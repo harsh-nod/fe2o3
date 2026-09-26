@@ -1,5 +1,5 @@
 // Non-inlined collective call bodies keep unrelated intrinsic temporaries off the dispatcher stack.
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     #[inline(never)]
     fn lower_intrinsic_subgroup_reduce_f32_v1(
         &mut self,

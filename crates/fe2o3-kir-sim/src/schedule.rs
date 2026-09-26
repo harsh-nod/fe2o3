@@ -3,7 +3,6 @@ use std::mem::size_of;
 use fe2o3_kernel_ir::{AccessMode, ScalarType};
 use sha2::{Digest, Sha256};
 
-use crate::resident::reserved_vec_bytes;
 use crate::{
     BufferArgumentV1, DynamicWorkgroupMemoryRequestV1, EventPolicyV1, IndexWidthV1,
     SimulationArgumentV1, SimulationInvocationV1, SimulationKernelIrIdentityV1, SimulationLimitsV1,
@@ -83,6 +82,22 @@ pub struct SimulationScheduleCoverageV1 {
 }
 
 impl SimulationScheduleCoverageV1 {
+    pub(crate) fn from_completed_counts(
+        decisions: u64,
+        workgroups: u64,
+        barrier_releases: u64,
+        expected_workgroups: u64,
+    ) -> Result<Self, SimulationScheduleReplayErrorV1> {
+        if workgroups != expected_workgroups {
+            return Err(SimulationScheduleReplayErrorV1::CoverageMismatch);
+        }
+        Ok(Self {
+            decisions,
+            workgroups,
+            barrier_releases,
+        })
+    }
+
     pub const fn decisions(self) -> u64 {
         self.decisions
     }
@@ -201,6 +216,7 @@ pub(crate) enum ReductionScheduleSourceV1<'a> {
 }
 
 pub(crate) struct PreparedScheduleV1<'a> {
+    initial_resident_bytes: usize,
     current_decision: u64,
     workgroups: u64,
     barrier_releases: u64,
@@ -243,6 +259,7 @@ impl<'a> PreparedScheduleV1<'a> {
     ) -> Result<Self, SchedulePrepareErrorV1> {
         let Some(request) = request else {
             return Ok(Self {
+                initial_resident_bytes: 0,
                 current_decision: 0,
                 workgroups: 0,
                 barrier_releases: 0,
@@ -280,8 +297,8 @@ impl<'a> PreparedScheduleV1<'a> {
                 SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
                 None,
                 *max_decisions,
-                *max_decisions,
-                *max_decisions,
+                0,
+                0,
                 false,
             ),
             ExecutionScheduleRequestV1::Public(SimulationScheduleRequestV1::RecordSeeded {
@@ -292,8 +309,8 @@ impl<'a> PreparedScheduleV1<'a> {
                 SimulationScheduleIdentityV1::WorkgroupMajorSeededRunnableCooperativeV1,
                 Some(*seed),
                 *max_decisions,
-                *max_decisions,
-                *max_decisions,
+                0,
+                0,
                 true,
             ),
             ExecutionScheduleRequestV1::Reduction {
@@ -338,13 +355,14 @@ impl<'a> PreparedScheduleV1<'a> {
         };
         validate_decision_limit(max_decisions, limits)?;
 
-        let decision_bytes = reserved_vec_bytes::<SimulationScheduleDecisionV1>(resident_decisions)
+        let decision_bytes = resident_decisions
+            .checked_mul(size_of::<SimulationScheduleDecisionV1>())
             .ok_or(SchedulePrepareErrorV1::ResidentLimit {
                 actual: usize::MAX,
                 limit: limits.max_resident_bytes,
             })?;
         let order_bytes = if needs_order {
-            reserved_vec_bytes::<usize>(participants).ok_or(
+            participants.checked_mul(size_of::<usize>()).ok_or(
                 SchedulePrepareErrorV1::ResidentLimit {
                     actual: usize::MAX,
                     limit: limits.max_resident_bytes,
@@ -354,18 +372,12 @@ impl<'a> PreparedScheduleV1<'a> {
             0
         };
         let extra = size_of::<Self>()
-            .checked_add(reserved_vec_bytes::<ScheduledStateV1<'_>>(1).ok_or(
-                SchedulePrepareErrorV1::ResidentLimit {
-                    actual: usize::MAX,
-                    limit: limits.max_resident_bytes,
-                },
-            )?)
+            .checked_add(size_of::<ScheduledStateV1<'_>>())
             .and_then(|bytes| bytes.checked_add(decision_bytes))
             .and_then(|bytes| bytes.checked_add(order_bytes))
             .and_then(|bytes| {
                 if matches!(mode, ScheduledModeV1::Record) {
-                    reserved_vec_bytes::<SimulationScheduleRecordV1>(1)
-                        .and_then(|record_bytes| bytes.checked_add(record_bytes))
+                    bytes.checked_add(size_of::<SimulationScheduleRecordV1>())
                 } else {
                     Some(bytes)
                 }
@@ -409,6 +421,58 @@ impl<'a> PreparedScheduleV1<'a> {
         scheduled
             .try_reserve_exact(1)
             .map_err(|_| SchedulePrepareErrorV1::AllocationFailure)?;
+        // Recheck actual capacities before publishing the prepared schedule.
+        // Borrowed replay decisions remain resident even though this owner allocates none.
+        let actual_extra = size_of::<Self>()
+            .checked_add(
+                scheduled
+                    .capacity()
+                    .checked_mul(size_of::<ScheduledStateV1<'_>>())
+                    .ok_or(SchedulePrepareErrorV1::ResidentLimit {
+                        actual: usize::MAX,
+                        limit: limits.max_resident_bytes,
+                    })?,
+            )
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    decisions
+                        .capacity()
+                        .checked_mul(size_of::<SimulationScheduleDecisionV1>())?,
+                )
+            })
+            .and_then(|bytes| bytes.checked_add(order.capacity().checked_mul(size_of::<usize>())?))
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    records
+                        .capacity()
+                        .checked_mul(size_of::<SimulationScheduleRecordV1>())?,
+                )
+            })
+            .and_then(|bytes| {
+                if matches!(mode, ScheduledModeV1::Replay(_)) {
+                    bytes.checked_add(decision_bytes)
+                } else {
+                    Some(bytes)
+                }
+            })
+            .ok_or(SchedulePrepareErrorV1::ResidentLimit {
+                actual: usize::MAX,
+                limit: limits.max_resident_bytes,
+            })?;
+        let actual_resident = plan
+            .resident_bytes()
+            .checked_add(resident_offset)
+            .and_then(|bytes| bytes.checked_add(actual_extra))
+            .ok_or(SchedulePrepareErrorV1::ResidentLimit {
+                actual: usize::MAX,
+                limit: limits.max_resident_bytes,
+            })?;
+        if actual_resident > limits.max_resident_bytes {
+            return Err(SchedulePrepareErrorV1::ResidentLimit {
+                actual: actual_resident,
+                limit: limits.max_resident_bytes,
+            });
+        }
         scheduled.push(ScheduledStateV1 {
             mode,
             context_identity,
@@ -430,12 +494,17 @@ impl<'a> PreparedScheduleV1<'a> {
             ExecutionScheduleRequestV1::Public(_) => None,
         };
         Ok(Self {
+            initial_resident_bytes: actual_extra,
             current_decision: 0,
             workgroups: 0,
             barrier_releases: 0,
             scheduled,
             reduction_decisions,
         })
+    }
+
+    pub(crate) const fn initial_resident_bytes(&self) -> usize {
+        self.initial_resident_bytes
     }
 
     pub(crate) fn identity(&self) -> SimulationScheduleIdentityV1 {
@@ -577,6 +646,10 @@ impl<'a> PreparedScheduleV1<'a> {
         &mut self,
         invocation: SimulationInvocationV1,
         phase: u64,
+        reserve: impl FnOnce(
+            &mut Vec<SimulationScheduleDecisionV1>,
+            usize,
+        ) -> Result<(), SchedulePrepareErrorV1>,
     ) -> Result<(), SchedulePrepareErrorV1> {
         let decision = SimulationScheduleDecisionV1 {
             workgroup: invocation.workgroup,
@@ -591,6 +664,9 @@ impl<'a> PreparedScheduleV1<'a> {
                 });
             }
             if matches!(state.mode, ScheduledModeV1::Record) {
+                if state.decisions.len() == state.decisions.capacity() {
+                    reserve(&mut state.decisions, state.max_decisions)?;
+                }
                 state.decisions.push(decision);
             }
         }
@@ -622,14 +698,12 @@ impl<'a> PreparedScheduleV1<'a> {
         target: SimulationTargetV1,
         limits: SimulationLimitsV1,
     ) -> Result<PreparedScheduleResultV1, SimulationScheduleReplayErrorV1> {
-        let coverage = SimulationScheduleCoverageV1 {
-            decisions: self.current_decision,
-            workgroups: self.workgroups,
-            barrier_releases: self.barrier_releases,
-        };
-        if self.workgroups != expected_workgroups {
-            return Err(SimulationScheduleReplayErrorV1::CoverageMismatch);
-        }
+        let coverage = SimulationScheduleCoverageV1::from_completed_counts(
+            self.current_decision,
+            self.workgroups,
+            self.barrier_releases,
+            expected_workgroups,
+        )?;
         let mut scheduled = self.scheduled;
         let state = scheduled.pop();
         if let Some(ScheduledStateV1 {
@@ -810,6 +884,7 @@ fn schedule_context_identity_configured(
     limits: SimulationLimitsV1,
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
+    target.hash_profile_identity(&mut hash);
     let write_only = request.arguments.iter().any(|argument| match argument {
         SimulationArgumentV1::Scalar(_) => false,
         SimulationArgumentV1::Buffer(buffer) => buffer.access() == AccessMode::WriteOnly,
@@ -996,5 +1071,90 @@ const fn scalar_tag(scalar: ScalarType) -> u8 {
         ScalarType::Bf16 => 13,
         ScalarType::F32 => 14,
         ScalarType::F64 => 15,
+    }
+}
+
+#[cfg(test)]
+mod recording_resident_tests {
+    use super::*;
+    use crate::AdmittedSimulationModuleV1;
+    use fe2o3_kernel_ir::{
+        BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent, Module, Signature,
+        Terminator, VerifiedCanonicalKernelIrV7,
+    };
+
+    #[test]
+    fn preparation_charges_actual_headers_order_and_offset_without_recording_capacity() {
+        let mut block = BasicBlock::new(BlockId(0));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("schedule-resident-test");
+        module.functions.push(Function::kernel_entry(
+            "entry",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            "test",
+            "entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        ));
+        let limits = SimulationLimitsV1::default();
+        let owner = AdmittedSimulationModuleV1::admit(
+            VerifiedCanonicalKernelIrV7::from_module(module).unwrap(),
+            limits,
+        )
+        .unwrap();
+        let simulation = SimulationRequestV1::new("test", [2, 1, 1], [2, 1, 1], vec![]);
+        let target = SimulationTargetV1::amdgpu_64();
+        let plan = owner.preflight(&simulation, target, limits).unwrap();
+        for seeded in [false, true] {
+            let request = if seeded {
+                SimulationScheduleRequestV1::RecordSeeded {
+                    seed: 17,
+                    max_decisions: 1 << 20,
+                }
+            } else {
+                SimulationScheduleRequestV1::RecordCanonical {
+                    max_decisions: 1 << 20,
+                }
+            };
+            let prepare = |max_resident_bytes| {
+                PreparedScheduleV1::prepare(
+                    Some(ExecutionScheduleRequestV1::Public(request)),
+                    *owner.identity(),
+                    &simulation,
+                    None,
+                    target,
+                    SimulationLimitsV1 {
+                        max_resident_bytes,
+                        ..limits
+                    },
+                    &plan,
+                    2,
+                    37,
+                )
+            };
+            let prepared = prepare(limits.max_resident_bytes).unwrap_or_else(|_| panic!("prepare"));
+            let state = &prepared.scheduled[0];
+            assert_eq!(state.decisions.capacity(), 0);
+            if seeded {
+                assert!(state.order.capacity() >= 2);
+            } else {
+                assert_eq!(state.order.capacity(), 0);
+            }
+            let actual_extra = size_of::<PreparedScheduleV1<'_>>()
+                + prepared.scheduled.capacity() * size_of::<ScheduledStateV1<'_>>()
+                + state.order.capacity() * size_of::<usize>()
+                + state.records.capacity() * size_of::<SimulationScheduleRecordV1>();
+            assert_eq!(prepared.initial_resident_bytes(), actual_extra);
+            let exact = plan.resident_bytes() + 37 + actual_extra;
+            assert!(prepare(exact).is_ok());
+            assert!(matches!(prepare(exact - 1),
+                Err(SchedulePrepareErrorV1::ResidentLimit { actual, limit })
+                    if actual == exact && limit == exact - 1));
+        }
     }
 }

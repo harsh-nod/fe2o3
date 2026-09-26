@@ -12,6 +12,7 @@ use pliron::op::Op;
 enum PipelineFamilyV1<'a> {
     Ordinary,
     Conditional(&'a ConditionalPipelineSubjectV1<'a>),
+    CanonicalPrivate(&'a crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1<'a>),
 }
 
 #[allow(
@@ -21,6 +22,7 @@ enum PipelineFamilyV1<'a> {
 enum ValidationFamilyV1<'a> {
     Ordinary(ProductionAnalysisReportValidationSessionV1<'a>),
     Conditional(conditional_validation::SessionV1<'a>),
+    CanonicalPrivate(canonical_private_v1::SessionV1<'a>),
 }
 
 // Constructed only by the closed dispatcher from its own preservation session
@@ -92,6 +94,7 @@ pub(crate) enum PipelineErrorV1 {
     ConditionalSemantic(conditional_semantic::ErrorV1),
     ConditionalPreparation(conditional_ownership::FailureV1),
     ConditionalInput,
+    CanonicalPrivateInput,
 }
 
 impl fmt::Display for PipelineErrorV1 {
@@ -109,6 +112,9 @@ impl fmt::Display for PipelineErrorV1 {
             }
             Self::ConditionalPreparation(error) => {
                 write!(formatter, "conditional preparation: {error:?}")
+            }
+            Self::CanonicalPrivateInput => {
+                formatter.write_str("canonical private coverage, epoch or checkpoint mismatch")
             }
             Self::ConditionalInput => {
                 formatter.write_str("conditional input custody or identity mismatch")
@@ -142,6 +148,7 @@ impl From<ProductionAnalysisResourceLimitV1> for PipelineErrorV1 {
 enum PipelineOutcomeV1 {
     Ordinary(ProductionPlironPreloweringOutcomeV1),
     Conditional(ConditionalPipelineOutcomeV1),
+    CanonicalPrivate(canonical_private_v1::CanonicalPrivatePipelineOutcomeV1),
 }
 
 #[allow(
@@ -151,6 +158,7 @@ enum PipelineOutcomeV1 {
 enum PipelineReportsV1 {
     Ordinary(ProductionPlironPreloweringReportV2),
     Conditional(ConditionalPipelineReportV1),
+    CanonicalPrivate(canonical_private_v1::CanonicalPrivatePipelineReportV1),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -290,7 +298,7 @@ impl PipelineFamilyV1<'_> {
         PipelineErrorV1,
     > {
         match self {
-            Self::Ordinary => Ok((None, None)),
+            Self::Ordinary | Self::CanonicalPrivate(_) => Ok((None, None)),
             Self::Conditional(input) => conditional_ownership::prepare_rows_with_observation_v1(
                 input.context(),
                 input.function(),
@@ -359,7 +367,7 @@ impl PipelineFamilyV1<'_> {
         observer: PipelineObservationV1<'_, '_, '_>,
     ) -> Result<ProductionAnalysisResourceUpperBoundV1, PipelineErrorV1> {
         Ok(match self {
-            Self::Ordinary => bound,
+            Self::Ordinary | Self::CanonicalPrivate(_) => bound,
             Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::checked_phase(
                 phase,
                 bound.work_upper_bound(),
@@ -389,7 +397,7 @@ impl PipelineFamilyV1<'_> {
         )
         .map_err(resource_error)?;
         let effect = match self {
-            Self::Ordinary => {
+            Self::Ordinary | Self::CanonicalPrivate(_) => {
                 compose_effect_refinement_resource_upper_bound_v1(census, effect_local, ownership)
             }
             Self::Conditional(_) => effect_local
@@ -524,7 +532,9 @@ pub(crate) fn run_conditional_production_checks_with_observation_v1(
         None,
     )? {
         PipelineOutcomeV1::Conditional(outcome) => Ok(outcome),
-        PipelineOutcomeV1::Ordinary(_) => Err(PipelineErrorV1::ConditionalInput),
+        PipelineOutcomeV1::Ordinary(_) | PipelineOutcomeV1::CanonicalPrivate(_) => {
+            Err(PipelineErrorV1::ConditionalInput)
+        }
     }
 }
 
@@ -652,6 +662,20 @@ impl<'a> ValidationFamilyV1<'a> {
         let (context, function) = endpoint;
         let (analyses, observer) = observed_analyses;
         match family {
+            PipelineFamilyV1::CanonicalPrivate(input) => {
+                let session = canonical_private_v1::SessionV1::begin(
+                    input,
+                    endpoint,
+                    atomic_target,
+                    preservation,
+                    census,
+                    limits,
+                    analyses,
+                    observer,
+                )?;
+                let transfer = observer.map(|_| session.setup());
+                Ok((Self::CanonicalPrivate(session), transfer))
+            }
             PipelineFamilyV1::Ordinary => {
                 let session = begin_observed_report_validation_v1(
                     context,
@@ -687,6 +711,7 @@ impl<'a> ValidationFamilyV1<'a> {
         match self {
             Self::Ordinary(session) => session.setup_resource_upper_bound_v1(),
             Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::default(),
+            Self::CanonicalPrivate(session) => session.setup(),
         }
     }
 
@@ -742,6 +767,14 @@ impl<'a> ValidationFamilyV1<'a> {
                     .map_err(resource_error)?;
                 Ok(observer.map(|_| bound))
             }
+            Self::CanonicalPrivate(session) => session.record(
+                (context, function),
+                checkpoint,
+                report,
+                stage,
+                analyses,
+                observer,
+            ),
             Self::Conditional(session) => session
                 .record_ordinary_with_observation_v1(
                     checkpoint,

@@ -2,7 +2,7 @@
 // leaf checks inert record consistency; authenticated source replay is upstream.
 // It does not change generic assembly effects or final functional refinement.
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn lower_gfx942_inline_u32_v30(
         &mut self,
         block: SemanticBlockIdV1,

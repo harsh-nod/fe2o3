@@ -207,6 +207,33 @@ fn stores_define_versions_reads_reuse_them_and_pure_operations_have_no_node() {
 }
 
 #[test]
+fn v18_discriminant_reads_use_distinct_memory_versions_across_even_equal_retags() {
+    use crate::canonical_kir_inventory_v1::v18_tests::{storage_discriminant_module, with_inventory as with_v18_inventory};
+    for space in [AddressSpace::Private, AddressSpace::Workgroup] {
+        with_v18_inventory(&storage_discriminant_module(space), |inventory, budget| {
+            let floor = budget.storage();
+            let (report, receipt) = CanonicalKirMemorySsaV18::derive_v18(inventory, Default::default(), budget).unwrap();
+            assert_eq!(budget.storage(), floor);
+            budget.reserve_storage(receipt.retained_storage()).unwrap();
+            let read = report.operation(operation_id(0, 18), budget).unwrap().unwrap();
+            let retag = report.operation(operation_id(0, 19), budget).unwrap().unwrap();
+            let reread = report.operation(operation_id(0, 20), budget).unwrap().unwrap();
+            let before = match report.node(read, budget).unwrap() {
+                Node::Use { incoming, .. } => *incoming,
+                other => panic!("tag read must be a memory use, got {other:?}"),
+            };
+            assert!(matches!(report.node(retag, budget).unwrap(), Node::Def { incoming, .. } if *incoming == before));
+            assert!(matches!(report.node(reread, budget).unwrap(), Node::Use { incoming, .. } if *incoming == retag));
+            assert_ne!(before, retag);
+            assert!(report.belongs_to(inventory));
+            drop(report);
+            budget.release_storage(receipt.retained_storage()).unwrap();
+            assert_eq!(budget.storage(), floor);
+        });
+    }
+}
+
+#[test]
 fn diamond_joins_distinct_stores_in_edge_order_with_nonmonotonic_block_ids() {
     with_report(diamond(), |report, budget| {
         let phi = report.block_entry(block_id(3), budget).unwrap();

@@ -440,16 +440,21 @@ fn check_modules(
     memory: &MemorySsa<'_, '_>,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
-    let inventory = memory.inventory();
-    let (mut initialized, initialized_storage) =
-        InitializedPrivateLoadsV1::derive(inventory, budget)?;
-    budget.reserve_storage(initialized_storage)?;
     let Module {
         id,
         functions,
         kernels,
         required_capabilities,
+        storage_layouts,
     } = input;
+    // O(1) eligibility precedes any initialized-load or payload traversal.
+    if !load_forwarding_legacy_storage_tables_v1(storage_layouts, &output.storage_layouts) {
+        return Err(Error::Rule("legacy profile excludes storage layouts"));
+    }
+    let inventory = memory.inventory();
+    let (mut initialized, initialized_storage) =
+        InitializedPrivateLoadsV1::derive(inventory, budget)?;
+    budget.reserve_storage(initialized_storage)?;
     if id != &output.id
         || kernels != &output.kernels
         || required_capabilities != &output.required_capabilities
@@ -567,3 +572,43 @@ fn check_modules(
 #[cfg(test)]
 #[path = "canonical_kir_load_forwarding_v1_tests.rs"]
 mod tests;
+
+// Only fixed table headers are inspected. No row equality or graph walk occurs.
+fn load_forwarding_legacy_storage_tables_v1(
+    input: &[fe2o3_kernel_ir::StorageLayoutV1],
+    output: &[fe2o3_kernel_ir::StorageLayoutV1],
+) -> bool {
+    input.is_empty() && output.is_empty()
+}
+
+#[cfg(test)]
+mod legacy_storage_schema_tests {
+    use fe2o3_kernel_ir::{Module, ScalarType, StorageLayoutKindV1, StorageLayoutV1};
+
+    fn eligible(input: &Module, output: &Module) -> bool {
+        super::load_forwarding_legacy_storage_tables_v1(
+            &input.storage_layouts,
+            &output.storage_layouts,
+        )
+    }
+
+    #[test]
+    fn canonical_kir_load_forwarding_v1_refuses_nonempty_storage_tables() {
+        let empty = Module::new("ordinary");
+        assert!(eligible(&empty, &empty));
+        let mut occupied = empty.clone();
+        occupied.storage_layouts.push(StorageLayoutV1 {
+            size: 1,
+            alignment: 1,
+            kind: StorageLayoutKindV1::Scalar(ScalarType::U8),
+        });
+        assert!(!eligible(&occupied, &empty));
+        assert!(!eligible(&empty, &occupied));
+        // Equal, structurally valid tables are still outside the old profile.
+        assert!(!eligible(&occupied, &occupied));
+        let mut other = occupied.clone();
+        other.storage_layouts[0].kind = StorageLayoutKindV1::Scalar(ScalarType::I8);
+        assert!(!eligible(&occupied, &other));
+        // This predicate proves schema eligibility only, not payload equality.
+    }
+}

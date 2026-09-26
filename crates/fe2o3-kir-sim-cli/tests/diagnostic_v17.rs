@@ -153,7 +153,7 @@ fn assert_result(result: &Value, inputs: [u32; 3], profile: usize, used: bool) {
     }
     assert_eq!(
         result["target_profile"]["identity"],
-        "amdgpu_64_little_endian_v1"
+        "amdgpu_gfx942_little_endian_v2"
     );
     assert_eq!(result["target_profile"]["index_bits"], 64);
     assert_eq!(result["counts"]["arguments"], 4);

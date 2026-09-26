@@ -40,6 +40,32 @@ use sha2::{Digest, Sha256};
 mod v12_preflight;
 use v12_preflight::reject_unsupported_v12_module;
 
+#[path = "lowering/storage_v1.rs"]
+mod storage_v1;
+
+#[path = "lowering/storage_copy_v18.rs"]
+mod storage_copy_v18;
+#[path = "lowering/storage_native_v18.rs"]
+mod storage_native_v18;
+#[path = "lowering/storage_operations_v18.rs"]
+mod storage_operations_v18;
+#[path = "lowering/storage_preflight_v18.rs"]
+mod storage_preflight_v18;
+#[path = "lowering/storage_resources_v18.rs"]
+mod storage_resources_v18;
+#[path = "lowering/storage_root_inline_abi_v29.rs"]
+mod storage_root_inline_abi_v29;
+#[path = "lowering/storage_values_v18.rs"]
+mod storage_values_v18;
+#[path = "lowering/storage_variants_v18.rs"]
+mod storage_variants_v18;
+pub(crate) use storage_native_v18::{
+    lower_canonical_storage_module_v18, lower_canonical_storage_module_with_root_roles_v29,
+};
+pub(crate) use storage_root_inline_abi_v29::{
+    RootKernelRolesV29, RootParameterRoleV29, RootRolesV29,
+};
+
 #[path = "lowering/ordered_region_v16.rs"]
 mod ordered_region_v16;
 pub use ordered_region_v16::lower_canonical_v16_compiler_module_to_gfx942_xnack_minus_llvm_ir;
@@ -1103,6 +1129,7 @@ fn lower_compiler_module_with_ordered_program_context_v17(
 enum OrderedModuleOwner<'a> {
     RegionV16(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV16),
     ProgramV17(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17),
+    StorageV18(&'a storage_native_v18::StorageEmissionContextV18<'a>),
 }
 
 fn lower_compiler_module_with_ordered_context(
@@ -1120,8 +1147,14 @@ fn lower_compiler_module_with_ordered_context(
             "compiler-module lowering requires at least one kernel entry",
         ));
     }
-    verify_module(module).map_err(LoweringErrors::verification)?;
+    if !matches!(ordered_owner, Some(OrderedModuleOwner::StorageV18(_))) {
+        verify_module(module).map_err(LoweringErrors::verification)?;
+    }
     match ordered_owner {
+        Some(OrderedModuleOwner::StorageV18(context)) => {
+            context.check_current(module, target)?;
+            v12_preflight::check_storage_v18_module(context)?;
+        }
         Some(OrderedModuleOwner::RegionV16(owner)) => {
             ordered_region_v16::validate_owner_context(module, target, owner)?;
             v12_preflight::reject_unsupported_v16_module(owner)?;
@@ -1286,7 +1319,11 @@ fn lower_compiler_module_with_ordered_context(
             format!("device function {}", function.id),
             location.clone(),
         )?;
-        validate_device_signature(module, function, target)?;
+        if let Some(OrderedModuleOwner::StorageV18(context)) = ordered_owner {
+            storage_preflight_v18::signature(context, function)?;
+        } else {
+            validate_device_signature(module, function, target)?;
+        }
         call_symbols.insert(function.id.clone(), function.id.as_str().to_string());
         match function.role {
             FunctionRole::InternalHelper | FunctionRole::DeviceFfiExport => {
@@ -1380,6 +1417,9 @@ fn lower_compiler_module_with_ordered_context(
             matches!(ordered_owner, Some(OrderedModuleOwner::RegionV16(_)));
         lowerer.ordered_program_v17 =
             matches!(ordered_owner, Some(OrderedModuleOwner::ProgramV17(_)));
+        if let Some(OrderedModuleOwner::StorageV18(context)) = ordered_owner {
+            lowerer.storage_v18 = Some(context);
+        }
         preflight_function(&mut lowerer)?;
         kernel_lowerers.push(lowerer);
     }
@@ -1394,6 +1434,9 @@ fn lower_compiler_module_with_ordered_context(
             &call_symbols,
             target,
         )?;
+        if let Some(OrderedModuleOwner::StorageV18(context)) = ordered_owner {
+            lowerer.storage_v18 = Some(context);
+        }
         preflight_function(&mut lowerer)?;
         helper_lowerers.push(lowerer);
     }
@@ -2650,7 +2693,12 @@ fn emit_compiler_module(
     let intrinsics = collect_intrinsic_declarations(kernels.iter().chain(helpers))?;
     let memcpy_address_spaces = collect_memcpy_declarations(kernels.iter().chain(helpers))?;
     let float_requirements = FloatRequirements::collect(kernels.iter().chain(helpers))?;
-    let diagnostic_requirements = DiagnosticRequirements::collect(kernels.iter().chain(helpers))?;
+    let mut diagnostic_requirements =
+        DiagnosticRequirements::collect(kernels.iter().chain(helpers))?;
+    let storage = kernels.iter().find_map(|lowerer| lowerer.storage_v18);
+    if storage.is_some() {
+        diagnostic_requirements.trap = true;
+    }
     let has_semantic_anchors = kernels.iter().any(|lowerer| {
         matches!(
             lowerer.semantic_anchor_emission,
@@ -2667,15 +2715,15 @@ fn emit_compiler_module(
     let convergent_attribute = has_convergent.then_some(kernels.len() + usize::from(has_readnone));
 
     let mut output = CapacityLimitedText::try_new(module, MAX_COMPILER_MODULE_TEXT_BYTES)?;
+    output.storage_meter = storage.map(|context| context.meter);
     writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"").unwrap();
     // Closed V16/V17 target paths emit directly for the pinned LLVM22 worker.
     // The older renderer intentionally retains the Rust/frontend layout. Select
     // the existing reviewed worker profile here, before any module text exists;
     // never edit captured LLVM or relax the worker's exact layout validation.
-    let data_layout = if kernels
-        .iter()
-        .any(|lowerer| lowerer.ordered_region_v16 || lowerer.ordered_program_v17)
-    {
+    let data_layout = if kernels.iter().any(|lowerer| {
+        lowerer.ordered_region_v16 || lowerer.ordered_program_v17 || lowerer.storage_v18.is_some()
+    }) {
         Some(fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1)
     } else {
         target.data_layout()
@@ -2694,7 +2742,7 @@ fn emit_compiler_module(
     }
 
     for lowerer in helpers {
-        if lowerer.function.signature.results.len() > 1 {
+        if lowerer.function.signature.results.len() > 1 && lowerer.storage_v18.is_none() {
             write!(output, "{} = type {{ ", llvm_result_type(lowerer.function)).unwrap();
             for (index, ty) in lowerer.function.signature.results.iter().enumerate() {
                 if index != 0 {
@@ -2743,6 +2791,9 @@ fn emit_compiler_module(
         .unwrap();
     }
     emit_float_support_declarations(&mut output, &float_requirements, target);
+    if let Some(context) = storage {
+        storage_copy_v18::declarations(&mut output, context, &memcpy_address_spaces)?;
+    }
     emit_diagnostic_declarations(&mut output, &diagnostic_requirements);
     for function in declarations {
         writeln!(
@@ -2841,15 +2892,16 @@ fn emit_compiler_module(
     output.finish(module)
 }
 
-struct CapacityLimitedText {
+struct CapacityLimitedText<'a> {
     output: String,
     attempted_bytes: usize,
     max_bytes: usize,
     overflowed: bool,
     allocation_failed: bool,
+    storage_meter: Option<&'a dyn storage_resources_v18::StorageMeterV18>,
 }
 
-impl CapacityLimitedText {
+impl CapacityLimitedText<'_> {
     fn try_new(module: &Module, max_bytes: usize) -> Result<Self, LoweringErrors> {
         if max_bytes == 0 {
             return Err(LoweringErrors::one(
@@ -2864,6 +2916,7 @@ impl CapacityLimitedText {
             max_bytes,
             overflowed: false,
             allocation_failed: false,
+            storage_meter: None,
         })
     }
 
@@ -2889,8 +2942,14 @@ impl CapacityLimitedText {
     }
 }
 
-impl fmt::Write for CapacityLimitedText {
+impl fmt::Write for CapacityLimitedText<'_> {
     fn write_str(&mut self, text: &str) -> fmt::Result {
+        if self
+            .storage_meter
+            .is_some_and(|meter| meter.charge(text.len()).is_err())
+        {
+            return Ok(());
+        }
         let Some(attempted_bytes) = self.attempted_bytes.checked_add(text.len()) else {
             self.overflowed = true;
             return Ok(());
@@ -3724,6 +3783,7 @@ struct FunctionLowerer<'a> {
     semantic_anchor_emission: SemanticAnchorEmissionV1,
     ordered_region_v16: bool,
     ordered_program_v17: bool,
+    storage_v18: Option<&'a storage_native_v18::StorageEmissionContextV18<'a>>,
 }
 
 #[derive(Clone, Copy)]
@@ -4074,6 +4134,7 @@ impl<'a> FunctionLowerer<'a> {
             semantic_anchor_emission,
             ordered_region_v16: false,
             ordered_program_v17: false,
+            storage_v18: None,
         })
     }
 
@@ -4106,6 +4167,7 @@ impl<'a> FunctionLowerer<'a> {
             semantic_anchor_emission,
             ordered_region_v16: false,
             ordered_program_v17: false,
+            storage_v18: None,
         })
     }
 
@@ -4133,6 +4195,7 @@ impl<'a> FunctionLowerer<'a> {
             semantic_anchor_emission: SemanticAnchorEmissionV1::Disabled,
             ordered_region_v16: false,
             ordered_program_v17: false,
+            storage_v18: None,
         })
     }
 
@@ -4332,8 +4395,13 @@ impl<'a> FunctionLowerer<'a> {
                     OperationKind::WorkgroupMemory(memory) => {
                         let bytes = match memory.extent {
                             WorkgroupMemoryExtent::Static(elements) => {
-                                let element_bytes = amdgpu_lds_element_bytes(&memory.element)
-                                    .expect("operation preflight accepted the LDS element type");
+                                let element_bytes = if self.storage_v18.is_some() {
+                                    self.storage_element_bytes(&memory.element)?
+                                        .or_else(|| amdgpu_lds_element_bytes(&memory.element))
+                                } else {
+                                    amdgpu_lds_element_bytes(&memory.element)
+                                }
+                                .expect("operation preflight accepted the LDS element type");
                                 Some(u64::from(elements) * element_bytes)
                             }
                             WorkgroupMemoryExtent::Dynamic
@@ -4376,6 +4444,9 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn validate_parameters(&mut self) -> Result<(), LoweringErrors> {
+        if self.storage_v18.is_some() {
+            return self.storage_validate_parameters();
+        }
         let body = self.function.body.as_ref().expect("definition required");
         for (index, (value, ty)) in body
             .parameters
@@ -4584,11 +4655,11 @@ impl<'a> FunctionLowerer<'a> {
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
         let scalar = match ty {
-            Type::Execution(_) => {
+            Type::Execution(_) | Type::StorageObject(_) => {
                 return Err(LoweringErrors::one(
                     location.clone(),
                     LoweringDiagnosticCode::UnsupportedType,
-                    "AMDGPU LLVM lowering does not support V15 execution types",
+                    "AMDGPU LLVM lowering does not support execution or storage-object types",
                 ));
             }
             Type::Scalar(scalar) => Some(*scalar),
@@ -4670,6 +4741,9 @@ impl<'a> FunctionLowerer<'a> {
     ) -> Result<(), LoweringErrors> {
         let location = self.operation_location(block, index);
         self.validate_operation_capability_declarations(operation, &location)?;
+        if self.storage_v18.is_some() && self.storage_validate_operation(operation)? {
+            return Ok(());
+        }
         match &operation.kind {
             OperationKind::Constant(constant) => {
                 validate_constant(constant, self.target).map_err(|message| {
@@ -4966,6 +5040,7 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Intrinsic(_)
             | OperationKind::Alloca { .. }
+            | OperationKind::Storage(_)
             | OperationKind::Execution(_)
             | OperationKind::VerificationContract(_)
             | OperationKind::VectorLoad(_)
@@ -5442,6 +5517,14 @@ impl<'a> FunctionLowerer<'a> {
                     .iter()
                     .enumerate()
                     .filter_map(|(operation_index, operation)| match &operation.kind {
+                        _ if self.storage_v18.is_some()
+                            && storage_operations_v18::split_operation(operation) =>
+                        {
+                            Some(storage_operations_v18::continuation(
+                                block.id,
+                                operation_index,
+                            ))
+                        }
                         OperationKind::GuardedLoad { .. } => {
                             Some(guarded_load_merge_label(block.id, operation_index))
                         }
@@ -5925,7 +6008,10 @@ impl<'a> FunctionLowerer<'a> {
             )
             .unwrap();
         } else {
-            let result = llvm_result_type(self.function);
+            let result = storage_values_v18::ResultTypeV18 {
+                function: self.function,
+                storage: self.storage_v18.is_some(),
+            };
             let wave_attribute = self
                 .wave_width
                 .map_or("", |width| self.target.wave_target_feature(width));
@@ -6212,6 +6298,11 @@ impl<'a> FunctionLowerer<'a> {
                 let symbol = lds_symbol(kernel, result.id);
                 match &operation.kind {
                     OperationKind::WorkgroupMemory(memory) => {
+                        if self.storage_v18.is_some()
+                            && self.emit_storage_lds_declaration(output, memory, &symbol)?
+                        {
+                            continue;
+                        }
                         let element = llvm_type(&memory.element);
                         match memory.extent {
                             WorkgroupMemoryExtent::Static(elements) => writeln!(
@@ -6258,6 +6349,10 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn emit_block_parameters(&self, output: &mut dyn fmt::Write, block: &BasicBlock) {
+        if self.storage_v18.is_some() {
+            self.emit_storage_block_parameters(output, block);
+            return;
+        }
         let incomings = self.incoming_edges(block.id);
         for (parameter_index, parameter) in block.parameters.iter().enumerate() {
             match self
@@ -6345,6 +6440,9 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn llvm_parameters(&self) -> Result<Vec<String>, LoweringErrors> {
+        if self.storage_v18.is_some() {
+            return self.storage_llvm_parameters();
+        }
         self.function
             .signature
             .parameters
@@ -6381,6 +6479,11 @@ impl<'a> FunctionLowerer<'a> {
         operation_index: usize,
         operation: &Operation,
     ) -> Result<(), LoweringErrors> {
+        if self.storage_v18.is_some()
+            && self.emit_storage_operation(output, block, operation_index, operation)?
+        {
+            return Ok(());
+        }
         let result_name = operation
             .results
             .first()
@@ -8799,6 +8902,12 @@ impl<'a> FunctionLowerer<'a> {
         predecessor: BlockId,
         terminator: &Terminator,
     ) {
+        if self.storage_v18.is_some() {
+            if let Terminator::Return { values } = terminator {
+                self.emit_storage_return(output, predecessor, values);
+                return;
+            }
+        }
         match terminator {
             Terminator::Branch { target, .. } => {
                 writeln!(
@@ -9268,6 +9377,35 @@ fn validate_cast(
     to: &Type,
     target: LoweringTarget,
 ) -> Result<(), String> {
+    if kind == CastKind::SliceToGeneric {
+        let valid = matches!((from, to), (Type::Slice(from), Type::Slice(to))
+            if from.element == to.element && from.access == to.access
+                && matches!(from.address_space, KernelAddressSpace::Global
+                    | KernelAddressSpace::Constant | KernelAddressSpace::Private | KernelAddressSpace::Workgroup)
+                && (from.address_space != KernelAddressSpace::Constant
+                    || from.access == AccessMode::ReadOnly)
+                && to.address_space == KernelAddressSpace::Generic);
+        return valid.then_some(())
+            .ok_or_else(|| format!("unsupported {kind:?} cast from {from:?} to {to:?}"));
+    }
+    if kind == CastKind::PointerToGeneric {
+        let valid = matches!((from, to), (Type::Pointer(from), Type::Pointer(to))
+            if from.pointee == to.pointee
+                && from.access == to.access
+                && matches!(
+                    from.address_space,
+                    KernelAddressSpace::Global
+                        | KernelAddressSpace::Constant
+                        | KernelAddressSpace::Private
+                        | KernelAddressSpace::Workgroup
+                )
+                && (from.address_space != KernelAddressSpace::Constant
+                    || from.access == AccessMode::ReadOnly)
+                && to.address_space == KernelAddressSpace::Generic);
+        return valid
+            .then_some(())
+            .ok_or_else(|| format!("unsupported {kind:?} cast from {from:?} to {to:?}"));
+    }
     if kind == CastKind::RestrictPointerAccess {
         let valid = matches!((from, to), (Type::Pointer(from), Type::Pointer(to))
             if from.pointee == to.pointee
@@ -9289,7 +9427,9 @@ fn validate_cast(
     let from_width = llvm_width(from_scalar);
     let to_width = llvm_width(to_scalar);
     let valid = match kind {
-        CastKind::RestrictPointerAccess => unreachable!("handled pointer restriction"),
+        CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric => {
+            unreachable!("handled pointer cast")
+        }
         CastKind::Truncate => {
             supported_integer(from_scalar) && supported_integer(to_scalar) && from_width > to_width
         }
@@ -9452,7 +9592,11 @@ fn llvm_type(ty: &Type) -> &'static str {
             "ptr addrspace(5)"
         }
         Type::Pointer(_) => unreachable!("preflight rejected unsupported address space"),
-        Type::Unit | Type::Slice(_) | Type::Vector(_) | Type::Execution(_) => {
+        Type::Unit
+        | Type::Slice(_)
+        | Type::Vector(_)
+        | Type::Execution(_)
+        | Type::StorageObject(_) => {
             unreachable!("type is not a first-class G1 LLVM value")
         }
     }
@@ -9460,10 +9604,11 @@ fn llvm_type(ty: &Type) -> &'static str {
 
 fn llvm_address_space(address_space: KernelAddressSpace) -> u32 {
     match address_space {
+        KernelAddressSpace::Generic => 0,
         KernelAddressSpace::Global => 1,
         KernelAddressSpace::Workgroup => 3,
+        KernelAddressSpace::Constant => 4,
         KernelAddressSpace::Private => 5,
-        _ => unreachable!("preflight rejected unsupported address space"),
     }
 }
 
@@ -9608,6 +9753,7 @@ fn saturating_float_to_integer_intrinsic_name(to: ScalarType) -> String {
 
 fn cast_opcode(kind: CastKind, from: &Type) -> &'static str {
     match kind {
+        CastKind::PointerToGeneric | CastKind::SliceToGeneric => "addrspacecast",
         CastKind::RestrictPointerAccess => {
             unreachable!("pointer access restriction uses an identity select")
         }
@@ -9627,6 +9773,14 @@ fn cast_opcode(kind: CastKind, from: &Type) -> &'static str {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "lowering/pointer_to_generic_v18_tests.rs"]
+mod pointer_to_generic_v18_tests;
+
+#[cfg(test)]
+#[path = "lowering/slice_to_generic_v18_tests.rs"]
+mod slice_to_generic_v18_tests;
 
 #[cfg(test)]
 mod tests {

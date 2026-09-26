@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: gpu.load violates pointer access or pointee type
+// Local native verification only; no source/private admission is inferred.
+builtin.func @private_bad_load: builtin.function <(gpu.pointer <builtin.integer ui64,Private,ReadWrite>) -> ()>
+{
+  ^entry(p: gpu.pointer <builtin.integer ui64,Private,ReadWrite>):
+    loaded = gpu.load (p) [] [gpu_load_address_space: gpu.address_space Private, gpu_load_alignment: gpu.memory_alignment 3, gpu_load_volatile: gpu.volatile false]: <(gpu.pointer <builtin.integer ui64,Private,ReadWrite>) -> (builtin.integer ui64)>;
+    kernel.return () [] []: <() -> ()>
+}

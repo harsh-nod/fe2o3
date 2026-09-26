@@ -85,6 +85,378 @@ use super::{
     ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
 };
 
+pub(super) type RankedValidationResultV18<T> = Result<T, ProductionRankedProjectionValidationErrorV18>;
+
+/// Validation of an unchanged recipe, preserving the original semantic or
+/// live-resource diagnostic. This error grants no source or lowering authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProductionRankedProjectionValidationErrorV18 {
+    /// The original ranked recipe failed a structural or semantic check.
+    Kernel(ProductionRankedKernelErrorV1),
+    /// The original live ledger refused work or coexisting storage.
+    Resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
+}
+
+impl From<ProductionRankedKernelErrorV1> for ProductionRankedProjectionValidationErrorV18 {
+    fn from(error: ProductionRankedKernelErrorV1) -> Self { Self::Kernel(error) }
+}
+
+impl From<ProductionSemanticExpressionErrorV2> for ProductionRankedProjectionValidationErrorV18 {
+    fn from(error: ProductionSemanticExpressionErrorV2) -> Self {
+        Self::Kernel(ProductionRankedKernelErrorV1::InvalidSemanticExpression(error))
+    }
+}
+
+impl From<fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1>
+    for ProductionRankedProjectionValidationErrorV18
+{
+    fn from(error: fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1) -> Self {
+        Self::Resource(error)
+    }
+}
+
+impl fmt::Display for ProductionRankedProjectionValidationErrorV18 {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Kernel(error) => fmt::Display::fmt(error, output),
+            Self::Resource(error) => fmt::Display::fmt(error, output),
+        }
+    }
+}
+
+impl Error for ProductionRankedProjectionValidationErrorV18 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self { Self::Kernel(error) => Some(error), Self::Resource(error) => Some(error) }
+    }
+}
+
+pub(super) enum RankedValidationAllocationV18<'a, 'w> {
+    Legacy,
+    Live {
+        budget: &'a mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'w>,
+        floor: usize,
+        reserved: usize,
+        retained: usize,
+    },
+}
+
+impl RankedValidationAllocationV18<'_, '_> {
+    pub(super) fn charge(&mut self, amount: usize) -> RankedValidationResultV18<()> {
+        match self {
+            Self::Legacy => Ok(()),
+            Self::Live { budget, .. } => budget.charge_work(amount).map_err(Into::into),
+        }
+    }
+
+    fn reserve(&mut self, bytes: usize) -> RankedValidationResultV18<()> {
+        if let Self::Live { budget, reserved, .. } = self {
+            let next = reserved.checked_add(bytes).ok_or(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+            budget.reserve_storage(bytes)?;
+            *reserved = next;
+        }
+        Ok(())
+    }
+
+    pub(super) fn header<T>(&mut self) -> RankedValidationResultV18<()> {
+        self.reserve(std::mem::size_of::<T>())
+    }
+
+    fn capacity<T>(&mut self, count: usize) -> RankedValidationResultV18<Vec<T>> {
+        if matches!(self, Self::Legacy) { return Ok(Vec::with_capacity(count)); }
+        self.header::<Vec<T>>()?;
+        let bytes = count.checked_mul(std::mem::size_of::<T>()).ok_or(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+        self.reserve(bytes)?;
+        let mut values = Vec::new();
+        values.try_reserve_exact(count).map_err(|_| {
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Allocation
+        })?;
+        let excess = values.capacity().checked_sub(count).and_then(|extra| {
+            extra.checked_mul(std::mem::size_of::<T>())
+        }).ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+        self.reserve(excess)?;
+        Ok(values)
+    }
+
+    fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> RankedValidationResultV18<()> {
+        if matches!(self, Self::Legacy) { values.push(value); return Ok(()); }
+        self.charge(1)?;
+        if values.len() == values.capacity() {
+            return Err(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting.into());
+        }
+        values.push(value);
+        Ok(())
+    }
+
+    fn keep(&mut self, bytes: usize) -> RankedValidationResultV18<()> {
+        if let Self::Live { retained, reserved, .. } = self {
+            let next = retained.checked_add(bytes).ok_or(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+            if next > *reserved {
+                return Err(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting.into());
+            }
+            *retained = next;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RankedValidationAllocationV18<'_, '_> {
+    fn drop(&mut self) {
+        if let Self::Live { budget, floor, reserved, retained } = self {
+            // The guard encloses the validator, so its temporary collections
+            // have already dropped on both return and unwind. Never refund
+            // across an unexpected caller balance.
+            if floor.checked_add(*reserved) == Some(budget.storage()) {
+                let _ = budget.release_storage(*reserved - *retained);
+            }
+        }
+    }
+}
+
+fn legacy_ranked_validation_v18<T>(result: RankedValidationResultV18<T>)
+    -> Result<T, ProductionRankedKernelErrorV1>
+{
+    match result {
+        Ok(value) => Ok(value),
+        Err(ProductionRankedProjectionValidationErrorV18::Kernel(error)) => Err(error),
+        Err(ProductionRankedProjectionValidationErrorV18::Resource(_)) => {
+            unreachable!("the private legacy validator has no live resource ledger")
+        }
+    }
+}
+
+enum RankedValidationFactsV18 {
+    Legacy {
+        allocation_classes: HashMap<u64, u64>,
+        success_uses: BTreeMap<ProductionRankedValueIdV1, usize>,
+        indices: BTreeMap<ProductionRankedValueIdV1, ProductionRankedValueIdV1>,
+    },
+    Live {
+        allocation_classes: Vec<(u64, Option<u64>)>,
+        success_uses: Vec<Option<usize>>,
+        indices: Vec<Option<ProductionRankedValueIdV1>>,
+    },
+}
+
+impl RankedValidationFactsV18 {
+    fn prepare(
+        blocks: &[ProductionRankedBlockV1],
+        allocation: &mut RankedValidationAllocationV18<'_, '_>,
+    ) -> RankedValidationResultV18<(Self, usize)> {
+        if matches!(allocation, RankedValidationAllocationV18::Legacy) {
+            return Ok((Self::Legacy { allocation_classes: HashMap::new(),
+                success_uses: BTreeMap::new(), indices: BTreeMap::new() }, 0));
+        }
+        allocation.header::<Self>()?;
+        let mut results = 0_usize;
+        let mut origins = 0_usize;
+        for block in blocks {
+            allocation.charge(1)?;
+            for operation in &block.operations {
+                allocation.charge(1)?;
+                let count = match operation {
+                    ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D { .. }
+                    | ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D { .. } => 2,
+                    ProductionRankedOperationV1::View { .. }
+                    | ProductionRankedOperationV1::ViewInSpace { .. }
+                    | ProductionRankedOperationV1::PipelineCreate { .. }
+                    | ProductionRankedOperationV1::IndexConstant { .. }
+                    | ProductionRankedOperationV1::IndexUnsignedCast { .. }
+                    | ProductionRankedOperationV1::IndexUnknown { .. }
+                    | ProductionRankedOperationV1::InvocationIndex { .. }
+                    | ProductionRankedOperationV1::IndexBinary { .. }
+                    | ProductionRankedOperationV1::DeterministicJoin { .. }
+                    | ProductionRankedOperationV1::CheckedTiledIndex2D { .. }
+                    | ProductionRankedOperationV1::CheckedRowStripedIndex2D { .. }
+                    | ProductionRankedOperationV1::Dimension { .. }
+                    | ProductionRankedOperationV1::TensorResultComponent { .. }
+                    | ProductionRankedOperationV1::SemanticSymbol { .. }
+                    | ProductionRankedOperationV1::SemanticConstant { .. }
+                    | ProductionRankedOperationV1::SemanticBinary { .. }
+                    | ProductionRankedOperationV1::SemanticExpression { .. } => 1,
+                    ProductionRankedOperationV1::ExecutionLayout { .. }
+                    | ProductionRankedOperationV1::PipelineEvent { .. }
+                    | ProductionRankedOperationV1::Access { .. }
+                    | ProductionRankedOperationV1::PredicatedAccess { .. }
+                    | ProductionRankedOperationV1::ValueAccess { .. }
+                    | ProductionRankedOperationV1::AtomicAccess { .. }
+                    | ProductionRankedOperationV1::AtomicValueAccess { .. }
+                    | ProductionRankedOperationV1::OwnershipContract { .. }
+                    | ProductionRankedOperationV1::AllocationEffect { .. }
+                    | ProductionRankedOperationV1::Barrier { .. }
+                    | ProductionRankedOperationV1::Fence { .. }
+                    | ProductionRankedOperationV1::TensorLayout { .. }
+                    | ProductionRankedOperationV1::CollectiveSemantics { .. }
+                    | ProductionRankedOperationV1::RequireEquivalent { .. }
+                    | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
+                    | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
+                    | ProductionRankedOperationV1::RequireEffectRefinement { .. }
+                    | ProductionRankedOperationV1::RequestEffectRefinement { .. }
+                    | ProductionRankedOperationV1::RequireNumericalRefinement { .. }
+                    | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
+                    | ProductionRankedOperationV1::RequireTensorRefinement { .. }
+                    | ProductionRankedOperationV1::RequestTensorRefinement { .. } => 0,
+                };
+                results = results.checked_add(count).ok_or(
+                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+                if ranked_allocation_origin_v18(operation).is_some() {
+                    origins = origins.checked_add(1).ok_or(
+                        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+                }
+            }
+        }
+        let mut allocation_classes = allocation.capacity(origins)?;
+        for block in blocks {
+            allocation.charge(1)?;
+            for operation in &block.operations {
+                allocation.charge(1)?;
+                if let Some(origin) = ranked_allocation_origin_v18(operation) {
+                    allocation.push(&mut allocation_classes, (origin, None))?;
+                }
+            }
+        }
+        sort_ranked_origins_v18(&mut allocation_classes, allocation)?;
+        allocation.charge(allocation_classes.len())?;
+        allocation_classes.dedup_by_key(|row| row.0);
+        let mut success_uses = allocation.capacity(results)?;
+        let mut indices = allocation.capacity(results)?;
+        allocation.charge(results)?;
+        success_uses.resize(results, None);
+        allocation.charge(results)?;
+        indices.resize(results, None);
+        Ok((Self::Live { allocation_classes, success_uses, indices }, results))
+    }
+
+    fn allocation_class(
+        &mut self, origin: u64, class: u64,
+        allocation: &mut RankedValidationAllocationV18<'_, '_>,
+    ) -> RankedValidationResultV18<Option<u64>> {
+        match self {
+            Self::Legacy { allocation_classes, .. } => Ok(allocation_classes.insert(origin, class)),
+            Self::Live { allocation_classes, .. } => {
+                let mut low = 0;
+                let mut high = allocation_classes.len();
+                while low < high {
+                    allocation.charge(1)?;
+                    let middle = low + (high - low) / 2;
+                    match allocation_classes[middle].0.cmp(&origin) {
+                        std::cmp::Ordering::Less => low = middle + 1,
+                        std::cmp::Ordering::Greater => high = middle,
+                        std::cmp::Ordering::Equal => return Ok(allocation_classes[middle].1.replace(class)),
+                    }
+                }
+                Err(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting.into())
+            }
+        }
+    }
+
+    fn has_index(&self, index: ProductionRankedValueIdV1,
+        allocation: &mut RankedValidationAllocationV18<'_, '_>) -> RankedValidationResultV18<bool> {
+        allocation.charge(1)?;
+        Ok(match self {
+            Self::Legacy { indices, .. } => indices.contains_key(&index),
+            Self::Live { indices, .. } => indices.get(index.get() as usize).is_some_and(Option::is_some),
+        })
+    }
+
+    fn use_success(&mut self, success: ProductionRankedValueIdV1,
+        allocation: &mut RankedValidationAllocationV18<'_, '_>) -> RankedValidationResultV18<()> {
+        allocation.charge(1)?;
+        let uses = match self {
+            Self::Legacy { success_uses, .. } => success_uses.get_mut(&success),
+            Self::Live { success_uses, .. } => success_uses.get_mut(success.get() as usize).and_then(Option::as_mut),
+        }.ok_or(ProductionRankedKernelErrorV1::InvalidPredicatedAccessUse { success, uses: 0 })?;
+        *uses = uses.checked_add(1).ok_or(ProductionRankedKernelErrorV1::ResourceLimit {
+            resource: "predicated success use", limit: MAX_RANKED_BOUNDS_OPERATIONS, actual: usize::MAX,
+        })?;
+        Ok(())
+    }
+
+    fn pair(&mut self, index: ProductionRankedValueIdV1, success: ProductionRankedValueIdV1,
+        allocation: &mut RankedValidationAllocationV18<'_, '_>) -> RankedValidationResultV18<()> {
+        allocation.charge(1)?;
+        match self {
+            Self::Legacy { success_uses, indices, .. } => {
+                success_uses.insert(success, 0);
+                indices.insert(index, success);
+            }
+            Self::Live { success_uses, indices, .. } => {
+                let uses = success_uses.get_mut(success.get() as usize).ok_or(
+                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting)?;
+                let paired = indices.get_mut(index.get() as usize).ok_or(
+                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting)?;
+                if uses.is_some() || paired.is_some() {
+                    return Err(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting.into());
+                }
+                *uses = Some(0);
+                *paired = Some(success);
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self, allocation: &mut RankedValidationAllocationV18<'_, '_>) -> RankedValidationResultV18<()> {
+        match self {
+            Self::Legacy { success_uses, .. } => {
+                if let Some((success, uses)) = success_uses.into_iter().find(|(_, uses)| *uses == 0) {
+                    return Err(ProductionRankedKernelErrorV1::InvalidPredicatedAccessUse { success, uses }.into());
+                }
+            }
+            Self::Live { success_uses, .. } => {
+                for (index, uses) in success_uses.into_iter().enumerate() {
+                    allocation.charge(1)?;
+                    if uses == Some(0) {
+                        let success = ProductionRankedValueIdV1::new(u32::try_from(index).map_err(|_| {
+                            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic
+                        })?);
+                        return Err(ProductionRankedKernelErrorV1::InvalidPredicatedAccessUse { success, uses: 0 }.into());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn ranked_allocation_origin_v18(operation: &ProductionRankedOperationV1) -> Option<u64> {
+    match operation {
+        ProductionRankedOperationV1::View { allocation_origin, .. }
+        | ProductionRankedOperationV1::ViewInSpace { allocation_origin, .. }
+        | ProductionRankedOperationV1::AllocationEffect { allocation_origin, .. } => Some(*allocation_origin),
+        _ => None,
+    }
+}
+
+fn sort_ranked_origins_v18(rows: &mut [(u64, Option<u64>)],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>) -> RankedValidationResultV18<()> {
+    fn sift(rows: &mut [(u64, Option<u64>)], mut root: usize, end: usize,
+        allocation: &mut RankedValidationAllocationV18<'_, '_>) -> RankedValidationResultV18<()> {
+        while root < end / 2 {
+            let mut child = root * 2 + 1;
+            if child + 1 < end {
+                allocation.charge(1)?;
+                if rows[child].0 < rows[child + 1].0 { child += 1; }
+            }
+            allocation.charge(1)?;
+            if rows[root].0 >= rows[child].0 { break; }
+            allocation.charge(1)?;
+            rows.swap(root, child);
+            root = child;
+        }
+        Ok(())
+    }
+    let count = rows.len();
+    for root in (0..count / 2).rev() { sift(rows, root, count, allocation)?; }
+    for end in (1..count).rev() {
+        allocation.charge(1)?;
+        rows.swap(0, end);
+        sift(rows, 0, end, allocation)?;
+    }
+    Ok(())
+}
+
 /// Compiler-derived provenance retained for one cooperative tensor call.
 ///
 /// These are identities of typed capability roots, not user assertions. The
@@ -1898,6 +2270,47 @@ pub struct ProductionRankedKernelV1 {
 }
 
 impl ProductionRankedKernelV1 {
+    /// Validates and retains exactly the supplied recipe without running any
+    /// ranked preverification transformations. All block, operation, value and
+    /// nested-payload coordinates are preserved.
+    ///
+    /// The caller retains accounting custody of the consumed block payloads.
+    /// This entrance pays for its name, retained kernel header and validation
+    /// scratch on the supplied ledger. Success is not source correspondence,
+    /// canonical-output, mandatory-verifier or lowering authority; those joins
+    /// must inspect this same immutable recipe before production use.
+    pub fn from_exact_projection_v18(
+        function_name: &str,
+        argument_count: usize,
+        blocks: Vec<ProductionRankedBlockV1>,
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<Self, ProductionRankedProjectionValidationErrorV18> {
+        let floor = budget.storage();
+        let mut allocation = RankedValidationAllocationV18::Live {
+            budget, floor, reserved: 0, retained: 0,
+        };
+        allocation.header::<RankedValidationAllocationV18<'_, '_>>()?;
+        allocation.header::<RankedValidationResultV18<Self>>()?;
+        allocation.header::<Self>()?;
+        allocation.charge(function_name.len())?;
+        validate_name(function_name, NameKind::Dialect)
+            .map_err(ProductionRankedKernelErrorV1::InvalidFunctionName)?;
+        allocation.reserve(function_name.len())?;
+        let mut name = String::new();
+        name.try_reserve_exact(function_name.len()).map_err(|_| {
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Allocation
+        })?;
+        allocation.reserve(name.capacity() - function_name.len())?;
+        allocation.charge(function_name.len())?;
+        name.push_str(function_name);
+        let retained = std::mem::size_of::<Self>().checked_add(name.capacity()).ok_or(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+        let mut kernel = Self { function_name: name, argument_count, blocks, tree_work: 0 };
+        kernel.tree_work = kernel.validate_core_v18(&mut allocation)?;
+        allocation.keep(retained)?;
+        Ok(kernel)
+    }
+
     pub fn new(
         function_name: &str,
         argument_count: usize,
@@ -1995,20 +2408,33 @@ impl ProductionRankedKernelV1 {
     }
 
     fn validate(&self) -> Result<usize, ProductionRankedKernelErrorV1> {
+        legacy_ranked_validation_v18(self.validate_core_v18(&mut RankedValidationAllocationV18::Legacy))
+    }
+
+    fn validate_core_v18(&self, allocation: &mut RankedValidationAllocationV18<'_, '_>) -> RankedValidationResultV18<usize> {
         if self.argument_count > HARD_MAX_PRODUCTION_RANKED_ARGUMENTS {
-            return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+            return Err((ProductionRankedKernelErrorV1::ResourceLimit {
                 resource: "function argument",
                 limit: HARD_MAX_PRODUCTION_RANKED_ARGUMENTS,
                 actual: self.argument_count,
-            });
+            }).into());
         }
         if self.blocks.is_empty() || self.blocks.len() > MAX_RANKED_BOUNDS_BLOCKS {
-            return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+            return Err((ProductionRankedKernelErrorV1::ResourceLimit {
                 resource: "basic block",
                 limit: MAX_RANKED_BOUNDS_BLOCKS,
                 actual: self.blocks.len(),
-            });
+            }).into());
         }
+        let scan_count = if matches!(allocation, RankedValidationAllocationV18::Legacy) { 0 } else {
+            allocation.charge(self.blocks.len())?;
+            self.blocks.iter().try_fold(0_usize, |count, block| {
+                count.checked_add(block.operations.len()).ok_or(
+                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)
+            })?
+        };
+        allocation.charge(scan_count.checked_mul(2).ok_or(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?)?;
         let tensor_sites = self
             .blocks
             .iter()
@@ -2030,6 +2456,8 @@ impl ProductionRankedKernelV1 {
             })
             .count();
         validate_tensor_refinement_resource_counts_v1(tensor_sites, tensor_claims)?;
+        allocation.charge(self.blocks.len())?;
+        allocation.charge(scan_count)?;
         for expression in self.blocks.iter().flat_map(|block| {
             block
                 .operations
@@ -2041,55 +2469,91 @@ impl ProductionRankedKernelV1 {
                     _ => None,
                 })
         }) {
-            expression
-                .validate()
-                .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
-            validate_live_semantic_loads(self, expression)?;
+            expression.validate_ranked_live_v18(allocation)?;
+            validate_live_semantic_loads_core_v18(self, expression, allocation)?;
         }
-        let operation_count = self.blocks.iter().try_fold(0_usize, |total, block| {
-            let materialized = block
-                .operations
-                .iter()
-                .try_fold(0_usize, |count, operation| {
-                    count.checked_add(match operation {
-                        ProductionRankedOperationV1::SemanticExpression { expression, .. } => {
-                            expression.validate().ok()?.nodes.checked_add(1)?
-                        }
-                        _ if matches!(
-                            operation,
-                            ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
-                                | ProductionRankedOperationV1::RequireEffectRefinement { .. }
-                                | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
-                                | ProductionRankedOperationV1::RequestEffectRefinement { .. }
-                                | ProductionRankedOperationV1::RequireNumericalRefinement { .. }
-                                | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
-                                | ProductionRankedOperationV1::RequireTensorRefinement { .. }
-                                | ProductionRankedOperationV1::RequestTensorRefinement { .. }
-                        ) => 3,
-                        _ => 1,
-                    })
-                })?;
-            total
-                .checked_add(materialized.checked_add(1)?)?
-                .checked_add(usize::from(matches!(
-                    block.terminator,
-                    ProductionRankedTerminatorV1::BranchArgsAdd { .. }
-                        | ProductionRankedTerminatorV1::BranchArgsAddAt { .. }
-                )))
-        });
-        let Some(operation_count) = operation_count else {
-            return Err(ProductionRankedKernelErrorV1::ResourceLimit {
-                resource: "operation",
-                limit: MAX_RANKED_BOUNDS_OPERATIONS,
-                actual: usize::MAX,
+        let operation_count = if matches!(allocation, RankedValidationAllocationV18::Legacy) {
+            let operation_count = self.blocks.iter().try_fold(0_usize, |total, block| {
+                let materialized = block
+                        .operations
+                        .iter()
+                        .try_fold(0_usize, |count, operation| {
+                            count.checked_add(match operation {
+                                    ProductionRankedOperationV1::SemanticExpression { expression, .. } => {
+                                        expression.validate().ok()?.nodes.checked_add(1)?
+                                    }
+                                    _ if matches!(
+                                        operation,
+                                        ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
+                                                | ProductionRankedOperationV1::RequireEffectRefinement { .. }
+                                                | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
+                                                | ProductionRankedOperationV1::RequestEffectRefinement { .. }
+                                                | ProductionRankedOperationV1::RequireNumericalRefinement { .. }
+                                                | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
+                                                | ProductionRankedOperationV1::RequireTensorRefinement { .. }
+                                                | ProductionRankedOperationV1::RequestTensorRefinement { .. }
+                                    ) => 3,
+                                    _ => 1,
+                            })
+                        })?;
+                total
+                        .checked_add(materialized.checked_add(1)?)?
+                        .checked_add(usize::from(matches!(
+                            block.terminator,
+                            ProductionRankedTerminatorV1::BranchArgsAdd { .. }
+                                    | ProductionRankedTerminatorV1::BranchArgsAddAt { .. }
+                        )))
             });
+            let Some(operation_count) = operation_count else {
+                return Err((ProductionRankedKernelErrorV1::ResourceLimit {
+                        resource: "operation",
+                        limit: MAX_RANKED_BOUNDS_OPERATIONS,
+                        actual: usize::MAX,
+                }).into());
+            };
+            operation_count
+        } else {
+            let mut total = 0_usize;
+            for block in &self.blocks {
+                allocation.charge(1)?;
+                let mut materialized = 0_usize;
+                for operation in &block.operations {
+                    allocation.charge(1)?;
+                    let count = match operation {
+                        ProductionRankedOperationV1::SemanticExpression { expression, .. } =>
+                            expression.validate_ranked_live_v18(allocation)?.nodes.checked_add(1),
+                        ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
+                        | ProductionRankedOperationV1::RequireEffectRefinement { .. }
+                        | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
+                        | ProductionRankedOperationV1::RequestEffectRefinement { .. }
+                        | ProductionRankedOperationV1::RequireNumericalRefinement { .. }
+                        | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
+                        | ProductionRankedOperationV1::RequireTensorRefinement { .. }
+                        | ProductionRankedOperationV1::RequestTensorRefinement { .. } => Some(3),
+                        _ => Some(1),
+                    }.ok_or(ProductionRankedKernelErrorV1::ResourceLimit {
+                        resource: "operation", limit: MAX_RANKED_BOUNDS_OPERATIONS, actual: usize::MAX,
+                    })?;
+                    materialized = materialized.checked_add(count).ok_or(
+                        ProductionRankedKernelErrorV1::ResourceLimit {
+                            resource: "operation", limit: MAX_RANKED_BOUNDS_OPERATIONS, actual: usize::MAX,
+                        })?;
+                }
+                let extra = usize::from(matches!(block.terminator,
+                    ProductionRankedTerminatorV1::BranchArgsAdd { .. } | ProductionRankedTerminatorV1::BranchArgsAddAt { .. }));
+                total = total.checked_add(materialized).and_then(|sum|sum.checked_add(1))
+                    .and_then(|sum|sum.checked_add(extra)).ok_or(ProductionRankedKernelErrorV1::ResourceLimit {
+                        resource: "operation", limit: MAX_RANKED_BOUNDS_OPERATIONS, actual: usize::MAX,
+                    })?;
+            }
+            total
         };
         if operation_count > MAX_RANKED_BOUNDS_OPERATIONS {
-            return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+            return Err((ProductionRankedKernelErrorV1::ResourceLimit {
                 resource: "operation",
                 limit: MAX_RANKED_BOUNDS_OPERATIONS,
                 actual: operation_count,
-            });
+            }).into());
         }
         let tree_work = ranked_tree_work(self.blocks.len(), operation_count).ok_or(
             ProductionRankedKernelErrorV1::ResourceLimit {
@@ -2099,30 +2563,28 @@ impl ProductionRankedKernelV1 {
             },
         )?;
         if tree_work > HARD_MAX_SESSION_OPERATION_TREE_ITEMS {
-            return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+            return Err((ProductionRankedKernelErrorV1::ResourceLimit {
                 resource: "operation tree work",
                 limit: HARD_MAX_SESSION_OPERATION_TREE_ITEMS,
                 actual: tree_work,
-            });
+            }).into());
         }
 
-        let mut locals = Vec::new();
-        let mut local_definition_blocks = Vec::new();
+        let (mut facts, result_count) = RankedValidationFactsV18::prepare(&self.blocks, allocation)?;
+        let mut locals = allocation.capacity(result_count)?;
+        let mut local_definition_blocks = allocation.capacity(result_count)?;
         let mut saw_execution_layout = false;
-        let mut allocation_classes = HashMap::new();
-        let mut predicated_success_uses: BTreeMap<ProductionRankedValueIdV1, usize> =
-            BTreeMap::new();
-        let mut predicated_indices = BTreeMap::new();
         let mut total_block_arguments = 0_usize;
         for (block_index, block) in self.blocks.iter().enumerate() {
+            allocation.charge(1)?;
             if block_index == 0 && block.index_argument_count != 0
                 || block.index_argument_count as usize > HARD_MAX_PRODUCTION_RANKED_ARGUMENTS
             {
-                return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+                return Err((ProductionRankedKernelErrorV1::ResourceLimit {
                     resource: "block argument",
                     limit: HARD_MAX_PRODUCTION_RANKED_ARGUMENTS,
                     actual: block.index_argument_count as usize,
-                });
+                }).into());
             }
             total_block_arguments = total_block_arguments
                 .checked_add(block.index_argument_count as usize)
@@ -2132,18 +2594,20 @@ impl ProductionRankedKernelV1 {
                     actual: usize::MAX,
                 })?;
             if total_block_arguments > MAX_RANKED_BOUNDS_OPERATIONS {
-                return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+                return Err((ProductionRankedKernelErrorV1::ResourceLimit {
                     resource: "total block argument",
                     limit: MAX_RANKED_BOUNDS_OPERATIONS,
                     actual: total_block_arguments,
-                });
+                }).into());
             }
             for (operation_index, operation) in block.operations.iter().enumerate() {
-                validate_scoped_operation_values_v1(
+                allocation.charge(1)?;
+                validate_scoped_operation_values_core_v18(
                     operation,
                     block_index,
                     &self.blocks,
                     &local_definition_blocks,
+                    allocation,
                 )?;
                 if let ProductionRankedOperationV1::ExecutionLayout {
                     global_extents,
@@ -2169,7 +2633,7 @@ impl ProductionRankedKernelV1 {
                                 },
                             ))
                     {
-                        return Err(ProductionRankedKernelErrorV1::InvalidExecutionLayout);
+                        return Err((ProductionRankedKernelErrorV1::InvalidExecutionLayout).into());
                     }
                     saw_execution_layout = true;
                 }
@@ -2190,45 +2654,31 @@ impl ProductionRankedKernelV1 {
                 } = operation
                     && (*noalias_class != 0 && *allocation_origin == 0
                         || *allocation_origin != 0
-                            && allocation_classes
-                                .insert(*allocation_origin, *noalias_class)
+                            && facts.allocation_class(*allocation_origin, *noalias_class, allocation)?
                                 .is_some_and(|previous| previous != *noalias_class))
                 {
-                    return Err(ProductionRankedKernelErrorV1::InvalidAllocationContract);
+                    return Err((ProductionRankedKernelErrorV1::InvalidAllocationContract).into());
                 }
-                let result = validate_operation(operation, self.argument_count, &locals)?;
+                let result = validate_operation_core_v18(operation, self.argument_count, &locals, allocation)?;
                 if let ProductionRankedOperationV1::Access { indices, .. }
                 | ProductionRankedOperationV1::ValueAccess { indices, .. }
                 | ProductionRankedOperationV1::AtomicAccess { indices, .. }
                 | ProductionRankedOperationV1::AtomicValueAccess { indices, .. } = operation
-                    && let Some(index) = indices.iter().find_map(|value| {
-                        let ProductionRankedValueV1::Local(index) = value else {
-                            return None;
-                        };
-                        predicated_indices.contains_key(index).then_some(*index)
-                    })
                 {
-                    return Err(
-                        ProductionRankedKernelErrorV1::InvalidPredicatedAccessIndexUse { index },
-                    );
+                    for index in indices {
+                        allocation.charge(1)?;
+                        if let ProductionRankedValueV1::Local(index) = index {
+                            if facts.has_index(*index, allocation)? {
+                                return Err((ProductionRankedKernelErrorV1::InvalidPredicatedAccessIndexUse { index: *index }).into());
+                            }
+                        }
+                    }
                 }
                 if let ProductionRankedOperationV1::PredicatedAccess { success, .. } = operation {
                     let ProductionRankedValueV1::Local(success) = success else {
-                        return Err(ProductionRankedKernelErrorV1::InvalidShape);
+                        return Err((ProductionRankedKernelErrorV1::InvalidShape).into());
                     };
-                    let uses = predicated_success_uses.get_mut(success).ok_or(
-                        ProductionRankedKernelErrorV1::InvalidPredicatedAccessUse {
-                            success: *success,
-                            uses: 0,
-                        },
-                    )?;
-                    *uses = uses.checked_add(1).ok_or(
-                        ProductionRankedKernelErrorV1::ResourceLimit {
-                            resource: "predicated success use",
-                            limit: MAX_RANKED_BOUNDS_OPERATIONS,
-                            actual: usize::MAX,
-                        },
-                    )?;
+                    facts.use_success(*success, allocation)?;
                 }
                 if let Some((identity, kind)) = result {
                     let expected = u32::try_from(locals.len()).map_err(|_| {
@@ -2239,13 +2689,13 @@ impl ProductionRankedKernelV1 {
                         }
                     })?;
                     if identity.get() != expected {
-                        return Err(ProductionRankedKernelErrorV1::NonCanonicalValueId {
+                        return Err((ProductionRankedKernelErrorV1::NonCanonicalValueId {
                             expected,
                             actual: identity.get(),
-                        });
+                        }).into());
                     }
-                    locals.push(kind);
-                    local_definition_blocks.push(block_index);
+                    allocation.push(&mut locals, kind)?;
+                    allocation.push(&mut local_definition_blocks, block_index)?;
                     let paired = match operation {
                         ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
                             result,
@@ -2270,40 +2720,324 @@ impl ProductionRankedKernelV1 {
                             }
                         })?;
                         if success.get() != expected {
-                            return Err(ProductionRankedKernelErrorV1::NonCanonicalValueId {
+                            return Err((ProductionRankedKernelErrorV1::NonCanonicalValueId {
                                 expected,
                                 actual: success.get(),
-                            });
+                            }).into());
                         }
-                        locals.push(RecipeValueKindV1::CheckedAccessSuccess {
-                            index: ProductionRankedValueV1::Local(index),
-                            physical_extent,
-                        });
-                        local_definition_blocks.push(block_index);
-                        predicated_success_uses.insert(success, 0);
-                        predicated_indices.insert(index, success);
+                        allocation.push(&mut locals, RecipeValueKindV1::CheckedAccessSuccess {
+                            index: ProductionRankedValueV1::Local(index), physical_extent,
+                        })?;
+                        allocation.push(&mut local_definition_blocks, block_index)?;
+                        facts.pair(index, success, allocation)?;
                     }
                 }
             }
-            validate_terminator(
-                &block.terminator,
-                self.argument_count,
-                &locals,
-                &self.blocks,
-                block_index,
-                &local_definition_blocks,
+            validate_terminator_core_v18(
+                &block.terminator, self.argument_count, &locals,
+                &self.blocks, block_index, &local_definition_blocks, allocation,
             )?;
         }
-        if let Some((success, uses)) = predicated_success_uses
-            .into_iter()
-            .find(|(_, uses)| *uses == 0)
-        {
-            return Err(ProductionRankedKernelErrorV1::InvalidPredicatedAccessUse {
-                success,
-                uses,
-            });
-        }
+        facts.finish(allocation)?;
         Ok(tree_work)
+    }
+}
+
+#[cfg(test)]
+mod exact_projection_validation_tests_v18 {
+    use super::*;
+    use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrVerificationResourceErrorV1 as Resource, CanonicalKernelIrWorkBudgetV1 as Work};
+    use std::mem::size_of;
+
+    #[test]
+    fn empty_exact_recipe_has_independent_work_storage_and_floor_oracles() {
+        let work = 10;
+        let retained = size_of::<ProductionRankedKernelV1>() + 1;
+        let peak = size_of::<RankedValidationAllocationV18<'_, '_>>()
+            + size_of::<RankedValidationResultV18<ProductionRankedKernelV1>>() + retained
+            + size_of::<RankedValidationFactsV18>()
+            + size_of::<Vec<(u64, Option<u64>)>>()
+            + size_of::<Vec<Option<usize>>>()
+            + size_of::<Vec<Option<ProductionRankedValueIdV1>>>()
+            + size_of::<Vec<RecipeValueKindV1>>() + size_of::<Vec<usize>>();
+        let floor = 37;
+        for (work_limit, storage_limit) in [(work, peak), (work - 1, peak), (work, peak - 1)] {
+            let mut ledger = Work::new(work_limit);
+            let mut budget = Budget::new(&mut ledger, floor + storage_limit);
+            budget.reserve_storage(floor).unwrap();
+            let result = ProductionRankedKernelV1::from_exact_projection_v18("x", 0,
+                vec![ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return)], &mut budget);
+            if work_limit < work {
+                let Err(ProductionRankedProjectionValidationErrorV18::Resource(Resource::Work(error))) = result else {
+                    panic!("the live work refusal changed classification");
+                };
+                assert_eq!((error.actual(), error.limit()), (work, work_limit));
+                assert_eq!((budget.storage(), budget.peak_storage()), (floor, floor + peak));
+            } else if storage_limit < peak {
+                let Err(ProductionRankedProjectionValidationErrorV18::Resource(Resource::Storage(error))) = result else {
+                    panic!("the live storage refusal changed classification");
+                };
+                assert_eq!((error.actual(), error.limit()), (floor + peak, floor + storage_limit));
+                assert_eq!(budget.failed_storage(), Some(floor + peak));
+                assert_eq!(budget.storage(), floor);
+                assert_eq!(budget.work(), 7);
+            } else {
+                let kernel = result.unwrap();
+                assert_eq!((budget.work(), budget.storage(), budget.peak_storage()),
+                    (work, floor + retained, floor + peak));
+                assert_eq!(kernel.tree_work, 9);
+                drop(kernel);
+                budget.release_storage(retained).unwrap();
+                assert_eq!(budget.storage(), floor);
+            }
+        }
+    }
+
+    fn unnormalized_blocks() -> Vec<ProductionRankedBlockV1> {
+        let local = |id| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(id));
+        vec![ProductionRankedBlockV1::new(vec![
+            ProductionRankedOperationV1::View {
+                result: ProductionRankedValueIdV1::new(0), element_width: 32, writable: false,
+                shape: vec![512], dynamic_extents: vec![], allocation_origin: u64::MAX, noalias_class: 7,
+            },
+            ProductionRankedOperationV1::IndexConstant { result: ProductionRankedValueIdV1::new(1), value: 511 },
+            ProductionRankedOperationV1::IndexUnsignedCast {
+                result: ProductionRankedValueIdV1::new(2), source: local(1), bit_width: 8,
+            },
+            ProductionRankedOperationV1::Access { kind: AccessKindAttr::Read, view: local(0), indices: vec![local(2)] },
+        ], ProductionRankedTerminatorV1::BranchArgs { arguments: vec![], target: 1 }),
+        ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return)]
+    }
+
+    #[test]
+    fn live_operation_count_cannot_erase_an_expression_resource_refusal() {
+        let scalar = ProductionSemanticScalarTypeV2::Integer { signed: false, bits: 32 };
+        let expression = ProductionSemanticExpressionV2::Constant { scalar, bits: 7 };
+        let mut ledger = Work::new(12);
+        let mut budget = Budget::new(&mut ledger, 100_000);
+        budget.reserve_storage(41).unwrap();
+        // Name validation/copy (2), two operation censuses (5), initial
+        // expression validation/statistics/load check (3), and the count
+        // block/operation visits (2) precede its next expression-node visit.
+        let result = ProductionRankedKernelV1::from_exact_projection_v18("x", 0,
+            vec![ProductionRankedBlockV1::new(vec![ProductionRankedOperationV1::SemanticExpression {
+                result: ProductionRankedValueIdV1::new(0), expression,
+                numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+            }], ProductionRankedTerminatorV1::Return)], &mut budget);
+        let Err(ProductionRankedProjectionValidationErrorV18::Resource(Resource::Work(error))) = result else {
+            panic!("operation-count validation erased the original expression work denial");
+        };
+        assert_eq!((error.actual(), error.limit()), (13, 12));
+        assert_eq!(budget.storage(), 41);
+        assert_eq!(budget.failed_storage(), None);
+    }
+
+    #[test]
+    fn exact_constructor_never_rewrites_the_supplied_graph_or_nested_backings() {
+        let blocks = unnormalized_blocks();
+        let expected = blocks.clone();
+        let blocks_pointer = blocks.as_ptr();
+        let operations_pointer = blocks[0].operations.as_ptr();
+        let ProductionRankedOperationV1::View { shape, .. } = &blocks[0].operations[0] else { unreachable!() };
+        let shape_pointer = shape.as_ptr();
+        let ProductionRankedOperationV1::Access { indices, .. } = &blocks[0].operations[3] else { unreachable!() };
+        let indices_pointer = indices.as_ptr();
+        let mut ledger = Work::new(10_000);
+        let mut budget = Budget::new(&mut ledger, 100_000);
+        let exact = ProductionRankedKernelV1::from_exact_projection_v18("exact", 0, blocks, &mut budget).unwrap();
+        assert_eq!(exact.blocks(), expected);
+        assert_eq!(exact.blocks.as_ptr(), blocks_pointer);
+        assert_eq!(exact.blocks[0].operations.as_ptr(), operations_pointer);
+        let ProductionRankedOperationV1::View { shape, .. } = &exact.blocks[0].operations[0] else { unreachable!() };
+        assert_eq!(shape.as_ptr(), shape_pointer);
+        let ProductionRankedOperationV1::Access { indices, .. } = &exact.blocks[0].operations[3] else { unreachable!() };
+        assert_eq!(indices.as_ptr(), indices_pointer);
+        assert!(ranked_preverification_transform_v1::require_ranked_preverification_normal_form_v1(&exact).is_err());
+
+        let legacy = ProductionRankedKernelV1::new("exact", 0, expected).unwrap();
+        assert!(matches!(legacy.blocks[0].operations[0], ProductionRankedOperationV1::ViewInSpace { .. }));
+        assert!(matches!(legacy.blocks[0].operations[2], ProductionRankedOperationV1::IndexConstant { value: 255, .. }));
+        assert!(matches!(legacy.blocks[0].terminator, ProductionRankedTerminatorV1::Branch { target: 1 }));
+        assert_ne!(exact, legacy);
+    }
+
+    #[test]
+    fn exact_constructor_keeps_legacy_refusals_for_sparse_and_conflicting_definitions() {
+        let mut conflict = unnormalized_blocks();
+        conflict[0].operations.push(ProductionRankedOperationV1::AllocationEffect {
+            kind: AccessKindAttr::Read, memory_space: MemorySpaceAttr::Global,
+            allocation_origin: u64::MAX, noalias_class: 8,
+        });
+        let mut sparse = unnormalized_blocks();
+        let ProductionRankedOperationV1::IndexConstant { result, .. } = &mut sparse[0].operations[1] else { unreachable!() };
+        *result = ProductionRankedValueIdV1::new(u32::MAX);
+        for blocks in [conflict, sparse] {
+            let raw = ProductionRankedKernelV1 { function_name: "x".into(), argument_count: 0, blocks: blocks.clone(), tree_work: 0 };
+            let expected = raw.validate().unwrap_err();
+            let mut ledger = Work::new(10_000);
+            let mut budget = Budget::new(&mut ledger, 100_000);
+            assert_eq!(ProductionRankedKernelV1::from_exact_projection_v18("x", 0, blocks, &mut budget),
+                Err(ProductionRankedProjectionValidationErrorV18::Kernel(expected)));
+            assert_eq!(budget.storage(), 0);
+            assert!(budget.peak_storage() < 10_000, "sparse external identities must not size dense tables");
+        }
+    }
+
+    fn exact_verifier_fixture(explicit_memory: bool, extent: u64) -> ProductionRankedKernelV1 {
+        let mut blocks = unnormalized_blocks();
+        if explicit_memory {
+            blocks[0].operations[0] = ProductionRankedOperationV1::ViewInSpace {
+                result: ProductionRankedValueIdV1::new(0), element_width: 32, writable: false,
+                memory_space: MemorySpaceAttr::Global, shape: vec![extent], dynamic_extents: vec![],
+                allocation_origin: u64::MAX, noalias_class: 7,
+            };
+        } else {
+            let ProductionRankedOperationV1::View { shape, .. } = &mut blocks[0].operations[0] else { unreachable!() };
+            shape[0] = extent;
+        }
+        blocks[0].operations.insert(0, ProductionRankedOperationV1::ExecutionLayout {
+            grid_identity: 1, global_extents: [1, 1, 1], workgroup_extents: [1, 1, 1],
+            subgroup_size: 1, full_physical_workgroups: true,
+        });
+        let mut work = Work::new(10_000);
+        let mut budget = Budget::new(&mut work, 100_000);
+        ProductionRankedKernelV1::from_exact_projection_v18("exact_checked", 0, blocks, &mut budget).unwrap()
+    }
+
+    #[test]
+    fn exact_view_verifier_keeps_coordinates_payloads_and_legacy_normal_form_gate() {
+        for explicit_memory in [false, true] {
+            let kernel = exact_verifier_fixture(explicit_memory, 512);
+            let expected = kernel.clone();
+            let blocks = kernel.blocks.as_ptr();
+            let operations = kernel.blocks[0].operations.as_ptr();
+            let construction = ProductionConstructionV1::ranked_kernel("legacy", expected.clone()).unwrap();
+            assert!(matches!(compile_ranked_kernel_for_gfx942_lowering_v1(
+                construction, ProductionSessionLimitsV1::default(), []),
+                Err(ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedRecipe(
+                    ProductionRankedKernelErrorV1::InvalidTransformation(_))))));
+            let checked = verify_exact_ranked_projection_for_gfx942_v18(kernel,
+                ProductionSessionLimitsV1::default(), []).unwrap();
+            assert_eq!(checked.kernel(), &expected);
+            assert_eq!(checked.kernel().blocks.as_ptr(), blocks);
+            assert_eq!(checked.kernel().blocks[0].operations.as_ptr(), operations);
+            assert_eq!(checked.checked.exact_graph_identity(), ProductionExactGraphIdentityV1::from_ranked(&expected));
+            assert_eq!(checked.checked._root.exact_graph_identity, Some(checked.checked.exact_graph_identity()));
+            assert_eq!(checked.checked._root.graph_snapshot, checked.checked.graph_snapshot());
+            assert!(checked.all_mandatory_reports_are_clean());
+            assert_eq!(checked.production_pipeline_report().preservation().certificates().len(), 9);
+            assert!(checked.production_analysis_work_upper_bound_v1() > 0);
+            assert!(checked.production_analysis_retained_storage_upper_bound_v1() > 0);
+            assert!(checked.production_analysis_peak_storage_upper_bound_v1()
+                >= checked.production_analysis_retained_storage_upper_bound_v1());
+        }
+    }
+
+    #[test]
+    fn exact_view_verifier_preserves_bounds_and_session_refusals() {
+        assert!(matches!(verify_exact_ranked_projection_for_gfx942_v18(
+            exact_verifier_fixture(false, 1), ProductionSessionLimitsV1::default(), []),
+            Err(ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedBounds(_)))));
+        let limits = ProductionSessionLimitsV1::new(crate::ShellLimits::new(1, 64, 512).unwrap(), 1).unwrap();
+        assert!(matches!(verify_exact_ranked_projection_for_gfx942_v18(
+            exact_verifier_fixture(true, 512), limits, []), Err(ProductionRankedCompileErrorV1::Context(_))));
+    }
+
+    #[test]
+    fn exact_unsigned_cast_widths_keep_the_graph_and_exclusive_access_bound() {
+        for (width, value, narrowed) in [(8, 511, 255), (16, 131_071, 65_535),
+            (32, 8_589_934_591, 4_294_967_295), (64, 511, 511)] {
+            for in_bounds in [false, true] {
+                let extent = narrowed + u64::from(in_bounds);
+                let mut blocks = exact_verifier_fixture(true, extent).blocks;
+                let ProductionRankedOperationV1::IndexConstant { value: source, .. } =
+                    &mut blocks[0].operations[2] else { unreachable!() };
+                *source = value;
+                let ProductionRankedOperationV1::IndexUnsignedCast { bit_width, .. } =
+                    &mut blocks[0].operations[3] else { unreachable!() };
+                *bit_width = width;
+                let expected = blocks.clone();
+                let pointer = blocks[0].operations.as_ptr();
+                let mut work = Work::new(10_000);
+                let mut budget = Budget::new(&mut work, 100_000);
+                let kernel = ProductionRankedKernelV1::from_exact_projection_v18(
+                    "exact_cast_width", 0, blocks, &mut budget).unwrap();
+                let verified = verify_exact_ranked_projection_for_gfx942_v18(
+                    kernel, ProductionSessionLimitsV1::default(), []);
+                if in_bounds {
+                    let checked = verified.unwrap();
+                    assert_eq!(checked.kernel().blocks(), expected);
+                    assert_eq!(checked.kernel().blocks[0].operations.as_ptr(), pointer);
+                    assert!(matches!(checked.kernel().blocks[0].operations[3],
+                        ProductionRankedOperationV1::IndexUnsignedCast { bit_width, .. }
+                        if bit_width == width));
+                    assert!(checked.all_mandatory_reports_are_clean());
+                } else {
+                    assert!(matches!(verified,
+                        Err(ProductionRankedCompileErrorV1::Session(
+                            ProductionSessionErrorV1::RankedBounds(_)))));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_unsigned_cast_constructor_rejects_unregistered_widths() {
+        for width in [0, 1, 7, 9, 24, 63, 65, 128, u16::MAX] {
+            let mut blocks = unnormalized_blocks();
+            let ProductionRankedOperationV1::IndexUnsignedCast { bit_width, .. } =
+                &mut blocks[0].operations[2] else { unreachable!() };
+            *bit_width = width;
+            let mut work = Work::new(10_000);
+            let mut budget = Budget::new(&mut work, 100_000);
+            budget.reserve_storage(37).unwrap();
+            assert_eq!(ProductionRankedKernelV1::from_exact_projection_v18(
+                "invalid_cast_width", 0, blocks, &mut budget),
+                Err(ProductionRankedProjectionValidationErrorV18::Kernel(
+                    ProductionRankedKernelErrorV1::InvalidUnsignedCast)));
+            assert_eq!(budget.storage(), 37);
+        }
+    }
+
+    fn exact_verified_session() -> (ProductionPlironSessionV1,
+        ProductionStageHandleV1<KernelChecksVerifiedGraphStageV1>,
+        ProductionRootHandleV1<KernelChecksVerifiedGraphStageV1>) {
+        let mut session = ProductionPlironSessionV1::new_ranked_v1(ProductionSessionLimitsV1::default()).unwrap();
+        let construction = ProductionConstructionV1::ranked_kernel("exact_view", exact_verifier_fixture(true, 512)).unwrap();
+        let registered = session.register_construction(construction).unwrap();
+        let (stage, root) = session.construct_registered(registered).unwrap();
+        let (stage, root) = session.verify_production_ranked_kernel_pipeline(stage, root).unwrap();
+        (session, stage, root)
+    }
+
+    #[test]
+    fn exact_view_prepare_replay_rejects_foreign_owner_and_missing_reports() {
+        let (owner, stage, root) = exact_verified_session();
+        let (foreign, _, _) = exact_verified_session();
+        assert!(matches!(foreign.prepare_ranked_lowering(stage, root), Err(ProductionSessionErrorV1::ForeignSession)));
+        drop(owner);
+        let (mut session, stage, root) = exact_verified_session();
+        session.constructed_roots.get_mut(&stage.identity).unwrap().production_pipeline_report = None;
+        assert!(matches!(session.prepare_ranked_lowering(stage, root), Err(ProductionSessionErrorV1::StageRootMismatch)));
+    }
+
+    #[test]
+    fn exact_view_prepare_replay_rejects_changed_recipe_and_typed_identity() {
+        for mutate_recipe in [false, true] {
+            let (mut session, stage, mut root) = exact_verified_session();
+            let record = session.constructed_roots.get_mut(&stage.identity).unwrap();
+            if mutate_recipe {
+                let kernel = record.ranked_kernel.as_mut().unwrap();
+                let ProductionRankedOperationV1::IndexConstant { value, .. } = &mut kernel.blocks[0].operations[2] else { unreachable!() };
+                *value = 510;
+            } else {
+                let identity = ProductionExactGraphIdentityV1([0xa5; 32]);
+                record.exact_graph_identity = Some(identity);
+                root.exact_graph_identity = Some(identity);
+            }
+            assert!(matches!(session.prepare_ranked_lowering(stage, root), Err(ProductionSessionErrorV1::RankedGraphChanged)));
+        }
     }
 }
 
@@ -2460,6 +3194,15 @@ fn validate_live_semantic_loads(
     kernel: &ProductionRankedKernelV1,
     expression: &ProductionSemanticExpressionV2,
 ) -> Result<(), ProductionRankedKernelErrorV1> {
+    legacy_ranked_validation_v18(validate_live_semantic_loads_core_v18(kernel, expression, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn validate_live_semantic_loads_core_v18(
+    kernel: &ProductionRankedKernelV1,
+    expression: &ProductionSemanticExpressionV2,
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<(), ProductionRankedProjectionValidationErrorV18> {
+    allocation.charge(1)?;
     match expression {
         ProductionSemanticExpressionV2::Load(load) => {
             let operation = kernel
@@ -2472,22 +3215,24 @@ fn validate_live_semantic_loads(
                 indices,
             }) = operation
             else {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidReferenceContract).into());
             };
+            allocation.charge(indices.len().min(load.indices.len()))?;
             if *kind != AccessKindAttr::Read
                 || *view != load.view
                 || indices.as_slice() != load.indices.as_ref()
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidReferenceContract).into());
             }
             let ProductionRankedValueV1::Local(view_identity) = load.view else {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidReferenceContract).into());
             };
-            let mut definitions = kernel
-                .blocks()
-                .iter()
-                .flat_map(|block| block.operations())
-                .filter_map(|operation| match operation {
+            let mut definition = None;
+            for block in kernel.blocks() {
+                allocation.charge(1)?;
+                for operation in block.operations() {
+                    allocation.charge(1)?;
+                    let found = match operation {
                     ProductionRankedOperationV1::ViewInSpace {
                         result,
                         element_width,
@@ -2505,17 +3250,23 @@ fn validate_live_semantic_loads(
                     } if *result == view_identity => {
                         Some((*element_width, *allocation_origin, MemorySpaceAttr::Global))
                     }
-                    _ => None,
-                });
-            let Some((element_width, allocation_origin, memory_space)) = definitions.next() else {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                        _ => None,
+                    };
+                    if let Some(found) = found {
+                        if definition.replace(found).is_some() {
+                            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract.into());
+                        }
+                    }
+                }
+            }
+            let Some((element_width, allocation_origin, memory_space)) = definition else {
+                return Err((ProductionRankedKernelErrorV1::InvalidReferenceContract).into());
             };
-            if definitions.next().is_some()
-                || memory_space != MemorySpaceAttr::Global
+            if memory_space != MemorySpaceAttr::Global
                 || allocation_origin != load.allocation_origin
                 || element_width != u32::from(load.scalar.bit_width())
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidReferenceContract).into());
             }
             Ok(())
         }
@@ -2523,12 +3274,12 @@ fn validate_live_semantic_loads(
         | ProductionSemanticExpressionV2::Constant { .. } => Ok(()),
         ProductionSemanticExpressionV2::Unary { operand, .. }
         | ProductionSemanticExpressionV2::Cast { operand, .. } => {
-            validate_live_semantic_loads(kernel, operand)
+            validate_live_semantic_loads_core_v18(kernel, operand, allocation)
         }
         ProductionSemanticExpressionV2::Binary { lhs, rhs, .. }
         | ProductionSemanticExpressionV2::Compare { lhs, rhs, .. } => {
-            validate_live_semantic_loads(kernel, lhs)?;
-            validate_live_semantic_loads(kernel, rhs)
+            validate_live_semantic_loads_core_v18(kernel, lhs, allocation)?;
+            validate_live_semantic_loads_core_v18(kernel, rhs, allocation)
         }
         ProductionSemanticExpressionV2::Select {
             condition,
@@ -2536,11 +3287,24 @@ fn validate_live_semantic_loads(
             when_false,
             ..
         } => {
-            validate_live_semantic_loads(kernel, condition)?;
-            validate_live_semantic_loads(kernel, when_true)?;
-            validate_live_semantic_loads(kernel, when_false)
+            validate_live_semantic_loads_core_v18(kernel, condition, allocation)?;
+            validate_live_semantic_loads_core_v18(kernel, when_true, allocation)?;
+            validate_live_semantic_loads_core_v18(kernel, when_false, allocation)
         }
     }
+}
+
+fn ranked_expression_contract_v18(
+    contract: ProductionNumericalContractV2,
+    expression: &ProductionSemanticExpressionV2,
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> RankedValidationResultV18<bool> {
+    if !contract.is_supported() { return Ok(false); }
+    Ok(if expression.contains_float_ranked_live_v18(allocation)? {
+        matches!(contract, ProductionNumericalContractV2::ExactIeee754OperatorCongruence { .. })
+    } else {
+        matches!(contract, ProductionNumericalContractV2::ExactBitVectorOperatorCongruence)
+    })
 }
 
 fn ranked_tree_work(block_count: usize, operation_count: usize) -> Option<usize> {
@@ -2965,6 +3729,16 @@ fn require_value(
     argument_count: usize,
     locals: &[RecipeValueKindV1],
 ) -> Result<RecipeValueKindV1, ProductionRankedKernelErrorV1> {
+    legacy_ranked_validation_v18(require_value_core_v18(value, argument_count, locals, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn require_value_core_v18(
+    value: ProductionRankedValueV1,
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<RecipeValueKindV1, ProductionRankedProjectionValidationErrorV18> {
+    allocation.charge(1)?;
     match value {
         ProductionRankedValueV1::Argument(argument)
             if usize::try_from(argument)
@@ -2976,10 +3750,10 @@ fn require_value(
         ProductionRankedValueV1::Local(identity) => locals
             .get(identity.get() as usize)
             .copied()
-            .ok_or(ProductionRankedKernelErrorV1::UndefinedValue(value)),
+            .ok_or(ProductionRankedKernelErrorV1::UndefinedValue(value)).map_err(Into::into),
         ProductionRankedValueV1::BlockArgument { .. } => Ok(RecipeValueKindV1::Index),
         ProductionRankedValueV1::Argument(_) => {
-            Err(ProductionRankedKernelErrorV1::UndefinedValue(value))
+            Err((ProductionRankedKernelErrorV1::UndefinedValue(value)).into())
         }
     }
 }
@@ -2989,13 +3763,23 @@ fn require_index(
     argument_count: usize,
     locals: &[RecipeValueKindV1],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
+    legacy_ranked_validation_v18(require_index_core_v18(value, argument_count, locals, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn require_index_core_v18(
+    value: ProductionRankedValueV1,
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<(), ProductionRankedProjectionValidationErrorV18> {
+    allocation.charge(1)?;
     if matches!(
-        require_value(value, argument_count, locals)?,
+        require_value_core_v18(value, argument_count, locals, allocation)?,
         RecipeValueKindV1::Index
     ) {
         Ok(())
     } else {
-        Err(ProductionRankedKernelErrorV1::ExpectedIndex(value))
+        Err((ProductionRankedKernelErrorV1::ExpectedIndex(value)).into())
     }
 }
 
@@ -3004,14 +3788,24 @@ fn require_view(
     argument_count: usize,
     locals: &[RecipeValueKindV1],
 ) -> Result<(usize, bool), ProductionRankedKernelErrorV1> {
-    match require_value(value, argument_count, locals)? {
+    legacy_ranked_validation_v18(require_view_core_v18(value, argument_count, locals, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn require_view_core_v18(
+    value: ProductionRankedValueV1,
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<(usize, bool), ProductionRankedProjectionValidationErrorV18> {
+    allocation.charge(1)?;
+    match require_value_core_v18(value, argument_count, locals, allocation)? {
         RecipeValueKindV1::View { rank, writable, .. } => Ok((rank, writable)),
         RecipeValueKindV1::Index
         | RecipeValueKindV1::Pipeline { .. }
         | RecipeValueKindV1::CheckedAccessSuccess { .. }
         | RecipeValueKindV1::Semantic
         | RecipeValueKindV1::TypedSemantic { .. } => {
-            Err(ProductionRankedKernelErrorV1::ExpectedView(value))
+            Err((ProductionRankedKernelErrorV1::ExpectedView(value)).into())
         }
     }
 }
@@ -3021,13 +3815,23 @@ fn require_semantic(
     argument_count: usize,
     locals: &[RecipeValueKindV1],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
+    legacy_ranked_validation_v18(require_semantic_core_v18(value, argument_count, locals, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn require_semantic_core_v18(
+    value: ProductionRankedValueV1,
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<(), ProductionRankedProjectionValidationErrorV18> {
+    allocation.charge(1)?;
     if matches!(
-        require_value(value, argument_count, locals)?,
+        require_value_core_v18(value, argument_count, locals, allocation)?,
         RecipeValueKindV1::Semantic | RecipeValueKindV1::TypedSemantic { .. }
     ) {
         Ok(())
     } else {
-        Err(ProductionRankedKernelErrorV1::ExpectedSemantic(value))
+        Err((ProductionRankedKernelErrorV1::ExpectedSemantic(value)).into())
     }
 }
 
@@ -3042,12 +3846,28 @@ fn require_typed_semantic(
     ),
     ProductionRankedKernelErrorV1,
 > {
-    match require_value(value, argument_count, locals)? {
+    legacy_ranked_validation_v18(require_typed_semantic_core_v18(value, argument_count, locals, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn require_typed_semantic_core_v18(
+    value: ProductionRankedValueV1,
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<
+    (
+        super::ProductionSemanticScalarTypeV2,
+        ProductionNumericalContractV2,
+    ),
+    ProductionRankedProjectionValidationErrorV18,
+> {
+    allocation.charge(1)?;
+    match require_value_core_v18(value, argument_count, locals, allocation)? {
         RecipeValueKindV1::TypedSemantic {
             scalar,
             numerical_contract,
         } => Ok((scalar, numerical_contract)),
-        _ => Err(ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract),
+        _ => Err((ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract).into()),
     }
 }
 
@@ -3056,6 +3876,16 @@ fn validate_operation(
     argument_count: usize,
     locals: &[RecipeValueKindV1],
 ) -> Result<Option<(ProductionRankedValueIdV1, RecipeValueKindV1)>, ProductionRankedKernelErrorV1> {
+    legacy_ranked_validation_v18(validate_operation_core_v18(operation, argument_count, locals, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn validate_operation_core_v18(
+    operation: &ProductionRankedOperationV1,
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<Option<(ProductionRankedValueIdV1, RecipeValueKindV1)>, ProductionRankedProjectionValidationErrorV18> {
+    allocation.charge(1)?;
     match operation {
         ProductionRankedOperationV1::ExecutionLayout { .. } => Ok(None),
         ProductionRankedOperationV1::View {
@@ -3075,25 +3905,26 @@ fn validate_operation(
             ..
         } => {
             if !(1..=MAX_RANKED_MEMORY_RANK).contains(&shape.len()) {
-                return Err(ProductionRankedKernelErrorV1::InvalidShape);
+                return Err((ProductionRankedKernelErrorV1::InvalidShape).into());
             }
             if !SUPPORTED_ELEMENT_WIDTHS.contains(element_width) {
-                return Err(ProductionRankedKernelErrorV1::UnsupportedElementWidth(
+                return Err((ProductionRankedKernelErrorV1::UnsupportedElementWidth(
                     *element_width,
-                ));
+                )).into());
             }
+            allocation.charge(shape.len())?;
             let expected = shape
                 .iter()
                 .filter(|extent| **extent == DYNAMIC_EXTENT)
                 .count();
             if dynamic_extents.len() != expected {
-                return Err(ProductionRankedKernelErrorV1::DynamicExtentCountMismatch {
+                return Err((ProductionRankedKernelErrorV1::DynamicExtentCountMismatch {
                     expected,
                     actual: dynamic_extents.len(),
-                });
+                }).into());
             }
             for extent in dynamic_extents {
-                require_index(*extent, argument_count, locals)?;
+                require_index_core_v18(*extent, argument_count, locals, allocation)?;
             }
             Ok(Some((
                 *result,
@@ -3125,16 +3956,16 @@ fn validate_operation(
                 memory_space: MemorySpaceAttr::Workgroup,
                 leading_extent,
                 ..
-            } = require_value(*view, argument_count, locals)?
+            } = require_value_core_v18(*view, argument_count, locals, allocation)?
             else {
-                return Err(ProductionRankedKernelErrorV1::InvalidPipelineContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidPipelineContract).into());
             };
             if leading_extent != u64::from(*buffers)
                 || !(2..=dialect_kernel::MAX_PIPELINE_BUFFERS_V1).contains(buffers)
                 || *prefetch_distance == 0
                 || *prefetch_distance >= *buffers
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidPipelineContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidPipelineContract).into());
             }
             Ok(Some((
                 *result,
@@ -3153,15 +3984,15 @@ fn validate_operation(
             let RecipeValueKindV1::Pipeline {
                 buffers,
                 prefetch_distance,
-            } = require_value(*pipeline, argument_count, locals)?
+            } = require_value_core_v18(*pipeline, argument_count, locals, allocation)?
             else {
-                return Err(ProductionRankedKernelErrorV1::InvalidPipelineContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidPipelineContract).into());
             };
             if prefetch_distance == 0 || prefetch_distance >= buffers {
-                return Err(ProductionRankedKernelErrorV1::InvalidPipelineContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidPipelineContract).into());
             }
-            require_index(*epoch, argument_count, locals)?;
-            require_index(*slot, argument_count, locals)?;
+            require_index_core_v18(*epoch, argument_count, locals, allocation)?;
+            require_index_core_v18(*slot, argument_count, locals, allocation)?;
             Ok(None)
         }
         ProductionRankedOperationV1::IndexConstant { result, .. } => {
@@ -3172,9 +4003,9 @@ fn validate_operation(
             source,
             bit_width,
         } => {
-            require_index(*source, argument_count, locals)?;
+            require_index_core_v18(*source, argument_count, locals, allocation)?;
             if !matches!(*bit_width, 8 | 16 | 32 | 64) {
-                return Err(ProductionRankedKernelErrorV1::InvalidUnsignedCast);
+                return Err((ProductionRankedKernelErrorV1::InvalidUnsignedCast).into());
             }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
@@ -3188,18 +4019,18 @@ fn validate_operation(
                 .ok()
                 .is_none_or(|dimension| dimension >= MAX_RANKED_MEMORY_RANK)
             {
-                return Err(ProductionRankedKernelErrorV1::DimensionOutOfBounds {
+                return Err((ProductionRankedKernelErrorV1::DimensionOutOfBounds {
                     dimension: *dimension,
                     rank: MAX_RANKED_MEMORY_RANK,
-                });
+                }).into());
             }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
         ProductionRankedOperationV1::IndexBinary {
             result, lhs, rhs, ..
         } => {
-            require_index(*lhs, argument_count, locals)?;
-            require_index(*rhs, argument_count, locals)?;
+            require_index_core_v18(*lhs, argument_count, locals, allocation)?;
+            require_index_core_v18(*rhs, argument_count, locals, allocation)?;
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
         ProductionRankedOperationV1::DeterministicJoin {
@@ -3207,14 +4038,14 @@ fn validate_operation(
             dependencies,
         } => {
             if !(1..=MAX_DETERMINISTIC_JOIN_INPUTS_V1).contains(&dependencies.len()) {
-                return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+                return Err((ProductionRankedKernelErrorV1::ResourceLimit {
                     resource: "deterministic dependency",
                     limit: MAX_DETERMINISTIC_JOIN_INPUTS_V1,
                     actual: dependencies.len(),
-                });
+                }).into());
             }
             for dependency in dependencies {
-                require_index(*dependency, argument_count, locals)?;
+                require_index_core_v18(*dependency, argument_count, locals, allocation)?;
             }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
@@ -3231,7 +4062,7 @@ fn validate_operation(
             elements_per_lane,
         } => {
             for value in [invocation, component, rows, columns, row_stride] {
-                require_index(*value, argument_count, locals)?;
+                require_index_core_v18(*value, argument_count, locals, allocation)?;
             }
             if *lanes_per_tile == 0
                 || *tile_rows == 0
@@ -3244,7 +4075,7 @@ fn validate_operation(
                 || (lanes_per_tile / tile_columns).checked_mul(*elements_per_lane)
                     != Some(*tile_rows)
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidShape);
+                return Err((ProductionRankedKernelErrorV1::InvalidShape).into());
             }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
@@ -3259,7 +4090,7 @@ fn validate_operation(
             elements_per_lane,
         } => {
             for value in [invocation, component, rows, columns, row_stride] {
-                require_index(*value, argument_count, locals)?;
+                require_index_core_v18(*value, argument_count, locals, allocation)?;
             }
             if *lanes_per_row == 0
                 || *elements_per_lane == 0
@@ -3268,7 +4099,7 @@ fn validate_operation(
                     .and_then(|base| base.checked_add(*lanes_per_row - 1))
                     .is_none()
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidShape);
+                return Err((ProductionRankedKernelErrorV1::InvalidShape).into());
             }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
@@ -3294,7 +4125,7 @@ fn validate_operation(
                 row_stride,
                 physical_extent,
             ] {
-                require_index(*value, argument_count, locals)?;
+                require_index_core_v18(*value, argument_count, locals, allocation)?;
             }
             if *lanes_per_tile == 0
                 || *tile_rows == 0
@@ -3307,7 +4138,7 @@ fn validate_operation(
                 || (lanes_per_tile / tile_columns).checked_mul(*elements_per_lane)
                     != Some(*tile_rows)
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidShape);
+                return Err((ProductionRankedKernelErrorV1::InvalidShape).into());
             }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
@@ -3331,7 +4162,7 @@ fn validate_operation(
                 row_stride,
                 physical_extent,
             ] {
-                require_index(*value, argument_count, locals)?;
+                require_index_core_v18(*value, argument_count, locals, allocation)?;
             }
             if *lanes_per_row == 0
                 || *elements_per_lane == 0
@@ -3340,7 +4171,7 @@ fn validate_operation(
                     .and_then(|base| base.checked_add(*lanes_per_row - 1))
                     .is_none()
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidShape);
+                return Err((ProductionRankedKernelErrorV1::InvalidShape).into());
             }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
@@ -3349,15 +4180,15 @@ fn validate_operation(
             view,
             dimension,
         } => {
-            let (rank, _) = require_view(*view, argument_count, locals)?;
+            let (rank, _) = require_view_core_v18(*view, argument_count, locals, allocation)?;
             if usize::try_from(*dimension)
                 .ok()
                 .is_none_or(|dimension| dimension >= rank)
             {
-                return Err(ProductionRankedKernelErrorV1::DimensionOutOfBounds {
+                return Err((ProductionRankedKernelErrorV1::DimensionOutOfBounds {
                     dimension: *dimension,
                     rank,
-                });
+                }).into());
             }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
@@ -3367,9 +4198,9 @@ fn validate_operation(
             indices,
         } => {
             if kind.is_atomic() {
-                return Err(ProductionRankedKernelErrorV1::AtomicContractRequired);
+                return Err((ProductionRankedKernelErrorV1::AtomicContractRequired).into());
             }
-            validate_access(*kind, *view, indices, argument_count, locals)?;
+            validate_access_core_v18(*kind, *view, indices, argument_count, locals, allocation)?;
             Ok(None)
         }
         ProductionRankedOperationV1::PredicatedAccess {
@@ -3379,25 +4210,25 @@ fn validate_operation(
             success,
         } => {
             if kind.is_atomic() {
-                return Err(ProductionRankedKernelErrorV1::AtomicContractRequired);
+                return Err((ProductionRankedKernelErrorV1::AtomicContractRequired).into());
             }
-            validate_access(*kind, *view, &[*index], argument_count, locals)?;
-            let view_kind = require_value(*view, argument_count, locals)?;
+            validate_access_core_v18(*kind, *view, &[*index], argument_count, locals, allocation)?;
+            let view_kind = require_value_core_v18(*view, argument_count, locals, allocation)?;
             let RecipeValueKindV1::View {
                 rank: 1,
                 dynamic_extent: Some(view_extent),
                 ..
             } = view_kind
             else {
-                return Err(ProductionRankedKernelErrorV1::InvalidShape);
+                return Err((ProductionRankedKernelErrorV1::InvalidShape).into());
             };
-            require_index(*index, argument_count, locals)?;
-            match require_value(*success, argument_count, locals)? {
+            require_index_core_v18(*index, argument_count, locals, allocation)?;
+            match require_value_core_v18(*success, argument_count, locals, allocation)? {
                 RecipeValueKindV1::CheckedAccessSuccess {
                     index: expected_index,
                     physical_extent,
                 } if expected_index == *index && physical_extent == view_extent => Ok(None),
-                _ => Err(ProductionRankedKernelErrorV1::InvalidShape),
+                _ => Err((ProductionRankedKernelErrorV1::InvalidShape).into()),
             }
         }
         ProductionRankedOperationV1::ValueAccess {
@@ -3407,10 +4238,10 @@ fn validate_operation(
             value,
         } => {
             if kind.is_atomic() || !kind.writes_memory() {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidReferenceContract).into());
             }
-            validate_access(*kind, *view, indices, argument_count, locals)?;
-            require_semantic(*value, argument_count, locals)?;
+            validate_access_core_v18(*kind, *view, indices, argument_count, locals, allocation)?;
+            require_semantic_core_v18(*value, argument_count, locals, allocation)?;
             Ok(None)
         }
         ProductionRankedOperationV1::AtomicAccess {
@@ -3420,9 +4251,9 @@ fn validate_operation(
             ..
         } => {
             if !kind.is_atomic() {
-                return Err(ProductionRankedKernelErrorV1::NonAtomicKindForAtomicAccess);
+                return Err((ProductionRankedKernelErrorV1::NonAtomicKindForAtomicAccess).into());
             }
-            validate_access(*kind, *view, indices, argument_count, locals)?;
+            validate_access_core_v18(*kind, *view, indices, argument_count, locals, allocation)?;
             Ok(None)
         }
         ProductionRankedOperationV1::AtomicValueAccess {
@@ -3433,16 +4264,16 @@ fn validate_operation(
             ..
         } => {
             if !kind.is_atomic() || !kind.writes_memory() {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidReferenceContract).into());
             }
-            validate_access(*kind, *view, indices, argument_count, locals)?;
-            require_semantic(*value, argument_count, locals)?;
+            validate_access_core_v18(*kind, *view, indices, argument_count, locals, allocation)?;
+            require_semantic_core_v18(*value, argument_count, locals, allocation)?;
             Ok(None)
         }
         ProductionRankedOperationV1::OwnershipContract { view, .. } => {
-            let (_, writable) = require_view(*view, argument_count, locals)?;
+            let (_, writable) = require_view_core_v18(*view, argument_count, locals, allocation)?;
             if !writable {
-                return Err(ProductionRankedKernelErrorV1::WriteThroughReadOnlyView);
+                return Err((ProductionRankedKernelErrorV1::WriteThroughReadOnlyView).into());
             }
             Ok(None)
         }
@@ -3458,7 +4289,7 @@ fn validate_operation(
                 *allocation_origin,
                 *noalias_class,
             ) {
-                return Err(ProductionRankedKernelErrorV1::InvalidAllocationContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidAllocationContract).into());
             }
             Ok(None)
         }
@@ -3477,7 +4308,7 @@ fn validate_operation(
                 || !numerical_contract.is_supported()
                 || !numerical_contract.admits_scalar(*scalar)
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidReferenceContract).into());
             }
             Ok(Some((
                 *result,
@@ -3489,9 +4320,9 @@ fn validate_operation(
         }
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
             if *symbol >= super::PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 {
-                return Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                return Err((ProductionRankedKernelErrorV1::InvalidSemanticExpression(
                     ProductionSemanticExpressionErrorV2::ReservedSymbol,
-                ));
+                )).into());
             }
             Ok(Some((*result, RecipeValueKindV1::Semantic)))
         }
@@ -3501,8 +4332,8 @@ fn validate_operation(
         ProductionRankedOperationV1::SemanticBinary {
             result, lhs, rhs, ..
         } => {
-            require_semantic(*lhs, argument_count, locals)?;
-            require_semantic(*rhs, argument_count, locals)?;
+            require_semantic_core_v18(*lhs, argument_count, locals, allocation)?;
+            require_semantic_core_v18(*rhs, argument_count, locals, allocation)?;
             Ok(Some((*result, RecipeValueKindV1::Semantic)))
         }
         ProductionRankedOperationV1::SemanticExpression {
@@ -3510,18 +4341,14 @@ fn validate_operation(
             expression,
             numerical_contract,
         } => {
-            expression
-                .validate()
-                .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
-            expression
-                .validate_static_domains()
-                .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+            expression.validate_ranked_live_v18(allocation)?;
+            expression.validate_static_domains_ranked_live_v18(allocation)?;
             if !numerical_contract.is_supported()
-                || !numerical_contract.admits_expression(expression)
+                || !ranked_expression_contract_v18(*numerical_contract, expression, allocation)?
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                return Err((ProductionRankedKernelErrorV1::InvalidSemanticExpression(
                     ProductionSemanticExpressionErrorV2::UnsupportedNumericalContract,
-                ));
+                )).into());
             }
             Ok(Some((
                 *result,
@@ -3539,27 +4366,25 @@ fn validate_operation(
             witness0,
             witness1,
         } => {
-            let (_, writable) = require_view(*view, argument_count, locals)?;
+            let (_, writable) = require_view_core_v18(*view, argument_count, locals, allocation)?;
             if !writable {
-                return Err(ProductionRankedKernelErrorV1::WriteThroughReadOnlyView);
+                return Err((ProductionRankedKernelErrorV1::WriteThroughReadOnlyView).into());
             }
-            let actual_type = require_typed_semantic(*actual, argument_count, locals)?;
-            let expected_type = require_typed_semantic(*expected, argument_count, locals)?;
-            let witness0_type = require_typed_semantic(*witness0, argument_count, locals)?;
-            let witness1_type = require_typed_semantic(*witness1, argument_count, locals)?;
+            let actual_type = require_typed_semantic_core_v18(*actual, argument_count, locals, allocation)?;
+            let expected_type = require_typed_semantic_core_v18(*expected, argument_count, locals, allocation)?;
+            let witness0_type = require_typed_semantic_core_v18(*witness0, argument_count, locals, allocation)?;
+            let witness1_type = require_typed_semantic_core_v18(*witness1, argument_count, locals, allocation)?;
             if actual_type != expected_type
                 || actual_type.1 != contract.numerical_contract()
                 || !contract.numerical_contract().admits_scalar(actual_type.0)
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract).into());
             }
             match contract.kind() {
                 ProductionCollectiveSemanticKindV1::FiniteFold
                 | ProductionCollectiveSemanticKindV1::FiniteRecurrence => {
                     if witness0_type != actual_type || witness1_type != actual_type {
-                        return Err(
-                            ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract,
-                        );
+                        return Err((ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract).into());
                     }
                 }
                 ProductionCollectiveSemanticKindV1::PermutationGather => {
@@ -3568,9 +4393,7 @@ fn validate_operation(
                         || witness0_type.1
                             != ProductionNumericalContractV2::ExactBitVectorOperatorCongruence
                     {
-                        return Err(
-                            ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract,
-                        );
+                        return Err((ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract).into());
                     }
                 }
             }
@@ -3587,15 +4410,15 @@ fn validate_operation(
             expected,
             ..
         } => {
-            require_semantic(*actual, argument_count, locals)?;
-            require_semantic(*expected, argument_count, locals)?;
+            require_semantic_core_v18(*actual, argument_count, locals, allocation)?;
+            require_semantic_core_v18(*expected, argument_count, locals, allocation)?;
             Ok(None)
         }
         ProductionRankedOperationV1::RequireEffectRefinement { contract, .. }
         | ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } => {
-            require_view(contract.view(), argument_count, locals)?;
+            require_view_core_v18(contract.view(), argument_count, locals, allocation)?;
             for index in contract.indices() {
-                require_index(*index, argument_count, locals)?;
+                require_index_core_v18(*index, argument_count, locals, allocation)?;
             }
             for value in contract
                 .gpu_coordinates()
@@ -3611,17 +4434,17 @@ fn validate_operation(
                     contract.reference_value(),
                 ])
             {
-                require_semantic(value, argument_count, locals)?;
+                require_semantic_core_v18(value, argument_count, locals, allocation)?;
             }
             Ok(None)
         }
         ProductionRankedOperationV1::RequireNumericalRefinement { contract, .. }
         | ProductionRankedOperationV1::RequestNumericalRefinement { contract, .. } => {
-            let actual = require_typed_semantic(contract.actual(), argument_count, locals)?;
-            let reference = require_typed_semantic(contract.reference(), argument_count, locals)?;
-            let domain = require_typed_semantic(contract.domain(), argument_count, locals)?;
+            let actual = require_typed_semantic_core_v18(contract.actual(), argument_count, locals, allocation)?;
+            let reference = require_typed_semantic_core_v18(contract.reference(), argument_count, locals, allocation)?;
+            let domain = require_typed_semantic_core_v18(contract.domain(), argument_count, locals, allocation)?;
             let precondition =
-                require_typed_semantic(contract.precondition(), argument_count, locals)?;
+                require_typed_semantic_core_v18(contract.precondition(), argument_count, locals, allocation)?;
             let boolean = (
                 ProductionSemanticScalarTypeV2::Bool,
                 ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
@@ -3631,29 +4454,29 @@ fn validate_operation(
                 || domain != boolean
                 || precondition != boolean
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidReferenceContract).into());
             }
             Ok(None)
         }
         ProductionRankedOperationV1::RequireTensorRefinement { contract, .. }
         | ProductionRankedOperationV1::RequestTensorRefinement { contract, .. } => {
-            require_view(contract.output_view(), argument_count, locals)?;
-            let actual = require_typed_semantic(contract.actual(), argument_count, locals)?;
-            let reference = require_typed_semantic(contract.reference(), argument_count, locals)?;
+            require_view_core_v18(contract.output_view(), argument_count, locals, allocation)?;
+            let actual = require_typed_semantic_core_v18(contract.actual(), argument_count, locals, allocation)?;
+            let reference = require_typed_semantic_core_v18(contract.reference(), argument_count, locals, allocation)?;
             if actual != reference
                 || actual != (contract.component_scalar(), contract.numerical_contract())
             {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                return Err((ProductionRankedKernelErrorV1::InvalidReferenceContract).into());
             }
             for component in contract.components() {
                 for index in component.indices() {
-                    require_index(*index, argument_count, locals)?;
+                    require_index_core_v18(*index, argument_count, locals, allocation)?;
                 }
-                let gpu = require_typed_semantic(component.gpu_value(), argument_count, locals)?;
+                let gpu = require_typed_semantic_core_v18(component.gpu_value(), argument_count, locals, allocation)?;
                 let sequential =
-                    require_typed_semantic(component.reference_value(), argument_count, locals)?;
+                    require_typed_semantic_core_v18(component.reference_value(), argument_count, locals, allocation)?;
                 if gpu != actual || sequential != reference {
-                    return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                    return Err((ProductionRankedKernelErrorV1::InvalidReferenceContract).into());
                 }
             }
             Ok(None)
@@ -3668,18 +4491,30 @@ fn validate_access(
     argument_count: usize,
     locals: &[RecipeValueKindV1],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
-    let (rank, writable) = require_view(view, argument_count, locals)?;
+    legacy_ranked_validation_v18(validate_access_core_v18(kind, view, indices, argument_count, locals, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn validate_access_core_v18(
+    kind: AccessKindAttr,
+    view: ProductionRankedValueV1,
+    indices: &[ProductionRankedValueV1],
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<(), ProductionRankedProjectionValidationErrorV18> {
+    allocation.charge(1)?;
+    let (rank, writable) = require_view_core_v18(view, argument_count, locals, allocation)?;
     if indices.len() != rank {
-        return Err(ProductionRankedKernelErrorV1::AccessRankMismatch {
+        return Err((ProductionRankedKernelErrorV1::AccessRankMismatch {
             expected: rank,
             actual: indices.len(),
-        });
+        }).into());
     }
     if kind.writes_memory() && !writable {
-        return Err(ProductionRankedKernelErrorV1::WriteThroughReadOnlyView);
+        return Err((ProductionRankedKernelErrorV1::WriteThroughReadOnlyView).into());
     }
     for index in indices {
-        require_index(*index, argument_count, locals)?;
+        require_index_core_v18(*index, argument_count, locals, allocation)?;
     }
     Ok(())
 }
@@ -3690,6 +4525,17 @@ fn validate_scoped_value_v1(
     blocks: &[ProductionRankedBlockV1],
     local_definition_blocks: &[usize],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
+    legacy_ranked_validation_v18(validate_scoped_value_core_v18(value, current_block, blocks, local_definition_blocks, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn validate_scoped_value_core_v18(
+    value: ProductionRankedValueV1,
+    current_block: usize,
+    blocks: &[ProductionRankedBlockV1],
+    local_definition_blocks: &[usize],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<(), ProductionRankedProjectionValidationErrorV18> {
+    allocation.charge(1)?;
     match value {
         ProductionRankedValueV1::BlockArgument { block, argument } => {
             if block as usize != current_block
@@ -3697,7 +4543,7 @@ fn validate_scoped_value_v1(
                     .get(block as usize)
                     .is_none_or(|recipe| argument >= recipe.index_argument_count)
             {
-                return Err(ProductionRankedKernelErrorV1::UndefinedValue(value));
+                return Err((ProductionRankedKernelErrorV1::UndefinedValue(value)).into());
             }
         }
         ProductionRankedValueV1::Local(identity) => {
@@ -3706,12 +4552,10 @@ fn validate_scoped_value_v1(
                 .copied()
                 .ok_or(ProductionRankedKernelErrorV1::UndefinedValue(value))?;
             if definition != 0 && definition != current_block {
-                return Err(
-                    ProductionRankedKernelErrorV1::CrossBlockDefinitionRequiresArgument {
+                return Err((ProductionRankedKernelErrorV1::CrossBlockDefinitionRequiresArgument {
                         definition_block: definition,
                         use_block: current_block,
-                    },
-                );
+                    }).into());
             }
         }
         ProductionRankedValueV1::Argument(_) => {}
@@ -3725,8 +4569,19 @@ fn validate_scoped_operation_values_v1(
     blocks: &[ProductionRankedBlockV1],
     local_definition_blocks: &[usize],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
-    let validate =
-        |value| validate_scoped_value_v1(value, current_block, blocks, local_definition_blocks);
+    legacy_ranked_validation_v18(validate_scoped_operation_values_core_v18(operation, current_block, blocks, local_definition_blocks, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn validate_scoped_operation_values_core_v18(
+    operation: &ProductionRankedOperationV1,
+    current_block: usize,
+    blocks: &[ProductionRankedBlockV1],
+    local_definition_blocks: &[usize],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<(), ProductionRankedProjectionValidationErrorV18> {
+    allocation.charge(1)?;
+    let mut validate =
+        |value| validate_scoped_value_core_v18(value, current_block, blocks, local_definition_blocks, allocation);
     match operation {
         ProductionRankedOperationV1::View {
             dynamic_extents, ..
@@ -3954,8 +4809,19 @@ fn validate_scoped_terminator_values_v1(
     blocks: &[ProductionRankedBlockV1],
     local_definition_blocks: &[usize],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
-    let validate =
-        |value| validate_scoped_value_v1(value, current_block, blocks, local_definition_blocks);
+    legacy_ranked_validation_v18(validate_scoped_terminator_values_core_v18(terminator, current_block, blocks, local_definition_blocks, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn validate_scoped_terminator_values_core_v18(
+    terminator: &ProductionRankedTerminatorV1,
+    current_block: usize,
+    blocks: &[ProductionRankedBlockV1],
+    local_definition_blocks: &[usize],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<(), ProductionRankedProjectionValidationErrorV18> {
+    allocation.charge(1)?;
+    let mut validate =
+        |value| validate_scoped_value_core_v18(value, current_block, blocks, local_definition_blocks, allocation);
     match terminator {
         ProductionRankedTerminatorV1::IndexLessThan { lhs, rhs, .. }
         | ProductionRankedTerminatorV1::IndexEqual { lhs, rhs, .. }
@@ -4040,28 +4906,40 @@ fn validate_terminator(
     current_block: usize,
     local_definition_blocks: &[usize],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
-    let target = |target: u32| {
-        usize::try_from(target)
-            .ok()
-            .filter(|target| *target < blocks.len())
-            .map(|_| ())
-            .ok_or(ProductionRankedKernelErrorV1::InvalidBlockTarget(target))
-    };
-    validate_scoped_terminator_values_v1(
+    legacy_ranked_validation_v18(validate_terminator_core_v18(terminator, argument_count, locals, blocks, current_block, local_definition_blocks, &mut RankedValidationAllocationV18::Legacy))
+}
+
+fn ranked_target_core_v18(
+    target: u32,
+    blocks: &[ProductionRankedBlockV1],
+    carries_arguments: bool,
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> RankedValidationResultV18<()> {
+    allocation.charge(1)?;
+    let target_index = usize::try_from(target).ok().filter(|index| *index < blocks.len())
+        .ok_or(ProductionRankedKernelErrorV1::InvalidBlockTarget(target))?;
+    if !carries_arguments && blocks[target_index].index_argument_count != 0 {
+        return Err(ProductionRankedKernelErrorV1::Materialization(
+            "ranked branch omits required successor arguments").into());
+    }
+    Ok(())
+}
+
+fn validate_terminator_core_v18(
+    terminator: &ProductionRankedTerminatorV1,
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+    blocks: &[ProductionRankedBlockV1],
+    current_block: usize,
+    local_definition_blocks: &[usize],
+    allocation: &mut RankedValidationAllocationV18<'_, '_>,
+) -> Result<(), ProductionRankedProjectionValidationErrorV18> {
+    allocation.charge(1)?;
+    validate_scoped_terminator_values_core_v18(
         terminator,
         current_block,
         blocks,
-        local_definition_blocks,
-    )?;
-    let target_without_arguments = |destination: u32| {
-        target(destination)?;
-        if blocks[destination as usize].index_argument_count != 0 {
-            return Err(ProductionRankedKernelErrorV1::Materialization(
-                "ranked branch omits required successor arguments",
-            ));
-        }
-        Ok(())
-    };
+        local_definition_blocks, allocation)?;
     match terminator {
         ProductionRankedTerminatorV1::IndexLessThan {
             lhs,
@@ -4075,10 +4953,10 @@ fn validate_terminator(
             true_block,
             false_block,
         } => {
-            require_index(*lhs, argument_count, locals)?;
-            require_index(*rhs, argument_count, locals)?;
-            target_without_arguments(*true_block)?;
-            target_without_arguments(*false_block)
+            require_index_core_v18(*lhs, argument_count, locals, allocation)?;
+            require_index_core_v18(*rhs, argument_count, locals, allocation)?;
+            ranked_target_core_v18(*true_block, blocks, false, allocation)?;
+            ranked_target_core_v18(*false_block, blocks, false, allocation)
         }
         ProductionRankedTerminatorV1::IndexLessThanArgs {
             lhs,
@@ -4096,20 +4974,20 @@ fn validate_terminator(
             true_block,
             false_block,
         } => {
-            require_index(*lhs, argument_count, locals)?;
-            require_index(*rhs, argument_count, locals)?;
-            target(*true_block)?;
-            target(*false_block)?;
+            require_index_core_v18(*lhs, argument_count, locals, allocation)?;
+            require_index_core_v18(*rhs, argument_count, locals, allocation)?;
+            ranked_target_core_v18(*true_block, blocks, true, allocation)?;
+            ranked_target_core_v18(*false_block, blocks, true, allocation)?;
             if true_arguments.len() != blocks[*true_block as usize].index_argument_count as usize
                 || false_arguments.len()
                     != blocks[*false_block as usize].index_argument_count as usize
             {
-                return Err(ProductionRankedKernelErrorV1::Materialization(
+                return Err((ProductionRankedKernelErrorV1::Materialization(
                     "ranked conditional branch arguments do not match successors",
-                ));
+                )).into());
             }
             for value in true_arguments.iter().chain(false_arguments) {
-                require_index(*value, argument_count, locals)?;
+                require_index_core_v18(*value, argument_count, locals, allocation)?;
             }
             Ok(())
         }
@@ -4119,10 +4997,10 @@ fn validate_terminator(
             second_block,
         } => {
             for value in control_dependencies {
-                require_index(*value, argument_count, locals)?;
+                require_index_core_v18(*value, argument_count, locals, allocation)?;
             }
-            target_without_arguments(*first_block)?;
-            target_without_arguments(*second_block)
+            ranked_target_core_v18(*first_block, blocks, false, allocation)?;
+            ranked_target_core_v18(*second_block, blocks, false, allocation)
         }
         ProductionRankedTerminatorV1::AnalysisSplitArgs {
             control_dependencies,
@@ -4131,41 +5009,41 @@ fn validate_terminator(
             first_block,
             second_block,
         } => {
-            target(*first_block)?;
-            target(*second_block)?;
+            ranked_target_core_v18(*first_block, blocks, true, allocation)?;
+            ranked_target_core_v18(*second_block, blocks, true, allocation)?;
             if first_arguments.len() != blocks[*first_block as usize].index_argument_count as usize
                 || second_arguments.len()
                     != blocks[*second_block as usize].index_argument_count as usize
             {
-                return Err(ProductionRankedKernelErrorV1::Materialization(
+                return Err((ProductionRankedKernelErrorV1::Materialization(
                     "ranked analysis split arguments do not match successors",
-                ));
+                )).into());
             }
             for value in control_dependencies
                 .iter()
                 .chain(first_arguments)
                 .chain(second_arguments)
             {
-                require_index(*value, argument_count, locals)?;
+                require_index_core_v18(*value, argument_count, locals, allocation)?;
             }
             Ok(())
         }
         ProductionRankedTerminatorV1::Branch {
             target: destination,
-        } => target_without_arguments(*destination),
+        } => ranked_target_core_v18(*destination, blocks, false, allocation),
         ProductionRankedTerminatorV1::BranchArgs {
             arguments,
             target: destination,
         } => {
-            target(*destination)?;
+            ranked_target_core_v18(*destination, blocks, true, allocation)?;
             let expected = blocks[*destination as usize].index_argument_count as usize;
             if arguments.len() != expected {
-                return Err(ProductionRankedKernelErrorV1::Materialization(
+                return Err((ProductionRankedKernelErrorV1::Materialization(
                     "ranked branch argument count does not match its successor",
-                ));
+                )).into());
             }
             for argument in arguments {
-                require_index(*argument, argument_count, locals)?;
+                require_index_core_v18(*argument, argument_count, locals, allocation)?;
             }
             Ok(())
         }
@@ -4174,14 +5052,14 @@ fn validate_terminator(
             step,
             target: destination,
         } => {
-            target(*destination)?;
+            ranked_target_core_v18(*destination, blocks, true, allocation)?;
             if blocks[*destination as usize].index_argument_count != 1 {
-                return Err(ProductionRankedKernelErrorV1::Materialization(
+                return Err((ProductionRankedKernelErrorV1::Materialization(
                     "ranked induction backedge requires one successor index argument",
-                ));
+                )).into());
             }
-            require_index(*value, argument_count, locals)?;
-            require_index(*step, argument_count, locals)
+            require_index_core_v18(*value, argument_count, locals, allocation)?;
+            require_index_core_v18(*step, argument_count, locals, allocation)
         }
         ProductionRankedTerminatorV1::BranchArgsAddAt {
             arguments,
@@ -4189,21 +5067,21 @@ fn validate_terminator(
             step,
             target: destination,
         } => {
-            target(*destination)?;
+            ranked_target_core_v18(*destination, blocks, true, allocation)?;
             let expected = blocks[*destination as usize].index_argument_count as usize;
             if arguments.len() != expected
                 || usize::try_from(*add_argument)
                     .ok()
                     .is_none_or(|argument| argument >= arguments.len())
             {
-                return Err(ProductionRankedKernelErrorV1::Materialization(
+                return Err((ProductionRankedKernelErrorV1::Materialization(
                     "ranked induction backedge update does not match its successor arguments",
-                ));
+                )).into());
             }
             for argument in arguments {
-                require_index(*argument, argument_count, locals)?;
+                require_index_core_v18(*argument, argument_count, locals, allocation)?;
             }
-            require_index(*step, argument_count, locals)
+            require_index_core_v18(*step, argument_count, locals, allocation)
         }
         ProductionRankedTerminatorV1::Return | ProductionRankedTerminatorV1::Trap => Ok(()),
     }
@@ -6390,6 +7268,71 @@ pub struct ProductionRankedKernelLoweringInputV1 {
     _root: ProductionRootHandleV1<KernelChecksVerifiedGraphStageV1>,
 }
 
+/// Mandatory verifier results for an unchanged ranked projection.
+///
+/// This move-only owner retains the checked recipe, session, and complete
+/// verification/replay reports. It is not a source correspondence proof or an
+/// executable lowering input. A source consumer must separately join this exact
+/// recipe to its retained canonical executable and complete its currentness,
+/// conditional-proof, and resource-account checks.
+///
+/// There is deliberately no conversion into ordinary ranked lowering authority:
+///
+/// ```compile_fail
+/// use fe2o3_pliron::{ProductionRankedProjectionChecksV18,
+///     ProductionRankedKernelLoweringInputV1};
+/// fn executable(checks: ProductionRankedProjectionChecksV18)
+///     -> ProductionRankedKernelLoweringInputV1 {
+///     checks.into()
+/// }
+/// ```
+///
+/// The session and mutable graph are not exposed:
+///
+/// ```compile_fail
+/// use fe2o3_pliron::ProductionRankedProjectionChecksV18;
+/// fn session(checks: ProductionRankedProjectionChecksV18) {
+///     let _session = checks.checked._session;
+/// }
+/// ```
+#[must_use = "projection checks require an exact executable/source correspondence join"]
+#[derive(Debug)]
+pub struct ProductionRankedProjectionChecksV18 {
+    checked: ProductionRankedKernelLoweringInputV1,
+}
+
+impl ProductionRankedProjectionChecksV18 {
+    /// Returns the retained unchanged recipe, not an executable owner.
+    pub const fn kernel(&self) -> &ProductionRankedKernelV1 {
+        self.checked.kernel()
+    }
+
+    /// Returns the indivisible mandatory pipeline reports, including replay.
+    pub const fn production_pipeline_report(&self) -> &ProductionPlironPreloweringReportV2 {
+        self.checked.production_pipeline_report()
+    }
+
+    /// Returns whether every mandatory report accepted the retained recipe.
+    pub fn all_mandatory_reports_are_clean(&self) -> bool {
+        self.checked.all_mandatory_reports_are_clean()
+    }
+
+    /// Returns the admitted work for both verifier runs and report comparison.
+    pub fn production_analysis_work_upper_bound_v1(&self) -> usize {
+        self.checked.production_analysis_work_upper_bound_v1()
+    }
+
+    /// Returns storage retained after both verifier runs complete.
+    pub fn production_analysis_retained_storage_upper_bound_v1(&self) -> usize {
+        self.checked.production_analysis_retained_storage_upper_bound_v1()
+    }
+
+    /// Returns peak storage admitted for both verifier runs and comparison.
+    pub fn production_analysis_peak_storage_upper_bound_v1(&self) -> usize {
+        self.checked.production_analysis_peak_storage_upper_bound_v1()
+    }
+}
+
 impl fmt::Debug for ProductionRankedKernelLoweringInputV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -6837,7 +7780,53 @@ fn compile_ranked_kernel_for_lowering_with_target_v1(
     limits: ProductionSessionLimitsV1,
     atomic_target: Option<PlironAtomicTargetContextV1>,
 ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
-    if let ProductionConstructionKindV1::RankedKernel { kernel, .. } = &construction.kind {
+    verify_ranked_route_with_target_v18(construction, limits, atomic_target, RankedVerificationRouteV18::Legacy)
+}
+
+/// Verifies an unchanged ranked analysis projection using the gfx942 target.
+///
+/// Unlike the executable recipe entrance, this route neither requires nor runs
+/// the legacy preverification optimizer. Structural validation, the complete
+/// mandatory verifier pipeline, and the independent checked-preparation replay
+/// remain mandatory. The returned nominal analysis owner cannot be lowered as
+/// a second executable. This target-specific entrance does not qualify gfx950.
+///
+/// Callers in a live source scope must complete bounded recipe construction and
+/// resource-custody handoff before calling this session-bounded entrance, then
+/// reconcile the retained reports and exact canonical output correspondence.
+pub fn verify_exact_ranked_projection_for_gfx942_v18(
+    kernel: ProductionRankedKernelV1,
+    limits: ProductionSessionLimitsV1,
+    system_coherent_allocations: impl IntoIterator<Item = u64>,
+) -> Result<ProductionRankedProjectionChecksV18, ProductionRankedCompileErrorV1> {
+    let target = PlironAtomicTargetContextV1::new([PlironAtomicTargetCapabilityV1::new(
+        32,
+        MemorySpaceAttr::Global,
+        AtomicScopeAttr::System,
+    )
+    .map_err(ProductionRankedCompileErrorV1::AtomicTarget)?])
+    .and_then(|target| target.with_system_coherent_allocations(system_coherent_allocations))
+    .map_err(ProductionRankedCompileErrorV1::AtomicTarget)?;
+    let construction = ProductionConstructionV1::ranked_kernel("exact_ranked_projection", kernel)
+        .map_err(ProductionRankedCompileErrorV1::Registration)?;
+    verify_ranked_route_with_target_v18(construction, limits, Some(target), RankedVerificationRouteV18::ExactProjection)
+        .map(|checked| ProductionRankedProjectionChecksV18 { checked })
+}
+
+enum RankedVerificationRouteV18 {
+    Legacy,
+    ExactProjection,
+}
+
+fn verify_ranked_route_with_target_v18(
+    construction: ProductionConstructionV1,
+    limits: ProductionSessionLimitsV1,
+    atomic_target: Option<PlironAtomicTargetContextV1>,
+    route: RankedVerificationRouteV18,
+) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
+    if let (RankedVerificationRouteV18::Legacy, ProductionConstructionKindV1::RankedKernel { kernel, .. }) =
+        (route, &construction.kind)
+    {
         ranked_preverification_transform_v1::require_ranked_preverification_normal_form_v1(kernel)
             .map_err(|error| {
                 ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedRecipe(

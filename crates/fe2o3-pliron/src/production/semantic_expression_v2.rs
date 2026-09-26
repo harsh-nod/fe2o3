@@ -253,6 +253,17 @@ pub enum ProductionSemanticExpressionV2 {
     },
 }
 
+fn legacy_expression_validation_v18<T>(result: super::ranked::RankedValidationResultV18<T>)
+    -> Result<T, ProductionSemanticExpressionErrorV2>
+{
+    match result {
+        Ok(value) => Ok(value),
+        Err(super::ranked::ProductionRankedProjectionValidationErrorV18::Kernel(
+            super::ranked::ProductionRankedKernelErrorV1::InvalidSemanticExpression(error))) => Err(error),
+        Err(_) => unreachable!("the private legacy expression adapter cannot create other errors"),
+    }
+}
+
 impl ProductionSemanticExpressionV2 {
     pub const fn scalar(&self) -> ProductionSemanticScalarTypeV2 {
         match self {
@@ -268,16 +279,22 @@ impl ProductionSemanticExpressionV2 {
     }
 
     pub fn contains_float_semantics(&self) -> bool {
+        legacy_expression_validation_v18(self.contains_float_ranked_live_v18(&mut super::ranked::RankedValidationAllocationV18::Legacy))
+            .expect("legacy scalar-kind inspection cannot fail")
+    }
+
+    pub(super) fn contains_float_ranked_live_v18(&self, allocation: &mut super::ranked::RankedValidationAllocationV18<'_, '_>) -> super::ranked::RankedValidationResultV18<bool> {
+        allocation.charge(1)?;
         if self.scalar().is_float() {
-            return true;
+            return Ok(true);
         }
-        match self {
+        Ok(match self {
             Self::Symbol { .. } | Self::Constant { .. } | Self::Load(_) => false,
             Self::Unary { operand, .. } | Self::Cast { operand, .. } => {
-                operand.contains_float_semantics()
+                operand.contains_float_ranked_live_v18(allocation)?
             }
             Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => {
-                lhs.contains_float_semantics() || rhs.contains_float_semantics()
+                lhs.contains_float_ranked_live_v18(allocation)? || rhs.contains_float_ranked_live_v18(allocation)?
             }
             Self::Select {
                 condition,
@@ -285,18 +302,20 @@ impl ProductionSemanticExpressionV2 {
                 when_false,
                 ..
             } => {
-                condition.contains_float_semantics()
-                    || when_true.contains_float_semantics()
-                    || when_false.contains_float_semantics()
+                condition.contains_float_ranked_live_v18(allocation)?
+                    || when_true.contains_float_ranked_live_v18(allocation)?
+                    || when_false.contains_float_ranked_live_v18(allocation)?
             }
-        }
+        })
     }
 
-    pub fn validate(
-        &self,
-    ) -> Result<ProductionSemanticExpressionStatsV2, ProductionSemanticExpressionErrorV2> {
+    pub fn validate(&self) -> Result<ProductionSemanticExpressionStatsV2, ProductionSemanticExpressionErrorV2> {
+        legacy_expression_validation_v18(self.validate_ranked_live_v18(&mut super::ranked::RankedValidationAllocationV18::Legacy))
+    }
+
+    pub(super) fn validate_ranked_live_v18(&self, allocation: &mut super::ranked::RankedValidationAllocationV18<'_, '_>) -> super::ranked::RankedValidationResultV18<ProductionSemanticExpressionStatsV2> {
         let mut nodes = 0_usize;
-        let depth = self.validate_inner(1, &mut nodes)?;
+        let depth = self.validate_inner_ranked_live_v18(1, &mut nodes, allocation)?;
         let mut stats = ProductionSemanticExpressionStatsV2 {
             nodes,
             depth,
@@ -307,13 +326,18 @@ impl ProductionSemanticExpressionV2 {
             checked_operations: 0,
             ieee_operations: 0,
         };
-        self.accumulate_stats(&mut stats);
+        self.accumulate_stats_ranked_live_v18(&mut stats, allocation)?;
         Ok(stats)
     }
 
     /// Discharges definedness from constants or an exact positional shift mask.
     /// Dynamic guards and source provenance are not assumed by this expression.
     pub fn validate_static_domains(&self) -> Result<(), ProductionSemanticExpressionErrorV2> {
+        legacy_expression_validation_v18(self.validate_static_domains_ranked_live_v18(&mut super::ranked::RankedValidationAllocationV18::Legacy))
+    }
+
+    pub(super) fn validate_static_domains_ranked_live_v18(&self, allocation: &mut super::ranked::RankedValidationAllocationV18<'_, '_>) -> super::ranked::RankedValidationResultV18<()> {
+        allocation.charge(1)?;
         match self {
             Self::Symbol { .. } | Self::Constant { .. } | Self::Load(_) => Ok(()),
             Self::Unary {
@@ -321,15 +345,15 @@ impl ProductionSemanticExpressionV2 {
                 scalar,
                 operand,
             } => {
-                operand.validate_static_domains()?;
+                operand.validate_static_domains_ranked_live_v18(allocation)?;
                 if *operation == ProductionSemanticUnaryOpV2::Negate
                     && let ProductionSemanticScalarTypeV2::Integer { signed: true, bits } = scalar
                 {
                     let Some(value) = constant_bits(operand) else {
-                        return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
+                        return Err((ProductionSemanticExpressionErrorV2::IncompleteDomain).into());
                     };
                     if signed_value(value, *bits) == -(1_i128 << (bits - 1)) {
-                        return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
+                        return Err((ProductionSemanticExpressionErrorV2::IncompleteDomain).into());
                     }
                 }
                 Ok(())
@@ -341,14 +365,14 @@ impl ProductionSemanticExpressionV2 {
                 lhs,
                 rhs,
             } => {
-                lhs.validate_static_domains()?;
-                rhs.validate_static_domains()?;
+                lhs.validate_static_domains_ranked_live_v18(allocation)?;
+                rhs.validate_static_domains_ranked_live_v18(allocation)?;
                 if *overflow == ProductionOverflowContractV2::Checked {
                     let (Some(lhs), Some(rhs)) = (constant_bits(lhs), constant_bits(rhs)) else {
-                        return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
+                        return Err((ProductionSemanticExpressionErrorV2::IncompleteDomain).into());
                     };
                     if !checked_integer_result_in_range(*operation, *scalar, lhs, rhs) {
-                        return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
+                        return Err((ProductionSemanticExpressionErrorV2::IncompleteDomain).into());
                     }
                 }
                 if matches!(
@@ -357,19 +381,19 @@ impl ProductionSemanticExpressionV2 {
                 ) && scalar.is_integer()
                 {
                     let Some(rhs_bits) = constant_bits(rhs) else {
-                        return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
+                        return Err((ProductionSemanticExpressionErrorV2::IncompleteDomain).into());
                     };
                     if rhs_bits == 0 {
-                        return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
+                        return Err((ProductionSemanticExpressionErrorV2::IncompleteDomain).into());
                     }
                     if let ProductionSemanticScalarTypeV2::Integer { signed: true, bits } = scalar {
                         let rhs = signed_value(rhs_bits, *bits);
                         if rhs == -1 {
                             let Some(lhs_bits) = constant_bits(lhs) else {
-                                return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
+                                return Err((ProductionSemanticExpressionErrorV2::IncompleteDomain).into());
                             };
                             if signed_value(lhs_bits, *bits) == -(1_i128 << (bits - 1)) {
-                                return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
+                                return Err((ProductionSemanticExpressionErrorV2::IncompleteDomain).into());
                             }
                         }
                     }
@@ -380,14 +404,14 @@ impl ProductionSemanticExpressionV2 {
                         | ProductionSemanticBinaryOpV2::ShiftRight
                 ) {
                     if !shift_count_is_defined(rhs, *scalar) {
-                        return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
+                        return Err((ProductionSemanticExpressionErrorV2::IncompleteDomain).into());
                     }
                 }
                 Ok(())
             }
             Self::Compare { lhs, rhs, .. } => {
-                lhs.validate_static_domains()?;
-                rhs.validate_static_domains()
+                lhs.validate_static_domains_ranked_live_v18(allocation)?;
+                rhs.validate_static_domains_ranked_live_v18(allocation)
             }
             Self::Select {
                 condition,
@@ -395,15 +419,21 @@ impl ProductionSemanticExpressionV2 {
                 when_false,
                 ..
             } => {
-                condition.validate_static_domains()?;
-                when_true.validate_static_domains()?;
-                when_false.validate_static_domains()
+                condition.validate_static_domains_ranked_live_v18(allocation)?;
+                when_true.validate_static_domains_ranked_live_v18(allocation)?;
+                when_false.validate_static_domains_ranked_live_v18(allocation)
             }
-            Self::Cast { operand, .. } => operand.validate_static_domains(),
+            Self::Cast { operand, .. } => operand.validate_static_domains_ranked_live_v18(allocation),
         }
     }
 
     fn accumulate_stats(&self, stats: &mut ProductionSemanticExpressionStatsV2) {
+        legacy_expression_validation_v18(self.accumulate_stats_ranked_live_v18(stats, &mut super::ranked::RankedValidationAllocationV18::Legacy))
+            .expect("legacy expression statistics cannot fail");
+    }
+
+    fn accumulate_stats_ranked_live_v18(&self, stats: &mut ProductionSemanticExpressionStatsV2, allocation: &mut super::ranked::RankedValidationAllocationV18<'_, '_>) -> super::ranked::RankedValidationResultV18<()> {
+        allocation.charge(1)?;
         match self {
             Self::Symbol { .. } | Self::Constant { .. } | Self::Load(_) => {}
             Self::Unary {
@@ -411,7 +441,7 @@ impl ProductionSemanticExpressionV2 {
             } => {
                 stats.arithmetic_operations += 1;
                 stats.ieee_operations += usize::from(scalar.is_float());
-                operand.accumulate_stats(stats);
+                operand.accumulate_stats_ranked_live_v18(stats, allocation)?;
             }
             Self::Binary {
                 scalar,
@@ -424,8 +454,8 @@ impl ProductionSemanticExpressionV2 {
                 stats.checked_operations +=
                     usize::from(*overflow == ProductionOverflowContractV2::Checked);
                 stats.ieee_operations += usize::from(scalar.is_float());
-                lhs.accumulate_stats(stats);
-                rhs.accumulate_stats(stats);
+                lhs.accumulate_stats_ranked_live_v18(stats, allocation)?;
+                rhs.accumulate_stats_ranked_live_v18(stats, allocation)?;
             }
             Self::Compare {
                 operand_scalar,
@@ -435,8 +465,8 @@ impl ProductionSemanticExpressionV2 {
             } => {
                 stats.comparisons += 1;
                 stats.ieee_operations += usize::from(operand_scalar.is_float());
-                lhs.accumulate_stats(stats);
-                rhs.accumulate_stats(stats);
+                lhs.accumulate_stats_ranked_live_v18(stats, allocation)?;
+                rhs.accumulate_stats_ranked_live_v18(stats, allocation)?;
             }
             Self::Select {
                 condition,
@@ -445,9 +475,9 @@ impl ProductionSemanticExpressionV2 {
                 ..
             } => {
                 stats.selects += 1;
-                condition.accumulate_stats(stats);
-                when_true.accumulate_stats(stats);
-                when_false.accumulate_stats(stats);
+                condition.accumulate_stats_ranked_live_v18(stats, allocation)?;
+                when_true.accumulate_stats_ranked_live_v18(stats, allocation)?;
+                when_false.accumulate_stats_ranked_live_v18(stats, allocation)?;
             }
             Self::Cast {
                 source,
@@ -457,16 +487,19 @@ impl ProductionSemanticExpressionV2 {
             } => {
                 stats.casts += 1;
                 stats.ieee_operations += usize::from(source.is_float() || target.is_float());
-                operand.accumulate_stats(stats);
+                operand.accumulate_stats_ranked_live_v18(stats, allocation)?;
             }
         }
+    
+        Ok(())
     }
 
-    fn validate_inner(
-        &self,
-        depth: usize,
-        nodes: &mut usize,
-    ) -> Result<usize, ProductionSemanticExpressionErrorV2> {
+    fn validate_inner(&self, depth: usize, nodes: &mut usize) -> Result<usize, ProductionSemanticExpressionErrorV2> {
+        legacy_expression_validation_v18(self.validate_inner_ranked_live_v18(depth, nodes, &mut super::ranked::RankedValidationAllocationV18::Legacy))
+    }
+
+    fn validate_inner_ranked_live_v18(&self, depth: usize, nodes: &mut usize, allocation: &mut super::ranked::RankedValidationAllocationV18<'_, '_>) -> super::ranked::RankedValidationResultV18<usize> {
+        allocation.charge(1)?;
         *nodes = nodes
             .checked_add(1)
             .ok_or(ProductionSemanticExpressionErrorV2::ResourceLimit)?;
@@ -474,18 +507,18 @@ impl ProductionSemanticExpressionV2 {
             || depth > MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2
             || !self.scalar().is_supported()
         {
-            return Err(ProductionSemanticExpressionErrorV2::ResourceLimit);
+            return Err((ProductionSemanticExpressionErrorV2::ResourceLimit).into());
         }
         let child_depth = match self {
             Self::Symbol { symbol, .. } => {
                 if *symbol >= PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 {
-                    return Err(ProductionSemanticExpressionErrorV2::ReservedSymbol);
+                    return Err((ProductionSemanticExpressionErrorV2::ReservedSymbol).into());
                 }
                 depth
             }
             Self::Constant { scalar, bits } => {
                 if scalar.bit_width() < 64 && *bits >= (1_u64 << scalar.bit_width()) {
-                    return Err(ProductionSemanticExpressionErrorV2::ConstantOutOfRange);
+                    return Err((ProductionSemanticExpressionErrorV2::ConstantOutOfRange).into());
                 }
                 depth
             }
@@ -496,7 +529,7 @@ impl ProductionSemanticExpressionV2 {
                     || load.indices.len() > 8
                     || load.allocation_origin == 0
                 {
-                    return Err(ProductionSemanticExpressionErrorV2::UnboundLoad);
+                    return Err((ProductionSemanticExpressionErrorV2::UnboundLoad).into());
                 }
                 depth
             }
@@ -515,9 +548,9 @@ impl ProductionSemanticExpressionV2 {
                         ),
                     }
                 {
-                    return Err(ProductionSemanticExpressionErrorV2::TypeMismatch);
+                    return Err((ProductionSemanticExpressionErrorV2::TypeMismatch).into());
                 }
-                operand.validate_inner(depth + 1, nodes)?
+                operand.validate_inner_ranked_live_v18(depth + 1, nodes, allocation)?
             }
             Self::Binary {
                 operation,
@@ -555,10 +588,10 @@ impl ProductionSemanticExpressionV2 {
                                 | ProductionSemanticBinaryOpV2::Multiply
                         )
                 {
-                    return Err(ProductionSemanticExpressionErrorV2::TypeMismatch);
+                    return Err((ProductionSemanticExpressionErrorV2::TypeMismatch).into());
                 }
-                lhs.validate_inner(depth + 1, nodes)?
-                    .max(rhs.validate_inner(depth + 1, nodes)?)
+                lhs.validate_inner_ranked_live_v18(depth + 1, nodes, allocation)?
+                    .max(rhs.validate_inner_ranked_live_v18(depth + 1, nodes, allocation)?)
             }
             Self::Compare {
                 operand_scalar,
@@ -570,10 +603,10 @@ impl ProductionSemanticExpressionV2 {
                     || rhs.scalar() != *operand_scalar
                     || !operand_scalar.is_supported()
                 {
-                    return Err(ProductionSemanticExpressionErrorV2::TypeMismatch);
+                    return Err((ProductionSemanticExpressionErrorV2::TypeMismatch).into());
                 }
-                lhs.validate_inner(depth + 1, nodes)?
-                    .max(rhs.validate_inner(depth + 1, nodes)?)
+                lhs.validate_inner_ranked_live_v18(depth + 1, nodes, allocation)?
+                    .max(rhs.validate_inner_ranked_live_v18(depth + 1, nodes, allocation)?)
             }
             Self::Select {
                 scalar,
@@ -585,12 +618,12 @@ impl ProductionSemanticExpressionV2 {
                     || when_true.scalar() != *scalar
                     || when_false.scalar() != *scalar
                 {
-                    return Err(ProductionSemanticExpressionErrorV2::TypeMismatch);
+                    return Err((ProductionSemanticExpressionErrorV2::TypeMismatch).into());
                 }
                 condition
-                    .validate_inner(depth + 1, nodes)?
-                    .max(when_true.validate_inner(depth + 1, nodes)?)
-                    .max(when_false.validate_inner(depth + 1, nodes)?)
+                    .validate_inner_ranked_live_v18(depth + 1, nodes, allocation)?
+                    .max(when_true.validate_inner_ranked_live_v18(depth + 1, nodes, allocation)?)
+                    .max(when_false.validate_inner_ranked_live_v18(depth + 1, nodes, allocation)?)
             }
             Self::Cast {
                 kind,
@@ -624,9 +657,9 @@ impl ProductionSemanticExpressionV2 {
                         }
                     }
                 {
-                    return Err(ProductionSemanticExpressionErrorV2::TypeMismatch);
+                    return Err((ProductionSemanticExpressionErrorV2::TypeMismatch).into());
                 }
-                operand.validate_inner(depth + 1, nodes)?
+                operand.validate_inner_ranked_live_v18(depth + 1, nodes, allocation)?
             }
         };
         Ok(depth.max(child_depth))

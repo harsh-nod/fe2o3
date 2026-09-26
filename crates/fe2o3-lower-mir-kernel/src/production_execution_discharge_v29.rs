@@ -14,6 +14,12 @@ type Budget<'a> = CanonicalKernelIrVerificationResourceBudgetV1<'a>;
 type ResourceError = CanonicalKernelIrVerificationResourceErrorV1;
 type DischargeError = ProductionExecutionDischargeErrorV29;
 
+#[path = "production_execution_discharge_core_v29.rs"]
+mod erasure_core;
+#[path = "production_execution_discharge_v18.rs"]
+mod storage_profile;
+pub use storage_profile::*;
+
 /// The closed set of lifecycle-only operations erased by this rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionExecutionErasureKindV29 {
@@ -84,6 +90,17 @@ pub enum ProductionExecutionDischargeErrorV29 {
     UnsupportedExecution,
     /// Independent replay found a changed ordinary graph or erasure roster.
     ReplayMismatch,
+}
+
+impl From<erasure_core::RuleError> for DischargeError {
+    fn from(error: erasure_core::RuleError) -> Self {
+        match error {
+            erasure_core::RuleError::Resource(error) => Self::Resource(error),
+            erasure_core::RuleError::NoExecution => Self::NoExecution,
+            erasure_core::RuleError::UnsupportedExecution => Self::UnsupportedExecution,
+            erasure_core::RuleError::ReplayMismatch => Self::ReplayMismatch,
+        }
+    }
 }
 
 impl From<ResourceError> for DischargeError {
@@ -187,27 +204,6 @@ impl ProductionExecutionDischargeV29 {
     }
 }
 
-fn erasure_kind(
-    kind: &OperationKind,
-) -> Result<Option<ProductionExecutionErasureKindV29>, DischargeError> {
-    use ProductionExecutionErasureKindV29 as Kind;
-    match kind {
-        OperationKind::Execution(ExecutionOperationV15::ContextIssue) => {
-            Ok(Some(Kind::ContextIssue))
-        }
-        OperationKind::Execution(ExecutionOperationV15::WorkgroupDerive { .. }) => {
-            Ok(Some(Kind::WorkgroupDerive))
-        }
-        OperationKind::Execution(ExecutionOperationV15::ScopeEnd { discarded, .. })
-            if discarded.is_empty() =>
-        {
-            Ok(Some(Kind::ScopeEnd))
-        }
-        OperationKind::Execution(_) => Err(DischargeError::UnsupportedExecution),
-        _ => Ok(None),
-    }
-}
-
 fn discharge(
     input: &VerifiedCanonicalKernelIrModuleV15,
     budget: &mut Budget<'_>,
@@ -218,23 +214,7 @@ fn discharge(
     ),
     DischargeError,
 > {
-    // The exact encoding bounds all vector walks, including empty containers.
-    budget.charge_work(input.canonical_bytes().len())?;
-    let mut count = 0usize;
-    for function in &input.module().functions {
-        if let Some(body) = &function.body {
-            for block in &body.blocks {
-                for operation in &block.operations {
-                    if erasure_kind(&operation.kind)?.is_some() {
-                        count = count.checked_add(1).ok_or(ResourceError::Arithmetic)?;
-                    }
-                }
-            }
-        }
-    }
-    if count == 0 {
-        return Err(DischargeError::NoExecution);
-    }
+    let count = erasure_core::preflight(input.module(), input.canonical_bytes().len(), budget)?;
     let wrapper_bytes = size_of::<ProductionExecutionDischargeV29>()
         .checked_sub(size_of::<VerifiedCanonicalKernelIrModuleV12>())
         .ok_or(ResourceError::Accounting)?;
@@ -256,33 +236,13 @@ fn discharge(
         .copy_module_for_transformation_v15(budget)
         .map_err(DischargeError::Input)?;
     budget.reserve_storage(candidate_storage.retained_storage())?;
-    budget.charge_work(input.canonical_bytes().len())?;
-    for (function_ordinal, function) in candidate.functions.iter_mut().enumerate() {
-        if let Some(body) = &mut function.body {
-            for (block_ordinal, block) in body.blocks.iter_mut().enumerate() {
-                let mut operation_ordinal = 0;
-                block.operations.retain(|operation| {
-                    let ordinal = operation_ordinal;
-                    operation_ordinal += 1;
-                    // Preflight checked the immutable inverse before any mutation.
-                    if let Ok(Some(kind)) = erasure_kind(&operation.kind) {
-                        erased_operations.push(ProductionExecutionErasureV29 {
-                            function_ordinal,
-                            block_ordinal,
-                            operation_ordinal: ordinal,
-                            kind,
-                        });
-                        false
-                    } else {
-                        true
-                    }
-                });
-            }
-        }
-    }
-    if erased_operations.len() != count {
-        return Err(DischargeError::ReplayMismatch);
-    }
+    erasure_core::erase(
+        &mut candidate,
+        input.canonical_bytes().len(),
+        count,
+        &mut erased_operations,
+        budget,
+    )?;
     let (output, output_storage) =
         VerifiedCanonicalKernelIrModuleV12::from_module_ref_with_verification_budget_v12(
             &candidate, budget,
@@ -311,125 +271,58 @@ fn replay_erasure(
     rows: &[ProductionExecutionErasureV29],
     budget: &mut Budget<'_>,
 ) -> Result<(), DischargeError> {
-    let work = input
-        .canonical_bytes()
-        .len()
-        .checked_add(output.canonical().canonical_bytes().len())
-        .and_then(|value| value.checked_add(rows.len()))
-        .ok_or(ResourceError::Arithmetic)?;
-    budget.charge_work(work)?;
-    // Exhaustive destructuring makes newly added IR fields require a replay decision.
-    let Module {
-        id,
-        functions,
-        kernels,
-        required_capabilities,
-    } = input.module();
-    let Module {
-        id: out_id,
-        functions: out_functions,
-        kernels: out_kernels,
-        required_capabilities: out_capabilities,
-    } = output.module();
-    if (id, kernels, required_capabilities) != (out_id, out_kernels, out_capabilities)
-        || functions.len() != out_functions.len()
-    {
-        return Err(DischargeError::ReplayMismatch);
-    }
-    let mut remaining = rows.iter();
-    for (function_ordinal, (function, out_function)) in
-        functions.iter().zip(out_functions).enumerate()
-    {
-        let Function {
-            id,
-            signature,
-            role,
-            body,
-            required_capabilities,
-        } = function;
-        let Function {
-            id: out_id,
-            signature: out_signature,
-            role: out_role,
-            body: out_body,
-            required_capabilities: out_capabilities,
-        } = out_function;
-        if (id, signature, role, required_capabilities)
-            != (out_id, out_signature, out_role, out_capabilities)
-        {
-            return Err(DischargeError::ReplayMismatch);
-        }
-        let (body, out_body) = match (body, out_body) {
-            (Some(body), Some(out_body)) => (body, out_body),
-            (None, None) => continue,
-            _ => return Err(DischargeError::ReplayMismatch),
-        };
-        let FunctionBody { parameters, blocks } = body;
-        let FunctionBody {
-            parameters: out_parameters,
-            blocks: out_blocks,
-        } = out_body;
-        if parameters != out_parameters || blocks.len() != out_blocks.len() {
-            return Err(DischargeError::ReplayMismatch);
-        }
-        for (block_ordinal, (block, out_block)) in blocks.iter().zip(out_blocks).enumerate() {
-            let BasicBlock {
-                id,
-                parameters,
-                operations,
-                terminator,
-            } = block;
-            let BasicBlock {
-                id: out_id,
-                parameters: out_parameters,
-                operations: out_operations,
-                terminator: out_terminator,
-            } = out_block;
-            if (id, parameters, terminator) != (out_id, out_parameters, out_terminator) {
-                return Err(DischargeError::ReplayMismatch);
-            }
-            let mut physical = out_operations.iter();
-            for (operation_ordinal, operation) in operations.iter().enumerate() {
-                // Deliberately independent of the producer's erasure classifier.
-                let kind = match &operation.kind {
-                    OperationKind::Execution(ExecutionOperationV15::ContextIssue) => {
-                        ProductionExecutionErasureKindV29::ContextIssue
-                    }
-                    OperationKind::Execution(ExecutionOperationV15::WorkgroupDerive { .. }) => {
-                        ProductionExecutionErasureKindV29::WorkgroupDerive
-                    }
-                    OperationKind::Execution(ExecutionOperationV15::ScopeEnd {
-                        discarded, ..
-                    }) if discarded.is_empty() => ProductionExecutionErasureKindV29::ScopeEnd,
-                    OperationKind::Execution(_) => return Err(DischargeError::ReplayMismatch),
-                    _ => {
-                        if physical.next() != Some(operation) {
-                            return Err(DischargeError::ReplayMismatch);
-                        }
-                        continue;
-                    }
-                };
-                let expected = ProductionExecutionErasureV29 {
-                    function_ordinal,
-                    block_ordinal,
-                    operation_ordinal,
-                    kind,
-                };
-                if remaining.next() != Some(&expected) {
-                    return Err(DischargeError::ReplayMismatch);
-                }
-            }
-            if physical.next().is_some() {
-                return Err(DischargeError::ReplayMismatch);
-            }
-        }
-    }
-    if remaining.next().is_some() || rows.is_empty() {
-        return Err(DischargeError::ReplayMismatch);
-    }
-    Ok(())
+    erasure_core::replay(
+        input.module(),
+        input.canonical_bytes().len(),
+        output.module(),
+        output.canonical().canonical_bytes().len(),
+        rows,
+        erasure_core::TableProfile::LegacyEmpty,
+        budget,
+    )
+    .map_err(DischargeError::from)
 }
 
 #[cfg(test)]
 #[path = "production_execution_discharge_v29_tests.rs"]
 mod tests;
+
+// Only fixed table headers are inspected. No row equality or graph walk occurs.
+fn execution_discharge_legacy_storage_tables_v29(
+    input: &[fe2o3_kernel_ir::StorageLayoutV1],
+    output: &[fe2o3_kernel_ir::StorageLayoutV1],
+) -> bool {
+    input.is_empty() && output.is_empty()
+}
+
+#[cfg(test)]
+mod legacy_storage_schema_tests {
+    use fe2o3_kernel_ir::{Module, ScalarType, StorageLayoutKindV1, StorageLayoutV1};
+
+    fn eligible(input: &Module, output: &Module) -> bool {
+        super::execution_discharge_legacy_storage_tables_v29(
+            &input.storage_layouts,
+            &output.storage_layouts,
+        )
+    }
+
+    #[test]
+    fn production_execution_discharge_v29_refuses_nonempty_storage_tables() {
+        let empty = Module::new("ordinary");
+        assert!(eligible(&empty, &empty));
+        let mut occupied = empty.clone();
+        occupied.storage_layouts.push(StorageLayoutV1 {
+            size: 1,
+            alignment: 1,
+            kind: StorageLayoutKindV1::Scalar(ScalarType::U8),
+        });
+        assert!(!eligible(&occupied, &empty));
+        assert!(!eligible(&empty, &occupied));
+        // Equal, structurally valid tables are still outside the old profile.
+        assert!(!eligible(&occupied, &occupied));
+        let mut other = occupied.clone();
+        other.storage_layouts[0].kind = StorageLayoutKindV1::Scalar(ScalarType::I8);
+        assert!(!eligible(&occupied, &other));
+        // This predicate proves schema eligibility only, not payload equality.
+    }
+}

@@ -1927,6 +1927,56 @@ fn argument_layout_v2(
     Ok((materialized, explicit_byte_len, unsupported))
 }
 
+fn compiler_legacy_slot_shape_v2(
+    ty: &Type,
+) -> Result<(usize, usize, Option<usize>), SimRuntimeBackendErrorV1> {
+    let mut leaf = ty;
+    loop {
+        leaf = match leaf {
+            Type::Pointer(pointer) => &pointer.pointee,
+            Type::Slice(slice) => &slice.element,
+            Type::StorageObject(_) => {
+                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                    "storage-object types require a storage-aware simulator descriptor".to_owned(),
+                ));
+            }
+            Type::Unit | Type::Scalar(_) | Type::Vector(_) | Type::Execution(_) => break,
+        };
+    }
+    Ok(match ty {
+        Type::Scalar(scalar) => {
+            let width = scalar_bytes(Some(*scalar)).ok_or_else(|| {
+                SimRuntimeBackendErrorV1::UnsupportedBundle(
+                    "KIR scalar has no exact physical width".to_owned(),
+                )
+            })?;
+            (width, width.next_power_of_two(), None)
+        }
+        Type::Pointer(_) => (8, 8, None),
+        Type::Slice(_) => (8, 8, Some(8)),
+        Type::Vector(_) => {
+            return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "vector KIR parameters have no admitted physical slot".to_owned(),
+            ));
+        }
+        Type::StorageObject(_) => {
+            return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "storage-object KIR parameters have no admitted legacy physical slot".to_owned(),
+            ));
+        }
+        Type::Execution(_) => {
+            return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "execution KIR parameters have no admitted physical slot".to_owned(),
+            ));
+        }
+        Type::Unit => {
+            return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "unit KIR parameters have no exact physical slot".to_owned(),
+            ));
+        }
+    })
+}
+
 fn validate_compiler_packing_plan_v2(
     kernel: &SemanticKernelStorageV2,
     kir_types: &[Type],
@@ -1971,33 +2021,7 @@ fn validate_compiler_packing_plan_v2(
                 "compiler packing plan does not cover every KIR parameter".to_owned(),
             )
         })?;
-        let (width, alignment, metadata_relative) = match ty {
-            Type::Scalar(scalar) => {
-                let width = scalar_bytes(Some(*scalar)).ok_or_else(|| {
-                    SimRuntimeBackendErrorV1::UnsupportedBundle(
-                        "KIR scalar has no exact physical width".to_owned(),
-                    )
-                })?;
-                (width, width.next_power_of_two(), None)
-            }
-            Type::Pointer(_) => (8, 8, None),
-            Type::Slice(_) => (8, 8, Some(8)),
-            Type::Vector(_) => {
-                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
-                    "vector KIR parameters have no admitted physical slot".to_owned(),
-                ));
-            }
-            Type::Execution(_) => {
-                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
-                    "execution KIR parameters have no admitted physical slot".to_owned(),
-                ));
-            }
-            Type::Unit => {
-                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
-                    "unit KIR parameters have no exact physical slot".to_owned(),
-                ));
-            }
-        };
+        let (width, alignment, metadata_relative) = compiler_legacy_slot_shape_v2(ty)?;
         next = align_up(next, alignment)?;
         let expected_value = SemanticKernargSlotV2::new(
             u32::try_from(next).map_err(|_| {
@@ -6004,6 +6028,50 @@ mod tests {
         assert_eq!(
             scalar_bits(prepare_arguments(&kernel, &[7], &[], &HashMap::new()).unwrap()),
             vec![7]
+        );
+    }
+}
+
+#[cfg(test)]
+mod storage_descriptor_profile_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{AccessMode, AddressSpace, ScalarType, StorageLayoutIdV1, Type};
+    #[test]
+    fn legacy_descriptor_slots_refuse_storage_even_behind_a_pointer_or_slice() {
+        let storage = Type::StorageObject(StorageLayoutIdV1(31));
+        for ty in [
+            storage.clone(),
+            Type::pointer(
+                storage.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+            Type::slice(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert!(compiler_legacy_slot_shape_v2(&ty).is_err());
+        }
+        assert_eq!(
+            compiler_legacy_slot_shape_v2(&Type::Scalar(ScalarType::U32)).unwrap(),
+            (4, 4, None)
+        );
+        assert_eq!(
+            compiler_legacy_slot_shape_v2(&Type::pointer(
+                Type::Scalar(ScalarType::U32),
+                AddressSpace::Global,
+                AccessMode::ReadWrite
+            ))
+            .unwrap(),
+            (8, 8, None)
+        );
+        assert_eq!(
+            compiler_legacy_slot_shape_v2(&Type::slice(
+                Type::Scalar(ScalarType::U32),
+                AddressSpace::Global,
+                AccessMode::ReadOnly
+            ))
+            .unwrap(),
+            (8, 8, Some(8))
         );
     }
 }

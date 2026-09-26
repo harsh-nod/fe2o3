@@ -1,11 +1,13 @@
+include!("production_scoped_source_cleanup_v29.rs");
+
 // Complete graph custody pending source replay, assertion sealing and discharge.
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "Scoped source admission remains gated")
 )]
 struct PendingScopedModuleV29 {
-    graph: fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV15,
-    graph_storage: fe2o3_kernel_ir::CanonicalKernelIrReplayStorageV15,
+    graph: fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
+    graph_storage: fe2o3_kernel_ir::CanonicalKernelIrReplayStorageV18,
     roots: Vec<ScopedModuleRootV29>,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     retained_storage: usize,
@@ -18,10 +20,12 @@ struct PendingScopedModuleV29 {
 struct ScopedModuleRootV29 {
     function_ordinal: usize,
     sidecars: InstanceRowsV1<PendingInstanceSidecarsV29>,
+    active_instances: PendingActiveInstanceIndexV1,
     coordinates: OwnedInstanceCoordinatesV1,
     slot_relocation: Option<scoped_slot_relocation_v29::RelocationV29>,
     source_slots: OwnedScopedSourceSlotsV29,
     insertions: Vec<LifecycleInsertionV29>,
+    terminal_failures: Option<TerminalFailureRelationV18>,
     declarations: Vec<ScopedDeclarationUseV29>,
     // Cumulative through this root, not an independently summable per-root cost.
     private_payload: PrivateArrayPayloadV1,
@@ -55,7 +59,7 @@ struct ScopedDeclarationUseV29 {
 )]
 enum ScopedModuleErrorV29 {
     Source(ProductionSemanticKirErrorV1),
-    Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15),
+    Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18),
     Occurrences(fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1),
 }
 
@@ -322,8 +326,10 @@ fn scoped_module_name_v29(
     Ok(complete)
 }
 
-fn scoped_module_roots_v29(
-    source: &ExecutionLifecycleSourceV29<'_>,
+fn scoped_module_roots_v29<'source>(
+    source: &ExecutionLifecycleSourceV29<'source>,
+    demands: &source_storage_demands_v29::SourceStorageDemandsV29<'source>,
+    layouts: &mut source_storage_v29::SourceStorageLayoutsV29<'source>,
     limits: ProductionSemanticKirLimitsV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<Vec<OwnedLifecycleInsertedRootV29>, ProductionSemanticKirErrorV1> {
@@ -337,6 +343,8 @@ fn scoped_module_roots_v29(
         let pending = emit_pending_source_root_v29(
             source,
             ordinal,
+            demands,
+            layouts,
             limits,
             &mut closure,
             &mut private_work,
@@ -345,7 +353,7 @@ fn scoped_module_roots_v29(
         )?;
         private_payload = pending.private_payload;
         let mut donor = Some(pending);
-        roots.push(insert_pending_lifecycle_v29(&mut donor, limits, budget)?);
+        roots.push(insert_pending_lifecycle_with_failures_v18(&mut donor, limits, budget)?);
     }
     Ok(roots)
 }
@@ -428,12 +436,13 @@ fn scoped_module_candidate_v29(
     )?;
     budget.charge_work(argument_product_v1(count, 8)?)?;
     for (ordinal, inserted) in emitted.into_iter().enumerate() {
-        let OwnedLifecycleInsertedRootV29 { root, insertions } = inserted;
+        let OwnedLifecycleInsertedRootV29 { root, insertions, terminal_failures } = inserted;
         let OwnedPendingScopedRootV29 {
             pending,
             kernel,
             private_payload,
             source_slots,
+            terminal_failures: _,
             requires_context_issue,
             ledger: _,
             retained_emission_storage,
@@ -441,6 +450,7 @@ fn scoped_module_candidate_v29(
         let PendingScopedRootEmissionV29 {
             function,
             sidecars,
+            active_instances,
             coordinates,
             slot_relocation,
             additional_storage_bytes,
@@ -480,10 +490,12 @@ fn scoped_module_candidate_v29(
         roots.push(ScopedModuleRootV29 {
             function_ordinal: ordinal,
             sidecars,
+            active_instances,
             coordinates,
             slot_relocation,
             source_slots,
             insertions,
+            terminal_failures,
             declarations: Vec::new(),
             private_payload,
             requires_context_issue,
@@ -496,7 +508,8 @@ fn scoped_module_candidate_v29(
     // per-instance routes. Every other sidecar and its coordinate system stays intact.
     for root in &mut roots {
         budget.charge_work(argument_sum_v1(&[root.sidecars.rows.len(), 1])?)?;
-        for (instance, sidecar) in root.sidecars.rows.iter_mut().enumerate() {
+        for sidecar in &mut root.sidecars.rows {
+            let instance = sidecar.source_call_instance.ok_or_else(scoped_module_error_v29)?.index();
             for (kind, declarations) in [
                 (
                     ScopedDeclarationKindV29::Diagnostic,
@@ -533,11 +546,125 @@ fn scoped_module_candidate_v29(
     Ok((module, roots))
 }
 
+#[cfg(test)]
+fn with_scoped_source_test_layouts_v29<'source, 'work, R>(
+    source: &ExecutionLifecycleSourceV29<'source>,
+    limits: ProductionSemanticKirLimitsV1,
+    budget: &mut ArgumentBudgetV1<'work>,
+    consume: impl FnOnce(
+        &source_storage_demands_v29::SourceStorageDemandsV29<'source>,
+        &mut source_storage_v29::SourceStorageLayoutsV29<'source>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<R, ProductionSemanticKirErrorV1>,
+) -> Result<R, ProductionSemanticKirErrorV1> {
+    let floor = budget.storage();
+    with_scoped_source_cleanup_v29(budget, floor, |cleanup, budget| {
+        with_scoped_source_layouts_v29(
+            source,
+            limits,
+            cleanup,
+            budget,
+            consume,
+            |value, layouts, demands, budget| {
+                layouts.release(budget)?;
+                demands.discard(budget)?;
+                Ok(value)
+            },
+        )
+    })
+}
+
+fn with_scoped_source_layouts_v29<'source, 'work, R, T>(
+    source: &ExecutionLifecycleSourceV29<'source>,
+    limits: ProductionSemanticKirLimitsV1,
+    cleanup: &ScopedSourceCleanupV29,
+    budget: &mut ArgumentBudgetV1<'work>,
+    consume: impl FnOnce(
+        &source_storage_demands_v29::SourceStorageDemandsV29<'source>,
+        &mut source_storage_v29::SourceStorageLayoutsV29<'source>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<R, ProductionSemanticKirErrorV1>,
+    finish: impl FnOnce(
+        R,
+        source_storage_v29::SourceStorageLayoutsV29<'source>,
+        source_storage_demands_v29::SourceStorageDemandsV29<'source>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<T, ProductionSemanticKirErrorV1>,
+) -> Result<T, ProductionSemanticKirErrorV1> {
+    let floor = budget.storage();
+    scoped_source_attempt_v29(cleanup, budget, floor, |budget| {
+        let catch_header =
+            size_of::<std::thread::Result<Result<R, ProductionSemanticKirErrorV1>>>();
+        budget.reserve_storage(catch_header)?;
+        let demands =
+            source_storage_demands_v29::SourceStorageDemandsV29::collect(source.owner, budget)?;
+        let mut layouts = source_storage_v29::SourceStorageLayoutsV29::new_with_limits(
+            source.owner,
+            demands.types(source.owner, budget)?,
+            limits.storage_layout_limits(),
+            budget,
+        )?;
+        // Observe the actual lease before these owners can unwind or be consumed.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let value = consume(&demands, &mut layouts, budget)?;
+            #[cfg(test)]
+            cleanup.source_fault(floor, budget)?;
+            Ok::<_, ProductionSemanticKirErrorV1>(value)
+        }));
+        cleanup.observe_table(source.owner, &layouts, budget);
+        match result {
+            Ok(Ok(value)) if !cleanup.is_denied() => {
+                let output = finish(value, layouts, demands, budget)?;
+                budget.release_storage(catch_header)?;
+                Ok(output)
+            }
+            Ok(Ok(value)) => {
+                drop((value, layouts, demands));
+                Err(ArgumentResourceV1::Accounting.into())
+            }
+            Ok(Err(error)) => {
+                drop((layouts, demands));
+                Err(error)
+            }
+            Err(payload) => {
+                drop((layouts, demands));
+                std::panic::resume_unwind(payload)
+            }
+        }
+    })
+}
+
+// Admission and replay share this original-source producer. Demands stay live
+// until install_rows ends the table lease and transfers only its row credit.
+fn scoped_source_candidate_v29(
+    source: &ExecutionLifecycleSourceV29<'_>,
+    limits: ProductionSemanticKirLimitsV1,
+    cleanup: &ScopedSourceCleanupV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(Module, Vec<ScopedModuleRootV29>, usize), ProductionSemanticKirErrorV1> {
+    with_scoped_source_layouts_v29(
+        source,
+        limits,
+        cleanup,
+        budget,
+        |demands, layouts, budget| {
+            let emitted = scoped_module_roots_v29(source, demands, layouts, limits, budget)?;
+            scoped_module_candidate_v29(source, emitted, limits, budget)
+        },
+        |(mut candidate, roots), layouts, demands, budget| {
+            let row_storage = layouts.install_rows(source.owner, &mut candidate, budget)?;
+            demands.discard(budget)?;
+            Ok((candidate, roots, row_storage))
+        },
+    )
+}
+
 /// Success keeps its complete reservation live, like the pending root owner.
-/// Original emission envelopes conservatively coexist with the genuine V15
-/// receipt: dropping the raw candidate does not refund still-owned source rows.
+/// Original emission envelopes conservatively coexist with the genuine V18
+/// receipt: only transferred raw-table credit is refunded with the candidate;
+/// source sidecars retain their emission envelopes.
 /// Failure/panic drops the attempted graph and source rows before restoring the
-/// caller's floor; returned V15 verifier diagnostics retain their existing
+/// caller's floor; returned V18 verifier diagnostics retain their existing
 /// caller-owned accounting contract.
 #[cfg_attr(
     not(test),
@@ -552,15 +679,31 @@ fn admit_pending_scoped_module_v29(
         return Err(ArgumentResourceV1::Accounting.into());
     }
     let floor = budget.storage();
-    scoped_module_attempt_v29(budget, floor, |budget| {
-        let emitted = scoped_module_roots_v29(source, limits, budget)?;
-        let (candidate, roots) = scoped_module_candidate_v29(source, emitted, limits, budget)?;
+    with_scoped_source_cleanup_v29(budget, floor, |cleanup, budget| {
+        admit_pending_scoped_module_with_cleanup_v29(source, limits, cleanup, budget)
+    })
+}
+
+fn admit_pending_scoped_module_with_cleanup_v29(
+    source: &ExecutionLifecycleSourceV29<'_>,
+    limits: ProductionSemanticKirLimitsV1,
+    cleanup: &ScopedSourceCleanupV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<PendingScopedModuleV29, ScopedModuleErrorV29> {
+    if source.ledger != budget.work_ledger_identity_v1() {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    let floor = budget.storage();
+    scoped_source_attempt_v29(cleanup, budget, floor, |budget| {
+        let (candidate, roots, row_storage) =
+            scoped_source_candidate_v29(source, limits, cleanup, budget)?;
         let (graph, graph_storage) =
-            fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV15::from_module_ref_with_verification_budget_v15(
-                &candidate, budget,
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18::from_module_ref_with_verification_budget_v18(
+                &candidate, limits.storage_layout_limits(), budget,
             ).map_err(ScopedModuleErrorV29::Canonical)?;
         budget.reserve_storage(graph_storage.retained_storage())?;
         drop(candidate);
+        budget.release_storage(row_storage)?;
         let retained_storage = budget
             .storage()
             .checked_sub(floor)

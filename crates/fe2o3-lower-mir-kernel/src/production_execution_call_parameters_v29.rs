@@ -71,6 +71,7 @@ struct PreparedExecutionParametersV29<'scope> {
     function: SemanticFunctionIdV1,
     values: Vec<ValueDef>,
     locals: Vec<(usize, SemanticValueBindingV1)>,
+    invocation_inputs: Option<Vec<InvocationInputRowV1>>,
     nominal_floor: u32,
 }
 
@@ -121,7 +122,7 @@ fn execution_call_shape_v29(
     Ok(leaves)
 }
 
-impl<'a> SemanticFunctionLoweringV1<'a> {
+impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
     fn prepare_execution_call_origin_v29<'scope>(
         &mut self,
         block: SemanticBlockIdV1,
@@ -191,6 +192,47 @@ fn prepare_execution_parameters_v29<'scope>(
     plan: &LoweredFunctionPlanV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(Vec<ValueId>, PreparedExecutionParametersV29<'scope>), ProductionSemanticKirErrorV1> {
+    prepare_execution_parameters_with_references_v29(instances, child, prepared, plan, None, budget)
+}
+
+fn prepare_execution_parameters_with_references_v29<'scope>(
+    instances: &ExecutionInstancesV29<'_>,
+    child: ProductionCallInstanceIdV1,
+    prepared: PreparedDefinedCallArgumentsV1<'scope>,
+    plan: &LoweredFunctionPlanV1,
+    references: Option<&SourceReferenceEmissionV29<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(Vec<ValueId>, PreparedExecutionParametersV29<'scope>), ProductionSemanticKirErrorV1> {
+    if let Some(references) = references {
+        references.check(budget)?;
+        references.plan.check_owner(instances, budget)?;
+        source_reference_owned_prepay_v29::<(Vec<ValueId>, PreparedExecutionParametersV29<'scope>)>(
+            references.plan,
+            budget,
+        )?;
+    }
+    build_execution_parameters_with_references_v29(
+        instances, child, prepared, plan, references, budget,
+    )
+    .inspect_err(|error| {
+        if let Some(references) = references {
+            source_reference_record_failure_v29(references.plan, error);
+        }
+    })
+}
+
+fn build_execution_parameters_with_references_v29<'scope>(
+    instances: &ExecutionInstancesV29<'_>,
+    child: ProductionCallInstanceIdV1,
+    prepared: PreparedDefinedCallArgumentsV1<'scope>,
+    plan: &LoweredFunctionPlanV1,
+    references: Option<&SourceReferenceEmissionV29<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(Vec<ValueId>, PreparedExecutionParametersV29<'scope>), ProductionSemanticKirErrorV1> {
+    if let Some(references) = references {
+        references.check(budget)?;
+        references.plan.check_owner(instances, budget)?;
+    }
     budget.charge_work(12)?;
     let origin = prepared.execution.ok_or_else(execution_call_error_v29)?;
     let incoming = instances
@@ -224,6 +266,7 @@ fn prepare_execution_parameters_v29<'scope>(
     let mut values = emission_vec_v1(plan.parameter_values.len(), budget)?;
     let mut nominal_floor = 0u32;
     let mut next = 0usize;
+    let mut invocation_inputs = (!row.ssa().plan().entry_arguments().is_empty()).then(Vec::new);
     for (local, declaration) in row.declaration().locals().iter().enumerate() {
         budget.charge_work(1)?;
         if !declaration.role().is_entry_argument() {
@@ -238,6 +281,7 @@ fn prepare_execution_parameters_v29<'scope>(
                 _ => execution_call_error_v29(),
             })?;
         let argument = selector.source_argument as usize;
+        let input_first = next;
         if !std::ptr::eq(selector.operand, &incoming.source().arguments()[argument]) {
             return Err(execution_call_error_v29());
         }
@@ -297,9 +341,50 @@ fn prepare_execution_parameters_v29<'scope>(
             values.push(ValueDef::new(id, expected));
             locals.push((local, SemanticValueBindingV1::Value { id, ty: local_type }));
             next = argument_sum_v1(&[next, 1])?;
+            if let Some(inputs) = &mut invocation_inputs {
+                invocation_append_input_v1(
+                    inputs,
+                    row.declaration(),
+                    local,
+                    selector.source_argument,
+                    selector.tuple_field,
+                    input_first,
+                    next,
+                    budget,
+                )?;
+            }
             continue;
         }
-        let leaves = execution_call_shape_v29(types, selector.ty, binding, budget)?;
+        let reference_node = if let Some(references) = references {
+            let node = source_reference_entry_node_v29(
+                references.plan,
+                child,
+                SemanticLocalIdV1::from_index(local as u32),
+                None,
+                budget,
+            )?
+            .ok_or_else(execution_call_error_v29)?;
+            (source_reference_node_has_loan_v29(references.plan, node, budget)?
+                || source_reference_node_has_selected_pointer_v29(references.plan, node, budget)?
+                || source_descriptor_node_present_v29(references.plan, node, &mut 0, budget)?)
+                .then_some(node)
+        } else {
+            None
+        };
+        let (leaves, reference_values) = match (references, reference_node) {
+            (Some(references), Some(node)) => {
+                if references.plan.nodes[node].ty != selector.ty {
+                    return Err(execution_call_error_v29());
+                }
+                let (leaves, values) =
+                    source_reference_call_shape_v29(references, node, binding, budget)?;
+                (leaves, Some(values))
+            }
+            _ => (
+                execution_call_shape_v29(types, selector.ty, binding, budget)?,
+                None,
+            ),
+        };
         for leaf in &leaves {
             budget.charge_work(4)?;
             let held = match leaf {
@@ -320,7 +405,12 @@ fn prepare_execution_parameters_v29<'scope>(
                 );
             }
         }
-        let physical = execution_cfg_types_v29(types, selector.ty, budget)?;
+        let physical = match (references, reference_node) {
+            (Some(references), Some(node)) => {
+                source_reference_node_types_v29(references.plan, node, budget)?
+            }
+            _ => execution_cfg_types_v29(types, selector.ty, budget)?,
+        };
         let start = next;
         for (component, expected) in physical.into_iter().enumerate() {
             budget.charge_work(5)?;
@@ -336,6 +426,13 @@ fn prepare_execution_parameters_v29<'scope>(
                 || origin.parameter_types.get(next) != Some(&expected)
                 || projection.source_argument != selector.source_argument
                 || projection.tuple_field != selector.tuple_field
+                || reference_values.as_ref().is_some_and(|values| {
+                    values
+                        .get(component)
+                        .copied()
+                        .flatten()
+                        .is_some_and(|value| Some(value) != prepared.arguments.get(next).copied())
+                })
                 || match projection.component {
                     Some(found) => found != component,
                     None => {
@@ -353,19 +450,42 @@ fn prepare_execution_parameters_v29<'scope>(
         }
         let mut leaves = leaves.iter();
         let mut physical = values[start..next].iter();
-        let rebuilt = rebuild_execution_cfg_binding_v29(
-            types,
-            selector.ty,
-            true,
-            &mut leaves,
-            &mut physical,
-            &mut 0,
-            budget,
-        )?;
+        let rebuilt = match (references, reference_node) {
+            (Some(references), Some(node)) => source_reference_rebuild_node_v29(
+                references,
+                node,
+                true,
+                &mut leaves,
+                &mut physical,
+                &mut 0,
+                budget,
+            )?,
+            _ => rebuild_execution_cfg_binding_v29(
+                types,
+                selector.ty,
+                true,
+                &mut leaves,
+                &mut physical,
+                &mut 0,
+                budget,
+            )?,
+        };
         if leaves.next().is_some() || physical.next().is_some() {
             return Err(execution_call_error_v29());
         }
         locals.push((local, rebuilt));
+        if let Some(inputs) = &mut invocation_inputs {
+            invocation_append_input_v1(
+                inputs,
+                row.declaration(),
+                local,
+                selector.source_argument,
+                selector.tuple_field,
+                input_first,
+                next,
+                budget,
+            )?;
+        }
     }
     budget.charge_work(values.len())?;
     if next != prepared.arguments.len() || values.iter().any(|value| value.id.0 < nominal_floor) {
@@ -381,6 +501,7 @@ fn prepare_execution_parameters_v29<'scope>(
             function: row.function(),
             values,
             locals,
+            invocation_inputs,
             nominal_floor,
         },
     ))
@@ -441,6 +562,16 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         {
             return Err(execution_call_error_v29());
         }
+        if self.invocation_inputs.is_some()
+            || prepared.invocation_inputs.is_some() != !self.ssa.plan().entry_arguments().is_empty()
+        {
+            return Err(invocation_entry_error_v1());
+        }
+        if let Some(inputs) = &prepared.invocation_inputs {
+            invocation_check_inputs_v1(self.function, inputs, prepared.values.len(), budget)?;
+        }
+        self.install_retained_seeds_v1(&prepared.locals, budget)?;
+        self.invocation_inputs = prepared.invocation_inputs;
         // All fallible checks precede installation; failure drops the constructor.
         for (local, binding) in prepared.locals {
             locals[local] = Some(binding);

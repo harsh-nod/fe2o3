@@ -80,6 +80,251 @@ mod local_bound_tests {
     }
 
     #[test]
+    fn unsigned_cast_constants_use_exact_low_bits_for_every_supported_width() {
+        for width in [8, 16, 32, 64] {
+            let context = &mut setup();
+            let function = function(context, "cast_constants");
+            let entry = function.get_entry_block(context);
+            let mask = u64::MAX >> (64 - width);
+            let values = [0, 1, mask, mask.saturating_add(1), 511, u64::MAX];
+            let mut results = Vec::new();
+            for value in values {
+                let constant = IndexConstantOp::new(context, value);
+                append(context, entry, &constant);
+                let cast = IndexUnsignedCastOp::new(context, constant.result(context), width);
+                append(context, entry, &cast);
+                results.push(cast.result(context));
+            }
+            let ret = ReturnOp::new(context);
+            append(context, entry, &ret);
+            let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+            for (value, result) in values.into_iter().zip(results) {
+                let fact = analysis.fact(result);
+                assert_eq!(fact.constant_value(), Some(value & mask));
+                assert_eq!(fact.maximum(&[]), Some(value & mask));
+                assert_eq!(fact.evaluate(&[]), Some(value & mask));
+            }
+        }
+    }
+
+    #[test]
+    fn unsigned_cast_range_is_not_a_constant_affine_formula_or_presburger_map() {
+        use crate::production_analysis::pliron_presburger_adapter::PlironPresburgerAnalysisV1;
+        for width in [8, 16, 32, 64] {
+            let context = &mut setup();
+            let function = function(context, "cast_unknown");
+            let entry = function.get_entry_block(context);
+            let unknown = IndexUnknownOp::new(context);
+            append(context, entry, &unknown);
+            let cast = IndexUnsignedCastOp::new(context, unknown.result(context), width);
+            append(context, entry, &cast);
+            let ret = ReturnOp::new(context);
+            append(context, entry, &ret);
+            let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+            let fact = analysis.fact(cast.result(context));
+            if width == 64 {
+                assert_eq!(fact, SparseIndexFactV1::Unknown);
+                assert_eq!(fact.maximum(&[]), None);
+            } else {
+                let inclusive = (1_u64 << width) - 1;
+                assert_eq!(fact, SparseIndexFactV1::UnsignedUpperBound { inclusive });
+                assert_eq!(fact.maximum(&[]), Some(inclusive));
+            }
+            assert_eq!(fact.constant_value(), None);
+            assert_eq!(fact.affine(), None);
+            assert_eq!(fact.evaluate(&[0]), None);
+            assert_eq!(fact.machine_overflow(), None);
+            assert_eq!(analysis.stable_root(context, &function, cast.result(context)), None);
+            assert!(PlironPresburgerAnalysisV1::from_sparse(&analysis)
+                .map_for_facts(&[fact]).is_err());
+        }
+    }
+
+    #[test]
+    fn unsigned_cast_affine_remainder_and_identity_follow_actual_invocations() {
+        use crate::production_analysis::pliron_presburger_adapter::PlironPresburgerAnalysisV1;
+        let context = &mut setup();
+        let function = function(context, "cast_invocation");
+        let entry = function.get_entry_block(context);
+        let invocation = InvocationIndexOp::new(context, 0, 512);
+        append(context, entry, &invocation);
+        let mut results = Vec::new();
+        for width in [8, 16, 32, 64] {
+            let cast = IndexUnsignedCastOp::new(context, invocation.result(context), width);
+            append(context, entry, &cast);
+            results.push((width, cast.result(context)));
+        }
+        let ret = ReturnOp::new(context);
+        append(context, entry, &ret);
+        let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+        for (width, result) in results {
+            let fact = analysis.fact(result);
+            if width == 8 {
+                assert_eq!(fact, SparseIndexFactV1::Remainder {
+                    dividend: SparseAffineIndexV1::invocation(0), modulus: 256,
+                });
+                assert_eq!(fact.maximum(&[512]), Some(255));
+            } else {
+                assert_eq!(fact, analysis.fact(invocation.result(context)));
+                assert_eq!(fact.maximum(&[512]), Some(511));
+            }
+            let mask = u64::MAX >> (64 - width);
+            for lane in 0..512 {
+                assert_eq!(fact.evaluate(&[lane]), Some(lane & mask));
+            }
+            assert!(PlironPresburgerAnalysisV1::from_sparse(&analysis)
+                .map_for_facts(&[fact]).is_ok());
+        }
+    }
+
+    #[test]
+    fn unsigned_cast_cannot_hide_a_preceding_machine_overflow() {
+        let context = &mut setup();
+        let function = function(context, "cast_overflow");
+        let entry = function.get_entry_block(context);
+        let lhs = IndexConstantOp::new(context, u64::MAX);
+        let rhs = IndexConstantOp::new(context, 1);
+        append(context, entry, &lhs);
+        append(context, entry, &rhs);
+        let sum = IndexBinaryOp::new(context, IndexBinaryKindAttr::Add,
+            lhs.result(context), rhs.result(context));
+        append(context, entry, &sum);
+        let mut results = Vec::new();
+        for width in [8, 16, 32, 64] {
+            let cast = IndexUnsignedCastOp::new(context, sum.result(context), width);
+            append(context, entry, &cast);
+            results.push(cast.result(context));
+        }
+        let ret = ReturnOp::new(context);
+        append(context, entry, &ret);
+        let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+        let original = analysis.fact(sum.result(context));
+        assert!(original.machine_overflow().is_some());
+        for result in results {
+            assert_eq!(analysis.fact(result), original);
+        }
+    }
+
+    #[test]
+    fn unsigned_cast_range_survives_typed_edge_transport_and_widening() {
+        let context = &mut setup();
+        let function = function(context, "cast_typed_edge");
+        let entry = function.get_entry_block(context);
+        let join = block(context, &function, "join", true);
+        let unknown = IndexUnknownOp::new(context);
+        append(context, entry, &unknown);
+        let cast = IndexUnsignedCastOp::new(context, unknown.result(context), 8);
+        append(context, entry, &cast);
+        let branch = BranchArgsOp::new(context, vec![cast.result(context)], join);
+        append(context, entry, &branch);
+        let phi = argument(context, join);
+        let wide = IndexUnsignedCastOp::new(context, phi, 64);
+        append(context, join, &wide);
+        let ret = ReturnOp::new(context);
+        append(context, join, &ret);
+        let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+        for value in [cast.result(context), phi, wide.result(context)] {
+            assert_eq!(analysis.fact(value), SparseIndexFactV1::UnsignedUpperBound { inclusive: 255 });
+            assert_eq!(analysis.fact(value).constant_value(), None);
+            assert_eq!(analysis.stable_root(context, &function, value), None);
+        }
+    }
+
+    #[test]
+    fn unsigned_cast_invalid_widths_fail_structural_verification() {
+        for width in [0, 1, 7, 9, 24, 63, 65, 128, u64::MAX] {
+            let context = &mut setup();
+            let function = function(context, "invalid_cast_width");
+            let entry = function.get_entry_block(context);
+            let source = IndexConstantOp::new(context, 511);
+            append(context, entry, &source);
+            let cast = IndexUnsignedCastOp::new(context, source.result(context), width);
+            append(context, entry, &cast);
+            let ret = ReturnOp::new(context);
+            append(context, entry, &ret);
+            assert_eq!(cast.inclusive_upper_bound(context), None);
+            assert_eq!(run_pliron_ranked_bounds_check_v1(context, &function).findings(),
+                &[RankedBoundsFindingV1::StructuralVerificationFailed]);
+        }
+    }
+
+    #[test]
+    fn unsigned_cast_unknown_ranges_prove_only_strict_matching_access_bounds() {
+        use dialect_kernel::{AccessKindAttr, RankedAccessOp, RankedViewType};
+        for width in [8, 16, 32, 64] {
+            let inclusive = u64::MAX >> (64 - width);
+            for extent in [inclusive, inclusive.saturating_add(1)] {
+                for use_cast in [false, true] {
+                    let context = &mut setup();
+                    let function = function(context, "cast_range_access");
+                    let entry = function.get_entry_block(context);
+                    let view_type = RankedViewType::new(context, 32, false, vec![extent]).unwrap();
+                    let view = RankedViewOp::new(context, view_type, vec![]).unwrap();
+                    append(context, entry, &view);
+                    let unknown = IndexUnknownOp::new(context);
+                    append(context, entry, &unknown);
+                    let cast = IndexUnsignedCastOp::new(context, unknown.result(context), width);
+                    append(context, entry, &cast);
+                    let value = if use_cast { cast.result(context) } else { unknown.result(context) };
+                    let access = RankedAccessOp::new(context, AccessKindAttr::Read,
+                        view.result(context), vec![value]).unwrap();
+                    append(context, entry, &access);
+                    let ret = ReturnOp::new(context);
+                    append(context, entry, &ret);
+                    let report = run_pliron_ranked_bounds_check_v1(context, &function);
+                    if use_cast && width < 64 && extent > inclusive {
+                        assert!(report.is_clean());
+                    } else {
+                        assert!(matches!(report.findings(),
+                            [RankedBoundsFindingV1::UnprovedBound { .. }]));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unsigned_cast_chains_keep_the_linear_exact_resource_envelope() {
+        for count in [1, 64, 1_024] {
+            let context = &mut setup();
+            let function = function(context, "cast_chain");
+            let entry = function.get_entry_block(context);
+            let source = IndexUnknownOp::new(context);
+            append(context, entry, &source);
+            let mut value = source.result(context);
+            for index in 0..count {
+                let cast = IndexUnsignedCastOp::new(context, value, [8, 16, 64][index % 3]);
+                append(context, entry, &cast);
+                value = cast.result(context);
+            }
+            let ret = ReturnOp::new(context);
+            append(context, entry, &ret);
+            let census = authenticated_census(context, &function);
+            assert_eq!((census.blocks, census.operations, census.results, census.operands,
+                census.successors, census.block_arguments), (1, count + 2, count + 1, count, 0, 0));
+            // V=N+1, D=3N+2; no merge terms. Fixed-width range facts add
+            // neither backing storage nor a new publication tier.
+            let work = 146 * count + 153;
+            let type_words = std::mem::size_of::<TypeHandle>()
+                .div_ceil(std::mem::size_of::<usize>());
+            let retained = 28 * count + 52;
+            let peak = retained + 63 * count + 75 + (count + 1) * type_words;
+            let bound = preflight_sparse_index_resource_upper_bound_v1(context, &function,
+                census, ProductionAnalysisResourceLimitsV1::new(work, peak)).unwrap();
+            assert_eq!((bound.work_upper_bound(), bound.retained_storage_upper_bound(),
+                bound.peak_storage_upper_bound()), (work, retained, peak));
+            for limits in [ProductionAnalysisResourceLimitsV1::new(work - 1, peak),
+                ProductionAnalysisResourceLimitsV1::new(work, peak - 1)] {
+                assert!(preflight_sparse_index_resource_upper_bound_v1(context, &function,
+                    census, limits).is_err());
+            }
+            let (analysis, actual_work) = analyze_with_work(context, &function);
+            assert!(actual_work <= work);
+            assert_eq!(analysis.fact(value), SparseIndexFactV1::UnsignedUpperBound { inclusive: 255 });
+        }
+    }
+
+    #[test]
     fn affine_maximum_requires_extents_only_for_used_axes() {
         for axis in 0..MAX_RANKED_MEMORY_RANK {
             let expression = SparseAffineIndexV1::invocation(axis)

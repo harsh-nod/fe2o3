@@ -35,6 +35,9 @@ mod native_catalog_transport_v1_tests;
 #[path = "canonical_kir_transition_receipt_capture_v1_tests.rs"]
 mod canonical_kir_transition_receipt_capture_v1_tests;
 
+#[path = "native_switch_folding_v1_tests.rs"]
+mod native_switch_folding_v1_tests;
+
 fn u32_type() -> Type {
     Type::Scalar(ScalarType::U32)
 }

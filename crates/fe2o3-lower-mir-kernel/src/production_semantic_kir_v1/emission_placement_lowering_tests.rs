@@ -155,9 +155,25 @@ fn captured_source_instances_drive_existing_lowering_and_call_expansion() {
             )
         })
         .unwrap();
+        let archive_storage = super::super::instance_correspondence_tests::scalar_archive_storage_v1(
+            &caller,
+            plan,
+            plan.root(),
+            budget,
+        ) + super::super::instance_correspondence_tests::scalar_archive_storage_v1(
+            &callee,
+            plan,
+            child,
+            budget,
+        );
+        let scratch_storage = super::super::instance_correspondence_tests::scalar_lowering_scratch_storage_v29(&caller)
+            + super::super::instance_correspondence_tests::scalar_lowering_scratch_storage_v29(&callee);
         with_production_instance_correspondence_v1(plan, budget, |mapping, budget| {
             mapping.append_lowered(plan.root(), &caller, budget)?;
             mapping.append_lowered(child, &callee, budget)?;
+            drop(caller.execution_observation);
+            drop(callee.execution_observation);
+            budget.release_storage(archive_storage)?;
             let call_storage = CallReturnBufferV1::bytes(
                 caller.call_returns.sites.rows.len() + callee.call_returns.sites.rows.len(),
                 caller.call_returns.components.rows.len()
@@ -217,6 +233,7 @@ fn captured_source_instances_drive_existing_lowering_and_call_expansion() {
             verify_module(&module).unwrap();
             drop(module);
             budget.release_storage(retained)?;
+            budget.release_storage(scratch_storage)?;
             Ok::<_, InstanceCorrespondenceErrorV1>(())
         })
         .unwrap();

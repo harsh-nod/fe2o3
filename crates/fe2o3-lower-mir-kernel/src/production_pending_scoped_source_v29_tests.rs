@@ -12,9 +12,25 @@ fn with_pending_api_input<'work, R>(
         &mut ArgumentBudgetV1<'work>,
     ) -> R,
 ) -> R {
-    let projection_owner = module_fixture_owner(kind);
+    with_pending_api_owner_v18(kind, preexisting, budget, || module_fixture_owner(kind), use_input)
+}
+
+fn with_pending_api_owner_v18<'work, R>(
+    kind: ModuleFixture,
+    preexisting: bool,
+    budget: &mut ArgumentBudgetV1<'work>,
+    make_owner: impl Fn() -> ProductionSemanticSsaOwnerV1,
+    use_input: impl FnOnce(
+        ProductionSemanticSsaOwnerV1,
+        ProductionSourceLaunchRosterV1,
+        ProductionExecutionSourceInputV29<'_>,
+        usize,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> R,
+) -> R {
+    let projection_owner = make_owner();
     with_module_fixture_view(&projection_owner, kind, budget, |source, budget| {
-        let mut owner = module_fixture_owner(kind);
+        let mut owner = make_owner();
         let (_, launch) = with_module_fixture_view(&owner, kind, budget, |_, _| ()).unwrap();
         let capture = if preexisting {
             let receipt = owner
@@ -184,17 +200,17 @@ fn pending_scoped_api_late_reconstruction_panic_drops_before_refunding() {
                     )
                 }));
                 SCOPED_SLOT_OBSERVER_V29.set(previous);
-                let Err(payload) = result else {
-                    panic!("expected the original reconstruction panic");
-                };
-                assert!(
-                    payload.downcast_ref::<String>().is_some_and(|message| {
-                        message.starts_with(
-                            "assertion `left != right` failed: late source replay panic",
-                        )
-                    }),
-                    "the original panic payload must survive wrapper cleanup",
-                );
+                assert!(matches!(
+                    result.expect("the inner source-reference callback has a typed panic contract"),
+                    Err(ProductionPendingScopedSourceErrorV29::Source(
+                        ProductionSemanticKirErrorV1::Unsupported {
+                            function: 0,
+                            block: None,
+                            statement: None,
+                            detail: "source reference callback panicked",
+                        }
+                    ))
+                ));
                 assert_eq!(OWNING_REPLAY_ROOT_VISITS.get(), 6);
                 assert_eq!(budget.storage(), MODULE_FLOOR + capture);
                 budget.release_storage(capture).unwrap();

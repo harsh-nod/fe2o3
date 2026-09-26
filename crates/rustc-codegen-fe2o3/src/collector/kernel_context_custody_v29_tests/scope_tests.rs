@@ -2,6 +2,9 @@
 use super::*;
 use crate::collector::workgroup_scope_custody_v29::*;
 
+#[path = "ordinary_source_census_tests.rs"]
+mod ordinary_source_census_tests;
+
 fn declarations(semantic: &AdmittedInertSemanticMirV1) -> SemanticDeclarationTablesCommitmentV1 {
     canonical_declaration_tables_commitment_v1(
         semantic.types(),

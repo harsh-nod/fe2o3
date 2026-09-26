@@ -1,0 +1,15 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: PASS
+// CHECK: event 0 use v0=d0
+// CHECK: event 1 def v0=d1
+// CHECK: event 2 use v0=d1
+// Field-update event equation: consume the old holder representation,
+// define a new whole holder, then read from that new version.
+
+entry b0
+variables v0
+entry-def v0
+block b0
+use v0
+def v0
+use v0

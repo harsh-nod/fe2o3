@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: gpu.call operands and results must match its function signature
+// Exact native ABI schema rejection, not a source-level callable decision.
+builtin.func @private_bad_call: builtin.function <(builtin.integer ui64) -> ()>
+{
+  ^entry(v: builtin.integer ui64):
+    answer = gpu.call (v) [] [gpu_call_callee: builtin.string "typed_leaf", gpu_call_signature: builtin.type builtin.function <(builtin.integer ui32) -> (builtin.integer ui64)>]: <(builtin.integer ui64) -> (builtin.integer ui64)>;
+    kernel.return () [] []: <() -> ()>
+}

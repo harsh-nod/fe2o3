@@ -69,6 +69,18 @@ never re-lowers source, invokes a compiler, launches hardware, or falls back
 between execution modes. A separately supplied request retains the same strict
 16 MiB boundary and preflight checks as raw KIR.
 
+Raw KIR routes explicitly select `SimulationTargetV1::amdgpu_64()`, the gfx942
+CPU profile, not a width-only legacy target. Admitted bundle targets map exactly:
+`gfx942:xnack-` selects `amdgpu_gfx942_little_endian_v2`; `gfx950:xnack-` selects
+`amdgpu_gfx950_little_endian_v2`. Result and exploration `target_profile`
+metadata report that actual target, including its index width and workgroup
+limit. The library's two legacy identities, `little_endian_index32_v1` and
+`amdgpu_64_little_endian_v1`, retain `None` for the AMD profile. The historical
+64-bit tag does not mean today's `amdgpu_64()` default, and no profile is inferred
+during decoding or replay. See the [four target identities](../fe2o3-kir-sim/README.md).
+These identities remain CPU observations, not source authentication or hardware
+authority.
+
 The library also exposes `load_debug_simulation_bundle_v2` for the debugger's
 explicit V2 envelope route. It strictly verifies the outer V2 bytes, the exact
 embedded V1 bundle, and the independently committed Source Map V2 payload.
@@ -182,6 +194,19 @@ subject, request bytes, target, limits, context, transcript, seed, coverage, and
 decisions.
 Binding drift is rejected before execution; runnable-decision and transcript
 validation remains in the simulator itself.
+The outer schedule V1 envelope retains that name when its nested target uses an
+explicit gfx942/gfx950 V2 identity tag. Legacy `None` documents remain unchanged;
+they cannot be promoted to the admitted bundle's profile to pass replay checks.
+The full target participates in both binding and replay-context identity, so
+equal 64-bit widths do not permit cross-profile substitution.
+
+Failure-reduction reports use `fe2o3-simulation-failure-reduction-v2` for explicit
+gfx942/gfx950 profiles, retaining `index_bits` and requiring `target_identity`.
+Legacy `None` reports retain their V1 schema and digests. Report replay checks
+the exact target as well as the full module, request, limits and reproducer.
+These legacy artifact routes do not admit the library's direct V18 storage
+owners; selecting an explicit profile adds no CLI, schedule, reduction, source,
+or hardware authority for those owners.
 
 For those same schedule-supported inputs,
 `--explore-seeded-schedules COUNT --schedule-seed FIRST_U64` is a separate,
@@ -306,8 +331,8 @@ retains canonical cooperative ordering. Recording and replay are command
 policy, not request-document fields, so an unchanged request cannot silently
 opt into a different execution order.
 `--race-evidence` additively includes the bounded race assessment for one
-ordinary run; without that flag the result remains byte-compatible with the
-previous V1 output. Evidence distinguishes unordered races, conflicts ordered
+ordinary run; without that flag the optional race-assessment fields are absent.
+Evidence distinguishes unordered races, conflicts ordered
 by integer atomic serialization or a compatible same-workgroup global
 acquire-release barrier, and incomplete assessment. Release/acquire atomic and
 fence edges into ordinary memory are not fully modeled, so a potentially

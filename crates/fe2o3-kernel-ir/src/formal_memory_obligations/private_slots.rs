@@ -1,5 +1,18 @@
 use super::*;
 
+fn private_access_type_matches(
+    pointer: ValueId,
+    access: MemoryAccess,
+    value_types: &BTreeMap<ValueId, Type>,
+) -> bool {
+    matches!(
+        value_types.get(&pointer),
+        Some(Type::Pointer(ty))
+            if ty.address_space == access.address_space
+                && matches!(ty.address_space, AddressSpace::Private | AddressSpace::Generic)
+    )
+}
+
 pub(super) fn classify_eligible_private_slots(
     function: &Function,
     definitions: &Definitions<'_>,
@@ -85,7 +98,7 @@ pub(super) fn classify_eligible_private_slots(
                 let exact_access = match &operation.kind {
                     OperationKind::Load { pointer, access } => {
                         *pointer == operand
-                            && access.address_space == AddressSpace::Private
+                            && private_access_type_matches(*pointer, *access, value_types)
                             && exact_slot(*pointer) == Some(slot)
                     }
                     OperationKind::Store {
@@ -94,12 +107,12 @@ pub(super) fn classify_eligible_private_slots(
                         access,
                     } => {
                         *pointer == operand
-                            && access.address_space == AddressSpace::Private
+                            && private_access_type_matches(*pointer, *access, value_types)
                             && exact_slot(*pointer) == Some(slot)
                             && exact_slot(*value) != Some(slot)
                     }
                     OperationKind::Cast {
-                        kind: CastKind::RestrictPointerAccess,
+                        kind: CastKind::RestrictPointerAccess | CastKind::PointerToGeneric,
                         value,
                         ..
                     } => {
@@ -185,7 +198,7 @@ fn exact_private_alloca_access_origin(
     value_types: &BTreeMap<ValueId, Type>,
     eligible_private_slots: &BTreeSet<ValueId>,
 ) -> Option<ValueId> {
-    if access.address_space != AddressSpace::Private {
+    if !private_access_type_matches(pointer, access, value_types) {
         return None;
     }
     definitions

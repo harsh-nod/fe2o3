@@ -25,6 +25,7 @@ pub use fixed_integer_continuation_v1::{
     INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V1, IntegerContinuationExecutionWitnessV1,
 };
 pub use fixed_policy_v3::{
+    POLICY3_EXECUTION_RECORD_BYTES_V18, Policy3ExecutionWitnessV18,
     POLICY3_EXECUTION_RECORD_BYTES_V1, Policy3ExecutionClaimErrorV1, Policy3ExecutionWitnessV1,
     UnauthenticatedPolicy3ExecutionClaimV1, policy3_execution_receipt_digest_v1,
     read_unauthenticated_policy3_execution_claim_v1,
@@ -32,6 +33,7 @@ pub use fixed_policy_v3::{
 pub use graph_analysis_v1::*;
 pub use kir_bridge_v1::*;
 pub use kir_optimization_map_v12::{
+    KirOptimizationMapPolicy3V18,
     KirOptimizationDispositionV12, KirOptimizationEndpointV12, KirOptimizationMapErrorV12,
     KirOptimizationMapIntegerContinuationV12, KirOptimizationMapPolicy3V12, KirOptimizationMapV12,
     KirOptimizationRelationV12,
@@ -86,7 +88,8 @@ pub use production::{
     ProductionPlironSessionV1, ProductionPolicyCheckedRefinementStagingV2, ProductionRankedBlockV1,
     ProductionRankedCompileErrorV1, ProductionRankedCompileErrorV2, ProductionRankedKernelErrorV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
-    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionRankedProjectionChecksV18, ProductionRankedProjectionValidationErrorV18, ProductionRankedTerminatorV1,
+    ProductionRankedValueIdV1, ProductionRankedValueV1,
     ProductionReconciledMirPlironKernelV1, ProductionReconciledMirPlironSemanticContractV1,
     ProductionReferenceOutputSiteV2, ProductionReferenceProofV2, ProductionRootHandleV1,
     ProductionSemanticBinaryOpV2, ProductionSemanticCastV2, ProductionSemanticComparisonV2,
@@ -112,6 +115,7 @@ pub use production::{
     ProductionTypedSemanticCommitmentReconciliationV2, ProductionTypedSemanticObligationSummaryV2,
     SemanticPartialMoveViolationV1, authenticated_ambient_workgroup_lds_scope_zst_v1,
     compile_ranked_kernel_for_gfx942_lowering_v1, compile_ranked_kernel_for_lowering_v1,
+    verify_exact_ranked_projection_for_gfx942_v18,
     derive_and_reconcile_mir_pliron_semantic_contract_v1,
     derive_and_require_parallel_reference_contract_v1, derive_noncanonical_loop_proof_request_v1,
     derive_noncanonical_loop_proof_requirement_v1, normalized_effect_refinement_hash_for_kernel_v2,
@@ -1981,6 +1985,8 @@ mod kir_occurrence_capture_v1;
 mod neutral_optimization_v1;
 pub use kir_occurrence_capture_v1::KirNeutralOccurrenceRowsV1;
 pub use neutral_optimization_v1::{
+    CheckedNeutralKernelIrOwnerV18, KirNeutralOptimizationErrorV18,
+    KirNeutralOptimizationOutputV18, optimize_neutral_kernel_ir_v18,
     CheckedNeutralKernelIrOwnerIntegerContinuationV1, CheckedNeutralKernelIrOwnerPolicy3V1,
     CheckedNeutralKernelIrOwnerV1, KirCheckedNeutralOptimizationErrorV1,
     KirCheckedNeutralOptimizationStorageV1, KirNeutralOptimizationErrorV1,

@@ -81,6 +81,13 @@ pub(in crate::production::semantic_ssa) trait SemanticSsaEmissionObserverV1 {
     fn entry_pass_begin(&mut self, _: usize, _: usize) -> Result<(), Self::Error> {
         Ok(())
     }
+    fn terminal_failure_begin(
+        &mut self,
+        _: SemanticSsaEmissionSiteV1,
+        _: usize,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
     fn visit(
         &mut self,
         kind: SemanticSsaVisitV1,
@@ -140,7 +147,7 @@ pub(in crate::production::semantic_ssa) trait SemanticSsaEmissionObserverV1 {
     ) -> Result<(), Self::Error>;
 }
 
-pub(super) struct NoSemanticSsaEmissionObserverV1;
+pub(in crate::production::semantic_ssa) struct NoSemanticSsaEmissionObserverV1;
 
 impl SemanticSsaEmissionObserverV1 for NoSemanticSsaEmissionObserverV1 {
     type Error = Infallible;
@@ -214,7 +221,7 @@ impl SemanticSsaEmissionObserverV1 for NoSemanticSsaEmissionObserverV1 {
     }
 }
 
-pub(super) fn infallible_v1<T>(result: Result<T, Infallible>) -> T {
+pub(in crate::production::semantic_ssa) fn infallible_v1<T>(result: Result<T, Infallible>) -> T {
     match result {
         Ok(value) => value,
         Err(error) => match error {},
@@ -263,6 +270,7 @@ struct EmitterV1<'a, B, O> {
     events: &'a mut B,
     observer: &'a mut O,
     site: SemanticSsaEmissionSiteV1,
+    failure_start: Option<usize>,
 }
 
 pub(in crate::production::semantic_ssa) fn emit_statement_events_v1<
@@ -307,6 +315,7 @@ pub(in crate::production::semantic_ssa) fn emit_statement_events_with_buffer_v1<
         events,
         observer,
         site,
+        failure_start: None,
     };
     emitter.visit(SemanticSsaVisitV1::Statement)?;
     if elided_borrow {
@@ -336,13 +345,29 @@ pub(in crate::production::semantic_ssa) fn emit_terminator_events_with_buffer_v1
     events: &mut B,
     observer: &mut O,
 ) -> EmissionResultV1<O::Error, B::Error> {
+    emit_terminator_events_with_failure_tail_v1(terminator, return_local, site, events, observer)
+        .map(|_| ())
+}
+
+pub(in crate::production::semantic_ssa) fn emit_terminator_events_with_failure_tail_v1<
+    B: SemanticSsaEventBufferV1,
+    O: SemanticSsaEmissionObserverV1,
+>(
+    terminator: &SemanticTerminatorKindV1,
+    return_local: Option<usize>,
+    site: SemanticSsaEmissionSiteV1,
+    events: &mut B,
+    observer: &mut O,
+) -> Result<Option<usize>, SemanticSsaEmissionErrorV1<O::Error, B::Error>> {
     let mut emitter = EmitterV1 {
         events,
         observer,
         site,
+        failure_start: None,
     };
     emitter.visit(SemanticSsaVisitV1::Terminator)?;
-    emitter.terminator(terminator, return_local)
+    emitter.terminator(terminator, return_local)?;
+    Ok(emitter.failure_start)
 }
 
 impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_, B, O> {
@@ -477,6 +502,14 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
         place: &SemanticPlaceV1,
         role: SemanticSsaOperandRoleV1,
     ) -> EmissionResultV1<O::Error, B::Error> {
+        self.place_contents_with_definition(place, role, false)
+    }
+    fn place_contents_with_definition(
+        &mut self,
+        place: &SemanticPlaceV1,
+        role: SemanticSsaOperandRoleV1,
+        mut field_definition: bool,
+    ) -> EmissionResultV1<O::Error, B::Error> {
         self.event(
             role,
             SemanticSsaEventRoleV1::BaseUse,
@@ -484,6 +517,7 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
         )?;
         for (ordinal, projection) in place.projections().iter().enumerate() {
             self.visit(SemanticSsaVisitV1::Projection)?;
+            field_definition &= matches!(projection.kind(), SemanticProjectionKindV1::Field(_));
             if let SemanticProjectionKindV1::Index(local) = projection.kind() {
                 self.event(
                     role,
@@ -491,6 +525,13 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
                     SsaEventV1::Use(SsaVariableIdV1::new(local.index())),
                 )?;
             }
+        }
+        if field_definition {
+            self.event(
+                role,
+                SemanticSsaEventRoleV1::DestinationDefine,
+                SsaEventV1::Define(SsaVariableIdV1::new(place.local().index())),
+            )?;
         }
         Ok(())
     }
@@ -538,7 +579,11 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
                 SsaEventV1::Define(SsaVariableIdV1::new(place.local().index())),
             )
         } else {
-            self.place_contents(place, role)
+            // A static field update consumes the old holder representation and
+            // creates a new whole-holder version; it does not read removed leaves.
+            self.place_contents_with_definition(
+                place, role, role == SemanticSsaOperandRoleV1::Destination,
+            )
         }
     }
     fn terminator(
@@ -570,9 +615,19 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
             }
             SemanticTerminatorKindV1::Drop { place, .. } => self.place(place, R::DropPlace),
             SemanticTerminatorKindV1::Assert {
-                condition, message, ..
+                condition,
+                message,
+                unwind,
+                ..
             } => {
                 self.operand(condition, R::AssertCondition)?;
+                if !matches!(unwind, SemanticUnwindActionV1::Cleanup(_)) {
+                    let start = self.events.event_count();
+                    self.observer
+                        .terminal_failure_begin(self.site, start)
+                        .map_err(SemanticSsaEmissionErrorV1::Observer)?;
+                    self.failure_start = Some(start);
+                }
                 self.assert_message(message)
             }
             SemanticTerminatorKindV1::Return => {

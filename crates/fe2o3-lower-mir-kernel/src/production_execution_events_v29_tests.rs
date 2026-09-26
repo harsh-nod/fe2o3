@@ -240,11 +240,20 @@ fn every_new_scalar_sibling_source_event_is_mandatory() {
         (Shape::AssertConditionFolded, vec![Role::AssertCondition]),
     ] {
         let mut required = Vec::new();
+        let mut definitions = Vec::new();
+        let subject = std::cell::Cell::new(None);
+        let failure_reads = std::cell::RefCell::new(Vec::new());
         lower_cfg_fixture_with_cursor(
             shape,
             |_| {},
             |cursor| {
+                subject.set(Some(ScopedInitializationSubjectV29::from_cursor(cursor)));
                 required.extend_from_slice(&cursor.events.required);
+                definitions.extend(required.iter().copied().filter(|index| {
+                    cursor.occurrences.events()[*index].role()
+                        == ExecutionEventV29::DestinationDefine
+                }));
+                assert_eq!(definitions, [2], "{shape:?}");
                 let operands = required
                     .iter()
                     .skip(3)
@@ -267,15 +276,92 @@ fn every_new_scalar_sibling_source_event_is_mandatory() {
                                 .retained_operand(event.site(), Role::CallArgument(0))
                                 .is_none()
                         );
+                        if matches!(event.operand(), Role::AssertMessage(_)) {
+                            let Some(SemanticOperandV1::Copy(place)) =
+                                cursor.retained_operand(event.site(), event.operand())
+                            else {
+                                panic!("source diagnostic must retain its original scalar place");
+                            };
+                            assert_eq!(place.local().index(), 4);
+                            assert_eq!(place.ty(), U32);
+                            assert_eq!(
+                                event.site(),
+                                execution_site_v29(SemanticBlockIdV1::from_index(0), None)
+                            );
+                            failure_reads.borrow_mut().push((
+                                *index,
+                                place.local().index(),
+                                ScopedMemoryFrameV29::operand(event.site(), Some(event.operand())),
+                                place as *const SemanticPlaceV1 as usize,
+                            ));
+                        }
                         event.operand()
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(operands, expected, "{shape:?}");
             },
-            |_, _, result| {
-                result.unwrap();
+            |owner, _, result| {
+                let result = result.unwrap();
+                let subject = subject.get().unwrap();
+                assert_eq!(result.source_call_instance, Some(subject.instance));
+                let anchors = result.scoped_memory_anchors.as_ref().unwrap();
+                assert!(anchors.subject == subject);
+                assert_eq!(anchors.subject.function, ROOT);
+                let source = &owner.source_semantic().functions()[ROOT.index() as usize];
+                let mut actual = Vec::new();
+                for row in &anchors.rows {
+                    if let ScopedMemoryAnchorKindV29::FailureRead { event, local } = row.kind {
+                        let frame = row.source.unwrap();
+                        let Some(ScopedMemoryRoleV29::Operand(role @ Role::AssertMessage(_))) =
+                            frame.role
+                        else {
+                            panic!("failure receipt has another source role");
+                        };
+                        let Some(SemanticOperandV1::Copy(place)) =
+                            scoped_source_operand_v29(source, frame.site, role)
+                        else {
+                            panic!("failure receipt lost its original source place");
+                        };
+                        assert_eq!(row.block, BlockId(17));
+                        assert_eq!(
+                            row.position,
+                            result.function.body.as_ref().unwrap().blocks[0]
+                                .operations
+                                .len()
+                        );
+                        actual.push((
+                            event,
+                            local,
+                            frame,
+                            place as *const SemanticPlaceV1 as usize,
+                        ));
+                    }
+                    if matches!(
+                        row.source.and_then(|frame| frame.role),
+                        Some(ScopedMemoryRoleV29::Operand(Role::AssertMessage(_)))
+                    ) {
+                        assert!(matches!(
+                            row.kind,
+                            ScopedMemoryAnchorKindV29::FailureRead { .. }
+                        ));
+                    }
+                }
+                assert_eq!(actual, *failure_reads.borrow(), "{shape:?}");
+                assert_eq!(
+                    actual.len(),
+                    match shape {
+                        Shape::AssertMessage => 1,
+                        Shape::AssertMessagePair => 2,
+                        _ => 0,
+                    }
+                );
+                if matches!(shape, Shape::AssertMessagePair) {
+                    assert_ne!(actual[0].0, actual[1].0);
+                    assert_ne!(actual[0].3, actual[1].3);
+                }
             },
         );
+        let last_required = required.last().copied().unwrap();
         for omitted in required {
             lower_cfg_fixture_with_cursor(
                 shape,
@@ -285,9 +371,20 @@ fn every_new_scalar_sibling_source_event_is_mandatory() {
                 },
                 |_, _, result| {
                     let error = result.err().expect("an omitted source event must reject");
+                    // Definition archives require their consumed source event;
+                    // other omissions fail ordered consumption or receipt checking.
+                    let expected_error = if definitions.contains(&omitted) {
+                        execution_archive_error_v29()
+                    } else if matches!(shape, Shape::AssertMessage | Shape::AssertMessagePair)
+                        && omitted == last_required
+                    {
+                        scoped_memory_error_v29()
+                    } else {
+                        execution_availability_error_v29()
+                    };
                     assert_eq!(
                         format!("{error:?}"),
-                        format!("{:?}", execution_availability_error_v29()),
+                        format!("{expected_error:?}"),
                         "{shape:?}, omitted {omitted}"
                     );
                 },
@@ -380,7 +477,7 @@ fn selected_field_archive_checks_reject_moved_and_stale_nominal_values() {
             assert!(
                 check_execution_archive_v29(
                     &observation.locals,
-                    &BTreeMap::new(),
+                    &SemanticSsaBindingsV1::default(),
                     &selected(1, U32),
                     definition,
                     &mut budget
@@ -646,19 +743,29 @@ fn shared_emitter_consumes_storage_and_ordinary_siblings_of_nominal_roots() {
 #[test]
 fn shared_emitter_rejects_every_omitted_nominal_event_including_the_last() {
     for omitted in [0, 1, 2, 3, 4, 5, 6, 8, 9] {
+        let definition = std::cell::Cell::new(false);
         lower_cfg_fixture_with_cursor(
             Shape::Storage,
             |_| {},
             |cursor| {
+                definition.set(
+                    cursor.occurrences.events()[omitted].role()
+                        == ExecutionEventV29::DestinationDefine,
+                );
                 cursor.skipped_event = Some(omitted);
             },
             |_, _, result| {
                 let error = result
                     .err()
                     .expect("a missing source event cannot produce a lowered function");
+                let expected_error = if definition.get() {
+                    execution_archive_error_v29()
+                } else {
+                    execution_availability_error_v29()
+                };
                 assert_eq!(
                     format!("{error:?}"),
-                    format!("{:?}", execution_availability_error_v29()),
+                    format!("{expected_error:?}"),
                     "omitted {omitted}"
                 );
             },

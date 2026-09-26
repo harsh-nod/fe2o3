@@ -30,6 +30,7 @@ pub use general::redundant_store::{
     ProductionLoopInductionQueryV1,
 };
 
+pub(super) use general::with_canonical_private_source_reader_v1;
 #[path = "production_checked_output_general_policy3_v1.rs"]
 mod general;
 pub use general::redundant_store::{

@@ -1,0 +1,11 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: gpu.call
+// CHECK: outside the closed ranked operation allowlist
+// Ordinary admission stays closed. This is not the contextual trap-pair/source checker.
+builtin.func @private_nonterminal_trap: builtin.function <() -> ()>
+{
+  ^entry():
+    gpu.call () [] [gpu_call_callee: builtin.string "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_trap", gpu_call_signature: builtin.type builtin.function <() -> ()>]: <() -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

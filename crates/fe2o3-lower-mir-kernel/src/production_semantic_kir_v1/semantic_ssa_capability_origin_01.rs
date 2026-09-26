@@ -440,13 +440,22 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
         &mut self,
         local: SemanticLocalIdV1,
     ) -> Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
+        self.resolve_with_budget_v29(local, &mut None)
+    }
+
+    fn resolve_with_budget_v29<'work>(
+        &mut self,
+        local: SemanticLocalIdV1,
+        budget: &mut Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
+    ) -> Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
+        if let Some(budget) = budget.as_deref_mut() { budget.charge_work(1)?; }
         let ty = self
             .function
             .locals()
             .get(local.index() as usize)
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
             .ty();
-        self.resolve_local(local, ty)
+        self.resolve_local(local, ty, budget)
     }
 
     fn charge_work(&mut self, amount: usize) -> Result<(), ProductionSemanticKirErrorV1> {
@@ -510,13 +519,20 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
             .copied()
     }
 
-    fn resolve_local(
+    fn resolve_local<'work>(
         &mut self,
         local: SemanticLocalIdV1,
         expected_type: SemanticTypeIdV1,
+        budget: &mut Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
     ) -> Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
         let node = SemanticCapabilityOriginNodeV1::Local(local.index(), expected_type.index());
-        self.resolve_node(node, |resolver| {
+        self.resolve_node(node, budget, |resolver, budget| {
+            if let Some(budget) = budget.as_deref_mut() {
+                charge_execution_cfg_lookup_v29(resolver.certified_locals.len(), budget)?;
+                charge_execution_cfg_lookup_v29(resolver.invalidated_locals.len(), budget)?;
+                charge_execution_cfg_lookup_v29(resolver.definitions.len(), budget)?;
+                budget.charge_work(4)?;
+            }
             if !resolver.certified_locals.contains(&local.index())
                 || resolver.invalidated_locals.contains(&local.index())
             {
@@ -534,6 +550,10 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
             }
             let mut binding = None;
             for index in 0..definition_count {
+                if let Some(budget) = budget.as_deref_mut() {
+                    budget.charge_work(2)?;
+                    charge_execution_cfg_lookup_v29(resolver.definitions.len(), budget)?;
+                }
                 resolver.charge_work(1)?;
                 let Some(definition) = resolver.definition(local, index) else {
                     return Ok(None);
@@ -541,9 +561,12 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
                 let candidate = match definition {
                     SemanticCapabilityDefinitionV1::Assignment(SemanticRvalueKindV1::Use(
                         operand,
-                    )) => resolver.resolve_operand(operand, expected_type)?,
+                    )) => resolver.resolve_operand(operand, expected_type, budget)?,
                     SemanticCapabilityDefinitionV1::Assignment(_) => None,
                     SemanticCapabilityDefinitionV1::Call(call) => {
+                        if let Some(budget) = budget.as_deref_mut() {
+                            budget.charge_work(argument_sum_v1(&[resolver.callables.len(), 16])?)?;
+                        }
                         resolver.resolve_direct_call(local, expected_type, call)
                     }
                 };
@@ -558,28 +581,32 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
         })
     }
 
-    fn resolve_operand(
+    fn resolve_operand<'work>(
         &mut self,
         operand: &SemanticOperandV1,
         expected_type: SemanticTypeIdV1,
+        budget: &mut Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
     ) -> Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
+        if let Some(budget) = budget.as_deref_mut() { budget.charge_work(1)?; }
         let place = match operand {
             SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place,
             SemanticOperandV1::Constant(_) => return Ok(None),
         };
-        self.resolve_place(place, expected_type)
+        self.resolve_place(place, expected_type, budget)
     }
 
-    fn resolve_place(
+    fn resolve_place<'work>(
         &mut self,
         place: &SemanticPlaceV1,
         expected_type: SemanticTypeIdV1,
+        budget: &mut Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
     ) -> Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
+        if let Some(budget) = budget.as_deref_mut() { budget.charge_work(4)?; }
         if place.ty() != expected_type {
             return Ok(None);
         }
         match place.projections() {
-            [] => self.resolve_local(place.local(), expected_type),
+            [] => self.resolve_local(place.local(), expected_type, budget),
             [downcast, field] => {
                 let SemanticProjectionKindV1::Downcast(variant) = downcast.kind() else {
                     return Ok(None);
@@ -587,7 +614,7 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
                 let SemanticProjectionKindV1::Field(field) = field.kind() else {
                     return Ok(None);
                 };
-                self.resolve_enum_payload(place.local(), variant, field, expected_type)
+                self.resolve_enum_payload_with_budget_v29(place.local(), variant, field, expected_type, budget)
             }
             _ => Ok(None),
         }
@@ -600,13 +627,30 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
         field: u32,
         expected_type: SemanticTypeIdV1,
     ) -> Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
+        self.resolve_enum_payload_with_budget_v29(local, variant, field, expected_type, &mut None)
+    }
+
+    fn resolve_enum_payload_with_budget_v29<'work>(
+        &mut self,
+        local: SemanticLocalIdV1,
+        variant: u32,
+        field: u32,
+        expected_type: SemanticTypeIdV1,
+        budget: &mut Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
+    ) -> Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
         let node = SemanticCapabilityOriginNodeV1::EnumPayload(
             local.index(),
             variant,
             field,
             expected_type.index(),
         );
-        self.resolve_node(node, |resolver| {
+        self.resolve_node(node, budget, |resolver, budget| {
+            if let Some(budget) = budget.as_deref_mut() {
+                charge_execution_cfg_lookup_v29(resolver.certified_locals.len(), budget)?;
+                charge_execution_cfg_lookup_v29(resolver.invalidated_locals.len(), budget)?;
+                charge_execution_cfg_lookup_v29(resolver.definitions.len(), budget)?;
+                budget.charge_work(10)?;
+            }
             if !resolver.certified_locals.contains(&local.index())
                 || resolver.invalidated_locals.contains(&local.index())
             {
@@ -646,6 +690,10 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
             }
             let mut binding = None;
             for index in 0..definition_count {
+                if let Some(budget) = budget.as_deref_mut() {
+                    budget.charge_work(4)?;
+                    charge_execution_cfg_lookup_v29(resolver.definitions.len(), budget)?;
+                }
                 resolver.charge_work(1)?;
                 let Some(definition) = resolver.definition(local, index) else {
                     return Ok(None);
@@ -661,7 +709,7 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
                             let Some(operand) = aggregate.operands().get(field as usize) else {
                                 return Ok(None);
                             };
-                            resolver.resolve_operand(operand, expected_type)?
+                            resolver.resolve_operand(operand, expected_type, budget)?
                         }
                         SemanticAggregateKindV1::EnumVariant(_) => continue,
                         SemanticAggregateKindV1::Array
@@ -681,23 +729,26 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
                             | SemanticOperandV1::Move(_)
                             | SemanticOperandV1::Constant(_) => return Ok(None),
                         };
-                        resolver.resolve_enum_payload(
+                        resolver.resolve_enum_payload_with_budget_v29(
                             place.local(),
                             variant,
                             field,
                             expected_type,
+                            budget,
                         )?
                     }
                     SemanticCapabilityDefinitionV1::Assignment(_) => None,
-                    SemanticCapabilityDefinitionV1::Call(call) => resolver
-                        .resolve_option_payload_call(
+                    SemanticCapabilityDefinitionV1::Call(call) => {
+                        if let Some(budget) = budget.as_deref_mut() { budget.charge_work(16)?; }
+                        resolver.resolve_option_payload_call(
                             local,
                             enum_type,
                             variant,
                             field,
                             expected_type,
                             call,
-                        ),
+                        )
+                    }
                 };
                 let Some(candidate) = candidate else {
                     return Ok(None);
@@ -810,14 +861,27 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
         }
     }
 
-    fn resolve_node(
+    fn resolve_node<'budget, 'work>(
         &mut self,
         node: SemanticCapabilityOriginNodeV1,
+        budget: &mut Option<&'budget mut (dyn SemanticEmissionBudgetV1 + 'work)>,
         resolve: impl FnOnce(
             &mut Self,
+            &mut Option<&'budget mut (dyn SemanticEmissionBudgetV1 + 'work)>,
         )
             -> Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1>,
     ) -> Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
+        if let Some(budget) = budget.as_deref_mut() {
+            budget.charge_work(1)?;
+            charge_execution_cfg_lookup_v29(self.memo.len(), budget)?;
+            charge_execution_cfg_lookup_v29(self.visiting.len(), budget)?;
+            budget.reserve_storage(argument_sum_v1(&[
+                std::mem::size_of::<SemanticCapabilityOriginNodeV1>(),
+                std::mem::size_of::<Option<SemanticPromotedBindingV1>>(),
+                std::mem::size_of::<Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1>>(),
+                std::mem::size_of_val(&resolve),
+            ])?)?;
+        }
         self.charge_work(1)?;
         if let Some(cached) = self.memo.get(&node) {
             return Ok(*cached);
@@ -825,12 +889,21 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
         if self.visiting.contains(&node) {
             return Ok(None);
         }
+        if let Some(budget) = budget.as_deref_mut() {
+            reserve_execution_cfg_map_entry_v29::<SemanticCapabilityOriginNodeV1, ()>(self.visiting.len(), budget)?;
+            // Pay for removal before descending: cleanup must not replace the
+            // first recursive refusal with a later shared-ledger refusal.
+            charge_execution_cfg_lookup_v29(argument_sum_v1(&[self.visiting.len(), 1])?, budget)?;
+        }
         self.charge_storage(1)?;
         self.visiting.insert(node);
-        let result = resolve(self);
+        let result = resolve(self, budget);
         self.visiting.remove(&node);
         self.release_storage(1)?;
         let result = result?;
+        if let Some(budget) = budget.as_deref_mut() {
+            reserve_execution_cfg_map_entry_v29::<SemanticCapabilityOriginNodeV1, Option<SemanticPromotedBindingV1>>(self.memo.len(), budget)?;
+        }
         self.charge_storage(1)?;
         self.memo.insert(node, result);
         Ok(result)

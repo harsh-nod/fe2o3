@@ -4,6 +4,9 @@ use fe2o3_mir_model::semantic_mir_v1::*;
 use rustc_hir::def_id::{DefId, DefIndex};
 use rustc_middle::ty::GenericArgs;
 
+#[path = "ordinary_source_census_tests.rs"]
+mod ordinary_source_census_tests;
+
 fn instance(index: u32) -> Instance<'static> {
     Instance::new_raw(
         DefId::local(DefIndex::from_u32(index + 1)),

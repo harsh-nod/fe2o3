@@ -635,7 +635,7 @@ impl ProductionCanonicalRankedCallTransportV1<'_> {
             self.row.semantic_block,
         )
     }
-    /// Argument preparation start, actual call, and destination end; None for a return.
+    /// Normal-call preparation, call, and destination end; None without normal completion.
     pub fn call_operation_span(&self) -> Option<(u32, u32, u32)> {
         match self.row.kind {
             SemanticKirCallReturnKindV1::Call {
@@ -644,7 +644,8 @@ impl ProductionCanonicalRankedCallTransportV1<'_> {
                 destination_end,
                 ..
             } => Some((arguments_first, call_operation, destination_end)),
-            SemanticKirCallReturnKindV1::Return { .. } => None,
+            SemanticKirCallReturnKindV1::Return { .. }
+            | SemanticKirCallReturnKindV1::NoNormalReturnCall { .. } => None,
         }
     }
     /// Complete destination mode; None for a return.

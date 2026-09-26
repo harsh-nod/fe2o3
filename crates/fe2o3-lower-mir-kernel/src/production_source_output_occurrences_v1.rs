@@ -527,10 +527,11 @@ fn source_output_replay_v1(
         .semantic_ssa
         .verify_replay()
         .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
-    let (module, correspondence) = lower_module(
+    let (module, correspondence) = lower_module_with_profile_v18(
         &source.semantic_ssa,
         source.limits,
         Some(source.launch_roots.as_ref()),
+        source.kernel_abi.as_ref(),
     )?;
     if source.executable().module() != &module || source.correspondence != correspondence {
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);

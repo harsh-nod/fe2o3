@@ -152,6 +152,7 @@ Usage: scripts/ci-local.sh <command>
 Commands:
   generic         Run all validation suitable for a machine without ROCm/GPU
   generic-core    Run generic validation except codegen integration shards
+  compiler-boundary-ui  Check private source/cursor API non-escape with rustc
   workspace-policy  Validate workspace ownership and dependency directions
   hygiene-delta <base> <head>  Validate changed production source hygiene
   standalone-locks  Validate every tracked standalone Cargo lockfile
@@ -1230,6 +1231,19 @@ run_parity_matrix_checks() {
     bash scripts/tests/hosted-parity-ci.sh
 }
 
+run_compiler_boundary_ui() {
+  run_step compiler-boundary-ui-harness-tests \
+    node --test scripts/compiler-boundary-ui.test.mjs \
+      scripts/source-storage-root-custody-ui.test.mjs \
+      scripts/scoped-raw-admission-ui.test.mjs
+  run_step source-storage-root-custody-ui \
+    node scripts/source-storage-root-custody-ui.mjs "${REPO_ROOT}"
+  run_step execution-cursor-ui \
+    node scripts/execution-cursor-ui.mjs "${REPO_ROOT}"
+  run_step scoped-raw-admission-ui \
+    node scripts/scoped-raw-admission-ui.mjs "${REPO_ROOT}"
+}
+
 run_generic_core() {
   run_workspace_dependency_policy
   run_standalone_lockfiles
@@ -1242,6 +1256,7 @@ run_generic_core() {
   run_parity_matrix_checks
   run_format
   run_check
+  run_compiler_boundary_ui
   run_backend_build
   run_step simulation-expectation-tests \
     python3 -I -B scripts/tests/simulation_expectation.py
@@ -1584,6 +1599,7 @@ main() {
   case "${1:-}" in
     generic) run_generic ;;
     generic-core) run_generic_core ;;
+    compiler-boundary-ui) run_compiler_boundary_ui ;;
     workspace-policy) run_workspace_dependency_policy ;;
     hygiene-delta)
       if (($# != 3)); then

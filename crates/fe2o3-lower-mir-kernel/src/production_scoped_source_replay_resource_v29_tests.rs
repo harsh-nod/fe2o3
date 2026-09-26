@@ -99,6 +99,10 @@ fn owning_stage_probe(
 }
 
 fn owning_resource(error: ScopedModuleErrorV29) -> ArgumentResourceV1 {
+    use fe2o3_kernel_ir::{
+        BorrowedKernelIrVerificationErrorV1 as V, CanonicalKernelIrReplayAdmissionErrorV18 as C,
+        KernelIrDecodeError as D, KernelIrEncodeError as E, StorageLayoutErrorV1 as L,
+    };
     match error {
         ScopedModuleErrorV29::Occurrences(
             fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1::Resource(error),
@@ -109,14 +113,23 @@ fn owning_resource(error: ScopedModuleErrorV29) -> ArgumentResourceV1 {
         | ScopedModuleErrorV29::Source(ProductionSemanticKirErrorV1::AssertOrigin(
             SemanticKirAssertOriginErrorV1::Resource(error),
         ))
-        | ScopedModuleErrorV29::Canonical(
-            fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Resource(error),
-        )
-        | ScopedModuleErrorV29::Canonical(
-            fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Decode(
-                fe2o3_kernel_ir::KernelIrDecodeError::Resource(error),
-            ),
-        ) => error,
+        | ScopedModuleErrorV29::Canonical(C::Resource(error))
+        | ScopedModuleErrorV29::Canonical(C::Decode(D::Resource(error)))
+        | ScopedModuleErrorV29::Canonical(C::Layout(L::Resource(error)))
+        | ScopedModuleErrorV29::Canonical(C::Verification(V::Resource(error))) => error,
+        ScopedModuleErrorV29::Canonical(C::Encode(E::WorkLimit(limit)))
+        | ScopedModuleErrorV29::Canonical(C::Decode(D::WorkLimit(limit)))
+        | ScopedModuleErrorV29::Canonical(C::Decode(D::Encode(E::WorkLimit(limit)))) => {
+            ArgumentResourceV1::Work(limit)
+        }
+        ScopedModuleErrorV29::Canonical(C::Encode(E::Allocation))
+        | ScopedModuleErrorV29::Canonical(C::Decode(D::Encode(E::Allocation))) => {
+            ArgumentResourceV1::Allocation
+        }
+        ScopedModuleErrorV29::Canonical(C::Encode(E::Overflow { .. }))
+        | ScopedModuleErrorV29::Canonical(C::Decode(D::Encode(E::Overflow { .. }))) => {
+            ArgumentResourceV1::Arithmetic
+        }
         other => panic!("expected a typed resource refusal: {other:?}"),
     }
 }

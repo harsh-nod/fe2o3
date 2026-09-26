@@ -1,6 +1,8 @@
 use super::*;
 #[path = "typed_elision_capture_v1_tests.rs"]
 mod typed_elision_capture_v1_tests;
+#[path = "holder_capture_v1_tests.rs"]
+mod holder_capture_v1_tests;
 
 use crate::{
     ProductionSemanticSsaEntryOriginV1 as EntryOrigin,

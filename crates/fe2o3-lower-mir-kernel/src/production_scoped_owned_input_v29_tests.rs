@@ -4,6 +4,7 @@ fn owned_input_payload(input: &OwnedExecutionInputV29) -> usize {
         + input.classes.capacity() * size_of::<ProductionScopeCallableCandidateV29>()
         + input.events.capacity() * size_of::<crate::ProductionScopeEventCandidateV29>()
         + input.launch.capacity() * size_of::<crate::ProductionSourceLaunchRootV1>()
+        + input.kernel_argument_abi.as_ref().map_or(0, |profile| profile.retained_storage())
 }
 
 #[test]
@@ -164,13 +165,16 @@ fn owned_execution_input_rejects_launch_substitution_even_when_graph_is_identica
         let limits = ProductionSemanticKirLimitsV1::default();
         let pending = admit_pending_scoped_module_v29(source, limits, budget).unwrap();
         let scratch_floor = budget.storage();
-        let emitted = scoped_module_roots_v29(&alternate, limits, budget).unwrap();
-        let (candidate, roots) =
-            scoped_module_candidate_v29(&alternate, emitted, limits, budget).unwrap();
+        let (candidate, roots, _) = with_scoped_source_cleanup_v29(
+            budget,
+            scratch_floor,
+            |cleanup, budget| scoped_source_candidate_v29(&alternate, limits, cleanup, budget),
+        )
+        .unwrap();
         assert!(
             pending
                 .graph
-                .matches_module_with_budget_v15(&candidate, budget)
+                .matches_module_with_budget_v18(&candidate, budget)
                 .unwrap()
         );
         drop((candidate, roots));
@@ -311,6 +315,18 @@ fn owned_execution_input_never_refunds_a_replaced_ledger_or_swallows_panic() {
             }));
             if mode == 2 {
                 assert_eq!(result.unwrap_err().downcast_ref::<u32>(), Some(&1729));
+            } else if mode == 1 {
+                assert!(matches!(
+                    result,
+                    Ok(Err(ScopedModuleErrorV29::Source(
+                        ProductionSemanticKirErrorV1::Unsupported {
+                            function: 0,
+                            block: None,
+                            statement: None,
+                            detail: "scoped module differs from its complete source roster",
+                        }
+                    )))
+                ));
             } else {
                 assert!(matches!(
                     result,
@@ -451,5 +467,261 @@ fn owned_execution_input_capture_cleans_partial_allocation_at_exact_stage_limits
         if mode == 3 {
             assert_eq!(work.failed_work(), Some(usize::MAX));
         }
+    }
+}
+
+fn execution_input_comparison_work_v18(input: ProductionExecutionSourceInputV29<'_>) -> usize {
+    100
+        + input.classes.len() * size_of::<ProductionScopeCallableCandidateV29>()
+        + input.events.len() * size_of::<crate::ProductionScopeEventCandidateV29>()
+        + input.roots.iter().map(|root| {
+            size_of::<ScopedRootRecipeV29>() + 39 + 8 * root.helper_arguments.len()
+        }).sum::<usize>()
+}
+
+#[test]
+fn execution_input_comparison_checks_complete_genuine_census_without_allocation() {
+    for kind in [ModuleFixture::Ordinary, ModuleFixture::Mixed, ModuleFixture::Array] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        with_module_fixture(kind, &mut budget, |source, budget| {
+            let owned = OwnedExecutionInputV29::capture(source, budget).unwrap();
+            let before = (budget.work(), budget.storage(), budget.peak_storage());
+            owned.check_candidate_v18(source.owner, source.input, budget).unwrap();
+            assert_eq!(budget.work() - before.0, execution_input_comparison_work_v18(source.input));
+            assert_eq!((budget.storage(), budget.peak_storage()), (before.1, before.2));
+            let retained = owned.retained_storage;
+            drop(owned);
+            budget.release_storage(retained).unwrap();
+        }).unwrap();
+        assert_eq!(budget.storage(), MODULE_FLOOR);
+    }
+}
+
+#[test]
+fn execution_input_comparison_rejects_source_census_and_exact_root_substitutions() {
+    use crate::ProductionContextRootErrorV29 as Error;
+    for fault in 0..29 {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        with_module_fixture(ModuleFixture::Mixed, &mut budget, |source, budget| {
+            let owned = OwnedExecutionInputV29::capture(source, budget).unwrap();
+            owned.check_candidate_v18(source.owner, source.input, budget).unwrap();
+            let other = module_fixture_owner(ModuleFixture::Array);
+            let mut sha = *source.input.semantic_sha256;
+            sha[0] ^= 1;
+            let mut roots = source.input.roots.to_vec();
+            let mut classes = source.input.classes.to_vec();
+            let mut events = source.input.events.to_vec();
+            let mut arguments = roots[0].helper_arguments.to_vec();
+            let mut candidate = source.input;
+            let mut owner = source.owner;
+            let expected = match fault {
+                0 => { candidate.semantic_sha256 = &sha; Error::Source }
+                1 => { owner = &other; Error::Source }
+                2 => { roots.clear(); Error::RootCensus }
+                3 => { roots.push(roots[0]); Error::RootCensus }
+                4 => { classes.pop(); Error::CallableCensus }
+                5 => { classes.push(ProductionScopeCallableCandidateV29::Ordinary); Error::CallableCensus }
+                6 => { classes.swap(0, 2); Error::CallableCensus }
+                7 => { events.pop(); Error::ScopeEventCensus }
+                8 => { events.push(events[0]); Error::ScopeEventCensus }
+                9 => { events.swap(0, 1); Error::ScopeEventCensus }
+                10 => { events[0].statement_count += 1; Error::ScopeEventCensus }
+                11 => { roots[0].semantic_sha256 = &sha; Error::RootCensus }
+                12 => { roots[0].root = SemanticFunctionIdV1::from_index(0); Error::RootCensus }
+                13 => { roots[0].root_identity = source.owner.source_semantic().functions()[0].identity(); Error::RootCensus }
+                14 => { roots[0].helper = SemanticFunctionIdV1::from_index(0); Error::RootCensus }
+                15 => { roots[0].helper_identity = source.owner.source_semantic().functions()[0].identity(); Error::RootCensus }
+                16 => { roots[0].issuer = SemanticCallableIdV1::from_index(0); Error::RootCensus }
+                17 => { roots[0].issuer_identity = source.owner.source_semantic().functions()[0].identity(); Error::RootCensus }
+                18 => { roots[0].context_type = U32; Error::RootCensus }
+                19 => { roots[0].context_identity = source.owner.source_semantic().types()[U32.index() as usize].identity(); Error::RootCensus }
+                20 => { roots[0].issuance.statement_count += 1; Error::RootCensus }
+                21 => { roots[0].helper_call.destination = SemanticLocalIdV1::from_index(1); Error::RootCensus }
+                22 => { roots[0].helper_context_local = SemanticLocalIdV1::from_index(1); Error::RootCensus }
+                23 => { arguments.clear(); roots[0].helper_arguments = &arguments; Error::Arguments }
+                24 => {
+                    let SemanticOperandV1::Move(place) = &arguments[0] else { panic!("context move"); };
+                    arguments[0] = SemanticOperandV1::Copy(place.clone());
+                    roots[0].helper_arguments = &arguments;
+                    Error::Arguments
+                }
+                25 => {
+                    let SemanticOperandV1::Move(place) = &arguments[0] else { panic!("context move"); };
+                    arguments[0] = SemanticOperandV1::Move(SemanticPlaceV1::new(
+                        SemanticLocalIdV1::from_index(place.local().index() + 1), Vec::new(), place.ty(),
+                    ).unwrap());
+                    roots[0].helper_arguments = &arguments;
+                    Error::Arguments
+                }
+                26 => { roots[0].issuance.target = SemanticBlockIdV1::from_index(0); Error::RootCensus }
+                27 => { roots[0].helper_call.target = SemanticBlockIdV1::from_index(0); Error::RootCensus }
+                28 => {
+                    let SemanticOperandV1::Move(place) = &arguments[0] else { panic!("context move"); };
+                    let projection = SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), place.ty()).unwrap();
+                    arguments[0] = SemanticOperandV1::Move(SemanticPlaceV1::new(
+                        place.local(), vec![projection; 1024], place.ty(),
+                    ).unwrap());
+                    roots[0].helper_arguments = &arguments;
+                    Error::Arguments
+                }
+                _ => unreachable!(),
+            };
+            candidate.roots = &roots;
+            candidate.classes = &classes;
+            candidate.events = &events;
+            let before = (budget.storage(), budget.peak_storage());
+            assert_eq!(owned.check_candidate_v18(owner, candidate, budget), Err(expected), "fault {fault}");
+            assert_eq!((budget.storage(), budget.peak_storage()), before);
+            // Relative comparison does not itself poison the owner or mint a receipt.
+            owned.check_candidate_v18(source.owner, source.input, budget).unwrap();
+            let retained = owned.retained_storage;
+            drop(owned);
+            budget.release_storage(retained).unwrap();
+        }).unwrap();
+        assert_eq!(budget.storage(), 0);
+    }
+}
+
+#[test]
+fn execution_input_comparison_exact_work_zero_scratch_and_lost_custody_boundaries() {
+    use crate::ProductionContextRootErrorV29 as Error;
+    for mode in 0..4 {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        let mut foreign = ArgumentBudgetV1::new(&mut foreign_work, MODULE_LIMIT);
+        with_module_fixture(ModuleFixture::Mixed, &mut budget, |source, budget| {
+            let owned = OwnedExecutionInputV29::capture(source, budget).unwrap();
+            let comparison_work = execution_input_comparison_work_v18(source.input);
+            if mode < 2 {
+                let filler = MODULE_LIMIT - budget.storage();
+                budget.reserve_storage(filler).unwrap();
+                budget.charge_work(MODULE_LIMIT - budget.work() - comparison_work + usize::from(mode == 1)).unwrap();
+                let before = (budget.work(), budget.storage(), budget.peak_storage());
+                let result = owned.check_candidate_v18(source.owner, source.input, budget);
+                if mode == 0 {
+                    result.unwrap();
+                    assert_eq!(budget.work() - before.0, comparison_work);
+                } else {
+                    assert!(matches!(result, Err(Error::Resource(ArgumentResourceV1::Work(_)))));
+                }
+                assert_eq!((budget.storage(), budget.peak_storage()), (before.1, before.2));
+                budget.release_storage(filler).unwrap();
+            } else if mode == 2 {
+                foreign.reserve_storage(owned.retained_storage).unwrap();
+                let before = (foreign.work(), foreign.storage(), budget.work(), budget.storage());
+                assert_eq!(owned.check_candidate_v18(source.owner, source.input, &mut foreign), Err(Error::Resource(ArgumentResourceV1::Accounting)));
+                assert_eq!((foreign.work(), foreign.storage(), budget.work(), budget.storage()), before);
+            } else {
+                let released = budget.storage() - owned.retained_storage + 1;
+                budget.release_storage(released).unwrap();
+                let before = (budget.work(), budget.storage());
+                assert_eq!(owned.check_candidate_v18(source.owner, source.input, budget), Err(Error::Resource(ArgumentResourceV1::Accounting)));
+                assert_eq!((budget.work(), budget.storage()), before);
+                budget.reserve_storage(released).unwrap();
+            }
+            let retained = owned.retained_storage;
+            drop(owned);
+            budget.release_storage(retained).unwrap();
+        }).unwrap();
+        assert_eq!(budget.storage(), 0);
+    }
+}
+
+#[test]
+fn source_owned_execution_input_comparison_retains_first_refusal() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let prepared = prepared_source_fixture(ModuleFixture::Mixed, false, &mut budget);
+    let completed = std::cell::Cell::new(false);
+    let result = prepared.with_checked_source_v18(&mut budget, |view, budget| {
+        let owned = &view.owner.inner.source.input;
+        let owner = view.source_ssa(budget)?;
+        let mut roots: Vec<_> = owned.roots.iter().map(|root| {
+            root.borrow(&owned.semantic_sha256, owner).unwrap()
+        }).collect();
+        let candidate = ProductionExecutionSourceInputV29 {
+            semantic_sha256: &owned.semantic_sha256,
+            roots: &roots,
+            classes: &owned.classes,
+            events: &owned.events,
+        };
+        view.check_execution_input_v18(candidate, budget)?;
+        roots[0].helper_context_local = SemanticLocalIdV1::from_index(1);
+        let candidate = ProductionExecutionSourceInputV29 {
+            semantic_sha256: &owned.semantic_sha256,
+            roots: &roots,
+            classes: &owned.classes,
+            events: &owned.events,
+        };
+        assert!(matches!(view.check_execution_input_v18(candidate, budget),
+            Err(ProductionSourceOwnedViewErrorV18::Binding("execution source candidate differs from retained input"))));
+        let before = (budget.work(), budget.storage());
+        assert!(matches!(view.check_execution_input_v18(candidate, budget),
+            Err(ProductionSourceOwnedViewErrorV18::Binding("execution source candidate differs from retained input"))));
+        assert!(matches!(view.root_count(budget),
+            Err(ProductionSourceOwnedViewErrorV18::Binding("execution source candidate differs from retained input"))));
+        assert_eq!((budget.work(), budget.storage()), before);
+        completed.set(true);
+        Ok(())
+    });
+    assert!(completed.get());
+    assert!(matches!(result,
+        Err(ProductionSourceOwnedViewErrorV18::Binding("execution source candidate differs from retained input"))));
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+}
+
+#[test]
+fn source_owned_execution_input_comparison_work_refusal_keeps_projection_cleanup_eligible() {
+    for short in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let prepared = prepared_source_fixture(ModuleFixture::Mixed, false, &mut budget);
+        let completed = std::cell::Cell::new(false);
+        let result = prepared.with_checked_source_v18(&mut budget, |view, budget| {
+            view.check_query_v18(budget)?;
+            let owner = view.source_ssa(budget)?;
+            view.check_original_source(owner, budget)?;
+            let owned = &view.owner.inner.source.input;
+            let roots: Vec<_> = owned.roots.iter().map(|root| {
+                root.borrow(&owned.semantic_sha256, owner).unwrap()
+            }).collect();
+            let candidate = ProductionExecutionSourceInputV29 {
+                semantic_sha256: &owned.semantic_sha256,
+                roots: &roots,
+                classes: &owned.classes,
+                events: &owned.events,
+            };
+            let allowance = 1 + execution_input_comparison_work_v18(candidate) - usize::from(short);
+            budget.charge_work(MODULE_LIMIT - budget.work() - allowance)?;
+            let before = (budget.work(), budget.storage());
+            let checked = view.check_execution_input_v18(candidate, budget);
+            if short {
+                assert!(matches!(checked,
+                    Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(_)))));
+                assert!(matches!(view.check_execution_input_v18(candidate, budget),
+                    Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(_)))));
+            } else {
+                checked?;
+                assert_eq!(budget.work() - before.0, allowance);
+            }
+            assert_eq!(budget.storage(), before.1);
+            assert!(!view.cleanup.is_denied());
+            completed.set(true);
+            Ok(())
+        });
+        assert!(completed.get());
+        if short {
+            assert!(matches!(result,
+                Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(_)))));
+        } else {
+            result.unwrap();
+        }
+        assert_eq!(budget.storage(), MODULE_FLOOR);
     }
 }

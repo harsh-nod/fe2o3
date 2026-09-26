@@ -1,3 +1,5 @@
+    include!("../production_invocation_transport_v1_tests.rs");
+
     #[test]
     fn direct_parameter_transport_preserves_only_its_authenticated_carrier() {
         let semantic_type = SemanticTypeIdV1::from_index(0);

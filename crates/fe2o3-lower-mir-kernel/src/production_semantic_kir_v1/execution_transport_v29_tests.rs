@@ -91,7 +91,7 @@ fn function_with_reference(
 fn lowering<'a>(
     types: &'a [SemanticTypeDeclV1],
     function: &'a SemanticFunctionDeclV1,
-) -> SemanticFunctionLoweringV1<'a> {
+) -> SemanticFunctionLoweringV1<'a, 'a> {
     SemanticFunctionLoweringV1::new(
         types,
         &[],
@@ -112,7 +112,7 @@ fn lowering<'a>(
     .unwrap()
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn nominal_borrow_v29(
         &self,
         block: SemanticBlockIdV1,
@@ -229,7 +229,7 @@ fn archive_check_rejects_changed_producers_borrows_and_missing_phi_bindings() {
         block: SsaBlockIdV1::new(0),
         variable: fe2o3_mir_model::SsaVariableIdV1::new(1),
     };
-    let mut archive = BTreeMap::from([(
+    let mut archive = SemanticSsaBindingsV1::from([(
         definition,
         SemanticValueBindingV1::Execution(expected.clone()),
     )]);
@@ -526,12 +526,18 @@ fn ordinary_operands_without_a_cursor_still_require_the_exact_shared_work_budget
         id: ValueId(id),
         ty: Type::Scalar(ScalarType::U32),
     };
+    // Optional array classification pays one lookup and its presence check.
+    // Strict legacy lookup separately checks the original-object range and the
+    // legacy key, then pays their two representation checks, even for empty maps.
+    const OPTIONAL_ARRAY_PROBE: usize = 32 + 1;
+    const STRICT_LEGACY_PROBE: usize = 2 * 32 + 2;
+    const SLOT_LOOKUPS: usize = OPTIONAL_ARRAY_PROBE + STRICT_LEGACY_PROBE;
     for (input, binding, exact, storage) in [
-        (SemanticTypeIdV1::from_index(2), scalar(77), 6, 0),
+        (SemanticTypeIdV1::from_index(2), scalar(77), 6 + SLOT_LOOKUPS, 0),
         (
             SemanticTypeIdV1::from_index(8),
             SemanticValueBindingV1::Aggregate(vec![scalar(77), scalar(78)]),
-            20,
+            20 + SLOT_LOOKUPS,
             2 * std::mem::size_of::<SemanticValueBindingV1>(),
         ),
     ] {
@@ -616,7 +622,7 @@ fn ordinary_operands_without_a_cursor_still_require_the_exact_shared_work_budget
                         ArgumentResourceV1::Storage(_),
                     )),
                 ) => {
-                    assert_eq!(budget.work(), 16);
+                    assert_eq!(budget.work(), 16 + SLOT_LOOKUPS);
                     assert_eq!(budget.failed_storage(), Some(FLOOR + storage));
                 }
                 (outcome, result) => panic!("expected {outcome:?}, got {result:?}"),

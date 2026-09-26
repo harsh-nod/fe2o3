@@ -1,5 +1,12 @@
 use super::*;
 
+include!("production_source_direct_volatile_v29_tests.rs");
+include!("production_source_raw_volatile_v29_tests.rs");
+include!("production_source_access_epoch_join_v29_tests.rs");
+include!("production_source_physical_backing_v29_tests.rs");
+include!("production_source_raw_scalar_epochs_v29_tests.rs");
+include!("production_source_address_formation_epochs_v29_tests.rs");
+
 fn config() -> InitializationFixtureV29 {
     InitializationFixtureV29::default()
 }
@@ -149,6 +156,14 @@ fn source_initialization_retains_literal_diamond_and_loop_states_per_instance() 
 #[test]
 fn direct_slot_loads_reject_kills_on_joins_and_loop_backedges_before_capture() {
     for looping in [false, true] {
+        for (copy_read, volatile) in [(false, false), (false, true), (true, false)] {
+            let positive = init_run(
+                InitializationFixtureV29 { looping, copy_read, volatile, ..config() },
+                observe_initialization,
+            );
+            assert!(is_stopped(&positive), "positive {looping}/{copy_read}/{volatile}: {positive:?}");
+            assert_eq!(OBSERVED.get(), 1);
+        }
         for kill in [
             InitializationKillV29::StorageLive,
             InitializationKillV29::StorageDead,
@@ -156,25 +171,42 @@ fn direct_slot_loads_reject_kills_on_joins_and_loop_backedges_before_capture() {
             InitializationKillV29::Move,
         ] {
             for (copy_read, volatile) in [(false, false), (false, true), (true, false)] {
+                let configuration = InitializationFixtureV29 {
+                    looping, kill: Some(kill), copy_read, volatile, ..config()
+                };
+                if matches!(kill, InitializationKillV29::Deinitialize) {
+                    // The original partial-state analysis now sees semantic
+                    // Deinitialize even with no projected Move. This invalid
+                    // read must fail before any lowerer/observer is created.
+                    OBSERVED.set(0);
+                    let error = scoped_root_tests::fixtures::try_initialization_owner(configuration)
+                        .err().expect("read after a possibly deinitialized predecessor must fail SSA admission");
+                    assert!(matches!(error, ProductionSemanticSsaErrorV1::PartialMove {
+                        function, block: 3, statement: Some(0), local: 2,
+                        violation: fe2o3_pliron::SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
+                    } if function == SemanticFunctionIdV1::from_index(3)),
+                        "{looping}/{kill:?}/{copy_read}/{volatile}: {error:?}");
+                    assert_eq!(OBSERVED.get(), 0);
+                    continue;
+                }
                 let result = init_run(
-                    InitializationFixtureV29 {
-                        looping,
-                        kill: Some(kill),
-                        copy_read,
-                        volatile,
-                        ..config()
-                    },
+                    configuration,
                     observe_initialization,
                 );
+                // Source C2 intersects initialization at the join before
+                // emission. StorageDead also ends the original lifetime;
+                // the other removals leave a live but uninitialized object.
+                let expected = if matches!(kill, InitializationKillV29::StorageDead) {
+                    "source storage object lifetime has ended"
+                } else {
+                    "source reference reads an uninitialized partial holder"
+                };
                 assert!(
                     matches!(
                         result,
-                        Err(ProductionSemanticKirErrorV1::MissingLocalDefinition {
-                            function: 3,
-                            block: 3,
-                            statement: Some(0),
-                            local: 2,
-                        })
+                        Err(ProductionSemanticKirErrorV1::Unsupported {
+                            function: 0, block: None, statement: None, detail,
+                        }) if detail == expected
                     ),
                     "{looping}/{kill:?}/{copy_read}/{volatile}: {result:?}"
                 );
@@ -189,7 +221,7 @@ fn reinitialization_restores_direct_reads_after_each_source_kill() {
     for looping in [false, true] {
         for kill in [
             InitializationKillV29::StorageLive,
-            InitializationKillV29::StorageDead,
+            InitializationKillV29::StorageDeadLive,
             InitializationKillV29::Deinitialize,
             InitializationKillV29::Move,
         ] {
@@ -205,6 +237,25 @@ fn reinitialization_restores_direct_reads_after_each_source_kill() {
             assert!(is_stopped(&result), "{looping}/{kill:?}: {result:?}");
             assert_eq!(OBSERVED.get(), 1);
         }
+    }
+}
+
+#[test]
+fn a_store_after_storage_dead_cannot_restart_the_original_local_lifetime() {
+    for looping in [false, true] {
+        // Keep the former invalid positive as an exact earlier-stage negative:
+        // Store initializes bytes only after an explicit lifetime restart.
+        let result = init_run(InitializationFixtureV29 {
+            looping,
+            kill: Some(InitializationKillV29::StorageDead),
+            reinitialize: true,
+            ..config()
+        }, observe_initialization);
+        assert!(matches!(result, Err(ProductionSemanticKirErrorV1::Unsupported {
+            function: 0, block: None, statement: None,
+            detail: "source storage object lifetime has ended",
+        })), "looping={looping}: {result:?}");
+        assert_eq!(OBSERVED.get(), 0, "original source lifetime validation precedes emission observation");
     }
 }
 
@@ -354,13 +405,11 @@ fn retained_initialization_capture_has_independent_exact_resource_limits() {
         let summary = output.scoped_initialization.as_ref().unwrap();
         let instance = instances.instance(slot.instance).unwrap();
         let slots = BTreeMap::from([(
-            2,
+            ScopedAllocationIdentityV29::LegacyLocal(2),
             SemanticRetainedLocalSlotV1 {
                 pointer: slot.origin.pointer,
                 semantic_type: U32,
-                kernel_type: Type::Scalar(ScalarType::U32),
-                alignment: 4,
-                array: None,
+                storage: SemanticRetainedStorageV29::ScalarArray { kernel_type: Type::Scalar(ScalarType::U32), alignment: 4, array: None },
             },
         )]);
         // Literal source expectations, not another invocation of the analysis.
@@ -389,8 +438,8 @@ fn retained_initialization_capture_has_independent_exact_resource_limits() {
         assert!(entry > old_peak);
         let before = budget.work();
         let replay = capture(budget)?;
-        // Four source blocks and three initialized-local entries.
-        let work = 35;
+        // Four source blocks, three initialized entries, and one closed slot-kind check.
+        let work = 37;
         let peak =
             4 * std::mem::size_of::<ScopedInitializedEntryV29>() + 3 * std::mem::size_of::<u32>();
         assert_eq!(budget.work() - before, work);
@@ -452,7 +501,8 @@ fn partial_array_writes_do_not_create_whole_array_initialization() {
             receipt.slots[1].origin.pointer
         );
         for slot in &receipt.slots {
-            assert_eq!((slot.origin.local, slot.length, slot.bytes), (2, 2, 8));
+            let scalar = slot.scalar_array().unwrap();
+            assert_eq!((slot.legacy_local().unwrap(), scalar.length, scalar.bytes), (2, 2, 8));
             let output = emitted[slot.instance.index()].as_ref().unwrap();
             let summary = output.scoped_initialization.as_ref().unwrap();
             assert_eq!(initialized_rows(summary), vec![(0, vec![]), (1, vec![2])]);
@@ -478,7 +528,7 @@ fn partial_array_writes_do_not_create_whole_array_initialization() {
         matches!(
             partial,
             Err(ProductionSemanticKirErrorV1::Unsupported {
-                detail: "retained array read requires whole-array initialization",
+                detail: "source reference reads an uninitialized partial holder",
                 ..
             })
         ),

@@ -1,5 +1,7 @@
 #![no_std]
 
+#[cfg(feature = "canonical-assertion-source")]
+mod canonical_assertion_source;
 #[cfg(feature = "scalar-fixed-point")]
 mod scalar_fixed_point;
 
@@ -144,6 +146,7 @@ mod ordered_program_v32;
 
 #[cfg(not(any(
     feature = "scalar-fixed-point",
+    feature = "canonical-assertion-source",
     feature = "guarded-loop-read",
     feature = "guarded-loop-read-control",
     feature = "guarded-loop-read-stale",
@@ -817,3 +820,10 @@ pub fn fill(mut output: DisjointSlice<u32>) {
         *element = 17;
     }
 }
+
+#[cfg(any(
+    fe2o3_private_call_shared,
+    fe2o3_private_call_cross_block,
+    fe2o3_private_call_normal
+))]
+mod private_call_history;

@@ -25,6 +25,7 @@ struct OwnedInstanceCoordinatesV1 {
     returns: InstanceRowsV1<InstanceReturnAnchorV1>,
     components: InstanceRowsV1<CallResultComponentV1>,
     values: InstanceRowsV1<ValueId>,
+    inline: InstanceRowsV1<ScopedInlineSourceV30>,
     storage: usize,
 }
 
@@ -52,13 +53,13 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         budget.charge_work(8)?;
         let plan = self.plan;
         let root = plan.root();
-        if self.seeds.rows.len() != plan.instances().len()
-            || self.owner != plan.instance(root).map(|row| row.function())
+        if self.owner != plan.instance(root).map(|row| row.function())
         {
             return Err(InstanceCorrespondenceErrorV1::Source);
         }
         let mut calls = 0_usize;
         let mut returns = 0_usize;
+        let mut active_instances = 0_usize;
         for index in 0..plan.instances().len() {
             budget.charge_work(4 + self.seeds.rows.len())?;
             let instance = plan
@@ -69,6 +70,11 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
                 .rows
                 .iter()
                 .filter(|row| row.instance == instance);
+            if plan.instance_reachable(instance) == Some(false) {
+                if seeds.next().is_some() { return Err(InstanceCorrespondenceErrorV1::Source); }
+                continue;
+            }
+            active_instances = active_instances.checked_add(1).ok_or(ArgumentResourceV1::Arithmetic)?;
             let seed = seeds.next().ok_or(InstanceCorrespondenceErrorV1::Source)?;
             if seeds.next().is_some() || seed.container != root {
                 return Err(InstanceCorrespondenceErrorV1::Source);
@@ -79,6 +85,7 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
             {
                 budget.charge_work(1)?;
                 let Some(child) = call.child() else { continue };
+                if plan.call_control(call.occurrence()) == Some(ProductionCallControlV1::Unreachable) { continue; }
                 calls = calls.checked_add(1).ok_or(ArgumentResourceV1::Arithmetic)?;
                 budget.charge_work(self.anchors.rows.len())?;
                 let mut anchors = self.anchors.rows.iter().filter(|row| {
@@ -101,6 +108,7 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
                 .returns(instance)
                 .ok_or(InstanceCorrespondenceErrorV1::Source)?
             {
+                if plan.block_reachable(instance, exit.block) == Some(false) { continue; }
                 returns = returns
                     .checked_add(1)
                     .ok_or(ArgumentResourceV1::Arithmetic)?;
@@ -135,7 +143,8 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
                 }
             }
         }
-        if calls != self.anchors.rows.len() || returns != self.returns.rows.len() {
+        if active_instances != self.seeds.rows.len()
+            || calls != self.anchors.rows.len() || returns != self.returns.rows.len() {
             return Err(InstanceCorrespondenceErrorV1::CallAnchor);
         }
         self.check_coordinates(root, function, budget)?;
@@ -312,6 +321,7 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
             returns: std::mem::replace(&mut self.returns, InstanceRowsV1::new()),
             components: std::mem::replace(&mut self.components, InstanceRowsV1::new()),
             values: std::mem::replace(&mut self.values, InstanceRowsV1::new()),
+            inline: std::mem::replace(&mut self.inline, InstanceRowsV1::new()),
             storage,
         };
         self.storage = 0;

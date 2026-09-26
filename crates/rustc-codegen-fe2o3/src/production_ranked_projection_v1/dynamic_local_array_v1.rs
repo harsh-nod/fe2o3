@@ -66,11 +66,26 @@ fn authenticate_fixed_array_guard_v1(
     index: &SemanticOperandV1,
     bound: &SemanticOperandV1,
 ) -> Result<(SemanticLocalIdV1, u64), ProductionRankedProjectionErrorV1> {
+    authenticate_fixed_array_guard_core_v18(proof, guard, success, condition, index, bound,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_fixed_array_guard_core_v18(
+    proof: &mut SemanticAssertProofsV1<'_>,
+    guard: usize,
+    success: usize,
+    condition: &SemanticOperandV1,
+    index: &SemanticOperandV1,
+    bound: &SemanticOperandV1,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<(SemanticLocalIdV1, u64), ProductionRankedProjectionErrorV1> {
     let refuse = || {
         ProductionRankedProjectionErrorV1::Incomplete(
             "a fixed-array bounds check lacks stable exact unsigned index < literal extent evidence",
         )
     };
+    allocation.charge(1)?;
     proof.charge(1)?;
     let index_local = simple_operand_local(index).ok_or_else(refuse)?;
     let index_slot = index_local.index() as usize;
@@ -80,9 +95,9 @@ fn authenticate_fixed_array_guard_v1(
     let declaration = proof.function.locals().get(index_slot).ok_or_else(refuse)?;
     if declaration.ty() != index.ty()
         || bound.ty() != index.ty()
-        || proof.address_escaped.get(index_slot) != Some(&false)
-        || proof.address_escaped.get(condition_slot) != Some(&false)
-        || proof.definition_counts.get(condition_slot) != Some(&1)
+        || proof.address_escaped().get(index_slot) != Some(&false)
+        || proof.address_escaped().get(condition_slot) != Some(&false)
+        || proof.definition_counts().get(condition_slot) != Some(&1)
         || !matches!(
             proof
                 .types
@@ -107,12 +122,15 @@ fn authenticate_fixed_array_guard_v1(
     }
     let extent = u64::try_from(value.bits()).map_err(|_| refuse())?;
     let comparison = proof
-        .assignments
+        .assignments()
         .get(condition_slot)
         .copied()
         .flatten()
         .ok_or_else(refuse)?;
-    if comparison.block != guard || !proof.block_dominates(guard, success)? {
+    if comparison.block != guard || !match allocation {
+        source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy => proof.block_dominates(guard, success)?,
+        source_ranked_consumer_resources_v18::ProjectionAllocationV18::Source(_) => proof.block_dominates_live_v18(guard, success, allocation)?,
+    } {
         return Err(refuse());
     }
     let SemanticStatementKindV1::Assign(assignment) =
@@ -120,27 +138,41 @@ fn authenticate_fixed_array_guard_v1(
     else {
         return Err(refuse());
     };
+    if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Source(_)) {
+        allocation.charge(8)?;
+        let SemanticRvalueKindV1::Binary { left, right, .. } = assignment.value().kind() else { return Err(refuse()); };
+        if simple_operand_local(left) != Some(index_local)
+            || !matches!(right, SemanticOperandV1::Constant(value)
+                if matches!(value.value(), SemanticConstantValueV1::Scalar(_)))
+        { return Err(refuse()); }
+    }
     if !matches!(assignment.value().kind(), SemanticRvalueKindV1::Binary {
         operation: SemanticBinaryOpV1::LessThan, left, right,
     } if left == index && right == bound)
     {
         return Err(refuse());
     }
-    if proof.definition_counts.get(index_slot) == Some(&0) && declaration.role().is_entry_argument()
+    if proof.definition_counts().get(index_slot) == Some(&0)
+        && declaration.role().is_entry_argument()
     {
         return Ok((index_local, extent));
     }
-    if proof.definition_counts.get(index_slot) != Some(&1) {
+    if proof.definition_counts().get(index_slot) != Some(&1) {
         return Err(refuse());
     }
     let definition = proof
-        .assignments
+        .assignments()
         .get(index_slot)
         .copied()
         .flatten()
         .ok_or_else(refuse)?;
-    if !proof.assignment_dominates_use(definition, guard, comparison.statement)?
-        || !proof.assignment_dominates_use(definition, success, 0)?
+    let mut dominates = |block, statement| match allocation {
+        source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy =>
+            proof.assignment_dominates_use(definition, block, statement),
+        source_ranked_consumer_resources_v18::ProjectionAllocationV18::Source(_) =>
+            proof.assignment_dominates_use_live_v18(definition, block, statement, allocation),
+    };
+    if !dominates(guard, comparison.statement)? || !dominates(success, 0)?
     {
         return Err(refuse());
     }

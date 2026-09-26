@@ -1,55 +1,41 @@
-// Sparse positions only. No expression, proof-result, or cross-function cache.
-struct StatementDefinitionIndexV1 {
-    rows: Vec<(usize, usize, usize)>,
+// Compatibility facade; the one sparse-index implementation lives in mir-model.
+#[cfg(test)]
+struct StatementDefinitionIndexV1<'a> {
+    inner: neutral_assertion::SemanticStatementDefinitionIndexV1<'a>,
 }
-
-impl StatementDefinitionIndexV1 {
-    fn new(function: &SemanticFunctionDeclV1) -> Result<Self, ProductionRankedProjectionErrorV1> {
-        let mut count = Some(0_usize);
-        for statement in function
-            .blocks()
-            .iter()
-            .flat_map(|block| block.statements())
-        {
-            visit_statement_definition_places(statement.kind(), &mut |place| {
-                if local_definition_index(place).is_some() {
-                    count = count.and_then(|count| count.checked_add(1));
-                }
-            });
-        }
-        let count = count.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "GPU semantic definition-index length overflowed",
-        ))?;
-        let mut rows = Vec::new();
-        rows.try_reserve_exact(count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "GPU semantic definition-index storage cannot be reserved",
-            )
-        })?;
-        for (block, body) in function.blocks().iter().enumerate() {
-            for (statement, value) in body.statements().iter().enumerate() {
-                visit_statement_definition_places(value.kind(), &mut |place| {
-                    if let Some(local) = local_definition_index(place) {
-                        rows.push((local, block, statement));
-                    }
-                });
-            }
-        }
-        rows.sort_unstable();
-        Ok(Self { rows })
+#[cfg(test)]
+impl<'a> StatementDefinitionIndexV1<'a> {
+    fn new(
+        function: &'a SemanticFunctionDeclV1,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        let inner = neutral_assertion::SemanticStatementDefinitionIndexV1::new_metered(
+            function,
+            assertion_compatibility_limits_v1(),
+            &mut AssertionCompatibilityMeterV1::new(&mut 0),
+        )
+        .map_err(assertion_projection_error_v1)?;
+        Ok(Self { inner })
     }
-
+    fn rows(&self) -> &[(usize, usize, usize)] {
+        self.inner.rows()
+    }
+    fn capacity(&self) -> usize {
+        self.inner.row_capacity()
+    }
     fn before(&self, local: usize, block: usize, statement: usize) -> Option<usize> {
-        let end = self
-            .rows
-            .partition_point(|row| *row < (local, block, statement));
-        let &(found_local, found_block, found_statement) = self.rows.get(end.checked_sub(1)?)?;
-        (found_local == local && found_block == block).then_some(found_statement)
+        self.inner
+            .before_metered(
+                local,
+                block,
+                statement,
+                &mut AssertionCompatibilityMeterV1::new(&mut 0),
+            )
+            .expect("compatibility index lookup has bounded scalar work")
     }
 }
 
-// Match repeated charge(1), including the exact state at its first failure.
-// The existing counter models legacy logical visits, not measured CPU instructions.
+// Diagnostic equivalence only. The neutral total ledger has already charged
+// its full debit once; truncation here never refunds or discounts that debit.
 fn charge_statement_scan_equivalent_v1(
     work: &mut usize,
     visits: usize,

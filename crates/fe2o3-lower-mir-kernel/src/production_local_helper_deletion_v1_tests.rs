@@ -397,6 +397,10 @@ fn silent_unit_deletion_does_not_admit_source_use_after_kill() {
         ScalarKill::Storage,
         ScalarKill::Deinitialize,
     ] {
+        if matches!(kind, ScalarKill::Deinitialize) {
+            assert_deinitialized_unit_source_is_rejected();
+            continue;
+        }
         let (ssa, launch) = unit_source(UnitCase::Killed(kind), &[1]);
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
         let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);

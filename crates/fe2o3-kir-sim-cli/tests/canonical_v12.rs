@@ -197,7 +197,7 @@ fn assert_result(result: &Value, owner: &VerifiedCanonicalKernelIrV12) {
     }
     assert_eq!(
         result["target_profile"]["identity"],
-        "amdgpu_64_little_endian_v1"
+        "amdgpu_gfx942_little_endian_v2"
     );
     assert_eq!(result["target_profile"]["index_bits"], 64);
     assert_eq!(result["kir"]["sha256"], hex(owner.identity().digest()));

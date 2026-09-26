@@ -24,7 +24,7 @@ use fe2o3_mir_model::{
         SemanticLocalIdV1, SemanticLocalRoleV1, SemanticOperandV1, SemanticPlaceV1,
         SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticStatementKindV1,
         SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1,
-        SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
+        SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnwindActionV1,
     },
     semantic_option_producers_v1,
 };
@@ -222,6 +222,7 @@ pub enum ProductionSemanticSsaErrorV1 {
         error: SsaPlannerErrorV1,
     },
     ResourceOverflow,
+    HolderAvailabilityAllocation,
     AggregateResourceLimit {
         resource: SsaPlannerResourceV1,
         required: usize,
@@ -282,6 +283,8 @@ impl fmt::Display for ProductionSemanticSsaErrorV1 {
             ),
             Self::ResourceOverflow => formatter
                 .write_str("production semantic SSA aggregate resource accounting overflowed"),
+            Self::HolderAvailabilityAllocation => formatter
+                .write_str("production semantic SSA holder analysis allocation failed"),
             Self::AggregateResourceLimit {
                 resource,
                 required,
@@ -327,6 +330,7 @@ impl Error for ProductionSemanticSsaErrorV1 {
             Self::SemanticOwner(error) => Some(error),
             Self::Planner { error, .. } => Some(error),
             Self::ResourceOverflow
+            | Self::HolderAvailabilityAllocation
             | Self::AggregateResourceLimit { .. }
             | Self::PartialMove { .. }
             | Self::PartialMoveResourceLimit { .. }
@@ -335,7 +339,7 @@ impl Error for ProductionSemanticSsaErrorV1 {
     }
 }
 
-/// Bounded field-sensitive availability certificate for projected Rust moves.
+/// Bounded field-sensitive availability for projected moves and static local deinitialization.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProductionSemanticPartialMoveCertificateV1 {
     projected_moves: usize,
@@ -792,13 +796,17 @@ fn plan_semantic_function_ssa_with_driver_v1<D: occurrences_v1::ReplayDriver>(
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
     driver: &mut D,
 ) -> Result<ProductionSemanticSsaFunctionPlanV1, D::Error> {
-    let (input, implicit_entry_variables, adapter_analysis_work) =
-        driver.input(function, types, callables, transparent_borrows)?;
-    let mut auxiliary_resources = semantic_ssa_auxiliary_resources_v1(function, &input)?;
-    auxiliary_resources.work_units = auxiliary_resources
-        .work_units
-        .checked_add(adapter_analysis_work)
-        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+    let (input, implicit_entry_variables, adapter_analysis_work, prepared_resources) =
+        driver.input(function_id, function, types, callables, transparent_borrows, limits)?;
+    let auxiliary_resources = match prepared_resources {
+        Some(resources) => resources,
+        None => {
+            let mut resources = semantic_ssa_auxiliary_resources_v1(function, &input)?;
+            resources.work_units = resources.work_units.checked_add(adapter_analysis_work)
+                .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+            resources
+        }
+    };
     enforce_function_resource_limit_v1(function_id, auxiliary_resources, limits)?;
     let plan = plan_ssa_with_limits_v1(&input, limits.planner()).map_err(|error| {
         ProductionSemanticSsaErrorV1::Planner {
@@ -847,14 +855,21 @@ fn semantic_ssa_auxiliary_resources_v1(
     function: &SemanticFunctionDeclV1,
     input: &SsaConstructionInputV1,
 ) -> Result<SemanticSsaAuxiliaryResourcesV1, ProductionSemanticSsaErrorV1> {
-    let blocks = input.blocks().len();
-    let variables = input.promotable().len();
+    semantic_ssa_auxiliary_resources_for_parts_v1(function, input.promotable().len(), input.blocks())
+}
+
+fn semantic_ssa_auxiliary_resources_for_parts_v1(
+    function: &SemanticFunctionDeclV1,
+    variables: usize,
+    input_blocks: &[SsaBlockInputV1],
+) -> Result<SemanticSsaAuxiliaryResourcesV1, ProductionSemanticSsaErrorV1> {
+    let blocks = input_blocks.len();
     let statements = function.blocks().iter().try_fold(0_usize, |total, block| {
         total
             .checked_add(block.statements().len())
             .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)
     })?;
-    let (events, edges, edge_definitions) = input.blocks().iter().try_fold(
+    let (events, edges, edge_definitions) = input_blocks.iter().try_fold(
         (0_usize, 0_usize, 0_usize),
         |(events, edges, definitions), block| {
             let events = events
@@ -871,7 +886,10 @@ fn semantic_ssa_auxiliary_resources_v1(
             Ok((events, edges, definitions))
         },
     )?;
-    let (projected_moves, maximum_projection_depth) = projected_local_move_metrics_v1(function)?;
+    let (projected_moves, deinitializations, maximum_projection_depth) =
+        projected_local_move_metrics_v1(function)?;
+    let removals = projected_moves.checked_add(deinitializations)
+        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
 
     // Logical words conservatively cover adapter rows, Option-dominance scratch,
     // borrow/implicit-entry indices, retained-local scratch, and every persistent partial-move state.
@@ -889,18 +907,27 @@ fn semantic_ssa_auxiliary_resources_v1(
         .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
     let partial_state_copies = blocks
         .checked_add(2)
-        .and_then(|value| value.checked_mul(projected_moves))
+        .and_then(|value| value.checked_mul(removals))
         .and_then(|value| value.checked_mul(path_words))
         .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+    // Owned block fields plus the emitter, driver binding, finish argument,
+    // and working output block's boundary slots; none relies on prior slack.
+    let failure_boundary_words = blocks
+        .checked_add(4)
+        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?
+        .checked_mul(std::mem::size_of::<Option<usize>>())
+        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?
+        .div_ceil(std::mem::size_of::<usize>());
     let storage_words = adapter_items
-        .checked_add(partial_state_copies)
+        .checked_add(failure_boundary_words)
+        .and_then(|value| value.checked_add(partial_state_copies))
         .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
 
     // A block can be revisited once for each newly merged path. On each visit,
     // every outgoing edge can clone and merge the complete path set.
     let partial_rounds = edges
         .checked_mul(
-            projected_moves
+            removals
                 .checked_add(1)
                 .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
         )
@@ -908,7 +935,7 @@ fn semantic_ssa_auxiliary_resources_v1(
         .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
     let partial_work = partial_rounds
         .checked_mul(
-            projected_moves
+            removals
                 .checked_add(1)
                 .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
         )
@@ -956,6 +983,7 @@ fn enforce_function_resource_limit_v1(
 }
 
 mod accounting;
+mod holder_availability_v1;
 mod adapter;
 mod nominal_reference_effects_v29;
 mod occurrences_v1;
@@ -978,8 +1006,10 @@ use accounting::{
 };
 pub use adapter::authenticated_ambient_workgroup_lds_scope_zst_v1;
 use adapter::{
-    SemanticTransparentBorrowSiteV1, semantic_function_ssa_input_v1, transparent_borrow_sites_v1,
+    SemanticTransparentBorrowSiteV1, transparent_borrow_sites_v1,
 };
+#[cfg(test)]
+use adapter::semantic_function_ssa_input_v1;
 use partial_moves::{projected_local_move_metrics_v1, validate_partial_moves_v1};
 
 #[cfg(test)]

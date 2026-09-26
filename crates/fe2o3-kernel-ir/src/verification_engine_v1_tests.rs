@@ -207,6 +207,7 @@ fn duplicate_long_identifier_role_diagnostic_has_stable_snapshot() {
         required_capabilities: BTreeSet::new(),
     };
     let module = Module {
+        storage_layouts: Vec::new(),
         id: ModuleId::new("module"),
         functions: vec![external, defined],
         kernels: vec![],

@@ -45,11 +45,15 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             ));
         }
         self.definitions.charge(locals)?;
+        self.source_reserve_elements_v18(locals, std::mem::size_of::<Option<(usize, &SemanticDirectCallV1)>>())
+            .map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
         self.scalar_calls.try_reserve_exact(locals).map_err(|_| {
             ProductionRankedProjectionErrorV1::Unsupported(
-                "GPU scalar call index allocation failed",
+                self.source_allocation_refusal_v18("GPU scalar call index allocation failed"),
             )
         })?;
+        self.source_capacity_v18(locals, self.scalar_calls.capacity(), std::mem::size_of::<Option<(usize, &SemanticDirectCallV1)>>())
+            .map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
         self.scalar_calls.resize(locals, None);
         self.scalar_callables = callables;
         for (block, body) in self.function.blocks().iter().enumerate() {
@@ -74,7 +78,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             // The complete existing source definition census includes all call
             // destinations and all direct/projected writes, not only this intrinsic.
             if destination.place().projections().is_empty()
-                && self.definitions.definition_counts.get(local).copied() == Some(1)
+                && self.definitions.definition_counts().get(local).copied() == Some(1)
             {
                 *slot = Some((block, call));
             }
@@ -94,8 +98,8 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             .copied()
             .flatten()
             .ok_or("GPU semantic local has no exact reaching assignment")?;
-        if self.definitions.definition_counts.get(local).copied() != Some(1)
-            || self.definitions.address_escaped.get(local).copied() != Some(false)
+        if self.definitions.definition_counts().get(local).copied() != Some(1)
+            || self.definitions.address_escaped().get(local).copied() != Some(false)
         {
             return Err("GPU scalar intrinsic result is ambiguous or escaped");
         }
@@ -140,7 +144,14 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         site: ScalarAssignmentSiteV1,
     ) -> Result<(), &'static str> {
         let count = self.function.blocks().len();
-        if self.definitions.graph.reachable.get(site.block).copied() != Some(true) {
+        if self
+            .definitions
+            .graph()
+            .reachable()
+            .get(site.block)
+            .copied()
+            != Some(true)
+        {
             return Err("GPU scalar intrinsic result use is unreachable");
         }
         self.source_charge_v1(
@@ -148,15 +159,21 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 .checked_mul(2)
                 .ok_or("GPU scalar call scratch overflow")?,
         )?;
+        self.source_reserve_elements_v18(1, std::mem::size_of::<Vec<bool>>())?;
+        self.source_reserve_elements_v18(count, std::mem::size_of::<bool>())?;
         let mut visited = Vec::new();
         visited
             .try_reserve_exact(count)
-            .map_err(|_| "GPU scalar call visited allocation failed")?;
+            .map_err(|_| self.source_allocation_refusal_v18("GPU scalar call visited allocation failed"))?;
+        self.source_capacity_v18(count, visited.capacity(), std::mem::size_of::<bool>())?;
         visited.resize(count, false);
+        self.source_reserve_elements_v18(1, std::mem::size_of::<Vec<(usize, usize, bool)>>())?;
+        self.source_reserve_elements_v18(count, std::mem::size_of::<(usize, usize, bool)>())?;
         let mut pending = Vec::new();
         pending
             .try_reserve_exact(count)
-            .map_err(|_| "GPU scalar call worklist allocation failed")?;
+            .map_err(|_| self.source_allocation_refusal_v18("GPU scalar call worklist allocation failed"))?;
+        self.source_capacity_v18(count, pending.capacity(), std::mem::size_of::<(usize, usize, bool)>())?;
         let mut current = Some((site.block, site.statement, false));
         while let Some((block, before, full)) = current.take().or_else(|| pending.pop()) {
             self.source_charge_v1(1)?;
@@ -172,14 +189,14 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                     return Err("GPU scalar intrinsic result was killed before its use");
                 }
             }
-            if block == self.definitions.graph.entry {
+            if block == self.definitions.graph().entry() {
                 return Err("GPU scalar intrinsic result is not defined on every path");
             }
-            let predecessors = self.definitions.graph.predecessors[block].len();
+            let predecessors = self.definitions.graph().predecessors()[block].len();
             self.source_charge_v1(predecessors)?;
             for index in 0..predecessors {
-                let predecessor = self.definitions.graph.predecessors[block][index];
-                if self.definitions.graph.reachable[predecessor] && !visited[predecessor] {
+                let predecessor = self.definitions.graph().predecessors()[block][index];
+                if self.definitions.graph().reachable()[predecessor] && !visited[predecessor] {
                     visited[predecessor] = true;
                     pending.push((
                         predecessor,
@@ -297,7 +314,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         }
     }
 
-    fn resolve_saturating_call_v2(
+    pub(super) fn resolve_saturating_call_v2(
         &mut self,
         call: &'a SemanticDirectCallV1,
         depth: usize,

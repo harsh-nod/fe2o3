@@ -1,0 +1,19 @@
+// RUN: fe2o3-pliron-lit --passes=gpu-cse %s
+// EXPECT: PASS
+// CHECK: CSE 2 -> 1
+// CHECK: gpu.cast
+// CHECK: SliceToGeneric
+builtin.func @slice_to_generic_transport: builtin.function <(gpu.slice <builtin.integer ui32,Global,ReadOnly>) -> ()>
+{
+  ^entry(source: gpu.slice <builtin.integer ui32,Global,ReadOnly>):
+    first = gpu.cast (source) [] [gpu_cast_kind: gpu.cast_kind SliceToGeneric]: <(gpu.slice <builtin.integer ui32,Global,ReadOnly>) -> (gpu.slice <builtin.integer ui32,Generic,ReadOnly>)> !0;
+    second = gpu.cast (source) [] [gpu_cast_kind: gpu.cast_kind SliceToGeneric]: <(gpu.slice <builtin.integer ui32,Global,ReadOnly>) -> (gpu.slice <builtin.integer ui32,Generic,ReadOnly>)> !1;
+    kernel.br_args (first, second) [^exit] []: <(gpu.slice <builtin.integer ui32,Generic,ReadOnly>, gpu.slice <builtin.integer ui32,Generic,ReadOnly>) -> ()>
+  ^exit(left: gpu.slice <builtin.integer ui32,Generic,ReadOnly>, right: gpu.slice <builtin.integer ui32,Generic,ReadOnly>):
+    kernel.return () [] []: <() -> ()>
+}
+
+// Full attribute equality includes explicit display names, not SSA identity.
+outlined_attributes:
+!0 = [builtin_debug_info = builtin.debug_info [widened]]
+!1 = [builtin_debug_info = builtin.debug_info [widened]]

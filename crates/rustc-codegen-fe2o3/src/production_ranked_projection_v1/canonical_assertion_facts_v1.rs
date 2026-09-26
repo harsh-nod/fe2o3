@@ -36,6 +36,7 @@ pub(crate) enum CanonicalAssertionErrorV1 {
     MaskedAssertion(fe2o3_lower_mir_kernel::ProductionSemanticMaskedShiftQueryErrorV1),
     GuardedProgress(Box<fe2o3_lower_mir_kernel::ProductionScalarSsaEmissionErrorV1>),
     Binding(&'static str),
+    SourceOwned(fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18),
 }
 impl fmt::Display for CanonicalAssertionErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -50,6 +51,7 @@ impl fmt::Display for CanonicalAssertionErrorV1 {
             Self::MaskedAssertion(error) => error.fmt(f),
             Self::GuardedProgress(error) => error.fmt(f),
             Self::Binding(detail) => f.write_str(detail),
+            Self::SourceOwned(error) => error.fmt(f),
         }
     }
 }
@@ -66,6 +68,7 @@ impl Error for CanonicalAssertionErrorV1 {
             Self::MaskedAssertion(error) => Some(error),
             Self::GuardedProgress(error) => Some(error.as_ref()),
             Self::Binding(_) => None,
+            Self::SourceOwned(error) => Some(error),
         }
     }
 }
@@ -104,10 +107,88 @@ pub(super) enum ProjectedAssertionConditionV1 {
     ElidedByExistingRule,
 }
 
+// These are source locators, not a UnitLocal or Storage safety certificate.
+pub(super) struct PendingSourceCallV18<'call> {
+    pub(super) scope: usize,
+    pub(super) root: usize,
+    pub(super) caller_instance: usize,
+    pub(super) caller_function: SemanticFunctionIdV1,
+    pub(super) source_block: SemanticBlockIdV1,
+    pub(super) callee_instance: usize,
+    pub(super) callee_function: SemanticFunctionIdV1,
+    pub(super) call: &'call super::SemanticDirectCallV1,
+}
+
+pub(super) enum CallProjectionDispositionV18<'call> {
+    CheckedUnitLocal,
+    PendingStorage(PendingSourceCallV18<'call>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ProjectedSourceSiteControlV18 {
+    Retained,
+    RemovedUnreachable,
+    Mixed,
+    OriginalUnmaterialized,
+}
+
+pub(super) fn project_source_site_v18(
+    facts: &mut dyn ProjectedAssertionFactsV1,
+    block: usize,
+    statement: Option<usize>,
+) -> Result<bool, ProjectionError> {
+    match facts.source_site_control_v18(block, statement)? {
+        None
+        | Some(ProjectedSourceSiteControlV18::Retained)
+        | Some(ProjectedSourceSiteControlV18::OriginalUnmaterialized) => Ok(true),
+        Some(ProjectedSourceSiteControlV18::RemovedUnreachable) => Ok(false),
+        Some(ProjectedSourceSiteControlV18::Mixed) => Err(ProjectionError::Incomplete(
+            "partially surviving source site requires exact ranked segment projection",
+        )),
+    }
+}
+
 /// Private consumer contract. Production implements it only with the sealed
 /// origin view and exact borrowed graph report below. Tests must identify any
 /// isolated synthetic decision inputs explicitly.
 pub(super) trait ProjectedAssertionFactsV1 {
+    fn check_projection_source_v18(&mut self,
+        _semantic: &super::AdmittedInertSemanticMirV1,
+        _function: super::SemanticFunctionIdV1,
+    ) -> Result<(),ProjectionError> {Ok(())}
+
+    // This is a spend-only resource interface, never a source/output proof.
+    // Historical adapters keep their original constructors and work schedule.
+    fn projection_meter_v18(&mut self) -> Option<&mut dyn fe2o3_mir_model::SemanticAssertionMeterV1<Error = ProjectionError>> {
+        None
+    }
+
+    // The optimized adapter validates the exact supplied view without running
+    // the legacy ranked transformations. Neither route grants source authority.
+    fn finish_ranked_projection_v18(
+        &mut self,
+        name: &str,
+        arguments: usize,
+        blocks: Vec<fe2o3_pliron::ProductionRankedBlockV1>,
+    ) -> Result<fe2o3_pliron::ProductionRankedKernelV1, ProjectionError> {
+        if self.projection_meter_v18().is_some() {
+            return Err(ProjectionError::Incomplete(
+                "a live source adapter has no checked non-rewriting ranked entrance"));
+        }
+        fe2o3_pliron::ProductionRankedKernelV1::new(name, arguments, blocks)
+            .map_err(ProjectionError::Recipe)
+    }
+
+    // Legacy adapters add neither queries nor work. Only the checked optimized
+    // endpoint supplies a disposition before effect construction.
+    fn source_site_control_v18(
+        &mut self,
+        _block: usize,
+        _statement: Option<usize>,
+    ) -> Result<Option<ProjectedSourceSiteControlV18>, ProjectionError> {
+        Ok(None)
+    }
+
     #[cfg(test)]
     fn observe_conditional_bound_for_test_v1(
         &mut self,
@@ -163,6 +244,25 @@ pub(super) trait ProjectedAssertionFactsV1 {
             callee: call.callee().index(),
             tail: false,
         })
+    }
+
+    fn call_projection_disposition_v18<'call>(
+        &mut self,
+        block: usize,
+        call: &'call super::SemanticDirectCallV1,
+        source: super::SemanticSourceProvenanceV1,
+    ) -> Result<CallProjectionDispositionV18<'call>, ProjectionError> {
+        self.require_unit_local_call(block, call, source)?;
+        Ok(CallProjectionDispositionV18::CheckedUnitLocal)
+    }
+
+    fn accept_pending_source_call_v18(
+        &mut self,
+        _pending: PendingSourceCallV18<'_>,
+    ) -> Result<(), ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "pending source storage requires the original non-executable source scope",
+        ))
     }
 
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError>;
@@ -244,6 +344,7 @@ pub(super) struct CanonicalAssertionSessionV1<'r, 'i, 'g, 'b, 'w> {
     origins: SemanticKirAssertOriginsV1<'g>,
     report: &'r CanonicalKirSparseV1<'i, 'g>,
     budget: &'b mut Budget<'w>,
+    cleanup: &'r fe2o3_pliron::CanonicalAnalysisCleanupV1<'r>,
 }
 impl CanonicalAssertionSessionV1<'_, '_, '_, '_, '_> {
     #[cfg(test)]
@@ -317,7 +418,7 @@ pub(super) struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     budget: &'b mut Budget<'w>,
     correspondence_owner: SemanticFunctionIdV1,
     semantic_function: SemanticFunctionIdV1,
-    masked: Option<&'r MaskedSourceAssertionTableV1<'g>>,
+    masked: Option<&'r MaskedSourceAssertionTableV1<'g, 'r>>,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
     #[cfg(test)]
@@ -457,7 +558,6 @@ impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '
         ordinal: u32,
         assertion: u32,
     ) -> Result<super::slice_projection_v1::ProjectedSliceInputV1, ProjectionError> {
-        use fe2o3_kernel_ir::{AccessMode, AddressSpace, Type};
         let block = u32::try_from(site.block).map_err(|_| resource(Resource::Arithmetic))?;
         let statement = site
             .statement
@@ -474,37 +574,12 @@ impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '
         );
         self.owner
             .with_checked_slice_access_v1(self.report.inventory(), site, self.budget, |view| {
-                let mismatch =
-                    || fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::CorrespondenceMismatch;
-                let ProductionArgumentCoverageV1::Parameter(parameter) = view.source().coverage()
-                else {
-                    return Err(mismatch());
-                };
-                let Type::Slice(slice) = parameter.ty() else {
-                    return Err(mismatch());
-                };
-                if slice.address_space != AddressSpace::Global
-                    || slice.access != AccessMode::ReadOnly
-                    || slice.element.as_ref() != view.loaded_type()
-                {
-                    return Err(mismatch());
-                }
-                let element_width = view
-                    .loaded_type()
-                    .as_scalar()
-                    .and_then(|scalar| scalar.bit_width())
-                    .map(|bits| u32::from(bits).max(8))
-                    .ok_or_else(mismatch)?;
                 let direct_local = view
                     .source()
                     .local_binding()
                     .filter(|(_, path)| path.is_empty() && view.source().source_path().is_empty())
                     .map(|(local, _)| local);
-                Ok(super::slice_projection_v1::ProjectedSliceInputV1 {
-                    source_argument: view.source().source_argument(),
-                    direct_local,
-                    element_width,
-                })
+                checked_slice_projection_v18(view, direct_local)
             })
             .map_err(ProjectionError::StructuralValidation)
     }
@@ -541,42 +616,90 @@ impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '
                 self.budget,
             )
             .map_err(|error| reject(CanonicalAssertionErrorV1::Origin(error)))?;
-        if binding.expected() != expected || binding.semantic_success() != semantic_success {
-            return Err(reject(CanonicalAssertionErrorV1::Binding(
-                "canonical assertion source polarity or success occurrence changed",
-            )));
+        condition_from_checked_binding_v18(
+            binding,
+            expected,
+            semantic_success,
+            self.report,
+            self.budget,
+        )
+    }
+}
+
+pub(super) fn condition_from_checked_binding_v18<O>(
+    binding: fe2o3_lower_mir_kernel::SemanticKirAssertConditionBindingV1,
+    expected: bool,
+    semantic_success: SemanticBlockIdV1,
+    report: &CanonicalKirSparseV1<'_, '_, O>,
+    budget: &mut Budget<'_>,
+) -> Result<ProjectedAssertionConditionV1, ProjectionError> {
+    if binding.expected() != expected || binding.semantic_success() != semantic_success {
+        return Err(reject(CanonicalAssertionErrorV1::Binding(
+            "canonical assertion source polarity or success occurrence changed",
+        )));
+    }
+    match binding.outcome() {
+        SemanticKirAssertConditionOutcomeV1::ElidedByExistingRule { .. } => {
+            Ok(ProjectedAssertionConditionV1::ElidedByExistingRule)
         }
-        match binding.outcome() {
-            SemanticKirAssertConditionOutcomeV1::ElidedByExistingRule { .. } => {
-                Ok(ProjectedAssertionConditionV1::ElidedByExistingRule)
-            }
-            SemanticKirAssertConditionOutcomeV1::Emitted { condition_use, .. } => {
-                // The lowerer's sealed binding independently checks the full
-                // definition, both edge occurrences/payloads and failure block.
-                let value = self
-                    .report
-                    .value_at_use(condition_use, self.budget)
-                    .map_err(|error| reject(CanonicalAssertionErrorV1::Sparse(error)))?;
-                Ok(match value {
-                    CanonicalKirSparseValueV1::Constant(value)
-                        if value.ty() == ScalarType::Bool && value.bits() <= 1 =>
-                    {
-                        ProjectedAssertionConditionV1::Bool(value.bits() == 1)
-                    }
-                    CanonicalKirSparseValueV1::Constant(_) => {
-                        return Err(reject(CanonicalAssertionErrorV1::Binding(
-                            "canonical assertion condition is not an exact Boolean",
-                        )));
-                    }
-                    CanonicalKirSparseValueV1::Unreachable => {
-                        ProjectedAssertionConditionV1::Dormant
-                    }
-                    CanonicalKirSparseValueV1::Unknown => ProjectedAssertionConditionV1::Unknown,
-                    CanonicalKirSparseValueV1::Dynamic => ProjectedAssertionConditionV1::Dynamic,
-                })
-            }
+        SemanticKirAssertConditionOutcomeV1::Emitted { condition_use, .. } => {
+            // Both producers check the exact definition, edge payloads and
+            // failure block before exposing this binding to the shared query.
+            let value = report
+                .value_at_use(condition_use, budget)
+                .map_err(|error| reject(CanonicalAssertionErrorV1::Sparse(error)))?;
+            Ok(match value {
+                CanonicalKirSparseValueV1::Constant(value)
+                    if value.ty() == ScalarType::Bool && value.bits() <= 1 =>
+                {
+                    ProjectedAssertionConditionV1::Bool(value.bits() == 1)
+                }
+                CanonicalKirSparseValueV1::Constant(_) => {
+                    return Err(reject(CanonicalAssertionErrorV1::Binding(
+                        "canonical assertion condition is not an exact Boolean",
+                    )));
+                }
+                CanonicalKirSparseValueV1::Unreachable => ProjectedAssertionConditionV1::Dormant,
+                CanonicalKirSparseValueV1::Unknown => ProjectedAssertionConditionV1::Unknown,
+                CanonicalKirSparseValueV1::Dynamic => ProjectedAssertionConditionV1::Dynamic,
+            })
         }
     }
+}
+
+pub(super) fn checked_slice_projection_v18(
+    view: &fe2o3_lower_mir_kernel::ProductionSliceAccessViewV1<'_>,
+    direct_local: Option<super::SemanticLocalIdV1>,
+) -> Result<
+    super::slice_projection_v1::ProjectedSliceInputV1,
+    fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1,
+> {
+    use fe2o3_kernel_ir::{AccessMode, AddressSpace, Type};
+    let mismatch =
+        || fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::CorrespondenceMismatch;
+    let ProductionArgumentCoverageV1::Parameter(parameter) = view.source().coverage() else {
+        return Err(mismatch());
+    };
+    let Type::Slice(slice) = parameter.ty() else {
+        return Err(mismatch());
+    };
+    if slice.address_space != AddressSpace::Global
+        || slice.access != AccessMode::ReadOnly
+        || slice.element.as_ref() != view.loaded_type()
+    {
+        return Err(mismatch());
+    }
+    let element_width = view
+        .loaded_type()
+        .as_scalar()
+        .and_then(|scalar| scalar.bit_width())
+        .map(|bits| u32::from(bits).max(8))
+        .ok_or_else(mismatch)?;
+    Ok(super::slice_projection_v1::ProjectedSliceInputV1 {
+        source_argument: view.source().source_argument(),
+        direct_local,
+        element_width,
+    })
 }
 
 include!("canonical_masked_assertion_facts_v1.rs");
@@ -585,7 +708,7 @@ include!("canonical_masked_assertion_facts_v1.rs");
 /// assertion/inventory/sparse work is on this ledger, not the Rust/projector
 /// phases. Inner owners drop before cleanup. With valid ledger accounting,
 /// cleanup restores the entry floor and resumes the original unwind payload;
-/// corrupted accounting instead returns its resource error.
+/// custody loss denies refunds without replacing selected errors or raw panics.
 pub(super) fn with_canonical_assertions_source_budget_v1<T>(
     source: &RankedProjectionSourceV1<'_>,
     budget: &mut Budget<'_>,
@@ -600,28 +723,18 @@ pub(super) fn with_canonical_assertions_source_budget_v1<T>(
             "canonical assertion origins belong to a different executable owner",
         )));
     }
-    let floor = budget.storage();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        with_canonical_analysis_scope_v1(source.executable(), budget, |scope| {
-            scope.with_sparse_v1(|report, budget| {
-                body(&mut CanonicalAssertionSessionV1 {
-                    owner: source.owner(),
-                    origins: source.origins(),
-                    report,
-                    budget,
-                })
+    with_canonical_analysis_scope_v1(source.executable(), budget, |scope| {
+        let cleanup = scope.cleanup_notification_v1();
+        scope.with_sparse_v1(|report, budget| {
+            body(&mut CanonicalAssertionSessionV1 {
+                owner: source.owner(),
+                origins: source.origins(),
+                report,
+                budget,
+                cleanup,
             })
         })
-    }));
-    let released = budget
-        .storage()
-        .checked_sub(floor)
-        .ok_or_else(|| resource(Resource::Accounting))?;
-    budget.release_storage(released).map_err(resource)?;
-    match result {
-        Ok(result) => result,
-        Err(payload) => std::panic::resume_unwind(payload),
-    }
+    })
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
 fn with_dispatch_callable<R>(
     replace: impl FnOnce(SemanticCallableDeclV1) -> SemanticCallableDeclV1,
     run: impl FnOnce(
-        &mut SemanticFunctionLoweringV1<'_>,
+        &mut SemanticFunctionLoweringV1<'_, '_>,
         &SemanticDirectCallV1,
     ) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
@@ -42,7 +42,7 @@ fn with_dispatch_callable<R>(
 fn with_dispatch_intrinsic<R>(
     operation: SemanticCompilerIntrinsicOperationV1,
     run: impl FnOnce(
-        &mut SemanticFunctionLoweringV1<'_>,
+        &mut SemanticFunctionLoweringV1<'_, '_>,
         &SemanticDirectCallV1,
     ) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
@@ -457,11 +457,12 @@ fn guarded_result_store_type_refusal_precedes_missing_failure_block() {
     with_guarded_result_context(false, |lowering, call| {
         let mut operations = Vec::new();
         install_result_slot(lowering, false, &mut operations)?;
-        lowering
+        let slot = lowering
             .retained_local_slots
-            .get_mut(&3)
-            .unwrap()
-            .kernel_type = Type::Scalar(ScalarType::U64);
+            .get_mut(&ScopedAllocationIdentityV29::LegacyLocal(3))
+            .unwrap();
+        let SemanticRetainedStorageV29::ScalarArray { kernel_type, .. } = &mut slot.storage else { panic!("scalar fixture"); };
+        *kernel_type = Type::Scalar(ScalarType::U64);
         lowering.assert_failure_block = None;
         assert_dispatch_error(
             lowering

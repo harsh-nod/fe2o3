@@ -6,6 +6,9 @@ pub(crate) mod checked_output_policy3_v1;
 #[path = "compiler_descriptor_laid_out_plan_v1.rs"]
 mod laid_out_plan_v1;
 
+#[path = "compiler_descriptor_inline_plan_v29.rs"]
+mod inline_plan_v29;
+
 #[path = "compiler_descriptor_conditional_output_binding_v1.rs"]
 pub(crate) mod conditional_output_binding_v1;
 #[cfg(test)]
@@ -947,6 +950,182 @@ pub(crate) fn validate_production_v1_semantic_ownership_evidence(
     }
     Ok(())
 }
+
+// This is the concrete Prepared-source capture call, not a generic callback
+// scope. Descriptor scratch drops before its exact credit is refunded; the
+// returned prepared owner retains its separately reported source credit.
+pub(crate) fn prepare_source_with_kernel_arguments_v18(
+    owner: fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+    launch: fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+    source: fe2o3_lower_mir_kernel::ProductionExecutionSourceInputV29<'_>,
+    typed_roots: &[TypedDescriptorRootV1],
+    limits: fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<fe2o3_lower_mir_kernel::ProductionPreparedSourceV18, crate::production_pipeline::ProductionPipelineError> {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    use fe2o3_lower_mir_kernel::{
+        ProductionKernelArgumentAbiArgumentV18 as Argument,
+        ProductionKernelArgumentAbiInputV18 as Input,
+        ProductionKernelArgumentAbiRootV18 as Root,
+        ProductionPendingScopedSourceOwnerV29 as Pending,
+        ProductionSourceOwnedViewErrorV18 as ViewError,
+    };
+    use crate::production_pipeline::ProductionPipelineError as Error;
+    let resource = |error| Error::SourceOwnedEntrance(ViewError::Resource(error));
+    let descriptor = Error::DescriptorEvidence;
+    let mismatch = |field| descriptor(CompilerDescriptorError::ProductionDescriptorMismatch(field));
+    let inherited = owner.occurrence_storage().map_or(0, |receipt| receipt.retained_storage());
+    let floor = budget.storage().checked_sub(inherited).ok_or_else(|| resource(Resource::Accounting))?;
+    let slot = std::ptr::from_ref(budget) as usize;
+    let ledger = budget.work_ledger_identity_v1();
+    let mut owner = Some(owner);
+    let mut launch = Some(launch);
+    let mut scratch = 0usize;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let construction_floor = budget.storage();
+        let semantic = owner.as_ref().expect("source owner is adopted once").source_semantic();
+        budget.charge_work(typed_roots.len().checked_add(4).ok_or_else(|| resource(Resource::Arithmetic))?).map_err(resource)?;
+        if typed_roots.len() != semantic.roots().len() { return Err(mismatch("complete source ABI root roster")); }
+        let vector_error = |error| match error {
+            nominal_v3::NominalDescriptorErrorV3::Resource(error) => resource(error),
+            _ => mismatch("kernel argument ABI scratch allocation"),
+        };
+        let mut arguments = nominal_v3::vector::<inline_plan_v29::RootArguments>(typed_roots.len(), budget).map_err(vector_error)?;
+        for (root, &function_id) in typed_roots.iter().zip(semantic.roots()) {
+            let function = semantic.functions().get(function_id.index() as usize).ok_or_else(|| mismatch("source ABI root function"))?;
+            let work = root.arguments.len().checked_mul(32)
+                .and_then(|work| work.checked_add(root.export_name.len()))
+                .and_then(|work| work.checked_add(40)).ok_or_else(|| resource(Resource::Arithmetic))?;
+            budget.charge_work(work).map_err(resource)?;
+            let mut packing = inline_plan_v29::Packing::new(root, semantic, function, budget)?;
+            let mut rows = nominal_v3::vector::<Argument>(root.arguments.len(), budget).map_err(vector_error)?;
+            for (ordinal, argument) in root.arguments.as_slice().iter().enumerate() {
+                let offset = packing.offset(ordinal)?;
+                rows.push(kernel_argument_abi_argument_at_v29(argument, ordinal, offset, budget)?);
+            }
+            arguments.push(inline_plan_v29::RootArguments { arguments: rows, extent: packing.finish()? });
+        }
+        let mut bindings = nominal_v3::vector::<[u8; 32]>(typed_roots.len(), budget).map_err(vector_error)?;
+        for root in typed_roots { bindings.push(root.kernel_binding_bytes()); }
+        let mut roots = nominal_v3::vector::<Root<'_>>(typed_roots.len(), budget).map_err(vector_error)?;
+        for ((root, arguments), binding) in typed_roots.iter().zip(&arguments).zip(&bindings) {
+            roots.push(Root {
+                kernel_binding: binding, export: root.entry_symbol(), arguments: &arguments.arguments,
+                explicit_argument_bytes: arguments.extent.bytes,
+                kernarg_alignment_bytes: arguments.extent.alignment,
+            });
+        }
+        scratch = budget.storage().checked_sub(construction_floor).ok_or_else(|| resource(Resource::Accounting))?;
+        let prepared = Pending::prepare_source_with_kernel_abi_budget_v18(
+            owner.take().expect("source is adopted once"), launch.take().expect("launch is adopted once"),
+            source, Input { roots: &roots }, limits, budget,
+        ).map_err(Error::SourceOwnedEntrance);
+        drop(roots);
+        drop(bindings);
+        drop(arguments);
+        prepared
+    }));
+    // No user callback runs above. Until adoption, the only new live allocation
+    // owner is this concrete construction; after adoption it is the prepared
+    // source whose reservation is reported by its move-only receipt.
+    let unadopted = owner.is_some();
+    drop((owner, launch));
+    let output = match &result {
+        Ok(Ok(prepared)) => prepared.adopted_storage(),
+        _ => 0,
+    };
+    let expected = floor.checked_add(scratch).and_then(|bytes| bytes.checked_add(output))
+        .and_then(|bytes| bytes.checked_add(if unadopted { inherited } else { 0 }));
+    let valid = ledger == budget.work_ledger_identity_v1()
+        && slot == std::ptr::from_ref(budget) as usize
+        && expected.is_some_and(|minimum| budget.storage() >= minimum);
+    let settlement = if valid {
+        // Before the input was fully built, all delta is this concrete scratch.
+        let release = if scratch == 0 {
+            budget.storage().checked_sub(floor)
+        } else { scratch.checked_add(if unadopted { inherited } else { 0 }) };
+        release.ok_or(Resource::Arithmetic).and_then(|bytes| budget.release_storage(bytes))
+    } else { Err(Resource::Accounting) };
+    match result {
+        Ok(Ok(value)) => match settlement {
+            Ok(()) => Ok(value),
+            Err(error) => { drop(value); Err(resource(error)) }
+        },
+        Ok(Err(error)) => Err(error),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+fn kernel_argument_abi_argument_v18(
+    argument: &TypedDescriptorArgumentV1,
+    ordinal: usize,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiArgumentV18, crate::production_pipeline::ProductionPipelineError> {
+    kernel_argument_abi_argument_at_v29(argument, ordinal, argument.offset, budget)
+}
+
+fn kernel_argument_abi_argument_at_v29(
+    argument: &TypedDescriptorArgumentV1,
+    ordinal: usize,
+    offset: u32,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiArgumentV18, crate::production_pipeline::ProductionPipelineError> {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    use fe2o3_lower_mir_kernel::{ProductionKernelArgumentAbiArgumentV18 as Argument,
+        ProductionKernelArgumentAbiKindV18 as Kind, ProductionSourceOwnedViewErrorV18 as ViewError};
+    use fe2o3_kernel_descriptor::SourceTypeDescriptorV3 as Source;
+    use crate::production_pipeline::ProductionPipelineError as Error;
+    let resource = |error| Error::SourceOwnedEntrance(ViewError::Resource(error));
+    let descriptor = Error::DescriptorEvidence;
+    let mismatch = |field| descriptor(CompilerDescriptorError::ProductionDescriptorMismatch(field));
+    budget.charge_work(4).map_err(resource)?;
+    let kind = match argument.kind {
+        DescriptorArgumentKindV1::CompilerLaidOutByValue => Kind::CompilerLaidOutByValue { offset },
+        original => {
+            let (kind, physical_kind) = match original {
+                DescriptorArgumentKindV1::Scalar(s) => (Source::Scalar(s), original),
+                DescriptorArgumentKindV1::SharedSlice(s) => (Source::SharedSlice(s), original),
+                DescriptorArgumentKindV1::DisjointSlice(s) => (Source::DisjointSlice(s), original),
+                DescriptorArgumentKindV1::GlobalMutPointer(s) => (Source::GlobalMutPointer(s), original),
+                DescriptorArgumentKindV1::CompilerLaidOutUsize => (Source::Usize, DescriptorArgumentKindV1::Scalar(ScalarTypeV1::U64)),
+                DescriptorArgumentKindV1::CompilerLaidOutIsize => (Source::Isize, DescriptorArgumentKindV1::Scalar(ScalarTypeV1::I64)),
+                DescriptorArgumentKindV1::CompilerLaidOutByValue => unreachable!(),
+            };
+            let components = if matches!(kind, Source::SharedSlice(_) | Source::DisjointSlice(_)) { 2usize } else { 1 };
+            let payload = components.checked_mul(std::mem::size_of::<fe2o3_kernel_descriptor::PhysicalComponentV3>())
+                .and_then(|bytes| bytes.checked_add(argument.name.len())).ok_or_else(|| resource(Resource::Arithmetic))?;
+            budget.reserve_storage(payload).map_err(resource)?;
+            budget.charge_work(argument.name.len().checked_add(128).ok_or_else(|| resource(Resource::Arithmetic))?).map_err(resource)?;
+            // Existing checked V1 constructors own at most two components;
+            // QUERY prepays their bounded descriptor hash/validation scratch.
+            let query = fe2o3_kernel_descriptor::DESCRIPTOR_QUERY_STORAGE_V3;
+            budget.reserve_storage(query).map_err(resource)?;
+            let built = (|| {
+                let (source, layout) = descriptor_records(physical_kind);
+                let ordinal = u16::try_from(ordinal).map_err(|_| mismatch("source ABI argument ordinal"))?;
+                let name = argument.name.clone();
+                budget.reserve_storage(name.capacity().checked_sub(argument.name.len()).ok_or_else(|| resource(Resource::Accounting))?).map_err(resource)?;
+                let name = ValidName::new(name).map_err(CompilerDescriptorError::from).map_err(descriptor)?;
+                match physical_kind {
+                    DescriptorArgumentKindV1::Scalar(_) => LogicalArgumentV1::scalar(ordinal, name, &source, &layout, offset),
+                    DescriptorArgumentKindV1::SharedSlice(_) => LogicalArgumentV1::shared_slice(ordinal, name, &source, &layout, offset),
+                    DescriptorArgumentKindV1::DisjointSlice(_) => LogicalArgumentV1::disjoint_slice(ordinal, name, &source, &layout, argument.access, offset),
+                    DescriptorArgumentKindV1::GlobalMutPointer(_) => LogicalArgumentV1::global_mut_pointer(ordinal, name, &source, &layout, offset),
+                    _ => unreachable!(),
+                }.map_err(CompilerDescriptorError::from).map_err(descriptor)
+            })();
+            let release = budget.release_storage(query);
+            let argument = match built { Err(error) => return Err(error), Ok(argument) => { release.map_err(resource)?; argument } };
+            if argument.physical_components().len() != components { return Err(mismatch("kernel ABI component allocation extent")); }
+            Kind::Descriptor { source: kind, argument }
+        }
+    };
+    Ok(Argument { semantic_type_identity: argument.semantic_type_identity, kind })
+}
+
+#[cfg(test)]
+#[path = "compiler_descriptor_kernel_argument_abi_v18_tests.rs"]
+mod kernel_argument_abi_v18_tests;
 
 fn match_exact_production_root_roster_v1(
     typed_bindings: &[[u8; 32]],

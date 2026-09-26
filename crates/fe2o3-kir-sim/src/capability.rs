@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_885_766;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_889_538;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -178,10 +178,11 @@ pub enum SimulationOperationSurfaceV1 {
     Execution = 37,
     OrderedRegion = 38,
     OrderedProgram = 39,
+    Storage = 40,
 }
 
 impl SimulationOperationSurfaceV1 {
-    const ALL: [Self; 40] = [
+    const ALL: [Self; 41] = [
         Self::Constant,
         Self::Intrinsic,
         Self::MemoryIntrinsic,
@@ -222,8 +223,9 @@ impl SimulationOperationSurfaceV1 {
         Self::Execution,
         Self::OrderedRegion,
         Self::OrderedProgram,
+        Self::Storage,
     ];
-    const COUNT: usize = Self::OrderedProgram as usize + 1;
+    const COUNT: usize = Self::Storage as usize + 1;
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -277,6 +279,7 @@ pub enum SimulationUnsupportedReasonCodeV1 {
     DynamicWorkgroupMemoryAuthenticatedMinimum,
     DynamicWorkgroupMemoryExtentLayout,
     InertV12Carrier,
+    InertStorage,
     InertExecutionV15,
     OrderedRegion,
     OrderedRegionProfile,
@@ -293,6 +296,7 @@ impl UnsupportedFeatureV1 {
             Self::OrderedProgram => SimulationUnsupportedReasonCodeV1::OrderedProgram,
             Self::OrderedProgramProfile => SimulationUnsupportedReasonCodeV1::OrderedProgramProfile,
             Self::InertV12Carrier => SimulationUnsupportedReasonCodeV1::InertV12Carrier,
+            Self::InertStorage => SimulationUnsupportedReasonCodeV1::InertStorage,
             Self::FloatType(_) => SimulationUnsupportedReasonCodeV1::FloatType,
             Self::UnsupportedType => SimulationUnsupportedReasonCodeV1::UnsupportedType,
             Self::MemoryIntrinsic => SimulationUnsupportedReasonCodeV1::MemoryIntrinsic,
@@ -693,6 +697,7 @@ fn top_level_capability(
             )
         }
         Surface::OrderedProgram => unsupported(Reason::OrderedProgramProfile),
+        Surface::Storage => unsupported(Reason::InertStorage),
         Surface::Execution => unsupported(Reason::InertExecutionV15),
         Surface::VectorLoad
         | Surface::VectorStore
@@ -711,6 +716,7 @@ fn top_level_capability(
 
 pub(crate) fn operation_surface_v1(operation: &OperationKind) -> SimulationOperationSurfaceV1 {
     match operation {
+        OperationKind::Storage(_) => SimulationOperationSurfaceV1::Storage,
         OperationKind::Execution(_) => SimulationOperationSurfaceV1::Execution,
         OperationKind::VectorLoad(_) => SimulationOperationSurfaceV1::VectorLoad,
         OperationKind::VectorStore(_) => SimulationOperationSurfaceV1::VectorStore,
@@ -770,7 +776,9 @@ const fn scalar_owner(ty: ScalarType) -> SimulationSemanticOwnerV1 {
 
 const fn cast_owner(kind: CastKind) -> SimulationSemanticOwnerV1 {
     match kind {
-        CastKind::RestrictPointerAccess => SimulationSemanticOwnerV1::TypedMemory,
+        CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric => {
+            SimulationSemanticOwnerV1::TypedMemory
+        }
         CastKind::FloatExtend
         | CastKind::FloatTruncate
         | CastKind::IntegerToFloat
@@ -841,6 +849,8 @@ const fn compare_name(operation: ComparePredicate) -> &'static str {
 const fn cast_name(operation: CastKind) -> &'static str {
     match operation {
         CastKind::RestrictPointerAccess => "restrict_pointer_access",
+        CastKind::PointerToGeneric => "pointer_to_generic",
+        CastKind::SliceToGeneric => "slice_to_generic",
         CastKind::Truncate => "truncate",
         CastKind::ZeroExtend => "zero_extend",
         CastKind::SignExtend => "sign_extend",
@@ -849,5 +859,45 @@ const fn cast_name(operation: CastKind) -> &'static str {
         CastKind::IntegerToFloat => "integer_to_float",
         CastKind::FloatToInteger => "float_to_integer",
         CastKind::Bitcast => "bitcast",
+    }
+}
+
+#[cfg(test)]
+mod storage_compatibility_tests {
+    use super::*;
+
+    #[test]
+    fn storage_capability_is_distinct_and_unsupported_in_every_old_profile() {
+        use fe2o3_kernel_ir::{AddressSpace, StorageOperationV1, ValueId};
+        let operation = OperationKind::Storage(StorageOperationV1::ReadValue {
+            address: ValueId(0),
+            access: fe2o3_kernel_ir::MemoryAccess::new(AddressSpace::Private, 1),
+        });
+        assert_eq!(
+            operation_surface_v1(&operation),
+            SimulationOperationSurfaceV1::Storage
+        );
+        assert_eq!(
+            UnsupportedFeatureV1::InertStorage.reason_code(),
+            SimulationUnsupportedReasonCodeV1::InertStorage
+        );
+        for profile in SimulationCapabilityProfileV1::ALL {
+            for version in SimulationKirWireVersionV1::ALL {
+                assert_eq!(
+                    top_level_capability(SimulationOperationSurfaceV1::Storage, profile, version),
+                    SimulationCapabilityDispositionV1::Unsupported {
+                        reason: SimulationUnsupportedReasonCodeV1::InertStorage,
+                    }
+                );
+            }
+        }
+        assert_eq!(
+            SimulationOperationSurfaceV1::ALL.last(),
+            Some(&SimulationOperationSurfaceV1::Storage)
+        );
+        assert_eq!(
+            SimulationOperationSurfaceV1::COUNT,
+            SimulationOperationSurfaceV1::ALL.len()
+        );
     }
 }

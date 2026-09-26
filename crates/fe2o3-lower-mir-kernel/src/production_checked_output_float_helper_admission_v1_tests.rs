@@ -315,7 +315,7 @@ fn float_source(bits: u16, op: SemanticBinaryOpV1) -> ProductionPreRankedKirOwne
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
     budget.reserve_storage(FLOOR).unwrap();
-    let source = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+    let source = materialize_with_fixture_kernel_abi_v18(
         ssa,
         launch,
         ProductionSemanticKirLimitsV1::default(),

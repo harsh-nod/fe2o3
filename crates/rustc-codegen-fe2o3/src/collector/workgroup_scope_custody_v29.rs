@@ -2,6 +2,7 @@
 //! instances, capability issuance, lifecycle proofs or executable authority.
 
 use crate::production_semantic_body_v1::ProductionSemanticBodyErrorV1 as Error;
+use crate::production_semantic_body_v1::ProductionSourceCensusEncodingV1;
 use fe2o3_mir_model::semantic_mir_v1::*;
 
 fn mismatch() -> Error {
@@ -180,6 +181,7 @@ pub(crate) struct PendingWorkgroupScopesV29 {
     function_count: usize,
     completed: usize,
     events: Vec<ScopeEventV29>,
+    encoding: ProductionSourceCensusEncodingV1,
 }
 
 pub(crate) struct PreparedScopeEventsV29<'a> {
@@ -195,11 +197,28 @@ impl PreparedScopeEventsV29<'_> {
 }
 
 impl PendingWorkgroupScopesV29 {
+    #[cfg(test)]
     pub(crate) fn new(
         classes: Vec<ScopeCallableV29>,
         declarations: SemanticDeclarationTablesCommitmentV1,
         target: SemanticTargetDataLayoutV1,
         function_count: usize,
+    ) -> Result<Self, Error> {
+        Self::new_with_encoding(
+            classes,
+            declarations,
+            target,
+            function_count,
+            ProductionSourceCensusEncodingV1::execution_for_test(),
+        )
+    }
+
+    pub(crate) fn new_with_encoding(
+        classes: Vec<ScopeCallableV29>,
+        declarations: SemanticDeclarationTablesCommitmentV1,
+        target: SemanticTargetDataLayoutV1,
+        function_count: usize,
+        encoding: ProductionSourceCensusEncodingV1,
     ) -> Result<Self, Error> {
         if function_count == 0 || function_count > classes.len() {
             return Err(mismatch());
@@ -211,6 +230,7 @@ impl PendingWorkgroupScopesV29 {
             function_count,
             completed: 0,
             events: Vec::new(),
+            encoding,
         })
     }
 
@@ -285,7 +305,8 @@ impl PendingWorkgroupScopesV29 {
         charge(1)?;
         if self.declarations != declarations
             || self.target != semantic.target()
-            || declarations.wire_version() != SemanticMirWireVersionV1::V29
+            || declarations.wire_version() != self.encoding.wire_version()
+            || !self.encoding.accepts_profile(semantic.wire_version())
             || self.completed != self.function_count
             || self.function_count != semantic.functions().len()
             || self.classes.len() != semantic.callables().len()
@@ -297,14 +318,21 @@ impl PendingWorkgroupScopesV29 {
         {
             return Err(mismatch());
         }
+        if !self.encoding.is_execution() && !self.events.is_empty() {
+            return Err(mismatch());
+        }
         for (index, class) in self.classes.iter().copied().enumerate() {
             charge(1)?;
+            if !self.encoding.is_execution() && class != ScopeCallableV29::Ordinary {
+                return Err(mismatch());
+            }
             class.check(index, semantic)?;
         }
         Ok(ScopeCensusV29 {
             scopes: RetainedWorkgroupScopesV29 {
                 classes: self.classes,
                 events: self.events,
+                encoding: self.encoding,
             },
             next: 0,
         })
@@ -355,9 +383,14 @@ impl ScopeCensusV29 {
 pub(crate) struct RetainedWorkgroupScopesV29 {
     classes: Vec<ScopeCallableV29>,
     events: Vec<ScopeEventV29>,
+    encoding: ProductionSourceCensusEncodingV1,
 }
 
 impl RetainedWorkgroupScopesV29 {
+    pub(crate) const fn is_execution(&self) -> bool {
+        self.encoding.is_execution()
+    }
+
     pub(crate) fn classes(&self) -> &[ScopeCallableV29] {
         &self.classes
     }

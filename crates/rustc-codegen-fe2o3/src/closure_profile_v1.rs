@@ -11,7 +11,9 @@ use crate::rustc_semantic_adapter_v1::{
 };
 use crate::rustc_semantic_plan_v1::SourceClosureWorkV1;
 use crate::semantic_layout_bridge::rustc_semantic_layout_target_v1;
-use fe2o3_mir_model::semantic_mir_v1::{SemanticFunctionIdentityV1, SemanticLayoutIdentityV1};
+use fe2o3_mir_model::semantic_mir_v1::{
+    SemanticFunctionIdentityV1, SemanticLayoutIdentityV1, SemanticTypeIdentityV1,
+};
 use rustc_hir::Mutability;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{
@@ -31,6 +33,8 @@ mod alias_flow_v1;
 mod constants_v1;
 #[path = "closure_profile_v1/once_shim_v1.rs"]
 mod once_shim_v1;
+#[path = "closure_profile_v1/sdk_allocation_capture_v1.rs"]
+mod sdk_allocation_capture_v1;
 #[path = "closure_profile_v1/uses_v1.rs"]
 mod uses_v1;
 pub(crate) use once_shim_v1::{authenticate_once_shim_v1, is_shim_receiver_call_v1};
@@ -78,6 +82,8 @@ pub(crate) struct ClosureCaptureLayoutV1 {
     pub(crate) offset_bytes: u64,
     pub(crate) mode: ClosureCaptureModeV1,
     pub(crate) layout: TypeLayoutFacts,
+    capture_type: SemanticTypeIdentityV1,
+    allocation_views: sdk_allocation_capture_v1::SdkCaptureObservationV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -158,7 +164,13 @@ impl RawClosureObservationV1 {
             }
             require_origin(policy, origin)?;
             for capture in &environment.captures {
-                validate_capture_layout_v1(&capture.layout, origin, work)?;
+                capture.allocation_views.validate(
+                    capture.source_index,
+                    capture.capture_type,
+                    &capture.layout,
+                    origin,
+                    work,
+                )?;
             }
             environment.origin = origin;
         }
@@ -404,7 +416,22 @@ pub(crate) fn observe_raw_closures_v1<'tcx>(
                     "capture {source_index} has unsupported physical layout: {error}"
                 ))
             })?;
-            validate_capture_layout_v1(&facts, ClosureOriginV1::DeviceInternal, work)?;
+            let capture_type =
+                crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(tcx, capture_ty);
+            let allocation_views = sdk_allocation_capture_v1::SdkCaptureObservationV1::observe(
+                tcx,
+                source_index,
+                capture_ty,
+                &facts,
+                work,
+            )?;
+            allocation_views.validate(
+                source_index,
+                capture_type,
+                &facts,
+                ClosureOriginV1::DeviceInternal,
+                work,
+            )?;
             let field = layout.field(&layout_cx, source_index);
             if field.size.bytes() != facts.size_bytes
                 || field.align.abi.bytes() != facts.abi_alignment_bytes
@@ -423,6 +450,8 @@ pub(crate) fn observe_raw_closures_v1<'tcx>(
                 offset_bytes: layout.fields.offset(source_index).bytes(),
                 mode,
                 layout: facts,
+                capture_type,
+                allocation_views,
             });
         }
         closure_locals.insert(local);
@@ -659,58 +688,6 @@ fn closure_creations(
         }
     }
     Ok(result)
-}
-
-// Extraction already bounds the depth and node count of this layout tree.
-fn validate_capture_layout_v1(
-    facts: &TypeLayoutFacts,
-    origin: ClosureOriginV1,
-    work: &mut SourceClosureWorkV1,
-) -> Result<(), ClosureProfileErrorV1> {
-    use crate::rust_type_layout_general::PointerKind;
-
-    charge_work(work, 1)?;
-    match &facts.kind {
-        TypeLayoutKind::Closure { .. } => Err(ClosureProfileErrorV1::new(
-            "nested closure captures are outside the bounded profile",
-        )),
-        TypeLayoutKind::Scalar(_) => Ok(()),
-        TypeLayoutKind::SharedSliceReference { element } => {
-            if origin == ClosureOriginV1::HostArgument {
-                return Err(ClosureProfileErrorV1::new(
-                    "host closure references require an eligible allocation/completion token; none is present in V1",
-                ));
-            }
-            validate_capture_layout_v1(element, origin, work)
-        }
-        TypeLayoutKind::Pointer(pointer) => {
-            match pointer.kind {
-                PointerKind::ConstRaw | PointerKind::MutRaw => {
-                    return Err(ClosureProfileErrorV1::new(
-                        "raw-pointer captures have no allocation authority",
-                    ));
-                }
-                PointerKind::SharedReference | PointerKind::MutableReference
-                    if origin == ClosureOriginV1::HostArgument =>
-                {
-                    return Err(ClosureProfileErrorV1::new(
-                        "host closure references require an eligible allocation/completion token; none is present in V1",
-                    ));
-                }
-                PointerKind::SharedReference | PointerKind::MutableReference => {}
-            }
-            validate_capture_layout_v1(&pointer.pointee, origin, work)
-        }
-        TypeLayoutKind::Array(array) => validate_capture_layout_v1(&array.element, origin, work),
-        TypeLayoutKind::Tuple(fields) => fields
-            .iter()
-            .try_for_each(|field| validate_capture_layout_v1(&field.layout, origin, work)),
-        TypeLayoutKind::Adt(adt) => adt
-            .variants
-            .iter()
-            .flat_map(|variant| &variant.fields)
-            .try_for_each(|field| validate_capture_layout_v1(&field.layout, origin, work)),
-    }
 }
 
 fn declared_call_kind(

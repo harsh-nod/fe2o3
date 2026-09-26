@@ -574,7 +574,7 @@ mod guarded_opaque_divisor_tests {
             let first = p.guarded_divisor_proofs.as_ref().unwrap();
             let identity = std::ptr::from_ref(first);
             let work = first.work;
-            let cached = first.zero_exclusion.len();
+            let cached = first.core.zero_exclusion_cache_len_v1();
             assert!(cached > 0);
             assert!(matches!(
                 p.resolve_local(4).unwrap(),
@@ -583,7 +583,7 @@ mod guarded_opaque_divisor_tests {
             let second = p.guarded_divisor_proofs.as_ref().unwrap();
             assert_eq!(identity, std::ptr::from_ref(second));
             assert!(second.work > work);
-            assert_eq!(second.zero_exclusion.len(), cached);
+            assert_eq!(second.core.zero_exclusion_cache_len_v1(), cached);
         });
     }
 
@@ -602,7 +602,7 @@ mod guarded_opaque_divisor_tests {
         assert!(measured > 8 && measured < MAX_PROJECTED_LOOP_GRAPH_WORK_V1);
         with_projector(&function, |p| {
             let mut proof = SemanticAssertProofsV1::new(p.types, p.function).unwrap();
-            proof.work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1 - measured;
+            proof.seed_legacy_visits_for_test_v1(MAX_PROJECTED_LOOP_GRAPH_WORK_V1 - measured);
             p.guarded_divisor_proofs = Some(proof);
             assert!(check_actual(p).unwrap());
             assert_eq!(
@@ -612,7 +612,7 @@ mod guarded_opaque_divisor_tests {
         });
         with_projector(&function, |p| {
             let mut proof = SemanticAssertProofsV1::new(p.types, p.function).unwrap();
-            proof.work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1 - measured + 1;
+            proof.seed_legacy_visits_for_test_v1(MAX_PROJECTED_LOOP_GRAPH_WORK_V1 - measured + 1);
             p.guarded_divisor_proofs = Some(proof);
             assert!(matches!(
                 check_actual(p),
@@ -623,7 +623,7 @@ mod guarded_opaque_divisor_tests {
         });
         with_projector(&function, |p| {
             let mut proof = SemanticAssertProofsV1::new(p.types, p.function).unwrap();
-            proof.work = usize::MAX;
+            proof.seed_legacy_visits_for_test_v1(usize::MAX);
             p.guarded_divisor_proofs = Some(proof);
             assert!(matches!(
                 check_actual(p),

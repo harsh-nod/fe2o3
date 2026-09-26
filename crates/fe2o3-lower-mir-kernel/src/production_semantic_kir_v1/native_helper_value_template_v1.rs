@@ -628,7 +628,7 @@ impl Template {
             .get(value.index)
             .ok_or("foreign template value")?;
         let scalar = node.scalar;
-        let child = |value| self.emit(value, arguments).map(Box::new);
+        let child = |value| self.emit(value, arguments).map(NormalizedScalarNodeV18::legacy);
         Ok(match node.kind {
             Kind::Parameter(parameter) => arguments
                 .get(parameter)

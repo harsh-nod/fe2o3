@@ -93,7 +93,7 @@ fn check_unit_local_control_v1(
             {
                 return Err(bad("local helper assertion has an unsupported source edge"));
             }
-            let SemanticAssertMessageV1::BoundsCheck { length, index } = message else {
+            let SemanticAssertMessageV1::BoundsCheck { .. } = message else {
                 return Err(bad("local helper assertion requires a bounds diagnostic"));
             };
             let (_, success) = cursor.native_block(target.target(), budget)?;
@@ -178,20 +178,7 @@ fn check_unit_local_control_v1(
                 ));
             }
             // Adapter order is condition, diagnostic length, diagnostic index.
-            let length = cursor.resolve_operand(
-                site,
-                Role::AssertMessage(0),
-                length,
-                UnitLocalOperandUseV1::Diagnostic,
-                budget,
-            )?;
-            let index = cursor.resolve_operand(
-                site,
-                Role::AssertMessage(1),
-                index,
-                UnitLocalOperandUseV1::Diagnostic,
-                budget,
-            )?;
+            let [length, index] = cursor.resolve_assert_diagnostics(site, message, budget)?;
             for value in [length, index] {
                 budget.charge_work(6)?;
                 let row = cursor.value(value).ok_or_else(mismatch)?;

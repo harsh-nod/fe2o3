@@ -1138,7 +1138,23 @@ fn checked_operand_limits_accumulate_across_statements_and_functions() {
 
 #[test]
 fn checked_validation_work_has_an_exact_admission_boundary() {
-    const EXACT_CHECKED_VALIDATION_WORK: u64 = 159;
+    // The new pass visits ten types four times and eleven tuple-field edges;
+    // this roster has no enum-variant steps. All other validation still costs 159.
+    const CONTAINMENT_WORK: u64 = 4 * 10 + 11;
+    const EXACT_CHECKED_VALIDATION_WORK: u64 = 159 + CONTAINMENT_WORK;
+    let roster = types();
+    assert_eq!(roster.len(), 10);
+    assert_eq!(
+        roster
+            .iter()
+            .filter_map(|ty| match ty.shape() {
+                SemanticTypeShapeV1::Tuple(fields) => Some(fields.fields().len()),
+                SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => None,
+                _ => panic!("unexpected containment edge in checked-arithmetic fixture"),
+            })
+            .collect::<Vec<_>>(),
+        vec![2, 2, 2, 3, 2]
+    );
     let exact = SemanticMirLimitsV1::default()
         .with_limit(
             SemanticMirResourceV1::ValidationWork,

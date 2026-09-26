@@ -106,11 +106,15 @@ fn cr_with_arguments_v1<'w, R>(
         &mut ProductionArgumentViewV1<'s, 'w>,
     ) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
-    with_parameter_correspondence_v1(
+    let descriptor_root = descriptor_root_for_entry_v18(
+        &owner.semantic_ssa, owner.kernel_abi.as_ref(), group.function.source, budget,
+    )?;
+    with_parameter_correspondence_profile_v18(
         owner.semantic_ssa.source_semantic(),
         group.function.source,
         group.function.canonical.function,
         group.parameters(),
+        descriptor_root,
         budget,
         run,
     )

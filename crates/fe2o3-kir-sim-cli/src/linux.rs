@@ -92,6 +92,7 @@ const _: () = assert!(MAX_CLI_EXPLORATION_ENVELOPE_BYTES < MAX_SUCCESS_BYTES);
 #[serde(rename_all = "snake_case")]
 enum UnsupportedFeatureCode {
     InertV12Carrier,
+    InertStorage,
     InertExecutionV15,
     FloatType,
     UnsupportedType,
@@ -1405,9 +1406,10 @@ fn run_with_admitted_input(
         | ScheduleOption::ReduceFailure { .. }
         | ScheduleOption::ReplayFailureReduction { .. } => None,
     };
+    let target = input.simulation_target;
     drop(input);
     drop(replay);
-    let maximum = measure_success_bytes(&execution, race_evidence)?;
+    let maximum = measure_success_bytes(&execution, target, race_evidence)?;
     let publishes_schedule = schedule_output.is_some();
     if let Some((path, bytes)) = schedule_output {
         publish_payload(
@@ -1417,8 +1419,8 @@ fn run_with_admitted_input(
         )?;
     }
     let result = match output {
-        Some(path) => publish_transactionally(Path::new(&path), &execution, maximum, race_evidence),
-        None => write_success_stdout(&execution, maximum, race_evidence),
+        Some(path) => publish_transactionally(Path::new(&path), &execution, target, maximum, race_evidence),
+        None => write_success_stdout(&execution, target, maximum, race_evidence),
     };
     if publishes_schedule {
         result.map_err(Failure::after_schedule_published)
@@ -2014,14 +2016,13 @@ fn load_admitted_bundle_v6(
 }
 
 fn simulation_target_for_bundle(target: &str) -> Result<SimulationTargetV1, Failure> {
-    match target {
-        "gfx942:xnack-" | "gfx950:xnack-" => Ok(SimulationTargetV1::amdgpu_64()),
-        _ => Err(Failure::input(
+    SimulationTargetV1::amdgpu_from_device_target(target).ok_or_else(|| {
+        Failure::input(
             InputCode::SimulationBundle,
             ErrorKind::SimulationBundleTargetUnsupported,
             "simulation bundle target has no exact V1 CPU simulation profile",
-        )),
-    }
+        )
+    })
 }
 
 fn load_admitted_kir_v12(
@@ -3330,6 +3331,7 @@ fn admission_error_kind(error: &SimulationAdmissionErrorV1) -> ErrorKind {
 fn preflight_kind(error: &SimulationPreflightErrorV1) -> ErrorKind {
     match error {
         SimulationPreflightErrorV1::InvalidLimits(_) => ErrorKind::PreflightInvalidLimits,
+        SimulationPreflightErrorV1::StorageProfileNotAdmitted => ErrorKind::PreflightUnsupported,
         SimulationPreflightErrorV1::UnknownKernel(_) => ErrorKind::PreflightUnknownKernel,
         SimulationPreflightErrorV1::MissingEntry(_) => ErrorKind::PreflightMissingEntry,
         SimulationPreflightErrorV1::InvalidLaunch(_) => ErrorKind::PreflightInvalidLaunch,
@@ -3371,6 +3373,12 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
         }
         SimulationExecutionErrorKindV1::TotalBytesLimit { .. } => {
             ErrorKind::ExecutionTotalBytesLimit
+        }
+        SimulationExecutionErrorKindV1::StorageResidentLimit { .. } => {
+            ErrorKind::ExecutionStorageResidentLimit
+        }
+        SimulationExecutionErrorKindV1::StorageViolation { .. } => {
+            ErrorKind::ExecutionStorageViolation
         }
         SimulationExecutionErrorKindV1::AllocationFailure => ErrorKind::ExecutionAllocationFailure,
         SimulationExecutionErrorKindV1::MissingFunction(_) => ErrorKind::ExecutionMissingFunction,
@@ -3518,6 +3526,7 @@ fn wave_mask(width: WaveWidth, mask: u64) -> String {
 fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
     match feature {
         UnsupportedFeatureV1::InertV12Carrier => UnsupportedFeatureCode::InertV12Carrier,
+        UnsupportedFeatureV1::InertStorage => UnsupportedFeatureCode::InertStorage,
         UnsupportedFeatureV1::InertExecutionV15 => UnsupportedFeatureCode::InertExecutionV15,
         UnsupportedFeatureV1::FloatType(_) => UnsupportedFeatureCode::FloatType,
         UnsupportedFeatureV1::UnsupportedType => UnsupportedFeatureCode::UnsupportedType,
@@ -3610,13 +3619,14 @@ fn site_document(site: SimulationSiteV1) -> SiteDocument {
 
 fn measure_success_bytes(
     execution: &SimulationExecutionV1,
+    target: SimulationTargetV1,
     race_evidence: bool,
 ) -> Result<usize, Failure> {
     let mut bounded = BoundedWriter::new(
         CountingWriter::default(),
         MAX_SUCCESS_BYTES.saturating_sub(1),
     );
-    if let Err(error) = write_success(&mut bounded, execution, race_evidence) {
+    if let Err(error) = write_success(&mut bounded, execution, target, race_evidence) {
         return if error.kind() == io::ErrorKind::FileTooLarge {
             Err(output_too_large())
         } else {
@@ -3687,7 +3697,9 @@ fn write_exploration<W: Write + ?Sized>(
 ) -> io::Result<()> {
     writer.write_all(b"{\"schema\":\"")?;
     writer.write_all(EXPLORATION_SCHEMA.as_bytes())?;
-    writer.write_all(b"\",\"status\":\"ok\",\"authority\":\"observation_only\",\"simulated\":true,\"hardware_observed\":false,\"hardware_validation\":false,\"performance_prediction\":false,\"schedule_space_exhausted\":false,\"target_profile\":{\"identity\":\"amdgpu_64_little_endian_v1\",\"index_bits\":64,\"max_workgroup_invocations\":1024},\"input\":")?;
+    writer.write_all(b"\",\"status\":\"ok\",\"authority\":\"observation_only\",\"simulated\":true,\"hardware_observed\":false,\"hardware_validation\":false,\"performance_prediction\":false,\"schedule_space_exhausted\":false,\"target_profile\":")?;
+    write_target_profile(writer, binding.target())?;
+    writer.write_all(b",\"input\":")?;
     write_exploration_input(writer, binding)?;
     let wraps = request.max_schedules() > 1
         && request
@@ -3900,15 +3912,29 @@ impl<W: Write> Write for BoundedWriter<W> {
     }
 }
 
+fn write_target_profile<W: Write + ?Sized>(
+    writer: &mut W,
+    target: SimulationTargetV1,
+) -> io::Result<()> {
+    let bits = match target.index_width() {
+        fe2o3_kir_sim::IndexWidthV1::Bits32 => 32,
+        fe2o3_kir_sim::IndexWidthV1::Bits64 => 64,
+    };
+    write!(writer,
+        "{{\"identity\":\"{}\",\"index_bits\":{},\"max_workgroup_invocations\":{}}}",
+        target.identity_tag(), bits, target.max_workgroup_invocations())
+}
+
 fn write_success_stdout(
     execution: &SimulationExecutionV1,
+    target: SimulationTargetV1,
     maximum: usize,
     race_evidence: bool,
 ) -> Result<(), Failure> {
     let stdout = io::stdout();
     let bounded = BoundedWriter::new(stdout.lock(), maximum);
     let mut output = BufWriter::with_capacity(32 * 1024, bounded);
-    write_success(&mut output, execution, race_evidence)
+    write_success(&mut output, execution, target, race_evidence)
         .and_then(|()| output.write_all(b"\n"))
         .and_then(|()| output.flush())
         .map_err(output_write_failure)
@@ -3917,11 +3943,14 @@ fn write_success_stdout(
 fn write_success<W: Write + ?Sized>(
     writer: &mut W,
     execution: &SimulationExecutionV1,
+    target: SimulationTargetV1,
     race_evidence: bool,
 ) -> io::Result<()> {
     writer.write_all(b"{\"schema\":\"")?;
     writer.write_all(RESULT_SCHEMA.as_bytes())?;
-    writer.write_all(b"\",\"status\":\"ok\",\"authority\":\"observation_only\",\"simulated\":true,\"hardware_observed\":false,\"hardware_validation\":false,\"performance_prediction\":false,\"target_profile\":{\"identity\":\"amdgpu_64_little_endian_v1\",\"index_bits\":64,\"max_workgroup_invocations\":1024},\"kir\":{\"sha256\":\"")?;
+    writer.write_all(b"\",\"status\":\"ok\",\"authority\":\"observation_only\",\"simulated\":true,\"hardware_observed\":false,\"hardware_validation\":false,\"performance_prediction\":false,\"target_profile\":")?;
+    write_target_profile(writer, target)?;
+    writer.write_all(b",\"kir\":{\"sha256\":\"")?;
     write_lower_hex(writer, execution.identity().digest(), false)?;
     write!(
         writer,
@@ -4332,11 +4361,12 @@ fn output_write_failure(error: io::Error) -> Failure {
 fn publish_transactionally(
     path: &Path,
     execution: &SimulationExecutionV1,
+    target: SimulationTargetV1,
     maximum: usize,
     race_evidence: bool,
 ) -> Result<(), Failure> {
     publish_payload(path, maximum, |writer| {
-        write_success(writer, execution, race_evidence)?;
+        write_success(writer, execution, target, race_evidence)?;
         writer.write_all(b"\n")
     })
 }
@@ -5519,6 +5549,46 @@ mod tests {
     }
 
     #[test]
+    fn storage_refusal_error_codes_are_distinct_and_stable() {
+        assert_eq!(
+            serde_json::to_value(unsupported_code(&UnsupportedFeatureV1::InertStorage)).unwrap(),
+            "inert_storage"
+        );
+        assert_eq!(
+            preflight_kind(&SimulationPreflightErrorV1::StorageProfileNotAdmitted),
+            ErrorKind::PreflightUnsupported
+        );
+    }
+
+    #[test]
+    fn storage_execution_error_codes_are_distinct_and_stable() {
+        for (error, kind, code) in [
+            (
+                SimulationExecutionErrorKindV1::StorageResidentLimit {
+                    actual: 2,
+                    limit: 1,
+                },
+                ErrorKind::ExecutionStorageResidentLimit,
+                "execution_storage_resident_limit",
+            ),
+            (
+                SimulationExecutionErrorKindV1::StorageViolation {
+                    reason: "partial relocation copy",
+                },
+                ErrorKind::ExecutionStorageViolation,
+                "execution_storage_violation",
+            ),
+        ] {
+            assert_eq!(execution_kind(&error), kind);
+            let failure = Failure::new(Stage::Execution, execution_kind(&error), "storage refused");
+            let value = serde_json::to_value(&failure.0).unwrap();
+            assert_eq!(value["schema"], ERROR_SCHEMA);
+            assert_eq!(value["stage"], "execution");
+            assert_eq!(value["kind"], code);
+        }
+    }
+
+    #[test]
     fn error_schema_uses_closed_stage_kind_and_feature_codes() {
         let failure = Failure::new(Stage::Request, ErrorKind::RequestHexInvalid, "invalid");
         let value = serde_json::to_value(&failure.0).unwrap();
@@ -6171,6 +6241,88 @@ mod tests {
                 "GPU runtime package {} entered the standalone CLI closure",
                 names[package]
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod target_profile_output_tests {
+    use super::*;
+
+    #[test]
+    fn exact_target_success_measurement_matches_writer_and_one_short_refuses() {
+        use fe2o3_kernel_ir::{
+            BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent, Module, Signature,
+            Terminator, VerifiedCanonicalKernelIrV7,
+        };
+        let mut block = BasicBlock::new(BlockId(0));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("profile-output-bound");
+        module.functions.push(Function::kernel_entry(
+            "entry",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            "kernel",
+            "entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        ));
+        let limits = SimulationLimitsV1::default();
+        let owner = AdmittedSimulationModuleV1::admit(
+            VerifiedCanonicalKernelIrV7::from_module(module).unwrap(),
+            limits,
+        )
+        .unwrap();
+        let request = SimulationRequestV1::new("kernel", [1, 1, 1], [1, 1, 1], vec![]);
+        for (target, tag, bits) in [
+            (
+                SimulationTargetV1::little_endian(fe2o3_kir_sim::IndexWidthV1::Bits32),
+                "little_endian_index32_v1",
+                32,
+            ),
+            (
+                SimulationTargetV1::little_endian(fe2o3_kir_sim::IndexWidthV1::Bits64),
+                "amdgpu_64_little_endian_v1",
+                64,
+            ),
+            (
+                SimulationTargetV1::amdgpu_from_device_target("gfx942:xnack-").unwrap(),
+                "amdgpu_gfx942_little_endian_v2",
+                64,
+            ),
+            (
+                SimulationTargetV1::amdgpu_from_device_target("gfx950:xnack-").unwrap(),
+                "amdgpu_gfx950_little_endian_v2",
+                64,
+            ),
+        ] {
+            let execution = owner.simulate(&request, target, limits).unwrap();
+            for race_evidence in [false, true] {
+                let maximum = measure_success_bytes(&execution, target, race_evidence).unwrap();
+                let mut exact = BoundedWriter::new(Vec::new(), maximum);
+                write_success(&mut exact, &execution, target, race_evidence).unwrap();
+                exact.write_all(b"\n").unwrap();
+                let bytes = exact.into_inner();
+                assert_eq!(bytes.len(), maximum);
+                let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(
+                    value["target_profile"],
+                    serde_json::json!({
+                        "identity": tag, "index_bits": bits, "max_workgroup_invocations": 1024
+                    })
+                );
+                let mut short = BoundedWriter::new(Vec::new(), maximum - 1);
+                write_success(&mut short, &execution, target, race_evidence).unwrap();
+                assert_eq!(
+                    short.write_all(b"\n").unwrap_err().kind(),
+                    io::ErrorKind::FileTooLarge
+                );
+                assert_eq!(short.into_inner().len(), maximum - 1);
+            }
         }
     }
 }

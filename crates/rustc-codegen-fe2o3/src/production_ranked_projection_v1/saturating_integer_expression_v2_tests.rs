@@ -513,7 +513,9 @@ mod saturating_integer_expression_v2_tests {
             .unwrap()
             .with_scalar_callables_v1(&callables)
             .unwrap();
-        resolver.definitions.work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1;
+        resolver
+            .definitions
+            .seed_legacy_visits_for_test_v1(MAX_PROJECTED_LOOP_GRAPH_WORK_V1);
         assert!(
             resolver
                 .resolve_store_v2(

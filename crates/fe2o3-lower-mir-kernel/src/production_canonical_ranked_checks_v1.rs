@@ -39,6 +39,8 @@ pub enum ProductionCanonicalRankedPolicyErrorV1 {
     Policy(fe2o3_pliron::CanonicalRankedPolicyChecksErrorV1),
     /// Paid short-view query failed.
     Query(fe2o3_pliron::CanonicalRankedPolicyFailureV1),
+    /// Existing physical/source lifetime reader refused the original private graph.
+    PrivateSource(ProductionCheckedOutputAdmissionErrorPolicy3V1),
     /// Unsupported typed source fact and its original roster position.
     Unsupported {
         /// Required reader, not an optional annotation.
@@ -53,6 +55,7 @@ impl std::fmt::Display for ProductionCanonicalRankedPolicyErrorV1 {
             Self::Source(error) => error.fmt(f),
             Self::Policy(error) => error.fmt(f),
             Self::Query(error) => error.fmt(f),
+            Self::PrivateSource(error) => error.fmt(f),
             Self::Unsupported {
                 requirement,
                 ordinal,
@@ -69,6 +72,7 @@ impl std::error::Error for ProductionCanonicalRankedPolicyErrorV1 {
             Self::Source(error) => Some(error),
             Self::Policy(error) => Some(error),
             Self::Query(error) => Some(error),
+            Self::PrivateSource(error) => Some(error),
             Self::Unsupported { .. } => None,
         }
     }
@@ -104,6 +108,14 @@ fn cr_policy_source_profile_v1(
     source: &ProductionCanonicalRankedMetadataV1<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> CrPolicyResultV1<()> {
+    cr_policy_source_profile_with_assertions_v1(source, None, budget)
+}
+
+fn cr_policy_source_profile_with_assertions_v1(
+    source: &ProductionCanonicalRankedMetadataV1<'_>,
+    assertions: Option<&canonical_assertion_v1::Coverage<'_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> CrPolicyResultV1<()> {
     use ProductionCanonicalRankedSourceRequirementV1 as Need;
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticRvalueKindV1 as Rvalue, SemanticStatementKindV1 as Statement,
@@ -118,8 +130,14 @@ fn cr_policy_source_profile_v1(
         return Err(cr_policy_unsupported_v1(Need::Effect, 0));
     }
     if !source.contracts.assertions.is_empty() {
-        budget.charge_work(1)?;
-        return Err(cr_policy_unsupported_v1(Need::Assertion, 0));
+        if let Some(coverage) = assertions {
+            for assertion in &source.contracts.assertions {
+                coverage.span(source, assertion.span, budget)?;
+            }
+        } else {
+            budget.charge_work(1)?;
+            return Err(cr_policy_unsupported_v1(Need::Assertion, 0));
+        }
     }
     budget.charge_work(2)?;
     if !source.contracts.catalog.definitions().is_empty()
@@ -204,7 +222,8 @@ fn cr_policy_source_profile_v1(
                     }
                 }
             }
-            SemanticKirCallReturnKindV1::Call { .. } => {
+            SemanticKirCallReturnKindV1::Call { .. }
+            | SemanticKirCallReturnKindV1::NoNormalReturnCall { .. } => {
                 return Err(cr_policy_unsupported_v1(Need::CallTransport, ordinal));
             }
         }
@@ -250,9 +269,15 @@ fn cr_policy_source_profile_v1(
                     }
                 }
             }
-            ProductionCanonicalRankedSourceSiteV1::Terminator { source, .. } => match source.kind()
-            {
+            ProductionCanonicalRankedSourceSiteV1::Terminator {
+                source: terminator, ..
+            } => match terminator.kind() {
                 Terminator::Goto(_) | Terminator::SwitchInt { .. } | Terminator::Return => {}
+                Terminator::Assert { .. } if assertions.is_some() => {
+                    assertions
+                        .expect("sealed assertion coverage")
+                        .span(source, ordinal, budget)?;
+                }
                 Terminator::Call(_)
                 | Terminator::TailCall(_)
                 | Terminator::Drop { .. }
@@ -265,8 +290,14 @@ fn cr_policy_source_profile_v1(
                     return Err(cr_policy_unsupported_v1(Need::Terminator, ordinal));
                 }
             },
-            ProductionCanonicalRankedSourceSiteV1::Synthetic(_) => {
-                return Err(cr_policy_unsupported_v1(Need::Synthetic, ordinal));
+            ProductionCanonicalRankedSourceSiteV1::Synthetic(synthetic) => {
+                if synthetic.rule() == SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap
+                    && let Some(coverage) = assertions
+                {
+                    coverage.span(source, ordinal, budget)?;
+                } else {
+                    return Err(cr_policy_unsupported_v1(Need::Synthetic, ordinal));
+                }
             }
         }
     }

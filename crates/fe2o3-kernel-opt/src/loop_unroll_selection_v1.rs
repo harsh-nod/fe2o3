@@ -80,7 +80,7 @@ fn ty(t: &Type) -> bool {
         Type::Scalar(_) => scalar(t),
         Type::Pointer(p) => scalar(&p.pointee),
         Type::Slice(s) => scalar(&s.element),
-        Type::Unit | Type::Vector(_) | Type::Execution(_) => false,
+        Type::Unit | Type::Vector(_) | Type::Execution(_) | Type::StorageObject(_) => false,
     }
 }
 fn allowed(k: &OperationKind) -> bool {
@@ -110,7 +110,8 @@ fn allowed(k: &OperationKind) -> bool {
                     AddressSpace::Private | AddressSpace::Global
                 )
         }
-        OperationKind::Execution(_)
+        OperationKind::Storage(_)
+        | OperationKind::Execution(_)
         | OperationKind::VerificationContract(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
@@ -654,4 +655,34 @@ fn emit(
         add(&mut p.output_counts[4], b.terminator_uses.len())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod storage_recipe_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{AccessMode, AddressSpace, Constant, StorageLayoutIdV1};
+    #[test]
+    fn storage_is_outside_the_closed_unroll_recipe() {
+        let storage = Type::StorageObject(StorageLayoutIdV1(0));
+        assert!(!ty(&storage));
+        assert!(!ty(&Type::pointer(
+            storage.clone(),
+            AddressSpace::Private,
+            AccessMode::ReadWrite
+        )));
+        assert!(!ty(&Type::slice(
+            storage,
+            AddressSpace::Global,
+            AccessMode::ReadOnly
+        )));
+        assert!(!allowed(&OperationKind::Storage(
+            fe2o3_kernel_ir::StorageOperationV1::Project {
+                base: ValueId(0),
+                step: fe2o3_kernel_ir::StorageProjectionV1::Field(0)
+            }
+        )));
+        assert!(ty(&Type::Scalar(ScalarType::U32)));
+        assert!(allowed(&OperationKind::Constant(Constant::U32(7))));
+    }
 }

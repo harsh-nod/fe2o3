@@ -345,3 +345,24 @@ mod special_tests;
 
 #[path = "canonical_kir_call_effects_v1/graph_tests.rs"]
 mod graph_tests;
+
+#[test]
+fn private_call_whole_entry_pinned_call_effect_layout_equivalence_premises() {
+    use std::mem::{align_of, size_of};
+
+    // Source has Unseen, Active and Done(three-valued Decision). The one-byte
+    // premise is tested on the actual types, not inferred as a Rust ABI rule.
+    assert_eq!((size_of::<usize>(), align_of::<usize>()), (8, 8));
+    assert_eq!((size_of::<Decision>(), align_of::<Decision>()), (1, 1));
+    assert_eq!(
+        (size_of::<State>(), align_of::<State>()),
+        (size_of::<u8>(), align_of::<u8>()),
+        "call-effect State pinned layout premise; do not retune entry totals"
+    );
+    type FrameFields = (Function, usize, usize, Decision);
+    assert_eq!(
+        (size_of::<Frame>(), align_of::<Frame>()),
+        (size_of::<FrameFields>(), align_of::<FrameFields>()),
+        "call-effect Frame pinned layout premise; do not retune entry totals"
+    );
+}

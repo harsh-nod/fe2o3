@@ -79,6 +79,8 @@ impl fmt::Display for ValueId {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Module {
+    /// Inert physical layouts owned by this module, not source or runtime proof.
+    pub storage_layouts: Vec<crate::StorageLayoutV1>,
     pub id: ModuleId,
     pub functions: Vec<Function>,
     pub kernels: Vec<Kernel>,
@@ -88,6 +90,7 @@ pub struct Module {
 impl Module {
     pub fn new(id: impl Into<ModuleId>) -> Self {
         Self {
+            storage_layouts: Vec::new(),
             id: id.into(),
             functions: Vec::new(),
             kernels: Vec::new(),
@@ -405,6 +408,16 @@ impl Operation {
             return semantic.contract().memory_effects;
         }
         match &self.kind {
+            OperationKind::Storage(storage) => {
+                let mut effects = Vec::with_capacity(2);
+                if let Err(never) = storage.try_visit_memory_effects(|effect| {
+                    effects.push(effect);
+                    Ok::<_, std::convert::Infallible>(())
+                }) {
+                    match never {}
+                }
+                effects
+            }
             OperationKind::Execution(crate::ExecutionOperationV15::MaskedTileLoadU32 {
                 ..
             }) => {
@@ -499,6 +512,9 @@ impl Operation {
     reason = "boxing a public IR operation would change its established ownership and API shape"
 )]
 pub enum OperationKind {
+    /// Typed accesses to this module's physical layout table. Structural type
+    /// checking alone does not establish memory or source safety.
+    Storage(crate::StorageOperationV1),
     /// Closed execution lifecycle operations, encoded only in Kernel IR V15.
     Execution(crate::ExecutionOperationV15),
     /// Ordered compiler event whose catalog key alone grants no proof authority.
@@ -1228,6 +1244,16 @@ pub enum CastKind {
     /// This is a one-way capability restriction. It cannot change the pointee or
     /// address space and cannot widen read-only access back to read-write.
     RestrictPointerAccess,
+    /// Expose a concrete-space pointer in the generic address space.
+    ///
+    /// The pointee and access mode remain exact. Global, Constant, Private and
+    /// Workgroup sources are accepted; Constant requires ReadOnly access.
+    /// The reverse conversion is not. This
+    /// executable operation is encoded only by the V18 canonical profile.
+    PointerToGeneric,
+    /// Expose a whole concrete-space slice in Generic without changing its
+    /// element, access, length, allocation or lifetime. V18 only.
+    SliceToGeneric,
     /// Discard high bits from an integer value into a strictly narrower integer type.
     Truncate,
     /// Widen `Bool` or an unsigned integer by filling high bits with zero.

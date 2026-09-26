@@ -43,6 +43,20 @@ root, which is not a legal in-tree pass rewrite. Tests use the versioned
 pointer-independent conformance facade; production compilation uses the
 separate semantic KIR APIs exported by this crate.
 
+## Production API Compile Checks
+
+Run `scripts/ci-local.sh compiler-boundary-ui` to check the private source-storage
+and execution-cursor APIs with the pinned Rust compiler and Node.js 18 or newer.
+The same gate runs in `generic-core`. Each suite first compiles a non-test
+production library control, then checks the exact source span and diagnostic
+for every rejected escape attempt. Probe cfgs are final-package flags, never
+dependency-wide `RUSTFLAGS`; metadata-only compilation avoids unnecessary linking.
+
+The cursor probes cover direct and nested cursor escape and moving owned buffers
+out of the cursor. They do not establish a general prohibition on `mem::take`,
+`mem::forget`, or every possible API misuse. Runtime accounting, source semantics,
+optimizer correctness and end-to-end kernel qualification remain separate tests.
+
 ## Production Source Launch Facts
 
 `ProductionSourceLaunchRosterV1` checks the complete ordered kernel-root
@@ -132,6 +146,34 @@ not allocator-byte or whole-compiler peak-memory bounds. Component tests cover
 changing and invariant loops, simultaneous transfers, ambiguous edges and
 exact resource limits; admitted lowering tests preserve the runtime selector
 and variant-guarded payload paths.
+
+## Static Aggregate Field Updates
+
+For an otherwise promotable tuple or aggregate root, a nonvolatile assignment
+through a typed Field-only path creates a new whole-root SSA definition.
+`production_static_field_update_v29.rs` consumes the original destination's
+BaseUse, rebuilds its exact archived holder after RHS evaluation, and uses the
+ordinary definition/archive path. Earlier definitions and independent copied
+holders are unchanged. This representation copy does not read a moved sibling;
+the source partial-move certificate independently restricts later field uses.
+
+The importer checks the original Assign and destination identity, source
+function, SSA classification and ledger, aggregate field counts, each projected
+type, and final destination type. It charges holder cloning and path traversal
+and retains their storage in the existing emission scope. The shared production
+SSA adapter first checks complete-holder availability over reachable control
+flow. Initially absent and maybe-absent holders stay in memory, as do
+address-observed roots. Partial moves preserve representation without restoring
+the moved field's initializedness. Enum/union projections, dynamic indices,
+volatile writes and drop-sensitive promotion are not admitted by this rule.
+This component does not establish whole-pipeline or tutorial qualification.
+
+Pending helper ABI claims for typed-object pointers join the original
+instance, local, generation, selected schema and backing cell to the actual
+allocation. Call and edge transport must preserve a grounded physical origin.
+These claims are discarded before final memory/currentness verification and
+cannot be consumed as the checked scalar-cell proof. Schema or pointer-type
+equality alone never grants memory permission.
 
 ## Same-Type Slice Reborrows
 

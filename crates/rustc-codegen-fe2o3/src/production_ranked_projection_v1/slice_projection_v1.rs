@@ -68,6 +68,35 @@ impl<'a> ProjectedViewsV1<'a> {
         }
     }
 
+    pub(super) fn call_projection_disposition_v18<'call>(
+        &mut self,
+        block: usize,
+        call: &'call SemanticDirectCallV1,
+        source: SemanticSourceProvenanceV1,
+    ) -> Result<CallProjectionDispositionV18<'call>, ProductionRankedProjectionErrorV1> {
+        match self.facts.as_deref_mut() {
+            Some(facts) => facts.call_projection_disposition_v18(block, call, source),
+            None => Err(ProductionRankedProjectionErrorV1::UnresolvedCallableEffect {
+                block,
+                source: Box::new(source),
+                callee: call.callee().index(),
+                tail: false,
+            }),
+        }
+    }
+
+    pub(super) fn accept_pending_source_call_v18(
+        &mut self,
+        pending: PendingSourceCallV18<'_>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        match self.facts.as_deref_mut() {
+            Some(facts) => facts.accept_pending_source_call_v18(pending),
+            None => Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "pending source storage has no original source facts scope",
+            )),
+        }
+    }
+
     pub(super) fn new(locals: usize, facts: Option<&'a mut dyn ProjectedAssertionFactsV1>) -> Self {
         Self {
             locals: vec![None; locals],
@@ -79,6 +108,36 @@ impl<'a> ProjectedViewsV1<'a> {
             guarded_start: 0,
             next_access: 0,
             queried: Vec::new(),
+        }
+    }
+
+    pub(super) fn new_with_facts_v18(
+        count: usize,
+        facts: &'a mut dyn ProjectedAssertionFactsV1,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        if facts.projection_meter_v18().is_none() {
+            return Ok(Self::new(count, Some(facts)));
+        }
+        let (locals, queried) = {
+            let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?;
+            allocation.header::<Self>()?;
+            allocation.header::<Result<Self, ProductionRankedProjectionErrorV1>>()?;
+            (allocation.optional(count)?, allocation.empty()?)
+        };
+        Ok(Self {
+            locals, queried, scalar_private_singletons: &[], scalar_private_borrows: None,
+            facts: Some(facts), site: None, source_start: 0, guarded_start: 0, next_access: 0,
+        })
+    }
+
+    pub(super) fn with_allocation_v18<T>(
+        &mut self,
+        action: impl FnOnce(&mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>)
+            -> Result<T, ProductionRankedProjectionErrorV1>,
+    ) -> Result<T, ProductionRankedProjectionErrorV1> {
+        match self.facts.as_deref_mut() {
+            Some(facts) => action(&mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?),
+            None => action(&mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy),
         }
     }
 
@@ -212,9 +271,15 @@ impl<'a> ProjectedViewsV1<'a> {
         // Count completed effects at this source site in materializer order;
         // ordinary private accesses are absent from the executable census.
         let mut direct = 0_usize;
-        for source in sources.get(self.source_start..).ok_or(
+        let completed = sources.get(self.source_start..).ok_or(
             ProductionRankedProjectionErrorV1::Unsupported("invalid slice source cursor"),
-        )? {
+        )?;
+        let mut allocation = match self.facts.as_deref_mut() {
+            Some(facts) => source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?,
+            None => source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy,
+        };
+        for source in completed {
+            allocation.charge(1)?;
             let operation = operations.get(source.operation).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "slice source operation is out of range",
@@ -228,10 +293,12 @@ impl<'a> ProjectedViewsV1<'a> {
             .get(self.guarded_start..)
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "invalid slice guarded cursor",
-            ))?
-            .iter()
+            ))?;
+        allocation.charge(delayed.len())?;
+        let delayed = delayed.iter()
             .filter(|site| site.access.memory_space != MemorySpaceAttr::Private)
             .count();
+        drop(allocation);
         let added = direct
             .checked_add(delayed)
             .and_then(|count| u32::try_from(count).ok())
@@ -263,12 +330,12 @@ impl<'a> ProjectedViewsV1<'a> {
                 "slice query count exceeds ranked operation limit",
             ));
         }
-        self.queried.try_reserve(1).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "slice query correspondence storage cannot be reserved",
-            )
-        })?;
-        self.queried.push(QueriedSliceV1 {
+        let mut allocation = match self.facts.as_deref_mut() {
+            Some(facts) => source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?,
+            None => source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy,
+        };
+        allocation.reserve(&mut self.queried, 1, false, "slice query correspondence storage cannot be reserved")?;
+        allocation.push(&mut self.queried, QueriedSliceV1 {
             site: self
                 .site
                 .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -276,7 +343,7 @@ impl<'a> ProjectedViewsV1<'a> {
                 ))?,
             ordinal,
             view,
-        });
+        })?;
         Ok(())
     }
 
@@ -289,35 +356,53 @@ pub(super) struct ProjectedSliceQueriesV1(Vec<QueriedSliceV1>);
 
 impl ProjectedSliceQueriesV1 {
     pub(super) fn validate(
-        mut self,
+        self,
         blocks: &[ProductionRankedBlockV1],
         sources: &[ProductionRankedAccessSourceV1],
     ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        self.validate_core_v18(blocks, sources,
+            &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+    }
+
+    pub(super) fn validate_with_facts_v18(
+        self,
+        blocks: &[ProductionRankedBlockV1],
+        sources: &[ProductionRankedAccessSourceV1],
+        facts: &mut dyn ProjectedAssertionFactsV1,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        self.validate_core_v18(blocks, sources,
+            &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?)
+    }
+
+    fn validate_core_v18(
+        mut self,
+        blocks: &[ProductionRankedBlockV1],
+        sources: &[ProductionRankedAccessSourceV1],
+        allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        allocation.header::<Result<(), ProductionRankedProjectionErrorV1>>()?;
         let key = |query: &QueriedSliceV1| (query.site.block, query.site.statement, query.ordinal);
-        self.0.sort_unstable_by_key(key);
+        allocation.sort_fixed_key(&mut self.0, key)?;
         for pair in self.0.windows(2) {
+            allocation.charge(1)?;
             if key(&pair[0]) == key(&pair[1]) {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "duplicate queried slice occurrence",
                 ));
             }
         }
-        let mut seen = Vec::new();
-        seen.try_reserve_exact(self.0.len()).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "slice census scratch storage cannot be reserved",
-            )
-        })?;
+        let mut seen = allocation.empty()?;
+        allocation.reserve(&mut seen, self.0.len(), true, "slice census scratch storage cannot be reserved")?;
+        allocation.charge(self.0.len())?;
         seen.resize(self.0.len(), false);
         for source in sources {
-            let key = (
+            allocation.charge(1)?;
+            let wanted = (
                 source.semantic_block() as usize,
                 source.semantic_statement().map(|value| value as usize),
                 source.semantic_access_ordinal(),
             );
-            let Ok(index) = self.0.binary_search_by_key(&key, |query| {
-                (query.site.block, query.site.statement, query.ordinal)
-            }) else {
+            let Some(index) = allocation.find_fixed_key(&self.0, &wanted, key)? else {
                 continue;
             };
             if std::mem::replace(&mut seen[index], true) {
@@ -340,11 +425,103 @@ impl ProjectedSliceQueriesV1 {
                 ));
             }
         }
-        if seen.iter().any(|seen| !seen) {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+        for present in seen {
+            allocation.charge(1)?;
+            if !present { return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "queried slice disappeared from the final source access census",
-            ));
+            )); }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod live_query_tests_v18 {
+    use super::*;
+    use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work,
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget};
+    use source_ranked_consumer_resources_v18::{ProjectionAllocationV18, SourceAssertionMeterV18};
+    use std::mem::size_of;
+
+    fn query() -> ProjectedSliceQueriesV1 {
+        ProjectedSliceQueriesV1(vec![QueriedSliceV1 {
+            site: ProjectedSemanticAccessSiteV1 { block: 3, statement: Some(7) },
+            ordinal: 2, view: ProductionRankedValueIdV1::new(0),
+        }])
+    }
+
+    fn blocks() -> Vec<ProductionRankedBlockV1> {
+        vec![ProductionRankedBlockV1::new(vec![ProductionRankedOperationV1::Access {
+            kind: AccessKindAttr::Read, view: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0)),
+            indices: vec![],
+        }], ProductionRankedTerminatorV1::Return)]
+    }
+
+    #[test]
+    fn live_slice_census_has_independent_exact_and_short_resource_oracles() {
+        type Key = (usize, Option<usize>, u32);
+        type Error = ProductionRankedProjectionErrorV1;
+        let storage = 2 * size_of::<Result<(), Error>>()
+            + size_of::<(usize, usize, usize, Key, Key)>()
+            + size_of::<Vec<bool>>() + 1
+            + size_of::<(usize, usize, usize, Key)>()
+            + size_of::<Result<Option<usize>, Error>>();
+        let sources = [ProductionRankedAccessSourceV1::new(3, Some(7), 2, 0, 0)];
+        let blocks = blocks();
+        query().validate(&blocks, &sources).unwrap();
+        for (work, limit) in [(4, storage), (3, storage), (4, storage - 1)] {
+            let mut ledger = Work::new(work);
+            let mut budget = Budget::new(&mut ledger, 23 + limit);
+            budget.reserve_storage(23).unwrap();
+            let result = query().validate_core_v18(&blocks, &sources,
+                &mut ProjectionAllocationV18::Source(&mut SourceAssertionMeterV18(&mut budget)));
+            if work == 3 {
+                assert!(result.is_err());
+                assert_eq!(budget.storage(), 23 + storage);
+                drop(budget);
+                assert_eq!(ledger.failed_work(), Some(4));
+            } else if limit < storage {
+                assert!(result.is_err());
+                assert_eq!(budget.failed_storage(), Some(23 + storage));
+                assert_eq!(budget.work(), 2);
+            } else {
+                result.unwrap();
+                assert_eq!((budget.work(), budget.storage()), (4, 23 + storage));
+                budget.release_storage(storage).unwrap();
+                assert_eq!(budget.storage(), 23);
+            }
+        }
+    }
+
+    #[test]
+    fn live_slice_census_keeps_missing_duplicate_and_wrong_actual_view_refusals() {
+        for mode in 0..4 {
+            let mut query = query();
+            let mut blocks = blocks();
+            let mut sources = vec![ProductionRankedAccessSourceV1::new(3, Some(7), 2, 0, 0)];
+            match mode {
+                0 => sources.clear(),
+                1 => sources.push(ProductionRankedAccessSourceV1::new(3, Some(7), 2, 0, 0)),
+                2 => {
+                    blocks[0] = ProductionRankedBlockV1::new(vec![ProductionRankedOperationV1::Access {
+                        kind: AccessKindAttr::Read,
+                        view: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(1)),
+                        indices: vec![],
+                    }], ProductionRankedTerminatorV1::Return);
+                }
+                3 => query.0.push(QueriedSliceV1 {
+                    site: ProjectedSemanticAccessSiteV1 { block: 3, statement: Some(7) },
+                    ordinal: 2, view: ProductionRankedValueIdV1::new(0),
+                }),
+                _ => unreachable!(),
+            }
+            let mut ledger = Work::new(100);
+            let mut budget = Budget::new(&mut ledger, 100_000);
+            assert!(query.validate_core_v18(&blocks, &sources,
+                &mut ProjectionAllocationV18::Source(&mut SourceAssertionMeterV18(&mut budget))).is_err());
+            assert_eq!(budget.failed_storage(), None);
+            drop(budget);
+            assert_eq!(ledger.failed_work(), None);
+        }
     }
 }

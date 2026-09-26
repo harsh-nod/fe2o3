@@ -19,6 +19,7 @@ use crate::resident::{
     type_retained_heap_bytes,
 };
 use crate::soft_float::SoftFloatOperationV1;
+use crate::storage_request_view_v29::{SimulationArgumentRefV29, SimulationBackingRefV29, SimulationRequestRefV29};
 use crate::{
     AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, IndexWidthV1,
     SimulationArgumentV1, SimulationLimitsErrorV1, SimulationLimitsV1, SimulationRequestV1,
@@ -41,6 +42,7 @@ pub const MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1: usize = 1 << 20;
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum UnsupportedFeatureV1 {
     InertV12Carrier,
+    InertStorage,
     InertExecutionV15,
     FloatType(ScalarType),
     UnsupportedType,
@@ -307,6 +309,8 @@ impl Error for DynamicWorkgroupMemoryUnavailableV1 {}
 #[derive(Debug, Eq, PartialEq)]
 pub enum SimulationPreflightErrorV1 {
     InvalidLimits(SimulationLimitsErrorV1),
+    /// Existing canonical simulation profiles have no storage-table admission.
+    StorageProfileNotAdmitted,
     UnknownKernel(fe2o3_kernel_ir::KernelId),
     MissingEntry(FunctionId),
     InvalidLaunch(&'static str),
@@ -361,6 +365,8 @@ impl fmt::Display for SimulationPreflightErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidLimits(error) => error.fmt(formatter),
+            Self::StorageProfileNotAdmitted => formatter
+                .write_str("module-owned storage layouts require a separate simulation profile"),
             Self::UnknownKernel(kernel) => write!(formatter, "unknown simulation kernel {kernel}"),
             Self::MissingEntry(entry) => write!(formatter, "kernel entry {entry} is missing"),
             Self::InvalidLaunch(detail) => write!(formatter, "invalid simulation launch: {detail}"),
@@ -494,9 +500,65 @@ pub(crate) fn preflight(
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
 ) -> Result<SimulationPlanV1, SimulationPreflightErrorV1> {
+    preflight_module_v1(
+        module,
+        None,
+        admitted_resident_bytes,
+        SimulationRequestRefV29::Legacy(request),
+        dynamic,
+        target,
+        limits,
+    )
+}
+
+pub(crate) fn preflight_storage_v1(
+    verified: &fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>,
+    retained_bytes: usize,
+    request: &SimulationRequestV1,
+    dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
+    target: SimulationTargetV1,
+    limits: SimulationLimitsV1,
+) -> Result<SimulationPlanV1, SimulationPreflightErrorV1> {
+    preflight_module_v1(
+        verified.module(),
+        Some(verified),
+        retained_bytes,
+        SimulationRequestRefV29::Legacy(request),
+        dynamic,
+        target,
+        limits,
+    )
+}
+
+pub(crate) fn preflight_storage_inputs_v29(
+    verified: &fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>,
+    retained_bytes: usize,
+    request: &crate::storage_inputs_v29::SimulationStorageRequestV29,
+    dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
+    target: SimulationTargetV1,
+    limits: SimulationLimitsV1,
+) -> Result<SimulationPlanV1, SimulationPreflightErrorV1> {
+    preflight_module_v1(verified.module(), Some(verified), retained_bytes,
+        SimulationRequestRefV29::Storage(request), dynamic, target, limits)
+}
+
+fn preflight_module_v1(
+    module: &Module,
+    storage: Option<&fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>>,
+    admitted_resident_bytes: usize,
+    request: SimulationRequestRefV29<'_>,
+    dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
+    target: SimulationTargetV1,
+    limits: SimulationLimitsV1,
+) -> Result<SimulationPlanV1, SimulationPreflightErrorV1> {
     let limits = limits
         .validate()
         .map_err(SimulationPreflightErrorV1::InvalidLimits)?;
+    if storage.is_some_and(|view| !std::ptr::eq(view.module(), module))
+        || storage.is_none() && !module.storage_layouts.is_empty()
+    {
+        return Err(SimulationPreflightErrorV1::StorageProfileNotAdmitted);
+    }
     let input_peak = conservative_preflight_input_bytes(admitted_resident_bytes, module, request)
         .ok_or(SimulationPreflightErrorV1::ResourceLimit {
         resource: "resident bytes",
@@ -511,8 +573,8 @@ pub(crate) fn preflight(
     let kernel = module
         .kernels
         .iter()
-        .find(|kernel| kernel.id == request.kernel)
-        .ok_or_else(|| SimulationPreflightErrorV1::UnknownKernel(request.kernel.clone()))?;
+        .find(|kernel| &kernel.id == request.kernel())
+        .ok_or_else(|| SimulationPreflightErrorV1::UnknownKernel(request.kernel().clone()))?;
     let entry = module
         .function(&kernel.entry)
         .ok_or_else(|| SimulationPreflightErrorV1::MissingEntry(kernel.entry.clone()))?;
@@ -541,20 +603,22 @@ pub(crate) fn preflight(
     let (unsupported, reachable_function_indices, reachable_operations, reachable_ssa_values) =
         scan_reachable(
             module,
+            storage,
             entry,
             dynamic.is_some(),
             target,
             limits,
-            crate::ordered_region_v16::launch_profile_matches(module, kernel, request, target),
-            crate::ordered_program_v17::launch_profile_matches(module, kernel, request, target),
+            request.legacy().is_some_and(|request| crate::ordered_region_v16::launch_profile_matches(module, kernel, request, target)),
+            request.legacy().is_some_and(|request| crate::ordered_program_v17::launch_profile_matches(module, kernel, request, target)),
         )?;
     if unsupported.total_findings() != 0 {
         return Err(SimulationPreflightErrorV1::Unsupported(unsupported));
     }
     let reserved_call_depth = validate_acyclic_call_depth(module, entry, limits)?;
-    validate_arguments(entry, request, target, limits)?;
-    let workgroup_resources = validate_workgroup_resources(
+    validate_arguments(entry, storage, request, target, limits)?;
+    let workgroup_resources = validate_workgroup_resources_with_storage_v1(
         module,
+        storage,
         &reachable_function_indices,
         request,
         dynamic,
@@ -589,7 +653,7 @@ pub(crate) fn preflight(
         .map(|function| function.id.retained_capacity_bytes())
         .max()
         .unwrap_or(0);
-    let execution_peak = crate::execute::conservative_execution_resident_bytes(
+    let execution_peak = crate::execute::conservative_execution_resident_bytes_v29(
         admitted_resident_bytes,
         request,
         limits,
@@ -657,6 +721,39 @@ fn validate_workgroup_resources(
     workgroups: u64,
     limits: SimulationLimitsV1,
 ) -> Result<WorkgroupResourcePlan, SimulationPreflightErrorV1> {
+    validate_workgroup_resources_with_storage_v1(
+        module, None, reachable, SimulationRequestRefV29::Legacy(request), dynamic, target, workgroup, workgroups, limits,
+    )
+}
+
+fn allocation_element_bytes_v1(
+    storage: Option<&fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>>,
+    element: &Type,
+    target: SimulationTargetV1,
+) -> Option<usize> {
+    match element {
+        Type::Scalar(scalar) => target.scalar_bytes(*scalar),
+        Type::StorageObject(id) => storage?
+            .storage()
+            .layouts()
+            .row(*id)
+            .and_then(|row| usize::try_from(row.size).ok())
+            .filter(|size| *size != 0),
+        _ => None,
+    }
+}
+
+fn validate_workgroup_resources_with_storage_v1(
+    module: &Module,
+    storage: Option<&fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>>,
+    reachable: &[usize],
+    request: SimulationRequestRefV29<'_>,
+    dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
+    target: SimulationTargetV1,
+    workgroup: [u32; 3],
+    workgroups: u64,
+    limits: SimulationLimitsV1,
+) -> Result<WorkgroupResourcePlan, SimulationPreflightErrorV1> {
     let participants = workgroup
         .into_iter()
         .try_fold(1_u64, |product, dimension| {
@@ -687,16 +784,16 @@ fn validate_workgroup_resources(
                 };
                 let (bytes, allocation_resource) = match &operation.kind {
                     OperationKind::WorkgroupMemory(memory) => {
-                        let Type::Scalar(element) = memory.element else {
+                        let Some(element_bytes) =
+                            allocation_element_bytes_v1(storage, &memory.element, target)
+                        else {
                             continue;
                         };
                         match memory.extent {
                             fe2o3_kernel_ir::WorkgroupMemoryExtent::Static(elements) => {
-                                let bytes = usize::try_from(elements).ok().and_then(|elements| {
-                                    target
-                                        .scalar_bytes(element)
-                                        .and_then(|width| elements.checked_mul(width))
-                                });
+                                let bytes = usize::try_from(elements)
+                                    .ok()
+                                    .and_then(|elements| elements.checked_mul(element_bytes));
                                 (bytes, "static workgroup allocation bytes")
                             }
                             fe2o3_kernel_ir::WorkgroupMemoryExtent::Dynamic => {
@@ -712,13 +809,6 @@ fn validate_workgroup_resources(
                                         },
                                     ));
                                 }
-                                let element_bytes = target.scalar_bytes(element).ok_or(
-                                    SimulationPreflightErrorV1::ResourceLimit {
-                                        resource: "dynamic workgroup element bytes",
-                                        actual: u64::MAX,
-                                        limit: limits.max_allocation_bytes as u64,
-                                    },
-                                )?;
                                 let element_bytes_u32 =
                                     u32::try_from(element_bytes).map_err(|_| {
                                         SimulationPreflightErrorV1::ResourceLimit {
@@ -819,18 +909,8 @@ fn validate_workgroup_resources(
         "live bytes with static workgroup memory"
     };
     let argument_bytes = request
-        .arguments
-        .iter()
-        .filter_map(|argument| match argument {
-            SimulationArgumentV1::Buffer(buffer) => Some(buffer.bytes().len()),
-            _ => None,
-        })
-        .chain(
-            request
-                .shared_buffers
-                .iter()
-                .map(|shared| shared.buffer.bytes().len()),
-        )
+        .allocations()
+        .map(SimulationBackingRefV29::bytes)
         .try_fold(0usize, |total, bytes| total.checked_add(bytes))
         .ok_or(SimulationPreflightErrorV1::ResourceLimit {
             resource: live_bytes_resource,
@@ -857,13 +937,8 @@ fn validate_workgroup_resources(
             actual: u64::MAX,
             limit: limits.max_allocations as u64,
         })?;
-    let argument_allocations = request
-        .arguments
-        .iter()
-        .filter(|argument| matches!(argument, SimulationArgumentV1::Buffer(_)))
-        .count()
-        .checked_add(request.shared_buffers.len())
-        .and_then(|count| u64::try_from(count).ok())
+    let argument_allocations = u64::try_from(request.allocations().count())
+        .ok()
         .ok_or(SimulationPreflightErrorV1::ResourceLimit {
             resource: "allocations including workgroup memory",
             actual: u64::MAX,
@@ -891,21 +966,10 @@ fn validate_workgroup_resources(
 fn conservative_preflight_input_bytes(
     admitted_resident_bytes: usize,
     module: &Module,
-    request: &SimulationRequestV1,
+    request: SimulationRequestRefV29<'_>,
 ) -> Option<usize> {
     let mut resident = ResidentLedger::new(admitted_resident_bytes);
-    resident.add_bytes(size_of::<SimulationRequestV1>())?;
-    resident.add_bytes(request.kernel.retained_capacity_bytes())?;
-    resident.add_vec::<SimulationArgumentV1>(request.arguments.capacity())?;
-    resident.add_vec::<crate::SharedBufferV1>(request.shared_buffers.capacity())?;
-    for argument in &request.arguments {
-        if let SimulationArgumentV1::Buffer(buffer) = argument {
-            resident.add_bytes(buffer.retained_payload_capacity_bytes()?)?;
-        }
-    }
-    for shared in &request.shared_buffers {
-        resident.add_bytes(shared.buffer.retained_payload_capacity_bytes()?)?;
-    }
+    request.retain_input(&mut resident)?;
     // Unknown-kernel and missing-entry diagnostics own one identifier. Charge
     // the largest possible visible clone before performing either lookup.
     let diagnostic_identifier_bytes = module
@@ -918,7 +982,7 @@ fn conservative_preflight_input_bytes(
                 .iter()
                 .flat_map(|kernel| [kernel.id.as_str().len(), kernel.entry.as_str().len()]),
         )
-        .chain(std::iter::once(request.kernel.as_str().len()))
+        .chain(std::iter::once(request.kernel().as_str().len()))
         .max()
         .unwrap_or(0);
     resident.add_bytes(diagnostic_identifier_bytes)?;
@@ -927,7 +991,7 @@ fn conservative_preflight_input_bytes(
 
 fn conservative_preflight_scratch_bytes(
     module: &Module,
-    request: &SimulationRequestV1,
+    request: SimulationRequestRefV29<'_>,
     limits: SimulationLimitsV1,
 ) -> Option<usize> {
     let functions = module.functions.len();
@@ -990,9 +1054,10 @@ fn conservative_preflight_scratch_bytes(
     resident.add_bytes(reserved_vec_bytes::<CallGraphDfsFrame>(reachable)?)?;
 
     // Shared-backing validation temporarily retains a B-tree of borrowed inputs.
-    resident.add_btree_set::<(crate::BufferBackingIdV1, &crate::BufferArgumentV1)>(
-        request.shared_buffers.len(),
-    )?;
+    match request {
+        SimulationRequestRefV29::Legacy(_) => resident.add_btree_set::<(crate::BufferBackingIdV1, &crate::BufferArgumentV1)>(request.backing_count())?,
+        SimulationRequestRefV29::Storage(_) => resident.add_btree_set::<(crate::BufferBackingIdV1, SimulationBackingRefV29<'_>)>(request.backing_count())?,
+    }
     Some(resident.bytes())
 }
 
@@ -1000,12 +1065,12 @@ type LaunchFacts = ([u64; 3], [u32; 3], [u64; 3], u64, u64, u64);
 
 fn validate_launch(
     kernel: &Kernel,
-    request: &SimulationRequestV1,
+    request: SimulationRequestRefV29<'_>,
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
 ) -> Result<LaunchFacts, SimulationPreflightErrorV1> {
-    let grid = request.grid.0;
-    let workgroup = request.workgroup.0;
+    let grid = request.grid().0;
+    let workgroup = request.workgroup().0;
     if grid.contains(&0) {
         return Err(SimulationPreflightErrorV1::InvalidLaunch(
             "global dimensions must be nonzero",
@@ -1128,6 +1193,7 @@ fn check_limit(
 
 fn scan_reachable(
     module: &Module,
+    storage: Option<&fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>>,
     entry: &Function,
     allow_dynamic_workgroup_memory: bool,
     target: SimulationTargetV1,
@@ -1173,7 +1239,7 @@ fn scan_reachable(
             && crate::ordered_program_v17::function_profile_is_consistent(
                 &function.required_capabilities,
             );
-        scan_signature(function, target, &mut findings);
+        scan_signature(function, storage, target, &mut findings);
         let Some(body) = &function.body else {
             let identifier_bytes = function.id.retained_capacity_bytes().saturating_mul(2);
             findings.push(identifier_bytes, || {
@@ -1203,7 +1269,7 @@ fn scan_reachable(
                         limit: limits.max_reachable_operations as u64,
                     });
                 }
-                scan_operation(
+                scan_operation_with_storage_v1(
                     function,
                     block.id,
                     ordinal,
@@ -1220,6 +1286,7 @@ fn scan_reachable(
                     target,
                     ordered_region_profile,
                     ordered_program_profile,
+                    storage,
                 )?;
             }
             scan_terminator(
@@ -1517,6 +1584,7 @@ fn try_preflight_filled<T: Clone>(
 
 fn scan_signature(
     function: &Function,
+    storage: Option<&fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>>,
     target: SimulationTargetV1,
     findings: &mut UnsupportedCollectorV1,
 ) {
@@ -1527,7 +1595,7 @@ fn scan_signature(
         .iter()
         .chain(&function.signature.results)
     {
-        if let Some(feature) = unsupported_type(ty, target) {
+        if let Some(feature) = unsupported_type_with_storage_v1(ty, storage, target) {
             findings.push(identifier_bytes, || signature_finding(function, feature));
         }
     }
@@ -1608,6 +1676,7 @@ fn value_types(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn scan_operation(
     function: &Function,
     block: BlockId,
@@ -1626,6 +1695,47 @@ fn scan_operation(
     ordered_region_profile: bool,
     ordered_program_profile: bool,
 ) -> Result<(), SimulationPreflightErrorV1> {
+    scan_operation_with_storage_v1(
+        function,
+        block,
+        ordinal,
+        operation,
+        value_types,
+        module,
+        functions,
+        pending,
+        discovered,
+        discovered_count,
+        max_reachable_functions,
+        findings,
+        allow_dynamic_workgroup_memory,
+        target,
+        ordered_region_profile,
+        ordered_program_profile,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scan_operation_with_storage_v1(
+    function: &Function,
+    block: BlockId,
+    ordinal: usize,
+    operation: &Operation,
+    value_types: &HashMap<ValueId, &Type>,
+    module: &Module,
+    functions: &HashMap<&FunctionId, usize>,
+    pending: &mut Vec<usize>,
+    discovered: &mut [bool],
+    discovered_count: &mut usize,
+    max_reachable_functions: usize,
+    findings: &mut UnsupportedCollectorV1,
+    allow_dynamic_workgroup_memory: bool,
+    target: SimulationTargetV1,
+    ordered_region_profile: bool,
+    ordered_program_profile: bool,
+    storage: Option<&fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>>,
+) -> Result<(), SimulationPreflightErrorV1> {
     let _surface = crate::capability::operation_surface_v1(&operation.kind);
     let identifier_bytes = function.id.retained_capacity_bytes();
     macro_rules! reject {
@@ -1642,11 +1752,16 @@ fn scan_operation(
         };
     }
     for result in &operation.results {
-        if let Some(feature) = unsupported_type(&result.ty, target) {
+        if let Some(feature) = unsupported_type_with_storage_v1(&result.ty, storage, target) {
             reject!(feature);
         }
     }
     match &operation.kind {
+        OperationKind::Storage(_) => {
+            if storage.is_none() {
+                reject!(UnsupportedFeatureV1::InertStorage);
+            }
+        }
         OperationKind::Execution(_) => reject!(UnsupportedFeatureV1::InertExecutionV15),
         OperationKind::Constant(constant) => {
             if matches!(constant, Constant::Index(value) if target.index_width() == IndexWidthV1::Bits32 && *value > u64::from(u32::MAX))
@@ -1669,6 +1784,26 @@ fn scan_operation(
             value: operand,
             to,
         } => match (kind, value_types.get(operand), to) {
+            (CastKind::SliceToGeneric, Some(Type::Slice(from)), Type::Slice(to))
+                if from.element == to.element && from.access == to.access
+                    && matches!(from.address_space, AddressSpace::Global
+                        | AddressSpace::Constant | AddressSpace::Private | AddressSpace::Workgroup)
+                    && to.address_space == AddressSpace::Generic
+                    && (from.address_space != AddressSpace::Constant
+                        || from.access == AccessMode::ReadOnly) => {}
+            (CastKind::PointerToGeneric, Some(Type::Pointer(from)), Type::Pointer(to))
+                if from.pointee == to.pointee
+                    && from.access == to.access
+                    && matches!(
+                        from.address_space,
+                        AddressSpace::Global
+                            | AddressSpace::Constant
+                            | AddressSpace::Private
+                            | AddressSpace::Workgroup
+                    )
+                    && to.address_space == AddressSpace::Generic
+                    && (from.address_space != AddressSpace::Constant
+                        || from.access == AccessMode::ReadOnly) => {}
             (CastKind::RestrictPointerAccess, Some(Type::Pointer(from)), Type::Pointer(to))
                 if from.pointee == to.pointee
                     && from.address_space == to.address_space
@@ -1769,18 +1904,28 @@ fn scan_operation(
                     *address_space,
                 ));
             }
-            if !matches!(element, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some()) {
+            if allocation_element_bytes_v1(storage, element, target).is_none() {
                 reject!(UnsupportedFeatureV1::NonScalarMemory);
             }
         }
-        OperationKind::SliceLength { slice } | OperationKind::SliceData { slice } => {
-            if let Some(Type::Slice(slice)) = value_types.get(slice) {
-                scan_memory_type(
-                    &slice.element,
-                    slice.address_space,
-                    &mut |feature| reject!(feature),
-                    target,
-                );
+        OperationKind::SliceLength { slice: operand }
+        | OperationKind::SliceData { slice: operand } => {
+            if let Some(Type::Slice(slice)) = value_types.get(operand) {
+                if storage.is_some() {
+                    if let Some(feature) =
+                        unsupported_type_with_storage_v1(value_types[operand], storage, target)
+                    {
+                        reject!(feature);
+                    }
+                } else {
+                    scan_memory_type(
+                        &slice.element,
+                        slice.address_space,
+                        &mut |feature| reject!(feature),
+                        target,
+                        false,
+                    );
+                }
             }
         }
         OperationKind::GetElementPointer { base, .. }
@@ -1792,6 +1937,7 @@ fn scan_operation(
                     pointer.address_space,
                     &mut |feature| reject!(feature),
                     target,
+                    storage.is_some(),
                 );
             }
         }
@@ -1802,6 +1948,7 @@ fn scan_operation(
                     pointer.address_space,
                     &mut |feature| reject!(feature),
                     target,
+                    storage.is_some(),
                 );
             }
         }
@@ -1818,6 +1965,7 @@ fn scan_operation(
                     pointer.address_space,
                     &mut |feature| reject!(feature),
                     target,
+                    false,
                 );
             }
         }
@@ -1827,8 +1975,7 @@ fn scan_operation(
             if memory.extent.is_dynamic() && !allow_dynamic_workgroup_memory {
                 reject!(UnsupportedFeatureV1::DynamicWorkgroupMemory);
             }
-            if !matches!(&memory.element, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some())
-            {
+            if allocation_element_bytes_v1(storage, &memory.element, target).is_none() {
                 reject!(UnsupportedFeatureV1::NonScalarMemory);
             }
         }
@@ -1891,6 +2038,7 @@ fn scan_memory_type(
     address_space: AddressSpace,
     reject: &mut impl FnMut(UnsupportedFeatureV1),
     target: SimulationTargetV1,
+    allow_generic: bool,
 ) {
     if !matches!(
         address_space,
@@ -1898,7 +2046,8 @@ fn scan_memory_type(
             | AddressSpace::Private
             | AddressSpace::Workgroup
             | AddressSpace::Constant
-    ) {
+    ) && !(allow_generic && address_space == AddressSpace::Generic)
+    {
         reject(UnsupportedFeatureV1::UnsupportedAddressSpace(address_space));
     }
     if !matches!(pointee, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some()) {
@@ -2024,6 +2173,15 @@ fn scan_terminator(
 }
 
 fn unsupported_type(ty: &Type, target: SimulationTargetV1) -> Option<UnsupportedFeatureV1> {
+    let mut component = ty;
+    loop {
+        component = match component {
+            Type::StorageObject(_) => return Some(UnsupportedFeatureV1::InertStorage),
+            Type::Pointer(pointer) => &pointer.pointee,
+            Type::Slice(slice) => &slice.element,
+            _ => break,
+        };
+    }
     if ty.contains_execution_role_v15() {
         return Some(UnsupportedFeatureV1::InertExecutionV15);
     }
@@ -2067,6 +2225,63 @@ fn unsupported_type(ty: &Type, target: SimulationTargetV1) -> Option<Unsupported
     }
 }
 
+fn unsupported_type_with_storage_v1(
+    ty: &Type,
+    storage: Option<&fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>>,
+    target: SimulationTargetV1,
+) -> Option<UnsupportedFeatureV1> {
+    let Some(storage) = storage else {
+        return unsupported_type(ty, target);
+    };
+    let mut component = ty;
+    let mut pointee = false;
+    loop {
+        component = match component {
+            Type::Pointer(pointer) => {
+                if !matches!(
+                    pointer.address_space,
+                    AddressSpace::Global
+                        | AddressSpace::Constant
+                        | AddressSpace::Private
+                        | AddressSpace::Workgroup
+                        | AddressSpace::Generic
+                ) {
+                    return Some(UnsupportedFeatureV1::UnsupportedAddressSpace(
+                        pointer.address_space,
+                    ));
+                }
+                pointee = true;
+                &pointer.pointee
+            }
+            Type::Slice(slice) => {
+                if !matches!(
+                    slice.address_space,
+                    AddressSpace::Global
+                        | AddressSpace::Constant
+                        | AddressSpace::Private
+                        | AddressSpace::Workgroup
+                        | AddressSpace::Generic
+                ) {
+                    return Some(UnsupportedFeatureV1::UnsupportedAddressSpace(
+                        slice.address_space,
+                    ));
+                }
+                pointee = true;
+                &slice.element
+            }
+            Type::StorageObject(id)
+                if pointee && storage.storage().layouts().row(*id).is_some() =>
+            {
+                return None;
+            }
+            Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some() => return None,
+            Type::Vector(vector) if target.scalar_bits(vector.element).is_some() => return None,
+            Type::Execution(_) => return Some(UnsupportedFeatureV1::InertExecutionV15),
+            _ => return Some(UnsupportedFeatureV1::UnsupportedType),
+        };
+    }
+}
+
 pub(crate) fn supported_cast(
     kind: CastKind,
     from: ScalarType,
@@ -2078,7 +2293,7 @@ pub(crate) fn supported_cast(
         return false;
     };
     match kind {
-        CastKind::RestrictPointerAccess => false,
+        CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric => false,
         CastKind::Truncate => from.is_integer() && to.is_integer() && to_bits < from_bits,
         CastKind::ZeroExtend => {
             (from.is_integer() || from == ScalarType::Bool)
@@ -2155,6 +2370,96 @@ fn supports_float_function(function: F32MathFunction) -> bool {
 
 fn validate_arguments(
     entry: &Function,
+    storage: Option<&fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>>,
+    request: SimulationRequestRefV29<'_>,
+    target: SimulationTargetV1,
+    limits: SimulationLimitsV1,
+) -> Result<(), SimulationPreflightErrorV1> {
+    if let SimulationRequestRefV29::Legacy(request) = request {
+        return validate_legacy_arguments_v29(entry, request, target, limits);
+    }
+    let storage = storage.ok_or(SimulationPreflightErrorV1::StorageProfileNotAdmitted)?;
+    if request.argument_count() != entry.signature.parameters.len() {
+        return Err(SimulationPreflightErrorV1::ArgumentCount {
+            expected: entry.signature.parameters.len(), actual: request.argument_count(),
+        });
+    }
+    check_limit("entry arguments", request.argument_count() as u64, limits.max_ssa_values as u64)?;
+    check_limit("argument allocations", request.allocations().count() as u64, limits.max_allocations as u64)?;
+    let mut backings = BTreeMap::new();
+    let mut bytes = 0;
+    for (id, backing) in request.backings() {
+        if backings.insert(id, backing).is_some() {
+            return Err(SimulationPreflightErrorV1::DuplicateBacking(id.0));
+        }
+        match backing {
+            SimulationBackingRefV29::Scalar(buffer) if !buffer.matches_target(target) => {
+                return Err(SimulationPreflightErrorV1::SharedTargetLayout(id.0));
+            }
+            SimulationBackingRefV29::Object { image, .. } => {
+                validate_input_image_v29(storage, image)?;
+            }
+            _ => {}
+        }
+        bytes = checked_argument_bytes(bytes, backing.bytes(), limits)?;
+    }
+    let scalar_backing = |id| match backings.get(&id) {
+        Some(SimulationBackingRefV29::Scalar(buffer)) => Some(*buffer),
+        _ => None,
+    };
+    for (index, (argument, expected)) in request.arguments().zip(&entry.signature.parameters).enumerate() {
+        let mismatch = || SimulationPreflightErrorV1::ArgumentType { argument: index, expected: expected.clone() };
+        match argument {
+            SimulationArgumentRefV29::Existing(argument) => {
+                if let SimulationArgumentV1::Buffer(buffer) = argument {
+                    if !buffer.matches_target(target) { return Err(SimulationPreflightErrorV1::TargetLayout { argument: index }); }
+                    bytes = checked_argument_bytes(bytes, buffer.bytes().len(), limits)?;
+                }
+                validate_existing_argument_v29(index, argument, expected, scalar_backing, target)?;
+            }
+            SimulationArgumentRefV29::InlineObject(image) => {
+                validate_input_image_v29(storage, image)?;
+                let Type::Pointer(pointer) = expected else { return Err(mismatch()); };
+                if pointer.pointee.as_ref() != &Type::StorageObject(image.layout())
+                    || pointer.address_space != AddressSpace::Constant || pointer.access != AccessMode::ReadOnly
+                { return Err(mismatch()); }
+                bytes = checked_argument_bytes(bytes, image.bytes().len(), limits)?;
+            }
+            SimulationArgumentRefV29::ObjectView(view) => {
+                if storage.storage().layouts().row(view.layout).is_none() { return Err(mismatch()); }
+                let (element, space, access, slice) = match expected {
+                    Type::Pointer(pointer) => (pointer.pointee.as_ref(), pointer.address_space, pointer.access, false),
+                    Type::Slice(slice) => (slice.element.as_ref(), slice.address_space, slice.access, true),
+                    _ => return Err(mismatch()),
+                };
+                if element != &Type::StorageObject(view.layout)
+                    || !matches!(space, AddressSpace::Global | AddressSpace::Constant | AddressSpace::Generic)
+                    || access != view.access || slice && view.range.is_none()
+                { return Err(mismatch()); }
+                if let Some(range) = view.range {
+                    validate_slice_length(index, usize::try_from(range.elements)
+                        .map_err(|_| SimulationPreflightErrorV1::TargetValueOutOfRange { argument: index })?, target)?;
+                }
+            }
+        }
+    }
+    check_limit("argument total bytes", bytes as u64, limits.max_total_bytes as u64)
+}
+
+fn validate_input_image_v29(
+    storage: &fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>,
+    image: &crate::storage_inputs_v29::SimulationObjectImageV29,
+) -> Result<(), SimulationPreflightErrorV1> {
+    let row = storage.storage().layouts().row(image.layout())
+        .ok_or(SimulationPreflightErrorV1::StorageProfileNotAdmitted)?;
+    if usize::try_from(row.size).ok() != Some(image.bytes().len())
+        || image.initialized().len() != image.bytes().len() || row.alignment != image.alignment()
+    { return Err(SimulationPreflightErrorV1::StorageProfileNotAdmitted); }
+    Ok(())
+}
+
+fn validate_legacy_arguments_v29(
+    entry: &Function,
     request: &SimulationRequestV1,
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
@@ -2211,6 +2516,23 @@ fn validate_arguments(
             total_buffer_bytes =
                 checked_argument_bytes(total_buffer_bytes, buffer.bytes().len(), limits)?;
         }
+        validate_existing_argument_v29(index, argument, expected, |id| backings.get(&id).copied(), target)?;
+    }
+    check_limit(
+        "argument total bytes",
+        total_buffer_bytes as u64,
+        limits.max_total_bytes as u64,
+    )?;
+    Ok(())
+}
+
+fn validate_existing_argument_v29<'a>(
+    index: usize,
+    argument: &SimulationArgumentV1,
+    expected: &Type,
+    backing: impl Fn(crate::BufferBackingIdV1) -> Option<&'a crate::BufferArgumentV1>,
+    target: SimulationTargetV1,
+) -> Result<(), SimulationPreflightErrorV1> {
         match (argument, expected) {
             (SimulationArgumentV1::Scalar(value), Type::Scalar(expected_scalar))
                 if value.ty() == *expected_scalar
@@ -2243,14 +2565,14 @@ fn validate_arguments(
                 if slice.address_space == AddressSpace::Global
                     && slice.element.as_ref() == &Type::Scalar(view.element()) =>
             {
-                validate_buffer_view(index, view, slice.access, &backings, target)?;
+                validate_buffer_view(index, view, slice.access, &backing, target)?;
                 validate_slice_length(index, view.elements(), target)?;
             }
             (SimulationArgumentV1::BufferView(view), Type::Pointer(pointer))
                 if pointer.address_space == AddressSpace::Global
                     && pointer.pointee.as_ref() == &Type::Scalar(view.element()) =>
             {
-                validate_buffer_view(index, view, pointer.access, &backings, target)?;
+                validate_buffer_view(index, view, pointer.access, &backing, target)?;
             }
             _ => {
                 return Err(SimulationPreflightErrorV1::ArgumentType {
@@ -2259,12 +2581,6 @@ fn validate_arguments(
                 });
             }
         }
-    }
-    check_limit(
-        "argument total bytes",
-        total_buffer_bytes as u64,
-        limits.max_total_bytes as u64,
-    )?;
     Ok(())
 }
 
@@ -2301,17 +2617,17 @@ fn checked_argument_bytes(
         })
 }
 
-fn validate_buffer_view(
+fn validate_buffer_view<'a>(
     argument: usize,
     view: &crate::BufferViewArgumentV1,
     required: AccessMode,
-    backings: &BTreeMap<crate::BufferBackingIdV1, &crate::BufferArgumentV1>,
+    backing: &impl Fn(crate::BufferBackingIdV1) -> Option<&'a crate::BufferArgumentV1>,
     target: SimulationTargetV1,
 ) -> Result<(), SimulationPreflightErrorV1> {
     if !view.matches_target(target) {
         return Err(SimulationPreflightErrorV1::TargetLayout { argument });
     }
-    let backing = backings.get(&view.backing()).copied().ok_or(
+    let backing = backing(view.backing()).ok_or(
         SimulationPreflightErrorV1::MissingBacking {
             argument,
             backing: view.backing().0,
@@ -2359,6 +2675,31 @@ fn validate_buffer_access(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generic_memory_requires_storage_aware_preflight() {
+        let target = SimulationTargetV1::amdgpu_64();
+        let generic = Type::pointer(Type::F32, AddressSpace::Generic, AccessMode::ReadWrite);
+        assert_eq!(
+            unsupported_type_with_storage_v1(&generic, None, target),
+            Some(UnsupportedFeatureV1::UnsupportedAddressSpace(AddressSpace::Generic)),
+        );
+        for allow_generic in [false, true] {
+            let mut findings = Vec::new();
+            scan_memory_type(
+                &Type::F32,
+                AddressSpace::Generic,
+                &mut |feature| findings.push(feature),
+                target,
+                allow_generic,
+            );
+            if allow_generic {
+                assert!(findings.is_empty());
+            } else {
+                assert_eq!(findings, vec![UnsupportedFeatureV1::UnsupportedAddressSpace(AddressSpace::Generic)]);
+            }
+        }
+    }
 
     #[test]
     fn execution_v15_raw_preflight_has_no_execution_plan() {
@@ -2531,6 +2872,141 @@ mod tests {
                     block: Some(BlockId(0)),
                     operation: Some(0),
                     feature: UnsupportedFeatureV1::InertV12Carrier,
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn storage_table_is_refused_before_legacy_resident_census() {
+        let mut module = Module::new("storage_table");
+        module
+            .storage_layouts
+            .push(fe2o3_kernel_ir::StorageLayoutV1 {
+                size: 4,
+                alignment: 4,
+                kind: fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(ScalarType::U32),
+            });
+        let request = SimulationRequestV1::new("absent", [1, 1, 1], [1, 1, 1], vec![]);
+        let mut limits = SimulationLimitsV1::default();
+        limits.max_resident_bytes = 1;
+        let error = preflight(
+            &module,
+            usize::MAX,
+            &request,
+            None,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            SimulationPreflightErrorV1::StorageProfileNotAdmitted
+        ));
+        assert!(error.to_string().contains("separate simulation profile"));
+        assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn storage_object_direct_and_nested_types_are_inert_in_legacy_profiles() {
+        let storage = Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(0));
+        for ty in [
+            storage.clone(),
+            Type::pointer(
+                storage.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+            Type::slice(
+                Type::pointer(storage, AddressSpace::Global, AccessMode::ReadOnly),
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ),
+        ] {
+            for target in [
+                SimulationTargetV1::amdgpu_64(),
+                SimulationTargetV1::little_endian(crate::IndexWidthV1::Bits32),
+            ] {
+                assert_eq!(
+                    unsupported_type(&ty, target),
+                    Some(UnsupportedFeatureV1::InertStorage)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn storage_family_raw_empty_table_preflight_has_no_execution_plan() {
+        use fe2o3_kernel_ir::{
+            MemoryAccess, StorageCopyOverlapV1, StorageOperationV1, StorageProjectionV1,
+        };
+        let access = MemoryAccess::new(AddressSpace::Private, 1);
+        for storage in [
+            StorageOperationV1::Project {
+                base: ValueId(0),
+                step: StorageProjectionV1::Field(0),
+            },
+            StorageOperationV1::Project {
+                base: ValueId(0),
+                step: StorageProjectionV1::ArrayIndex(ValueId(1)),
+            },
+            StorageOperationV1::Project {
+                base: ValueId(0),
+                step: StorageProjectionV1::Variant { index: 0, access },
+            },
+            StorageOperationV1::ReadValue {
+                address: ValueId(0),
+                access,
+            },
+            StorageOperationV1::WriteValue {
+                address: ValueId(0),
+                value: ValueId(1),
+                access,
+            },
+            StorageOperationV1::CopyObject {
+                source: ValueId(0),
+                destination: ValueId(1),
+                source_access: access,
+                destination_access: access,
+                overlap: StorageCopyOverlapV1::MayOverlap,
+            },
+        ] {
+            let mut module = Module::new("inert_storage");
+            let mut function = call_depth_test_function("entry", &[], true);
+            function.body.as_mut().unwrap().blocks[0]
+                .operations
+                .push(Operation::new(vec![], OperationKind::Storage(storage)));
+            module.functions.push(function);
+            let mut kernel = fe2o3_kernel_ir::Kernel::new(
+                "entry",
+                "entry",
+                fe2o3_kernel_ir::LaunchDomain::D1 {
+                    x: LaunchExtent::Static(1),
+                },
+            );
+            kernel.workgroup_size = Some(fe2o3_kernel_ir::WorkgroupSize::new(1, 1, 1));
+            module.kernels.push(kernel);
+            let request = SimulationRequestV1::new("entry", [1, 1, 1], [1, 1, 1], vec![]);
+            let error = preflight(
+                &module,
+                0,
+                &request,
+                None,
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+            )
+            .unwrap_err();
+            let SimulationPreflightErrorV1::Unsupported(report) = error else {
+                panic!("expected storage refusal, got {error:?}");
+            };
+            assert_eq!(report.total_findings(), 1);
+            assert_eq!(
+                report.findings(),
+                &[UnsupportedSimulationSiteV1 {
+                    function: FunctionId::new("entry"),
+                    block: Some(BlockId(0)),
+                    operation: Some(0),
+                    feature: UnsupportedFeatureV1::InertStorage,
                 }]
             );
         }

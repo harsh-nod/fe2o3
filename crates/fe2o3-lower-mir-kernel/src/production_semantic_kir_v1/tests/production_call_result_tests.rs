@@ -330,7 +330,7 @@ fn live_v4_and_nested_v5_producers_refuse_aggregate_result_evidence() {
             canonical_kernel_ir: ProductionCanonicalKernelIrV1::from_module(module.clone())
                 .unwrap(),
             semantic_ssa: source,
-            module: RetainedProductionKirModuleV1::Legacy(module),
+            module: RetainedProductionKirModuleV1::Legacy { module, kernel_abi: None },
             correspondence: rows,
             limits,
             launch_roots: Some(roots),
@@ -679,7 +679,7 @@ fn coordinated_same_typed_result_swap_still_requires_source_lowering_replay() {
     let owner = ProductionSemanticKirOwnerV1 {
         canonical_kernel_ir: ProductionCanonicalKernelIrV1::from_module(module.clone()).unwrap(),
         semantic_ssa: source,
-        module: RetainedProductionKirModuleV1::Legacy(module),
+        module: RetainedProductionKirModuleV1::Legacy { module, kernel_abi: None },
         correspondence: rows,
         limits,
         launch_roots: Some(roots),

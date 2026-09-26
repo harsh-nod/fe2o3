@@ -5,9 +5,11 @@ struct InstanceAssertReplaySubjectV1<'a> {
     functions: &'a [Function],
     function_ordinal: usize,
     sidecars: &'a InstanceRowsV1<PendingInstanceSidecarsV29>,
+    active_instances: &'a PendingActiveInstanceIndexV1,
     coordinates: &'a OwnedInstanceCoordinatesV1,
     slot_relocation: Option<&'a scoped_slot_relocation_v29::RelocationV29>,
     insertions: &'a [LifecycleInsertionV29],
+    terminal_failures: Option<&'a TerminalFailureRelationV18>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,9 +30,11 @@ fn replay_pending_instance_asserts_v1(
             functions: std::slice::from_ref(&pending.function),
             function_ordinal: 0,
             sidecars: &pending.sidecars,
+            active_instances: &pending.active_instances,
             coordinates: &pending.coordinates,
             slot_relocation: pending.slot_relocation.as_ref(),
             insertions: &[],
+            terminal_failures: None,
         };
         check_instance_assert_source_v1(subject, instances, budget)?;
         let graph = AssertGraphIndexV1::build_functions(subject.functions, true, budget)?;
@@ -61,9 +65,7 @@ fn check_instance_assert_source_v1(
         .functions
         .get(subject.function_ordinal)
         .ok_or_else(execution_call_error_v29)?;
-    if subject.sidecars.rows.len() != instances.instances().len() {
-        return Err(execution_call_error_v29());
-    }
+    subject.active_instances.check_source_plan(instances, &subject.sidecars.rows, budget)?;
     let root_seed = subject
         .coordinates
         .seeds
@@ -75,6 +77,7 @@ fn check_instance_assert_source_v1(
     if root_seed.function_name != function.id.as_str() {
         return Err(execution_call_error_v29());
     }
+    check_terminal_failures_source_v18(subject, instances, budget)?;
     Ok(())
 }
 
@@ -119,11 +122,14 @@ fn replay_checked_instance_asserts_v1(
     if usize::try_from(root_coordinate.0).ok() != Some(subject.function_ordinal) {
         return Err(execution_call_error_v29());
     }
-    for (index, sidecar) in subject.sidecars.rows.iter().enumerate() {
+    for sidecar in &subject.sidecars.rows {
         budget.charge_work(2)?;
-        let instance = instances
-            .id_at(index)
+        let instance = sidecar
+            .source_call_instance
             .ok_or_else(execution_call_error_v29)?;
+        if instances.instance_reachable(instance) != Some(true) {
+            return Err(execution_call_error_v29());
+        }
         let capture = sidecar
             .instance_assert_origins
             .as_ref()
@@ -149,6 +155,9 @@ fn replay_checked_instance_asserts_v1(
         for block in row.ssa().plan().reverse_postorder() {
             budget.charge_work(2)?;
             let semantic_block = SemanticBlockIdV1::from_index(block.get());
+            if !instances.block_reachable(instance, semantic_block).ok_or_else(execution_call_error_v29)? {
+                continue;
+            }
             let source_block = source
                 .blocks()
                 .get(block.get() as usize)
@@ -298,7 +307,10 @@ fn replay_checked_instance_asserts_v1(
                     }
             }
             let coordinate = graph.block(root_coordinate, recorded.block, budget)?;
-            let binding = seal_assert_occurrence_in_functions_at_v1(
+            let terminal = if matches!(recorded.outcome, PendingAssertOutcomeV1::Emitted { .. }) {
+                checked_terminal_assertion_v18(subject.terminal_failures, instance, recorded, budget)?
+            } else { None };
+            let binding = seal_assert_occurrence_with_terminal_v18(
                 recorded,
                 relocated.first,
                 &capture.arguments,
@@ -306,6 +318,7 @@ fn replay_checked_instance_asserts_v1(
                 graph,
                 functions,
                 failure,
+                terminal,
                 budget,
             )?;
             visit(

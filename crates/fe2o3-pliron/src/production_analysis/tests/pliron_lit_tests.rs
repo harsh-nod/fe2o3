@@ -23,6 +23,21 @@ use pliron::{
 const MAX_FIXTURE_BYTES: u64 = 64 * 1024;
 
 #[test]
+fn unsigned_index_cast_bounds_textual_pliron_fixtures() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/production_analysis/tests/lit");
+    for fixture in [
+        "bounds_unsigned_cast_exact.pliron",
+        "bounds_unsigned_cast_range.pliron",
+        "bounds_unsigned_cast_range_too_small.pliron",
+        "bounds_unsigned_cast_exact_oob.pliron",
+        "bounds_unsigned_cast_overflow.pliron",
+        "bounds_unsigned_cast_invalid_width.pliron",
+    ] {
+        run_fixture(&root.join(fixture));
+    }
+}
+
+#[test]
 fn layout_only_execution_domain_textual_pliron_fixtures() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/production_analysis/tests/lit");
     for fixture in [
@@ -157,15 +172,103 @@ fn parallel_reference_prerequisite_mutation_fixtures() {
     }
 }
 
+fn same_lit_structure(
+    context: &Context,
+    original: pliron::context::Ptr<Operation>,
+    reparsed: pliron::context::Ptr<Operation>,
+) -> bool {
+    use pliron::irbuild::{
+        cloning::IrMapping,
+        equivalence::{EqResult, IgnoreConfig, operation_eq},
+    };
+    // Printed names contain context allocation suffixes, not graph identity.
+    // The existing mapper checks every definition/use, successor and attribute.
+    matches!(
+        operation_eq(
+            context,
+            &mut IrMapping::default(),
+            original,
+            reparsed,
+            &IgnoreConfig {
+                ignore_loc: false,
+                ignore_attr: |_, _| false,
+            },
+        ),
+        EqResult::Eq
+    )
+}
+
+#[test]
+fn lit_roundtrip_compares_actual_operands_edges_types_attributes_and_locations() {
+    use pliron::{
+        linked_list::ContainsLinkedList,
+        location::Located,
+        pass::{AnalysisManager, Pass},
+        printable::Printable,
+    };
+
+    let source = r#"builtin.func @roundtrip: builtin.function <(gpu.slice <builtin.integer ui32,Global,ReadOnly>, gpu.slice <builtin.integer ui32,Global,ReadOnly>) -> ()>
+{
+  ^entry(source: gpu.slice <builtin.integer ui32,Global,ReadOnly>, other: gpu.slice <builtin.integer ui32,Global,ReadOnly>):
+    first = gpu.cast (source) [] [gpu_cast_kind: gpu.cast_kind SliceToGeneric]: <(gpu.slice <builtin.integer ui32,Global,ReadOnly>) -> (gpu.slice <builtin.integer ui32,Generic,ReadOnly>)>;
+    second = gpu.cast (source) [] [gpu_cast_kind: gpu.cast_kind SliceToGeneric]: <(gpu.slice <builtin.integer ui32,Global,ReadOnly>) -> (gpu.slice <builtin.integer ui32,Generic,ReadOnly>)>;
+    kernel.br_args (first, second) [^exit] []: <(gpu.slice <builtin.integer ui32,Generic,ReadOnly>, gpu.slice <builtin.integer ui32,Generic,ReadOnly>) -> ()>
+  ^exit(left: gpu.slice <builtin.integer ui32,Generic,ReadOnly>, right: gpu.slice <builtin.integer ui32,Generic,ReadOnly>):
+    kernel.return () [] []: <() -> ()>
+  ^spare(spare_left: gpu.slice <builtin.integer ui32,Generic,ReadOnly>, spare_right: gpu.slice <builtin.integer ui32,Generic,ReadOnly>):
+    kernel.return () [] []: <() -> ()>
+}"#;
+    let mut context = Context::new();
+    ensure_context_identity(&mut context).unwrap();
+    register_dialect(&mut context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();
+    dialect_gpu::register_dialect(&mut context).unwrap();
+    dialect_proof::register_dialect(&mut context).unwrap();
+    let original = parse_from_str(Operation::top_level_parser(), &mut context, source).unwrap();
+    verify_operation(original, &context).unwrap();
+    // Different explicit debug attributes remain distinct under conservative CSE.
+    let report = dialect_gpu::cse_v1::LocalPureCsePassV1
+        .run(original, &mut context, &mut AnalysisManager::default())
+        .unwrap();
+    assert_eq!(report.ir_changed, pliron::irbuild::IRStatus::Unchanged);
+    let printed = original.disp(&context).to_string();
+    for change in 0..6 {
+        let text = match change {
+            3 => source.replace("ui32", "ui64"),
+            4 => source.replace("@roundtrip", "@roundtriq"),
+            _ => printed.clone(),
+        };
+        let reparsed = parse_from_str(Operation::top_level_parser(), &mut context, &text).unwrap();
+        let blocks: Vec<_> = reparsed.deref(&context).get_region(0).deref(&context).iter(&context).collect();
+        let operations: Vec<_> = blocks[0].deref(&context).iter(&context).collect();
+        match change {
+            1 => {
+                let other = blocks[0].deref(&context).arguments().nth(1).unwrap();
+                Operation::replace_operand(operations[0], &context, 0, other);
+            }
+            2 => Operation::replace_successor(operations[2], &context, 0, blocks[2]),
+            5 => {
+                let different = operations[0].deref(&context).loc().clone();
+                reparsed.deref_mut(&context).set_loc(different);
+            }
+            _ => {}
+        }
+        verify_operation(reparsed, &context).expect("every hostile graph remains valid IR");
+        assert_eq!(same_lit_structure(&context, original, reparsed), change == 0, "change {change}");
+    }
+}
+
 fn run_fixture(path: &Path) {
     let metadata = fs::metadata(path).expect("fixture metadata");
     assert!(metadata.is_file());
     assert!(metadata.len() <= MAX_FIXTURE_BYTES);
     let source = fs::read_to_string(path).expect("UTF-8 fixture");
+    let gpu_cse = source.lines().any(|line| line == "// RUN: fe2o3-pliron-lit --passes=gpu-cse %s");
     assert_eq!(
         source
             .lines()
-            .filter(|line| *line == "// RUN: fe2o3-pliron-lit --passes=general %s")
+            .filter(|line| matches!(*line,
+                "// RUN: fe2o3-pliron-lit --passes=general %s" |
+                "// RUN: fe2o3-pliron-lit --passes=gpu-cse %s"))
             .count(),
         1,
         "{} must name the production pass pipeline exactly once",
@@ -229,6 +332,29 @@ fn run_fixture(path: &Path) {
     }
     verify_operation(operation, &context)
         .unwrap_or_else(|error| panic!("{} failed local verification: {error:?}", path.display()));
+    if gpu_cse {
+        use pliron::{pass::{AnalysisManager, Pass}, printable::Printable};
+        assert!(!rejected);
+        let printed = operation.disp(&context).to_string();
+        let reparsed = parse_from_str(Operation::top_level_parser(), &mut context, &printed)
+            .expect("registered GPU syntax reparses");
+        verify_operation(reparsed, &context).expect("reparsed GPU syntax verifies");
+        assert!(same_lit_structure(&context, operation, reparsed));
+        let before = printed.matches("gpu.cast (").count();
+        assert_eq!(before, 2, "fixture must retain two equivalent source casts");
+        let report = dialect_gpu::cse_v1::LocalPureCsePassV1
+            .run(operation, &mut context, &mut AnalysisManager::default()).unwrap();
+        assert_eq!(report.ir_changed, pliron::irbuild::IRStatus::Changed);
+        verify_operation(operation, &context).expect("actual CSE output verifies");
+        let after = operation.disp(&context).to_string();
+        assert_eq!(after.matches("gpu.cast (").count(), 1);
+        let reparsed = parse_from_str(Operation::top_level_parser(), &mut context, &after).unwrap();
+        verify_operation(reparsed, &context).unwrap();
+        assert!(same_lit_structure(&context, operation, reparsed));
+        let output = format!("PASS\nCSE 2 -> 1\n{after}");
+        for check in checks { assert!(output.contains(check), "{}: missing {check}\n{output}", path.display()); }
+        return;
+    }
     assert!(Operation::is_op::<FuncOp>(operation, &context));
     let function = FuncOp::from_operation(operation);
     let capabilities = source

@@ -98,7 +98,7 @@ impl<'module> RegisteredOperandRosterV1<'module> {
             count = count
                 .checked_add(1)
                 .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
-            Ok(())
+            Ok::<(), CanonicalKernelIrVerificationResourceErrorV1>(())
         })?;
         // One exact ValueId cell and one nullable borrowed Type cell per
         // operand. Neither vector owns any part of a recursive Type.

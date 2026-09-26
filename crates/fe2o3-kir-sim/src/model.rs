@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
+include!("target_identity_v2.rs");
+
 use fe2o3_kernel_ir::{
     AccessMode, KernelId, KernelIrDecodeError, KernelIrEncodeError, Module, ScalarType,
     VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrIdentityV9,
@@ -46,7 +48,8 @@ pub struct SimulationLimitsV1 {
     pub max_workgroups: u64,
     /// Maximum workitems visited, including padded tail slots.
     pub max_scheduled_slots: u64,
-    /// Maximum operations and terminators executed across the launch.
+    /// Maximum operations, terminators, and metered storage-helper work across
+    /// the launch. Ordinary-profile operations retain their existing charges.
     pub max_steps: u64,
     /// Maximum nested internal calls.
     pub max_call_depth: usize,
@@ -170,17 +173,43 @@ impl IndexWidthV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SimulationTargetV1 {
     index_width: IndexWidthV1,
+    amd_profile: Option<fe2o3_amd_target::ProductionAmdTargetProfileV1>,
 }
 
 impl SimulationTargetV1 {
     /// Constructs a little-endian profile with the selected index width.
     pub const fn little_endian(index_width: IndexWidthV1) -> Self {
-        Self { index_width }
+        Self { index_width, amd_profile: None }
     }
 
     /// The production AMDGPU-compatible 64-bit little-endian scalar profile.
     pub const fn amdgpu_64() -> Self {
-        Self::little_endian(IndexWidthV1::Bits64)
+        Self::amdgpu_profile(fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942)
+    }
+
+    /// Selects an explicit production AMDGPU scalar and pointer encoding profile.
+    pub const fn amdgpu_profile(profile: fe2o3_amd_target::ProductionAmdTargetProfileV1) -> Self {
+        Self { index_width: IndexWidthV1::Bits64, amd_profile: Some(profile) }
+    }
+
+    pub(crate) fn storage_pointer_encoding(
+        self, pointer: fe2o3_kernel_ir::StoragePointerV1,
+    ) -> Option<fe2o3_amd_target::AmdPointerEncodingV1> {
+        use fe2o3_kernel_ir::{AccessMode, AddressSpace};
+        if (pointer.value_space != pointer.encoded_space && pointer.encoded_space != AddressSpace::Generic)
+            || (pointer.value_space == AddressSpace::Constant && pointer.access != AccessMode::ReadOnly)
+        {
+            return None;
+        }
+        let space = match pointer.encoded_space {
+            AddressSpace::Generic => 0,
+            AddressSpace::Global => 1,
+            AddressSpace::Workgroup => 3,
+            AddressSpace::Constant => 4,
+            AddressSpace::Private => 5,
+        };
+        let recipe = self.amd_profile?.pointer_encoding(space)?;
+        (recipe.bits() == pointer.stored_bits).then_some(recipe)
     }
 
     /// Returns the target index width.

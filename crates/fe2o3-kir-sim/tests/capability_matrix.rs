@@ -175,6 +175,28 @@ fn execution_v15_surface_is_additive_and_has_no_simulation_owner() {
 }
 
 #[test]
+fn storage_surface_is_additive_and_unsupported_in_every_existing_profile() {
+    assert_eq!(SimulationOperationSurfaceV1::Storage as u8, 40);
+    let matrix = semantic_capability_matrix_v1();
+    let rows: Vec<_> = matrix
+        .top_level_rows
+        .iter()
+        .filter(|row| row.operation == SimulationOperationSurfaceV1::Storage)
+        .collect();
+    assert_eq!(rows.len(), 4 * 7);
+    assert!(rows.iter().all(|row| matches!(
+        &row.capability,
+        SimulationCapabilityDispositionV1::Unsupported {
+            reason: SimulationUnsupportedReasonCodeV1::InertStorage,
+        }
+    )));
+    assert_eq!(
+        serde_json::to_string(&SimulationOperationSurfaceV1::Storage).unwrap(),
+        "\"storage\""
+    );
+}
+
+#[test]
 fn v12_inherits_every_v11_disposition_without_activating_inert_carriers() {
     let matrix = semantic_capability_matrix_v1();
     let inherited = matrix
@@ -182,7 +204,7 @@ fn v12_inherits_every_v11_disposition_without_activating_inert_carriers() {
         .iter()
         .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V12)
         .collect::<Vec<_>>();
-    assert_eq!(inherited.len(), 160);
+    assert_eq!(inherited.len(), 41 * 4);
     for row in inherited {
         let previous = matrix
             .top_level_rows
@@ -209,7 +231,7 @@ fn v17_extends_only_the_v12_baseline_and_never_owns_the_v16_pair() {
         .iter()
         .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V17)
         .collect();
-    assert_eq!(rows.len(), 160);
+    assert_eq!(rows.len(), 41 * 4);
     for row in rows {
         if row.operation == SimulationOperationSurfaceV1::OrderedProgram {
             continue; // Its exact single owned profile is tested by canonical_v17.

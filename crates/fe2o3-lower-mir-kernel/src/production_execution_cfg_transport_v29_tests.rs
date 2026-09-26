@@ -3,11 +3,25 @@ use crate::production_semantic_kir_v1::*;
 
 const PAIR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
 
+mod archive_tests {
+    use super::*;
+    include!("production_execution_archive_v29_tests.rs");
+}
+
 mod event_tests {
     include!("production_execution_events_v29_tests.rs");
 }
 
 include!("production_execution_cfg_fixture_v29_tests.rs");
+
+mod target_scope_tests {
+    include!("production_execution_cfg_target_scope_v29_tests.rs");
+}
+
+mod original_place_use_tests {
+    use super::*;
+    include!("production_execution_original_place_use_v29_tests.rs");
+}
 
 #[test]
 fn actual_emitter_preserves_identity_through_a_real_source_phi() {
@@ -223,7 +237,7 @@ fn captured_call_result_edge_is_exact_and_claimed_once() {
                 None,
                 Some(SemanticValueBindingV1::Execution(seed.clone())),
             ];
-            let archive = BTreeMap::from([(definition, SemanticValueBindingV1::Execution(seed))]);
+            let archive = SemanticSsaBindingsV1::from([(definition, SemanticValueBindingV1::Execution(seed))]);
             cursor.begin_block(block, budget)?;
             assert!(
                 cursor
@@ -324,7 +338,7 @@ fn nominal_cfg_construction_and_edge_queries_have_exact_resource_boundaries() {
                         None,
                     ];
                     let archive =
-                        BTreeMap::from([(definition, SemanticValueBindingV1::Execution(seed))]);
+                        SemanticSsaBindingsV1::from([(definition, SemanticValueBindingV1::Execution(seed))]);
                     cursor.begin_block(block, budget)?;
                     cursor.transport_edge(block, 0, target, &held, &archive, budget)?;
                     cursor.transport_edge(
@@ -368,7 +382,7 @@ fn nominal_cfg_construction_and_edge_queries_have_exact_resource_boundaries() {
                             0,
                             SemanticBlockIdV1::from_index(1),
                             &[],
-                            &BTreeMap::new(),
+                            &SemanticSsaBindingsV1::default(),
                             &mut foreign
                         )
                         .is_err()
@@ -704,7 +718,7 @@ fn populated_diamond_join_still_requires_both_predecessors() {
             .unwrap();
             let mut held = vec![None; 7];
             held[4] = Some(SemanticValueBindingV1::Execution(seed.clone()));
-            let archive = BTreeMap::from([(value, SemanticValueBindingV1::Execution(seed))]);
+            let archive = SemanticSsaBindingsV1::from([(value, SemanticValueBindingV1::Execution(seed))]);
             cursor.begin_block(block, budget)?;
             cursor.use_place(
                 execution_site_v29(block, Some(0)),

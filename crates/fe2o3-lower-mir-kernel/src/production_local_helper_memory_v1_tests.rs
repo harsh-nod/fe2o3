@@ -361,6 +361,12 @@ fn physical_initialization_cannot_resurrect_a_source_cell_after_any_source_only_
         ScalarKill::Storage,
         ScalarKill::Deinitialize,
     ] {
+        if matches!(kill, ScalarKill::Deinitialize) {
+            // Static removal is now rejected before a retained-memory candidate
+            // can exist. The other kills still exercise the later source check.
+            assert_deinitialized_unit_source_is_rejected();
+            continue;
+        }
         with_pending_candidate(
             UnitCase::Killed(kill),
             |_| {},

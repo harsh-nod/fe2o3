@@ -168,7 +168,7 @@ fn private_array_facts_match_owned_scalar_validity_and_thin_pointer_types() {
             (SemanticMutabilityV1::Mutable, AccessMode::ReadWrite),
         ] {
             for (space, lowered) in [
-                (0, AddressSpace::Global),
+                (0, AddressSpace::Generic),
                 (1, AddressSpace::Global),
                 (3, AddressSpace::Workgroup),
                 (4, AddressSpace::Constant),
@@ -194,6 +194,23 @@ fn private_array_facts_match_owned_scalar_validity_and_thin_pointer_types() {
                         8,
                     )),
                 );
+                let pointer = SemanticTypeIdV1::from_index(1);
+                let expected = Type::pointer(Type::Scalar(ScalarType::U32), lowered, access);
+                assert_eq!(
+                    lower_parameter_type(&declarations, &[], pointer).unwrap(),
+                    expected
+                );
+                assert_eq!(
+                    lower_ssa_value_types(&declarations, pointer).unwrap(),
+                    vec![expected.clone()]
+                );
+                let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000);
+                let mut budget = ArgumentBudgetV1::new(&mut work, 1_000);
+                let transported =
+                    execution_cfg_types_v29(&declarations, pointer, &mut budget).unwrap();
+                assert_eq!(transported, vec![expected]);
+                drop(transported);
+                budget.release_storage(budget.storage()).unwrap();
             }
         }
     }

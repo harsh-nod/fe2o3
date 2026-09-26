@@ -45,7 +45,9 @@ pub(crate) mod reference_signature_preimage_v1;
 
 #[path = "reference_binding_census_v1.rs"]
 mod reference_binding_census_v1;
-pub(crate) use reference_binding_census_v1::equivalent_bindings_v1;
+pub(crate) use reference_binding_census_v1::{
+    BindingCloneEnvelopeErrorV18, binding_clone_envelope_v18, equivalent_bindings_v1,
+};
 
 pub(crate) use reference_signature_preimage_v1::ReferenceLogicalSignaturePreimageV1;
 use reference_signature_preimage_v1::{

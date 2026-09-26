@@ -213,10 +213,22 @@ fn check_census(
 ) -> Result<(), Error> {
     budget.charge_work(32)?;
     let semantic = ssa.source_semantic();
-    if semantic.wire_version() != SemanticMirWireVersionV1::V29
-        || input.semantic_sha256 != ssa.source_semantic_sha256()
-    {
+    if input.semantic_sha256 != ssa.source_semantic_sha256() {
         return Err(Error::Source);
+    }
+    let execution_profile = semantic.wire_version() == SemanticMirWireVersionV1::V29;
+    if !execution_profile {
+        if !input.roots.is_empty() || !input.events.is_empty() {
+            return Err(Error::Source);
+        }
+        // Ordinary source keeps its admitted profile; emptiness of projected
+        // rows alone cannot hide nominal execution content in the real owner.
+        for ty in semantic.types() {
+            budget.charge_work(1)?;
+            if matches!(ty.rust_type_kind(), SemanticRustTypeKindV1::Execution(_)) {
+                return Err(Error::Source);
+            }
+        }
     }
     if input.classes.len() != semantic.callables().len() {
         return Err(Error::CallableCensus);
@@ -252,6 +264,18 @@ fn check_census(
     }
     for (index, class) in input.classes.iter().copied().enumerate() {
         budget.charge_work(12)?;
+        if !execution_profile
+            && (!matches!(class, ProductionScopeCallableCandidateV29::Ordinary)
+                || matches!(
+                    semantic.callables()[index],
+                    SemanticCallableDeclV1::CompilerIntrinsic {
+                        operation: SemanticCompilerIntrinsicOperationV1::Execution(_),
+                        ..
+                    }
+                ))
+        {
+            return Err(Error::Source);
+        }
         check_class(class, index, semantic)?;
     }
     let mut next_root = 0;
@@ -351,3 +375,7 @@ pub fn with_checked_execution_source_v29(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "production_execution_source_input_v29_tests.rs"]
+mod tests;

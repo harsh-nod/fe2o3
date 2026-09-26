@@ -251,6 +251,32 @@
     }
 
     #[test]
+    fn authenticated_unique_borrow_preserves_optional_rustc_noalias() {
+        for pointee in [
+            SemanticAbiPointeeKindV1::MutableReference { unpin: false },
+            SemanticAbiPointeeKindV1::MutableReference { unpin: true },
+            SemanticAbiPointeeKindV1::Box { unpin: false, global: false },
+            SemanticAbiPointeeKindV1::Box { unpin: false, global: true },
+            SemanticAbiPointeeKindV1::Box { unpin: true, global: false },
+            SemanticAbiPointeeKindV1::Box { unpin: true, global: true },
+        ] {
+            for noalias in [false, true] {
+                for origin in [0, 3, u64::from(u32::MAX)] {
+                    let abi = allocation_contract_from_pointee(pointee, noalias, origin);
+                    let authenticated = authenticated_source_allocation_contract_v1(
+                        SemanticSourceArgumentOwnershipV1::UniqueBorrow, pointee, abi,
+                    ).unwrap();
+                    assert_eq!(authenticated, abi);
+                    assert_eq!(authenticated.noalias_class, if noalias { origin + 1 } else { 0 });
+                    assert_eq!(authenticated.allocation_origin, origin);
+                    assert!(authenticated.writable);
+                    assert!(!authenticated.singleton_object);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn authenticated_source_ownership_mismatches_fail_closed() {
         let shared = allocation_contract_from_pointee(
             SemanticAbiPointeeKindV1::SharedReference { frozen: true },
@@ -273,6 +299,18 @@
                 SemanticSourceArgumentOwnershipV1::UniqueBorrow,
                 SemanticAbiPointeeKindV1::Raw,
                 raw,
+            ),
+            (
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+                SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+                shared,
+            ),
+            (
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+                SemanticAbiPointeeKindV1::SharedReference { frozen: false },
+                allocation_contract_from_pointee(
+                    SemanticAbiPointeeKindV1::SharedReference { frozen: false }, false, 2,
+                ),
             ),
             (
                 SemanticSourceArgumentOwnershipV1::Unspecified,

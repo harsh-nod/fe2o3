@@ -1,6 +1,10 @@
 //! Allocation-free borrowed views of existing edge and local-effect semantics.
 //! No purity, transitive call, trap, convergence or contract-authentication claim.
 
+#[cfg(test)]
+#[path = "storage_shared_visitors_v1_tests.rs"]
+mod storage_tests;
+
 use std::collections::BTreeSet;
 
 use crate::{
@@ -144,6 +148,17 @@ impl Operation {
         use KirLocalMemoryEffectRefV1 as Effect;
         use OperationKind as Op;
         match &self.kind {
+            Op::Storage(storage) => {
+                storage.try_visit_memory_accesses(|_, access, kind| {
+                    use crate::StorageMemoryAccessKindV1::{Read, Write};
+                    visitor(match (kind, access.volatile) {
+                        (Read, false) => Effect::Read(access.address_space),
+                        (Read, true) => Effect::VolatileRead(access.address_space),
+                        (Write, false) => Effect::Write(access.address_space),
+                        (Write, true) => Effect::VolatileWrite(access.address_space),
+                    })
+                })?;
+            }
             Op::Execution(crate::ExecutionOperationV15::MaskedTileLoadU32 { .. }) => {
                 visitor(Effect::Read(AddressSpace::Global))?
             }

@@ -1,0 +1,20 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK-WITNESSES
+// CHECK: PASS
+// CHECK: WITNESS TensorLayout
+// CHECK: WITNESS MemoryBounds
+// CHECK: WITNESS AtomicLegality
+// CHECK: WITNESS RaceFreedom
+// CHECK: WITNESS HierarchicalOwnership
+// CHECK: WITNESS BarrierConvergence
+// CHECK: WITNESS PipelineProtocol
+// CHECK: WITNESS WorkgroupMemory
+// CHECK: WITNESS SemanticRefinement
+builtin.func @native_switch_duplicate_payloads: builtin.function <(builtin.integer ui32, builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>
+{
+  ^entry(selector: builtin.integer ui32, left: builtin.integer ui32, right: builtin.integer ui32):
+    gpu.switch_v3 (selector, left, right, selector) [^join, ^join, ^join] [gpu_switch_kind: gpu.switch_key_kind_v3 U32, gpu_switch_cases: gpu.switch_case_bits_v3 [7, 11], gpu_switch_offsets: gpu.switch_successor_offsets_v3 [0, 1, 2, 3], operand_segment_sizes: builtin.operand_segment_sizes [1, 3]]: <(builtin.integer ui32, builtin.integer ui32, builtin.integer ui32, builtin.integer ui32) -> ()>
+  ^join(value: builtin.integer ui32):
+    gpu.return (value) [] []: <(builtin.integer ui32) -> ()>
+}

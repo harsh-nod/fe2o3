@@ -385,14 +385,31 @@ pub(crate) struct BuiltIdentityV1 {
     input_census: ProductionAnalysisInputCensusV1,
 }
 
+use crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1;
+type PrivateIdentityV1<'a> = Option<&'a NativeCanonicalPrivateAdmissionV1<'a>>;
+type PrivateAttributeV1<'a> = Option<(&'a NativeCanonicalPrivateAdmissionV1<'a>, Ptr<Operation>)>;
+
 pub(crate) struct LivePlironStructuralIdentityProviderV1<'a> {
     context: &'a Context,
     function: &'a FuncOp,
+    private: PrivateIdentityV1<'a>,
 }
 
 impl<'a> LivePlironStructuralIdentityProviderV1<'a> {
     pub(crate) const fn new(context: &'a Context, function: &'a FuncOp) -> Self {
-        Self { context, function }
+        Self {
+            context,
+            function,
+            private: None,
+        }
+    }
+
+    pub(crate) fn canonical_private(input: &'a NativeCanonicalPrivateAdmissionV1<'a>) -> Self {
+        Self {
+            context: input.context(),
+            function: input.function(),
+            private: Some(input),
+        }
     }
 
     pub(crate) const fn scoped_endpoints_v1(&self) -> (&Context, &FuncOp) {
@@ -414,8 +431,18 @@ impl PlironStructuralIdentityProviderV1 for LivePlironStructuralIdentityProvider
         &mut self,
         limits: ProductionAnalysisResourceLimitsV1,
     ) -> Result<BoundedPlironIdentityCaptureV1<Self::Snapshot>, IdentityCaptureFailureV1> {
-        let (snapshot, input_census, resource_upper_bound) =
-            build_identity_caught_with_resource_limits_v1(self.context, self.function, limits)?;
+        let (snapshot, input_census, resource_upper_bound) = match self.private {
+            None => {
+                build_identity_caught_with_resource_limits_v1(self.context, self.function, limits)?
+            }
+            Some(_) => build_identity_caught_private_v1(
+                self.context,
+                self.function,
+                limits,
+                self.private,
+                None,
+            )?,
+        };
         Ok(BoundedPlironIdentityCaptureV1 {
             snapshot,
             input_census,
@@ -428,13 +455,13 @@ impl PlironStructuralIdentityProviderV1 for LivePlironStructuralIdentityProvider
         limits: ProductionAnalysisResourceLimitsV1,
         observer: RenderObserverV1<'_, '_, '_>,
     ) -> Result<BoundedPlironIdentityCaptureV1<Self::Snapshot>, IdentityCaptureFailureV1> {
-        let (snapshot, input_census, resource_upper_bound) =
-            build_identity_caught_with_observation_v1(
-                self.context,
-                self.function,
-                limits,
-                observer,
-            )?;
+        let (snapshot, input_census, resource_upper_bound) = build_identity_caught_private_v1(
+            self.context,
+            self.function,
+            limits,
+            self.private,
+            observer,
+        )?;
         Ok(BoundedPlironIdentityCaptureV1 {
             snapshot,
             input_census,
@@ -594,10 +621,27 @@ fn build_identity_caught_with_observation_v1(
     ),
     IdentityCaptureFailureV1,
 > {
+    build_identity_caught_private_v1(context, function, limits, None, observer)
+}
+
+fn build_identity_caught_private_v1(
+    context: &Context,
+    function: &FuncOp,
+    limits: ProductionAnalysisResourceLimitsV1,
+    private: PrivateIdentityV1<'_>,
+    observer: RenderObserverV1<'_, '_, '_>,
+) -> Result<
+    (
+        BuiltIdentityV1,
+        ProductionAnalysisInputCensusV1,
+        ProductionAnalysisResourceUpperBoundV1,
+    ),
+    IdentityCaptureFailureV1,
+> {
     let (built, upper_bound) = match catch_unwind(AssertUnwindSafe(|| match observer {
-        None => build_identity(context, function, limits),
+        None => build_identity_private_v1(context, function, limits, private, None),
         Some(observer) => observer.with_projection(&Ok, |nested| {
-            build_identity_observed_v1(context, function, limits, Some(nested))
+            build_identity_private_v1(context, function, limits, private, Some(nested))
         }),
     })) {
         Err(_) => {

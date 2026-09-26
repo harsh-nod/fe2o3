@@ -24,16 +24,54 @@ pub(super) fn reserve_rows<T>(count: usize, budget: &mut Budget<'_>) -> Result<V
     Ok(rows)
 }
 
+// One additional fixed slot beside the caught callback result. Public callers
+// prepay it after the exact-floor inventory query, before user code can run.
+pub(super) const fn drain_header() -> usize {
+    size_of::<std::thread::Result<()>>()
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static CLEANUP_TRACE: std::cell::RefCell<Option<Vec<(&'static str, usize)>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+#[cfg(test)]
+pub(super) fn cleanup_trace_start() {
+    CLEANUP_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+}
+#[cfg(test)]
+pub(super) fn cleanup_trace_record(event: &'static str, amount: usize) {
+    CLEANUP_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            trace.push((event, amount));
+        }
+    });
+}
+#[cfg(test)]
+pub(super) fn cleanup_trace_take() -> Vec<(&'static str, usize)> {
+    CLEANUP_TRACE.with(|trace| trace.borrow_mut().take().unwrap_or_default())
+}
+
+pub(super) fn discard<T>(value: T) {
+    let mut pending = catch_unwind(AssertUnwindSafe(|| drop(value)));
+    while let Err(payload) = pending {
+        pending = catch_unwind(AssertUnwindSafe(|| drop(payload)));
+    }
+}
+
 #[derive(Clone, Copy)]
 enum QueryFailure {
     Resource(Resource),
     Invalid(usize),
+    Mutation,
 }
 impl QueryFailure {
     fn error(self) -> Failure {
         match self {
             Self::Resource(e) => Failure::Resource(e),
             Self::Invalid(function) => Failure::InvalidQuery { function },
+            Self::Mutation => Failure::Mutation,
         }
     }
 }
@@ -77,6 +115,12 @@ impl Guard {
     pub(super) fn invalid(&self, ordinal: usize) -> Failure {
         self.fail(QueryFailure::Invalid(ordinal))
     }
+    pub(super) fn resource(&self, error: Resource) -> Failure {
+        self.fail(QueryFailure::Resource(error))
+    }
+    pub(super) fn mutation(&self) -> Failure {
+        self.fail(QueryFailure::Mutation)
+    }
     pub(super) fn callback<'w, T>(
         &self,
         budget: &mut Budget<'w>,
@@ -93,15 +137,17 @@ impl Guard {
         if let Err(error) = postcheck {
             // Rejected callback owners and payloads die while the native graph,
             // reports and their full floor still live. No aliased budget probe.
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(returned))) {
-                drop(payload);
-            }
+            #[cfg(test)]
+            cleanup_trace_record("callback discard", self.floor);
+            discard(returned);
             return Err(error);
         }
         match returned {
             Ok(value) => value,
             Err(payload) => {
-                drop(payload);
+                #[cfg(test)]
+                cleanup_trace_record("callback discard", self.floor);
+                discard(payload);
                 Err(Failure::Panicked)
             }
         }
@@ -121,20 +167,31 @@ pub(super) fn protected<'w, T>(
         || slot != std::ptr::from_ref(&*budget) as usize
         || budget.storage() < floor
     {
-        drop(result);
+        discard(result);
         return Err(Resource::Accounting.into());
     }
-    // A panic payload may own caller state. Destroy it before restoring credit,
-    // including when its own destructor panics; the enclosing owner retains its
-    // established unwind contract instead of silently refunding during unwind.
+    // Payload destructors may panic again. Drain them before any refund.
+    // This fixed bookkeeping does not bound arbitrary external Drop wall time.
     let value = match result {
         Ok(value) => value,
         Err(payload) => {
-            drop(payload);
+            discard(payload);
             Err(Failure::Panicked)
         }
     };
-    budget.release_storage(budget.storage() - floor)?;
+    if ledger != budget.work_ledger_identity_v1()
+        || slot != std::ptr::from_ref(&*budget) as usize
+        || budget.storage() < floor
+    {
+        discard(value);
+        return Err(Resource::Accounting.into());
+    }
+    #[cfg(test)]
+    cleanup_trace_record("before refund", budget.storage());
+    if let Err(error) = budget.release_storage(budget.storage() - floor) {
+        discard(value);
+        return Err(error.into());
+    }
     value
 }
 
@@ -228,7 +285,7 @@ impl AnalysisState {
                 });
             }
             Err(payload) => {
-                drop(payload);
+                discard(payload);
                 return Err(Failure::Panicked);
             }
         };

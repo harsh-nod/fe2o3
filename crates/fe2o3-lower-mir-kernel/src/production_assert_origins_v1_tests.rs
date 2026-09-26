@@ -6,6 +6,9 @@ use fe2o3_kernel_ir::{
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{ProductionSemanticMirLimitsV1, ProductionSemanticSsaLimitsV1};
 
+#[path = "production_legacy_kernel_abi_v18_tests.rs"]
+mod legacy_kernel_abi_v18_tests;
+
 #[path = "production_issued_scope_legacy_source_v1_tests.rs"]
 mod issued_scope_legacy_source_v1_tests;
 
@@ -526,6 +529,24 @@ fn fixture_with_blocks_symbol_and_slices(
         crate::ProductionSourceLaunchRosterV1::try_new(ssa.source_semantic(), &launches).unwrap();
     (ssa, launch)
 }
+#[path = "production_pre_ranked_kernel_abi_v18_tests.rs"]
+mod pre_ranked_kernel_abi_v18_tests;
+
+fn materialize_with_fixture_kernel_abi_v18(
+    ssa: ProductionSemanticSsaOwnerV1,
+    launch: crate::ProductionSourceLaunchRosterV1,
+    limits: ProductionSemanticKirLimitsV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<ProductionPreRankedKirOwnerV1, ProductionPreRankedKirErrorV1> {
+    // The fixture submits a complete descriptor proposal for the unchanged
+    // original source. Production capture authenticates every row and offset.
+    let profile = kernel_argument_abi_v18::tests::FixtureKernelAbiV18::new(&ssa);
+    let roots = profile.roots();
+    ProductionPreRankedKirOwnerV1::try_materialize_with_kernel_abi_budget_v18(
+        ssa, launch, ProductionKernelArgumentAbiInputV18 { roots: &roots }, limits, budget,
+    )
+}
+
 pub(super) fn materialize(
     kind: Fixture,
     shared: bool,

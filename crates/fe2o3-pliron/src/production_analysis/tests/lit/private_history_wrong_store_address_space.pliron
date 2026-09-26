@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: gpu.store violates pointer access or pointee type
+// Local native verification only; the Private pointer is not silently Global.
+builtin.func @private_bad_store: builtin.function <(gpu.pointer <builtin.integer ui64,Private,ReadWrite>, builtin.integer ui64) -> ()>
+{
+  ^entry(p: gpu.pointer <builtin.integer ui64,Private,ReadWrite>, v: builtin.integer ui64):
+    gpu.store (p, v) [] [gpu_store_address_space: gpu.address_space Global, gpu_store_alignment: gpu.memory_alignment 8, gpu_store_volatile: gpu.volatile false]: <(gpu.pointer <builtin.integer ui64,Private,ReadWrite>, builtin.integer ui64) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

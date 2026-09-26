@@ -83,12 +83,22 @@ pub enum CanonicalRankedPolicyFailureV1 {
     Resource(Resource),
     View(CanonicalRankedViewErrorV1),
     Bridge(crate::KirBridgeErrorV12),
+    StorageBridge(crate::KirBridgeErrorV18),
+    /// Actual output operation has no checked source-role recipe in this scope.
+    SourceRequirementV18 {
+        coordinate: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+        requirement: storage::CanonicalRankedSourceRequirementV18,
+    },
     UnsupportedGraph {
         function: usize,
         block: Option<usize>,
         operation: Option<usize>,
     },
     NativeSchema,
+    PrivateRequirement {
+        requirement: private::CanonicalPrivateRequirementV1,
+        coordinate: Option<fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1>,
+    },
     ExactGraph,
     Mutation,
     Analysis {
@@ -122,6 +132,14 @@ impl From<crate::KirBridgeErrorV12> for Failure {
         Self::Bridge(value)
     }
 }
+impl From<crate::KirBridgeErrorV18> for Failure {
+    fn from(value: crate::KirBridgeErrorV18) -> Self {
+        match value {
+            crate::KirBridgeErrorV18::Resource(error) => Self::Resource(error),
+            other => Self::StorageBridge(other),
+        }
+    }
+}
 impl From<Limit> for Failure {
     fn from(value: Limit) -> Self {
         Self::AnalysisLimit {
@@ -141,9 +159,12 @@ impl std::error::Error for Failure {
             Self::Resource(error) => Some(error),
             Self::View(error) => Some(error),
             Self::Bridge(error) => Some(error),
+            Self::StorageBridge(error) => Some(error),
             Self::Analysis { cause, .. } => Some(cause),
             Self::UnsupportedGraph { .. }
+            | Self::SourceRequirementV18 { .. }
             | Self::NativeSchema
+            | Self::PrivateRequirement { .. }
             | Self::ExactGraph
             | Self::Mutation
             | Self::AnalysisLimit { .. }
@@ -189,6 +210,17 @@ impl std::error::Error for CanonicalRankedPolicyChecksErrorV1 {
 struct ReportRow {
     outcome: ProductionPlironPreloweringOutcomeV1,
     history: CanonicalRankedPolicyHistoryV1,
+}
+
+fn invoke_native_policy_function_v1(
+    analysis: &mut AnalysisState,
+    ordinal: usize,
+    context: &pliron::context::Context,
+    function: &pliron::builtin::ops::FuncOp,
+) -> Result<ReportRow, Failure> {
+    let outcome = analysis.invoke(ordinal, context, function)?;
+    let history = analysis.last.ok_or(Failure::InvocationAccounting)?;
+    Ok(ReportRow { outcome, history })
 }
 
 /// Short immutable reports over the exact graph supplied to this invocation.
@@ -261,26 +293,7 @@ impl<'g> CheckedCanonicalRankedPoliciesV1<'_, 'g> {
     }
     /// All full-compiler obligations remain pending, including source equivalence.
     pub const fn pending_obligations(&self) -> Obligations {
-        Obligations::NONE
-            .with(Obligation::ExactScalarSemantics)
-            .with(Obligation::Control)
-            .with(Obligation::Bounds)
-            .with(Obligation::Provenance)
-            .with(Obligation::Initialization)
-            .with(Obligation::RaceFreedom)
-            .with(Obligation::Lifetime)
-            .with(Obligation::Ordering)
-            .with(Obligation::Convergence)
-            .with(Obligation::TrapBehavior)
-            .with(Obligation::CallEffects)
-            .with(Obligation::CallControl)
-            .with(Obligation::Launch)
-            .with(Obligation::Target)
-            .with(Obligation::Tensor)
-            .with(Obligation::Assembly)
-            .with(Obligation::Contract)
-            .with(Obligation::ReferenceRefinement)
-            .with(Obligation::SourceMetadata)
+        pending_obligations()
     }
     pub const fn ranked_verification_is_complete(&self) -> bool {
         false
@@ -290,9 +303,32 @@ impl<'g> CheckedCanonicalRankedPoliciesV1<'_, 'g> {
     }
 }
 
+const fn pending_obligations() -> Obligations {
+    Obligations::NONE
+        .with(Obligation::ExactScalarSemantics)
+        .with(Obligation::Control)
+        .with(Obligation::Bounds)
+        .with(Obligation::Provenance)
+        .with(Obligation::Initialization)
+        .with(Obligation::RaceFreedom)
+        .with(Obligation::Lifetime)
+        .with(Obligation::Ordering)
+        .with(Obligation::Convergence)
+        .with(Obligation::TrapBehavior)
+        .with(Obligation::CallEffects)
+        .with(Obligation::CallControl)
+        .with(Obligation::Launch)
+        .with(Obligation::Target)
+        .with(Obligation::Tensor)
+        .with(Obligation::Assembly)
+        .with(Obligation::Contract)
+        .with(Obligation::ReferenceRefinement)
+        .with(Obligation::SourceMetadata)
+}
+
 #[path = "canonical_ranked_checks_resource_v1.rs"]
 mod resources;
-use resources::{AnalysisState, Guard, checked_add, protected, reserve_rows};
+use resources::{AnalysisState, Guard, checked_add, drain_header, protected, reserve_rows};
 
 /// Imports one temporary native view, runs the fixed nine-stage policy on every
 /// defined function in canonical order, and checks exact bytes/schema/epoch
@@ -334,18 +370,20 @@ fn with_checks<'w, T>(
                 size_of::<Guard>(),
                 checked_add(
                     size_of::<CheckedCanonicalRankedPoliciesV1<'_, '_>>(),
-                    size_of::<std::thread::Result<Result<T, Failure>>>(),
+                    checked_add(
+                        size_of::<std::thread::Result<Result<T, Failure>>>(),
+                        drain_header(),
+                    )?,
                 )?,
             )?,
         )?)?;
         let mut reports = reserve_rows::<ReportRow>(owner.module().functions.len(), budget)?;
         let mut projection = Projection::import(owner, budget)?;
         for ordinal in 0..owner.module().functions.len() {
-            let outcome = projection.with_function(ordinal, budget, |context, function| {
-                analysis.invoke(ordinal, context, function)
+            let row = projection.with_function(ordinal, budget, |context, function| {
+                invoke_native_policy_function_v1(&mut analysis, ordinal, context, function)
             })??;
-            let history = analysis.last.ok_or(Failure::InvocationAccounting)?;
-            reports.push(ReportRow { outcome, history });
+            reports.push(row);
             projection.check_epoch()?;
             #[cfg(test)]
             tests::between_functions(&projection, ordinal);
@@ -379,3 +417,18 @@ fn with_checks<'w, T>(
 #[cfg(test)]
 #[path = "canonical_ranked_checks_v1_tests.rs"]
 mod tests;
+
+#[path = "canonical_ranked_checks_v18.rs"]
+mod storage;
+pub use storage::{
+    CanonicalRankedSourceRequirementV18, CheckedCanonicalRankedPoliciesV18,
+    with_canonical_ranked_policy_checks_v18,
+    CanonicalRankedSourceObligationV18, PendingCanonicalRankedPoliciesV18,
+    PendingCanonicalRankedSourceRolesV18, with_pending_canonical_ranked_source_roles_v18,
+};
+
+#[path = "canonical_private_admission_v1.rs"]
+pub(crate) mod private;
+
+#[path = "canonical_trap_pairs_v1.rs"]
+pub(crate) mod traps;

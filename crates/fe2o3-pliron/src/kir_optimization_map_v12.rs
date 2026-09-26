@@ -251,10 +251,14 @@ type Endpoint = KirOptimizationEndpointV12;
 mod replay_work;
 use replay_work::ReplayCensusV12;
 
+#[path = "kir_optimization_map_v18.rs"]
+mod storage_v18;
+pub use storage_v18::KirOptimizationMapPolicy3V18;
+
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct MapData {
-    input: Identity,
-    output: Identity,
+pub(crate) struct MapData<I = Identity> {
+    input: I,
+    output: I,
     nodes: Vec<Node>,
     events: Vec<Event>,
     terminal: Vec<Option<Endpoint>>,
@@ -344,11 +348,11 @@ impl KirOptimizationMapV12 {
     }
 }
 
-impl MapData {
-    pub const fn input_identity(&self) -> &Identity {
+impl<I> MapData<I> {
+    pub const fn input_identity(&self) -> &I {
         &self.input
     }
-    pub const fn output_identity(&self) -> &Identity {
+    pub const fn output_identity(&self) -> &I {
         &self.output
     }
     pub const fn digest(&self) -> &[u8; 32] {
@@ -386,6 +390,9 @@ impl MapData {
             })
     }
 
+}
+
+impl MapData {
     /// Rechecks exact snapshot binding and the observed structural relation.
     /// No raw bytes, unverified Module or externally supplied graph is admitted.
     pub fn check_against(
@@ -400,20 +407,44 @@ impl MapData {
         {
             return Err(KirOptimizationMapErrorV12::Identity);
         }
-        let limits =
-            CaptureLimitsV12::for_policy_bytes(input.canonical().canonical_bytes().len(), policy)?;
+        self.check_modules(
+            input.module(), output.module(), input.canonical().canonical_bytes().len(),
+            budget, policy, Self::compute_digest,
+        )
+    }
+
+    fn compute_digest(&self, policy: FixedPolicy) -> [u8; 32] {
+        self.compute_digest_with_header(
+            policy.map_domain(),
+            [(self.input.digest(), self.input.canonical_length()),
+             (self.output.digest(), self.output.canonical_length())],
+        )
+    }
+}
+
+impl<I> MapData<I> {
+    fn check_modules(
+        &self,
+        input: &Module,
+        output: &Module,
+        input_bytes: usize,
+        budget: &mut Budget<'_>,
+        policy: FixedPolicy,
+        digest: fn(&Self, FixedPolicy) -> [u8; 32],
+    ) -> Result<()> {
+        let limits = CaptureLimitsV12::for_policy_bytes(input_bytes, policy)?;
         let census = ReplayCensusV12::derive(
             &self.nodes,
             &self.events,
-            input.module(),
-            output.module(),
+            input,
+            output,
             limits,
             budget,
         )?;
         budget.charge_work(census.check_work(limits.targets)?)?;
         let floor = budget.storage();
         budget.reserve_storage(limits.storage()?)?;
-        let result = self.check_inner(input.module(), output.module(), limits, policy);
+        let result = self.check_inner(input, output, limits, policy, digest);
         // All scratch owned by check_inner has dropped on both Result paths.
         budget.release_storage(
             budget
@@ -430,6 +461,7 @@ impl MapData {
         output: &Module,
         limits: CaptureLimitsV12,
         policy: FixedPolicy,
+        digest: fn(&Self, FixedPolicy) -> [u8; 32],
     ) -> Result<()> {
         if self.nodes.len() > limits.nodes
             || self.events.len() > limits.events
@@ -471,7 +503,7 @@ impl MapData {
         if relations != self.relations
             || targets != self.targets
             || synthesized != self.synthesized
-            || self.compute_digest(policy) != self.digest
+            || digest(self, policy) != self.digest
         {
             return Err(KirOptimizationMapErrorV12::Relation);
         }
@@ -503,13 +535,17 @@ impl MapData {
         Ok(n)
     }
 
-    fn compute_digest(&self, policy: FixedPolicy) -> [u8; 32] {
+    fn compute_digest_with_header(
+        &self,
+        domain: &[u8],
+        endpoints: [(&[u8; 32], u64); 2],
+    ) -> [u8; 32] {
         let mut h = Sha256::new();
-        h.update(policy.map_domain());
-        h.update(self.input.digest());
-        h.update(self.input.canonical_length().to_le_bytes());
-        h.update(self.output.digest());
-        h.update(self.output.canonical_length().to_le_bytes());
+        h.update(domain);
+        for (digest, length) in endpoints {
+            h.update(digest);
+            h.update(length.to_le_bytes());
+        }
         number(&mut h, self.nodes.len());
         for node in &self.nodes {
             match node.kind {
@@ -1374,6 +1410,23 @@ impl CaptureV12 {
         budget: &mut Budget<'_>,
         policy: FixedPolicy,
     ) -> Result<(MapData, usize)> {
+        self.finish_header_data(
+            input.module(), output.module(),
+            [*input.canonical().identity(), *output.canonical().identity()],
+            roster, budget, policy, MapData::compute_digest,
+        )
+    }
+
+    fn finish_header_data<I: Copy>(
+        &self,
+        input: &Module,
+        output: &Module,
+        identities: [I; 2],
+        roster: &LiveRosterV12,
+        budget: &mut Budget<'_>,
+        policy: FixedPolicy,
+        digest: fn(&MapData<I>, FixedPolicy) -> [u8; 32],
+    ) -> Result<(MapData<I>, usize)> {
         if self.0.is_poisoned() {
             return Err(KirOptimizationMapErrorV12::UnsupportedMutation);
         }
@@ -1388,8 +1441,8 @@ impl CaptureV12 {
         let census = ReplayCensusV12::derive(
             &state.nodes,
             &state.events,
-            input.module(),
-            output.module(),
+            input,
+            output,
             state.limits,
             budget,
         )?;
@@ -1411,8 +1464,8 @@ impl CaptureV12 {
             let (relations, targets, synthesized) =
                 derive_relations(&state.nodes, &state.events, &terminal, state.limits.targets)?;
             let mut map = MapData {
-                input: *input.canonical().identity(),
-                output: *output.canonical().identity(),
+                input: identities[0],
+                output: identities[1],
                 nodes: state.nodes.clone(),
                 events: state.events.clone(),
                 terminal,
@@ -1422,8 +1475,8 @@ impl CaptureV12 {
                 synthesized,
                 digest: [0; 32],
             };
-            map.digest = map.compute_digest(policy);
-            map.check_inner(input.module(), output.module(), state.limits, policy)?;
+            map.digest = digest(&map, policy);
+            map.check_inner(input, output, state.limits, policy, digest)?;
             let retained = map.retained_storage()?;
             if retained > state.limits.storage()? {
                 return Err(KirOptimizationMapErrorV12::Limit);
@@ -1589,7 +1642,7 @@ impl RewriteObserver for CaptureV12 {
 
 // Private read-only witness access for the separately metered neutral occurrence
 // rows. Existing map bytes, lifecycle validation and target reports are frozen.
-impl MapData {
+impl<I> MapData<I> {
     pub(crate) fn neutral_node_count_v1(&self) -> usize {
         self.nodes.len()
     }

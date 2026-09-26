@@ -2955,6 +2955,8 @@ mod tests {
     mod nominal_pointer_sized_v35_tests;
     mod rust_call_local_tests;
     mod saturating_integer_v30_tests;
+    #[path = "../../type_containment_v1_tests.rs"]
+    mod type_containment_v1_tests;
     mod wave64_shuffle_v33_tests;
 
     fn identity(tag: u8) -> [u8; 32] {

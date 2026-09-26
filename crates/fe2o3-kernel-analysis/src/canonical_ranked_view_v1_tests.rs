@@ -778,3 +778,32 @@ fn canonical_ranked_atomic_context_capability_and_barrier_convergence_are_not_om
         budget.release_storage(bytes).unwrap();
     });
 }
+
+#[test]
+fn private_call_whole_entry_pinned_ranked_accounting_layout_equivalence_premise() {
+    use std::mem::{align_of, size_of};
+
+    // Required companion to the lowerer whole-entry resource oracle. This is
+    // a tested pinned-host equivalence, not a portable Rust-layout derivation.
+    // A failure invalidates the profile; never retune observed entry totals.
+    type AccessibleAccounting = (
+        usize,
+        fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+        usize,
+        usize,
+        Option<CanonicalRankedViewErrorV1>,
+        bool,
+    );
+    assert_eq!(size_of::<usize>(), 8);
+    assert_eq!(align_of::<usize>(), 8);
+    assert_eq!(
+        size_of::<control::Accounting>(),
+        size_of::<AccessibleAccounting>(),
+        "ranked Accounting pinned size premise"
+    );
+    assert_eq!(
+        align_of::<control::Accounting>(),
+        align_of::<AccessibleAccounting>(),
+        "ranked Accounting pinned alignment premise"
+    );
+}

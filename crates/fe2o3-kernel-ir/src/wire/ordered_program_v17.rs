@@ -1,6 +1,9 @@
 //! Exact 179-byte program payload; parent owns operation tag and V17 grammar.
 
-use super::{KERNEL_IR_VERSION_V17, KernelIrDecodeError, KernelIrEncodeError, Reader, Writer};
+use super::{
+    KERNEL_IR_VERSION_V17, KERNEL_IR_VERSION_V18, KernelIrDecodeError, KernelIrEncodeError, Reader,
+    Writer,
+};
 use crate::{
     AssemblySourceIdentity, Gfx942OrderedProgramRegistersV1, Gfx942OrderedProgramV1,
     Gfx942U32ProgramV1, ValueId,
@@ -19,7 +22,10 @@ pub(super) fn encode(
     writer: &mut Writer<'_>,
     program: &Gfx942OrderedProgramV1,
 ) -> Result<(), KernelIrEncodeError> {
-    if writer.version != KERNEL_IR_VERSION_V17 {
+    if !matches!(
+        writer.version,
+        KERNEL_IR_VERSION_V17 | KERNEL_IR_VERSION_V18
+    ) {
         return Err(KernelIrEncodeError::UnsupportedInVersion {
             version: writer.version,
             feature: "gfx942 ordered program",
@@ -56,7 +62,10 @@ pub(super) fn encode(
 pub(super) fn decode(
     reader: &mut Reader<'_, '_>,
 ) -> Result<Gfx942OrderedProgramV1, KernelIrDecodeError> {
-    if reader.version != KERNEL_IR_VERSION_V17 {
+    if !matches!(
+        reader.version,
+        KERNEL_IR_VERSION_V17 | KERNEL_IR_VERSION_V18
+    ) {
         return Err(KernelIrDecodeError::UnknownVersion(reader.version));
     }
     let revision = reader.u8()?;

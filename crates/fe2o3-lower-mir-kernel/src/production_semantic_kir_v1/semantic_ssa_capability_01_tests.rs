@@ -480,6 +480,304 @@
     }
 
     #[test]
+    fn original_compiler_carriers_define_plain_cfg_transport_contracts() {
+        let (types, callables, function, option_dominance) =
+            nested_component_capability_fixture_v1(0, false);
+        let certified = (0..function.locals().len() as u32).collect();
+        let availability = option_dominance
+            .availability(SemanticLocalIdV1::from_index(1))
+            .unwrap();
+        let index_space = SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+            lanes_per_row: 64,
+            elements_per_lane: 64,
+        };
+        let expected = [
+            (
+                1,
+                SemanticPromotedBindingV1::OptionComponentWitness {
+                    index_space,
+                    availability,
+                },
+                vec![
+                    ValueDef::new(ValueId(91), Type::BOOL),
+                    ValueDef::new(ValueId(92), Type::INDEX),
+                ],
+            ),
+            (
+                8,
+                SemanticPromotedBindingV1::ComponentWitness {
+                    index_space,
+                    availability: SemanticCapabilityAvailabilityV1::Option(availability),
+                },
+                vec![ValueDef::new(ValueId(92), Type::INDEX)],
+            ),
+        ];
+        for (local, expected_descriptor, values) in expected {
+            let descriptor = promoted_capability_binding_v1(
+                &types,
+                &callables,
+                &function,
+                &option_dominance,
+                &certified,
+                local,
+            )
+            .unwrap()
+            .expect("the original intrinsic and guarded aliases identify this carrier");
+            assert_eq!(descriptor, expected_descriptor);
+            let ty = function.locals()[local as usize].ty();
+
+            // This is the intrinsic-result representation contract, not a source
+            // plan admission or a test of the not-yet-integrated CFG dispatcher.
+            let plain = SourceReferenceNodeV29 {
+                ty,
+                kind: SourceReferenceNodeKindV29::Plain(None),
+                value_origin: None,
+                storage: None,
+                inactive: None,
+                descriptor: None,
+            };
+            let expected_types: Vec<_> = values.iter().map(|value| value.ty.clone()).collect();
+            assert_eq!(descriptor.transport_types(&types, plain.ty).unwrap(), expected_types);
+            check_paid_compiler_carrier_construction(descriptor, &types, plain.ty, &values);
+            let binding = descriptor
+                .binding_from_transport(&types, plain.ty, &values)
+                .unwrap();
+            assert_eq!(
+                descriptor.transport_values(&binding).unwrap(),
+                values.iter().map(|value| (value.id, value.ty.clone())).collect::<Vec<_>>(),
+            );
+            check_transport_visitors(
+                SemanticPromotedTransportV1::Semantic(descriptor),
+                &binding,
+                &expected_types,
+            );
+            match (local, &binding) {
+                (
+                    1,
+                    SemanticValueBindingV1::OptionComponentWitness {
+                        present,
+                        raw,
+                        index_space: actual_space,
+                        availability: actual_availability,
+                    },
+                ) => {
+                    assert_eq!((*present, *raw), (ValueId(91), ValueId(92)));
+                    assert_eq!(*actual_space, index_space);
+                    assert_eq!(*actual_availability, availability);
+                }
+                (
+                    8,
+                    SemanticValueBindingV1::ComponentWitness {
+                        raw,
+                        index_space: actual_space,
+                        availability: actual_availability,
+                    },
+                ) => {
+                    assert_eq!(*raw, ValueId(92));
+                    assert_eq!(*actual_space, index_space);
+                    assert_eq!(
+                        *actual_availability,
+                        SemanticCapabilityAvailabilityV1::Option(availability),
+                    );
+                }
+                _ => panic!("source carrier was rebuilt as a different binding: {binding:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn original_carrier_resolution_prepays_shared_ledger_before_queries() {
+        let (types, callables, function, option_dominance) =
+            nested_component_capability_fixture_v1(0, false);
+        let certified = (0..function.locals().len() as u32).collect();
+        let local = SemanticLocalIdV1::from_index(8);
+        let make = || SemanticCapabilityOriginResolverV1::new(
+            &types, &callables, &function, &option_dominance, &certified,
+            usize::MAX, usize::MAX,
+        ).unwrap();
+        let expected = make().resolve(local).unwrap();
+        assert!(expected.is_some());
+        let run = |work_limit, storage_limit| {
+            let mut resolver = make();
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(work_limit);
+            let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+            budget.reserve_storage(37).unwrap();
+            let result = scoped_slot_attempt_v29(&mut budget, |budget| {
+                resolver.resolve_with_budget_v29(local, &mut Some(budget))
+            });
+            // All recursive visiting rows unwind even after a paid operation
+            // refuses. Retained memo and conservative credits die with owner.
+            assert!(resolver.visiting.is_empty());
+            let observed = (budget.work(), budget.peak_storage());
+            if result.is_ok() {
+                let retained = budget.storage() - 37;
+                budget.release_storage(retained).unwrap();
+            }
+            assert_eq!(budget.storage(), 37);
+            (result, observed)
+        };
+        let (result, measured) = run(1_000_000, 1_000_000);
+        assert_eq!(result.unwrap(), expected);
+        assert!(measured.0 > 0 && measured.1 > 37);
+        // These are calibrated recursive-query boundaries, distinct from the
+        // independent zero-component construction equation.
+        assert_eq!(run(measured.0, measured.1).0.unwrap(), expected);
+        assert!(matches!(run(measured.0 - 1, measured.1).0,
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Work(_)))));
+        assert!(matches!(run(measured.0, measured.1 - 1).0,
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Storage(_)))));
+
+        let mut resolver = make();
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(0);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+        assert!(resolver.resolve_with_budget_v29(local, &mut Some(&mut budget)).is_err());
+        assert!(resolver.memo.is_empty() && resolver.visiting.is_empty());
+        assert_eq!(budget.storage(), 0, "initial work refusal precedes allocation");
+    }
+
+    #[test]
+    fn original_carrier_capture_reuses_exact_intrinsic_and_guarded_alias_contracts() {
+        let (types, callables, function, dominance) = nested_component_capability_fixture_v1(0, false);
+        let certified = (0..function.locals().len() as u32).collect();
+        let mut resolver = SemanticCapabilityOriginResolverV1::new(
+            &types, &callables, &function, &dominance, &certified, usize::MAX, usize::MAX,
+        ).unwrap();
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+        for local in [1, 8] {
+            let expected = promoted_capability_binding_v1(&types, &callables, &function,
+                &dominance, &certified, local).unwrap().unwrap();
+            assert_eq!(original_compiler_carrier_v29(SemanticLocalIdV1::from_index(local),
+                &BTreeMap::new(), &mut resolver, &mut budget).unwrap(),
+                Some((function.locals()[local as usize].ty(), expected)));
+        }
+        assert!(resolver.visiting.is_empty());
+    }
+
+    #[test]
+    fn original_carrier_capture_does_not_rewalk_ordinary_alias_chains() {
+        let (types, _, base, _) = nested_component_capability_fixture_v1(0, false);
+        let ty = SemanticTypeIdV1::from_index(1);
+        let source = base.source();
+        for count in [16_u32, 64, 256, 1024] {
+            let mut locals = vec![base.locals()[0].clone()];
+            let mut statements = Vec::new();
+            let place = |local| SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap();
+            for local in 1..=count {
+                let mut identity = [0; 32];
+                identity[..4].copy_from_slice(&local.to_le_bytes());
+                locals.push(SemanticLocalDeclV1::new(SemanticLocalIdentityV1::from_sha256(identity),
+                    ty, SemanticLocalRoleV1::Temporary, source));
+                let operand = if local == 1 {
+                    SemanticOperandV1::Constant(SemanticConstantV1::new(ty,
+                        SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(9, 4).unwrap())))
+                } else { SemanticOperandV1::Copy(place(local - 1)) };
+                statements.push(SemanticStatementV1::new(source, SemanticStatementKindV1::Assign(
+                    SemanticAssignmentV1::new(place(local), SemanticRvalueV1::new(ty, SemanticRvalueKindV1::Use(operand))))));
+            }
+            let function = SemanticFunctionDeclV1::new(base.identity(), base.role(), base.item_definition_identity(),
+                base.monomorphization_identity(), base.generic_type_arguments_identity(), base.const_generic_arguments_identity(),
+                source, base.abi().clone(), locals, SemanticBlockIdV1::from_index(0), vec![
+                    SemanticBasicBlockV1::new(SemanticBlockIdentityV1::from_sha256([81; 32]), source, statements,
+                        SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return)).unwrap(),
+                ]).unwrap();
+            let dominance = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
+            let certified = (0..=count).collect();
+            let mut resolver = SemanticCapabilityOriginResolverV1::new(
+                &types, &[], &function, &dominance, &certified, usize::MAX, usize::MAX,
+            ).unwrap();
+            // This bounds only the newly expanded query roster, not the
+            // inherited constructor's independently metered source indexing.
+            let bound = 120 * count as usize * (count.ilog2() as usize + 2);
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(bound);
+            let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+            for local in 1..=count {
+                assert_eq!(original_compiler_carrier_v29(SemanticLocalIdV1::from_index(local),
+                    &BTreeMap::new(), &mut resolver, &mut budget).unwrap(), None);
+            }
+            assert_eq!(resolver.memo.len(), count as usize);
+            assert!(resolver.visiting.is_empty());
+            assert!(budget.work() <= bound);
+        }
+    }
+
+    #[test]
+    fn original_compiler_carrier_transport_rejects_changed_payload_and_availability() {
+        let (types, callables, function, option_dominance) =
+            nested_component_capability_fixture_v1(0, false);
+        let certified = (0..function.locals().len() as u32).collect();
+        let descriptor = |local| {
+            promoted_capability_binding_v1(
+                &types,
+                &callables,
+                &function,
+                &option_dominance,
+                &certified,
+                local,
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let optional = descriptor(1);
+        let ty = function.locals()[1].ty();
+        let values = [
+            ValueDef::new(ValueId(91), Type::BOOL),
+            ValueDef::new(ValueId(92), Type::INDEX),
+        ];
+        let valid = optional.binding_from_transport(&types, ty, &values).unwrap();
+        assert_eq!(optional.transport_values(&valid).unwrap().len(), 2);
+        for invalid in [
+            vec![],
+            vec![values[0].clone()],
+            vec![values[1].clone(), values[0].clone()],
+            vec![values[0].clone(), values[1].clone(), values[1].clone()],
+        ] {
+            assert!(matches!(
+                optional.binding_from_transport(&types, ty, &invalid),
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    detail: "typed fragment SSA component types changed",
+                    ..
+                }),
+            ));
+        }
+        let SemanticValueBindingV1::OptionComponentWitness {
+            present,
+            raw,
+            availability,
+            ..
+        } = valid else { unreachable!() };
+        let changed_contract = SemanticValueBindingV1::OptionComponentWitness {
+            present,
+            raw,
+            index_space: SemanticDisjointIndexSpaceV1::Index1d,
+            availability,
+        };
+        assert_eq!(
+            optional.transport_values(&changed_contract),
+            Err("promoted optional component witness lacks its authenticated producer metadata"),
+        );
+        let witness = descriptor(8);
+        let valid = witness
+            .binding_from_transport(&types, function.locals()[8].ty(), &values[1..])
+            .unwrap();
+        assert_eq!(witness.transport_values(&valid).unwrap().len(), 1);
+        let SemanticValueBindingV1::ComponentWitness { raw, index_space, .. } = valid
+        else { unreachable!() };
+        let changed_availability = SemanticValueBindingV1::ComponentWitness {
+            raw,
+            index_space,
+            availability: SemanticCapabilityAvailabilityV1::EnumPayload {
+                local: SemanticLocalIdV1::from_index(6),
+                variant: 0,
+            },
+        };
+        assert_eq!(
+            witness.transport_values(&changed_availability),
+            Err("promoted component witness lacks its authenticated availability"),
+        );
+    }
+
+    #[test]
     fn capability_origin_rejects_wrong_variant_and_projected_writes() {
         for (selected_variant, projected_write) in [(1, false), (0, true)] {
             let (types, callables, function, option_dominance) =
@@ -1170,12 +1468,14 @@
         )
         .unwrap();
         let slots = BTreeMap::from([(
-            1,
+            ScopedAllocationIdentityV29::LegacyLocal(1),
             SemanticRetainedLocalSlotPlanV1 {
                 semantic_type: scalar,
-                kernel_type: Type::Scalar(ScalarType::U64),
-                alignment: 8,
-                array: None,
+                storage: SemanticRetainedStorageV29::ScalarArray {
+                    kernel_type: Type::Scalar(ScalarType::U64),
+                    alignment: 8,
+                    array: None,
+                },
             },
         )]);
         let reachable = BTreeSet::from([0, 1, 2, 3]);

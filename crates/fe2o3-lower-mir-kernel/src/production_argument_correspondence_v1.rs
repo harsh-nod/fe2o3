@@ -18,6 +18,149 @@ struct ArgumentTraceV1<'a> {
 }
 
 #[derive(Clone, Copy)]
+struct ArgumentEntryV18<'a> {
+    correspondence_owner: SemanticFunctionIdV1,
+    semantic_function: SemanticFunctionIdV1,
+    kernel_ir_function: &'a FunctionId,
+    role: SemanticKirFunctionRoleV1,
+    descriptor_root: Option<kernel_argument_abi_v18::SourceDescriptorRootAbiV29<'a>>,
+}
+
+impl<'a> ArgumentEntryV18<'a> {
+    fn legacy(instance: &'a SemanticKirFunctionCorrespondenceV1) -> Self {
+        Self {
+            correspondence_owner: instance.correspondence_owner,
+            semantic_function: instance.semantic_function,
+            kernel_ir_function: &instance.kernel_ir_function,
+            role: instance.role,
+            descriptor_root: None,
+        }
+    }
+}
+
+fn descriptor_root_for_entry_v18<'a>(
+    owner: &ProductionSemanticSsaOwnerV1,
+    profile: Option<&'a kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>,
+    instance: &SemanticKirFunctionCorrespondenceV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<Option<kernel_argument_abi_v18::SourceDescriptorRootAbiV29<'a>>, ProductionSemanticKirErrorV1> {
+    if instance.role != SemanticKirFunctionRoleV1::KernelEntry {
+        return Ok(None);
+    }
+    descriptor_root_for_function_v18(owner, profile, instance.correspondence_owner,
+        instance.semantic_function, budget)
+}
+
+fn descriptor_root_for_function_v18<'a>(
+    owner: &ProductionSemanticSsaOwnerV1,
+    profile: Option<&'a kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>,
+    original_root: SemanticFunctionIdV1,
+    function: SemanticFunctionIdV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<Option<kernel_argument_abi_v18::SourceDescriptorRootAbiV29<'a>>, ProductionSemanticKirErrorV1> {
+    let Some(profile) = profile else { return Ok(None); };
+    // Compatibility profiling is restricted to the original direct entry.
+    // A wrapper's adjusted ABI needs the scoped original-source route.
+    budget.charge_work(2)?;
+    if original_root != function {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
+    let roots = owner.source_semantic().roots();
+    budget.charge_work(roots.len())?;
+    let root = roots.iter().position(|root| *root == function)
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    profile.descriptor_root(owner, root, budget).map(Some)
+}
+
+fn source_argument_error_v18(
+    error: ProductionSemanticKirErrorV1,
+) -> ProductionSourceOwnedViewErrorV18 {
+    match error {
+        ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error) => error.into(),
+        ProductionSemanticKirErrorV1::CorrespondenceMismatch => {
+            ProductionSourceOwnedViewErrorV18::Binding("original source argument correspondence")
+        }
+        error => ScopedModuleErrorV29::from(error).into(),
+    }
+}
+
+impl ProductionSourceCorrespondenceV18<'_> {
+    fn with_root_argument_data_v18<'work, R>(
+        &self,
+        root: usize,
+        budget: &mut ArgumentBudgetV1<'work>,
+        use_data: impl for<'s> FnOnce(
+            ArgumentViewDataV1<'s>,
+            &'s mut ArgumentBudgetV1<'work>,
+        ) -> Result<R, ProductionSemanticKirErrorV1>,
+    ) -> SourceOwnedResultV18<R> {
+        self.retain_query((|| {
+            self.query(budget)?;
+            let source = self.source.source_semantic(budget)?;
+            let (original_root, function_ordinal) = self.source.root(root, budget)?;
+            let (instance_function, incoming) = self.source.instance(root, 0, budget)?;
+            let sidecar = self.source.sidecar(root, 0, budget)?;
+            budget.charge_work(3)?;
+            let physical = self.inventory.functions().get(function_ordinal).ok_or(
+                ProductionSourceOwnedViewErrorV18::Binding("original root physical function"),
+            )?;
+            if instance_function != original_root
+                || incoming.is_some()
+                || source.roots().binary_search(&original_root).is_err()
+                || physical.coordinate.0 as usize != function_ordinal
+                || self.source.root_row(root)?.coordinates.sources.rows[0].function != original_root
+            {
+                return self.source.missing("original root argument association");
+            }
+            with_parameter_data_v18(
+                source,
+                ArgumentEntryV18 {
+                    correspondence_owner: original_root,
+                    semantic_function: original_root,
+                    kernel_ir_function: &physical.function.id,
+                    role: SemanticKirFunctionRoleV1::KernelEntry,
+                    descriptor_root: self.source.descriptor_root_abi_v29(root, budget)?,
+                },
+                physical.function,
+                ArgumentTraceV1 {
+                    direct: &sidecar.parameter_bindings,
+                    components: &sidecar.parameter_component_bindings,
+                    ignored: &sidecar.ignored_parameter_bindings,
+                },
+                self.source.cleanup,
+                budget,
+                use_data,
+            )
+            .map_err(source_argument_error_v18)
+        })())
+    }
+}
+
+fn with_argument_scratch_v18<'work, T>(
+    cleanup: &ScopedSourceCleanupV29,
+    budget: &mut ArgumentBudgetV1<'work>,
+    run: impl FnOnce(&mut ArgumentBudgetV1<'work>) -> Result<T, ProductionSemanticKirErrorV1>,
+) -> Result<T, ProductionSemanticKirErrorV1> {
+    let floor = budget.storage();
+    let value = scoped_source_attempt_v29(cleanup, budget, floor, run)?;
+    // The run closure owns all scratch. Nested callback attempts have already
+    // checked their larger live floors before any enclosing release can occur.
+    let release = budget
+        .storage()
+        .checked_sub(floor)
+        .ok_or(ArgumentResourceV1::Accounting)
+        .and_then(|amount| budget.release_storage(amount));
+    match release {
+        Ok(()) => Ok(value),
+        Err(error) => {
+            cleanup.deny_refund();
+            drop(value);
+            Err(error.into())
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum PhysicalArgumentTraceV1<'a> {
     Direct(&'a SemanticKirParameterBindingV1),
     Component(&'a SemanticKirParameterComponentBindingV1),
@@ -104,27 +247,73 @@ fn with_parameter_correspondence_v1<'w, R>(
         &mut ProductionArgumentViewV1<'s, 'w>,
     ) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
-    budget.charge_work(2)?;
-    let work_ledger = budget.work_ledger_identity_v1();
-    let floor = budget.storage();
-    let result = check_argument_trace_v1(semantic, instance, target, trace, budget, use_view);
-    // All function-local owners have dropped on either Result path. Work and
-    // peak history remain cumulative; this scope does not promise unwind cleanup.
-    if work_ledger != budget.work_ledger_identity_v1() {
-        return Err(ArgumentResourceV1::Accounting.into());
-    }
-    budget.release_storage(budget.storage() - floor)?;
-    result
+    with_parameter_correspondence_profile_v18(semantic, instance, target, trace, None, budget, use_view)
 }
 
-fn check_argument_trace_v1<'w, R>(
+fn with_parameter_correspondence_profile_v18<'w, R>(
     semantic: &AdmittedInertSemanticMirV1,
     instance: &SemanticKirFunctionCorrespondenceV1,
     target: &Function,
     trace: ArgumentTraceV1<'_>,
+    descriptor_root: Option<kernel_argument_abi_v18::SourceDescriptorRootAbiV29<'_>>,
     budget: &mut ArgumentBudgetV1<'w>,
     use_view: impl for<'s> FnOnce(
         &mut ProductionArgumentViewV1<'s, 'w>,
+    ) -> Result<R, ProductionSemanticKirErrorV1>,
+) -> Result<R, ProductionSemanticKirErrorV1> {
+    let floor = budget.storage();
+    with_scoped_source_cleanup_v29(budget, floor, |cleanup, budget| {
+        with_parameter_data_v18(
+            semantic,
+            ArgumentEntryV18 { descriptor_root, ..ArgumentEntryV18::legacy(instance) },
+            target,
+            trace,
+            cleanup,
+            budget,
+            |data, budget| {
+                let mut view = ProductionArgumentViewV1 {
+                    data,
+                    association: instance,
+                    budget,
+                };
+                use_view(&mut view)
+            },
+        )
+    })
+}
+
+fn with_parameter_data_v18<'w, R>(
+    semantic: &AdmittedInertSemanticMirV1,
+    entry: ArgumentEntryV18<'_>,
+    target: &Function,
+    trace: ArgumentTraceV1<'_>,
+    cleanup: &ScopedSourceCleanupV29,
+    budget: &mut ArgumentBudgetV1<'w>,
+    use_data: impl for<'s> FnOnce(
+        ArgumentViewDataV1<'s>,
+        &'s mut ArgumentBudgetV1<'w>,
+    ) -> Result<R, ProductionSemanticKirErrorV1>,
+) -> Result<R, ProductionSemanticKirErrorV1> {
+    budget.charge_work(2)?;
+    with_argument_scratch_v18(cleanup, budget, |budget| {
+        budget.reserve_storage(argument_sum_v1(&[
+            std::mem::size_of::<ArgumentEntryV18<'_>>(),
+            std::mem::size_of::<ArgumentQueryCustodyV18>(),
+        ])?)?;
+        check_argument_trace_v18(semantic, entry, target, trace, cleanup, budget, use_data)
+    })
+}
+
+fn check_argument_trace_v18<'w, R>(
+    semantic: &AdmittedInertSemanticMirV1,
+    instance: ArgumentEntryV18<'_>,
+    target: &Function,
+    trace: ArgumentTraceV1<'_>,
+    cleanup: &ScopedSourceCleanupV29,
+    budget: &mut ArgumentBudgetV1<'w>,
+    use_data: impl for<'s> FnOnce(
+        ArgumentViewDataV1<'s>,
+        &'s mut ArgumentBudgetV1<'w>,
     ) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
     let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
@@ -139,7 +328,7 @@ fn check_argument_trace_v1<'w, R>(
     let count = argument_sum_v1(&[trace.direct.len(), trace.components.len()])?;
     if count != body.parameters.len()
         || count != target.signature.parameters.len()
-        || target.id != instance.kernel_ir_function
+        || &target.id != instance.kernel_ir_function
     {
         return Err(mismatch());
     }
@@ -264,6 +453,12 @@ fn check_argument_trace_v1<'w, R>(
         let shape_floor = budget.storage();
         let first = slot;
         prepay_argument_shape_v1(semantic, mapped.abi().ty(), budget)?;
+        let global_descriptor = match instance.descriptor_root {
+            Some(profile) if instance.role == SemanticKirFunctionRoleV1::KernelEntry =>
+                profile.shared_slice(mapped.source_argument(), mapped.abi().ty(), budget)?,
+            Some(_) => return Err(mismatch()),
+            None => false,
+        };
         let mut check = |path: &[SemanticKirParameterProjectionV1], semantic_type, ty: &Type| {
             budget.charge_work(argument_sum_v1(&[40, path.len()])?)?;
             let value = *body.parameters.get(slot).ok_or_else(mismatch)?;
@@ -315,7 +510,11 @@ fn check_argument_trace_v1<'w, R>(
                     mapped.source_argument(),
                     mapped.abi().ty(),
                 )? {
-                    KernelParameterShapeV1::Direct(ty) => {
+                    KernelParameterShapeV1::Direct(mut ty) => {
+                        if global_descriptor {
+                            let Type::Slice(slice) = &mut ty else { return Err(mismatch()); };
+                            slice.address_space = AddressSpace::Global;
+                        }
                         check(&[], mapped.abi().ty(), &ty)?;
                         true
                     }
@@ -349,13 +548,20 @@ fn check_argument_trace_v1<'w, R>(
             end: slot,
             atomic,
             policy: match instance.role {
-                SemanticKirFunctionRoleV1::KernelEntry => ParameterLeafPolicyV1::PointerFree,
+                // Match exact original ByValue component lowering; nested
+                // shared slices retain Generic representation, never Global.
+                SemanticKirFunctionRoleV1::KernelEntry => ParameterLeafPolicyV1::SharedSliceLeaves,
                 SemanticKirFunctionRoleV1::InternalHelper => {
                     ParameterLeafPolicyV1::SharedSliceLeaves
                 }
             },
         });
-        budget.release_storage(budget.storage() - shape_floor)?;
+        budget.release_storage(
+            budget
+                .storage()
+                .checked_sub(shape_floor)
+                .ok_or(ArgumentResourceV1::Accounting)?,
+        )?;
     }
     budget.charge_work(argument_sum_v1(&[locals, count])?)?;
     for (index, local) in function.locals().iter().enumerate() {
@@ -389,20 +595,24 @@ fn check_argument_trace_v1<'w, R>(
     if slot != count || physical.iter().any(|row| !row.used) {
         return Err(mismatch());
     }
-    let mut view = ProductionArgumentViewV1 {
-        data: ArgumentViewDataV1 {
-            semantic,
-            instance,
-            target,
-            logical: &arguments,
-            physical: &physical,
-            ignored: &ignored,
-            shapes: &shapes,
+    let data = ArgumentViewDataV1 {
+        semantic,
+        semantic_function: instance.semantic_function,
+        target,
+        logical: &arguments,
+        physical: &physical,
+        ignored: &ignored,
+        shapes: &shapes,
+        cleanup,
+        custody: ArgumentQueryCustodyV18 {
+            slot: std::ptr::from_ref(budget) as usize,
+            ledger: budget.work_ledger_identity_v1(),
+            floor: budget.storage(),
         },
-        budget,
     };
-    view.visit_nodes(|_| Ok(()))?;
-    use_view(&mut view)
+    data.visit_nodes_scoped(budget, |_, _| Ok(()))?;
+    let floor = budget.storage();
+    scoped_source_attempt_v29(cleanup, budget, floor, |budget| use_data(data, budget))
 }
 
 fn prepay_argument_shape_v1(

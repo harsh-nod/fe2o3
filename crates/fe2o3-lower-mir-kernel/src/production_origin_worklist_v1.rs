@@ -42,18 +42,19 @@ impl From<Resource> for OriginWorkErrorV1 {
 
 type Result<T> = std::result::Result<T, OriginWorkErrorV1>;
 
-struct Link {
+struct Link<L> {
     target: usize,
     next: usize,
+    transfer: L,
 }
 
 /// Bounded exact-origin transport, not may-alias analysis or source authority.
 /// Labels and all syntactic dependencies are authenticated by the caller.
 /// Requested payload reservations, including failure cleanup, stay caller-owned.
-pub(super) struct OriginWorkV1<T> {
+pub(super) struct OriginWorkV1<T, L = ()> {
     origins: Vec<OriginStateV1<T>>,
     heads: Vec<usize>,
-    links: Vec<Link>,
+    links: Vec<Link<L>>,
     queue: Vec<usize>,
     queued: Vec<bool>,
     read: usize,
@@ -78,7 +79,7 @@ fn reserved<T>(count: usize, budget: &mut Budget<'_>) -> Result<Vec<T>> {
     Ok(values)
 }
 
-impl<T: Copy + Eq> OriginWorkV1<T> {
+impl<T: Copy + Eq, L: Copy> OriginWorkV1<T, L> {
     pub(super) fn new(nodes: usize, edges: usize, budget: &mut Budget<'_>) -> Result<Self> {
         let mut origins = reserved(nodes, budget)?;
         let mut heads = reserved(nodes, budget)?;
@@ -131,10 +132,11 @@ impl<T: Copy + Eq> OriginWorkV1<T> {
         Ok(())
     }
 
-    pub(super) fn add_link(
+    pub(super) fn add_transfer(
         &mut self,
         source: usize,
         target: usize,
+        transfer: L,
         budget: &mut Budget<'_>,
     ) -> Result<()> {
         self.check_ledger(budget)?;
@@ -150,12 +152,19 @@ impl<T: Copy + Eq> OriginWorkV1<T> {
         self.links.push(Link {
             target,
             next: self.heads[source],
+            transfer,
         });
         self.heads[source] = link;
         Ok(())
     }
 
-    pub(super) fn solve(mut self, budget: &mut Budget<'_>) -> Result<Vec<OriginStateV1<T>>> {
+    // Transfer labels are inert caller-checked equations, not new seeds.
+    // Pending and Unknown never enter the exact-value transfer callback.
+    pub(super) fn solve_with(
+        mut self,
+        budget: &mut Budget<'_>,
+        mut transfer: impl FnMut(L, T, &mut Budget<'_>) -> Result<T>,
+    ) -> Result<Vec<OriginStateV1<T>>> {
         self.check_ledger(budget)?;
         if self.seeded != self.origins.len() || self.links.len() != self.edges {
             return Err(OriginWorkErrorV1::Shape);
@@ -166,7 +175,7 @@ impl<T: Copy + Eq> OriginWorkV1<T> {
                 self.enqueue(index, budget)?;
             }
         }
-        self.propagate(budget)?;
+        self.propagate(budget, &mut transfer)?;
         // An ungrounded incoming cycle cannot disappear from a partly grounded phi.
         for index in 0..self.origins.len() {
             budget.charge_work(1)?;
@@ -175,7 +184,7 @@ impl<T: Copy + Eq> OriginWorkV1<T> {
                 self.enqueue(index, budget)?;
             }
         }
-        self.propagate(budget)?;
+        self.propagate(budget, &mut transfer)?;
         Ok(self.origins)
     }
 
@@ -202,7 +211,11 @@ impl<T: Copy + Eq> OriginWorkV1<T> {
         Ok(())
     }
 
-    fn propagate(&mut self, budget: &mut Budget<'_>) -> Result<()> {
+    fn propagate(
+        &mut self,
+        budget: &mut Budget<'_>,
+        transfer: &mut impl FnMut(L, T, &mut Budget<'_>) -> Result<T>,
+    ) -> Result<()> {
         while self.pending != 0 {
             budget.charge_work(1)?;
             let source = self.queue[self.read];
@@ -218,8 +231,13 @@ impl<T: Copy + Eq> OriginWorkV1<T> {
             while link != NO_LINK {
                 budget.charge_work(1)?;
                 let row = self.links.get(link).ok_or(OriginWorkErrorV1::Shape)?;
-                let (target, next) = (row.target, row.next);
-                let merged = self.origins[target].join(incoming);
+                let (target, next, label) = (row.target, row.next, row.transfer);
+                let mapped = match incoming {
+                    OriginStateV1::Exact(value) => OriginStateV1::Exact(transfer(label, value, budget)?),
+                    other => other,
+                };
+                self.check_ledger(budget)?;
+                let merged = self.origins[target].join(mapped);
                 if merged != self.origins[target] {
                     self.origins[target] = merged;
                     self.enqueue(target, budget)?;
@@ -228,5 +246,20 @@ impl<T: Copy + Eq> OriginWorkV1<T> {
             }
         }
         Ok(())
+    }
+}
+
+impl<T: Copy + Eq> OriginWorkV1<T> {
+    pub(super) fn add_link(
+        &mut self,
+        source: usize,
+        target: usize,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.add_transfer(source, target, (), budget)
+    }
+
+    pub(super) fn solve(self, budget: &mut Budget<'_>) -> Result<Vec<OriginStateV1<T>>> {
+        self.solve_with(budget, |(), value, _| Ok(value))
     }
 }

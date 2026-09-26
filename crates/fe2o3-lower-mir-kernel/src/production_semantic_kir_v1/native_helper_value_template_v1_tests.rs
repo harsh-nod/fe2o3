@@ -117,8 +117,8 @@ fn exact_noncommutative_arguments_are_substituted_without_symbol_placeholders() 
             operation: ProductionSemanticBinaryOpV2::Subtract,
             scalar: U32,
             overflow: ProductionOverflowContractV2::Wrapping,
-            lhs: Box::new(constant(7)),
-            rhs: Box::new(constant(11)),
+            lhs: NormalizedScalarNodeV18::legacy(constant(7)),
+            rhs: NormalizedScalarNodeV18::legacy(constant(11)),
         }
     );
     release_expression(actual, bytes, &mut meter);
@@ -290,7 +290,7 @@ fn substitution_size_is_checked_before_output_tree_allocation() {
     let argument = Expression::Unary {
         operation: ProductionSemanticUnaryOpV2::Not,
         scalar: U32,
-        operand: Box::new(constant(1)),
+        operand: NormalizedScalarNodeV18::legacy(constant(1)),
     };
     let floor = meter.storage;
     let before = meter.peak;

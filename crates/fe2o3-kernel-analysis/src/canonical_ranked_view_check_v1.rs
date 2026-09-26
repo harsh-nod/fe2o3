@@ -44,6 +44,32 @@ pub fn with_checked_canonical_ranked_view_v1<'i, 'g, 'm, 'work, T, E>(
 where
     E: From<Error>,
 {
+    with_checked_view(
+        inventory,
+        metadata,
+        candidate,
+        inventory.owner().module(),
+        effects::operation,
+        budget,
+        run,
+    )
+}
+
+pub(super) fn with_checked_view<'i, 'g, 'm, 'work, O, T, E>(
+    inventory: &'i Inventory<'g, O>,
+    metadata: &'i Metadata<'g, 'm, O>,
+    candidate: &'i Candidate<'i, 'g, 'm, O>,
+    module: &'g fe2o3_kernel_ir::Module,
+    classify: Classifier,
+    budget: &mut Budget<'work>,
+    run: impl for<'scope> FnOnce(
+        &mut CheckedCanonicalRankedViewV1<'scope, 'i, 'g, 'm, O>,
+        &mut Budget<'work>,
+    ) -> std::result::Result<T, E>,
+) -> std::result::Result<T, E>
+where
+    E: From<Error>,
+{
     budget
         .charge_work(1)
         .map_err(Error::from)
@@ -64,7 +90,7 @@ where
     }
     let retained = add(
         size_of::<control::Accounting>(),
-        size_of::<CheckedCanonicalRankedViewV1<'_, '_, '_, '_>>(),
+        size_of::<CheckedCanonicalRankedViewV1<'_, '_, '_, '_, O>>(),
     )
     .map_err(E::from)?;
     let floor = budget.storage();
@@ -75,7 +101,7 @@ where
     let mut accounting = control::Accounting::new(budget, floor, retained);
     let mut panics = [None, None];
     let protected = catch_unwind(AssertUnwindSafe(|| -> Result<std::result::Result<T, E>> {
-        check(inventory, metadata, candidate, budget)?;
+        check(inventory, metadata, candidate, module, classify, budget)?;
         let mut view = CheckedCanonicalRankedViewV1 {
             candidate,
             accounting: &mut accounting,
@@ -154,10 +180,12 @@ impl Reader<'_> {
     }
 }
 
-fn check(
-    inventory: &Inventory<'_>,
-    metadata: &Metadata<'_, '_>,
-    candidate: &Candidate<'_, '_, '_>,
+fn check<O>(
+    inventory: &Inventory<'_, O>,
+    metadata: &Metadata<'_, '_, O>,
+    candidate: &Candidate<'_, '_, '_, O>,
+    module: &fe2o3_kernel_ir::Module,
+    classify: Classifier,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
     let mut reader = Reader {
@@ -168,6 +196,16 @@ fn check(
         row(Subject::Module, Role::Module, Obligations::NONE),
         budget,
     )?;
+    for (i, _) in module.storage_layouts.iter().enumerate() {
+        reader.expect(
+            row(
+                Subject::StorageLayout(i),
+                Role::StorageLayout,
+                storage::layout_obligations(),
+            ),
+            budget,
+        )?;
+    }
     for (i, _) in inventory.kernels().iter().enumerate() {
         reader.expect(
             row(
@@ -199,7 +237,7 @@ fn check(
     }
     for (i, operation) in inventory.operations().iter().enumerate() {
         budget.charge_work(1)?;
-        let (kind, mut obligations) = effects::operation(i, &operation.operation.kind)?;
+        let (kind, mut obligations) = classify(i, &operation.operation.kind)?;
         if !operation.compiler_ordering().is_empty() {
             obligations = obligations
                 .with(Obligation::Ordering)
@@ -312,13 +350,7 @@ fn check(
         reader.expect(row(Subject::Call(i), Role::Call, effects::call()), budget)?;
     }
     // Independent complete owner roster. Do not call the builder's requirement walk.
-    for (ordinal, _) in inventory
-        .owner()
-        .module()
-        .required_capabilities
-        .iter()
-        .enumerate()
-    {
+    for (ordinal, _) in module.required_capabilities.iter().enumerate() {
         reader.requirement(RequirementOwner::Module, ordinal, budget)?;
     }
     for (i, kernel) in inventory.kernels().iter().enumerate() {
@@ -370,7 +402,7 @@ fn check(
             return Err(Error::MetadataOrder { ordinal: i });
         }
         previous = Some(key);
-        if !subject_exists(inventory, annotation.subject) {
+        if !subject_exists(inventory, module, annotation.subject) {
             return Err(Error::MetadataSubject { ordinal: i });
         }
         for (f, fact) in annotation.facts.iter().enumerate() {
@@ -400,9 +432,14 @@ fn check(
     Ok(())
 }
 
-fn subject_exists(inventory: &Inventory<'_>, subject: Subject) -> bool {
+fn subject_exists<O>(
+    inventory: &Inventory<'_, O>,
+    module: &fe2o3_kernel_ir::Module,
+    subject: Subject,
+) -> bool {
     match subject {
         Subject::Module => true,
+        Subject::StorageLayout(i) => i < module.storage_layouts.len(),
         Subject::Kernel(i) => i < inventory.kernels().len(),
         Subject::Function(i) => i < inventory.functions().len(),
         Subject::Block(i) => i < inventory.blocks().len(),

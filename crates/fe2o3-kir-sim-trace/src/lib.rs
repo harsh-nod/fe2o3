@@ -1516,6 +1516,10 @@ fn configuration_identity(
     target: SimulationTargetV1,
 ) -> Result<OpaqueIdentityV1, TraceAdapterErrorV1> {
     let mut digest = Sha256::new();
+    if target.amd_profile().is_some() {
+        digest.update(b"FE2O3/KIR-SIM-TRACE/TARGET-PROFILE/V2\0");
+        hash_bytes(&mut digest, target.identity_tag().as_bytes());
+    }
     let write_only = request.arguments.iter().any(|argument| match argument {
         SimulationArgumentV1::Scalar(_) => false,
         SimulationArgumentV1::Buffer(buffer) => {

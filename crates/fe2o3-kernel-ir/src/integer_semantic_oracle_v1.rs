@@ -469,6 +469,7 @@ fn preflight_terminator(
 
 fn operation_name(kind: &OperationKind) -> &'static str {
     match kind {
+        OperationKind::Storage(_) => "storage",
         OperationKind::Execution(_) => "execution",
         OperationKind::VerificationContract(_) => "verification-contract",
         OperationKind::VectorLoad(_) => "vector-load",
@@ -1374,6 +1375,25 @@ impl Error for IntegerSemanticOracleErrorV1 {
 #[cfg(test)]
 mod guarded_load_tests {
     use super::*;
+
+    #[test]
+    fn storage_read_is_reported_as_unsupported_by_the_legacy_integer_oracle() {
+        let operation = Operation::effect_free(
+            ValueDef::new(ValueId(1), Type::Scalar(ScalarType::U32)),
+            OperationKind::Storage(crate::StorageOperationV1::ReadValue {
+                address: ValueId(0),
+                access: crate::MemoryAccess::new(AddressSpace::Global, 4),
+            }),
+        );
+        assert_eq!(
+            preflight_operation(BlockId(2), 7, &operation),
+            Err(IntegerSemanticOracleErrorV1::UnsupportedOperation {
+                block: BlockId(2),
+                operation: 7,
+                kind: "storage",
+            })
+        );
+    }
 
     fn operation(predicate: ValueId, pointer: ValueId, fallback: ValueId) -> Operation {
         Operation::effect_free(

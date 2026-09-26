@@ -586,9 +586,9 @@ the information needed to implement Rust correctly:
 
 SSA construction uses a mixed value/memory classification. Locals whose
 storage is not observed are eligible for value SSA; address-taken, aliased,
-atomic, volatile, projection-mutated, and drop-observed storage is retained
-rather than forced into SSA. This boundary is conservative: retention is valid
-even when a stronger alias or escape analysis could prove promotion safe.
+atomic, volatile, drop-observed, and unsupported projection-mutated storage is
+retained rather than forced into SSA. This boundary is conservative: retention
+is valid even when a stronger alias or escape analysis could prove promotion safe.
 
 The Pliron-independent planner computes reachable blocks, liveness, dominators,
 pruned iterated dominance-frontier merge placement, sparse block transport
@@ -623,6 +623,35 @@ storage-observable only when its result has exactly one direct consumer at the
 exact accepted argument of a registered compiler intrinsic. Escapes, ordinary
 calls, multiple consumers, and nonmatching arguments retain the source in
 memory.
+
+Nonvolatile assignment through a fully typed, static Field-only path in a tuple
+or aggregate can remain in SSA when its root is otherwise promotable. The
+adapter evaluates right-hand-side uses first, records a BaseUse of the old root,
+then records a DestinationDefine for the whole root. Lowering consumes those
+exact original occurrences, clones the archived aggregate representation,
+replaces the checked field path, and archives the new root definition. Copies
+and earlier SSA definitions retain their old values; joins and backedges
+transport the new whole-root definition through the ordinary SSA plan.
+
+Cloning that representation is not a semantic read of each field. A moved
+sibling stays unavailable under the independent partial-move certificate,
+while exact field reinitialization restores only the assigned path.
+
+Before SSA planning, normal replay and occurrence capture run the same
+complete-holder availability analysis. Exact field-update event coordinates
+come from the shared emitter. Whole definitions and normal-edge definitions
+establish a holder, whole kills remove it, and a field update requires and
+preserves it. Sparse per-local block summaries explore at most two presence
+states per reachable block. If any incoming path lacks a holder, the local
+remains explicit memory; lowering never fabricates an undefined aggregate.
+This decision neither initializes individual fields nor grants memory access.
+Its scratch and traversal envelope are prepaid against configured limits and,
+during capture, the shared ledger. The refined bitmap drives both the final
+SSA plan and its original-occurrence join.
+
+Enum/downcast, union,
+dynamic-index and other projection writes are not covered by this static-field
+rule, nor does it override address observability or drop restrictions.
 
 Optimized rustc MIR may erase the producer of the ambient
 `WorkgroupLdsScope` zero-sized value while retaining its intrinsic borrows. A

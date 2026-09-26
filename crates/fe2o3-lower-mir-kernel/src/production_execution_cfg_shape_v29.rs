@@ -61,26 +61,51 @@ fn execution_cfg_nominal_count_v29(
     ty: SemanticTypeIdV1,
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<usize, ProductionSemanticKirErrorV1> {
+    execution_cfg_transport_count_v29(types, ty, false, budget)
+}
+
+// This selects original ABI transport, not a memory region or execution
+// capability. Unprofiled shared slices retain their Generic representation.
+fn execution_cfg_return_transport_count_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
+    execution_cfg_transport_count_v29(types, ty, true, budget)
+}
+
+fn execution_cfg_transport_count_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    shared_slices: bool,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
     fn count(
         types: &[SemanticTypeDeclV1],
         ty: SemanticTypeIdV1,
+        shared_slices: bool,
         nodes: &mut usize,
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<usize, ProductionSemanticKirErrorV1> {
         execution_cfg_charge_node_v29(nodes, budget)?;
-        if execution_cfg_nominal_kind_v29(types, ty)?.is_some() {
+        if execution_cfg_nominal_kind_v29(types, ty)?.is_some()
+            || (shared_slices && shared_slice_leaf_v1(types, ty))
+        {
             return Ok(1);
         }
         match types[ty.index() as usize].shape() {
             SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => {
                 let mut total = 0;
                 for field in fields.fields() {
-                    total = argument_sum_v1(&[total, count(types, *field, nodes, budget)?])?;
+                    total = argument_sum_v1(&[
+                        total,
+                        count(types, *field, shared_slices, nodes, budget)?,
+                    ])?;
                 }
                 Ok(total)
             }
             SemanticTypeShapeV1::Array { element, length } => {
-                let leaf_count = count(types, *element, nodes, budget)?;
+                let leaf_count = count(types, *element, shared_slices, nodes, budget)?;
                 if leaf_count == 0 {
                     return Ok(0);
                 }
@@ -94,7 +119,7 @@ fn execution_cfg_nominal_count_v29(
             SemanticTypeShapeV1::Enum { variants, .. } => {
                 for variant in variants {
                     for field in variant.fields().fields() {
-                        if count(types, *field, nodes, budget)? != 0 {
+                        if count(types, *field, shared_slices, nodes, budget)? != 0 {
                             return Err(execution_cfg_error_v29());
                         }
                     }
@@ -104,7 +129,7 @@ fn execution_cfg_nominal_count_v29(
             _ => Ok(0),
         }
     }
-    count(types, ty, &mut 0, budget)
+    count(types, ty, shared_slices, &mut 0, budget)
 }
 
 fn execution_cfg_leaf_v29(
@@ -383,7 +408,7 @@ fn execution_cfg_clone_type_inner_v29(
 ) -> Result<Type, ProductionSemanticKirErrorV1> {
     execution_cfg_charge_node_v29(nodes, budget)?;
     match ty {
-        Type::Unit | Type::Scalar(_) | Type::Vector(_) => Ok(ty.clone()),
+        Type::Unit | Type::Scalar(_) | Type::Vector(_) | Type::StorageObject(_) => Ok(ty.clone()),
         Type::Pointer(pointer) => {
             budget.reserve_storage(std::mem::size_of::<Type>())?;
             Ok(Type::pointer(
@@ -411,10 +436,34 @@ fn clone_execution_cfg_binding_v29(
 ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
     execution_cfg_charge_node_v29(nodes, budget)?;
     Ok(match binding {
+        SemanticValueBindingV1::SourceReference(_)
+        | SemanticValueBindingV1::SourceInactive(_)
+        | SemanticValueBindingV1::Enum { .. }
+        | SemanticValueBindingV1::DynamicLds { .. }
+        | SemanticValueBindingV1::MatrixFragment { .. }
+        | SemanticValueBindingV1::AccumulatorFragment { .. }
+        | SemanticValueBindingV1::WorkgroupPipeline { .. }
+        | SemanticValueBindingV1::OptionPointer { .. } => {
+            emission_clone_binding_v1(binding, budget)?
+        }
+        // Copy existing producer identities and availability without admitting a
+        // new producer, observation, merge, or ordinary SSA representation.
         SemanticValueBindingV1::Unit
         | SemanticValueBindingV1::Execution(_)
         | SemanticValueBindingV1::ExecutionBorrow(_)
-        | SemanticValueBindingV1::MovedExecution => binding.clone(),
+        | SemanticValueBindingV1::MovedExecution
+        | SemanticValueBindingV1::MathContext
+        | SemanticValueBindingV1::CollectiveContext
+        | SemanticValueBindingV1::WorkgroupLdsScope
+        | SemanticValueBindingV1::MatrixContext
+        | SemanticValueBindingV1::WaveLane { .. }
+        | SemanticValueBindingV1::Gfx950LdsTransposeTile { .. }
+        | SemanticValueBindingV1::IndexWitness { .. }
+        | SemanticValueBindingV1::OptionIndexWitness { .. }
+        | SemanticValueBindingV1::GridLeader { .. }
+        | SemanticValueBindingV1::ComponentWitness { .. }
+        | SemanticValueBindingV1::OptionComponentWitness { .. }
+        | SemanticValueBindingV1::OptionGridLeader { .. } => binding.clone(),
         SemanticValueBindingV1::Aggregate(fields) => {
             let mut output = emission_vec_v1(fields.len(), budget)?;
             for field in fields {
@@ -426,7 +475,9 @@ fn clone_execution_cfg_binding_v29(
             id: *id,
             ty: execution_cfg_clone_type_inner_v29(ty, nodes, budget)?,
         },
-        _ => return Err(execution_cfg_error_v29()),
+        SemanticValueBindingV1::Unmaterialized | SemanticValueBindingV1::ExecutionReferent(_) => {
+            return Err(execution_cfg_error_v29());
+        }
     })
 }
 
@@ -497,4 +548,40 @@ fn rebuild_execution_cfg_binding_v29(
         id: value.id,
         ty: output_type,
     })
+}
+
+#[cfg(test)]
+mod storage_cfg_copy_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, StorageLayoutIdV1};
+    #[test]
+    fn storage_terminal_copy_preserves_id_without_copying_a_layout_table() {
+        let input = Type::pointer(
+            Type::slice(
+                Type::StorageObject(StorageLayoutIdV1(31)),
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ),
+            AddressSpace::Private,
+            AccessMode::ReadWrite,
+        );
+        let mut work = Work::new(3);
+        let mut nodes = 0;
+        {
+            let mut budget = ArgumentBudgetV1::new(&mut work, 11 + 2 * std::mem::size_of::<Type>());
+            budget.reserve_storage(11).unwrap();
+            let copied =
+                execution_cfg_clone_type_inner_v29(&input, &mut nodes, &mut budget).unwrap();
+            assert_eq!(copied, input);
+            assert_eq!(budget.storage(), 11 + 2 * std::mem::size_of::<Type>());
+            drop(copied);
+            budget
+                .release_storage(2 * std::mem::size_of::<Type>())
+                .unwrap();
+            assert_eq!(budget.storage(), 11);
+        }
+        assert_eq!(work.work(), 3);
+        assert_eq!(nodes, 3);
+    }
 }

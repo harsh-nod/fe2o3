@@ -7,6 +7,8 @@ use fe2o3_kernel_ir::{
 };
 use simulation::integer_identity::{Batch, Integer, ROOTS};
 
+#[path = "production_rustc_driver_canonical_scalar_source_v1_tests.rs"]
+mod canonical_scalar_source;
 #[path = "production_rustc_driver_dominance_cse_source_v1_tests.rs"]
 mod dominance;
 #[path = "production_rustc_driver_integer_identity_graph_v1_tests.rs"]
@@ -1086,3 +1088,6 @@ fn ordinary_rust_integer_identities_reach_final_i_native_and_sim_both_profiles()
         (64, 320, 32, 256)
     );
 }
+
+#[path = "production_rustc_driver_canonical_assertion_source_v1_tests.rs"]
+mod canonical_assertion_source;

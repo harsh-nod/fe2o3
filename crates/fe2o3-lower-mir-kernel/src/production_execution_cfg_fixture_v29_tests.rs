@@ -541,7 +541,22 @@ fn lower_cfg_fixture_with_limits(
         Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1>,
     ),
 ) -> Result<(usize, usize), String> {
-    let mut owner = cfg_owner(shape);
+    lower_cfg_owner_with_limits(cfg_owner(shape), shape, (work_limit, storage_limit),
+        change_seed, change_cursor, inspect)
+}
+
+fn lower_cfg_owner_with_limits(
+    mut owner: ProductionSemanticSsaOwnerV1,
+    shape: Shape,
+    (work_limit, storage_limit): (usize, usize),
+    change_seed: impl FnOnce(&mut SemanticExecutionBindingV29),
+    change_cursor: impl FnOnce(&mut ExecutionAvailabilityV29<'_>),
+    inspect: impl FnOnce(
+        &ProductionSemanticSsaOwnerV1,
+        &SemanticExecutionBindingV29,
+        Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1>,
+    ),
+) -> Result<(usize, usize), String> {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
     let captured = owner

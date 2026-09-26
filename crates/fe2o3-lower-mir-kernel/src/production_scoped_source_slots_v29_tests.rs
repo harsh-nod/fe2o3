@@ -1,5 +1,15 @@
 use super::*;
 
+include!("production_scoped_source_consuming_v29_tests.rs");
+
+mod retained_scalar_entry_tests {
+    include!("production_retained_scalar_entry_v29_tests.rs");
+}
+
+mod source_reference_postflight_tests {
+    include!("production_source_reference_postflight_v29_tests.rs");
+}
+
 mod slot_use_tests {
     include!("production_scoped_slot_uses_orchestration_v29_tests.rs");
 }
@@ -24,6 +34,10 @@ mod relocation_tests {
     include!("production_scoped_slot_relocation_v29_tests.rs");
 }
 
+mod tile_call_index_tests {
+    include!("production_execution_tile_call_index_v29_tests.rs");
+}
+
 const STOP: &str = "test stopped after scoped source-slot validation";
 thread_local! {
     static OBSERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -46,6 +60,16 @@ fn check_receipt(
     emitted: &[Option<LoweredFunctionResultV1>],
     receipt: &OwnedScopedSourceSlotsV29,
     budget: &mut ArgumentBudgetV1<'_>,
+) {
+    check_receipt_with_scalar_local(instances, emitted, receipt, budget, 2);
+}
+
+fn check_receipt_with_scalar_local(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &[Option<LoweredFunctionResultV1>],
+    receipt: &OwnedScopedSourceSlotsV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+    scalar_local: u32,
 ) {
     OBSERVED.set(OBSERVED.get() + 1);
     assert!(receipt.ledger == budget.work_ledger_identity_v1());
@@ -104,24 +128,25 @@ fn check_receipt(
                     .collect();
                 assert_eq!(matching.len(), 1);
                 let row = matching[0];
+                let scalar = row.scalar_array().unwrap();
                 assert_eq!(row.instance, instance);
                 assert_eq!(*element, Type::Scalar(ScalarType::U32));
                 assert_eq!(*address_space, AddressSpace::Private);
                 assert_eq!(*alignment, 4);
                 assert_eq!(
-                    row.element,
+                    scalar.element,
                     PrivateRetainedSlotFactsV1 {
                         element: PrivateRetainedElementFactsV1::Scalar(ScalarType::U32),
                         size: 4,
                         alignment: 4,
                     }
                 );
-                assert_eq!(row.length, 1);
-                assert_eq!(row.bytes, 4);
-                assert_eq!(row.element_type, U32);
+                assert_eq!(scalar.length, 1);
+                assert_eq!(scalar.bytes, 4);
+                assert_eq!(scalar.element_type, U32);
                 assert_eq!(
                     row.origin.semantic_type,
-                    source.declaration().locals()[row.origin.local as usize].ty()
+                    source.declaration().locals()[row.legacy_local().unwrap() as usize].ty()
                 );
                 assert_eq!(
                     operation.results,
@@ -135,7 +160,7 @@ fn check_receipt(
                     )]
                 );
                 assert!(physical.insert(row.origin.pointer));
-                match row.count {
+                match scalar.count {
                     Some((value, location)) => {
                         assert_eq!(*count, Some(value));
                         assert_eq!(location.block, block.id);
@@ -150,7 +175,7 @@ fn check_receipt(
                         );
                         assert_eq!(operation_index, 1);
                         assert_eq!(
-                            row.origin.local,
+                            row.legacy_local().unwrap(),
                             if source.function() == HELPER { 6 } else { 3 }
                         );
                     }
@@ -158,7 +183,7 @@ fn check_receipt(
                         assert_eq!(*count, None);
                         assert_eq!(operation_index, 0);
                         assert_eq!(source.function(), SemanticFunctionIdV1::from_index(3));
-                        assert_eq!(row.origin.local, 2);
+                        assert_eq!(row.legacy_local().unwrap(), scalar_local);
                     }
                 }
             }
@@ -170,8 +195,8 @@ fn check_receipt(
         assert_ne!(first.instance, second.instance);
         assert_ne!(first.origin.pointer, second.origin.pointer);
         assert_ne!(first.allocation.block, second.allocation.block);
-        if first.count.is_none() {
-            assert_eq!(first.origin.local, second.origin.local);
+        if first.scalar_array().unwrap().count.is_none() {
+            assert_eq!(first.legacy_local().unwrap(), second.legacy_local().unwrap());
             assert_eq!(
                 receipt.instances[first.instance.index()].function,
                 receipt.instances[second.instance.index()].function
@@ -307,7 +332,7 @@ fn mutation_check(
         origins.push(origins[0]);
     });
     reject_mutation(instances, emitted, index, budget, |row| {
-        row.scoped_slot_origins.as_mut().unwrap()[0].local = 0;
+        row.scoped_slot_origins.as_mut().unwrap()[0].identity = ScopedAllocationIdentityV29::LegacyLocal(0);
     });
     reject_mutation(instances, emitted, index, budget, |row| {
         row.scoped_slot_origins.as_mut().unwrap()[0].semantic_type = UNIT;
@@ -362,7 +387,13 @@ fn mutation_check(
     reject_mutation(instances, emitted, index, budget, |row| {
         row.scoped_slot_origins.as_mut().unwrap()[0] = other.origin;
     });
-    if let Some((_, count)) = slot.count {
+    if let Some((_, count)) = slot.scalar_array().unwrap().count {
+        reject_mutation(instances, emitted, index, budget, |row| {
+            row.scoped_slot_origins.as_mut().unwrap()[0].source =
+                ScopedAllocationSourceV29::OriginalArray {
+                    schema: fe2o3_kernel_ir::StorageLayoutIdV1(u32::MAX),
+                };
+        });
         reject_mutation(instances, emitted, index, budget, |row| {
             row.function.body.as_mut().unwrap().blocks[count.block_ordinal].operations
                 [count.operation]
@@ -474,32 +505,31 @@ fn captured_scalar_origins_have_independent_exact_resource_limits() {
         .into_iter()
         .map(|local| {
             (
-                local,
+                ScopedAllocationIdentityV29::LegacyLocal(local),
                 SemanticRetainedLocalSlotV1 {
                     pointer: ValueId(local + 10),
                     semantic_type: U32,
-                    kernel_type: Type::Scalar(ScalarType::U32),
-                    alignment: 4,
-                    array: None,
+                    storage: SemanticRetainedStorageV29::ScalarArray { kernel_type: Type::Scalar(ScalarType::U32), alignment: 4, array: None },
                 },
             )
         })
         .collect();
     let bytes = 2 * std::mem::size_of::<ScopedSlotOriginV29>();
+    // Vec construction3 plus two closed identity/representation rows6 each.
     for (work_limit, capacity, success) in [
-        (9, 37 + bytes, true),
-        (8, 37 + bytes, false),
-        (9, 36 + bytes, false),
+        (15, 37 + bytes, true),
+        (14, 37 + bytes, false),
+        (15, 36 + bytes, false),
     ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
         let mut budget = ArgumentBudgetV1::new(&mut work, capacity);
         budget.reserve_storage(37).unwrap();
-        match capture_scoped_slot_origins_v29(&original, &mut budget) {
+        match capture_scoped_slot_origins_v29(&original, None, &mut budget) {
             Ok(rows) => {
                 assert!(success);
                 assert_eq!(
                     rows.iter()
-                        .map(|row| (row.local, row.pointer))
+                        .map(|row| (row.legacy_local().unwrap(), row.pointer))
                         .collect::<Vec<_>>(),
                     vec![(3, ValueId(13)), (7, ValueId(17))]
                 );
@@ -509,7 +539,7 @@ fn captured_scalar_origins_have_independent_exact_resource_limits() {
             }
             Err(error) => {
                 assert!(!success);
-                assert_resource(&error, work_limit == 8);
+                assert_resource(&error, work_limit == 14);
             }
         }
         assert_eq!(budget.storage(), 37);

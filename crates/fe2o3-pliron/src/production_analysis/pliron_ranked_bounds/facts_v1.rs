@@ -38,6 +38,13 @@ struct PredecessorEdge {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RankedOperationKind {
     NativeData,
+    PrivateAllocate,
+    PrivateAddress,
+    PrivateRead,
+    PrivateWrite,
+    PrivateCall,
+    TerminalCall,
+    TerminalEnd,
     RankedView,
     IndexConstant,
     IndexUnsignedCast,
@@ -58,6 +65,7 @@ enum RankedOperationKind {
     IndexEqualBranch,
     IndexEqualBranchArgs,
     BooleanBranchArgs,
+    NativeSwitch,
     AnalysisSplit,
     Branch,
     BranchArgs,
@@ -91,11 +99,13 @@ impl RankedOperationKind {
                 | Self::IndexEqualBranch
                 | Self::IndexEqualBranchArgs
                 | Self::BooleanBranchArgs
+                | Self::NativeSwitch
                 | Self::AnalysisSplit
                 | Self::Branch
                 | Self::BranchArgs
                 | Self::Return
                 | Self::Trap
+                | Self::TerminalEnd
         )
     }
 }
@@ -152,6 +162,11 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         .is_some()
     {
         Some(RankedOperationKind::BooleanBranchArgs)
+    } else if operation
+        .downcast_ref::<dialect_gpu::switch_v3::SwitchOpV3>()
+        .is_some()
+    {
+        Some(RankedOperationKind::NativeSwitch)
     } else if operation.downcast_ref::<AnalysisSplitOp>().is_some() {
         Some(RankedOperationKind::AnalysisSplit)
     } else if operation
@@ -426,4 +441,24 @@ impl FactSet {
             *word &= source_word;
         }
     }
+}
+
+fn canonical_private_operation_kind_v1(
+    input: &crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1<'_>,
+    context: &Context,
+    operation: pliron::context::Ptr<Operation>,
+) -> Option<RankedOperationKind> {
+    use crate::production_analysis::canonical_ranked_checks_v1::private::PrivateOperationKindV1 as Kind;
+    Some(match input.operation(context, operation)? {
+        Kind::Allocate => RankedOperationKind::PrivateAllocate,
+        Kind::Address => RankedOperationKind::PrivateAddress,
+        Kind::Read => RankedOperationKind::PrivateRead,
+        Kind::Write => RankedOperationKind::PrivateWrite,
+        Kind::Call => RankedOperationKind::PrivateCall,
+        Kind::TrapCall => RankedOperationKind::TerminalCall,
+        Kind::TrapEnd => RankedOperationKind::TerminalEnd,
+        Kind::Scalar => {
+            return ranked_operation_kind(Operation::get_op_dyn(operation, context).as_ref());
+        }
+    })
 }

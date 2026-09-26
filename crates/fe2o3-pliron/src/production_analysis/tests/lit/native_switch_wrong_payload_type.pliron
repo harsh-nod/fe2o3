@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: native switch edge has an incompatible target signature
+builtin.func @native_switch_wrong_payload_type: builtin.function <(builtin.integer ui32, builtin.integer ui16) -> ()>
+{
+  ^entry(selector: builtin.integer ui32, value: builtin.integer ui16):
+    gpu.switch_v3 (selector, value, value) [^join, ^join] [gpu_switch_kind: gpu.switch_key_kind_v3 U32, gpu_switch_cases: gpu.switch_case_bits_v3 [7], gpu_switch_offsets: gpu.switch_successor_offsets_v3 [0, 1, 2], operand_segment_sizes: builtin.operand_segment_sizes [1, 2]]: <(builtin.integer ui32, builtin.integer ui16, builtin.integer ui16) -> ()>
+  ^join(received: builtin.integer ui32):
+    gpu.return () [] []: <() -> ()>
+}

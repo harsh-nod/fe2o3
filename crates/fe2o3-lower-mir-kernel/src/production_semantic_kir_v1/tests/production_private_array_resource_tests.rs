@@ -387,6 +387,106 @@ fn repeated_shared_activation_keeps_work_and_the_first_denial() {
 }
 
 #[test]
+fn empty_call_payload_merge_preserves_lazy_phase_and_rejects_unmetered_payloads() {
+    for (roots, operations) in [(1, 0), (2, usize::MAX)] {
+        let mut phase = PrivateArrayLazyBudgetV1::new(roots, operations);
+        let empty = PrivateArrayPayloadV1::default();
+        let merged = phase.merge_payload(empty, empty).unwrap();
+        assert_eq!((merged.occupied, merged.capacity), (0, 0));
+        for payload in [
+            PrivateArrayPayloadV1 { occupied: 1, capacity: 1 },
+            PrivateArrayPayloadV1 { occupied: 0, capacity: 1 },
+        ] {
+            mismatch(phase.merge_payload(empty, payload).err().unwrap());
+            mismatch(phase.merge_payload(payload, empty).err().unwrap());
+        }
+        assert!(phase.active.is_none());
+        let mut recorder = PrivateArrayRecorderWorkV1::Shared(&mut phase);
+        assert!(recorder.merge_payload(empty, empty).is_ok());
+        assert!(phase.active.is_none());
+    }
+    let mut detached = PrivateArrayRecorderWorkV1::Detached;
+    assert!(detached.merge_payload(PrivateArrayPayloadV1::default(), PrivateArrayPayloadV1::default()).is_err());
+}
+
+#[test]
+fn active_call_payload_merge_keeps_exact_work_and_sticky_failure() {
+    let mut phase = PrivateArrayLazyBudgetV1::new(1, 3);
+    phase.activate().unwrap();
+    let payload = PrivateArrayPayloadV1 { occupied: 2, capacity: 4 };
+    let merged = phase.merge_payload(payload, payload).unwrap();
+    assert_eq!((merged.occupied, merged.capacity), (4, 8));
+    assert_eq!(phase.active.as_ref().unwrap().work.work(), 2);
+    work_error(phase.merge_payload(payload, payload).err().unwrap(), 4, 3);
+    work_error(phase.merge_payload(PrivateArrayPayloadV1::default(), PrivateArrayPayloadV1::default()).err().unwrap(), 4, 3);
+    assert_eq!(phase.active.as_ref().unwrap().work.work(), 2);
+}
+
+#[test]
+fn inherited_call_payload_carry_keeps_lazy_phase_without_unmetered_growth() {
+    let empty = PrivateArrayPayloadV1::default();
+    for (roots, operations) in [(1, 0), (2, usize::MAX)] {
+        let mut phase = PrivateArrayLazyBudgetV1::new(roots, operations);
+        for inherited in [
+            PrivateArrayPayloadV1 { occupied: 40, capacity: 80 },
+            PrivateArrayPayloadV1 { occupied: usize::MAX, capacity: usize::MAX },
+        ] {
+            let mut recorder = PrivateArrayRecorderWorkV1::Shared(&mut phase);
+            let carried = recorder.carry_inherited_payload_v1(inherited, empty).unwrap();
+            assert_eq!((carried.occupied, carried.capacity), (inherited.occupied, inherited.capacity));
+            for added in [
+                PrivateArrayPayloadV1 { occupied: 1, capacity: 1 },
+                PrivateArrayPayloadV1 { occupied: 0, capacity: 1 },
+                PrivateArrayPayloadV1 { occupied: 1, capacity: 0 },
+            ] {
+                mismatch(recorder.carry_inherited_payload_v1(inherited, added).err().unwrap());
+            }
+            drop(recorder);
+            assert!(phase.active.is_none());
+            mismatch(phase.merge_payload(inherited, empty).err().unwrap());
+        }
+    }
+    let mut detached = PrivateArrayRecorderWorkV1::Detached;
+    assert!(detached.carry_inherited_payload_v1(empty, empty).is_err());
+    let mut owned = PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, 0));
+    let inherited = PrivateArrayPayloadV1 { occupied: 40, capacity: 80 };
+    let carried = owned.carry_inherited_payload_v1(inherited, empty).unwrap();
+    assert_eq!((carried.occupied, carried.capacity), (40, 80));
+}
+
+#[test]
+fn inherited_call_payload_carry_preserves_active_work_and_first_denial() {
+    let mut phase = PrivateArrayLazyBudgetV1::new(1, 3);
+    phase.activate().unwrap();
+    let inherited = PrivateArrayPayloadV1 { occupied: 40, capacity: 80 };
+    let empty = PrivateArrayPayloadV1::default();
+    let carried = phase.carry_inherited_payload_v1(inherited, empty).unwrap();
+    assert_eq!((carried.occupied, carried.capacity), (40, 80));
+    assert_eq!(phase.active.as_ref().unwrap().work.work(), 2);
+    work_error(phase.carry_inherited_payload_v1(inherited, empty).err().unwrap(), 4, 3);
+    work_error(phase.carry_inherited_payload_v1(empty, empty).err().unwrap(), 4, 3);
+    assert_eq!(phase.active.as_ref().unwrap().work.work(), 2);
+    assert_eq!(phase.active.as_ref().unwrap().work.failed_work(), Some(4));
+}
+
+#[test]
+fn disabled_call_recorder_preserves_ancestor_payload_without_new_array_work() {
+    let mut phase = PrivateArrayLazyBudgetV1::new(1, 5);
+    phase.activate().unwrap();
+    phase.charge_private_array_work(5).unwrap();
+    let outer = PrivateArrayPayloadV1 { occupied: 16, capacity: 32 };
+    let mut recorder = PrivateArrayFunctionRecorderV1::new(
+        PrivateArrayRecorderWorkV1::Shared(&mut phase), false, 0, outer,
+        SemanticEmissionPlacementV1::default(),
+    );
+    let payload = recorder.live_payload_v1(0, 0, 0, 0).unwrap();
+    assert_eq!((payload.occupied, payload.capacity), (16, 32));
+    mismatch(recorder.live_payload_v1(1, 0, 0, 0).err().unwrap());
+    drop(recorder);
+    assert_eq!(phase.active.as_ref().unwrap().work.work(), 5);
+}
+
+#[test]
 fn test_owned_wrapper_uses_the_same_lazy_meter_and_latch() {
     let mut work = PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(2, 5));
     mismatch(work.charge_private_array_work(0).unwrap_err());

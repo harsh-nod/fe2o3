@@ -76,6 +76,24 @@ fn erased_effect_fixture_mode_with_functions(
     ProductionPreRankedKirOwnerV1,
     Vec<ProductionRankedSemanticProjectionRootV1>,
 ) {
+    try_erased_effect_fixture_mode_with_functions(
+        expected, root_count, lifetime, load_forwarding, integer_identity,
+        redundant_store, transform,
+    ).unwrap()
+}
+
+fn try_erased_effect_fixture_mode_with_functions(
+    expected: bool,
+    root_count: usize,
+    lifetime: Option<SemanticStatementKindV1>,
+    load_forwarding: bool,
+    integer_identity: bool,
+    redundant_store: bool,
+    transform: impl FnOnce(&mut Vec<SemanticFunctionDeclV1>),
+) -> Result<
+    (ProductionPreRankedKirOwnerV1, Vec<ProductionRankedSemanticProjectionRootV1>),
+    fe2o3_pliron::ProductionSemanticSsaErrorV1,
+> {
     use fe2o3_pliron::{
         ProductionConstructionV1, ProductionNumericalContractV2, ProductionRankedBlockV1,
         ProductionRankedKernelV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
@@ -407,8 +425,7 @@ fn erased_effect_fixture_mode_with_functions(
         ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
             .unwrap();
     let ssa =
-        ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())
-            .unwrap();
+        ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())?;
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
     let fault_sites: Vec<_> = if lifetime.is_some() && !load_forwarding {
@@ -527,7 +544,7 @@ fn erased_effect_fixture_mode_with_functions(
             )
         })
         .collect();
-    (owner, roots)
+    Ok((owner, roots))
 }
 
 #[test]

@@ -17,9 +17,9 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
         Self::require_depth_v2(depth)?;
         if tail.is_empty()
-            && let Some(load) = self.place_loads.get(&(place as *const SemanticPlaceV1))
+            && let Some(leaf) = self.source_place_leaf_v18(place)?
         {
-            return Ok(ProductionSemanticExpressionV2::Load(load.clone()));
+            return Ok(leaf);
         }
         let local = place.local().index();
         let declaration = self
@@ -41,7 +41,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         if self.borrowed.contains(&local)
             || self
                 .definitions
-                .address_escaped
+                .address_escaped()
                 .get(local as usize)
                 .copied()
                 != Some(false)
@@ -54,10 +54,13 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             .checked_add(tail.len())
             .filter(|count| *count <= fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2)
             .ok_or("GPU semantic projection exceeds its bounded node budget")?;
+        self.source_reserve_elements_v18(1, std::mem::size_of::<Vec<SemanticProjectionV1>>())?;
+        self.source_reserve_elements_v18(count, std::mem::size_of::<SemanticProjectionV1>())?;
         let mut projections = Vec::new();
         projections
             .try_reserve_exact(count)
-            .map_err(|_| "GPU semantic projection storage cannot be reserved")?;
+            .map_err(|_| self.source_allocation_refusal_v18("GPU semantic projection storage cannot be reserved"))?;
+        self.source_capacity_v18(count, projections.capacity(), std::mem::size_of::<SemanticProjectionV1>())?;
         let mut ty = declaration.ty();
         for projection in place.projections() {
             self.charge_v2()?;
@@ -78,7 +81,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         if let SemanticLocalRoleV1::Argument(argument) = declaration.role() {
             if self
                 .definitions
-                .definition_counts
+                .definition_counts()
                 .get(local as usize)
                 .copied()
                 != Some(0)
@@ -90,12 +93,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                     "GPU semantic aggregate argument needs authenticated component binding",
                 );
             }
-            let symbol = crate::reference_effect_v1::kernel_scalar_symbol_v2(argument)
-                .ok_or("kernel scalar argument exceeds the reserved semantic symbol namespace")?;
-            return Ok(ProductionSemanticExpressionV2::Symbol {
-                symbol,
-                scalar: self.scalar_v2(declaration.ty())?,
-            });
+            return self.source_argument_leaf_v18(argument, self.scalar_v2(declaration.ty())?, depth);
         }
         let definition = self
             .definitions

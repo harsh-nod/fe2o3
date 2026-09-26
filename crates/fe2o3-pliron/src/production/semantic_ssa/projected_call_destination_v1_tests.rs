@@ -711,18 +711,22 @@ fn partial_move_address_read_checks_the_pointer_prefix_not_the_final_pointee() {
                 })
             ));
         } else {
-            // The disjoint moved field does not block the address read, but
-            // this nested destination remains unsupported by the write half.
-            assert!(matches!(
-                result,
-                Err(ProductionSemanticSsaErrorV1::PartialMove {
-                    block: 0,
-                    statement: None,
-                    local: 1,
-                    violation: SemanticPartialMoveViolationV1::UnsupportedProjection,
-                    ..
-                })
-            ));
+            // The exact pointer prefix remains readable, and the indirect
+            // return write neither consumes nor reinitializes its holder.
+            assert_eq!(result.unwrap().partial_move_certificate().projected_moves(), 1);
+
+            let mut blocks = function.blocks().to_vec();
+            blocks[1] = test_block(204, vec![test_assign(3,
+                SemanticOperandV1::Copy(test_place(1, Some(1))))], SemanticTerminatorKindV1::Return);
+            let still_moved = SemanticFunctionDeclV1::new(
+                function.identity(), function.role(), function.item_definition_identity(),
+                function.monomorphization_identity(), function.generic_type_arguments_identity(),
+                function.const_generic_arguments_identity(), function.source(), function.abi().clone(),
+                function.locals().to_vec(), function.entry(), blocks,
+            ).unwrap();
+            assert!(matches!(plan_test_function(&still_moved, &pointer_prefix_types()),
+                Err(ProductionSemanticSsaErrorV1::PartialMove { block: 1, statement: Some(0), local: 1,
+                    violation: SemanticPartialMoveViolationV1::MaybeMovedValueUsed, .. })));
         }
     }
 }

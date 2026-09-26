@@ -26,7 +26,26 @@ fn general_control_source(looping: bool) -> ProductionPreRankedKirOwnerV1 {
 }
 
 fn general_control_and_read_source(looping: bool, read: bool) -> ProductionPreRankedKirOwnerV1 {
-    let (ssa, launch) = fixture_with_blocks_and_symbol(
+    let (ssa, launch) = general_control_and_read_inputs(looping, read);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
+    materialize_with_fixture_kernel_abi_v18(
+        ssa,
+        launch,
+        ProductionSemanticKirLimitsV1::default(),
+        &mut budget,
+    )
+    .unwrap()
+}
+
+fn general_control_and_read_inputs(
+    looping: bool,
+    read: bool,
+) -> (
+    ProductionSemanticSsaOwnerV1,
+    crate::ProductionSourceLaunchRosterV1,
+) {
+    fixture_with_blocks_and_symbol(
         if looping {
             Fixture::Literal(true)
         } else {
@@ -123,16 +142,7 @@ fn general_control_and_read_source(looping: bool, read: bool) -> ProductionPreRa
         } else {
             &[]
         },
-    );
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
-    let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
-    ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-        ssa,
-        launch,
-        ProductionSemanticKirLimitsV1::default(),
-        &mut budget,
     )
-    .unwrap()
 }
 
 #[test]
@@ -296,8 +306,8 @@ fn general_policy3_cannot_bypass_existing_ranked_nontermination_refusal() {
         ProductionRankedTerminatorV1, ProductionSessionLimitsV1,
         compile_ranked_kernel_for_lowering_v1,
     };
-    let source = general_control_source(true);
-    let layout = source.source_launch().roots()[0].layout();
+    let (ssa, launch) = general_control_and_read_inputs(true, false);
+    let layout = launch.roots()[0].layout();
     let kernel = ProductionRankedKernelV1::new(
         "private_array_relation",
         0,
@@ -313,6 +323,24 @@ fn general_policy3_cannot_bypass_existing_ranked_nontermination_refusal() {
         )],
     )
     .unwrap();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
+    let source = materialize_with_fixture_kernel_abi_v18(
+        ssa,
+        launch,
+        ProductionSemanticKirLimitsV1::default(),
+        &mut budget,
+    );
+    assert!(matches!(
+        source,
+        Err(ProductionPreRankedKirErrorV1::Lowering(
+            ProductionSemanticKirErrorV1::Unsupported {
+                detail: "legacy source correspondence cannot represent an invocation-entry relation",
+                ..
+            }
+        ))
+    ));
+    assert_eq!(budget.storage(), 0);
     let error = compile_ranked_kernel_for_lowering_v1(
         ProductionConstructionV1::ranked_kernel("private_array_relation", kernel).unwrap(),
         ProductionSessionLimitsV1::default(),
@@ -327,8 +355,8 @@ fn general_policy3_cannot_bypass_existing_ranked_nontermination_refusal() {
     assert!(matches!(error.report().progress().findings(),
         [fe2o3_pliron::PlironProgressFindingV1::NonTerminatingCycle { blocks, .. }]
         if blocks == &[0]));
-    // A source owner alone cannot replace the refused ranked receipt.
-    assert_eq!(source.executable().module().kernels.len(), 1);
+    // Neither source admission nor a manually constructed ranked graph can
+    // manufacture a checked receipt for the original nonterminating loop.
 }
 
 #[test]

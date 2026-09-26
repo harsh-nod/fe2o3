@@ -207,14 +207,14 @@ mod wrapping_arithmetic_v1_tests {
             }
         }
 
-        fn lowering(&self) -> SemanticFunctionLoweringV1<'_> {
+        fn lowering(&self) -> SemanticFunctionLoweringV1<'_, '_> {
             self.lowering_with_callables(&[])
         }
 
         fn lowering_with_callables<'a>(
             &'a self,
             callables: &'a [SemanticCallableDeclV1],
-        ) -> SemanticFunctionLoweringV1<'a> {
+        ) -> SemanticFunctionLoweringV1<'a, 'a> {
             let scalar_type = SemanticTypeIdV1::from_index(1);
             let mut lowering = SemanticFunctionLoweringV1::new(
                 &self.types,
@@ -244,7 +244,7 @@ mod wrapping_arithmetic_v1_tests {
             axis: SemanticAxisV1,
             rank: u8,
             extra_argument: bool,
-            run: impl FnOnce(&mut SemanticFunctionLoweringV1<'_>, &SemanticDirectCallV1) -> T,
+            run: impl FnOnce(&mut SemanticFunctionLoweringV1<'_, '_>, &SemanticDirectCallV1) -> T,
         ) -> T {
             let scalar = SemanticTypeIdV1::from_index(1);
             let source = SemanticSourceProvenanceV1::unavailable();
@@ -346,7 +346,7 @@ mod wrapping_arithmetic_v1_tests {
 
         fn lower(
             &self,
-            lowering: &mut SemanticFunctionLoweringV1<'_>,
+            lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
             operation: SemanticBinaryOpV1,
             checked: bool,
             operations: &mut Vec<Operation>,

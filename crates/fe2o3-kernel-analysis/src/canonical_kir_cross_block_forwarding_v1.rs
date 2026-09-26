@@ -761,7 +761,12 @@ fn headers(a: &Module, b: &Module) -> Result<()> {
         functions,
         kernels,
         required_capabilities,
+        storage_layouts,
     } = a;
+    // O(1) old-profile eligibility, separate from prepaid legacy equality.
+    if !storage_layouts.is_empty() || !b.storage_layouts.is_empty() {
+        return Err(Error::Mismatch("legacy profile excludes storage layouts"));
+    }
     if id != &b.id
         || kernels != &b.kernels
         || required_capabilities != &b.required_capabilities
@@ -809,3 +814,33 @@ fn headers(a: &Module, b: &Module) -> Result<()> {
 #[cfg(test)]
 #[path = "canonical_kir_cross_block_forwarding_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod legacy_storage_schema_tests {
+    use fe2o3_kernel_ir::{Module, ScalarType, StorageLayoutKindV1, StorageLayoutV1};
+
+    fn eligible(input: &Module, output: &Module) -> bool {
+        super::headers(input, output).is_ok()
+    }
+
+    #[test]
+    fn canonical_kir_cross_block_forwarding_v1_refuses_nonempty_storage_tables() {
+        let empty = Module::new("ordinary");
+        assert!(eligible(&empty, &empty));
+        let mut occupied = empty.clone();
+        occupied.storage_layouts.push(StorageLayoutV1 {
+            size: 1,
+            alignment: 1,
+            kind: StorageLayoutKindV1::Scalar(ScalarType::U8),
+        });
+        assert!(!eligible(&occupied, &empty));
+        assert!(!eligible(&empty, &occupied));
+        // Equal, structurally valid tables are still outside the old profile.
+        assert!(!eligible(&occupied, &occupied));
+        let mut other = occupied.clone();
+        other.storage_layouts[0].kind = StorageLayoutKindV1::Scalar(ScalarType::I8);
+        assert!(!eligible(&occupied, &other));
+        let renamed = Module::new("different");
+        assert!(!eligible(&empty, &renamed));
+    }
+}

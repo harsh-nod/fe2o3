@@ -58,9 +58,9 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_observation_v1(
     observer: RankedBoundsObserverV1<'_, '_, '_>,
 ) -> RankedBoundsReportV1 {
     match observer {
-        None => run_pliron_ranked_bounds_inner_v1(context, function, analyses, None),
+        None => run_pliron_ranked_bounds_inner_v1(context, function, analyses, None, None),
         Some(observer) => observer.with_projection(&Ok, |nested| {
-            run_pliron_ranked_bounds_inner_v1(context, function, analyses, Some(nested))
+            run_pliron_ranked_bounds_inner_v1(context, function, analyses, None, Some(nested))
         }),
     }
 }
@@ -69,8 +69,12 @@ fn run_pliron_ranked_bounds_inner_v1(
     context: &Context,
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
+    private: Option<&crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1<'_>>,
     observer: RankedBoundsObserverV1<'_, '_, '_>,
 ) -> RankedBoundsReportV1 {
+    if private.is_some_and(|input| !input.authenticate(context, function)) {
+        return structural_failure();
+    }
     let mut budget = RankedBoundsBudget::default();
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
@@ -109,7 +113,13 @@ fn run_pliron_ranked_bounds_inner_v1(
                 return finding_failure(finding, observer);
             }
             let operation = Operation::get_op_dyn(operation_pointer, context);
-            let Some(kind) = ranked_operation_kind(operation.as_ref()) else {
+            let classified = match private {
+                None => ranked_operation_kind(operation.as_ref()),
+                Some(input) => {
+                    canonical_private_operation_kind_v1(input, context, operation_pointer)
+                }
+            };
+            let Some(kind) = classified else {
                 let finding = if terminator == Some(operation_pointer) {
                     RankedBoundsFindingV1::UnsupportedTerminator {
                         block: block_index,
@@ -520,4 +530,36 @@ fn intersect_predecessor_facts(
         result.intersect_edge(&inputs[edge.block], edge.guard_fact);
     }
     Ok(result)
+}
+
+pub(crate) fn require_canonical_private_bounds_v1(
+    input: &crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1<'_>,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
+) -> Result<RankedBoundsReportV1, RankedBoundsCheckErrorV1> {
+    // The shared private prepare gate admits the explicit lookup recurrence
+    // before this reader; no standalone public private-permission flag exists.
+    let report = match observer {
+        None => run_pliron_ranked_bounds_inner_v1(
+            input.context(),
+            input.function(),
+            analyses,
+            Some(input),
+            None,
+        ),
+        Some(observer) => observer.with_projection(&Ok, |nested| {
+            run_pliron_ranked_bounds_inner_v1(
+                input.context(),
+                input.function(),
+                analyses,
+                Some(input),
+                Some(nested),
+            )
+        }),
+    };
+    if report.is_clean() {
+        Ok(report)
+    } else {
+        Err(RankedBoundsCheckErrorV1 { report })
+    }
 }

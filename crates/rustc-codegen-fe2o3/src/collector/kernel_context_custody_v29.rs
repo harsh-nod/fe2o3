@@ -409,7 +409,7 @@ impl RetainedContextEntriesV29 {
             .map_err(ContextRootVisitErrorV29::Source)?;
         let scopes = match (self.entries.is_empty(), self.scopes.as_ref()) {
             (true, None) => return Ok(None),
-            (false, Some(scopes)) => scopes,
+            (empty, Some(scopes)) if empty != scopes.is_execution() => scopes,
             _ => return Err(ContextRootVisitErrorV29::Source(mismatch())),
         };
         let source = RetainedExecutionSourceV29 {

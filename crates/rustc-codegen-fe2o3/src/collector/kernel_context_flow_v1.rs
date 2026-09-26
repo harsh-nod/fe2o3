@@ -2,7 +2,8 @@
 
 use super::*;
 use rustc_middle::mir::{
-    BasicBlock, Const, ConstValue, Local, Location, START_BLOCK, StatementKind,
+    BasicBlock, BorrowKind, Const, ConstValue, Local, Location, PlaceElem, ProjectionElem,
+    START_BLOCK, StatementKind,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -210,6 +211,65 @@ fn operand(values: &mut Values, operand: &Operand<'_>) -> Result<Origin, Collect
     }
 }
 
+fn shared_reference_type<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    let ty = tcx.erase_and_anonymize_regions(ty);
+    matches!(ty.kind(), TyKind::Ref(_, _, rustc_hir::Mutability::Not)).then_some(ty)
+}
+
+fn identity_reborrow<T: Eq>(
+    origin: Origin,
+    projection: &[PlaceElem<'_>],
+    borrow: BorrowKind,
+    source: Option<T>,
+    destination: Option<T>,
+    argument: Option<T>,
+) -> Result<Origin, CollectError> {
+    if !matches!(origin, Origin::Argument(_))
+        || !matches!(projection, [ProjectionElem::Deref])
+        || borrow != BorrowKind::Shared
+        || source.is_none()
+        || source != destination
+        || source != argument
+    {
+        return Err(error(
+            "entry reference transport must identity-reborrow its original shared reference argument",
+        ));
+    }
+    Ok(origin)
+}
+
+fn reborrow_operand<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    values: &mut Values,
+    place: rustc_middle::mir::Place<'tcx>,
+    destination: rustc_middle::mir::Place<'tcx>,
+    borrow: BorrowKind,
+) -> Result<Origin, CollectError> {
+    let origin = values.read(place.local.index(), false)?;
+    let Origin::Argument(ordinal) = origin else {
+        return Err(error(
+            "entry reference transport is not a physical argument",
+        ));
+    };
+    if ordinal >= values.arguments {
+        return Err(error(
+            "entry reference transport has an invalid argument ordinal",
+        ));
+    }
+    let destination = Local::from_usize(local(destination)?);
+    // Reborrowing the complete referent preserves the argument's pointer and metadata;
+    // fields, indices, subslices, raw pointers, and newly issued authority cannot match.
+    identity_reborrow(
+        origin,
+        place.projection,
+        borrow,
+        shared_reference_type(tcx, body.local_decls[place.local].ty),
+        shared_reference_type(tcx, body.local_decls[destination].ty),
+        shared_reference_type(tcx, body.local_decls[Local::from_usize(ordinal + 1)].ty),
+    )
+}
+
 fn authenticate<'tcx>(
     tcx: TyCtxt<'tcx>,
     root: Instance<'tcx>,
@@ -263,6 +323,9 @@ fn authenticate<'tcx>(
                     let (place, rvalue) = &**assignment;
                     let origin = match rvalue {
                         Rvalue::Use(value) => operand(&mut values, value)?,
+                        Rvalue::Ref(_, borrow, source) => {
+                            reborrow_operand(tcx, body, &mut values, *source, *place, *borrow)?
+                        }
                         Rvalue::Aggregate(kind, fields)
                             if matches!(**kind, AggregateKind::Tuple) && fields.is_empty() =>
                         {
@@ -498,6 +561,121 @@ mod tests {
     }
 
     #[test]
+    fn shared_reference_forwarding_preserves_live_argument_origin_and_order() {
+        let mut values = Values::new(8, 2).unwrap();
+        values.issue(3).unwrap();
+        let source = values.read(1, false).unwrap();
+        let forwarded = identity_reborrow(
+            source,
+            &[ProjectionElem::Deref],
+            BorrowKind::Shared,
+            Some("shared slice u32"),
+            Some("shared slice u32"),
+            Some("shared slice u32"),
+        )
+        .unwrap();
+        values.assign(4, forwarded).unwrap();
+        assert_eq!(values.read(1, false).unwrap(), source);
+        let context = values.read(3, true).unwrap();
+        assert!(
+            values
+                .call(&[context, Origin::Argument(1), forwarded], 5)
+                .is_err()
+        );
+        assert!(values.call(&[context, forwarded, forwarded], 5).is_err());
+        let forwarded = values.read(4, true).unwrap();
+        values
+            .call(&[context, forwarded, Origin::Argument(1)], 5)
+            .unwrap();
+        assert_eq!(values.phase, Phase::Called);
+        assert!(values.read(4, false).is_err());
+    }
+
+    #[test]
+    fn shared_reference_forwarding_rejects_type_and_authority_substitution() {
+        let check = |origin, source, destination, argument| {
+            identity_reborrow(
+                origin,
+                &[ProjectionElem::Deref],
+                BorrowKind::Shared,
+                source,
+                destination,
+                argument,
+            )
+        };
+        for ty in ["shared u32", "shared slice f32", "shared array u8 7"] {
+            assert_eq!(
+                check(Origin::Argument(0), Some(ty), Some(ty), Some(ty)).unwrap(),
+                Origin::Argument(0)
+            );
+            for origin in [Origin::Context, Origin::Result, Origin::Unit] {
+                assert!(check(origin, Some(ty), Some(ty), Some(ty)).is_err());
+            }
+        }
+        // These nominal tokens stand for distinct region-erased Rust types. None
+        // represents a non-shared-reference type, including raw and mutable pointers.
+        for (source, destination, argument) in [
+            (Some("original"), Some("other"), Some("original")),
+            (Some("original"), Some("original"), Some("other")),
+            (Some("other"), Some("original"), Some("original")),
+            (None, Some("original"), Some("original")),
+            (Some("original"), None, Some("original")),
+            (Some("original"), Some("original"), None),
+            (None, None, None),
+        ] {
+            assert!(check(Origin::Argument(0), source, destination, argument).is_err());
+        }
+    }
+
+    #[test]
+    fn shared_reference_forwarding_rejects_changed_places_and_borrow_kinds() {
+        use rustc_middle::mir::{FakeBorrowKind, MutBorrowKind};
+        let check = |projection: &[PlaceElem<'_>], borrow| {
+            identity_reborrow(
+                Origin::Argument(0),
+                projection,
+                borrow,
+                Some(1_u8),
+                Some(1),
+                Some(1),
+            )
+        };
+        for projection in [
+            Vec::new(),
+            vec![ProjectionElem::Deref, ProjectionElem::Deref],
+            vec![
+                ProjectionElem::Deref,
+                ProjectionElem::Index(Local::from_u32(2)),
+            ],
+            vec![
+                ProjectionElem::Deref,
+                ProjectionElem::Subslice {
+                    from: 0,
+                    to: 1,
+                    from_end: true,
+                },
+            ],
+        ] {
+            assert!(check(&projection, BorrowKind::Shared).is_err());
+        }
+        for borrow in [
+            BorrowKind::Fake(FakeBorrowKind::Shallow),
+            BorrowKind::Fake(FakeBorrowKind::Deep),
+            BorrowKind::Mut {
+                kind: MutBorrowKind::Default,
+            },
+            BorrowKind::Mut {
+                kind: MutBorrowKind::TwoPhaseBorrow,
+            },
+            BorrowKind::Mut {
+                kind: MutBorrowKind::ClosureCapture,
+            },
+        ] {
+            assert!(check(&[ProjectionElem::Deref], borrow).is_err());
+        }
+    }
+
+    #[test]
     fn entry_parameter_bound_and_signature_agreement_are_exact() {
         let maximum = fe2o3_rustc_front::MAX_PARAMETERS_PER_FUNCTION_V1;
         assert!(check_parameter_count(0, 0).is_ok());
@@ -516,3 +694,7 @@ mod tests {
         assert!(Values::new(1, 1).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "kernel_context_reborrow_v1_tests.rs"]
+mod reborrow_tests;

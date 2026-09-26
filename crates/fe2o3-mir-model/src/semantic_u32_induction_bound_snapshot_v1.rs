@@ -209,6 +209,7 @@ impl SemanticU32InductionBoundSnapshotReportV1 {
 }
 
 pub(super) trait InternalMeter {
+    fn allocation_work_in_report(&self) -> bool { true }
     fn charge_work(&mut self, amount: usize) -> Result<(), SemanticU32InductionAnalysisErrorV1>;
     fn reserve_storage(&mut self, amount: usize)
     -> Result<(), SemanticU32InductionAnalysisErrorV1>;

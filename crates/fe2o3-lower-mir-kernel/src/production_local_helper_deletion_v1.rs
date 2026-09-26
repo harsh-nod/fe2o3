@@ -287,13 +287,21 @@ fn check_unit_deletion_exact_output_v1(
         functions: original,
         kernels,
         required_capabilities,
+        storage_layouts,
     } = input.module();
     let Module {
         id: output_id,
         functions: final_functions,
         kernels: output_kernels,
         required_capabilities: output_capabilities,
+        storage_layouts: output_storage_layouts,
     } = output.module();
+    // O(1) old-profile eligibility, independent of prepaid legacy payload work.
+    if !unit_deletion_legacy_storage_tables_v1(storage_layouts, output_storage_layouts) {
+        return Err(unit_deletion_refused_v1(
+            "legacy profile excludes storage layouts",
+        ));
+    }
     if id != output_id || kernels != output_kernels || required_capabilities != output_capabilities
     {
         return Err(unit_deletion_refused_v1(
@@ -469,3 +477,43 @@ fn check_unit_deletion_exact_output_v1(
 }
 
 include!("production_local_helper_silence_v1.rs");
+
+// Only fixed table headers are inspected. No row equality or graph walk occurs.
+fn unit_deletion_legacy_storage_tables_v1(
+    input: &[fe2o3_kernel_ir::StorageLayoutV1],
+    output: &[fe2o3_kernel_ir::StorageLayoutV1],
+) -> bool {
+    input.is_empty() && output.is_empty()
+}
+
+#[cfg(test)]
+mod legacy_storage_schema_tests {
+    use fe2o3_kernel_ir::{Module, ScalarType, StorageLayoutKindV1, StorageLayoutV1};
+
+    fn eligible(input: &Module, output: &Module) -> bool {
+        super::unit_deletion_legacy_storage_tables_v1(
+            &input.storage_layouts,
+            &output.storage_layouts,
+        )
+    }
+
+    #[test]
+    fn production_local_helper_deletion_v1_refuses_nonempty_storage_tables() {
+        let empty = Module::new("ordinary");
+        assert!(eligible(&empty, &empty));
+        let mut occupied = empty.clone();
+        occupied.storage_layouts.push(StorageLayoutV1 {
+            size: 1,
+            alignment: 1,
+            kind: StorageLayoutKindV1::Scalar(ScalarType::U8),
+        });
+        assert!(!eligible(&occupied, &empty));
+        assert!(!eligible(&empty, &occupied));
+        // Equal, structurally valid tables are still outside the old profile.
+        assert!(!eligible(&occupied, &occupied));
+        let mut other = occupied.clone();
+        other.storage_layouts[0].kind = StorageLayoutKindV1::Scalar(ScalarType::I8);
+        assert!(!eligible(&occupied, &other));
+        // This predicate proves schema eligibility only, not payload equality.
+    }
+}

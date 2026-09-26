@@ -170,6 +170,7 @@
         let mut plan = SemanticControlFlowSsaPlanV1 {
             has_retained_arrays: false,
             compiler_issued_bindings: BTreeMap::new(),
+            cfg_carriers: ExecutionCfgCarriersV29::default(),
             implicit_entry_locals: BTreeSet::new(),
             ssa_value_locals: BTreeSet::from([1, 2]),
             retained_local_slots: BTreeMap::new(),

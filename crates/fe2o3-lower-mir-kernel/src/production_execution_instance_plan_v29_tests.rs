@@ -1,5 +1,9 @@
 use super::*;
 
+mod source_selector_tests {
+    include!("production_source_reference_selectors_v29_tests.rs");
+}
+
 mod signature_tests {
     include!("production_execution_signature_v29_tests.rs");
 }
@@ -10,6 +14,18 @@ mod closure_parameter_tests {
 
 mod lifecycle_producer_tests {
     include!("production_execution_lifecycle_producer_v29_tests.rs");
+}
+
+mod storage_nominal_disposition_tests {
+    include!("production_storage_nominal_disposition_v29_tests.rs");
+}
+
+mod storage_logical_transfer_tests {
+    include!("production_source_storage_logical_transfer_v29_tests.rs");
+}
+
+mod storage_snapshot_index_tests {
+    include!("production_source_reference_snapshot_index_v29_tests.rs");
 }
 
 fn plan_case(

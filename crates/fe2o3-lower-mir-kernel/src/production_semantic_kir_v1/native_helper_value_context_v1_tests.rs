@@ -176,8 +176,8 @@ fn actual_verified_native_helper_is_derived_and_bound_to_exact_call() {
                             bits: 32
                         },
                         overflow: ProductionOverflowContractV2::Checked,
-                        lhs: Box::new(constant(7)),
-                        rhs: Box::new(constant(11))
+                        lhs: NormalizedScalarNodeV18::legacy(constant(7)),
+                        rhs: NormalizedScalarNodeV18::legacy(constant(11))
                     }
                 );
                 drop(expression);

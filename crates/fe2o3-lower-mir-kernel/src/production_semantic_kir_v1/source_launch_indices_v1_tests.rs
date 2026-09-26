@@ -152,7 +152,7 @@ mod source_launch_u32_tests {
         rank: u8,
         grid: [u64; 3],
         transform: impl FnOnce(
-            &mut SemanticFunctionLoweringV1<'_>,
+            &mut SemanticFunctionLoweringV1<'_, '_>,
             &mut Vec<Operation>,
             ValueId,
         ) -> (ValueId, Type, Option<ValueId>),

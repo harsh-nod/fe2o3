@@ -230,14 +230,13 @@ fn owned_coordinates_refuse_incomplete_or_changed_expansion_without_moving_rows(
                 }
                 map.check_coordinates(plan.root(), &caller.function, budget)?;
                 let before = snapshot(map);
+                // The live root call is still unexpanded in both cases; its
+                // anchor is rejected before traversal reaches a missing child.
+                assert!(map.anchors.rows.iter().any(|anchor| !anchor.removed));
                 assert_eq!(
                     map.take_owned_coordinates_v1(&caller.function, budget)
                         .err(),
-                    Some(if append_child {
-                        InstanceCorrespondenceErrorV1::CallAnchor
-                    } else {
-                        InstanceCorrespondenceErrorV1::Source
-                    })
+                    Some(InstanceCorrespondenceErrorV1::CallAnchor)
                 );
                 assert_eq!(snapshot(map), before);
                 Ok::<_, InstanceCorrespondenceErrorV1>(())

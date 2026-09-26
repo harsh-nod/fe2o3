@@ -52,14 +52,18 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             return Ok(self);
         }
         self.definitions.charge(self.function.locals().len())?;
+        self.source_reserve_elements_v18(self.function.locals().len(), std::mem::size_of::<Option<usize>>())
+            .map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
         let mut blocks = Vec::new();
         blocks
             .try_reserve_exact(self.function.locals().len())
             .map_err(|_| {
                 ProductionRankedProjectionErrorV1::Unsupported(
-                    "GPU typed ISA call index storage cannot be reserved",
+                    self.source_allocation_refusal_v18("GPU typed ISA call index storage cannot be reserved"),
                 )
             })?;
+        self.source_capacity_v18(self.function.locals().len(), blocks.capacity(), std::mem::size_of::<Option<usize>>())
+            .map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
         blocks.resize(self.function.locals().len(), None);
         for (index, block) in self.function.blocks().iter().enumerate() {
             self.definitions.charge(1)?;
@@ -116,11 +120,11 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         if self.function.role() != SemanticFunctionRoleV1::KernelRoot {
             return Err("GPU typed ISA scalar projection supports direct kernel roots only");
         }
-        if self.definitions.definition_counts.get(local).copied() != Some(1) {
+        if self.definitions.definition_counts().get(local).copied() != Some(1) {
             return Err("GPU typed ISA call result has no single global definition");
         }
         if self.borrowed.contains(&(local as u32))
-            || self.definitions.address_escaped.get(local).copied() != Some(false)
+            || self.definitions.address_escaped().get(local).copied() != Some(false)
         {
             return Err("GPU typed ISA call result has an escaped or borrowed address");
         }
@@ -192,9 +196,12 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         let use_site = self
             .use_site
             .ok_or("GPU typed ISA result has no exact use site")?;
+        self.source_reserve_elements_v18(1, std::mem::size_of::<HashSet<(usize, usize)>>())?;
+        self.source_reserve_elements_v18(1, std::mem::size_of::<(usize, usize)>())?;
         let mut edge = HashSet::new();
         edge.try_reserve(1)
-            .map_err(|_| "GPU typed ISA return-edge storage cannot be reserved")?;
+            .map_err(|_| self.source_allocation_refusal_v18("GPU typed ISA return-edge storage cannot be reserved"))?;
+        self.source_capacity_v18(1, edge.capacity(), std::mem::size_of::<(usize, usize)>())?;
         edge.insert((call_block, destination.edge().target().index() as usize));
         if !self
             .definitions

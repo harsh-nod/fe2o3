@@ -1,0 +1,17 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: PASS
+// CHECK: event 0 use v0=d0
+// CHECK: event 1 use v0=d0
+// CHECK: event 2 def v0=d1
+// CHECK: event 3 use v0=d1
+// RHS projected Move precedes the destination holder use. The independent
+// typed partial-state certificate owns leaf removal and reinitialization.
+
+entry b0
+variables v0
+entry-def v0
+block b0
+use v0
+use v0
+def v0
+use v0

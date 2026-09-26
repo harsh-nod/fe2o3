@@ -12,6 +12,14 @@ mod loop_unroll;
 #[path = "production_checked_output_refined_forwarding_native_census_v1.rs"]
 mod refined_forwarding;
 
+#[cfg(test)]
+#[path = "production_pointer_to_generic_census_v18_tests.rs"]
+mod pointer_to_generic_census_v18_tests;
+
+#[cfg(test)]
+#[path = "production_slice_to_generic_census_v18_tests.rs"]
+mod slice_to_generic_census_v18_tests;
+
 pub(super) fn source(
     owner: &ProductionSemanticKirOwnerV1,
     budget: &mut AssertOriginBudgetV1<'_>,
@@ -698,7 +706,9 @@ fn native_inner(
                     | CastKind::ZeroExtend
                     | CastKind::SignExtend
                     | CastKind::Bitcast
-                    | CastKind::RestrictPointerAccess,
+                    | CastKind::RestrictPointerAccess
+                    | CastKind::PointerToGeneric
+                    | CastKind::SliceToGeneric,
                 ..
             } => None,
             OperationKind::Binary {

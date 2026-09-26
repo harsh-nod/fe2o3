@@ -50,6 +50,8 @@ use crate::production_safe_core_shift_v1::NormalizedCallV1;
 use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
 
 mod function_commitments_v29;
+mod source_census_encoding_v1;
+pub(crate) use source_census_encoding_v1::ProductionSourceCensusEncodingV1;
 pub(crate) mod receiver_materialization_v1;
 pub(crate) mod receiver_reborrow_v1;
 pub(crate) use function_commitments_v29::ExpectedFunctionCommitmentV29;
@@ -445,11 +447,18 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
         mut self,
         semantic: &AdmittedInertSemanticMirV1,
     ) -> Result<crate::collector::RetainedContextEntriesV29, ProductionSemanticBodyErrorV1> {
-        if self.function_commitments.is_some() == self.context_entries.is_empty()
-            || self.function_commitments.is_some() != self.workgroup_scopes.is_some()
+        if self.function_commitments.is_some() != self.workgroup_scopes.is_some()
+            || self.function_commitments.as_ref().is_some_and(|pending| {
+                pending.encoding().is_execution() == self.context_entries.is_empty()
+            })
+            || (self.function_commitments.is_none() && !self.context_entries.is_empty())
         {
             return Err(table("function commitment context transaction"));
         }
+        let encoding = self
+            .function_commitments
+            .as_ref()
+            .map(|pending| pending.encoding());
         if let Some(pending) = self.function_commitments.take() {
             pending.verify(semantic, &mut self.totals, self.limits)?;
         }
@@ -462,6 +471,7 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
                     .declaration_tables_commitment_v29(
                         semantic.types(),
                         semantic.callables(),
+                        encoding.ok_or_else(|| table("source census encoding custody"))?,
                         self.limits,
                     )
                     .map(|declarations| (scopes, declarations))
@@ -528,16 +538,23 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
                 )?;
             }
         }
+        let encoding = self
+            .function_commitments
+            .as_ref()
+            .ok_or_else(|| table("scope function source roster"))?
+            .encoding();
         let declarations = self.totals.declaration_tables_commitment_v29(
             semantic_types,
             semantic_callables,
+            encoding,
             self.limits,
         )?;
-        self.workgroup_scopes = Some(PendingWorkgroupScopesV29::new(
+        self.workgroup_scopes = Some(PendingWorkgroupScopesV29::new_with_encoding(
             classes,
             declarations,
             target,
             self.defined_functions,
+            encoding,
         )?);
         Ok(())
     }

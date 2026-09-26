@@ -1147,6 +1147,22 @@ fn seal_assert_occurrence_in_functions_at_v1(
     expected_failure: BlockId,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> AssertOriginResultV1<SemanticKirAssertConditionBindingV1> {
+    seal_assert_occurrence_with_terminal_v18(pending, first_operation, arguments, coordinate,
+        graph, functions, expected_failure, None, budget)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seal_assert_occurrence_with_terminal_v18(
+    pending: &PendingAssertOriginV1,
+    first_operation: u32,
+    arguments: &[ValueId],
+    coordinate: AssertBlockCoordinateV1,
+    graph: &AssertGraphIndexV1<'_>,
+    functions: &[Function],
+    expected_failure: BlockId,
+    terminal: Option<CheckedTerminalAssertionV18>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> AssertOriginResultV1<SemanticKirAssertConditionBindingV1> {
     let bad = |detail| assert_origin_invalid_v1(Some(pending.site), detail);
     budget.charge_work(1)?;
     let block = assert_origin_function_block_v1(functions, coordinate)?;
@@ -1233,8 +1249,9 @@ fn seal_assert_occurrence_in_functions_at_v1(
                 || success != success_id
                 || success_arguments.as_slice() != expected_arguments
                 || !failure_arguments.is_empty()
-                || actual_failure != failure
+                || actual_failure != terminal.map_or(failure, |row| row.actual_failure)
                 || failure != expected_failure
+                || terminal.is_some_and(|row| row.site != pending.site || row.original_failure != failure)
             {
                 return Err(bad("assertion condition or successor occurrence differs"));
             }
@@ -1242,16 +1259,22 @@ fn seal_assert_occurrence_in_functions_at_v1(
             if !definition.boolean {
                 return Err(bad("assertion condition definition is not Boolean"));
             }
-            let failure_coordinate = graph.block(coordinate.function, failure, budget)?;
+            let failure_coordinate = graph.block(coordinate.function, actual_failure, budget)?;
             budget.charge_work(1)?;
             let failure_block = assert_origin_function_block_v1(functions, failure_coordinate)?;
+            let diagnostic = terminal.map_or(0, |row| row.diagnostic) as usize;
+            budget.charge_work(diagnostic)?;
             if !failure_block.parameters.is_empty()
                 || !matches!(failure_block.terminator, Some(Terminator::Unreachable))
-                || failure_block.operations.len() != 1
+                || failure_block.operations.len() != diagnostic.checked_add(1)
+                    .ok_or(AssertOriginResourceV1::Arithmetic)?
+                || failure_block.operations[..diagnostic].iter().any(|operation|
+                    !operation.results.is_empty() || !matches!(operation.kind,
+                        OperationKind::Execution(fe2o3_kernel_ir::ExecutionOperationV15::ScopeEnd { .. })))
             {
                 return Err(bad("assertion failure is not the synthetic trap block"));
             }
-            let operation = &failure_block.operations[0];
+            let operation = &failure_block.operations[diagnostic];
             let OperationKind::Call { callee, arguments } = &operation.kind else {
                 return Err(bad("assertion failure has no synthetic trap"));
             };

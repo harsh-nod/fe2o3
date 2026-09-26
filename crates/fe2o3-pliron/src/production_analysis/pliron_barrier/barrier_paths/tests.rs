@@ -139,7 +139,7 @@ fn repeated_switch_slots_and_typed_payloads_reach_the_same_barrier() {
         (128, false, K::LegacyU64, (0..17).collect()),
     ] {
         let count = keys.len() + 1;
-        let (context, function, _) = fixture(width, signed, kind, keys, None, false);
+        let (context, function, switch) = fixture(width, signed, kind, keys, None, false);
         let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
         let nodes = build_barrier_cfg_v1(&context, &inventory).ok().unwrap();
         assert_eq!(nodes[0].successors, vec![1; count]);
@@ -147,10 +147,24 @@ fn repeated_switch_slots_and_typed_payloads_reach_the_same_barrier() {
             summary(&context, &function),
             BarrierPathSummaryV1::Unique
         ));
-        // The private path algorithm is not whole-pipeline native admission.
+        let identity = crate::derive_pliron_ir_structural_identity_v1(&context, &function)
+            .expect("native Switch has an exact structural identity");
+        assert_eq!(identity.block_count(), 2);
+        assert_eq!(identity.operation_count(), 3);
+        assert_eq!(identity.value_count(), 5);
+        assert!(!identity.grants_operational_semantics_or_refinement_authority());
+
+        let alternate = function
+            .get_entry_block(&context)
+            .deref(&context)
+            .get_argument(2);
+        Operation::replace_operand(switch.get_operation(), &context, 1, alternate);
+        verify_operation(function.get_operation(), &context).unwrap();
+        let changed = crate::derive_pliron_ir_structural_identity_v1(&context, &function).unwrap();
+        assert!(!identity.exactly_matches(&changed));
         assert!(matches!(
-            crate::derive_pliron_ir_structural_identity_v1(&context, &function),
-            Err(crate::PlironIrIdentityErrorV1::UnsupportedOperation { .. })
+            summary(&context, &function),
+            BarrierPathSummaryV1::Unique
         ));
     }
 }

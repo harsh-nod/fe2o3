@@ -17,8 +17,8 @@ pub(super) fn terminator(term: &Terminator) -> (TerminatorClass, Obligations) {
     }
 }
 
-pub(super) fn edge(
-    inventory: &Inventory<'_>,
+pub(super) fn edge<O>(
+    inventory: &Inventory<'_, O>,
     ordinal: usize,
     budget: &mut Budget<'_>,
 ) -> Result<EdgeClass> {

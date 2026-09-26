@@ -21,15 +21,50 @@ changing the source owner's canonical bytes. It does not add a simulation-bundle
 CLI, or debugger import route. Its canonical/resident limits retain the existing
 post-decode accounting contract, not an allocator/RSS cap on rejected attempts.
 
+`simulate_canonical_storage_v18` directly borrows a verified canonical V18
+owner and executes its actual graph and storage-layout table through the same
+interpreter. It neither decodes a second graph nor converts the owner to an
+older profile. `simulate_canonical_storage_debugged_with_sink_v18` preserves
+bounded live-state debug callbacks; `simulate_canonical_storage_with_sinks_v18`
+also accepts event delivery and an explicit optional dynamic-LDS request.
+Canonical-byte limits are checked before graph traversal. Resident accounting
+includes the borrowed owner, its canonical bytes and graph, execution state,
+and output wrapper. The distinct `SimulationExecutionV18` returns the exact
+V18 identity and copied-back outputs, without a legacy replay transcript or
+hardware/verification authority. These APIs do not add a bundle, CLI import,
+persisted schedule, failure-reduction codec, or production-source admission
+route. Selecting an explicit target profile does not extend the legacy codecs
+to V18 storage owners.
+
 The `fe2o3-kir-sim-capabilities` binary emits the complete V1 semantic
 ownership matrix as stable JSON. It covers every top-level KIR operation and
-terminator for each simulator-facing profile, plus every scalar
+terminator for each profile listed in that frozen matrix, plus every scalar
 unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
 identifies V7, V9, V10, V11, V12, and V16 separately, names those rows as declared tool-contract facts with no authority, and
 grants no hardware or performance authority. The complete newline-terminated
 compact V1 document is fixed at 4,852,346 bytes and its regression test rejects
 any unreviewed schema-size change.
+The direct V18 APIs are not represented by this frozen V1 matrix.
+
+`SimulationTargetV1` has four canonical identities. Index width alone does not
+select an AMD profile:
+
+| Target | Canonical identity | Index bits | AMD profile |
+| --- | --- | --- | --- |
+| `little_endian(Bits32)` | `little_endian_index32_v1` | 32 | `None` |
+| `little_endian(Bits64)` | `amdgpu_64_little_endian_v1` | 64 | `None` |
+| Explicit gfx942, including `amdgpu_64()` | `amdgpu_gfx942_little_endian_v2` | 64 | `Gfx942` |
+| Explicit gfx950 | `amdgpu_gfx950_little_endian_v2` | 64 | `Gfx950` |
+
+The historical `amdgpu_64_little_endian_v1` name always denotes the legacy
+width-only target, not the current `amdgpu_64()` constructor's explicit gfx942
+default. Legacy `None` stays absent and supplies no storage-pointer encoding;
+decoding and replay never infer an AMD profile from bundle metadata or defaults.
+`amdgpu_from_device_target` maps exact `gfx942:xnack-` and `gfx950:xnack-`
+declarations to their respective profiles and refuses other strings. A profile
+describes target layout, not source authentication, allocation provenance,
+initialized memory, access permission, or hardware authority.
 
 The named `gfx942` and `gfx950` profiles describe CPU simulation contracts,
 including layout and any explicitly checked retained target declarations.
@@ -86,7 +121,7 @@ Ordinary admitted Rust can obtain these exact V7 bytes from a strict
 export does not execute or authorize a kernel, and its extraction-only compiler
 binding does not authenticate compiler execution.
 
-Admission relies on that consumed owner's private immutable bytes and identity:
+Legacy `AdmittedSimulationModuleV1` admission relies on the owner's private immutable bytes and identity:
 the owner cannot be constructed without exact versioned canonical decoding and full
 semantic verification. The simulator therefore does not rerun the semantic
 verifier. It independently enforces `max_canonical_bytes`, canonical-decodes and
@@ -193,8 +228,9 @@ wave, workgroup, or compute-unit scheduling.
 A successful recording returns an opaque `SimulationScheduleRecordV1`. The
 record and every result expose a SHA-256 transcript identity plus exact decision,
 workgroup, and barrier-release coverage. Replay binds the record to the exact
-canonical KIR identity, selected kernel, launch, target layout, arguments,
-shared buffers, event policy, and resource limits. It validates every decision
+canonical KIR identity, selected kernel, launch, full target identity (index
+width and optional AMD profile), arguments, shared buffers, event policy, and
+resource limits. It validates every decision
 against the currently runnable local identities and rejects context drift,
 missing or trailing decisions, duplicate or unavailable locals, phase drift,
 coverage drift, and transcript corruption. Decision retention has an explicit
@@ -242,6 +278,14 @@ to match. The CLI exposes `--reduce-failure` and
 same no-symlink snapshot input and durable no-replace output boundaries as
 other simulator artifacts. Reduction and replay remain CPU observations and
 grant no GPU scheduling, timing, performance, or execution authority.
+
+Legacy `None` targets retain the canonical
+`fe2o3-simulation-failure-reduction-v1` schema and existing identity digests.
+Explicit gfx942/gfx950 targets use `fe2o3-simulation-failure-reduction-v2`, with
+a required `target_identity` and matching 64-bit `index_bits`. Both the report
+digest and replay context bind the full target; equal index widths do not make
+profiles interchangeable.
+
 `matches_data_race` additionally lets a read-only consumer verify that a
 detailed race has the exact fingerprint retained by a canonical report. It
 does not authenticate the report producer or replay the report; consumers that
@@ -255,6 +299,12 @@ noncanonical, oversized, structurally invalid, and integrity-corrupt input.
 Decoding grants no authority: callers compare the retained binding to already
 admitted inputs, then ordinary replay still performs every context,
 runnable-decision, coverage, and transcript check.
+The outer `fe2o3-simulation-schedule-v1` envelope is unchanged; explicit profiles
+use the nested V2 target tags listed above. Legacy `None` schedule bytes and
+digests remain unchanged, and older decoders reject the new tags. Full-target
+binding and replay checks reject substitutions between legacy `None`, gfx942,
+and gfx950, including in-process replay. None of these codecs grants source or
+hardware authority or admits V18 storage inputs.
 
 Before any mutable execution state is created, preflight visits the complete
 call graph reachable from the selected kernel, checks target-specific constants,

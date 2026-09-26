@@ -48,7 +48,7 @@ fn noop_prefix8(profile: Profile) -> (Prefix8, usize) {
     );
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
-    let source = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+    let source = materialize_with_fixture_kernel_abi_v18(
         ssa,
         launch,
         ProductionSemanticKirLimitsV1::default(),

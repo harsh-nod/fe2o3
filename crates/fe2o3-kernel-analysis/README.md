@@ -4,6 +4,29 @@
 not grant source authenticity, formal verification, safe-launch or hardware
 execution authority.
 
+## Canonical Ranked Coverage
+
+`build_canonical_ranked_candidate_v18` and
+`with_checked_canonical_ranked_view_v18` share the V1 coverage traversal and
+independent checking traversal, but borrow an actual
+`VerifiedCanonicalKernelIrModuleV18` through `CanonicalKirInventoryV18`.
+They never convert it to V12 or omit its storage table. The existing V1 API
+remains V12-typed; storage-aware candidates cannot cross that boundary implicitly.
+
+Coverage retains every layout row, including unused rows, along with functions,
+blocks, operations, definitions, uses, edge occurrences, effects, requirements
+and inert metadata. Checked queries borrow original operations and layouts.
+Storage projections, reads, writes, object copies and discriminant writes have
+explicit pending obligations. Execution lifecycle and ordered GPU operations
+retain their lifetime, ordering, convergence and other applicable obligations.
+
+This is structural coverage, not proof that a read is initialized, a layout
+matches Rust, an operation is pure, or a rewrite is valid. Metadata facts remain
+inert until their owning source checks authenticate them. Later ranked/safety
+verification and production-pipeline integration are still required. Resource
+limits, exact-object binding, poisoned queries and scope cleanup use the shared
+implementation; the candidate receipt must be reserved while it lives.
+
 ## Canonical MemorySSA
 
 `CanonicalKirMemorySsaV1` borrows an exact immutable inventory and builds one
@@ -114,6 +137,7 @@ cargo test --locked -p fe2o3-kernel-analysis -p fe2o3-kernel-opt --lib store_for
 cargo test --locked -p fe2o3-kernel-analysis --lib canonical_kir_physical_occurrences_v1
 cargo test --locked -p fe2o3-kernel-analysis --no-default-features --lib canonical_kir_physical_occurrences_v1
 cargo test --locked -p fe2o3-kernel-analysis --doc CanonicalKirPhysicalOccurrencesV1
+cargo test --locked -p fe2o3-kernel-analysis --no-default-features canonical_ranked
 ```
 
 Direct tests cover actual KIR admission, exact/one-under work and storage, foreign

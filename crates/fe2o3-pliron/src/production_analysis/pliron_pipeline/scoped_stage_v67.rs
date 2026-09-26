@@ -181,11 +181,24 @@ where
     T: SealedProductionAnalysisReportV1,
 {
     let (validation, mut receipt) = validation;
+    let (phase, prepare) = preparation;
     let (result, stage) = prepare_and_invoke_production_stage_v1(
         analyses,
         preservation,
         receipt.as_deref_mut(),
-        preparation,
+        (phase, |analyses, observer| {
+            let ValidationFamilyV1::CanonicalPrivate(session) = validation else {
+                return prepare(analyses, observer);
+            };
+            let coverage = session.prepare(phase, analyses, observer)?;
+            let mut prepared = with_pipeline_projection_v1(
+                observer,
+                &|local| coverage.checked_then_retain(local, phase),
+                |nested| prepare(analyses, nested),
+            )?;
+            prepared.prefix = coverage.checked_then_retain(prepared.prefix, phase)?;
+            Ok(prepared)
+        }),
         invoke,
     )?;
     if let Ok(report) = &result {

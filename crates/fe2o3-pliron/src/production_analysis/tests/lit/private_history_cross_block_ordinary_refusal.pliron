@@ -1,0 +1,15 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: gpu.preserved_operation
+// CHECK: outside the closed ranked operation allowlist
+// Text-only ordinary-boundary test, not source/lifetime or private proof authority.
+builtin.func @private_cross_block: builtin.function <(builtin.integer ui64) -> ()>
+{
+  ^entry(v: builtin.integer ui64):
+    p = gpu.preserved_operation () [] [gpu_preserved_operation_kind: gpu.preserved_operation_kind Alloca]: <() -> (gpu.pointer <builtin.integer ui64,Private,ReadWrite>)>;
+    gpu.store (p, v) [] [gpu_store_address_space: gpu.address_space Private, gpu_store_alignment: gpu.memory_alignment 8, gpu_store_volatile: gpu.volatile false]: <(gpu.pointer <builtin.integer ui64,Private,ReadWrite>, builtin.integer ui64) -> ()>;
+    kernel.br_args () [^exit] []: <() -> ()>
+  ^exit():
+    loaded = gpu.load (p) [] [gpu_load_address_space: gpu.address_space Private, gpu_load_alignment: gpu.memory_alignment 8, gpu_load_volatile: gpu.volatile false]: <(gpu.pointer <builtin.integer ui64,Private,ReadWrite>) -> (builtin.integer ui64)>;
+    kernel.return () [] []: <() -> ()>
+}

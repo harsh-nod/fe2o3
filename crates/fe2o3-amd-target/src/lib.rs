@@ -14,6 +14,9 @@ mod atomic_legalizability;
 mod capabilities;
 mod feature_capabilities;
 mod resolved_target_v2;
+mod pointer_encoding_v1;
+
+pub use pointer_encoding_v1::AmdPointerEncodingV1;
 
 pub use advanced_model::{
     ADVANCED_CAPABILITY_MODEL_REVISION, AdvancedCapabilityModelIdentity,

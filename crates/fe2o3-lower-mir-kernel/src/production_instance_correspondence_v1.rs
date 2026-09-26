@@ -67,6 +67,7 @@ enum InstanceSpanSourceV1 {
     Statement(SemanticKirStatementOperationSpanV1),
     Terminator(SemanticKirTerminatorOperationSpanV1),
     Synthetic(SemanticKirSyntheticOperationSpanV1),
+    InvocationEntry(ProductionInvocationEntrySpanV1),
 }
 
 impl InstanceSpanSourceV1 {
@@ -97,6 +98,15 @@ impl InstanceSpanSourceV1 {
                 },
             ),
             Self::Synthetic(row) => (
+                row.correspondence_owner,
+                row.semantic_function,
+                InstancePhysicalSpanV1 {
+                    block: row.kernel_ir_block,
+                    first: row.first_operation_ordinal,
+                    count: row.operation_count,
+                },
+            ),
+            Self::InvocationEntry(row) => (
                 row.correspondence_owner,
                 row.semantic_function,
                 InstancePhysicalSpanV1 {
@@ -214,6 +224,7 @@ struct InstanceSeedV1 {
     container: ProductionCallInstanceIdV1,
     function_name: String,
     parameters: std::ops::Range<usize>,
+    inline: ScopedInlineChainV30,
 }
 
 struct InstanceCallAnchorV1 {
@@ -299,6 +310,7 @@ struct ProductionInstanceCorrespondenceV1<'p, 's> {
     returns: InstanceRowsV1<InstanceReturnAnchorV1>,
     components: InstanceRowsV1<CallResultComponentV1>,
     values: InstanceRowsV1<ValueId>,
+    inline: InstanceRowsV1<ScopedInlineSourceV30>,
     storage: usize,
     failed: bool,
     transferred: bool,
@@ -326,6 +338,7 @@ where
         returns: InstanceRowsV1::new(),
         components: InstanceRowsV1::new(),
         values: InstanceRowsV1::new(),
+        inline: InstanceRowsV1::new(),
         storage: 0,
         failed: false,
         transferred: false,
@@ -423,12 +436,17 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         if self.owner.is_some_and(|expected| expected != owner) {
             return Err(InstanceCorrespondenceErrorV1::Source);
         }
-        instance_check_source_rows_v1(source, owner, lowered, budget)?;
+        if lowered.source_call_instance.is_some() {
+            instance_check_source_rows_with_control_v1(plan, instance, owner, lowered, budget)?;
+        } else {
+            instance_check_source_rows_v1(source, owner, lowered, budget)?;
+        }
         let span_count = lowered
             .statement_operation_spans
             .len()
             .checked_add(lowered.terminator_operation_spans.len())
             .and_then(|n| n.checked_add(lowered.synthetic_operation_spans.len()))
+            .and_then(|n| n.checked_add(usize::from(lowered.invocation_entry.is_some())))
             .ok_or(ArgumentResourceV1::Arithmetic)?;
         budget.charge_work(span_count)?;
         self.spans.reserve(span_count, budget, &mut self.storage)?;
@@ -451,6 +469,12 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
                     .iter()
                     .copied()
                     .map(InstanceSpanSourceV1::Synthetic),
+            )
+            .chain(
+                lowered
+                    .invocation_entry
+                    .iter()
+                    .map(|entry| InstanceSpanSourceV1::InvocationEntry(entry.span)),
             )
         {
             let (row_owner, function, span) = origin.coordinates();
@@ -525,6 +549,18 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
                 Terminator::Return { values } => Some(self.append_values(values, budget)?),
                 _ => None,
             };
+            let expected_branch = if lowered
+                .invocation_entry
+                .as_ref()
+                .is_some_and(|entry| entry.layout.preheader == Some(block.id))
+            {
+                let Some(Terminator::Branch { target, arguments }) = &block.terminator else {
+                    return Err(InstanceCorrespondenceErrorV1::Control);
+                };
+                Some((*target, self.append_values(arguments, budget)?))
+            } else {
+                None
+            };
             self.controls.rows.push(InstanceControlV1 {
                 instance,
                 original_block: block.id,
@@ -532,7 +568,7 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
                 physical_block: block.id,
                 origin: InstanceControlOriginV1::Retained,
                 return_values,
-                expected_branch: None,
+                expected_branch,
             });
         }
         budget.charge_work(
@@ -623,13 +659,22 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
                 .blocks()
                 .get(anchor.semantic_block.index() as usize)
                 .ok_or(InstanceCorrespondenceErrorV1::CallAnchor)?;
-            let SemanticKirCallReturnKindV1::Call {
-                arguments_first,
-                call_operation,
-                destination_end,
-                ..
-            } = anchor.kind
-            else {
+            let call_coordinates = match anchor.kind {
+                SemanticKirCallReturnKindV1::Call { arguments_first, call_operation, destination_end, .. } => {
+                    Some((arguments_first, call_operation, destination_end))
+                }
+                SemanticKirCallReturnKindV1::NoNormalReturnCall { arguments_first, call_operation, .. } => {
+                    budget.charge_work(2)?;
+                    if plan.call_control(ProductionCallOccurrenceV1 { caller: instance, block: anchor.semantic_block })
+                        != Some(ProductionCallControlV1::NoNormalReturn)
+                        || !matches!(block.terminator, Some(Terminator::Unreachable))
+                    { return Err(InstanceCorrespondenceErrorV1::CallAnchor); }
+                    Some((arguments_first, call_operation, call_operation.checked_add(1)
+                        .ok_or(ArgumentResourceV1::Arithmetic)?))
+                }
+                SemanticKirCallReturnKindV1::Return { .. } => None,
+            };
+            let Some((arguments_first, call_operation, destination_end)) = call_coordinates else {
                 if !matches!(
                     semantic_block.terminator().kind(),
                     SemanticTerminatorKindV1::Return
@@ -711,16 +756,22 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
             .map_err(|_| ArgumentResourceV1::Allocation)?;
         function_name.push_str(name);
         self.seeds.reserve(1, budget, &mut self.storage)?;
+        let inline = self.append_inline_source_v30(instance, first_span, budget)?;
         self.seeds.rows.push(InstanceSeedV1 {
             instance,
             container: instance,
             function_name,
             parameters,
+            inline,
         });
         self.owner = Some(owner);
         Ok(())
     }
 
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "Retained ordinary no-roster comparison path")
+    )]
     fn splice(
         &mut self,
         call: &ProductionInstanceCallV1<'_>,
@@ -734,6 +785,10 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "Retained ordinary no-roster comparison path")
+    )]
     fn splice_with_scoped_frame_v29(
         &mut self,
         call: &ProductionInstanceCallV1<'_>,
@@ -745,7 +800,18 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> InstanceMapResultV1<SplicedCallInstanceV1> {
         self.check_live_ledger_v1(budget)?;
-        let result = self.splice_inner(call, caller, callee, entry, continuation, frame, budget);
+        let result = self.splice_inner(
+            call,
+            caller,
+            callee,
+            entry,
+            continuation,
+            frame,
+            None,
+            None,
+            None,
+            budget,
+        );
         self.failed = result.is_err();
         result
     }
@@ -759,6 +825,9 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         entry: BlockId,
         continuation: BlockId,
         frame: Option<&scoped_slot_relocation_v29::FramePermitV29<'_, '_>>,
+        sidecars: Option<(&[PendingInstanceSidecarsV29], &PendingActiveInstanceIndexV1)>,
+        storage: Option<&ScopedStorageTransportV29>,
+        lane: Option<&ScopedLaneQueryTransportV29>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> InstanceMapResultV1<SplicedCallInstanceV1> {
         let occurrence = call.occurrence();
@@ -853,24 +922,46 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
             return Err(InstanceCorrespondenceErrorV1::SpanCoverage);
         }
         self.controls.reserve(2, budget, &mut self.storage)?;
-        let result = match frame {
-            Some(frame) => splice_production_call_instance_with_scoped_frame_v29(
+        let result = if let Some((sidecars, active)) = sidecars {
+            let caller_parts = ScopedDeferredScalarViewV29::for_container(
+                self, sidecars, active, container, &caller, budget,
+            )
+            .map_err(instance_anchor_error_v1)?;
+            let callee_parts =
+                ScopedDeferredScalarViewV29::for_container(self, sidecars, active, child, &callee, budget)
+                    .map_err(instance_anchor_error_v1)?;
+            splice_production_call_instance_with_source_queries_v29(
                 caller,
                 callee,
                 site,
                 entry,
                 continuation,
-                Some(frame.for_child(self.plan, child)),
+                frame.map(|frame| frame.for_child(self.plan, child)),
+                Some((&caller_parts, &callee_parts)),
+                storage.map(|transport| ScopedStorageCalleeSourceV29 { transport, map: self, child }),
+                lane.map(|transport| ScopedLaneCalleeSourceV29 { transport, map: self, child }),
                 budget,
-            ),
-            None => splice_production_call_instance_v1(
-                caller,
-                callee,
-                site,
-                entry,
-                continuation,
-                budget,
-            ),
+            )
+        } else {
+            match frame {
+                Some(frame) => splice_production_call_instance_with_scoped_frame_v29(
+                    caller,
+                    callee,
+                    site,
+                    entry,
+                    continuation,
+                    Some(frame.for_child(self.plan, child)),
+                    budget,
+                ),
+                None => splice_production_call_instance_v1(
+                    caller,
+                    callee,
+                    site,
+                    entry,
+                    continuation,
+                    budget,
+                ),
+            }
         }?;
         let checked =
             self.check_new_edges(occurrence, child, anchor_index, child_seed, &result, budget);
@@ -882,6 +973,13 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         }
         // The preflight above made all row rewrites infallible. Pay this second
         // traversal separately, preserving first-failure work history.
+        let inline = self.join_inline_source_v30(container_seed, child_seed, budget);
+        if let Err(error) = inline {
+            let retained = result.additional_storage_bytes;
+            drop(result);
+            budget.release_storage(retained)?;
+            return Err(error);
+        }
         let updates = self
             .spans
             .rows

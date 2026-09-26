@@ -794,6 +794,10 @@ for core_step in \
   standalone-tiled-gemm-general-host-check \
   standalone-flash-attention-general-host-check \
   backend-build \
+  compiler-boundary-ui-harness-tests \
+  source-storage-root-custody-ui \
+  execution-cursor-ui \
+  scoped-raw-admission-ui \
   backend-all-features-build \
   virtual-runtime-no-gpu-metadata \
   virtual-runtime-no-gpu-build \
@@ -834,6 +838,22 @@ assert_equals \
   'python3 -B scripts/tests/tutorial_cpu_reference.py' \
   "$(step_command tutorial-cpu-reference-tests)" \
   'generic core did not gate the tutorial CPU runner protocols'
+assert_equals \
+  'node --test scripts/compiler-boundary-ui.test.mjs scripts/source-storage-root-custody-ui.test.mjs scripts/scoped-raw-admission-ui.test.mjs' \
+  "$(step_command compiler-boundary-ui-harness-tests)" \
+  'generic core omitted the compiler-boundary diagnostic harness tests'
+assert_equals \
+  "node scripts/source-storage-root-custody-ui.mjs ${REPO_ROOT}" \
+  "$(step_command source-storage-root-custody-ui)" \
+  'generic core omitted the actual source-storage custody compiler probes'
+assert_equals \
+  "node scripts/execution-cursor-ui.mjs ${REPO_ROOT}" \
+  "$(step_command execution-cursor-ui)" \
+  'generic core omitted the actual execution cursor compiler probes'
+assert_equals \
+  "node scripts/scoped-raw-admission-ui.mjs ${REPO_ROOT}" \
+  "$(step_command scoped-raw-admission-ui)" \
+  'generic core omitted the actual scoped raw-admission compiler probes'
 assert_equals \
   "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked --offline --manifest-path examples/tiled_gemm_general_v1/device-api/Cargo.toml --test device_api_ui" \
   "$(step_command tiled-gemm-capability-ui)" \

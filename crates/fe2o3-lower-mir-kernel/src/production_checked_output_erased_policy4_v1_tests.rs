@@ -265,6 +265,20 @@ fn final_erased_policy4_retains_source_lifetime_kill_refusals_after_erasure() {
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(3), vec![], ARRAY_SCALAR).unwrap(),
         ),
     ] {
+        if matches!(&killed, SemanticStatementKindV1::Deinitialize(_)) {
+            // No source owner survives this earlier exact failure, so neither
+            // erasure nor the final admission can acquire it as input.
+            assert!(matches!(
+                try_erased_effect_fixture_mode_with_functions(
+                    true, 1, Some(killed), false, false, false, |_| {},
+                ),
+                Err(fe2o3_pliron::ProductionSemanticSsaErrorV1::PartialMove {
+                    function, block: 1, statement: Some(2), local: 3,
+                    violation: fe2o3_pliron::SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
+                }) if function.index() == 0
+            ));
+            continue;
+        }
         let original = erased_effect_fixture_with_lifetime(true, 1, Some(killed));
         let site = [(0, 1, Some(2), 3)];
         let input = retained_load_fault_v1_tests::with_exact_sites(&site, || {

@@ -81,11 +81,12 @@ fn source_output_unit_local_replay_v1(
             module,
             correspondence,
             requires_source,
-        } = lower_pending_module_with_assert_origins_v1(
+        } = lower_pending_module_with_profile_v18(
             &source.semantic_ssa,
             source.limits,
             &source.launch_roots,
             &mut emission,
+            source.kernel_abi.as_ref(),
         )?;
         if !requires_source
             || source.executable().module() != &module

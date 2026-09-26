@@ -506,3 +506,39 @@ fn closed_native_entry_restores_floor_after_initial_work_denial_and_import_unwin
     assert_eq!(budget.storage(), floor);
     assert!(budget.peak_storage() > floor);
 }
+
+#[test]
+fn private_call_whole_entry_pinned_native_witness_layout_equivalence_premises() {
+    use std::mem::{align_of, size_of};
+
+    // Required pinned-host companion, not a portable repr(Rust) theorem and
+    // not a resource measurement. A failed premise invalidates the profile.
+    type SignatureFields = (Ptr<Operation>, TypeHandle);
+    type WitnessFields = (OperationHandle, [usize; 7], Vec<SignatureFields>);
+    assert_eq!((size_of::<usize>(), align_of::<usize>()), (8, 8));
+    for (name, actual, expected) in [
+        (
+            "native Census",
+            (size_of::<Census>(), align_of::<Census>()),
+            (size_of::<[usize; 7]>(), align_of::<[usize; 7]>()),
+        ),
+        (
+            "native SignatureRow",
+            (size_of::<SignatureRow>(), align_of::<SignatureRow>()),
+            (size_of::<SignatureFields>(), align_of::<SignatureFields>()),
+        ),
+        (
+            "native Witness",
+            (
+                size_of::<NativeBridgeWitnessV1>(),
+                align_of::<NativeBridgeWitnessV1>(),
+            ),
+            (size_of::<WitnessFields>(), align_of::<WitnessFields>()),
+        ),
+    ] {
+        assert_eq!(
+            actual, expected,
+            "{name} pinned layout premise; do not retune totals"
+        );
+    }
+}

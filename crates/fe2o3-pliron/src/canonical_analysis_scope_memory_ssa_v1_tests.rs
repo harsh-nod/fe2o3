@@ -345,6 +345,10 @@ fn clean_callback_errors_and_caught_panics_preserve_cache_and_release_scratch() 
 #[test]
 fn callback_floor_loss_poisons_both_caches_even_when_error_is_caught_and_floor_restored() {
     let (owner, retained) = admit(&Module::new("empty"));
+    let payload = size_of::<CanonicalKirInventoryV1<'_>>()
+        + size_of::<CanonicalKirSparseV1<'_, '_>>()
+        + size_of::<CanonicalKirMemorySsaV1<'_, '_>>();
+    let mut completed = 0;
     for memory in [false, true] {
         for mode in 0..3 {
             let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000);
@@ -359,17 +363,14 @@ fn callback_floor_loss_poisons_both_caches_even_when_error_is_caught_and_floor_r
                         budget.release_storage(1).unwrap();
                         callback_exit(mode)
                     };
-                    let failed = if memory {
-                        scope.with_memory_ssa_v1(|_, budget| invoke(budget))
-                    } else {
-                        scope.with_sparse_v1(|_, budget| invoke(budget))
-                    };
-                    assert!(matches!(
-                        failed,
-                        Err(CanonicalAnalysisScopeErrorV1::Resource(
-                            Resource::Accounting
-                        ))
-                    ));
+                    let failed = catch_unwind(AssertUnwindSafe(|| {
+                        if memory {
+                            scope.with_memory_ssa_v1(|_, budget| invoke(budget))
+                        } else {
+                            scope.with_sparse_v1(|_, budget| invoke(budget))
+                        }
+                    }));
+                    assert_custody_exit(mode, failed);
                     assert!(scope.sparse.is_none() && scope.memory_ssa.is_none());
                     assert_eq!(scope.budget.storage(), floor - 1);
                     // Private hostile recovery cannot revive either dropped cache.
@@ -388,6 +389,7 @@ fn callback_floor_loss_poisons_both_caches_even_when_error_is_caught_and_floor_r
                         ))
                     ));
                     assert_eq!(scope.budget.work(), before);
+                    completed += 1;
                     Ok(())
                 });
             assert!(matches!(
@@ -396,8 +398,21 @@ fn callback_floor_loss_poisons_both_caches_even_when_error_is_caught_and_floor_r
                     Resource::Accounting
                 ))
             ));
-            assert_eq!(budget.storage(), retained + 17);
+            assert_eq!(budget.storage(), retained + 17 + payload);
         }
+    }
+    assert_eq!(completed, 6);
+}
+
+fn assert_custody_exit(mode: u8, result: std::thread::Result<ScopeResult<()>>) {
+    match (mode, result) {
+        (0, Ok(Err(CanonicalAnalysisScopeErrorV1::Resource(Resource::Accounting)))) => {}
+        (1, Ok(Err(CanonicalAnalysisScopeErrorV1::Resource(Resource::Arithmetic)))) => {}
+        (2, Err(payload)) => assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"analysis scope sentinel")
+        ),
+        (_, other) => panic!("changed custody-loss callback result: {other:?}"),
     }
 }
 
@@ -405,30 +420,30 @@ fn callback_floor_loss_poisons_both_caches_even_when_error_is_caught_and_floor_r
 fn below_incoming_loss_is_not_recreated_and_fresh_scope_requires_explicit_restoration() {
     let (owner, retained) = admit(&Module::new("empty"));
     let floor = retained + 17;
+    let mut completed = 0;
     for mode in 0..3 {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000);
         let mut budget = Budget::new(&mut work, 1_000_000);
         budget.reserve_storage(floor).unwrap();
-        let result = with_canonical_analysis_scope_v1(&owner, &mut budget, |scope| {
-            scope.with_memory_ssa_v1(|_, budget| {
-                budget
-                    .release_storage(budget.storage() - (floor - 1))
-                    .unwrap();
-                callback_exit(mode)
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            with_canonical_analysis_scope_v1(&owner, &mut budget, |scope| {
+                scope.with_memory_ssa_v1(|_, budget| {
+                    budget
+                        .release_storage(budget.storage() - (floor - 1))
+                        .unwrap();
+                    callback_exit(mode)
+                })
             })
-        });
-        assert!(matches!(
-            result,
-            Err(CanonicalAnalysisScopeErrorV1::Resource(
-                Resource::Accounting
-            ))
-        ));
+        }));
+        assert_custody_exit(mode, result);
         assert_eq!(budget.storage(), floor - 1);
         budget.reserve_storage(1).unwrap();
         with_canonical_analysis_scope_v1(&owner, &mut budget, |scope| request(scope, true))
             .unwrap();
         assert_eq!(budget.storage(), floor);
+        completed += 1;
     }
+    assert_eq!(completed, 3);
 }
 
 fn substituted_callback<'work>(
@@ -455,6 +470,7 @@ fn substituted_callback<'work>(
 #[test]
 fn public_fixed_lifetime_same_slot_replacement_never_debits_or_cleans_foreign_work() {
     let (owner, retained) = admit(&Module::new("empty"));
+    let mut completed = 0;
     for memory in [false, true] {
         for mode in 0..3 {
             let mut original_work = CanonicalKernelIrWorkBudgetV1::new(10_000);
@@ -462,13 +478,10 @@ fn public_fixed_lifetime_same_slot_replacement_never_debits_or_cleans_foreign_wo
             let mut budget = Budget::new(&mut original_work, 1_000_000);
             let mut foreign = Budget::new(&mut foreign_work, 1_000_000);
             budget.reserve_storage(retained + 17).unwrap();
-            let result = substituted_callback(&owner, &mut budget, &mut foreign, memory, mode);
-            assert!(matches!(
-                result,
-                Err(CanonicalAnalysisScopeErrorV1::Resource(
-                    Resource::Accounting
-                ))
-            ));
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                substituted_callback(&owner, &mut budget, &mut foreign, memory, mode)
+            }));
+            assert_custody_exit(mode, result);
             assert_eq!(budget.work(), 0);
             assert_eq!(budget.storage(), foreign.storage());
             assert_eq!(budget.peak_storage(), budget.storage());
@@ -484,13 +497,18 @@ fn public_fixed_lifetime_same_slot_replacement_never_debits_or_cleans_foreign_wo
             with_canonical_analysis_scope_v1(&owner, &mut budget, |scope| request(scope, memory))
                 .unwrap();
             assert_eq!(budget.storage(), retained + 17);
+            completed += 1;
         }
     }
+    assert_eq!(completed, 6);
 }
 
 #[test]
 fn privately_restored_ledger_cannot_reenable_a_poisoned_scope_or_charge_foreign_query() {
     let (owner, retained) = admit(&Module::new("empty"));
+    let payload = size_of::<CanonicalKirInventoryV1<'_>>()
+        + size_of::<CanonicalKirSparseV1<'_, '_>>()
+        + size_of::<CanonicalKirMemorySsaV1<'_, '_>>();
     let mut work_a = CanonicalKernelIrWorkBudgetV1::new(10_000);
     let mut work_b = CanonicalKernelIrWorkBudgetV1::new(0);
     let mut budget = Budget::new(&mut work_a, 1_000_000);
@@ -526,7 +544,7 @@ fn privately_restored_ledger_cannot_reenable_a_poisoned_scope_or_charge_foreign_
             Resource::Accounting
         ))
     ));
-    assert_eq!(budget.storage(), retained + 17);
+    assert_eq!(budget.storage(), retained + 17 + payload);
     assert_eq!(foreign.work(), 0);
     assert_eq!(foreign.peak_storage(), foreign.storage());
 }
@@ -556,23 +574,26 @@ fn outer_unwind_drops_inventory_and_both_caches_and_preserves_payload() {
 #[test]
 fn inventory_only_full_floor_loss_is_not_hidden_by_the_incoming_floor() {
     let (owner, retained) = admit(&Module::new("empty"));
+    let mut completed = 0;
     for mode in 0..3 {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000);
         let mut budget = Budget::new(&mut work, 1_000_000);
         budget.reserve_storage(retained + 17).unwrap();
-        let result = with_canonical_analysis_scope_v1(&owner, &mut budget, |scope| {
-            // Private hostile access: the public inventory getter exposes no ledger.
-            scope.budget.release_storage(1).unwrap();
-            callback_exit(mode)
-        });
-        assert!(matches!(
-            result,
-            Err(CanonicalAnalysisScopeErrorV1::Resource(
-                Resource::Accounting
-            ))
-        ));
-        assert_eq!(budget.storage(), retained + 17);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            with_canonical_analysis_scope_v1(&owner, &mut budget, |scope| {
+                // Private hostile access: the public inventory getter exposes no ledger.
+                scope.budget.release_storage(1).unwrap();
+                callback_exit(mode)
+            })
+        }));
+        assert_custody_exit(mode, result);
+        assert_eq!(
+            budget.storage(),
+            retained + 17 + size_of::<CanonicalKirInventoryV1<'_>>() - 1
+        );
+        completed += 1;
     }
+    assert_eq!(completed, 3);
 }
 
 #[test]

@@ -159,6 +159,40 @@ fn transaction_with_census_in_active_session_v1<'tcx>(
         })?;
     let context_producers = crate::collector::capture_context_producers_v1(tcx)
         .map_err(|error| format!("production context producer capture failed: {error}"))?;
+    transaction_from_captured_sources_in_active_session_v1(
+        tcx, debug_source_capture, census, target, context_producers,
+    )
+}
+
+#[cfg(test)]
+fn transactions_with_original_sources_for_test_v1<'tcx, const COUNT: usize>(
+    tcx: TyCtxt<'tcx>,
+) -> Result<impl Iterator<Item = Result<crate::production_pipeline::ProductionCompilation<
+    'tcx, crate::production_pipeline::CollectedRustStage<'tcx>,
+>, String>>, String> {
+    let targets = (0..COUNT)
+        .map(|_| crate::production_target_v1::RetainedProductionTargetV1::authenticate_live_before_collection(tcx)
+            .map_err(|error| format!("production extraction target authentication failed before monomorphization: {error}")))
+        .collect::<Result<Vec<_>, _>>()?;
+    let sources = crate::collector::capture_context_producers_batch_for_test_v1::<COUNT>(tcx)
+        .map_err(|error| format!("production context producer capture failed: {error}"))?;
+    Ok(targets.into_iter().zip(sources).map(move |(target, source)| {
+        transaction_from_captured_sources_in_active_session_v1(
+            tcx, crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+            None, target, source,
+        )
+    }))
+}
+
+fn transaction_from_captured_sources_in_active_session_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    debug_source_capture: crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2,
+    census: Option<&SourceCensusRecorder>,
+    target: crate::production_target_v1::RetainedProductionTargetV1,
+    context_producers: crate::collector::CapturedContextProducersV1<'tcx>,
+) -> Result<crate::production_pipeline::ProductionCompilation<
+    'tcx, crate::production_pipeline::CollectedRustStage<'tcx>,
+>, String> {
     let partitions = tcx.collect_and_partition_mono_items(());
     let kernel_count = crate::collector::count_kernels_in_cgus(tcx, partitions.codegen_units);
     if kernel_count == 0 {

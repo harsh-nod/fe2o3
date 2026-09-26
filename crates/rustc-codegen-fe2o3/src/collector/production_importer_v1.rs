@@ -538,15 +538,10 @@ fn construct_complete_request_v1<'tcx>(
         Default::default()
     };
     let mut context_entries = plan.take_context_entries_v29();
-    let mut body_owner = build_body_request_owner_v1(
-        plan,
-        types.len(),
-        function_count,
-        !context_entries.is_empty(),
-    )?
-    .with_inline_sources_v30(inline_sources)
-    .with_ordered_sources_v31(ordered_sources)
-    .with_program_sources_v32(program_sources);
+    let mut body_owner = build_body_request_owner_v1(plan, types.len(), function_count)?
+        .with_inline_sources_v30(inline_sources)
+        .with_ordered_sources_v31(ordered_sources)
+        .with_program_sources_v32(program_sources);
     let mut callables = (0..function_count)
         .map(|index| SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(index)))
         .collect::<Vec<_>>();
@@ -586,11 +581,10 @@ fn construct_complete_request_v1<'tcx>(
         });
     }
 
-    if !context_entries.is_empty() {
-        body_owner
-            .enable_workgroup_scope_custody_v29(tcx, target, &types, &callables)
-            .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
-    }
+    enable_source_function_census_v1(plan, &mut body_owner, &types, &callables)?;
+    body_owner
+        .enable_workgroup_scope_custody_v29(tcx, target, &types, &callables)
+        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     let mut functions = Vec::new();
     functions
         .try_reserve_exact(plan.function_producers().len())
@@ -778,7 +772,6 @@ fn build_body_request_owner_v1<'tcx>(
     plan: &mut ProductionSemanticPreflightPlanV1<'tcx>,
     type_count: usize,
     function_count: u32,
-    context_transaction: bool,
 ) -> Result<ProductionSemanticBodyRequestOwnerV1<'tcx>, ProductionSemanticImportErrorV1> {
     let callable_count = plan
         .function_producers()
@@ -851,46 +844,52 @@ fn build_body_request_owner_v1<'tcx>(
         ));
     }
 
-    let mut owner = ProductionSemanticBodyRequestOwnerV1::with_preflight_work(
+    ProductionSemanticBodyRequestOwnerV1::with_preflight_work(
         plan.take_construction_work()
             .map_err(|error| ProductionSemanticImportErrorV1::Preflight(Box::new(error)))?,
         type_count,
         &entries,
     )
-    .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
-    if context_transaction {
-        if plan.function_producers().len() != function_count as usize
-            || plan.body_producers().len() != function_count as usize
-        {
-            return Err(body_owner_table_mismatch_v1(
-                "function commitment preflight bodies",
-            ));
-        }
-        owner
-            .enable_function_commitments_v29(
-                function_count as usize,
-                plan.function_producers()
-                    .iter()
-                    .zip(plan.body_producers())
-                    .map(|(function, body)| {
-                        ExpectedFunctionCommitmentV29::new(
-                            function.instance,
-                            body.function,
-                            ProductionSemanticFunctionIdentitiesV1::new(
-                                function.identities.function(),
-                                function.identities.item_definition(),
-                                function.identities.monomorphization(),
-                                function.identities.generic_type_arguments(),
-                                function.identities.const_generic_arguments(),
-                            ),
-                            semantic_function_role_v1(function.role),
-                            body.source.provenance,
-                        )
-                    }),
-            )
-            .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))
+}
+
+fn enable_source_function_census_v1<'tcx>(
+    plan: &ProductionSemanticPreflightPlanV1<'tcx>,
+    owner: &mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
+) -> Result<(), ProductionSemanticImportErrorV1> {
+    let function_count = plan.function_producers().len();
+    if plan.body_producers().len() != function_count {
+        return Err(body_owner_table_mismatch_v1(
+            "function commitment preflight bodies",
+        ));
     }
-    Ok(owner)
+    owner
+        .enable_source_function_commitments_v1(
+            types,
+            callables,
+            function_count,
+            plan.function_producers()
+                .iter()
+                .zip(plan.body_producers())
+                .map(|(function, body)| {
+                    ExpectedFunctionCommitmentV29::new(
+                        function.instance,
+                        body.function,
+                        ProductionSemanticFunctionIdentitiesV1::new(
+                            function.identities.function(),
+                            function.identities.item_definition(),
+                            function.identities.monomorphization(),
+                            function.identities.generic_type_arguments(),
+                            function.identities.const_generic_arguments(),
+                        ),
+                        semantic_function_role_v1(function.role),
+                        body.source.provenance,
+                    )
+                }),
+        )
+        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))
 }
 
 fn body_owner_table_mismatch_v1(table: &'static str) -> ProductionSemanticImportErrorV1 {

@@ -736,6 +736,23 @@ fn require_ranked_bound(
 }
 
 impl<F: ProjectedAssertionFactsV1> ProjectedAssertionFactsV1 for GuardedFacts<'_, '_, '_, F> {
+    fn check_projection_source_v18(&mut self,semantic:&AdmittedInertSemanticMirV1,function:SemanticFunctionIdV1)->Result<()> {
+        self.facts.check_projection_source_v18(semantic,function)
+    }
+
+    fn projection_meter_v18(&mut self) -> Option<&mut dyn fe2o3_mir_model::SemanticAssertionMeterV1<Error = ProductionRankedProjectionErrorV1>> {
+        // The borrowed meter can only spend. It cannot release this guard's
+        // floor, access its progress cells, or confer a proof disposition.
+        self.facts.projection_meter_v18()
+    }
+
+    fn finish_ranked_projection_v18(
+        &mut self, name: &str, arguments: usize,
+        blocks: Vec<fe2o3_pliron::ProductionRankedBlockV1>,
+    ) -> Result<fe2o3_pliron::ProductionRankedKernelV1> {
+        self.facts.finish_ranked_projection_v18(name, arguments, blocks)
+    }
+
     fn require_guarded_source_progress_v1(
         &mut self,
         types: &[SemanticTypeDeclV1],
@@ -921,6 +938,36 @@ impl<F: ProjectedAssertionFactsV1> ProjectedAssertionFactsV1 for GuardedFacts<'_
     ) -> Result<()> {
         self.progress.check(self.facts)?;
         self.facts.require_unit_local_call(block, call, source)
+    }
+
+    fn call_projection_disposition_v18<'call>(
+        &mut self,
+        block: usize,
+        call: &'call SemanticDirectCallV1,
+        source: SemanticSourceProvenanceV1,
+    ) -> Result<CallProjectionDispositionV18<'call>> {
+        self.progress.check(self.facts)?;
+        self.facts.call_projection_disposition_v18(block, call, source)
+    }
+
+    fn source_site_control_v18(
+        &mut self,
+        block: usize,
+        statement: Option<usize>,
+    ) -> Result<Option<super::canonical_assertion_facts_v1::ProjectedSourceSiteControlV18>> {
+        let control = self.facts.source_site_control_v18(block, statement)?;
+        if control.is_some() {
+            self.progress.check(self.facts)?;
+        }
+        Ok(control)
+    }
+
+    fn accept_pending_source_call_v18(
+        &mut self,
+        pending: PendingSourceCallV18<'_>,
+    ) -> Result<()> {
+        self.progress.check(self.facts)?;
+        self.facts.accept_pending_source_call_v18(pending)
     }
     fn charge_private_array_work(&mut self, amount: usize) -> Result<()> {
         self.progress.check(self.facts)?;

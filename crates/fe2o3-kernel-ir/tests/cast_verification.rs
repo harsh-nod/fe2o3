@@ -19,7 +19,7 @@ const SCALARS: [ScalarType; 16] = [
     ScalarType::F64,
 ];
 
-const CAST_KINDS: [CastKind; 8] = [
+const CAST_KINDS: [CastKind; 10] = [
     CastKind::Truncate,
     CastKind::ZeroExtend,
     CastKind::SignExtend,
@@ -28,6 +28,8 @@ const CAST_KINDS: [CastKind; 8] = [
     CastKind::IntegerToFloat,
     CastKind::FloatToInteger,
     CastKind::Bitcast,
+    CastKind::PointerToGeneric,
+    CastKind::SliceToGeneric,
 ];
 
 fn cast_module(kind: CastKind, from: Type, to: Type) -> Module {
@@ -69,7 +71,7 @@ fn expected_scalar_cast(kind: CastKind, from: ScalarType, to: ScalarType) -> boo
         return false;
     };
     match kind {
-        CastKind::RestrictPointerAccess => false,
+        CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric => false,
         CastKind::Truncate => from.is_integer() && to.is_integer() && from_width > to_width,
         CastKind::ZeroExtend => {
             matches!(

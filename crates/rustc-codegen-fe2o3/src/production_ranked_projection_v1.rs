@@ -18,6 +18,53 @@ mod helper_source_fixture_v1 {
 }
 mod analysis_multi_split_v1;
 mod canonical_assertion_facts_v1;
+mod canonical_source_facts_v18;
+mod source_ranked_consumer_v18;
+mod optimized_source_facts_v18;
+#[path = "production_ranked_projection_v1/optimized_source_projection_v18.rs"]
+mod optimized_source_projection_v18;
+pub(crate) use optimized_source_projection_v18::{
+    SourceInvocationArgumentsV18, SourceInvocationDispositionV18, SourceInvocationProjectionV18,
+    with_optimized_source_invocations_v18,
+};
+#[cfg(test)]
+pub(crate) use canonical_source_facts_v18::{
+    refuse_invocation_substitution_for_test_v18, refuse_foreign_invocation_owner_for_test_v18,
+};
+#[cfg(test)]
+pub(crate) use optimized_source_projection_v18::invocation_resource_counts_for_test_v18;
+#[cfg(test)]
+pub(crate) use optimized_source_projection_v18::inspect_actual_source_constants_for_test_v18;
+#[cfg(test)]
+pub(crate) use optimized_source_projection_v18::inspect_actual_source_capability_collections_for_test_v18;
+#[cfg(test)]
+pub(crate) use optimized_source_projection_v18::inspect_actual_source_capabilities_for_test_v18;
+#[cfg(test)]
+pub(crate) use optimized_source_projection_v18::inspect_actual_source_typed_capabilities_for_test_v18;
+#[cfg(test)]
+pub(crate) use optimized_source_projection_v18::fail_actual_source_constants_after_custody_for_test_v18;
+#[cfg(test)]
+pub(crate) use optimized_source_projection_v18::refuse_actual_source_capabilities_for_test_v18;
+#[cfg(test)]
+pub(crate) use optimized_source_projection_v18::refuse_actual_source_capability_phase_for_test_v18;
+#[cfg(test)]
+pub(crate) fn capability_work_refusal_for_test_v18(error: &ProductionRankedProjectionErrorV1) -> Option<usize> {
+    match error {
+        ProductionRankedProjectionErrorV1::CanonicalAssertions(CanonicalAssertionErrorV1::SourceOwned(
+            fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(error)))) => Some(error.actual()),
+        _ => None,
+    }
+}
+mod optimized_source_consumer_v18;
+use source_ranked_consumer_v18::{ResolverActiveDefinitionsV18, ResolverBorrowedLocalsV18, SourceScalarResolverLeavesV18};
+#[path = "production_ranked_projection_v1/source_ranked_consumer_resources_v18.rs"]
+mod source_ranked_consumer_resources_v18;
+#[cfg(test)]
+#[path = "production_ranked_projection_v1/source_ranked_consumer_v18_tests.rs"]
+mod source_ranked_consumer_v18_tests;
+#[cfg(test)]
+pub(crate) use source_ranked_consumer_v18_tests::inspect_actual_source_scalar_consumer_v18;
 #[cfg(test)]
 pub(crate) mod conditional_bound_observation_v1_tests;
 #[cfg(test)]
@@ -53,7 +100,8 @@ use analysis_multi_split_v1::{
     append_analysis_multi_split_blocks, append_analysis_multi_split_blocks_with_arguments,
 };
 use canonical_assertion_facts_v1::{
-    CanonicalAssertionErrorV1, ProjectedAssertionFactsV1, projected_assertion_is_proved_v1,
+    CallProjectionDispositionV18, CanonicalAssertionErrorV1, PendingSourceCallV18,
+    ProjectedAssertionFactsV1, projected_assertion_is_proved_v1,
     with_canonical_assertions_source_budget_v1,
 };
 use materialized_callable_effect_v1::derive_materialized_callable_effect_summaries_v1;
@@ -84,32 +132,32 @@ use fe2o3_lower_mir_kernel::{
     ProductionSourceLaunchRosterV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiPassModeV1,
-    SemanticAbiPointeeKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
-    SemanticAtomicAccessV1, SemanticAtomicOrderingV1, SemanticAtomicScopeV1, SemanticAxisV1,
-    SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBinaryOpV1, SemanticBlockIdV1,
-    SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCastKindV1,
-    SemanticCheckedBinaryOpV1, SemanticCheckedBinaryRvalueV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
-    SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1,
-    SemanticKernelBodySelectionV1, SemanticLocalIdV1, SemanticLocalRoleV1,
-    SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
-    SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
-    SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticMutabilityV1,
-    SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
-    SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticRvalueV1, SemanticScalarTypeV1,
+    AdmittedInertSemanticMirV1, SemanticAbiPassModeV1, SemanticAbiPointeeKindV1,
+    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAtomicAccessV1,
+    SemanticAtomicOrderingV1, SemanticAtomicScopeV1, SemanticAxisV1, SemanticBackendPrimitiveV1,
+    SemanticBackendReprV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBorrowKindV1,
+    SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
+    SemanticCheckedBinaryRvalueV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
+    SemanticDirectCallV1, SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1,
+    SemanticEdgeRoleV1, SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
+    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticKernelBodySelectionV1,
+    SemanticLocalIdV1, SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1,
+    SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandContractV1,
+    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
+    SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
+    SemanticPointerKindV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
+    SemanticRvalueKindV1, SemanticRvalueV1, SemanticScalarTypeV1,
     SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
     SemanticSwitchTargetsV1, SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1,
     SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
     SemanticVolatilityV1, SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
-    SemanticWriteOnlyDisjointWriteKindV1, exact_transparent_scalar_carrier_field_v1,
+    SemanticWriteOnlyDisjointWriteKindV1,
 };
 #[cfg(test)]
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticBackendScalarV1, SemanticExternAbiV1, SemanticFieldsShapeV1, SemanticFunctionSafetyV1,
     SemanticRustTypeKindV1, SemanticRustcVariantsV1, SemanticTargetArchitectureV1,
-    SemanticTypeLayoutDetailsV1,
+    SemanticTypeLayoutDetailsV1, exact_transparent_scalar_carrier_field_v1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -154,9 +202,6 @@ const MAX_PROJECTED_LOOP_GRAPH_WORK_V1: usize =
     MAX_RANKED_BOUNDS_BLOCKS * (MAX_RANKED_BOUNDS_BLOCKS + MAX_RANKED_BOUNDS_EDGES);
 const MAX_PIPELINE_SCALAR_NODES_V1: usize = 64;
 const MAX_PURE_UNIFORM_INDEX_NODES_V1: usize = 64;
-const MAX_DEFINED_CALLABLE_SUMMARY_FUNCTIONS_V1: usize = 4_096;
-const MAX_DEFINED_CALLABLE_SUMMARY_EDGES_V1: usize = 65_536;
-const MAX_DEFINED_CALLABLE_SUMMARY_WORK_V1: usize = 16_000_000;
 const PRIVATE_ALLOCATION_ORIGIN_TAG_V1: u64 = 1_u64 << 63;
 const TENSOR_CAPABILITY_ROOT_DOMAIN_V1: &[u8] = b"FE2O3/TENSOR-CAPABILITY-ROOT/V1\0";
 const RANKED_KERNEL_ROSTER_IDENTITY_DOMAIN_V1: &[u8] =
@@ -617,6 +662,1970 @@ struct ProjectedCapabilityEnumEnvelopeV1 {
 }
 
 type ProjectedCapabilityStateV1 = HashMap<usize, ProjectedCapabilityValueV1>;
+
+#[cfg(test)]
+mod capability_refusal_phase_v18 {
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(super) enum Phase { Normalize, Clear }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub(crate) struct Observation {
+        pub(crate) created: usize,
+        pub(crate) dropped: usize,
+        pub(crate) injected: bool,
+        pub(crate) work_before: usize,
+        pub(crate) work_after: usize,
+        pub(crate) storage_before: usize,
+        pub(crate) storage_after: usize,
+        pub(crate) first_failed_work: Option<usize>,
+        pub(crate) first_failed_storage: Option<usize>,
+        pub(crate) requested_work: usize,
+    }
+
+    #[derive(Clone, Copy)]
+    struct State { wanted: Phase, active: Option<Phase>, mutated: bool, observed: Observation }
+    thread_local! { static STATE: Cell<Option<State>> = const { Cell::new(None) }; }
+
+    pub(super) struct Run(Option<State>);
+    impl Run {
+        pub(super) fn start(wanted: Phase) -> Self {
+            Self(STATE.replace(Some(State { wanted, active: None, mutated: false, observed: Observation::default() })))
+        }
+        pub(super) fn observation(&self) -> Observation { STATE.get().expect("phase run absent").observed }
+    }
+    impl Drop for Run { fn drop(&mut self) { STATE.set(self.0); } }
+
+    pub(super) struct Active(Option<(Option<Phase>, bool)>);
+    pub(super) fn enter(phase: Phase) -> Active {
+        let Some(mut state) = STATE.get() else { return Active(None); };
+        let saved = (state.active, state.mutated);
+        state.active = Some(phase); state.mutated = false;
+        STATE.set(Some(state));
+        Active(Some(saved))
+    }
+    impl Drop for Active {
+        fn drop(&mut self) {
+            if let Some((active, mutated)) = self.0 && let Some(mut state) = STATE.get() {
+                state.active = active; state.mutated = mutated; STATE.set(Some(state));
+            }
+        }
+    }
+
+    pub(super) fn mutated() {
+        if let Some(mut state) = STATE.get() {
+            if state.active.is_some() { state.mutated = true; }
+            STATE.set(Some(state));
+        }
+    }
+    pub(super) fn created() {
+        if let Some(mut state) = STATE.get() { state.observed.created += 1; STATE.set(Some(state)); }
+    }
+    pub(super) fn dropped() {
+        if let Some(mut state) = STATE.get() { state.observed.dropped += 1; STATE.set(Some(state)); }
+    }
+    pub(super) fn should_refuse() -> bool {
+        STATE.get().is_some_and(|state| state.active == Some(state.wanted) && state.mutated && !state.observed.injected)
+    }
+    pub(super) fn record(observed: Observation) {
+        let mut state = STATE.get().expect("phase run absent");
+        state.observed = Observation { created: state.observed.created, dropped: state.observed.dropped, ..observed };
+        STATE.set(Some(state));
+    }
+}
+
+// Collection primitives for the live capability solver. Legacy execution keeps
+// its original maps; the live driver below uses these borrowed sparse slots.
+mod live_capability_collections_v18 {
+    use super::*;
+    use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation, add, resource};
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    type R<T> = Result<T, ProductionRankedProjectionErrorV1>;
+    pub(super) type Row = (usize, ProjectedCapabilityValueV1);
+
+    fn accounting() -> ProductionRankedProjectionErrorV1 { resource(Resource::Accounting) }
+
+    fn live(allocation: &Allocation<'_>) -> R<()> {
+        if matches!(allocation, Allocation::Source(_)) { Ok(()) } else { Err(accounting()) }
+    }
+
+    pub(super) struct Domain<'f> {
+        pub(super) function: &'f SemanticFunctionDeclV1,
+        pub(super) keys: Vec<usize>,
+    }
+
+    fn visit_keys<F>(function: &SemanticFunctionDeclV1, owners: &[Option<usize>],
+        allocation: &mut Allocation<'_>, mut visit: F) -> R<()>
+    where F: FnMut(usize, &mut Allocation<'_>) -> R<()> {
+        allocation.header::<F>()?;
+        allocation.header::<Result<(), ProductionRankedProjectionErrorV1>>()?;
+        fn key<F>(local: usize, allocation: &mut Allocation<'_>, visit: &mut F) -> R<()>
+        where F: FnMut(usize, &mut Allocation<'_>) -> R<()> {
+            allocation.charge(1)?;
+            visit(local, allocation)
+        }
+        fn place<F>(place: &SemanticPlaceV1, allocation: &mut Allocation<'_>, visit: &mut F) -> R<()>
+        where F: FnMut(usize, &mut Allocation<'_>) -> R<()> {
+            key(place.local().index() as usize, allocation, visit)
+        }
+        fn operand<F>(operand: &SemanticOperandV1, allocation: &mut Allocation<'_>, visit: &mut F) -> R<()>
+        where F: FnMut(usize, &mut Allocation<'_>) -> R<()> {
+            allocation.charge(1)?;
+            if let Some(value) = raw_operand_place(operand) { place(value, allocation, visit)?; }
+            Ok(())
+        }
+        for (index, local) in function.locals().iter().enumerate() {
+            allocation.charge(1)?;
+            if local.role().is_entry_argument() { key(index, allocation, &mut visit)?; }
+        }
+        for block in function.blocks() {
+            allocation.charge(1)?;
+            for statement in block.statements() {
+                allocation.charge(1)?;
+                match statement.kind() {
+                    SemanticStatementKindV1::Assign(assignment) => {
+                        place(assignment.destination(), allocation, &mut visit)?;
+                        allocation.header::<(&mut F, &mut Allocation<'_>)>()?;
+                        assignment.value().kind().try_visit_operands(|value| operand(value, allocation, &mut visit))?;
+                        match assignment.value().kind() {
+                            SemanticRvalueKindV1::Borrow { place: value, .. }
+                            | SemanticRvalueKindV1::AddressOf { place: value, .. }
+                            | SemanticRvalueKindV1::Length(value)
+                            | SemanticRvalueKindV1::Discriminant(value) => place(value, allocation, &mut visit)?,
+                            SemanticRvalueKindV1::Load(load) => place(load.source(), allocation, &mut visit)?,
+                            _ => {}
+                        }
+                    }
+                    SemanticStatementKindV1::Store(store) => {
+                        place(store.destination(), allocation, &mut visit)?;
+                        operand(store.value(), allocation, &mut visit)?;
+                    }
+                    SemanticStatementKindV1::AtomicRmw(atomic) => {
+                        place(atomic.destination(), allocation, &mut visit)?;
+                        place(atomic.address(), allocation, &mut visit)?;
+                        operand(atomic.value(), allocation, &mut visit)?;
+                    }
+                    SemanticStatementKindV1::AtomicCompareExchange(atomic) => {
+                        place(atomic.destination(), allocation, &mut visit)?;
+                        place(atomic.address(), allocation, &mut visit)?;
+                        operand(atomic.expected(), allocation, &mut visit)?;
+                        operand(atomic.replacement(), allocation, &mut visit)?;
+                    }
+                    SemanticStatementKindV1::SetDiscriminant { place: value, .. }
+                    | SemanticStatementKindV1::Deinitialize(value) => place(value, allocation, &mut visit)?,
+                    SemanticStatementKindV1::StorageLive(local)
+                    | SemanticStatementKindV1::StorageDead(local) => key(local.index() as usize, allocation, &mut visit)?,
+                    SemanticStatementKindV1::Assume(value) => operand(value, allocation, &mut visit)?,
+                    SemanticStatementKindV1::Nop => {}
+                }
+            }
+            allocation.charge(1)?;
+            match block.terminator().kind() {
+                SemanticTerminatorKindV1::Call(call) => {
+                    for value in call.arguments() { operand(value, allocation, &mut visit)?; }
+                    if let Some(destination) = call.destination() { place(destination.place(), allocation, &mut visit)?; }
+                }
+                SemanticTerminatorKindV1::TailCall(call) => {
+                    for value in call.arguments() { operand(value, allocation, &mut visit)?; }
+                }
+                SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => operand(discriminant, allocation, &mut visit)?,
+                SemanticTerminatorKindV1::Assert { condition, .. } => operand(condition, allocation, &mut visit)?,
+                SemanticTerminatorKindV1::Drop { place: value, .. } => place(value, allocation, &mut visit)?,
+                SemanticTerminatorKindV1::Goto(_) | SemanticTerminatorKindV1::FalseEdge { .. }
+                | SemanticTerminatorKindV1::Return | SemanticTerminatorKindV1::UnwindResume
+                | SemanticTerminatorKindV1::UnwindTerminate | SemanticTerminatorKindV1::Abort
+                | SemanticTerminatorKindV1::Unreachable => {}
+            }
+        }
+        for owner in owners {
+            allocation.charge(1)?;
+            if let Some(owner) = owner { key(*owner, allocation, &mut visit)?; }
+        }
+        Ok(())
+    }
+
+    impl<'f> Domain<'f> {
+        pub(super) fn prepare(function: &'f SemanticFunctionDeclV1, owners: &[Option<usize>],
+            allocation: &mut Allocation<'_>) -> R<Self> {
+            live(allocation)?;
+            if owners.len() != function.locals().len() { return Err(accounting()); }
+            allocation.header::<Self>()?;
+            allocation.header::<R<Self>>()?;
+            allocation.header::<(usize, usize, usize)>()?;
+            let mut count = 0;
+            visit_keys(function, owners, allocation, |_, allocation| {
+                let _ = allocation;
+                count = add(count, 1)?;
+                Ok(())
+            })?;
+            let mut keys = allocation.capacity(count)?;
+            visit_keys(function, owners, allocation, |key, allocation| allocation.push(&mut keys, key))?;
+            allocation.sort_fixed_key(&mut keys, |key| *key)?;
+            let mut unique = 0;
+            for index in 0..keys.len() {
+                allocation.charge(1)?;
+                if unique == 0 || keys[index] != keys[unique - 1] {
+                    if index != unique { allocation.charge(1)?; keys.swap(index, unique); }
+                    unique += 1;
+                }
+            }
+            keys.truncate(unique);
+            Ok(Self { function, keys })
+        }
+
+        pub(super) fn slot(&self, function: &SemanticFunctionDeclV1, key: usize,
+            allocation: &mut Allocation<'_>) -> R<usize> {
+            live(allocation)?;
+            allocation.header::<R<usize>>()?;
+            allocation.charge(1)?;
+            if !std::ptr::eq(self.function, function) { return Err(accounting()); }
+            allocation.find_fixed_key(&self.keys, &key, |key| *key)?.ok_or_else(accounting)
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(super) struct Slot {
+        pub(super) value: Option<ProjectedCapabilityValueV1>,
+        pub(super) touched: bool,
+    }
+
+    pub(super) struct Workspace<'d, 'f> {
+        pub(super) domain: &'d Domain<'f>,
+        pub(super) slots: Vec<Slot>,
+        pub(super) touched: Vec<usize>,
+        pub(super) present: usize,
+        pub(super) normalized: bool,
+    }
+
+    #[cfg(test)]
+    impl Drop for Workspace<'_, '_> {
+        fn drop(&mut self) { capability_refusal_phase_v18::dropped(); }
+    }
+
+    pub(super) struct State<'d, 'f> {
+        pub(super) domain: &'d Domain<'f>,
+        pub(super) rows: Vec<Row>,
+    }
+
+    // Both backings expose sorted, present rows without owning an outgoing copy.
+    trait OrderedRows {
+        fn len(&self) -> usize;
+        fn row(&self, index: usize) -> R<Row>;
+        fn validate_rows(&self, domain: &Domain<'_>, allocation: &mut Allocation<'_>) -> R<()>;
+    }
+
+    impl OrderedRows for State<'_, '_> {
+        fn len(&self) -> usize { self.rows.len() }
+        fn row(&self, index: usize) -> R<Row> { self.rows.get(index).copied().ok_or_else(accounting) }
+        fn validate_rows(&self, domain: &Domain<'_>, allocation: &mut Allocation<'_>) -> R<()> {
+            self.validate(domain, allocation)
+        }
+    }
+
+    impl OrderedRows for Workspace<'_, '_> {
+        fn len(&self) -> usize { self.touched.len() }
+        fn row(&self, index: usize) -> R<Row> {
+            let index = *self.touched.get(index).ok_or_else(accounting)?;
+            let slot = self.slots.get(index).ok_or_else(accounting)?;
+            if !slot.touched { return Err(accounting()); }
+            Ok((index, slot.value.ok_or_else(accounting)?))
+        }
+        fn validate_rows(&self, domain: &Domain<'_>, allocation: &mut Allocation<'_>) -> R<()> {
+            live(allocation)?;
+            allocation.header::<R<()>>()?;
+            allocation.charge(1)?;
+            if !std::ptr::eq(self.domain, domain) || !self.normalized || self.present != self.touched.len() {
+                return Err(accounting());
+            }
+            let mut previous = None;
+            for index in 0..self.touched.len() {
+                allocation.charge(1)?;
+                let (slot, _) = self.row(index)?;
+                if slot >= domain.keys.len() || previous.is_some_and(|previous| previous >= slot) {
+                    return Err(accounting());
+                }
+                previous = Some(slot);
+            }
+            Ok(())
+        }
+    }
+
+    impl<'d, 'f> Workspace<'d, 'f> {
+        pub(super) fn new(domain: &'d Domain<'f>, allocation: &mut Allocation<'_>) -> R<Self> {
+            live(allocation)?;
+            allocation.header::<Self>()?;
+            allocation.header::<R<Self>>()?;
+            let slots = allocation.filled(domain.keys.len(), Slot { value: None, touched: false })?;
+            let touched = allocation.capacity(domain.keys.len())?;
+            #[cfg(test)]
+            capability_refusal_phase_v18::created();
+            Ok(Self { domain, slots, touched, present: 0, normalized: true })
+        }
+
+        pub(super) fn get(&self, function: &SemanticFunctionDeclV1, key: usize,
+            allocation: &mut Allocation<'_>) -> R<Option<ProjectedCapabilityValueV1>> {
+            allocation.header::<R<Option<ProjectedCapabilityValueV1>>>()?;
+            let index = self.domain.slot(function, key, allocation)?;
+            allocation.charge(1)?;
+            Ok(self.slots.get(index).ok_or_else(accounting)?.value)
+        }
+
+        pub(super) fn insert(&mut self, function: &SemanticFunctionDeclV1, key: usize,
+            value: ProjectedCapabilityValueV1, allocation: &mut Allocation<'_>) -> R<Option<ProjectedCapabilityValueV1>> {
+            allocation.header::<R<Option<ProjectedCapabilityValueV1>>>()?;
+            let index = self.domain.slot(function, key, allocation)?;
+            self.assign(index, value, allocation)
+        }
+
+        fn assign(&mut self, index: usize, value: ProjectedCapabilityValueV1,
+            allocation: &mut Allocation<'_>) -> R<Option<ProjectedCapabilityValueV1>> {
+            allocation.header::<R<Option<ProjectedCapabilityValueV1>>>()?;
+            allocation.charge(1)?;
+            let slot = self.slots.get(index).copied().ok_or_else(accounting)?;
+            let present = if slot.value.is_none() { add(self.present, 1)? } else { self.present };
+            if !slot.touched && self.touched.len() == self.touched.capacity() { return Err(accounting()); }
+            // The complete first-touch commit is prepaid; its list cannot grow.
+            allocation.charge(if slot.touched { 1 } else { 2 })?;
+            if !slot.touched { self.touched.push(index); }
+            self.slots[index] = Slot { value: Some(value), touched: true };
+            self.present = present;
+            self.normalized = false;
+            Ok(slot.value)
+        }
+
+        pub(super) fn remove(&mut self, function: &SemanticFunctionDeclV1, key: usize,
+            allocation: &mut Allocation<'_>) -> R<Option<ProjectedCapabilityValueV1>> {
+            allocation.header::<R<Option<ProjectedCapabilityValueV1>>>()?;
+            let index = self.domain.slot(function, key, allocation)?;
+            allocation.charge(1)?;
+            let previous = self.slots.get(index).ok_or_else(accounting)?.value;
+            if previous.is_some() {
+                let count = self.present.checked_sub(1).ok_or_else(accounting)?;
+                allocation.charge(1)?;
+                self.slots[index].value = None;
+                self.present = count;
+                self.normalized = false;
+            }
+            Ok(previous)
+        }
+
+        pub(super) fn normalize(&mut self, allocation: &mut Allocation<'_>) -> R<()> {
+            #[cfg(test)]
+            let _phase = capability_refusal_phase_v18::enter(capability_refusal_phase_v18::Phase::Normalize);
+            live(allocation)?;
+            allocation.header::<R<()>>()?;
+            allocation.header::<(usize, usize)>()?;
+            let mut count = 0;
+            for index in 0..self.touched.len() {
+                allocation.charge(1)?;
+                let slot_index = self.touched[index];
+                let slot = self.slots.get_mut(slot_index).ok_or_else(accounting)?;
+                if !slot.touched { return Err(accounting()); }
+                if slot.value.is_some() {
+                    if index != count {
+                        allocation.charge(1)?; self.touched[count] = slot_index;
+                        #[cfg(test)]
+                        capability_refusal_phase_v18::mutated();
+                    }
+                    count = add(count, 1)?;
+                } else {
+                    allocation.charge(1)?;
+                    slot.touched = false;
+                    #[cfg(test)]
+                    capability_refusal_phase_v18::mutated();
+                }
+            }
+            if count != self.present { return Err(accounting()); }
+            self.touched.truncate(count);
+            allocation.sort_fixed_key(&mut self.touched, |slot| *slot)?;
+            for pair in self.touched.windows(2) {
+                allocation.charge(1)?;
+                if pair[0] >= pair[1] { return Err(accounting()); }
+            }
+            self.normalized = true;
+            Ok(())
+        }
+
+        pub(super) fn clear(&mut self, allocation: &mut Allocation<'_>) -> R<()> {
+            #[cfg(test)]
+            let _phase = capability_refusal_phase_v18::enter(capability_refusal_phase_v18::Phase::Clear);
+            live(allocation)?;
+            allocation.header::<R<()>>()?;
+            for &index in &self.touched {
+                allocation.charge(1)?;
+                let slot = self.slots.get_mut(index).ok_or_else(accounting)?;
+                allocation.charge(1)?;
+                *slot = Slot { value: None, touched: false };
+                #[cfg(test)]
+                capability_refusal_phase_v18::mutated();
+            }
+            allocation.charge(1)?;
+            self.touched.clear(); self.present = 0; self.normalized = true;
+            Ok(())
+        }
+
+        pub(super) fn load(&mut self, state: &State<'d, 'f>, allocation: &mut Allocation<'_>) -> R<()> {
+            allocation.header::<R<()>>()?;
+            state.validate(self.domain, allocation)?;
+            self.clear(allocation)?;
+            for &(slot, value) in &state.rows {
+                allocation.charge(1)?;
+                self.assign(slot, value, allocation)?;
+            }
+            self.normalized = true;
+            Ok(())
+        }
+
+        pub(super) fn snapshot(&self, allocation: &mut Allocation<'_>) -> R<State<'d, 'f>> {
+            live(allocation)?;
+            if !self.normalized || self.present != self.touched.len() { return Err(accounting()); }
+            checked_capability_stored_entries_v1(0, self.present)?;
+            allocation.header::<State<'d, 'f>>()?;
+            allocation.header::<R<State<'d, 'f>>>()?;
+            let mut rows = allocation.capacity(self.present)?;
+            let mut previous = None;
+            for &index in &self.touched {
+                allocation.charge(1)?;
+                if previous.is_some_and(|previous| previous >= index) { return Err(accounting()); }
+                let slot = self.slots.get(index).ok_or_else(accounting)?;
+                if !slot.touched { return Err(accounting()); }
+                let value = slot.value.ok_or_else(accounting)?;
+                allocation.push(&mut rows, (index, value))?;
+                previous = Some(index);
+            }
+            Ok(State { domain: self.domain, rows })
+        }
+    }
+
+    impl<'d, 'f> State<'d, 'f> {
+        pub(super) fn validate(&self, domain: &Domain<'_>, allocation: &mut Allocation<'_>) -> R<()> {
+            live(allocation)?;
+            allocation.header::<R<()>>()?;
+            allocation.charge(1)?;
+            if !std::ptr::eq(self.domain, domain) { return Err(accounting()); }
+            let mut previous = None;
+            for &(slot, _) in &self.rows {
+                allocation.charge(1)?;
+                if slot >= domain.keys.len() || previous.is_some_and(|previous| previous >= slot) { return Err(accounting()); }
+                previous = Some(slot);
+            }
+            Ok(())
+        }
+
+        pub(super) fn merge(&mut self, incoming: &Self, stored_entries: &mut usize,
+            allocation: &mut Allocation<'_>) -> R<bool> {
+            self.merge_rows(incoming, stored_entries, allocation)
+        }
+
+        pub(super) fn merge_workspace(&mut self, incoming: &Workspace<'d, 'f>, stored_entries: &mut usize,
+            allocation: &mut Allocation<'_>) -> R<bool> {
+            allocation.header::<&Workspace<'d, 'f>>()?;
+            self.merge_rows(incoming, stored_entries, allocation)
+        }
+
+        fn merge_rows<I: OrderedRows>(&mut self, incoming: &I, stored_entries: &mut usize,
+            allocation: &mut Allocation<'_>) -> R<bool> {
+            self.validate(self.domain, allocation)?;
+            incoming.validate_rows(self.domain, allocation)?;
+            allocation.header::<R<bool>>()?;
+            allocation.header::<(usize, usize, usize, bool)>()?;
+            let (mut left, mut right, mut additional, mut changed) = (0, 0, 0, false);
+            while left < self.rows.len() || right < incoming.len() {
+                allocation.charge(1)?;
+                if right == incoming.len()
+                    || (left < self.rows.len() && self.rows[left].0 < incoming.row(right)?.0) {
+                    changed |= self.rows[left].1 != ProjectedCapabilityValueV1::Invalid;
+                    left += 1;
+                } else if left == self.rows.len() || incoming.row(right)?.0 < self.rows[left].0 {
+                    additional = add(additional, 1)?; right += 1; changed = true;
+                } else {
+                    changed |= self.rows[left].1 != merge_capability_values_v1(self.rows[left].1, incoming.row(right)?.1);
+                    right += 1; left += 1;
+                }
+            }
+            let next_stored = checked_capability_stored_entries_v1(*stored_entries, additional)?;
+            let count = checked_capability_stored_entries_v1(self.rows.len(), additional)?;
+            if !changed { allocation.charge(1)?; return Ok(false); }
+            let mut rows = allocation.capacity(count)?;
+            let (mut left, mut right) = (0, 0);
+            while left < self.rows.len() || right < incoming.len() {
+                allocation.charge(1)?;
+                let row = if right == incoming.len()
+                    || (left < self.rows.len() && self.rows[left].0 < incoming.row(right)?.0) {
+                    let (slot, value) = self.rows[left]; left += 1;
+                    changed |= value != ProjectedCapabilityValueV1::Invalid;
+                    (slot, ProjectedCapabilityValueV1::Invalid)
+                } else if left == self.rows.len() || incoming.row(right)?.0 < self.rows[left].0 {
+                    let slot = incoming.row(right)?.0; right += 1; changed = true;
+                    (slot, ProjectedCapabilityValueV1::Invalid)
+                } else {
+                    let (slot, old) = self.rows[left];
+                    let value = merge_capability_values_v1(old, incoming.row(right)?.1);
+                    changed |= old != value; left += 1; right += 1;
+                    (slot, value)
+                };
+                allocation.push(&mut rows, row)?;
+            }
+            allocation.charge(1)?;
+            self.rows = rows;
+            *stored_entries = next_stored;
+            Ok(changed)
+        }
+    }
+
+    pub(super) struct Payloads<'d, 'f> {
+        pub(super) domain: &'d Domain<'f>,
+        pub(super) rows: Vec<Option<ProjectedMfmaOperandV1>>,
+    }
+
+    impl<'d, 'f> Payloads<'d, 'f> {
+        pub(super) fn new(domain: &'d Domain<'f>, allocation: &mut Allocation<'_>) -> R<Self> {
+            live(allocation)?;
+            allocation.header::<Self>()?;
+            allocation.header::<R<Self>>()?;
+            Ok(Self { domain, rows: allocation.filled(domain.keys.len(), None)? })
+        }
+
+        pub(super) fn get(&self, function: &SemanticFunctionDeclV1, key: usize,
+            allocation: &mut Allocation<'_>) -> R<Option<ProjectedMfmaOperandV1>> {
+            allocation.header::<R<Option<ProjectedMfmaOperandV1>>>()?;
+            let index = self.domain.slot(function, key, allocation)?;
+            allocation.charge(1)?;
+            self.rows.get(index).copied().ok_or_else(accounting)
+        }
+
+        pub(super) fn insert(&mut self, function: &SemanticFunctionDeclV1, key: usize,
+            value: ProjectedMfmaOperandV1, allocation: &mut Allocation<'_>) -> R<()> {
+            allocation.header::<R<()>>()?;
+            let index = self.domain.slot(function, key, allocation)?;
+            allocation.charge(1)?;
+            let previous = self.rows.get(index).copied().ok_or_else(accounting)?;
+            if previous.is_some_and(|previous| previous != value) {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "one workgroup pipeline receives incompatible typed payload layouts"));
+            }
+            allocation.charge(1)?;
+            self.rows[index] = Some(value);
+            Ok(())
+        }
+    }
+}
+
+mod live_capability_driver_v18 {
+    use super::*;
+    use live_capability_collections_v18::{Domain, Payloads, State, Workspace};
+    use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation, resource};
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    type R<T> = Result<T, ProductionRankedProjectionErrorV1>;
+
+    trait Backend {
+        type State;
+        type Payloads;
+        fn len(&self) -> usize;
+        fn state_len(state: &Self::State) -> usize;
+        fn get(&self, function: &SemanticFunctionDeclV1, local: usize, paid: &mut Allocation<'_>) -> R<Option<ProjectedCapabilityValueV1>>;
+        fn insert(&mut self, function: &SemanticFunctionDeclV1, local: usize, value: ProjectedCapabilityValueV1, paid: &mut Allocation<'_>) -> R<()>;
+        fn remove(&mut self, function: &SemanticFunctionDeclV1, local: usize, paid: &mut Allocation<'_>) -> R<()>;
+        fn clear(&mut self, paid: &mut Allocation<'_>) -> R<()>;
+        fn normalize(&mut self, paid: &mut Allocation<'_>) -> R<()>;
+        fn load(&mut self, state: &Self::State, paid: &mut Allocation<'_>) -> R<()>;
+        fn load_owned(&mut self, state: Self::State, paid: &mut Allocation<'_>) -> R<()>;
+        fn snapshot(&self, paid: &mut Allocation<'_>) -> R<Self::State>;
+        fn merge(&self, existing: &mut Self::State, stored: &mut usize, paid: &mut Allocation<'_>) -> R<bool>;
+        fn check_payloads(&self, payloads: &Self::Payloads) -> R<()>;
+        fn payload_get(&self, function: &SemanticFunctionDeclV1, payloads: &Self::Payloads, owner: usize,
+            paid: &mut Allocation<'_>) -> R<Option<ProjectedMfmaOperandV1>>;
+        fn payload_insert(&self, function: &SemanticFunctionDeclV1, payloads: &mut Self::Payloads, owner: usize,
+            value: ProjectedMfmaOperandV1, paid: &mut Allocation<'_>) -> R<()>;
+        fn visit_values<F: FnMut(ProjectedCapabilityValueV1) -> bool>(&self, paid: &mut Allocation<'_>, visit: F) -> R<()>;
+    }
+
+    impl<'d, 'f> Backend for Workspace<'d, 'f> {
+        type State = State<'d, 'f>;
+        type Payloads = Payloads<'d, 'f>;
+        fn len(&self) -> usize { self.present }
+        fn state_len(state: &Self::State) -> usize { state.rows.len() }
+        fn get(&self, function: &SemanticFunctionDeclV1, local: usize, paid: &mut Allocation<'_>) -> R<Option<ProjectedCapabilityValueV1>> {
+            Workspace::get(self, function, local, paid)
+        }
+        fn insert(&mut self, function: &SemanticFunctionDeclV1, local: usize, value: ProjectedCapabilityValueV1, paid: &mut Allocation<'_>) -> R<()> {
+            Workspace::insert(self, function, local, value, paid).map(|_| ())
+        }
+        fn remove(&mut self, function: &SemanticFunctionDeclV1, local: usize, paid: &mut Allocation<'_>) -> R<()> {
+            Workspace::remove(self, function, local, paid).map(|_| ())
+        }
+        fn clear(&mut self, paid: &mut Allocation<'_>) -> R<()> { Workspace::clear(self, paid) }
+        fn normalize(&mut self, paid: &mut Allocation<'_>) -> R<()> { Workspace::normalize(self, paid) }
+        fn load(&mut self, state: &Self::State, paid: &mut Allocation<'_>) -> R<()> { Workspace::load(self, state, paid) }
+        fn load_owned(&mut self, state: Self::State, paid: &mut Allocation<'_>) -> R<()> { Workspace::load(self, &state, paid) }
+        fn snapshot(&self, paid: &mut Allocation<'_>) -> R<Self::State> { Workspace::snapshot(self, paid) }
+        fn merge(&self, existing: &mut Self::State, stored: &mut usize, paid: &mut Allocation<'_>) -> R<bool> {
+            existing.merge_workspace(self, stored, paid)
+        }
+        fn check_payloads(&self, payloads: &Self::Payloads) -> R<()> {
+            if !std::ptr::eq(self.domain, payloads.domain) { return Err(resource(Resource::Accounting)); }
+            Ok(())
+        }
+        fn payload_get(&self, function: &SemanticFunctionDeclV1, payloads: &Self::Payloads, owner: usize,
+            paid: &mut Allocation<'_>) -> R<Option<ProjectedMfmaOperandV1>> { payloads.get(function, owner, paid) }
+        fn payload_insert(&self, function: &SemanticFunctionDeclV1, payloads: &mut Self::Payloads, owner: usize,
+            value: ProjectedMfmaOperandV1, paid: &mut Allocation<'_>) -> R<()> { payloads.insert(function, owner, value, paid) }
+        fn visit_values<F: FnMut(ProjectedCapabilityValueV1) -> bool>(&self, paid: &mut Allocation<'_>, mut visit: F) -> R<()> {
+            paid.header::<R<()>>()?;
+            paid.header::<F>()?;
+            for &index in &self.touched {
+                paid.charge(1)?;
+                let slot = self.slots.get(index).ok_or_else(|| resource(Resource::Accounting))?;
+                if let Some(value) = slot.value && !visit(value) { break; }
+            }
+            Ok(())
+        }
+    }
+
+    struct LegacyWorkspace { state: ProjectedCapabilityStateV1 }
+
+    impl Backend for LegacyWorkspace {
+        type State = ProjectedCapabilityStateV1;
+        type Payloads = HashMap<usize, ProjectedMfmaOperandV1>;
+        fn len(&self) -> usize { self.state.len() }
+        fn state_len(state: &Self::State) -> usize { state.len() }
+        fn get(&self, _: &SemanticFunctionDeclV1, local: usize, _: &mut Allocation<'_>) -> R<Option<ProjectedCapabilityValueV1>> {
+            Ok(self.state.get(&local).copied())
+        }
+        fn insert(&mut self, _: &SemanticFunctionDeclV1, local: usize, value: ProjectedCapabilityValueV1, _: &mut Allocation<'_>) -> R<()> {
+            self.state.insert(local, value); Ok(())
+        }
+        fn remove(&mut self, _: &SemanticFunctionDeclV1, local: usize, _: &mut Allocation<'_>) -> R<()> {
+            self.state.remove(&local); Ok(())
+        }
+        fn clear(&mut self, _: &mut Allocation<'_>) -> R<()> { self.state = HashMap::new(); Ok(()) }
+        fn normalize(&mut self, _: &mut Allocation<'_>) -> R<()> { Ok(()) }
+        fn load(&mut self, state: &Self::State, _: &mut Allocation<'_>) -> R<()> {
+            self.state = try_clone_capability_state_v1(state)?; Ok(())
+        }
+        fn load_owned(&mut self, state: Self::State, _: &mut Allocation<'_>) -> R<()> { self.state = state; Ok(()) }
+        fn snapshot(&self, _: &mut Allocation<'_>) -> R<Self::State> { try_clone_capability_state_v1(&self.state) }
+        fn merge(&self, existing: &mut Self::State, stored: &mut usize, _: &mut Allocation<'_>) -> R<bool> {
+            let additional = self.state.keys().filter(|key| !existing.contains_key(key)).count();
+            let next = checked_capability_stored_entries_v1(*stored, additional)?;
+            let changed = merge_capability_states_v1(existing, &self.state)?;
+            *stored = next;
+            Ok(changed)
+        }
+        fn check_payloads(&self, _: &Self::Payloads) -> R<()> { Ok(()) }
+        fn payload_get(&self, _: &SemanticFunctionDeclV1, payloads: &Self::Payloads, owner: usize,
+            _: &mut Allocation<'_>) -> R<Option<ProjectedMfmaOperandV1>> { Ok(payloads.get(&owner).copied()) }
+        fn payload_insert(&self, _: &SemanticFunctionDeclV1, payloads: &mut Self::Payloads, owner: usize,
+            value: ProjectedMfmaOperandV1, _: &mut Allocation<'_>) -> R<()> {
+            match payloads.insert(owner, value) {
+                Some(existing) if existing != value => {
+                    payloads.insert(owner, existing);
+                    Err(ProductionRankedProjectionErrorV1::Incomplete("one workgroup pipeline receives incompatible typed payload layouts"))
+                }
+                _ => Ok(()),
+            }
+        }
+        fn visit_values<F: FnMut(ProjectedCapabilityValueV1) -> bool>(&self, _: &mut Allocation<'_>, mut visit: F) -> R<()> {
+            for &value in self.state.values() { if !visit(value) { break; } }
+            Ok(())
+        }
+    }
+
+    pub(super) fn pipeline_owners(callables: &[SemanticCallableDeclV1], function: &SemanticFunctionDeclV1,
+        paid: &mut Allocation<'_>) -> R<Vec<Option<usize>>> {
+        paid.header::<R<Vec<Option<usize>>>>()?;
+        paid.header::<usize>()?;
+        let mut owners = paid.filled(function.locals().len(), None)?;
+        for block in function.blocks() {
+            paid.charge(1)?;
+            let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else { continue; };
+            paid.charge(1)?;
+            if !matches!(callables.get(call.callee().index() as usize),
+                Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. }, .. })) { continue; }
+            let destination = simple_call_destination(call)?.index() as usize;
+            paid.charge(1)?;
+            let slot = owners.get_mut(destination).ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "a workgroup pipeline destination is outside the semantic local table"))?;
+            paid.charge(1)?;
+            if slot.replace(destination).is_some() { return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "one Rust local receives multiple workgroup pipeline origins")); }
+        }
+        pipeline_aliases(function, &mut owners, paid)?;
+        Ok(owners)
+    }
+
+    pub(super) fn pipeline_aliases(function: &SemanticFunctionDeclV1, owners: &mut [Option<usize>],
+        paid: &mut Allocation<'_>) -> R<()> {
+        if owners.len() != function.locals().len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported("pipeline owner storage does not match the semantic local table"));
+        }
+        let mut present = false;
+        for owner in owners.iter() {
+            paid.charge(1)?;
+            if owner.is_some() { present = true; break; }
+        }
+        if !present { return Ok(()); }
+        let mut aliases = match paid {
+            Allocation::Legacy => {
+                let mut aliases = Vec::new();
+                aliases.try_reserve_exact(owners.len()).map_err(|_| ProductionRankedProjectionErrorV1::Unsupported(
+                    "pipeline alias adjacency storage cannot be reserved"))?;
+                aliases.resize_with(owners.len(), Vec::new);
+                aliases
+            }
+            Allocation::Source(_) => paid.nested(owners.len())?,
+        };
+        let mut alias_count = 0;
+        for block in function.blocks() {
+            paid.charge(1)?;
+            for statement in block.statements() {
+                paid.charge(1)?;
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else { continue; };
+                if !assignment.destination().projections().is_empty() { continue; }
+                let source = match assignment.value().kind() {
+                    SemanticRvalueKindV1::Use(operand) => raw_operand_place(operand),
+                    SemanticRvalueKindV1::Borrow { place, .. }
+                    | SemanticRvalueKindV1::AddressOf { place, .. } => Some(place),
+                    _ => None,
+                };
+                let Some(source) = source else { continue; };
+                push_local_provenance_edge_core_v18(&mut aliases, source.local().index() as usize,
+                    assignment.destination().local().index() as usize, &mut alias_count, paid)?;
+            }
+        }
+        let mut queue = paid.queue(owners.len(), "local provenance dataflow worklist cannot be reserved")?;
+        for (index, owner) in owners.iter().enumerate() {
+            paid.charge(1)?;
+            if owner.is_some() { paid.queue_push(&mut queue, index)?; }
+        }
+        let mut work = 0_usize;
+        while let Some(source) = paid.queue_pop(&mut queue)? {
+            paid.charge(1)?;
+            let Some(owner) = owners[source] else { continue; };
+            for &destination in &aliases[source] {
+                paid.charge(1)?;
+                work = work.checked_add(1).ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "local provenance dataflow work accounting overflowed"))?;
+                if work > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "local provenance dataflow exceeds the charged projection limit"));
+                }
+                match owners[destination] {
+                    None => {
+                        paid.charge(1)?;
+                        owners[destination] = Some(owner);
+                        paid.queue_push(&mut queue, destination)?;
+                    }
+                    Some(existing) if existing == owner => {}
+                    Some(_) => return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "one Rust local may alias two workgroup pipelines")),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn successors(terminator: &SemanticTerminatorKindV1, state_entries: usize,
+        work: &mut usize, paid: &mut Allocation<'_>) -> R<Vec<usize>> {
+        if matches!(paid, Allocation::Legacy) {
+            return charged_unique_capability_successors_v1(terminator, state_entries, work);
+        }
+        paid.header::<R<Vec<usize>>>()?;
+        paid.header::<(usize, usize, usize)>()?;
+        paid.header::<(&mut usize, &mut usize, &mut Allocation<'_>)>()?;
+        let mut count = 0_usize;
+        terminator.try_for_each_edge::<ProductionRankedProjectionErrorV1>(|_| {
+            charge_capability_dataflow_work_v1(work, 1)?;
+            paid.charge(1)?;
+            count = source_ranked_consumer_resources_v18::add(count, 1)?;
+            Ok(())
+        })?;
+        let mut rows = paid.capacity(count)?;
+        paid.header::<(&mut Vec<usize>, &mut Allocation<'_>)>()?;
+        terminator.try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
+            paid.charge(1)?;
+            paid.push(&mut rows, edge.target().index() as usize)
+        })?;
+        paid.sort_fixed_key(&mut rows, |target| *target)?;
+        let mut unique = 0;
+        for index in 0..rows.len() {
+            paid.charge(1)?;
+            if unique == 0 || rows[index] != rows[unique - 1] {
+                if unique != index { paid.charge(1)?; rows.swap(index, unique); }
+                unique += 1;
+            }
+        }
+        rows.truncate(unique);
+        let merge_work = state_entries.checked_add(1).ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "capability dataflow work overflow"))?;
+        for _ in &rows {
+            charge_capability_dataflow_work_v1(work, merge_work)?;
+            paid.charge(1)?;
+        }
+        Ok(rows)
+    }
+
+    fn propagate<W: Backend>(callables: &[SemanticCallableDeclV1], function: &SemanticFunctionDeclV1,
+        dominance: &SemanticEnumPayloadDominanceV1, allocations: &[Option<AllocationContractV1>],
+        constants: &[Option<u64>], owners: &[Option<usize>], payloads: &W::Payloads,
+        workspace: &mut W, entry: usize, work: &mut usize, paid: &mut Allocation<'_>,
+    ) -> R<Vec<Option<W::State>>> {
+        paid.header::<R<Vec<Option<W::State>>>>()?;
+        paid.header::<(usize, usize, usize)>()?;
+        paid.charge(function.blocks().len())?;
+        let mut entries = paid.capacity(function.blocks().len())?;
+        entries.resize_with(function.blocks().len(), || None);
+        workspace.clear(paid)?;
+        paid.charge(1)?;
+        entries[entry] = Some(workspace.snapshot(paid)?);
+        let mut queue = paid.queue(1, "capability dataflow worklist cannot be reserved")?;
+        paid.queue_push(&mut queue, entry)?;
+        let mut stored_entries = 0;
+        while let Some(block_index) = paid.queue_pop(&mut queue)? {
+            paid.charge(1)?;
+            let incoming = entries.get(block_index).and_then(Option::as_ref).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported("a queued capability dataflow block has no entry state"))?;
+            charge_capability_dataflow_work_v1(work, W::state_len(incoming).checked_add(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported("capability clone work overflow"))?)?;
+            workspace.load(incoming, paid)?;
+            {
+                paid.header::<Transfer<'_, '_, '_, W>>()?;
+                let mut transfer = Transfer { function, state: &mut *workspace, paid: &mut *paid };
+                transfer.statements(block_index, dominance)?;
+                transfer.terminator(callables, block_index, allocations, constants, owners, payloads, false)?;
+            }
+            charge_capability_dataflow_work_v1(work,
+                function.blocks()[block_index].statements().len().checked_add(workspace.len()).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported("capability dataflow work overflow"))?)?;
+            if workspace.len() > MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1 {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported("capability dataflow exceeds the charged projection limit"));
+            }
+            let successors = successors(function.blocks()[block_index].terminator().kind(), workspace.len(), work, paid)?;
+            workspace.normalize(paid)?;
+            for target in successors {
+                paid.charge(1)?;
+                let target_entry = entries.get_mut(target).ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a capability CFG edge outside the semantic function"))?;
+                let changed = match target_entry {
+                    None => {
+                        let next = checked_capability_stored_entries_v1(stored_entries, workspace.len())?;
+                        let state = workspace.snapshot(paid)?;
+                        paid.charge(1)?;
+                        stored_entries = next;
+                        *target_entry = Some(state);
+                        true
+                    }
+                    Some(existing) => workspace.merge(existing, &mut stored_entries, paid)?,
+                };
+                if changed { paid.queue_push(&mut queue, target)?; }
+            }
+        }
+        Ok(entries)
+    }
+
+    fn collect_payloads<W: Backend>(callables: &[SemanticCallableDeclV1], function: &SemanticFunctionDeclV1,
+        dominance: &SemanticEnumPayloadDominanceV1, owners: &[Option<usize>], entries: &[Option<W::State>],
+        workspace: &mut W, payloads: &mut W::Payloads, work: &mut usize, paid: &mut Allocation<'_>,
+    ) -> R<()> {
+        paid.header::<R<()>>()?;
+        for (block_index, block) in function.blocks().iter().enumerate() {
+            paid.charge(1)?;
+            let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else { continue; };
+            paid.charge(1)?;
+            let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { element, .. }, ..
+            }) = callables.get(call.callee().index() as usize) else { continue; };
+            paid.charge(1)?;
+            let Some(entry) = entries.get(block_index).and_then(Option::as_ref) else { continue; };
+            charge_capability_dataflow_work_v1(work, W::state_len(entry).saturating_add(1))?;
+            workspace.load(entry, paid)?;
+            paid.header::<Transfer<'_, '_, '_, W>>()?;
+            let mut transfer = Transfer { function, state: &mut *workspace, paid: &mut *paid };
+            transfer.statements(block_index, dominance)?;
+            let [receiver, _, _, value] = call.arguments() else { return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline write lacks its exact receiver, epoch, index, and payload")); };
+            if value.ty() != *element { return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline write payload changed semantic type")); }
+            let owner = if let Some(place) = raw_operand_place(receiver) {
+                transfer.paid.charge(1)?;
+                owners.get(place.local().index() as usize).copied().flatten()
+            } else { None }.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline write lacks one compiler-owned origin"))?;
+            let Some(ProjectedCapabilityOriginV1::Operand(payload)) = transfer.known(value)? else {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a workgroup pipeline write lacks one authenticated typed payload"));
+            };
+            transfer.state.payload_insert(function, payloads, owner, payload, transfer.paid)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn project(callables: &[SemanticCallableDeclV1], function: &SemanticFunctionDeclV1,
+        dominance: &SemanticEnumPayloadDominanceV1, allocations: &[Option<AllocationContractV1>],
+        constants: &[Option<u64>], paid: &mut Allocation<'_>,
+    ) -> R<ProjectedCapabilityEffectsV1> {
+        if !matches!(paid, Allocation::Source(_)) { return Err(resource(Resource::Accounting)); }
+        let block_count = function.blocks().len();
+        let entry = function.entry().index() as usize;
+        if entry >= block_count { return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "a capability projection entry outside the semantic CFG")); }
+        paid.header::<R<ProjectedCapabilityEffectsV1>>()?;
+        paid.header::<ProjectedCapabilityEffectsV1>()?;
+        paid.header::<(usize, usize, usize)>()?;
+        let owners = pipeline_owners(callables, function, paid)?;
+        let domain = Domain::prepare(function, &owners, paid)?;
+        let mut workspace = Workspace::new(&domain, paid)?;
+        let mut payloads = Payloads::new(&domain, paid)?;
+        project_prepared(callables, function, dominance, allocations, constants, &owners, &mut workspace, &mut payloads, paid)
+    }
+
+    pub(super) fn project_legacy(callables: &[SemanticCallableDeclV1], function: &SemanticFunctionDeclV1,
+        dominance: &SemanticEnumPayloadDominanceV1, allocations: &[Option<AllocationContractV1>], constants: &[Option<u64>],
+    ) -> R<ProjectedCapabilityEffectsV1> {
+        if function.entry().index() as usize >= function.blocks().len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported("a capability projection entry outside the semantic CFG"));
+        }
+        let paid = &mut Allocation::Legacy;
+        let owners = pipeline_owners(callables, function, paid)?;
+        let mut workspace = LegacyWorkspace { state: HashMap::new() };
+        let mut payloads = HashMap::new();
+        project_prepared(callables, function, dominance, allocations, constants, &owners, &mut workspace, &mut payloads, paid)
+    }
+
+    fn project_prepared<W: Backend>(callables: &[SemanticCallableDeclV1], function: &SemanticFunctionDeclV1,
+        dominance: &SemanticEnumPayloadDominanceV1, allocations: &[Option<AllocationContractV1>], constants: &[Option<u64>],
+        owners: &[Option<usize>], workspace: &mut W, payloads: &mut W::Payloads, paid: &mut Allocation<'_>,
+    ) -> R<ProjectedCapabilityEffectsV1> {
+        let block_count = function.blocks().len();
+        let entry = function.entry().index() as usize;
+        let mut work = 0;
+        let initial = propagate(callables, function, dominance, allocations, constants, owners, &*payloads,
+            workspace, entry, &mut work, paid)?;
+        collect_payloads(callables, function, dominance, owners, &initial, workspace, payloads, &mut work, paid)?;
+        let entries = propagate(callables, function, dominance, allocations, constants, owners, &*payloads,
+            workspace, entry, &mut work, paid)?;
+        let mut layouts = paid.optional(block_count)?;
+        let mut global_reads = paid.filled(block_count, None)?;
+        let mut transpose_workgroups = paid.filled(block_count, None)?;
+        let mut read_views = paid.filled(block_count, None)?;
+        for (block_index, state) in entries.into_iter().enumerate() {
+            paid.charge(1)?;
+            let Some(state) = state else { continue; };
+            charge_capability_dataflow_work_v1(&mut work, W::state_len(&state)
+                .checked_add(function.blocks()[block_index].statements().len()).and_then(|amount| amount.checked_add(1))
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported("capability replay work overflow"))?)?;
+            workspace.load_owned(state, paid)?;
+            paid.header::<Transfer<'_, '_, '_, W>>()?;
+            let mut transfer = Transfer { function, state: &mut *workspace, paid };
+            transfer.statements(block_index, dominance)?;
+            let effects = transfer.terminator(callables, block_index, allocations, constants, owners, &*payloads, true)?;
+            transfer.paid.charge(4)?;
+            layouts[block_index] = effects.layout;
+            global_reads[block_index] = effects.global_read;
+            transpose_workgroups[block_index] = effects.transpose_workgroup;
+            read_views[block_index] = effects.read_view;
+        }
+        Ok(ProjectedCapabilityEffectsV1 { layouts, global_reads, transpose_workgroups, read_views })
+    }
+
+    #[cfg(test)]
+    pub(super) fn count_typed_entries_for_test(callables: &[SemanticCallableDeclV1], function: &SemanticFunctionDeclV1,
+        dominance: &SemanticEnumPayloadDominanceV1, allocations: &[Option<AllocationContractV1>],
+        constants: &[Option<u64>], paid: &mut Allocation<'_>,
+    ) -> R<(usize, bool)> {
+        paid.header::<R<(usize, bool)>>()?;
+        paid.header::<(usize, usize, bool, bool, bool)>()?;
+        let owners = pipeline_owners(callables, function, paid)?;
+        let domain = Domain::prepare(function, &owners, paid)?;
+        let mut workspace = Workspace::new(&domain, paid)?;
+        let payloads = Payloads::new(&domain, paid)?;
+        let mut work = 0;
+        let entries = propagate(callables, function, dominance, allocations, constants, &owners, &payloads,
+            &mut workspace, function.entry().index() as usize, &mut work, paid)?;
+        let mut count = 0;
+        let mut together = false;
+        for state in &entries {
+            paid.charge(1)?;
+            if let Some(state) = state {
+                let (mut matrix, mut lane) = (false, false);
+                for (_, value) in &state.rows {
+                    paid.charge(1)?;
+                    if matches!(value, ProjectedCapabilityValueV1::Known(
+                        ProjectedCapabilityOriginV1::MatrixContext { .. } | ProjectedCapabilityOriginV1::Lane { .. })) {
+                        count = source_ranked_consumer_resources_v18::add(count, 1)?;
+                        match value {
+                            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext { .. }) => matrix = true,
+                            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Lane { .. }) => lane = true,
+                            _ => unreachable!("matched typed producer"),
+                        }
+                    }
+                }
+                together |= matrix && lane;
+            }
+        }
+        Ok((count, together))
+    }
+
+    #[cfg(test)]
+    pub(super) fn tensor_instruction_for_test<'d, 'f>(function: &'f SemanticFunctionDeclV1,
+        workspace: &mut Workspace<'d, 'f>, call: &SemanticDirectCallV1,
+        operand: SemanticMfmaOperandContractV1, accumulator: SemanticMfmaAccumulatorContractV1,
+        paid: &mut Allocation<'_>,
+    ) -> R<Result<AuthenticatedTensorInstructionV1, &'static str>> {
+        Transfer { function, state: workspace, paid }.tensor_instruction(call, operand, operand, accumulator)
+    }
+
+    #[cfg(test)]
+    pub(super) fn compare_initial_entries_for_test(callables: &[SemanticCallableDeclV1], function: &SemanticFunctionDeclV1,
+        dominance: &SemanticEnumPayloadDominanceV1, allocations: &[Option<AllocationContractV1>],
+        constants: &[Option<u64>], paid: &mut Allocation<'_>,
+    ) -> R<usize> {
+        let legacy_owners = workgroup_pipeline_local_owners_reference_v18(callables, function)?;
+        let mut legacy_work = 0;
+        let legacy = propagate_capability_dataflow_v1(callables, function, dominance, allocations, constants,
+            &legacy_owners, &HashMap::new(), function.entry().index() as usize, &mut legacy_work)?;
+        let mut shared_legacy_work = 0;
+        let mut shared_legacy_workspace = LegacyWorkspace { state: HashMap::new() };
+        let shared_legacy = propagate(callables, function, dominance, allocations, constants,
+            &legacy_owners, &HashMap::new(), &mut shared_legacy_workspace, function.entry().index() as usize,
+            &mut shared_legacy_work, &mut Allocation::Legacy)?;
+        assert_eq!(shared_legacy_work, legacy_work);
+        assert_eq!(shared_legacy, legacy);
+        let owners = pipeline_owners(callables, function, paid)?;
+        assert_eq!(owners, legacy_owners);
+        let domain = Domain::prepare(function, &owners, paid)?;
+        let mut workspace = Workspace::new(&domain, paid)?;
+        let payloads = Payloads::new(&domain, paid)?;
+        let mut work = 0;
+        let live = propagate(callables, function, dominance, allocations, constants, &owners, &payloads,
+            &mut workspace, function.entry().index() as usize, &mut work, paid)?;
+        assert_eq!(legacy_work, work);
+        assert_eq!(legacy.len(), live.len());
+        let mut compared = 0;
+        for (legacy, live) in legacy.iter().zip(&live) {
+            match (legacy, live) {
+                (Some(legacy), Some(live)) => {
+                    assert_eq!(legacy.len(), live.rows.len());
+                    for &(slot, value) in &live.rows {
+                        assert_eq!(legacy.get(&domain.keys[slot]), Some(&value));
+                        compared += 1;
+                    }
+                }
+                (None, None) => {}
+                _ => panic!("live fixed-point reachability differs from Legacy"),
+            }
+        }
+        Ok(compared)
+    }
+
+    #[cfg(test)]
+    pub(super) fn compare_transfer_backends_for_test(callables: &[SemanticCallableDeclV1], function: &SemanticFunctionDeclV1,
+        state: &ProjectedCapabilityStateV1, allocations: &[Option<AllocationContractV1>], constants: &[Option<u64>],
+        owners: &[Option<usize>], pipeline_payloads: &HashMap<usize, ProjectedMfmaOperandV1>, paid: &mut Allocation<'_>,
+    ) -> R<ProjectedCapabilityTerminatorEffectsV1> {
+        let mut reference = try_clone_capability_state_v1(state)?;
+        let expected = transfer_capability_terminator_v1(callables, function, 0, &mut reference,
+            allocations, constants, owners, pipeline_payloads, true);
+        let mut legacy = LegacyWorkspace { state: try_clone_capability_state_v1(state)? };
+        let actual_legacy = Transfer { function, state: &mut legacy, paid: &mut Allocation::Legacy }
+            .terminator(callables, 0, allocations, constants, owners, pipeline_payloads, true);
+        assert_eq!(format!("{expected:?}"), format!("{actual_legacy:?}"));
+        assert_eq!(reference, legacy.state);
+        let domain = Domain::prepare(function, owners, paid)?;
+        let mut workspace = Workspace::new(&domain, paid)?;
+        for (&key, &value) in state { workspace.insert(function, key, value, paid)?; }
+        let mut payloads = Payloads::new(&domain, paid)?;
+        for (&key, &value) in pipeline_payloads { payloads.insert(function, key, value, paid)?; }
+        let actual_source = Transfer { function, state: &mut workspace, paid }
+            .terminator(callables, 0, allocations, constants, owners, &payloads, true);
+        assert_eq!(format!("{expected:?}"), format!("{actual_source:?}"));
+        workspace.normalize(paid)?;
+        let source = workspace.snapshot(paid)?;
+        assert_eq!(source.rows.len(), reference.len());
+        for (slot, value) in source.rows { assert_eq!(reference.get(&domain.keys[slot]), Some(&value)); }
+        actual_source
+    }
+
+    struct Transfer<'a, 'f, 'm, W: Backend> {
+        function: &'f SemanticFunctionDeclV1,
+        state: &'a mut W,
+        paid: &'a mut Allocation<'m>,
+    }
+
+    impl<W: Backend> Transfer<'_, '_, '_, W> {
+        fn get(&mut self, local: usize) -> R<Option<ProjectedCapabilityValueV1>> {
+            self.state.get(self.function, local, self.paid)
+        }
+
+        fn insert(&mut self, local: usize, value: ProjectedCapabilityValueV1) -> R<()> {
+            self.state.insert(self.function, local, value, self.paid)?;
+            Ok(())
+        }
+
+        fn remove(&mut self, local: usize) -> R<()> {
+            self.state.remove(self.function, local, self.paid)?;
+            Ok(())
+        }
+
+        fn invalidate(&mut self, local: usize) -> R<()> {
+            if self.get(local)?.is_some() { self.insert(local, ProjectedCapabilityValueV1::Invalid)?; }
+            Ok(())
+        }
+
+        fn consume(&mut self, operand: &SemanticOperandV1) -> R<()> {
+            self.paid.header::<R<()>>()?;
+            self.paid.charge(1)?;
+            let place = match operand {
+                SemanticOperandV1::Copy(place) => {
+                    if place.projections().is_empty()
+                        && self.get(place.local().index() as usize)?.as_ref().is_some_and(projected_value_is_shared_read_v1)
+                    { return Ok(()); }
+                    place
+                }
+                SemanticOperandV1::Move(place) => place,
+                SemanticOperandV1::Constant(_) => return Ok(()),
+            };
+            self.invalidate(place.local().index() as usize)
+        }
+
+        fn consume_all(&mut self, operands: &[SemanticOperandV1]) -> R<()> {
+            self.paid.header::<std::slice::Iter<'_, SemanticOperandV1>>()?;
+            for operand in operands { self.consume(operand)?; }
+            Ok(())
+        }
+
+        fn known(&mut self, operand: &SemanticOperandV1) -> R<Option<ProjectedCapabilityOriginV1>> {
+            self.paid.header::<R<Option<ProjectedCapabilityOriginV1>>>()?;
+            self.paid.charge(1)?;
+            let Some(local) = simple_operand_local(operand) else { return Ok(None); };
+            Ok(match self.get(local.index() as usize)? {
+                Some(ProjectedCapabilityValueV1::Known(origin)) => Some(origin),
+                _ => None,
+            })
+        }
+
+        fn argument(&mut self, call: &SemanticDirectCallV1, index: usize) -> R<Option<ProjectedCapabilityOriginV1>> {
+            self.paid.charge(1)?;
+            match call.arguments().get(index) {
+                Some(operand) => self.known(operand),
+                None => Ok(None),
+            }
+        }
+
+        fn assignment_origin(&mut self, operand: &SemanticOperandV1,
+            dominance: &SemanticEnumPayloadDominanceV1, block: SemanticBlockIdV1,
+        ) -> R<Option<ProjectedCapabilityValueV1>> {
+            self.paid.header::<R<Option<ProjectedCapabilityValueV1>>>()?;
+            self.paid.charge(1)?;
+            let Some(place) = raw_operand_place(operand) else { return Ok(None); };
+            if place.projections().is_empty() { return self.get(place.local().index() as usize); }
+            let [downcast, field] = place.projections() else { return Ok(None); };
+            self.paid.charge(1)?;
+            let SemanticProjectionKindV1::Downcast(variant) = downcast.kind() else { return Ok(None); };
+            self.paid.charge(1)?;
+            if !matches!(field.kind(), SemanticProjectionKindV1::Field(0)) { return Ok(None); }
+            let carrier = place.local().index() as usize;
+            let Some(value) = self.get(carrier)? else { return Ok(None); };
+            match value {
+                ProjectedCapabilityValueV1::ConstructedEnum(envelope) => {
+                    self.paid.header::<ProjectedCapabilityEnumEnvelopeV1>()?;
+                    self.paid.charge(1)?;
+                    Ok(unwrap_capability_enum_value_v1(envelope, variant))
+                }
+                ProjectedCapabilityValueV1::Known(origin) if variant == 0 => {
+                    let result = match origin {
+                        ProjectedCapabilityOriginV1::ViewResult(view) => ProjectedCapabilityOriginV1::View(view),
+                        ProjectedCapabilityOriginV1::ReadViewResult(view) => ProjectedCapabilityOriginV1::ReadView(view),
+                        _ => return Ok(None),
+                    };
+                    let Some(availability) = dominance.availability_with_meter_v18(
+                        SemanticLocalIdV1::from_index(carrier as u32), variant, self.paid)? else { return Ok(None); };
+                    Ok(dominance.allows_with_meter_v18(availability, block, self.paid)?
+                        .then_some(ProjectedCapabilityValueV1::Known(result)))
+                }
+                ProjectedCapabilityValueV1::Invalid => Ok(Some(ProjectedCapabilityValueV1::Invalid)),
+                _ => Ok(None),
+            }
+        }
+
+        fn statements(&mut self, block_index: usize, dominance: &SemanticEnumPayloadDominanceV1) -> R<()> {
+            self.paid.header::<R<()>>()?;
+            self.paid.header::<(usize, Option<ProjectedCapabilityValueV1>)>()?;
+            let function = self.function;
+            let block = &function.blocks()[block_index];
+            let use_block = SemanticBlockIdV1::from_index(block_index as u32);
+            for statement in block.statements() {
+                self.paid.charge(1)?;
+                match statement.kind() {
+                    SemanticStatementKindV1::Assign(assignment) => {
+                        let destination = assignment.destination().local().index() as usize;
+                        let origin = if assignment.destination().projections().is_empty() {
+                            match assignment.value().kind() {
+                                SemanticRvalueKindV1::Use(operand) => self.assignment_origin(operand, dominance, use_block)?,
+                                SemanticRvalueKindV1::Borrow { place, .. }
+                                | SemanticRvalueKindV1::AddressOf { place, .. } if place.projections().is_empty() => self.get(place.local().index() as usize)?,
+                                SemanticRvalueKindV1::Aggregate(aggregate) => {
+                                    match (aggregate.kind(), aggregate.operands()) {
+                                        (SemanticAggregateKindV1::EnumVariant(variant), [operand]) => {
+                                            if let Some(value) = self.assignment_origin(operand, dominance, use_block)? {
+                                                self.paid.header::<ProjectedCapabilityEnumEnvelopeV1>()?;
+                                                self.paid.charge(1)?;
+                                                Some(wrap_capability_enum_value_v1(value, *variant)?)
+                                            } else { None }
+                                        }
+                                        _ => None,
+                                    }
+                                }
+                                _ => None,
+                            }
+                        } else { None };
+                        self.paid.header::<&mut Self>()?;
+                        assignment.value().kind().try_visit_operands(|operand| self.consume(operand))?;
+                        if !assignment.destination().projections().is_empty() {
+                            self.invalidate(destination)?;
+                            continue;
+                        }
+                        match origin {
+                            Some(value) => self.insert(destination, value)?,
+                            None => self.remove(destination)?,
+                        }
+                    }
+                    SemanticStatementKindV1::Store(store) => self.consume(store.value())?,
+                    SemanticStatementKindV1::AtomicRmw(atomic) => {
+                        self.consume(atomic.value())?;
+                        self.invalidate(atomic.destination().local().index() as usize)?;
+                    }
+                    SemanticStatementKindV1::AtomicCompareExchange(atomic) => {
+                        self.consume(atomic.expected())?;
+                        self.consume(atomic.replacement())?;
+                        self.invalidate(atomic.destination().local().index() as usize)?;
+                    }
+                    SemanticStatementKindV1::SetDiscriminant { place, .. }
+                    | SemanticStatementKindV1::Deinitialize(place) => self.invalidate(place.local().index() as usize)?,
+                    SemanticStatementKindV1::StorageLive(local)
+                    | SemanticStatementKindV1::StorageDead(local) => self.remove(local.index() as usize)?,
+                    SemanticStatementKindV1::Assume(operand) => self.consume(operand)?,
+                    SemanticStatementKindV1::Nop => {}
+                }
+            }
+            Ok(())
+        }
+
+        fn read_value(&mut self, operand: &SemanticOperandV1, constants: &[Option<u64>]) -> R<Option<ProjectedReadValueV1>> {
+            self.paid.header::<R<Option<ProjectedReadValueV1>>>()?;
+            self.paid.charge(1)?;
+            let value = match constant_definition(operand) {
+                ConstantDefinitionV1::Direct(value) => Some(value),
+                ConstantDefinitionV1::Alias(local) => {
+                    self.paid.charge(1)?;
+                    constants.get(local.index() as usize).copied().flatten()
+                }
+                _ => None,
+            };
+            Ok(value.map(ProjectedReadValueV1::Constant)
+                .or_else(|| simple_operand_local(operand).map(ProjectedReadValueV1::Local)))
+        }
+
+        fn allocation_argument(&mut self, call: &SemanticDirectCallV1,
+            allocations: &[Option<AllocationContractV1>]) -> R<Option<AllocationContractV1>> {
+            self.paid.header::<R<Option<AllocationContractV1>>>()?;
+            self.paid.charge(1)?;
+            let Some(operand) = call.arguments().first() else { return Ok(None); };
+            let Some(place) = raw_operand_place(operand) else { return Ok(None); };
+            let Some(place) = neutral_assertion::transparent_place_with_meter_v18(place, self.paid)? else { return Ok(None); };
+            self.paid.charge(1)?;
+            Ok(allocations.get(place.local().index() as usize).copied().flatten())
+        }
+
+        fn tensor_load(&mut self, call: &SemanticDirectCallV1, destination: SemanticTypeIdV1,
+            output: SemanticTypeIdV1, contract: SemanticMfmaOperandContractV1,
+            storage_layout: SemanticMfmaStorageLayoutV1) -> R<ProjectedCapabilityValueV1> {
+            self.paid.header::<R<ProjectedCapabilityValueV1>>()?;
+            if destination != output || call.arguments().len() != 4
+                || (storage_layout == SemanticMfmaStorageLayoutV1::ColumnMajor
+                    && (contract.role != SemanticMfmaOperandRoleV1::B || contract.profile != SemanticMfmaProfileV1::Bf16F32M16N16K16))
+            { return Ok(ProjectedCapabilityValueV1::Invalid); }
+            let Some(view) = self.argument(call, 0)? else { return Ok(ProjectedCapabilityValueV1::Invalid); };
+            let Some(lane) = self.argument(call, 1)? else { return Ok(ProjectedCapabilityValueV1::Invalid); };
+            let ProjectedCapabilityOriginV1::View(view) = view else { return Ok(ProjectedCapabilityValueV1::Invalid); };
+            let ProjectedCapabilityOriginV1::Lane { root: lane_root, wave_width } = lane else { return Ok(ProjectedCapabilityValueV1::Invalid); };
+            Ok(if view.role == contract.role && view.profile == contract.profile
+                && view.storage_layout == storage_layout && wave_width == contract.wave_width {
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(ProjectedMfmaOperandV1 {
+                    contract, storage_layout, lane_root, allocation: view.allocation,
+                }))
+            } else { ProjectedCapabilityValueV1::Invalid })
+        }
+
+        fn tensor_instruction(&mut self, call: &SemanticDirectCallV1, lhs_contract: SemanticMfmaOperandContractV1,
+            rhs_contract: SemanticMfmaOperandContractV1, accumulator_contract: SemanticMfmaAccumulatorContractV1,
+        ) -> R<Result<AuthenticatedTensorInstructionV1, &'static str>> {
+            self.paid.header::<R<Result<AuthenticatedTensorInstructionV1, &'static str>>>()?;
+            if call.arguments().len() != 4 { return Ok(Err("an MFMA call without its exact context and three typed operands")); }
+            let Some(ProjectedCapabilityOriginV1::MatrixContext { root: context_root }) = self.argument(call, 0)?
+                else { return Ok(Err("an MFMA call without dominating compiler-issued matrix context")); };
+            let Some(ProjectedCapabilityOriginV1::Operand(lhs)) = self.argument(call, 1)?
+                else { return Ok(Err("an MFMA lhs without one dominating checked typed-load payload")); };
+            let Some(ProjectedCapabilityOriginV1::Operand(rhs)) = self.argument(call, 2)?
+                else { return Ok(Err("an MFMA rhs without one dominating checked typed-load payload")); };
+            let Some(ProjectedCapabilityOriginV1::Accumulator(accumulator)) = self.argument(call, 3)?
+                else { return Ok(Err("an MFMA accumulator without dominating zero or compatible prior MFMA")); };
+            self.paid.header::<AuthenticatedTensorInstructionV1>()?;
+            self.paid.charge(1)?;
+            Ok(authenticate_tensor_components_v18(context_root, lhs, rhs, accumulator,
+                lhs_contract, rhs_contract, accumulator_contract))
+        }
+
+        fn tile_argument(&mut self, call: &SemanticDirectCallV1, expected_type: SemanticTypeIdV1,
+            expected_state: ProjectedGfx950TransposeStateV1, format: SemanticGfx950LdsTransposeFormatV1,
+        ) -> R<Option<ProjectedGfx950TransposeTileV1>> {
+            self.paid.header::<R<Option<ProjectedGfx950TransposeTileV1>>>()?;
+            self.paid.header::<Option<ProjectedGfx950TransposeTileV1>>()?;
+            self.paid.charge(1)?;
+            let Some(operand) = call.arguments().first() else { return Ok(None); };
+            if operand.ty() != expected_type { return Ok(None); }
+            if let Some(ProjectedCapabilityOriginV1::Gfx950TransposeTile(tile)) = self.known(operand)? {
+                return Ok((tile.state == expected_state && tile.format == format).then_some(tile));
+            }
+            if !matches!(operand, SemanticOperandV1::Constant(constant)
+                if matches!(constant.value(), SemanticConstantValueV1::ZeroSized)) { return Ok(None); }
+            let mut candidate = None;
+            self.paid.header::<bool>()?;
+            let mut ambiguous = false;
+            self.state.visit_values(self.paid, |value| {
+                if let ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(tile)) = value
+                    && tile.state == expected_state && tile.format == format {
+                    if candidate.is_some() { ambiguous = true; return false; }
+                    candidate = Some(tile);
+                }
+                true
+            })?;
+            Ok(if ambiguous { None } else { candidate })
+        }
+
+        fn transpose_current(&mut self, call: &SemanticDirectCallV1, destination: SemanticTypeIdV1,
+            tile_type: SemanticTypeIdV1, format: SemanticGfx950LdsTransposeFormatV1, token_root: u64,
+        ) -> R<ProjectedCapabilityValueV1> {
+            self.paid.header::<R<ProjectedCapabilityValueV1>>()?;
+            Ok(match self.argument(call, 0)? {
+                Some(ProjectedCapabilityOriginV1::Lane { root: lane_root, wave_width: 64 })
+                    if call.arguments().len() == 1 && destination == tile_type =>
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(ProjectedGfx950TransposeTileV1 {
+                        state: ProjectedGfx950TransposeStateV1::Current, format, lane_root, token_root, source_allocation: None,
+                    })),
+                _ => ProjectedCapabilityValueV1::Invalid,
+            })
+        }
+
+        fn transpose_stage(&mut self, call: &SemanticDirectCallV1, destination: SemanticTypeIdV1,
+            input: SemanticTypeIdV1, output: SemanticTypeIdV1, format: SemanticGfx950LdsTransposeFormatV1, token_root: u64,
+        ) -> R<ProjectedCapabilityValueV1> {
+            self.paid.header::<R<ProjectedCapabilityValueV1>>()?;
+            let tile = self.tile_argument(call, input, ProjectedGfx950TransposeStateV1::Current, format)?;
+            let view = self.argument(call, 1)?;
+            Ok(match (tile, view) {
+                (Some(ProjectedGfx950TransposeTileV1 { lane_root, source_allocation: None, .. }),
+                    Some(ProjectedCapabilityOriginV1::View(ProjectedMfmaViewV1 {
+                        role: SemanticMfmaOperandRoleV1::A, profile, storage_layout: SemanticMfmaStorageLayoutV1::RowMajor, allocation,
+                    }))) if call.arguments().len() == 4 && destination == output && profile == gfx950_transpose_profile_v1(format) =>
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(ProjectedGfx950TransposeTileV1 {
+                        state: ProjectedGfx950TransposeStateV1::Staged, format, lane_root, token_root, source_allocation: Some(allocation),
+                    })),
+                _ => ProjectedCapabilityValueV1::Invalid,
+            })
+        }
+
+        fn transpose_publish(&mut self, call: &SemanticDirectCallV1, destination: SemanticTypeIdV1,
+            input: SemanticTypeIdV1, output: SemanticTypeIdV1, format: SemanticGfx950LdsTransposeFormatV1, token_root: u64,
+        ) -> R<ProjectedCapabilityValueV1> {
+            self.paid.header::<R<ProjectedCapabilityValueV1>>()?;
+            Ok(match self.tile_argument(call, input, ProjectedGfx950TransposeStateV1::Staged, format)? {
+                Some(ProjectedGfx950TransposeTileV1 { lane_root, source_allocation: Some(allocation), .. })
+                    if call.arguments().len() == 1 && destination == output =>
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(ProjectedGfx950TransposeTileV1 {
+                        state: ProjectedGfx950TransposeStateV1::Published, format, lane_root, token_root, source_allocation: Some(allocation),
+                    })),
+                _ => ProjectedCapabilityValueV1::Invalid,
+            })
+        }
+
+        fn transpose_read(&mut self, call: &SemanticDirectCallV1, destination: SemanticTypeIdV1,
+            tile_type: SemanticTypeIdV1, fragment: SemanticTypeIdV1, contract: SemanticMfmaOperandContractV1,
+            format: SemanticGfx950LdsTransposeFormatV1,
+        ) -> R<ProjectedCapabilityValueV1> {
+            self.paid.header::<R<ProjectedCapabilityValueV1>>()?;
+            Ok(match self.tile_argument(call, tile_type, ProjectedGfx950TransposeStateV1::Published, format)? {
+                Some(ProjectedGfx950TransposeTileV1 { lane_root, source_allocation: Some(allocation), .. })
+                    if call.arguments().len() == 1 && destination == fragment && contract.role == SemanticMfmaOperandRoleV1::B
+                        && contract.profile == gfx950_transpose_profile_v1(format)
+                        && contract.register_distribution == SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
+                        && contract.wave_width == 64 =>
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(ProjectedMfmaOperandV1 {
+                        contract, storage_layout: SemanticMfmaStorageLayoutV1::RowMajor, lane_root, allocation,
+                    })),
+                _ => ProjectedCapabilityValueV1::Invalid,
+            })
+        }
+
+        fn strided_read(&mut self, call: &SemanticDirectCallV1, element: SemanticTypeIdV1,
+            constants: &[Option<u64>]) -> R<Option<ProjectedReadViewAccessV1>> {
+            self.paid.header::<R<Option<ProjectedReadViewAccessV1>>>()?;
+            if call.arguments().len() != 4 { return Ok(None); }
+            let Some(ProjectedCapabilityOriginV1::ReadView(view)) = self.argument(call, 0)? else { return Ok(None); };
+            if view.element != element { return Ok(None); }
+            let Some(row) = self.read_value(&call.arguments()[1], constants)? else { return Ok(None); };
+            let Some(column) = self.read_value(&call.arguments()[2], constants)? else { return Ok(None); };
+            Ok(Some(ProjectedReadViewAccessV1 { view, row, column }))
+        }
+
+        fn read_argument(&mut self, call: &SemanticDirectCallV1, index: usize,
+            constants: &[Option<u64>]) -> R<Option<ProjectedReadValueV1>> {
+            self.paid.charge(1)?;
+            match call.arguments().get(index) {
+                Some(operand) => self.read_value(operand, constants),
+                None => Ok(None),
+            }
+        }
+
+        fn terminator(&mut self, callables: &[SemanticCallableDeclV1], block_index: usize,
+            local_allocations: &[Option<AllocationContractV1>], constants: &[Option<u64>],
+            pipeline_owners: &[Option<usize>], pipeline_payloads: &W::Payloads,
+            require_authenticated_site: bool) -> R<ProjectedCapabilityTerminatorEffectsV1> {
+            self.paid.header::<R<ProjectedCapabilityTerminatorEffectsV1>>()?;
+            self.paid.header::<(ProjectedCapabilityValueV1, Option<ProductionRankedOperationV1>)>()?;
+            self.paid.charge(1)?;
+            let function = self.function;
+            let terminator = function.blocks()[block_index].terminator().kind();
+            let SemanticTerminatorKindV1::Call(call) = terminator else {
+                match terminator {
+                    SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
+                        self.consume(discriminant)?;
+                    }
+                    SemanticTerminatorKindV1::TailCall(call) => {
+                        self.consume_all(call.arguments())?;
+                    }
+                    SemanticTerminatorKindV1::Drop { place, .. } => {
+                        self.invalidate(place.local().index() as usize)?;
+                    }
+                    SemanticTerminatorKindV1::Assert { condition, .. } => {
+                        self.consume(condition)?;
+                    }
+                    SemanticTerminatorKindV1::Goto(_)
+                    | SemanticTerminatorKindV1::FalseEdge { .. }
+                    | SemanticTerminatorKindV1::Return
+                    | SemanticTerminatorKindV1::UnwindResume
+                    | SemanticTerminatorKindV1::UnwindTerminate
+                    | SemanticTerminatorKindV1::Abort
+                    | SemanticTerminatorKindV1::Unreachable => {}
+                    SemanticTerminatorKindV1::Call(_) => unreachable!("matched call terminator"),
+                }
+                return Ok(ProjectedCapabilityTerminatorEffectsV1::default());
+            };
+            self.paid.charge(1)?;
+            let intrinsic_operation = match callables.get(call.callee().index() as usize) {
+                Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) => Some(operation),
+                _ => None,
+            };
+            if matches!(
+                intrinsic_operation,
+                Some(SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. })
+            ) {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "the retired Option-returning BF16 matrix load; use Bf16MatrixLoadZeroFilledV2",
+                ));
+            }
+            let is_global_fragment_load = matches!(
+                intrinsic_operation,
+                Some(
+                    SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. }
+                        | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 { .. }
+                        | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 { .. }
+                )
+            );
+            let is_gfx950_transpose = matches!(
+                intrinsic_operation,
+                Some(
+                    SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent { .. }
+                        | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage { .. }
+                        | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish { .. }
+                        | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead { .. }
+                )
+            );
+            let is_gfx950_transpose_stage = matches!(
+                intrinsic_operation,
+                Some(SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage { .. })
+            );
+            if let Some(SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { element, .. }) =
+                intrinsic_operation
+            {
+                let read_view = self.strided_read(call, *element, constants)?;
+                self.consume_all(call.arguments())?;
+                if let Some(destination) = call.destination() {
+                    self.invalidate(destination.place().local().index() as usize)?;
+                    if destination.place().projections().is_empty() {
+                        self.remove(destination.place().local().index() as usize)?;
+                    }
+                }
+                if read_view.is_none() && require_authenticated_site {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a strided read without one dominating checked view payload and exact scalar operands",
+                    ));
+                }
+                return Ok(ProjectedCapabilityTerminatorEffectsV1 {
+                    read_view,
+                    ..ProjectedCapabilityTerminatorEffectsV1::default()
+                });
+            }
+            let Some(destination) = call.destination() else {
+                self.consume_all(call.arguments())?;
+                if is_gfx950_transpose {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a gfx950 LDS transpose operation without one direct state result",
+                    ));
+                }
+                if is_global_fragment_load {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a typed global fragment load without one direct local result",
+                    ));
+                }
+                return Ok(ProjectedCapabilityTerminatorEffectsV1::default());
+            };
+            if !destination.place().projections().is_empty() {
+                self.consume_all(call.arguments())?;
+                self.invalidate(destination.place().local().index() as usize)?;
+                if is_gfx950_transpose {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a gfx950 LDS transpose operation into a projected destination",
+                    ));
+                }
+                if is_global_fragment_load {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a typed global fragment load into a projected destination",
+                    ));
+                }
+                return Ok(ProjectedCapabilityTerminatorEffectsV1::default());
+            }
+            let destination_local = destination.place().local().index() as usize;
+            let Some(operation) = intrinsic_operation else {
+                self.consume_all(call.arguments())?;
+                self.remove(destination_local)?;
+                return Ok(ProjectedCapabilityTerminatorEffectsV1::default());
+            };
+            if matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_)) {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a typed capability with cleanup control flow",
+                ));
+            }
+            let root = ((block_index as u64) << 32) | destination_local as u64;
+            let (origin, layout) = match operation {
+                SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
+                    result,
+                    element,
+                    ..
+                } => {
+                    let allocation = self.allocation_argument(call, local_allocations)?;
+                    let rows = self.read_argument(call, 2, constants)?;
+                    let columns = self.read_argument(call, 3, constants)?;
+                    let origin = match (allocation, rows, columns) {
+                        (Some(allocation), Some(rows), Some(columns))
+                            if call.arguments().len() == 5
+                                && destination.place().ty() == *result
+                                && allocation.noalias_class == 1 =>
+                        {
+                            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ReadViewResult(
+                                ProjectedReadViewV1 {
+                                    root,
+                                    element: *element,
+                                    allocation: AllocationContractV1 {
+                                        writable: false,
+                                        ..allocation
+                                    },
+                                    rows,
+                                    columns,
+                                },
+                            ))
+                        }
+                        _ => ProjectedCapabilityValueV1::Invalid,
+                    };
+                    (origin, None)
+                }
+                SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
+                    if !call.arguments().is_empty() || destination.place().ty() != *context {
+                        (ProjectedCapabilityValueV1::Invalid, None)
+                    } else {
+                        (
+                            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext {
+                                root,
+                            }),
+                            None,
+                        )
+                    }
+                }
+                SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { lane, wave_width } => {
+                    if !call.arguments().is_empty() || destination.place().ty() != *lane {
+                        (ProjectedCapabilityValueV1::Invalid, None)
+                    } else {
+                        (
+                            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Lane {
+                                root,
+                                wave_width: *wave_width,
+                            }),
+                            None,
+                        )
+                    }
+                }
+                SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent {
+                    tile, format, ..
+                } => (
+                    self.transpose_current(
+                        call,
+                        destination.place().ty(),
+                        *tile,
+                        *format,
+                        root,
+                    )?,
+                    None,
+                ),
+                SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+                    input_tile,
+                    output_tile,
+                    format,
+                    ..
+                } => (
+                    self.transpose_stage(
+                        call,
+                        destination.place().ty(),
+                        *input_tile,
+                        *output_tile,
+                        *format,
+                        root,
+                    )?,
+                    None,
+                ),
+                SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+                    input_tile,
+                    output_tile,
+                    format,
+                    ..
+                } => (
+                    self.transpose_publish(
+                        call,
+                        destination.place().ty(),
+                        *input_tile,
+                        *output_tile,
+                        *format,
+                        root,
+                    )?,
+                    None,
+                ),
+                SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
+                    tile,
+                    fragment,
+                    contract,
+                    format,
+                    ..
+                } => (
+                    self.transpose_read(
+                        call,
+                        destination.place().ty(),
+                        *tile,
+                        *fragment,
+                        *contract,
+                        *format,
+                    )?,
+                    None,
+                ),
+                SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+                    result,
+                    role,
+                    storage_layout,
+                    ..
+                } => {
+                    let allocation = self.allocation_argument(call, local_allocations)?;
+                    let origin = match allocation {
+                        Some(allocation)
+                            if call.arguments().len() == 5 && destination.place().ty() == *result =>
+                        {
+                            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(
+                                ProjectedMfmaViewV1 {
+                                    role: *role,
+                                    profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+                                    storage_layout: *storage_layout,
+                                    allocation,
+                                },
+                            ))
+                        }
+                        _ => ProjectedCapabilityValueV1::Invalid,
+                    };
+                    (origin, None)
+                }
+                SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor { result, .. } => {
+                    let allocation = self.allocation_argument(call, local_allocations)?;
+                    let origin = match allocation {
+                        Some(allocation)
+                            if call.arguments().len() == 5 && destination.place().ty() == *result =>
+                        {
+                            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(
+                                ProjectedMfmaViewV1 {
+                                    role: SemanticMfmaOperandRoleV1::B,
+                                    profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+                                    storage_layout: SemanticMfmaStorageLayoutV1::ColumnMajor,
+                                    allocation,
+                                },
+                            ))
+                        }
+                        _ => ProjectedCapabilityValueV1::Invalid,
+                    };
+                    (origin, None)
+                }
+                SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor {
+                    result,
+                    role,
+                    storage_layout,
+                    ..
+                } => {
+                    let allocation = self.allocation_argument(call, local_allocations)?;
+                    let origin = match allocation {
+                        Some(allocation)
+                            if call.arguments().len() == 5 && destination.place().ty() == *result =>
+                        {
+                            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(
+                                ProjectedMfmaViewV1 {
+                                    role: *role,
+                                    profile: SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+                                    storage_layout: *storage_layout,
+                                    allocation,
+                                },
+                            ))
+                        }
+                        _ => ProjectedCapabilityValueV1::Invalid,
+                    };
+                    (origin, None)
+                }
+                SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor {
+                    result,
+                    role,
+                    storage_layout,
+                    ..
+                } => {
+                    let allocation = self.allocation_argument(call, local_allocations)?;
+                    let origin = match allocation {
+                        Some(allocation)
+                            if call.arguments().len() == 5 && destination.place().ty() == *result =>
+                        {
+                            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(
+                                ProjectedMfmaViewV1 {
+                                    role: *role,
+                                    profile: SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+                                    storage_layout: *storage_layout,
+                                    allocation,
+                                },
+                            ))
+                        }
+                        _ => ProjectedCapabilityValueV1::Invalid,
+                    };
+                    (origin, None)
+                }
+                SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+                    fragment,
+                    contract,
+                    storage_layout,
+                    ..
+                }
+                | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 {
+                    fragment,
+                    contract,
+                    storage_layout,
+                    ..
+                }
+                | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 {
+                    fragment,
+                    contract,
+                    storage_layout,
+                    ..
+                } => (
+                    self.tensor_load(
+                        call,
+                        destination.place().ty(),
+                        *fragment,
+                        *contract,
+                        *storage_layout,
+                    )?,
+                    None,
+                ),
+                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+                    fragment,
+                    contract,
+                    ..
+                } => {
+                    let lane = self.argument(call, 0)?;
+                    let origin = match lane {
+                        Some(ProjectedCapabilityOriginV1::Lane {
+                            root: lane_root,
+                            wave_width,
+                        }) if call.arguments().len() == 1
+                            && destination.place().ty() == *fragment
+                            && wave_width == contract.wave_width =>
+                        {
+                            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
+                                ProjectedMfmaAccumulatorV1 {
+                                    contract: *contract,
+                                    lane_root,
+                                    value_root: root,
+                                    flow_root: root,
+                                },
+                            ))
+                        }
+                        _ => ProjectedCapabilityValueV1::Invalid,
+                    };
+                    (origin, None)
+                }
+                SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { element, .. } => {
+                    let origin = self.pipeline_payload(call, pipeline_owners, pipeline_payloads)?
+                        .filter(|_| call.arguments().len() == 3 && destination.place().ty() == *element)
+                        .map(ProjectedCapabilityOriginV1::Operand)
+                        .map(ProjectedCapabilityValueV1::Known)
+                        .unwrap_or(ProjectedCapabilityValueV1::Invalid);
+                    (origin, None)
+                }
+                SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                    accumulator_fragment,
+                    lhs,
+                    rhs,
+                    accumulator,
+                    ..
+                } => match self.tensor_instruction(call, *lhs, *rhs, *accumulator)? {
+                    Ok(authenticated) if destination.place().ty() == *accumulator_fragment => {
+                        // The semantic value root remains stable for loop refinement,
+                        // while the flow root identifies this exact tensor result for
+                        // layout propagation into a later instruction.
+                        let result = ProjectedMfmaAccumulatorV1 {
+                            flow_root: root,
+                            ..authenticated.accumulator
+                        };
+                        self.paid.header::<(Sha256, DigestV1, ProductionCooperativeTensorBindingV1)>()?;
+                        self.paid.charge(6 * (TENSOR_CAPABILITY_ROOT_DOMAIN_V1.len() + 17) + 14 * 8)?;
+                        let binding = tensor_site_binding_v1(
+                            authenticated,
+                            root,
+                            u16::try_from(call.arguments().len()).unwrap_or(u16::MAX),
+                        )
+                        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                            "an MFMA call whose typed capability binding is invalid",
+                        ))?;
+                        (
+                            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
+                                result,
+                            )),
+                            Some(ProductionRankedOperationV1::TensorLayout {
+                                contract: authenticated.contract,
+                                convergence: TensorConvergenceAttr::UniformSubgroup,
+                                active_lanes: u32::from(authenticated.contract.subgroup_width),
+                                binding: Some(binding),
+                            }),
+                        )
+                    }
+                    Ok(_) => (ProjectedCapabilityValueV1::Invalid, None),
+                    Err(detail) if require_authenticated_site => {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(detail));
+                    }
+                    Err(_) => (ProjectedCapabilityValueV1::Invalid, None),
+                },
+                _ => {
+                    self.consume_all(call.arguments())?;
+                    self.remove(destination_local)?;
+                    return Ok(ProjectedCapabilityTerminatorEffectsV1::default());
+                }
+            };
+            self.consume_all(call.arguments())?;
+            self.insert(destination_local, origin)?;
+            if require_authenticated_site
+                && is_gfx950_transpose
+                && origin == ProjectedCapabilityValueV1::Invalid
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a gfx950 LDS transpose operation without its exact dominating Current-Stage-Publish state, format, view, and Wave64 lane",
+                ));
+            }
+            if require_authenticated_site
+                && matches!(
+                    operation,
+                    SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate { .. }
+                )
+                && layout.is_none()
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "an MFMA call whose result type does not match its authenticated accumulator contract",
+                ));
+            }
+            let global_read = match (is_global_fragment_load, is_gfx950_transpose_stage, origin) {
+                (
+                    true,
+                    false,
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(fragment)),
+                ) => Some(fragment.allocation),
+                (
+                    false,
+                    true,
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(
+                        ProjectedGfx950TransposeTileV1 {
+                            state: ProjectedGfx950TransposeStateV1::Staged,
+                            source_allocation: Some(allocation),
+                            ..
+                        },
+                    )),
+                ) => Some(allocation),
+                (true, false, _) => {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a typed global fragment load without exact authenticated view, lane, allocation, and result provenance",
+                    ));
+                }
+                (false, true, _) => {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a gfx950 LDS transpose stage without exact authenticated view, state token, lane, allocation, and result provenance",
+                    ));
+                }
+                (false, false, _) => None,
+                (true, true, _) => unreachable!("transpose stage is not a direct fragment load"),
+            };
+            let transpose_workgroup = match operation {
+                SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage { format, .. } => {
+                    Some(ProjectedTransposeWorkgroupEffectV1 {
+                        access: AccessKindAttr::Write,
+                        format: *format,
+                    })
+                }
+                SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead { format, .. } => {
+                    Some(ProjectedTransposeWorkgroupEffectV1 {
+                        access: AccessKindAttr::Read,
+                        format: *format,
+                    })
+                }
+                _ => None,
+            };
+            Ok(ProjectedCapabilityTerminatorEffectsV1 {
+                layout,
+                global_read,
+                transpose_workgroup,
+                read_view: None,
+            })
+        }
+
+        fn pipeline_payload(&mut self, call: &SemanticDirectCallV1, owners: &[Option<usize>],
+            payloads: &W::Payloads) -> R<Option<ProjectedMfmaOperandV1>> {
+            self.paid.header::<R<Option<ProjectedMfmaOperandV1>>>()?;
+            self.paid.charge(1)?;
+            self.state.check_payloads(payloads)?;
+            let Some(operand) = call.arguments().first() else { return Ok(None); };
+            let Some(place) = raw_operand_place(operand) else { return Ok(None); };
+            self.paid.charge(1)?;
+            let Some(owner) = owners.get(place.local().index() as usize).copied().flatten() else { return Ok(None); };
+            self.state.payload_get(self.function, payloads, owner, self.paid)
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AllocationContractV1 {
@@ -2075,18 +4084,38 @@ fn partition_reference_effect_binding_indices_v1(
     root_logical_names: &[&str],
     binding_logical_names: &[&str],
 ) -> Result<Vec<Vec<usize>>, ProductionRankedProjectionErrorV1> {
-    let mut root_indices = BTreeMap::new();
+    partition_reference_effect_binding_indices_v18(
+        root_logical_names, binding_logical_names,
+        &mut source_ranked_consumer_resources_v18::SourceBindingAllocationV18::new(None)?,
+    )
+}
+
+fn partition_reference_effect_binding_indices_v18(
+    root_logical_names: &[&str],
+    binding_logical_names: &[&str],
+    allocation: &mut source_ranked_consumer_resources_v18::SourceBindingAllocationV18<'_, '_>,
+) -> Result<Vec<Vec<usize>>, ProductionRankedProjectionErrorV1> {
+    let mut root_indices = allocation.rows(root_logical_names.len())?;
     for (root_index, logical_name) in root_logical_names.iter().copied().enumerate() {
-        if root_indices.insert(logical_name, root_index).is_some() {
+        allocation.charge(1)?;
+        source_ranked_consumer_resources_v18::push(&mut root_indices, (logical_name, root_index))?;
+    }
+    allocation.sort_roots(&mut root_indices)?;
+    for pair in root_indices.windows(2) {
+        if allocation.names(pair[0].0, pair[1].0)?.is_eq() {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "duplicate typed logical roots in the ranked roster",
             ));
         }
     }
-
-    let mut partitions = vec![Vec::new(); root_logical_names.len()];
+    let mut partitions = allocation.rows(root_logical_names.len())?;
+    for _ in root_logical_names {
+        allocation.charge(1)?;
+        source_ranked_consumer_resources_v18::push(&mut partitions, Vec::new())?;
+    }
     for (binding_index, logical_name) in binding_logical_names.iter().copied().enumerate() {
-        let root_index = root_indices.get(logical_name).copied().ok_or(
+        allocation.charge(1)?;
+        let root_index = allocation.find_root(&root_indices, logical_name)?.ok_or(
             ProductionRankedProjectionErrorV1::Unsupported(
                 "a reference-effect binding outside the exact typed root roster",
             ),
@@ -2096,13 +4125,16 @@ fn partition_reference_effect_binding_indices_v1(
                 "duplicate reference-effect bindings for one ranked root",
             ));
         }
-        partitions[root_index].push(binding_index);
+        let mut row = allocation.rows(1)?;
+        source_ranked_consumer_resources_v18::push(&mut row, binding_index)?;
+        partitions[root_index] = row;
     }
     Ok(partitions)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DefinedCallableEmptyEffectDecisionV1 {
+    #[cfg(test)]
     Unknown,
     ExactEmptyDeterministicScalar,
     ExactEmptyOnly,
@@ -2132,941 +4164,226 @@ impl DefinedCallableEmptyEffectSummariesV1 {
     }
 }
 
-struct DefinedCallableDirectSummaryV1 {
-    empty_eligible: bool,
-    deterministic_scalar_eligible: bool,
-    callees: Vec<usize>,
-}
-
-#[derive(Clone, Copy)]
-struct DefinedCallableTerminatorEligibilityV1 {
-    empty_eligible: bool,
-    deterministic_scalar_eligible: bool,
-}
-
-impl DefinedCallableTerminatorEligibilityV1 {
-    const fn shared(eligible: bool) -> Self {
-        Self {
-            empty_eligible: eligible,
-            deterministic_scalar_eligible: eligible,
-        }
-    }
-}
-
-fn scalar_defined_callable_intrinsic_eligibility_v1(
-    operation: SemanticCompilerIntrinsicOperationV1,
-    scalar_eligible: bool,
-) -> DefinedCallableTerminatorEligibilityV1 {
-    match operation {
-        SemanticCompilerIntrinsicOperationV1::FabsF32
-        | SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_) => {
-            DefinedCallableTerminatorEligibilityV1::shared(scalar_eligible)
-        }
-        SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
-        | SemanticCompilerIntrinsicOperationV1::GridDimension(_) => {
-            DefinedCallableTerminatorEligibilityV1 {
-                empty_eligible: scalar_eligible,
-                deterministic_scalar_eligible: false,
-            }
-        }
-        _ => DefinedCallableTerminatorEligibilityV1::shared(false),
-    }
-}
-
-fn charge_defined_callable_summary_work_v1(
-    work: &mut usize,
-    amount: usize,
-) -> Result<(), ProductionRankedProjectionErrorV1> {
-    *work = work
-        .checked_add(amount)
-        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "defined-callable effect-summary work overflowed",
-        ))?;
-    if *work > MAX_DEFINED_CALLABLE_SUMMARY_WORK_V1 {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "defined-callable effect-summary work exceeded its production limit",
-        ));
-    }
-    Ok(())
-}
-
-fn scalar_defined_callable_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
-    types.get(ty.index() as usize).is_some_and(|ty| {
-        matches!(
-            ty.shape(),
-            SemanticTypeShapeV1::Unit
-                | SemanticTypeShapeV1::Never
-                | SemanticTypeShapeV1::Scalar(_)
-                | SemanticTypeShapeV1::ValidityScalar(_)
-        )
-    })
-}
-
-fn checked_scalar_carrier_type_v1(
+// Source summaries remain separate from the materialized owner/call-local join.
+fn derive_defined_callable_empty_effect_summaries_v1(
     types: &[SemanticTypeDeclV1],
-    ty: SemanticTypeIdV1,
-) -> Option<(SemanticTypeIdV1, SemanticTypeIdV1)> {
-    let SemanticTypeShapeV1::Tuple(fields) = types.get(ty.index() as usize)?.shape() else {
-        return None;
-    };
-    let [value, overflow] = fields.fields() else {
-        return None;
-    };
-    if !scalar_defined_callable_type_v1(types, *value)
-        || !matches!(
-            types.get(overflow.index() as usize).map(|ty| ty.shape()),
-            Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool))
-        )
-    {
-        return None;
-    }
-    Some((*value, *overflow))
-}
-
-fn scalar_or_checked_carrier_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
-    scalar_defined_callable_type_v1(types, ty)
-        || checked_scalar_carrier_type_v1(types, ty).is_some()
-}
-
-fn zero_sized_defined_callable_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
-    fn visit(
-        types: &[SemanticTypeDeclV1],
-        ty: SemanticTypeIdV1,
-        visiting: &mut BTreeSet<SemanticTypeIdV1>,
-        admitted: &mut BTreeSet<SemanticTypeIdV1>,
-    ) -> bool {
-        if admitted.contains(&ty) {
-            return true;
-        }
-        if !visiting.insert(ty) {
-            return false;
-        }
-        let Some(declaration) = types.get(ty.index() as usize) else {
-            return false;
-        };
-        if declaration.layout().size_bytes() != Some(0) {
-            return false;
-        }
-        let pointer_free = match declaration.shape() {
-            SemanticTypeShapeV1::Unit | SemanticTypeShapeV1::Never => true,
-            SemanticTypeShapeV1::Array { element, .. } => {
-                visit(types, *element, visiting, admitted)
-            }
-            SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => fields
-                .fields()
-                .iter()
-                .copied()
-                .all(|field| visit(types, field, visiting, admitted)),
-            SemanticTypeShapeV1::Scalar(_)
-            | SemanticTypeShapeV1::ValidityScalar(_)
-            | SemanticTypeShapeV1::Pointer(_)
-            | SemanticTypeShapeV1::Slice { .. }
-            | SemanticTypeShapeV1::Enum { .. }
-            | SemanticTypeShapeV1::Union(_)
-            | SemanticTypeShapeV1::FunctionPointer { .. }
-            | SemanticTypeShapeV1::Opaque => false,
-        };
-        visiting.remove(&ty);
-        if pointer_free {
-            admitted.insert(ty);
-        }
-        pointer_free
-    }
-
-    visit(types, ty, &mut BTreeSet::new(), &mut BTreeSet::new())
-}
-
-fn zero_sized_defined_callable_place_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    place: &SemanticPlaceV1,
-    work: &mut usize,
-) -> Result<bool, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1 + place.projections().len())?;
-    Ok(place.projections().is_empty()
-        && zero_sized_defined_callable_type_v1(types, place.ty())
-        && function
-            .locals()
-            .get(place.local().index() as usize)
-            .is_some_and(|local| local.ty() == place.ty()))
-}
-
-fn zero_sized_defined_callable_operand_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    operand: &SemanticOperandV1,
-    work: &mut usize,
-) -> Result<bool, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1)?;
-    match operand {
-        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
-            zero_sized_defined_callable_place_v1(types, function, place, work)
-        }
-        SemanticOperandV1::Constant(constant) => {
-            Ok(zero_sized_defined_callable_type_v1(types, constant.ty())
-                && matches!(constant.value(), SemanticConstantValueV1::ZeroSized))
-        }
-    }
-}
-
-fn zero_sized_defined_callable_statement_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    statement: &fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1,
-    work: &mut usize,
-) -> Result<bool, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1)?;
-    match statement.kind() {
-        SemanticStatementKindV1::Assign(assignment) => {
-            if !zero_sized_defined_callable_place_v1(
-                types,
-                function,
-                assignment.destination(),
-                work,
-            )? || !zero_sized_defined_callable_type_v1(types, assignment.value().result_type())
-            {
-                return Ok(false);
-            }
-            match assignment.value().kind() {
-                SemanticRvalueKindV1::Use(operand) => {
-                    zero_sized_defined_callable_operand_v1(types, function, operand, work)
+    functions: &[SemanticFunctionDeclV1],
+    callables: &[SemanticCallableDeclV1],
+) -> Result<DefinedCallableEmptyEffectSummariesV1, ProductionRankedProjectionErrorV1> {
+    let source = neutral_assertion::SemanticDefinedCallableSummariesV1::new_metered(
+        types,
+        functions,
+        callables,
+        assertion_compatibility_limits_v1(),
+        &mut AssertionCompatibilityMeterV1::new(&mut 0),
+    )
+    .map_err(assertion_projection_error_v1)?;
+    let decisions = (0..functions.len())
+        .map(|index| {
+            let function = SemanticFunctionIdV1::from_index(index as u32);
+            match source.decision(function) {
+                Some(
+                    neutral_assertion::SemanticCallableDecisionV1::ExactEmptyDeterministicScalar,
+                ) => DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar,
+                Some(neutral_assertion::SemanticCallableDecisionV1::ExactEmptyOnly) => {
+                    DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
                 }
-                SemanticRvalueKindV1::Aggregate(aggregate) => {
-                    for operand in aggregate.operands() {
-                        if !zero_sized_defined_callable_operand_v1(types, function, operand, work)?
-                        {
-                            return Ok(false);
-                        }
-                    }
-                    Ok(true)
+                Some(neutral_assertion::SemanticCallableDecisionV1::Rejected) | None => {
+                    DefinedCallableEmptyEffectDecisionV1::Rejected
                 }
-                SemanticRvalueKindV1::Unary { .. }
-                | SemanticRvalueKindV1::Binary { .. }
-                | SemanticRvalueKindV1::CheckedBinary(_)
-                | SemanticRvalueKindV1::UncheckedBinary(_)
-                | SemanticRvalueKindV1::Cast { .. }
-                | SemanticRvalueKindV1::Borrow { .. }
-                | SemanticRvalueKindV1::AddressOf { .. }
-                | SemanticRvalueKindV1::Length(_)
-                | SemanticRvalueKindV1::Discriminant(_)
-                | SemanticRvalueKindV1::Load(_) => Ok(false),
             }
-        }
-        SemanticStatementKindV1::StorageLive(local)
-        | SemanticStatementKindV1::StorageDead(local) => Ok(function
-            .locals()
-            .get(local.index() as usize)
-            .is_some_and(|local| zero_sized_defined_callable_type_v1(types, local.ty()))),
-        SemanticStatementKindV1::Nop => Ok(true),
-        SemanticStatementKindV1::Store(_)
-        | SemanticStatementKindV1::AtomicRmw(_)
-        | SemanticStatementKindV1::AtomicCompareExchange(_)
-        | SemanticStatementKindV1::SetDiscriminant { .. }
-        | SemanticStatementKindV1::Deinitialize(_)
-        | SemanticStatementKindV1::Assume(_) => Ok(false),
-    }
-}
-
-fn zero_sized_direct_defined_callable_abi_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-) -> bool {
-    let abi = function.abi();
-    !abi.c_variadic()
-        && abi.hidden_arguments().is_empty()
-        && abi.arguments().iter().all(|argument| {
-            let value = argument.value();
-            zero_sized_defined_callable_type_v1(types, value.source_ty())
-                && value.adjusted().is_none()
-                && value.pointee_override().is_none()
-                && matches!(value.mode(), SemanticAbiPassModeV1::Ignore)
         })
-        && zero_sized_defined_callable_type_v1(types, abi.return_value().source_ty())
-        && abi.return_value().adjusted().is_none()
-        && abi.return_value().pointee_override().is_none()
-        && matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
-        && abi
-            .source_input_types()
-            .iter()
-            .copied()
-            .all(|ty| zero_sized_defined_callable_type_v1(types, ty))
-        && zero_sized_defined_callable_type_v1(types, abi.source_output_type())
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    Ok(DefinedCallableEmptyEffectSummariesV1 { decisions })
 }
+use neutral_assertion::{
+    address_escaped_local_index_v1, local_definition_index, raw_operand_place,
+    simple_operand_local, transparent_operand_place, transparent_place,
+    tuple_field_operand_local_v1, visit_statement_definition_places,
+};
+#[cfg(test)]
+use neutral_assertion::{checked_scalar_carrier_type_v1, scalar_defined_callable_type_v1};
 
-fn scalar_direct_abi_value_v1(
-    types: &[SemanticTypeDeclV1],
-    value: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueV1,
-) -> bool {
-    scalar_defined_callable_type_v1(types, value.source_ty())
-        && value.adjusted().is_none()
-        && value.pointee_override().is_none()
-        && matches!(
-            value.mode(),
-            SemanticAbiPassModeV1::Ignore | SemanticAbiPassModeV1::Direct(_)
-        )
+#[cfg(test)]
+fn zero_sized_defined_callable_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
+    neutral_assertion::semantic_zero_sized_type_profile_metered_v1(
+        types,
+        ty,
+        assertion_compatibility_limits_v1(),
+        &mut AssertionCompatibilityMeterV1::new(&mut 0),
+    )
+    .expect("compatibility type profile")
 }
-
+#[cfg(test)]
 fn scalar_direct_defined_callable_abi_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
 ) -> bool {
-    let abi = function.abi();
-    let scalar_abi = !abi.c_variadic()
-        && abi.hidden_arguments().is_empty()
-        && abi
-            .arguments()
-            .iter()
-            .all(|argument| scalar_direct_abi_value_v1(types, argument.value()))
-        && scalar_direct_abi_value_v1(types, abi.return_value())
-        && abi
-            .source_input_types()
-            .iter()
-            .copied()
-            .all(|ty| scalar_defined_callable_type_v1(types, ty))
-        && scalar_defined_callable_type_v1(types, abi.source_output_type());
-    let exact_input =
-        |ty: SemanticTypeIdV1,
-         ownership: SemanticSourceArgumentOwnershipV1,
-         value: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueV1| {
-            scalar_direct_abi_value_v1(types, value)
-                || (ownership == SemanticSourceArgumentOwnershipV1::ByValue
-                    && exact_transparent_scalar_carrier_field_v1(types, ty).is_some()
-                    && value.source_ty() == ty
-                    && value.adjusted().is_none()
-                    && value.pointee_override().is_none()
-                    && matches!(value.mode(), SemanticAbiPassModeV1::Direct(_)))
-        };
-    let has_carrier = abi
-        .source_input_types()
-        .iter()
-        .copied()
-        .any(|ty| exact_transparent_scalar_carrier_field_v1(types, ty).is_some());
-    let carrier_abi = has_carrier
-        && !abi.c_variadic()
-        && abi.hidden_arguments().is_empty()
-        && abi.arguments().len() == abi.source_input_types().len()
-        && abi.arguments().len() == abi.source_argument_ownership().len()
-        && abi
-            .arguments()
-            .iter()
-            .all(|argument| argument.role() == SemanticAbiArgumentRoleV1::Source)
-        && abi
-            .arguments()
-            .iter()
-            .zip(abi.source_input_types())
-            .zip(abi.source_argument_ownership())
-            .all(|((argument, ty), ownership)| exact_input(*ty, *ownership, argument.value()))
-        && scalar_direct_abi_value_v1(types, abi.return_value())
-        && abi
-            .source_input_types()
-            .iter()
-            .zip(abi.source_argument_ownership())
-            .all(|(ty, ownership)| {
-                scalar_defined_callable_type_v1(types, *ty)
-                    || (*ownership == SemanticSourceArgumentOwnershipV1::ByValue
-                        && exact_transparent_scalar_carrier_field_v1(types, *ty).is_some())
-            })
-        && scalar_defined_callable_type_v1(types, abi.source_output_type());
-    scalar_abi || carrier_abi
+    let mut diagnostic = 0;
+    let mut meter = AssertionCompatibilityMeterV1::new(&mut diagnostic);
+    neutral_assertion::SemanticCallableProfileQueriesV1::new_metered(
+        types,
+        function,
+        assertion_compatibility_limits_v1(),
+        &mut meter,
+    )
+    .expect("compatibility ABI profile")
+    .scalar_abi()
+    .expect("compatibility ABI query")
 }
 
+#[cfg(test)]
 fn scalar_defined_callable_place_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     place: &SemanticPlaceV1,
     work: &mut usize,
 ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1 + place.projections().len())?;
-    let Some(local) = function.locals().get(place.local().index() as usize) else {
-        return Ok(false);
-    };
-    match place.projections() {
-        [] => Ok(local.ty() == place.ty() && scalar_defined_callable_type_v1(types, place.ty())),
-        [projection] => {
-            let SemanticProjectionKindV1::Field(field) = projection.kind() else {
-                return Ok(false);
-            };
-            if let Some(carrier_field) =
-                exact_transparent_scalar_carrier_field_v1(types, local.ty())
-            {
-                return Ok(field == 0
-                    && projection.result_type() == carrier_field
-                    && place.ty() == carrier_field);
-            }
-            let Some((value, overflow)) = checked_scalar_carrier_type_v1(types, local.ty()) else {
-                return Ok(false);
-            };
-            let expected = match field {
-                0 => value,
-                1 => overflow,
-                _ => return Ok(false),
-            };
-            Ok(projection.result_type() == expected && place.ty() == expected)
-        }
-        _ => Ok(false),
-    }
+    let mut diagnostic = 0;
+    let mut meter = AssertionCompatibilityMeterV1::new(&mut diagnostic);
+    let mut profile = neutral_assertion::SemanticCallableProfileQueriesV1::new_metered(
+        types,
+        function,
+        assertion_compatibility_limits_v1(),
+        &mut meter,
+    )
+    .map_err(assertion_projection_error_v1)?;
+    let result = profile
+        .scalar_place(place)
+        .map_err(assertion_projection_error_v1);
+    *work = work.checked_add(profile.logical_visits()).ok_or(
+        ProductionRankedProjectionErrorV1::Unsupported("callable profile diagnostic overflow"),
+    )?;
+    result
 }
 
-fn scalar_or_checked_carrier_destination_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    place: &SemanticPlaceV1,
-    work: &mut usize,
-) -> Result<bool, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1 + place.projections().len())?;
-    Ok(place.projections().is_empty()
-        && scalar_or_checked_carrier_type_v1(types, place.ty())
-        && function
-            .locals()
-            .get(place.local().index() as usize)
-            .is_some_and(|local| local.ty() == place.ty()))
-}
-
-fn scalar_defined_callable_destination_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    place: &SemanticPlaceV1,
-    work: &mut usize,
-) -> Result<bool, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1 + place.projections().len())?;
-    Ok(place.projections().is_empty()
-        && scalar_defined_callable_type_v1(types, place.ty())
-        && function
-            .locals()
-            .get(place.local().index() as usize)
-            .is_some_and(|local| local.ty() == place.ty()))
-}
-
+#[cfg(test)]
 fn scalar_defined_callable_operand_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     operand: &SemanticOperandV1,
     work: &mut usize,
 ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1)?;
-    match operand {
-        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
-            scalar_defined_callable_place_v1(types, function, place, work)
-        }
-        SemanticOperandV1::Constant(constant) => {
-            Ok(scalar_defined_callable_type_v1(types, constant.ty())
-                && matches!(
-                    constant.value(),
-                    SemanticConstantValueV1::ZeroSized | SemanticConstantValueV1::Scalar(_)
-                ))
-        }
-    }
+    let mut diagnostic = 0;
+    let mut meter = AssertionCompatibilityMeterV1::new(&mut diagnostic);
+    let mut profile = neutral_assertion::SemanticCallableProfileQueriesV1::new_metered(
+        types,
+        function,
+        assertion_compatibility_limits_v1(),
+        &mut meter,
+    )
+    .map_err(assertion_projection_error_v1)?;
+    let result = profile
+        .scalar_operand(operand)
+        .map_err(assertion_projection_error_v1);
+    *work = work.checked_add(profile.logical_visits()).ok_or(
+        ProductionRankedProjectionErrorV1::Unsupported("callable profile diagnostic overflow"),
+    )?;
+    result
 }
 
+#[cfg(test)]
+fn scalar_or_checked_carrier_destination_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    place: &SemanticPlaceV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    let mut diagnostic = 0;
+    let mut meter = AssertionCompatibilityMeterV1::new(&mut diagnostic);
+    let mut profile = neutral_assertion::SemanticCallableProfileQueriesV1::new_metered(
+        types,
+        function,
+        assertion_compatibility_limits_v1(),
+        &mut meter,
+    )
+    .map_err(assertion_projection_error_v1)?;
+    let result = profile
+        .carrier_destination(place)
+        .map_err(assertion_projection_error_v1);
+    *work = work.checked_add(profile.logical_visits()).ok_or(
+        ProductionRankedProjectionErrorV1::Unsupported("callable profile diagnostic overflow"),
+    )?;
+    result
+}
+
+#[cfg(test)]
+fn scalar_defined_callable_destination_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    place: &SemanticPlaceV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    let mut diagnostic = 0;
+    let mut meter = AssertionCompatibilityMeterV1::new(&mut diagnostic);
+    let mut profile = neutral_assertion::SemanticCallableProfileQueriesV1::new_metered(
+        types,
+        function,
+        assertion_compatibility_limits_v1(),
+        &mut meter,
+    )
+    .map_err(assertion_projection_error_v1)?;
+    let result = profile
+        .scalar_destination(place)
+        .map_err(assertion_projection_error_v1);
+    *work = work.checked_add(profile.logical_visits()).ok_or(
+        ProductionRankedProjectionErrorV1::Unsupported("callable profile diagnostic overflow"),
+    )?;
+    result
+}
+
+#[cfg(test)]
 fn scalar_defined_callable_rvalue_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     value: &SemanticRvalueV1,
     work: &mut usize,
 ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1)?;
-    match value.kind() {
-        SemanticRvalueKindV1::Use(operand) | SemanticRvalueKindV1::Unary { operand, .. } => {
-            Ok(scalar_defined_callable_type_v1(types, value.result_type())
-                && scalar_defined_callable_operand_v1(types, function, operand, work)?)
-        }
-        SemanticRvalueKindV1::Binary { left, right, .. } => {
-            Ok(scalar_defined_callable_type_v1(types, value.result_type())
-                && scalar_defined_callable_operand_v1(types, function, left, work)?
-                && scalar_defined_callable_operand_v1(types, function, right, work)?)
-        }
-        SemanticRvalueKindV1::CheckedBinary(checked) => {
-            Ok(
-                checked_scalar_carrier_type_v1(types, value.result_type()).is_some_and(
-                    |(result, _)| result == checked.left().ty() && result == checked.right().ty(),
-                ) && scalar_defined_callable_operand_v1(types, function, checked.left(), work)?
-                    && scalar_defined_callable_operand_v1(types, function, checked.right(), work)?,
-            )
-        }
-        SemanticRvalueKindV1::UncheckedBinary(unchecked) => {
-            Ok(scalar_defined_callable_type_v1(types, value.result_type())
-                && scalar_defined_callable_operand_v1(types, function, unchecked.left(), work)?
-                && scalar_defined_callable_operand_v1(types, function, unchecked.right(), work)?)
-        }
-        SemanticRvalueKindV1::Cast {
-            kind: SemanticCastKindV1::Integer | SemanticCastKindV1::Float,
-            operand,
-        } => Ok(scalar_defined_callable_type_v1(types, value.result_type())
-            && scalar_defined_callable_operand_v1(types, function, operand, work)?),
-        SemanticRvalueKindV1::Cast { .. }
-        | SemanticRvalueKindV1::Borrow { .. }
-        | SemanticRvalueKindV1::AddressOf { .. }
-        | SemanticRvalueKindV1::Length(_)
-        | SemanticRvalueKindV1::Discriminant(_)
-        | SemanticRvalueKindV1::Aggregate(_)
-        | SemanticRvalueKindV1::Load(_) => Ok(false),
-    }
+    let mut diagnostic = 0;
+    let mut meter = AssertionCompatibilityMeterV1::new(&mut diagnostic);
+    let mut profile = neutral_assertion::SemanticCallableProfileQueriesV1::new_metered(
+        types,
+        function,
+        assertion_compatibility_limits_v1(),
+        &mut meter,
+    )
+    .map_err(assertion_projection_error_v1)?;
+    let result = profile
+        .scalar_rvalue(value)
+        .map_err(assertion_projection_error_v1);
+    *work = work.checked_add(profile.logical_visits()).ok_or(
+        ProductionRankedProjectionErrorV1::Unsupported("callable profile diagnostic overflow"),
+    )?;
+    result
 }
 
-fn scalar_defined_callable_statement_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    statement: &fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1,
-    work: &mut usize,
-) -> Result<bool, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1)?;
-    match statement.kind() {
-        SemanticStatementKindV1::Assign(assignment) => {
-            Ok(scalar_or_checked_carrier_destination_v1(
-                types,
-                function,
-                assignment.destination(),
-                work,
-            )? && scalar_defined_callable_rvalue_v1(types, function, assignment.value(), work)?)
-        }
-        SemanticStatementKindV1::StorageLive(local)
-        | SemanticStatementKindV1::StorageDead(local) => Ok(function
-            .locals()
-            .get(local.index() as usize)
-            .is_some_and(|local| {
-                scalar_or_checked_carrier_type_v1(types, local.ty())
-                    || exact_transparent_scalar_carrier_field_v1(types, local.ty()).is_some()
-            })),
-        SemanticStatementKindV1::Assume(condition) => {
-            scalar_defined_callable_operand_v1(types, function, condition, work)
-        }
-        SemanticStatementKindV1::Nop => Ok(true),
-        SemanticStatementKindV1::Store(_)
-        | SemanticStatementKindV1::AtomicRmw(_)
-        | SemanticStatementKindV1::AtomicCompareExchange(_)
-        | SemanticStatementKindV1::SetDiscriminant { .. }
-        | SemanticStatementKindV1::Deinitialize(_) => Ok(false),
-    }
-}
-
-fn deterministic_scalar_defined_callable_statement_v1(
-    statement: &fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1,
-) -> bool {
-    match statement.kind() {
-        SemanticStatementKindV1::Assign(assignment) => matches!(
-            assignment.value().kind(),
-            SemanticRvalueKindV1::Use(_)
-                | SemanticRvalueKindV1::Unary { .. }
-                | SemanticRvalueKindV1::Binary { .. }
-                | SemanticRvalueKindV1::CheckedBinary(_)
-                | SemanticRvalueKindV1::Cast {
-                    kind: SemanticCastKindV1::Integer | SemanticCastKindV1::Float,
-                    ..
-                }
-        ),
-        SemanticStatementKindV1::StorageLive(_)
-        | SemanticStatementKindV1::StorageDead(_)
-        | SemanticStatementKindV1::Nop => true,
-        SemanticStatementKindV1::Assume(_)
-        | SemanticStatementKindV1::Store(_)
-        | SemanticStatementKindV1::AtomicRmw(_)
-        | SemanticStatementKindV1::AtomicCompareExchange(_)
-        | SemanticStatementKindV1::SetDiscriminant { .. }
-        | SemanticStatementKindV1::Deinitialize(_) => false,
-    }
-}
-
-fn scalar_defined_callable_call_v1(
+#[cfg(test)]
+fn scalar_callable_terminator_profile_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     function_count: usize,
     callables: &[SemanticCallableDeclV1],
-    call: &SemanticDirectCallV1,
-    callees: &mut Vec<usize>,
-    call_edges: &mut usize,
-    work: &mut usize,
-) -> Result<DefinedCallableTerminatorEligibilityV1, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1 + call.arguments().len())?;
-    let mut eligible = call.variadic_argument_abis().is_empty()
-        && matches!(
-            call.unwind(),
-            SemanticUnwindActionV1::Continue | SemanticUnwindActionV1::Unreachable
-        );
-    for argument in call.arguments() {
-        eligible &= scalar_defined_callable_operand_v1(types, function, argument, work)?;
-    }
-    if let Some(destination) = call.destination() {
-        eligible &=
-            scalar_defined_callable_destination_v1(types, function, destination.place(), work)?;
-    }
-    let Some(callable) = callables.get(call.callee().index() as usize) else {
-        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
-    };
-    if let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable {
-        return Ok(scalar_defined_callable_intrinsic_eligibility_v1(
-            *operation, eligible,
-        ));
-    }
-    let SemanticCallableDeclV1::Defined { function: callee } = callable else {
-        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
-    };
-    let callee = callee.index() as usize;
-    if callee >= function_count {
-        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
-    }
-    *call_edges =
-        call_edges
-            .checked_add(1)
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "defined-callable effect-summary edge count overflowed",
-            ))?;
-    if *call_edges > MAX_DEFINED_CALLABLE_SUMMARY_EDGES_V1 {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "defined-callable effect-summary edge count exceeded its production limit",
-        ));
-    }
-    callees.try_reserve(1).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "defined-callable effect-summary edge storage cannot be reserved",
-        )
-    })?;
-    callees.push(callee);
-    Ok(DefinedCallableTerminatorEligibilityV1::shared(eligible))
-}
-
-fn scalar_defined_callable_tail_call_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    function_count: usize,
-    callables: &[SemanticCallableDeclV1],
-    call: &SemanticDirectTailCallV1,
-    callees: &mut Vec<usize>,
-    call_edges: &mut usize,
-    work: &mut usize,
-) -> Result<DefinedCallableTerminatorEligibilityV1, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1 + call.arguments().len())?;
-    let mut eligible = matches!(
-        call.unwind(),
-        SemanticUnwindActionV1::Continue | SemanticUnwindActionV1::Unreachable
-    );
-    for argument in call.arguments() {
-        eligible &= scalar_defined_callable_operand_v1(types, function, argument, work)?;
-    }
-    let Some(callable) = callables.get(call.callee().index() as usize) else {
-        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
-    };
-    if let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable {
-        return Ok(scalar_defined_callable_intrinsic_eligibility_v1(
-            *operation, eligible,
-        ));
-    }
-    let SemanticCallableDeclV1::Defined { function: callee } = callable else {
-        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
-    };
-    let callee = callee.index() as usize;
-    if callee >= function_count {
-        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
-    }
-    *call_edges =
-        call_edges
-            .checked_add(1)
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "defined-callable effect-summary edge count overflowed",
-            ))?;
-    if *call_edges > MAX_DEFINED_CALLABLE_SUMMARY_EDGES_V1 {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "defined-callable effect-summary edge count exceeded its production limit",
-        ));
-    }
-    callees.try_reserve(1).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "defined-callable effect-summary edge storage cannot be reserved",
-        )
-    })?;
-    callees.push(callee);
-    Ok(DefinedCallableTerminatorEligibilityV1::shared(eligible))
-}
-
-fn scalar_defined_callable_assert_message_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    message: &SemanticAssertMessageV1,
-    work: &mut usize,
-) -> Result<bool, ProductionRankedProjectionErrorV1> {
-    match message {
-        SemanticAssertMessageV1::BoundsCheck { length, index }
-        | SemanticAssertMessageV1::Overflow {
-            left: length,
-            right: index,
-            ..
-        }
-        | SemanticAssertMessageV1::MisalignedPointerDereference {
-            required_alignment: length,
-            found_alignment: index,
-        } => Ok(
-            scalar_defined_callable_operand_v1(types, function, length, work)?
-                && scalar_defined_callable_operand_v1(types, function, index, work)?,
-        ),
-        SemanticAssertMessageV1::DivisionByZero(operand)
-        | SemanticAssertMessageV1::RemainderByZero(operand) => {
-            scalar_defined_callable_operand_v1(types, function, operand, work)
-        }
-        SemanticAssertMessageV1::NullPointerDereference
-        | SemanticAssertMessageV1::ResumedAfterReturn
-        | SemanticAssertMessageV1::ResumedAfterPanic => Ok(true),
-    }
-}
-
-fn scalar_defined_callable_terminator_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    function_count: usize,
-    callables: &[SemanticCallableDeclV1],
-    assert_proved: bool,
     terminator: &SemanticTerminatorKindV1,
-    callees: &mut Vec<usize>,
-    call_edges: &mut usize,
     work: &mut usize,
-) -> Result<DefinedCallableTerminatorEligibilityV1, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1)?;
-    match terminator {
-        SemanticTerminatorKindV1::Goto(_)
-        | SemanticTerminatorKindV1::Return
-        | SemanticTerminatorKindV1::Unreachable => {
-            Ok(DefinedCallableTerminatorEligibilityV1::shared(true))
-        }
-        SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
-            Ok(DefinedCallableTerminatorEligibilityV1::shared(
-                scalar_defined_callable_operand_v1(types, function, discriminant, work)?,
-            ))
-        }
-        SemanticTerminatorKindV1::Call(call) => scalar_defined_callable_call_v1(
-            types,
-            function,
-            function_count,
-            callables,
-            call,
-            callees,
-            call_edges,
-            work,
-        ),
-        SemanticTerminatorKindV1::TailCall(call) => scalar_defined_callable_tail_call_v1(
-            types,
-            function,
-            function_count,
-            callables,
-            call,
-            callees,
-            call_edges,
-            work,
-        ),
-        SemanticTerminatorKindV1::Assert {
-            condition,
-            message,
-            target,
-            unwind,
-            ..
-        } => Ok(DefinedCallableTerminatorEligibilityV1::shared(
-            assert_proved
-                && target.role() == SemanticEdgeRoleV1::AssertSuccess
-                && matches!(unwind, SemanticUnwindActionV1::Unreachable)
-                && scalar_defined_callable_operand_v1(types, function, condition, work)?
-                && scalar_defined_callable_assert_message_v1(types, function, message, work)?,
-        )),
-        SemanticTerminatorKindV1::Drop { .. }
-        | SemanticTerminatorKindV1::FalseEdge { .. }
-        | SemanticTerminatorKindV1::UnwindResume
-        | SemanticTerminatorKindV1::UnwindTerminate
-        | SemanticTerminatorKindV1::Abort => {
-            Ok(DefinedCallableTerminatorEligibilityV1::shared(false))
-        }
-    }
-}
-
-fn direct_defined_callable_summary_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    function_count: usize,
-    callables: &[SemanticCallableDeclV1],
-    call_edges: &mut usize,
-    work: &mut usize,
-) -> Result<DefinedCallableDirectSummaryV1, ProductionRankedProjectionErrorV1> {
-    charge_defined_callable_summary_work_v1(work, 1 + function.locals().len())?;
-    let scalar_base_eligible = scalar_direct_defined_callable_abi_v1(types, function)
-        && function.locals().iter().all(|local| {
-            scalar_or_checked_carrier_type_v1(types, local.ty())
-                || exact_transparent_scalar_carrier_field_v1(types, local.ty()).is_some()
-        });
-    let zero_sized_base_eligible = zero_sized_direct_defined_callable_abi_v1(types, function)
-        && function
-            .locals()
-            .iter()
-            .all(|local| zero_sized_defined_callable_type_v1(types, local.ty()));
-    let base_eligible = scalar_base_eligible || zero_sized_base_eligible;
-    let mut empty_eligible = base_eligible;
-    let mut deterministic_scalar_eligible = scalar_base_eligible;
-    let assert_proofs = if scalar_base_eligible
-        && function.blocks().iter().any(|block| {
-            matches!(
-                block.terminator().kind(),
-                SemanticTerminatorKindV1::Assert { .. }
-            )
-        }) {
-        Some(SemanticAssertProofsV1::analyze_defined_callable_asserts_v1(
-            types, function,
-        )?)
-    } else {
-        None
-    };
-    let mut callees = Vec::new();
-    for (block_index, block) in function.blocks().iter().enumerate() {
-        charge_defined_callable_summary_work_v1(work, 1)?;
-        for statement in block.statements() {
-            let statement_eligible = if scalar_base_eligible {
-                scalar_defined_callable_statement_v1(types, function, statement, work)?
-            } else {
-                zero_sized_defined_callable_statement_v1(types, function, statement, work)?
-            };
-            empty_eligible &= statement_eligible;
-            deterministic_scalar_eligible &=
-                statement_eligible && deterministic_scalar_defined_callable_statement_v1(statement);
-        }
-        let terminator_eligibility = if scalar_base_eligible {
-            scalar_defined_callable_terminator_v1(
-                types,
-                function,
-                function_count,
-                callables,
-                assert_proofs
-                    .as_deref()
-                    .and_then(|proved| proved.get(block_index))
-                    .copied()
-                    .unwrap_or(false),
-                block.terminator().kind(),
-                &mut callees,
-                call_edges,
-                work,
-            )?
-        } else {
-            charge_defined_callable_summary_work_v1(work, 1)?;
-            DefinedCallableTerminatorEligibilityV1::shared(matches!(
-                block.terminator().kind(),
-                SemanticTerminatorKindV1::Goto(_)
-                    | SemanticTerminatorKindV1::Return
-                    | SemanticTerminatorKindV1::Unreachable
-            ))
-        };
-        empty_eligible &= terminator_eligibility.empty_eligible;
-        deterministic_scalar_eligible &= terminator_eligibility.deterministic_scalar_eligible;
-    }
-    Ok(DefinedCallableDirectSummaryV1 {
-        empty_eligible,
-        deterministic_scalar_eligible,
-        callees,
-    })
-}
-
-fn derive_defined_callable_empty_effect_summaries_v1(
-    types: &[SemanticTypeDeclV1],
-    functions: &[SemanticFunctionDeclV1],
-    callables: &[SemanticCallableDeclV1],
-) -> Result<DefinedCallableEmptyEffectSummariesV1, ProductionRankedProjectionErrorV1> {
-    if functions.len() > MAX_DEFINED_CALLABLE_SUMMARY_FUNCTIONS_V1 {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "defined-callable effect-summary function count exceeded its production limit",
-        ));
-    }
-    let mut direct = Vec::new();
-    direct.try_reserve_exact(functions.len()).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "defined-callable effect-summary storage cannot be reserved",
-        )
-    })?;
-    let mut call_edges = 0_usize;
-    let mut work = 0_usize;
-    for function in functions {
-        direct.push(direct_defined_callable_summary_v1(
-            types,
-            function,
-            functions.len(),
-            callables,
-            &mut call_edges,
-            &mut work,
-        )?);
-    }
-    let mut callers = Vec::new();
-    callers.try_reserve_exact(functions.len()).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "defined-callable reverse-edge storage cannot be reserved",
-        )
-    })?;
-    callers.resize_with(functions.len(), Vec::new);
-    for (caller, summary) in direct.iter().enumerate() {
-        for &callee in &summary.callees {
-            let Some(reverse) = callers.get_mut(callee) else {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "defined-callable effect summary references a missing function",
-                ));
-            };
-            reverse.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "defined-callable reverse edge cannot be reserved",
-                )
-            })?;
-            reverse.push(caller);
-        }
-    }
-
-    let mut decisions = vec![DefinedCallableEmptyEffectDecisionV1::Unknown; functions.len()];
-    let mut remaining = direct
-        .iter()
-        .map(|summary| summary.callees.len())
-        .collect::<Vec<_>>();
-    let mut all_callees_deterministic = vec![true; functions.len()];
-    let mut pending = VecDeque::new();
-    for (function, summary) in direct.iter().enumerate() {
-        if !summary.empty_eligible {
-            decisions[function] = DefinedCallableEmptyEffectDecisionV1::Rejected;
-            pending.push_back(function);
-        } else if remaining[function] == 0 {
-            decisions[function] = if summary.deterministic_scalar_eligible {
-                DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar
-            } else {
-                DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
-            };
-            pending.push_back(function);
-        }
-    }
-    while let Some(callee) = pending.pop_front() {
-        charge_defined_callable_summary_work_v1(&mut work, 1 + callers[callee].len())?;
-        for &caller in &callers[callee] {
-            if decisions[caller] != DefinedCallableEmptyEffectDecisionV1::Unknown {
-                continue;
-            }
-            remaining[caller] = remaining[caller].checked_sub(1).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "defined-callable effect-summary dependency accounting underflowed",
-                ),
-            )?;
-            if decisions[callee] == DefinedCallableEmptyEffectDecisionV1::Rejected {
-                decisions[caller] = DefinedCallableEmptyEffectDecisionV1::Rejected;
-                pending.push_back(caller);
-            } else {
-                all_callees_deterministic[caller] &= decisions[callee]
-                    == DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar;
-                if remaining[caller] == 0 {
-                    decisions[caller] = if direct[caller].deterministic_scalar_eligible
-                        && all_callees_deterministic[caller]
-                    {
-                        DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar
-                    } else {
-                        DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
-                    };
-                    pending.push_back(caller);
-                }
-            }
-        }
-    }
-    for decision in &mut decisions {
-        if *decision == DefinedCallableEmptyEffectDecisionV1::Unknown {
-            // The unresolved subgraph consists of recursive cycles and callers
-            // that depend on them. Recursion has no production call-stack proof.
-            *decision = DefinedCallableEmptyEffectDecisionV1::Rejected;
-        }
-    }
-    Ok(DefinedCallableEmptyEffectSummariesV1 {
-        decisions: decisions.into_boxed_slice(),
-    })
+) -> Result<neutral_assertion::SemanticCallableStructuralProfileV1, ProductionRankedProjectionErrorV1>
+{
+    let mut diagnostic = 0;
+    let mut meter = AssertionCompatibilityMeterV1::new(&mut diagnostic);
+    let mut profile = neutral_assertion::SemanticCallableProfileQueriesV1::new_metered(
+        types,
+        function,
+        assertion_compatibility_limits_v1(),
+        &mut meter,
+    )
+    .map_err(assertion_projection_error_v1)?;
+    let result = profile
+        .terminator_profile(function_count, callables, terminator)
+        .map_err(assertion_projection_error_v1);
+    *work = work.checked_add(profile.logical_visits()).ok_or(
+        ProductionRankedProjectionErrorV1::Unsupported("callable profile diagnostic overflow"),
+    )?;
+    result
 }
 
 /// Validates the complete source launch roster before executable materialization.
@@ -3133,72 +4450,28 @@ fn project_ranked_roots_with_progress_v1(
     mut progress: Option<&mut guarded_source_progress_v1::GuardedSourceProgressV1<'_, '_>>,
 ) -> Result<Box<[ProductionRankedRootProgramV1]>, ProductionRankedProjectionErrorV1> {
     source.require_floor(budget)?;
-    source
-        .semantic_ssa()
-        .verify_replay()
-        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
-    let semantic_owner = source.semantic_ssa().source_owner();
-    let semantic = source.semantic_ssa().source_semantic();
-    let source_launch_roster = source.source_launch();
-    if root_inputs.is_empty()
-        || root_inputs.len() != source_launch_roster.roots().len()
-        || source_launch_roster.semantic_sha256() != semantic.semantic_sha256().as_bytes()
-    {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "an incomplete typed/semantic ranked root roster",
-        ));
-    }
-    let root_logical_names = root_inputs
-        .iter()
-        .map(|input| input.logical_name.as_str())
-        .collect::<Vec<_>>();
-    let binding_logical_names = reference_bindings
-        .as_slice()
-        .iter()
-        .map(|binding| binding.logical_kernel_name.as_str())
-        .collect::<Vec<_>>();
-    let root_reference_binding_indices =
-        partition_reference_effect_binding_indices_v1(&root_logical_names, &binding_logical_names)?;
-    let root_reference_bindings = root_reference_binding_indices
-        .into_iter()
-        .map(|binding_indices| {
-            binding_indices
-                .into_iter()
-                .map(|binding_index| {
-                    reference_bindings
-                        .as_slice()
-                        .get(binding_index)
-                        .cloned()
-                        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                            "reference-effect root assignment produced an out-of-range binding",
-                        ))
-                })
-                .collect::<Result<Vec<_>, ProductionRankedProjectionErrorV1>>()
-                .map(crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new)
-        })
-        .collect::<Result<Vec<_>, ProductionRankedProjectionErrorV1>>()?;
-
+    let root_reference_bindings = prepare_ranked_root_bindings_v18(
+        source.semantic_ssa(),
+        source.source_launch(),
+        root_inputs,
+        reference_bindings,
+        None,
+    )?;
     with_canonical_assertions_source_budget_v1(source, budget, |session| {
         let callable_effects = session.callable_effect_summaries(source)?;
-        let mut roots = Vec::with_capacity(root_inputs.len());
-        for (root_ordinal, ((input, source_root), root_references)) in root_inputs
-            .iter()
-            .zip(source_launch_roster.roots())
-            .zip(root_reference_bindings.iter())
-            .enumerate()
-        {
-            let semantic_root = source_root.selected_root();
-            let selection = semantic
-                .select_kernel_body_for_root_v1(semantic_root)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a semantic KernelRoot without one direct body or transparent Result wrapper",
-                ))?;
-            let root = session
-                .with_source_masked_assertions_v1(semantic_root, selection.body(), |facts| {
-                    match progress.as_deref_mut() {
+        project_ranked_roots_prepared_v18(
+            source.semantic_ssa(),
+            source.source_launch(),
+            root_inputs,
+            &root_reference_bindings,
+            |root_ordinal, semantic, selection, input, source_root, root_references| {
+                session.with_source_masked_assertions_v1(
+                    selection.root(),
+                    selection.body(),
+                    |facts| match progress.as_deref_mut() {
                         Some(progress) => progress.with_source(
                             root_ordinal,
-                            semantic_root,
+                            selection.root(),
                             selection.body(),
                             facts,
                             |facts| {
@@ -3207,7 +4480,7 @@ fn project_ranked_roots_with_progress_v1(
                                     &callable_effects,
                                     selection,
                                     input,
-                                    *source_root,
+                                    source_root,
                                     root_references,
                                     facts,
                                 )
@@ -3218,41 +4491,144 @@ fn project_ranked_roots_with_progress_v1(
                             &callable_effects,
                             selection,
                             input,
-                            *source_root,
+                            source_root,
                             root_references,
                             facts,
                         ),
-                    }
-                })
-                .map_err(|error| {
-                    error.with_deterministic_root_context(
-                        semantic_root,
-                        selection.body(),
-                        input.logical_name.as_bytes(),
-                    )
-                })?;
-            if root.kernel_binding != input.kernel_binding {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a projected ranked root with a substituted kernel binding",
-                ));
-            }
-            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                semantic_owner,
-                semantic_root,
-                &root.lowering,
-                &root.ranked_ir,
-                &root.access_sources,
-                &root.executable_effect_sources,
-            )
-            .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
-            roots.push(root);
-        }
-        source
-            .semantic_ssa()
-            .verify_replay()
-            .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
-        Ok(roots.into_boxed_slice())
+                    },
+                )
+            },
+        )
     })
+}
+
+fn prepare_ranked_root_bindings_v18(
+    semantic_ssa: &ProductionSemanticSsaOwnerV1,
+    source_launch_roster: &ProductionSourceLaunchRosterV1,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: Option<&mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>>,
+) -> Result<
+    Vec<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1>,
+    ProductionRankedProjectionErrorV1,
+> {
+    semantic_ssa
+        .verify_replay()
+        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
+    let semantic = semantic_ssa.source_semantic();
+    if root_inputs.is_empty()
+        || root_inputs.len() != source_launch_roster.roots().len()
+        || source_launch_roster.semantic_sha256() != semantic.semantic_sha256().as_bytes()
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an incomplete typed/semantic ranked root roster",
+        ));
+    }
+    let mut allocation = source_ranked_consumer_resources_v18::SourceBindingAllocationV18::new(budget)?;
+    let mut root_logical_names = allocation.rows(root_inputs.len())?;
+    for input in root_inputs {
+        allocation.charge(1)?;
+        source_ranked_consumer_resources_v18::push(&mut root_logical_names, input.logical_name.as_str())?;
+    }
+    let mut binding_logical_names = allocation.rows(reference_bindings.as_slice().len())?;
+    for binding in reference_bindings.as_slice() {
+        allocation.charge(1)?;
+        source_ranked_consumer_resources_v18::push(&mut binding_logical_names, binding.logical_kernel_name.as_str())?;
+    }
+    let indices = partition_reference_effect_binding_indices_v18(
+        &root_logical_names, &binding_logical_names, &mut allocation)?;
+    let mut roots = allocation.rows(indices.len())?;
+    for binding_indices in indices {
+        allocation.charge(1)?;
+        let mut bindings = allocation.rows(binding_indices.len())?;
+        for binding_index in binding_indices {
+            allocation.charge(1)?;
+            let original = reference_bindings.as_slice().get(binding_index)
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "reference-effect root assignment produced an out-of-range binding",
+                ))?;
+            let binding = allocation.binding(original)?;
+            source_ranked_consumer_resources_v18::push(&mut bindings, binding)?;
+        }
+        allocation.box_storage::<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>(bindings.len())?;
+        source_ranked_consumer_resources_v18::push(&mut roots,
+            crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new(bindings))?;
+    }
+    Ok(roots)
+}
+
+fn project_ranked_roots_prepared_v18(
+    semantic_ssa: &ProductionSemanticSsaOwnerV1,
+    source_launch_roster: &ProductionSourceLaunchRosterV1,
+    root_inputs: &[ProductionRankedRootInputV1],
+    root_reference_bindings: &[crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1],
+    mut project: impl FnMut(
+        usize,
+        &AdmittedInertSemanticMirV1,
+        SemanticKernelBodySelectionV1,
+        &ProductionRankedRootInputV1,
+        ProductionSourceLaunchRootV1,
+        &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    )
+        -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1>,
+) -> Result<Box<[ProductionRankedRootProgramV1]>, ProductionRankedProjectionErrorV1> {
+    let semantic_owner = semantic_ssa.source_owner();
+    let semantic = semantic_ssa.source_semantic();
+    if root_inputs.len() != source_launch_roster.roots().len()
+        || root_inputs.len() != root_reference_bindings.len()
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an incomplete prepared ranked root roster",
+        ));
+    }
+    let mut roots = Vec::with_capacity(root_inputs.len());
+    for (root_ordinal, ((input, source_root), root_references)) in root_inputs
+        .iter()
+        .zip(source_launch_roster.roots())
+        .zip(root_reference_bindings.iter())
+        .enumerate()
+    {
+        let semantic_root = source_root.selected_root();
+        let selection = semantic
+            .select_kernel_body_for_root_v1(semantic_root)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "a semantic KernelRoot without one direct body or transparent Result wrapper",
+            ))?;
+        let root = project(
+            root_ordinal,
+            semantic,
+            selection,
+            input,
+            *source_root,
+            root_references,
+        )
+        .map_err(|error| {
+            error.with_deterministic_root_context(
+                semantic_root,
+                selection.body(),
+                input.logical_name.as_bytes(),
+            )
+        })?;
+        if root.kernel_binding != input.kernel_binding {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a projected ranked root with a substituted kernel binding",
+            ));
+        }
+        fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
+            semantic_owner,
+            semantic_root,
+            &root.lowering,
+            &root.ranked_ir,
+            &root.access_sources,
+            &root.executable_effect_sources,
+        )
+        .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
+        roots.push(root);
+    }
+    semantic_ssa
+        .verify_replay()
+        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
+    Ok(roots.into_boxed_slice())
 }
 
 #[cfg(test)]
@@ -3352,11 +4728,45 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
     borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
     induction_scope: &mut multi_entry_induction_v1::Scope,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
+    project_and_verify_ranked_root_core_v18(
+        semantic, callable_effects, selection, input, source_root, reference_bindings,
+        assertion_facts, singletons, borrows, induction_scope, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_and_verify_ranked_root_core_v18(
+    semantic: &AdmittedInertSemanticMirV1,
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+    selection: SemanticKernelBodySelectionV1,
+    input: &ProductionRankedRootInputV1,
+    source_root: ProductionSourceLaunchRootV1,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
+    singletons: &[u8],
+    borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
+    induction_scope: &mut multi_entry_induction_v1::Scope,
+    source_constants: Option<&optimized_source_projection_v18::SourceConstantLocalsV18<'_>>,
+) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let logical_name = input.logical_name.as_str();
     let source_launch = &input.source_launch;
-    let semantic_u32_induction =
-        fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(semantic, selection.body())
-            .map_err(ProductionRankedProjectionErrorV1::SemanticU32Induction)?;
+    assertion_facts.check_projection_source_v18(semantic,selection.body())?;
+    let metered_source=assertion_facts.projection_meter_v18().is_some();
+    let semantic_u32_induction = {
+        let mut allocation=source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(assertion_facts)?;
+        if matches!(allocation,source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+            fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(semantic,selection.body())
+                .map_err(ProductionRankedProjectionErrorV1::SemanticU32Induction)?
+        } else {
+            fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_with_meter_v18(
+                semantic,selection.body(),fe2o3_mir_model::SemanticU32InductionAnalysisLimitsV1::default(),&mut allocation)
+                .map_err(|error|match error {
+                    fe2o3_mir_model::SemanticU32InductionBoundSnapshotErrorV1::Analysis(error)=>
+                        ProductionRankedProjectionErrorV1::SemanticU32Induction(error),
+                    fe2o3_mir_model::SemanticU32InductionBoundSnapshotErrorV1::Meter(error)=>error,
+                })?
+        }
+    };
     let root_function = semantic
         .functions()
         .get(selection.root().index() as usize)
@@ -3391,8 +4801,18 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
             "source launch roster root changed before ranked projection",
         ));
     }
-    let constants = constant_locals(function)?;
-    let mut entry_operations = vec![ranked_execution_layout_v1(source_root.layout())];
+    let legacy_constants;
+    let constants = match (source_constants,metered_source) {
+        (Some(constants),true) => constants.values_for(function)?,
+        (None,false) => {
+            legacy_constants = constant_locals(function)?;
+            legacy_constants.as_slice()
+        },
+        _=>return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "optimized projection requires its nominal original constants and live source meter together")),
+    };
+    let mut allocation=source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(assertion_facts)?;
+    let mut entry_operations = allocation.one(ranked_execution_layout_v1(source_root.layout()))?;
     let mut next_value = 0_u32;
     let reserved_reference_values = if reference_bindings.as_slice().is_empty() {
         None
@@ -3404,13 +4824,13 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
         let count = crate::production_reference_effect_join_v2::reserved_reference_value_count_v2(
             reference_bindings,
         )?;
-        let mut values = Vec::with_capacity(count);
+        let mut values = allocation.capacity(count)?;
         for rank in output_ranks {
             for _ in 0..3 {
                 let result = next_value_id(&mut next_value)?;
-                values.push(result);
-                entry_operations
-                    .push(ProductionRankedOperationV1::SemanticConstant { result, value: 0 });
+                allocation.push(&mut values,result)?;
+                allocation.push(&mut entry_operations,
+                    ProductionRankedOperationV1::SemanticConstant { result, value: 0 })?;
             }
             for axis in 0..rank {
                 let symbol = u32::try_from(axis).map_err(|_| {
@@ -3419,16 +4839,17 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
                     )
                 })?;
                 let result = next_value_id(&mut next_value)?;
-                values.push(result);
-                entry_operations
-                    .push(ProductionRankedOperationV1::SemanticSymbol { result, symbol });
+                allocation.push(&mut values,result)?;
+                allocation.push(&mut entry_operations,
+                    ProductionRankedOperationV1::SemanticSymbol { result, symbol })?;
             }
         }
         debug_assert_eq!(values.len(), count);
         Some(values)
     };
+    drop(allocation);
     let mut incomplete = None;
-    let mut projected_views = ProjectedViewsV1::new(function.locals().len(), Some(assertion_facts))
+    let mut projected_views = ProjectedViewsV1::new_with_facts_v18(function.locals().len(), assertion_facts)?
         .with_scalar_private_singletons(singletons)
         .with_scalar_private_borrows(borrows, semantic.target());
     let mut discarded_ir = String::new();
@@ -3440,7 +4861,7 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
         )
     })?;
     projected_views.charge_private_array_work(extent_work)?;
-    let intrinsic = projected_views.with_assertion_facts_v1(|facts| {
+    let mut intrinsic = projected_views.with_assertion_facts_v1(|facts| {
         project_intrinsic_contracts_with_multi_entry_v1(
             semantic.callables(),
             callable_effects,
@@ -3457,7 +4878,18 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
             }),
         )
     })?;
-    let bounds_checks = project_rust_bounds_checks_with_ordinary_v1(
+    let bounds_checks = if let Some(source_constants) = source_constants {
+        projected_views.with_assertion_facts_v1(|facts| {
+            facts.check_projection_source_v18(semantic, selection.body())?;
+            let original_constants = source_constants.values_for(function)?;
+            project_rust_bounds_checks_core_v18(
+                semantic.types(), function, intrinsic.extent_argument_count,
+                &intrinsic.index_values, &intrinsic.ordinary_index_values,
+                Some(&intrinsic.local_contracts.checked_references.enum_payload_dominance),
+                &mut entry_operations, &mut next_value, original_constants, Some(facts),
+            )
+        })?
+    } else { project_rust_bounds_checks_with_ordinary_v1(
         semantic.types(),
         function,
         intrinsic.extent_argument_count,
@@ -3471,19 +4903,29 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
         ),
         &mut entry_operations,
         &mut next_value,
-    )?;
-    let switch_predicates = switch_predicates(
-        function,
-        &intrinsic.option_predicates,
-        &intrinsic.direct_switch_predicates,
-    )?;
-    let mut projected_blocks = Vec::new();
+    )? };
+    let switch_predicates = projected_views.with_assertion_facts_v1(|facts|
+        switch_predicates_with_facts_v18(function,&intrinsic.option_predicates,
+            &intrinsic.direct_switch_predicates,facts))?;
+    let mut projected_blocks = projected_views.with_allocation_v18(|allocation| {
+        if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+            Ok(Vec::new())
+        } else { allocation.capacity(function.blocks().len()) }
+    })?;
     let mut projected_effect_count = 0_usize;
     for (block_index, block) in function.blocks().iter().enumerate() {
-        let mut operations = Vec::new();
-        let mut guarded_sites = Vec::new();
-        let mut local_sources = Vec::new();
+        let (mut operations, mut guarded_sites, mut local_sources) = projected_views.with_allocation_v18(|allocation| {
+            allocation.charge(1)?;
+            Ok((allocation.empty()?, allocation.empty()?, allocation.empty()?))
+        })?;
         for (statement_index, statement) in block.statements().iter().enumerate() {
+            if !projected_views.with_assertion_facts_v1(|facts| {
+                canonical_assertion_facts_v1::project_source_site_v18(
+                    facts, block_index, Some(statement_index),
+                )
+            })? {
+                continue;
+            }
             let source_start = local_sources.len();
             let guarded_start = guarded_sites.len();
             projected_views.begin_site(
@@ -3526,6 +4968,10 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
                     &mut incomplete,
                 )?;
             }
+            projected_views.with_allocation_v18(|allocation| {
+                allocation.charge(source_ranked_consumer_resources_v18::add(
+                    local_sources.len() - source_start, guarded_sites.len() - guarded_start)?)
+            })?;
             bind_projected_access_site(
                 &mut local_sources[source_start..],
                 &mut guarded_sites[guarded_start..],
@@ -3535,8 +4981,12 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
                 },
             )?;
         }
+        let project_terminator = projected_views.with_assertion_facts_v1(|facts| {
+            canonical_assertion_facts_v1::project_source_site_v18(facts, block_index, None)
+        })?;
         let source_start = local_sources.len();
         let guarded_start = guarded_sites.len();
+        if project_terminator {
         projected_views.begin_site(
             ProjectedSemanticAccessSiteV1 {
                 block: block_index,
@@ -3567,12 +5017,16 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
             ),
             &mut incomplete,
         )?;
-        if let Some(tensor_layout) = intrinsic.tensor_layouts.get(block_index).cloned().flatten() {
-            reserve_operation(&mut operations)?;
+        if let Some(tensor_layout) = projected_views.with_allocation_v18(|allocation| {
+            allocation.consume_optional(&mut intrinsic.tensor_layouts, block_index)
+        })? {
             // This records contract consistency for the mandatory verifier. It
             // carries no load-refinement or artifact authority by itself; that
             // authority is joined later with the exact semantic owner and KIR.
-            operations.push(tensor_layout);
+            projected_views.with_allocation_v18(|allocation| {
+                reserve_operation_core_v18(&mut operations, allocation)?;
+                allocation.push(&mut operations, tensor_layout)
+            })?;
         }
         if let Some(effect) = intrinsic
             .capability_read_effects
@@ -3581,14 +5035,15 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
             .flatten()
         {
             let operation = operations.len();
-            reserve_operation(&mut operations)?;
-            operations.push(ProductionRankedOperationV1::AllocationEffect {
+            projected_views.with_allocation_v18(|allocation| {
+            reserve_operation_core_v18(&mut operations, allocation)?;
+            allocation.push(&mut operations, ProductionRankedOperationV1::AllocationEffect {
                 kind: AccessKindAttr::Read,
                 memory_space: MemorySpaceAttr::Global,
                 allocation_origin: effect.allocation.allocation_origin,
                 noalias_class: effect.allocation.noalias_class,
-            });
-            local_sources.push(ProjectedAccessSourceV1 {
+            })?;
+            allocation.push(&mut local_sources, ProjectedAccessSourceV1 {
                 block: block_index,
                 operation,
                 access: AccessKindAttr::Read,
@@ -3596,7 +5051,8 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
                 source: effect.source,
                 output_extent: None,
                 semantic_site: None,
-            });
+            })
+            })?;
         }
         if let Some(effect) = intrinsic
             .transpose_workgroup_effects
@@ -3607,14 +5063,15 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
             let (allocation_origin, noalias_class) =
                 gfx950_transpose_workgroup_identity_v1(effect.format);
             let operation = operations.len();
-            reserve_operation(&mut operations)?;
-            operations.push(ProductionRankedOperationV1::AllocationEffect {
+            projected_views.with_allocation_v18(|allocation| {
+            reserve_operation_core_v18(&mut operations, allocation)?;
+            allocation.push(&mut operations, ProductionRankedOperationV1::AllocationEffect {
                 kind: effect.access,
                 memory_space: MemorySpaceAttr::Workgroup,
                 allocation_origin,
                 noalias_class,
-            });
-            local_sources.push(ProjectedAccessSourceV1 {
+            })?;
+            allocation.push(&mut local_sources, ProjectedAccessSourceV1 {
                 block: block_index,
                 operation,
                 access: effect.access,
@@ -3622,56 +5079,46 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
                 source: block.terminator().source(),
                 output_extent: None,
                 semantic_site: None,
-            });
-        }
-        if let Some(access) = intrinsic
-            .read_view_effects
-            .get(block_index)
-            .cloned()
-            .flatten()
-        {
-            guarded_sites.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "strided read access-site storage cannot be reserved",
-                )
+            })
             })?;
-            guarded_sites.push(GuardedAccessSiteV1 {
+        }
+        if let Some(access) = projected_views.with_allocation_v18(|allocation| {
+            allocation.consume_optional(&mut intrinsic.read_view_effects, block_index)
+        })? {
+            projected_views.with_allocation_v18(|allocation| {
+            allocation.reserve(&mut guarded_sites, 1, false, "strided read access-site storage cannot be reserved")?;
+            allocation.push(&mut guarded_sites, GuardedAccessSiteV1 {
                 insertion_operation: operations.len(),
                 access,
-            });
-        }
-        if let Some(access) = intrinsic
-            .direct_read_effects
-            .get(block_index)
-            .cloned()
-            .flatten()
-        {
-            guarded_sites.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "volatile read access-site storage cannot be reserved",
-                )
+            })
             })?;
-            guarded_sites.push(GuardedAccessSiteV1 {
+        }
+        if let Some(access) = projected_views.with_allocation_v18(|allocation| {
+            allocation.consume_optional(&mut intrinsic.direct_read_effects, block_index)
+        })? {
+            projected_views.with_allocation_v18(|allocation| {
+            allocation.reserve(&mut guarded_sites, 1, false, "volatile read access-site storage cannot be reserved")?;
+            allocation.push(&mut guarded_sites, GuardedAccessSiteV1 {
                 insertion_operation: operations.len(),
                 access,
-            });
-        }
-        if let Some(access) = intrinsic
-            .direct_write_effects
-            .get(block_index)
-            .cloned()
-            .flatten()
-        {
-            guarded_sites.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "write-only access-site storage cannot be reserved",
-                )
+            })
             })?;
-            guarded_sites.push(GuardedAccessSiteV1 {
+        }
+        if let Some(access) = projected_views.with_allocation_v18(|allocation| {
+            allocation.consume_optional(&mut intrinsic.direct_write_effects, block_index)
+        })? {
+            projected_views.with_allocation_v18(|allocation| {
+            allocation.reserve(&mut guarded_sites, 1, false, "write-only access-site storage cannot be reserved")?;
+            allocation.push(&mut guarded_sites, GuardedAccessSiteV1 {
                 insertion_operation: operations.len(),
                 access,
-            });
+            })
+            })?;
         }
+        projected_views.with_allocation_v18(|allocation| {
+            allocation.charge(source_ranked_consumer_resources_v18::add(
+                local_sources.len() - source_start, guarded_sites.len() - guarded_start)?)
+        })?;
         bind_projected_access_site(
             &mut local_sources[source_start..],
             &mut guarded_sites[guarded_start..],
@@ -3680,31 +5127,38 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
                 statement: None,
             },
         )?;
-        let mut projected = order_projected_block_effects(
+        }
+        let mut projected = projected_views.with_allocation_v18(|allocation| order_projected_block_effects_core_v18(
             operations,
             guarded_sites,
             local_sources,
             &mut entry_operations,
-        )?;
-        if let Some(effect) = intrinsic
-            .pipeline_effects
-            .get(block_index)
-            .cloned()
-            .flatten()
-        {
-            projected.items.push(ProjectedBlockItemV1::Pipeline(effect));
+            allocation,
+        ))?;
+        if project_terminator && let Some(effect) = projected_views.with_allocation_v18(|allocation| {
+            allocation.consume_optional(&mut intrinsic.pipeline_effects, block_index)
+        })? {
+            projected_views.with_allocation_v18(|allocation|
+                allocation.push(&mut projected.items, ProjectedBlockItemV1::Pipeline(effect)))?;
         }
-        if let Some(effects) = intrinsic
-            .generated_terminator_effects
-            .get(block_index)
-            .cloned()
-            .flatten()
-        {
-            projected.items.extend(
+        if project_terminator && let Some(effects) = projected_views.with_allocation_v18(|allocation| {
+            allocation.consume_optional(&mut intrinsic.generated_terminator_effects, block_index)
+        })? {
+            projected_views.with_allocation_v18(|allocation| {
+            if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+                projected.items.extend(
                 effects
                     .into_iter()
                     .map(ProjectedBlockItemV1::GeneratedFromSemanticTerminator),
-            );
+                );
+            } else {
+                allocation.reserve(&mut projected.items, effects.len(), false, "generated source effect storage")?;
+                for effect in effects {
+                    allocation.push(&mut projected.items, ProjectedBlockItemV1::GeneratedFromSemanticTerminator(effect))?;
+                }
+            }
+            Ok(())
+            })?;
         }
         projected_effect_count = projected_effect_count
             .checked_add(projected.items.len())
@@ -3719,23 +5173,30 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
                 "semantic CFG projection exceeds the ranked operation limit",
             ));
         }
-        projected_blocks.push(projected);
+        projected_views.with_allocation_v18(|allocation| allocation.push(&mut projected_blocks, projected))?;
     }
     let slice_queries = projected_views.finish();
-    if bounds_checks.checks.iter().any(|check| {
-        check.must_authorize_access
-            && projected_blocks
-                .get(check.access_block)
-                .is_none_or(|block| !projected_block_uses_bounds_check(block, *check))
-    }) {
-        return Err(ProductionRankedProjectionErrorV1::Incomplete(
-            "a Rust bounds assertion does not authorize one matching projected access",
-        ));
-    }
-    if !projected_blocks
-        .iter()
-        .any(ProjectedSemanticBlockV1::has_memory_access)
-    {
+    let has_memory = {
+        let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(assertion_facts)?;
+        for check in &bounds_checks.checks {
+            allocation.charge(1)?;
+            if check.must_authorize_access {
+                let authorized = match projected_blocks.get(check.access_block) {
+                    Some(block) => projected_block_uses_bounds_check_core_v18(block, *check, &mut allocation)?,
+                    None => false,
+                };
+                if !authorized { return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a Rust bounds assertion does not authorize one matching projected access")); }
+            }
+        }
+        let mut has_memory = false;
+        for block in &projected_blocks {
+            allocation.charge(source_ranked_consumer_resources_v18::add(1, block.items.len())?)?;
+            if block.has_memory_access() { has_memory = true; break; }
+        }
+        has_memory
+    };
+    if !has_memory {
         if let Some(error) = incomplete.take() {
             return Err(error);
         }
@@ -3786,23 +5247,37 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
         &sources,
         assertion_facts,
     )?;
-    slice_queries.validate(&blocks, &access_sources)?;
-    let system_coherent_allocations = intrinsic
-        .local_contracts
-        .allocations
-        .iter()
-        .flatten()
-        .filter(|contract| contract.singleton_object)
-        .map(|contract| contract.allocation_origin)
-        .collect::<Vec<_>>();
-    let kernel = ProductionRankedKernelV1::new(
+    slice_queries.validate_with_facts_v18(&blocks, &access_sources, assertion_facts)?;
+    let system_coherent_allocations = {
+        let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(assertion_facts)?;
+        let contracts = &intrinsic.local_contracts.allocations;
+        if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+            contracts.iter().flatten().filter(|contract| contract.singleton_object)
+                .map(|contract| contract.allocation_origin).collect::<Vec<_>>()
+        } else {
+            allocation.charge(contracts.len())?;
+            let count = contracts.iter().flatten().filter(|contract| contract.singleton_object).count();
+            let mut origins = allocation.capacity(count)?;
+            for contract in contracts {
+                allocation.charge(1)?;
+                if let Some(contract) = contract && contract.singleton_object {
+                    allocation.push(&mut origins, contract.allocation_origin)?;
+                }
+            }
+            origins
+        }
+    };
+    let kernel = assertion_facts.finish_ranked_projection_v18(
         function_name(root_function)?,
         bounds_checks.argument_count,
         blocks,
-    )
-    .map_err(ProductionRankedProjectionErrorV1::Recipe)?;
+    )?;
     if let Some(error) = incomplete {
         return Err(error);
+    }
+    if metered_source {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "optimized source projection requires exact output/currentness and conditional finalization before the terminal backend"));
     }
     let (lowering, effect_receipts) = if reference_bindings.as_slice().is_empty() {
         #[cfg(test)]
@@ -4055,9 +5530,10 @@ struct GpuSemanticExpressionResolverV2<'a> {
     types: &'a [SemanticTypeDeclV1],
     function: &'a SemanticFunctionDeclV1,
     definitions: SemanticAssertProofsV1<'a>,
-    borrowed: HashSet<u32>,
+    borrowed: ResolverBorrowedLocalsV18<'a>,
     use_site: Option<ScalarAssignmentSiteV1>,
-    visiting: HashSet<(u32, usize, usize)>,
+    visiting: ResolverActiveDefinitionsV18<'a>,
+    source_leaves: Option<&'a dyn SourceScalarResolverLeavesV18>,
     work: usize,
     loads: HashMap<*const SemanticRvalueV1, ProductionSemanticLoadV2>,
     place_loads: HashMap<*const SemanticPlaceV1, ProductionSemanticLoadV2>,
@@ -4123,13 +5599,44 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         types: &'a [SemanticTypeDeclV1],
         function: &'a SemanticFunctionDeclV1,
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
-        let mut definitions = SemanticAssertProofsV1::new(types, function)?;
-        let mut borrowed = HashSet::new();
+        Self::new_with_source_v18(types, function, None)
+    }
+
+    fn new_with_source_v18(
+        types: &'a [SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+        source_leaves: Option<&'a dyn SourceScalarResolverLeavesV18>,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        if let Some(source) = source_leaves {
+            source.reserve(std::mem::size_of::<Self>()).map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
+        }
+        let mut definitions = SemanticAssertProofsV1::new_with_source_v18(types, function, source_leaves)?;
+        let mut borrowed = match source_leaves {
+            None => ResolverBorrowedLocalsV18::Legacy(HashSet::new()),
+            Some(source) => {
+                let count = function.locals().len();
+                source.work(count).map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
+                source.reserve(count).map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
+                let mut rows = Vec::new();
+                rows.try_reserve_exact(count).map_err(|_| ProductionRankedProjectionErrorV1::Unsupported(
+                    source.resource_refusal(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Allocation)))?;
+                source.reserve(rows.capacity().checked_sub(count).ok_or_else(|| ProductionRankedProjectionErrorV1::Unsupported(
+                    source.resource_refusal(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)))?).map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
+                rows.resize(count, false);
+                ResolverBorrowedLocalsV18::Source { rows, source }
+            }
+        };
+        if let Some(source) = source_leaves {
+            source.work(function.blocks().len()).map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
+        }
         for statement in function
             .blocks()
             .iter()
             .flat_map(|block| block.statements())
         {
+            if let Some(source) = source_leaves {
+                source.work(1).map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
+            }
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
@@ -4140,14 +5647,19 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 borrowed.insert(local as u32);
             }
         }
-        definitions.statement_definitions = Some(StatementDefinitionIndexV1::new(function)?);
+        definitions.enable_statement_index_v1()?;
         Ok(Self {
             types,
             function,
             definitions,
             borrowed,
             use_site: None,
-            visiting: HashSet::new(),
+            visiting: match source_leaves {
+                None => ResolverActiveDefinitionsV18::Legacy(HashSet::new()),
+                Some(source) => ResolverActiveDefinitionsV18::source(source)
+                    .map_err(ProductionRankedProjectionErrorV1::Incomplete)?,
+            },
+            source_leaves,
             work: 0,
             loads: HashMap::new(),
             place_loads: HashMap::new(),
@@ -4391,6 +5903,54 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         if self.work > fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2 {
             return Err("GPU semantic expression exceeds its bounded node budget");
         }
+        if let Some(source) = self.source_leaves { source.work(1)?; }
+        Ok(())
+    }
+
+    fn source_place_leaf_v18(&self, place: &SemanticPlaceV1)
+        -> Result<Option<ProductionSemanticExpressionV2>, &'static str>
+    {
+        match self.source_leaves {
+            Some(source) => source.place(self.function, place),
+            None => Ok(self.place_loads.get(&(place as *const SemanticPlaceV1))
+                .cloned().map(ProductionSemanticExpressionV2::Load)),
+        }
+    }
+
+    fn source_argument_leaf_v18(&self, argument: u32, scalar: ProductionSemanticScalarTypeV2, depth: usize)
+        -> Result<ProductionSemanticExpressionV2, &'static str>
+    {
+        match self.source_leaves {
+            Some(source) => source.argument(self.function, argument, scalar, depth),
+            None => {
+                let symbol = crate::reference_effect_v1::kernel_scalar_symbol_v2(argument)
+                    .ok_or("kernel scalar argument exceeds the reserved semantic symbol namespace")?;
+                Ok(ProductionSemanticExpressionV2::Symbol { symbol, scalar })
+            }
+        }
+    }
+
+    fn source_reserve_elements_v18(&self, count: usize, width: usize) -> Result<(), &'static str> {
+        if let Some(source) = self.source_leaves {
+            source.reserve(count.checked_mul(width).ok_or_else(||
+                source.resource_refusal(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic))?)?;
+        }
+        Ok(())
+    }
+
+    fn source_allocation_refusal_v18(&self, legacy: &'static str) -> &'static str {
+        self.source_leaves.map_or(legacy, |source| source.resource_refusal(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Allocation))
+    }
+
+    fn source_capacity_v18(&self, requested: usize, actual: usize, width: usize)
+        -> Result<(), &'static str>
+    {
+        if let Some(source) = self.source_leaves {
+            let extra = actual.checked_sub(requested).ok_or_else(|| source.resource_refusal(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting))?;
+            self.source_reserve_elements_v18(extra, width)?;
+        }
         Ok(())
     }
 
@@ -4570,12 +6130,13 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                     operand: Box::new(self.resolve_operand_v2(operand, depth + 1)?),
                 })
             }
-            SemanticRvalueKindV1::Load(_) => self
-                .loads
-                .get(&(value as *const SemanticRvalueV1))
-                .cloned()
-                .map(ProductionSemanticExpressionV2::Load)
-                .ok_or("GPU semantic RHS load has no exact ranked read correspondence"),
+            SemanticRvalueKindV1::Load(load) => match self.source_leaves {
+                Some(_) => self.source_place_leaf_v18(load.source())?
+                    .ok_or("GPU semantic RHS load has no exact source scalar correspondence"),
+                None => self.loads.get(&(value as *const SemanticRvalueV1)).cloned()
+                    .map(ProductionSemanticExpressionV2::Load)
+                    .ok_or("GPU semantic RHS load has no exact ranked read correspondence"),
+            },
             _ => Err("GPU semantic rvalue is outside typed scalar refinement V2"),
         }
     }
@@ -4962,6 +6523,74 @@ fn retained_ranked_access_source_v1(
     )
 }
 
+// One shared per-function counter table, not source or effect authority. The
+// later instance-qualified census still checks every actual access role.
+enum ProjectionAccessOrdinalsV18 {
+    Legacy(HashMap<(usize, Option<usize>), u32>),
+    Source(Vec<((usize, Option<usize>), u32)>),
+}
+
+impl ProjectionAccessOrdinalsV18 {
+    fn prepare(
+        sources: &[ProjectedAccessSourceV1],
+        facts: &mut dyn ProjectedAssertionFactsV1,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?;
+        if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+            return Ok(Self::Legacy(HashMap::new()));
+        }
+        allocation.header::<Self>()?;
+        let mut rows = allocation.capacity(sources.len())?;
+        for source in sources {
+            allocation.charge(1)?;
+            if let Some(site) = source.semantic_site {
+                allocation.push(&mut rows, ((site.block, site.statement), 0))?;
+            }
+        }
+        allocation.sort_fixed_key(&mut rows, |row| row.0)?;
+        allocation.charge(rows.len())?;
+        rows.dedup_by_key(|row| row.0);
+        Ok(Self::Source(rows))
+    }
+
+    fn current(
+        &mut self,
+        site: Option<ProjectedSemanticAccessSiteV1>,
+        facts: &mut dyn ProjectedAssertionFactsV1,
+    ) -> Result<u32, ProductionRankedProjectionErrorV1> {
+        let Some(site) = site else { return Ok(0); };
+        let key = (site.block, site.statement);
+        match self {
+            Self::Legacy(rows) => Ok(rows.get(&key).copied().unwrap_or(0)),
+            Self::Source(rows) => {
+                let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?;
+                let index = allocation.find_fixed_key(rows, &key, |row| row.0)?
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete("source access ordinal key is absent from its complete source roster"))?;
+                allocation.charge(1)?;
+                Ok(rows[index].1)
+            }
+        }
+    }
+
+    fn slot(
+        &mut self,
+        site: ProjectedSemanticAccessSiteV1,
+        facts: &mut dyn ProjectedAssertionFactsV1,
+    ) -> Result<&mut u32, ProductionRankedProjectionErrorV1> {
+        let key = (site.block, site.statement);
+        match self {
+            Self::Legacy(rows) => Ok(rows.entry(key).or_default()),
+            Self::Source(rows) => {
+                let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?;
+                let index = allocation.find_fixed_key(rows, &key, |row| row.0)?
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete("source access ordinal key is absent from its complete source roster"))?;
+                allocation.charge(1)?;
+                Ok(&mut rows[index].1)
+            }
+        }
+    }
+}
+
 fn production_access_sources(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -4969,14 +6598,15 @@ fn production_access_sources(
     sources: &[ProjectedAccessSourceV1],
     facts: &mut impl ProjectedAssertionFactsV1,
 ) -> Result<Vec<ProductionRankedAccessSourceV1>, ProductionRankedProjectionErrorV1> {
-    let mut ordinals = HashMap::<(usize, Option<usize>), u32>::new();
-    let mut retained = Vec::new();
-    retained.try_reserve(sources.len()).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "ranked access correspondence storage cannot be reserved",
-        )
-    })?;
+    let mut ordinals = ProjectionAccessOrdinalsV18::prepare(sources, facts)?;
+    let mut retained = {
+        let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?;
+        let mut retained = allocation.empty()?;
+        allocation.reserve(&mut retained, sources.len(), false, "ranked access correspondence storage cannot be reserved")?;
+        retained
+    };
     for source in sources {
+        source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?.charge(1)?;
         let operation = blocks
             .get(source.block)
             .and_then(|block| block.operations().get(source.operation))
@@ -5003,11 +6633,7 @@ fn production_access_sources(
             // Existing indexed predicate40 + initializer-dispatch4 + exact
             // source-site component-counter lookup4 also covers the literal case.
             facts.charge_private_array_work(48)?;
-            let component = source
-                .semantic_site
-                .and_then(|site| ordinals.get(&(site.block, site.statement)))
-                .copied()
-                .unwrap_or(0);
+            let component = ordinals.current(source.semantic_site, facts)?;
             if !private_array_write_source_v1(types, function, source, component) {
                 continue;
             }
@@ -5017,7 +6643,7 @@ fn production_access_sources(
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "ranked access correspondence has no exact semantic site",
             ))?;
-        let ordinal = ordinals.entry((site.block, site.statement)).or_default();
+        let ordinal = ordinals.slot(site, facts)?;
         let mut retained_source = ProductionRankedAccessSourceV1::new(
             u32::try_from(site.block).map_err(|_| {
                 ProductionRankedProjectionErrorV1::Unsupported(
@@ -5045,7 +6671,8 @@ fn production_access_sources(
             facts.charge_private_array_work(8)?;
             retained_source = retained_source.with_output_extent(extent);
         }
-        retained.push(retained_source);
+        source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?
+            .push(&mut retained, retained_source)?;
         *ordinal = ordinal
             .checked_add(1)
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -5088,6 +6715,24 @@ fn project_rust_bounds_checks_with_ordinary_v1(
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
 ) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
+    let constants = constant_locals(function)?;
+    project_rust_bounds_checks_core_v18(types, function, first_argument, known_indices,
+        ordinary_indices, enum_payload_dominance, operations, next_value, &constants, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_rust_bounds_checks_core_v18(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    first_argument: usize,
+    known_indices: &[Option<ProjectedDisjointIndexV1>],
+    ordinary_indices: &[Option<ProjectedOrdinaryIndexV1>],
+    enum_payload_dominance: Option<&SemanticEnumPayloadDominanceV1>,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    constants: &[Option<u64>],
+    mut facts: Option<&mut dyn ProjectedAssertionFactsV1>,
+) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
     #[derive(Clone, Copy, Default)]
     struct LocalDefinitionV1 {
         count: u32,
@@ -5103,11 +6748,15 @@ fn project_rust_bounds_checks_with_ordinary_v1(
         must_authorize_access: bool,
     }
 
-    let constants = constant_locals(function)?;
-    let mut definitions = vec![LocalDefinitionV1::default(); function.locals().len()];
-    let mut predecessors = vec![Vec::new(); function.blocks().len()];
+    let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_optional_facts(&mut facts)?;
+    allocation.header::<Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1>>()?;
+    allocation.header::<Option<SemanticAssertProofsV1<'_>>>()?;
+    let mut definitions = allocation.filled(function.locals().len(), LocalDefinitionV1::default())?;
+    let mut predecessors = allocation.nested(function.blocks().len())?;
     for (block_index, block) in function.blocks().iter().enumerate() {
+        allocation.charge(1)?;
         for statement in block.statements() {
+            allocation.charge(1)?;
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
@@ -5121,7 +6770,9 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 ))?;
             definition.count = definition.count.saturating_add(1);
             definition.length_source = match assignment.value().kind() {
-                SemanticRvalueKindV1::Length(place) => Some(
+                SemanticRvalueKindV1::Length(place) => {
+                    allocation.charge(place.projections().len())?;
+                    Some(
                     if place.projections().iter().any(|projection| {
                         matches!(projection.kind(), SemanticProjectionKindV1::Field(_))
                     }) {
@@ -5129,7 +6780,8 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                     } else {
                         ProjectedBoundsExtentSourceV1::Slice(place.local())
                     },
-                ),
+                    )
+                },
                 SemanticRvalueKindV1::Unary {
                     operation: SemanticUnaryOpV1::PointerMetadata,
                     operand,
@@ -5162,13 +6814,14 @@ fn project_rust_bounds_checks_with_ordinary_v1(
             .terminator()
             .kind()
             .try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
+                allocation.charge(1)?;
                 let target = edge.target().index() as usize;
                 let target_predecessors = predecessors.get_mut(target).ok_or(
                     ProductionRankedProjectionErrorV1::Unsupported(
                         "a Rust bounds-check CFG edge outside the semantic block table",
                     ),
                 )?;
-                target_predecessors.push(block_index);
+                allocation.push(target_predecessors, block_index)?;
                 Ok(())
             })?;
     }
@@ -5179,23 +6832,34 @@ fn project_rust_bounds_checks_with_ordinary_v1(
         ));
     }
     let mut local_values = if known_indices.is_empty() {
-        vec![None; function.locals().len()]
+        allocation.optional(function.locals().len())?
     } else {
         if known_indices.len() != function.locals().len() {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "intrinsic index facts do not match the semantic local table",
             ));
         }
-        known_indices
-            .iter()
-            .map(|index| index.map(|index| index.value))
-            .collect()
+        if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+            known_indices.iter().map(|index| index.map(|index| index.value)).collect()
+        } else {
+            let mut values = allocation.capacity(known_indices.len())?;
+            for index in known_indices {
+                allocation.push(&mut values, index.map(|index| index.value))?;
+            }
+            values
+        }
     };
     // Separate MIR `Len` temporaries for one stable slice describe one ranked extent.
-    let mut slice_extents = vec![None; function.locals().len()];
-    let mut checks = Vec::new();
+    let mut slice_extents = allocation.optional(function.locals().len())?;
+    let mut checks = allocation.empty()?;
     let mut fixed_proofs = None;
+    drop(allocation);
     for (block_index, block) in function.blocks().iter().enumerate() {
+        if let Some(facts) = facts.as_deref_mut()
+            && !canonical_assertion_facts_v1::project_source_site_v18(facts, block_index, None)?
+        { continue; }
+        let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_optional_facts(&mut facts)?;
+        allocation.charge(1)?;
         let guard = match block.terminator().kind() {
             SemanticTerminatorKindV1::Assert {
                 condition,
@@ -5219,10 +6883,12 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 }
                 if matches!(length, SemanticOperandV1::Constant(_)) {
                     if fixed_proofs.is_none() {
-                        fixed_proofs = Some(SemanticAssertProofsV1::new(types, function)?);
+                        fixed_proofs = Some(if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+                            SemanticAssertProofsV1::new(types, function)?
+                        } else { SemanticAssertProofsV1::new_live_v18(types, function, &mut allocation)? });
                     }
                     let access_block = target.target().index() as usize;
-                    let (index_local, extent_value) = authenticate_fixed_array_guard_v1(
+                    let (index_local, extent_value) = authenticate_fixed_array_guard_core_v18(
                         fixed_proofs
                             .as_mut()
                             .expect("initialized fixed-array analysis"),
@@ -5231,6 +6897,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                         condition,
                         index,
                         length,
+                        &mut allocation,
                     )?;
                     if predecessors.get(access_block).map(Vec::as_slice) != Some(&[block_index])
                         || access_block == function.entry().index() as usize
@@ -5239,6 +6906,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                             "a fixed-array bounds-check success block is not uniquely controlled",
                         ));
                     }
+                    allocation.charge(8)?;
                     reconcile_bounds_ordinary_index_v1(
                         block_index,
                         index_local,
@@ -5251,24 +6919,20 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                         value
                     } else {
                         let result = next_value_id(next_value)?;
-                        reserve_operation(operations)?;
-                        operations.push(ProductionRankedOperationV1::IndexUnknown { result });
+                        reserve_operation_core_v18(operations, &mut allocation)?;
+                        allocation.push(operations, ProductionRankedOperationV1::IndexUnknown { result })?;
                         let value = ProductionRankedValueV1::Local(result);
                         *slot = Some(value);
                         value
                     };
                     let result = next_value_id(next_value)?;
-                    reserve_operation(operations)?;
-                    operations.push(ProductionRankedOperationV1::IndexConstant {
+                    reserve_operation_core_v18(operations, &mut allocation)?;
+                    allocation.push(operations, ProductionRankedOperationV1::IndexConstant {
                         result,
                         value: extent_value,
-                    });
-                    checks.try_reserve(1).map_err(|_| {
-                        ProductionRankedProjectionErrorV1::Unsupported(
-                            "fixed-array bounds-check storage cannot be reserved",
-                        )
                     })?;
-                    checks.push(ProjectedBoundsCheckV1 {
+                    allocation.reserve(&mut checks, 1, false, "fixed-array bounds-check storage cannot be reserved")?;
+                    allocation.push(&mut checks, ProjectedBoundsCheckV1 {
                         assertion_block: Some(block_index as u32),
                         access_block,
                         extent_source: ProjectedBoundsExtentSourceV1::FixedArray(extent_value),
@@ -5276,7 +6940,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                         index,
                         extent: ProductionRankedValueV1::Local(result),
                         must_authorize_access: true,
-                    });
+                    })?;
                     continue;
                 }
                 BoundsGuardV1 {
@@ -5306,6 +6970,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 let Some(condition_local) = simple_operand_local(discriminant) else {
                     continue;
                 };
+                allocation.charge(block.statements().len())?;
                 let Some((index_local, length_local)) =
                     exact_less_than_definition_v1(block, condition_local)
                 else {
@@ -5383,6 +7048,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 "a Rust bounds-check length not derived from one exact slice",
             ),
         )?;
+        allocation.charge(block.statements().len())?;
         if exact_less_than_definition_v1(block, condition_local)
             != Some((index_local, length_local))
         {
@@ -5395,6 +7061,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 "a Rust bounds-check success block not uniquely controlled by that check",
             ));
         }
+        allocation.charge(8)?;
         reconcile_bounds_ordinary_index_v1(
             block_index,
             index_local,
@@ -5421,8 +7088,8 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                     .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                         "dynamic ranked-analysis value count overflow",
                     ))?;
-            reserve_operation(operations)?;
-            operations.push(ProductionRankedOperationV1::IndexUnknown { result });
+            reserve_operation_core_v18(operations, &mut allocation)?;
+            allocation.push(operations, ProductionRankedOperationV1::IndexUnknown { result })?;
             let value = ProductionRankedValueV1::Local(result);
             *slot = Some(value);
             Ok(value)
@@ -5467,12 +7134,9 @@ fn project_rust_bounds_checks_with_ordinary_v1(
             }
             extent
         };
-        checks.try_reserve(1).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "Rust bounds-check projection storage cannot be reserved",
-            )
-        })?;
-        checks.push(ProjectedBoundsCheckV1 {
+        drop(unknown_for);
+        allocation.reserve(&mut checks, 1, false, "Rust bounds-check projection storage cannot be reserved")?;
+        allocation.push(&mut checks, ProjectedBoundsCheckV1 {
             assertion_block: must_authorize_access.then_some(block_index as u32),
             access_block,
             extent_source,
@@ -5480,7 +7144,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
             index,
             extent,
             must_authorize_access,
-        });
+        })?;
     }
     Ok(ProjectedBoundsChecksV1 {
         checks,
@@ -5520,6 +7184,17 @@ fn project_authenticated_capabilities_v1(
     local_allocations: &[Option<AllocationContractV1>],
     constants: &[Option<u64>],
 ) -> Result<ProjectedCapabilityEffectsV1, ProductionRankedProjectionErrorV1> {
+    live_capability_driver_v18::project_legacy(callables, function, enum_payload_dominance, local_allocations, constants)
+}
+
+#[cfg(test)]
+fn project_authenticated_capabilities_reference_v18(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+    local_allocations: &[Option<AllocationContractV1>],
+    constants: &[Option<u64>],
+) -> Result<ProjectedCapabilityEffectsV1, ProductionRankedProjectionErrorV1> {
     let block_count = function.blocks().len();
     let entry = function.entry().index() as usize;
     if entry >= block_count {
@@ -5528,7 +7203,7 @@ fn project_authenticated_capabilities_v1(
         ));
     }
     let mut work = 0_usize;
-    let pipeline_owners = workgroup_pipeline_local_owners_v1(callables, function)?;
+    let pipeline_owners = workgroup_pipeline_local_owners_reference_v18(callables, function)?;
     let initial_entries = propagate_capability_dataflow_v1(
         callables,
         function,
@@ -5612,6 +7287,14 @@ fn workgroup_pipeline_local_owners_v1(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
 ) -> Result<Vec<Option<usize>>, ProductionRankedProjectionErrorV1> {
+    live_capability_driver_v18::pipeline_owners(callables, function, &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+#[cfg(test)]
+fn workgroup_pipeline_local_owners_reference_v18(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+) -> Result<Vec<Option<usize>>, ProductionRankedProjectionErrorV1> {
     let mut owners = vec![None; function.locals().len()];
     for block in function.blocks() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
@@ -5639,11 +7322,19 @@ fn workgroup_pipeline_local_owners_v1(
             ));
         }
     }
-    propagate_workgroup_pipeline_aliases_v1(function, &mut owners)?;
+    propagate_workgroup_pipeline_aliases_reference_v18(function, &mut owners)?;
     Ok(owners)
 }
 
 fn propagate_workgroup_pipeline_aliases_v1(
+    function: &SemanticFunctionDeclV1,
+    owners: &mut [Option<usize>],
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    live_capability_driver_v18::pipeline_aliases(function, owners, &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+#[cfg(test)]
+fn propagate_workgroup_pipeline_aliases_reference_v18(
     function: &SemanticFunctionDeclV1,
     owners: &mut [Option<usize>],
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
@@ -5696,6 +7387,7 @@ fn propagate_workgroup_pipeline_aliases_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn propagate_capability_dataflow_v1(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -5797,6 +7489,7 @@ fn propagate_capability_dataflow_v1(
     Ok(entries)
 }
 
+#[cfg(test)]
 fn collect_workgroup_pipeline_payloads_v1(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -5870,24 +7563,31 @@ fn bind_capability_read_effects_to_call_blocks_v1(
     function: &SemanticFunctionDeclV1,
     global_reads: &[Option<AllocationContractV1>],
 ) -> Result<Vec<Option<ProjectedCapabilityReadEffectV1>>, ProductionRankedProjectionErrorV1> {
+    bind_capability_read_effects_core_v18(function, global_reads,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn bind_capability_read_effects_core_v18(
+    function: &SemanticFunctionDeclV1, global_reads: &[Option<AllocationContractV1>],
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Vec<Option<ProjectedCapabilityReadEffectV1>>, ProductionRankedProjectionErrorV1> {
     if global_reads.len() != function.blocks().len() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "capability read effects do not correspond one-to-one with semantic MIR blocks",
         ));
     }
-    let mut effects = Vec::new();
-    effects.try_reserve_exact(global_reads.len()).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "capability read effect storage cannot be reserved",
-        )
-    })?;
-    for (block, allocation) in function.blocks().iter().zip(global_reads.iter().copied()) {
-        effects.push(
-            allocation.map(|allocation| ProjectedCapabilityReadEffectV1 {
-                allocation,
+    allocation.header::<Result<Vec<Option<ProjectedCapabilityReadEffectV1>>, ProductionRankedProjectionErrorV1>>()?;
+    let mut effects = allocation.empty()?;
+    allocation.reserve(&mut effects, global_reads.len(), true,
+        "capability read effect storage cannot be reserved")?;
+    for (block, contract) in function.blocks().iter().zip(global_reads.iter().copied()) {
+        allocation.charge(1)?;
+        allocation.push(&mut effects,
+            contract.map(|contract| ProjectedCapabilityReadEffectV1 {
+                allocation: contract,
                 source: block.terminator().source(),
             }),
-        );
+        )?;
     }
     Ok(effects)
 }
@@ -5900,11 +7600,24 @@ fn project_read_value_to_ranked_v1(
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
 ) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    project_read_value_to_ranked_core_v18(value, stable_argument_origins, arguments,
+        next_argument, operations, next_value,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn project_read_value_to_ranked_core_v18(
+    value: ProjectedReadValueV1, stable_argument_origins: &[Option<u32>],
+    arguments: &mut [Option<u32>], next_argument: &mut usize,
+    operations: &mut Vec<ProductionRankedOperationV1>, next_value: &mut u32,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    allocation.header::<Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1>>()?;
+    allocation.charge(1)?;
     match value {
         ProjectedReadValueV1::Constant(value) => {
-            reserve_operation(operations)?;
+            reserve_operation_core_v18(operations, allocation)?;
             let result = next_value_id(next_value)?;
-            operations.push(ProductionRankedOperationV1::IndexConstant { result, value });
+            allocation.push(operations, ProductionRankedOperationV1::IndexConstant { result, value })?;
             Ok(ProductionRankedValueV1::Local(result))
         }
         ProjectedReadValueV1::Local(local) => {
@@ -5942,6 +7655,135 @@ fn project_read_value_to_ranked_v1(
     }
 }
 
+type StridedReadCacheRowV18 = (u64, Option<(ProjectedReadViewV1, ProjectedViewV1)>);
+
+enum StridedReadCacheV18<'f, 'e> {
+    Legacy(HashMap<u64, (ProjectedReadViewV1, ProjectedViewV1)>),
+    Source {
+        function: &'f SemanticFunctionDeclV1,
+        effects: &'e [Option<ProjectedReadViewAccessV1>],
+        rows: Vec<StridedReadCacheRowV18>,
+    },
+}
+
+impl<'f, 'e> StridedReadCacheV18<'f, 'e> {
+    fn prepare(
+        function: &'f SemanticFunctionDeclV1,
+        effects: &'e [Option<ProjectedReadViewAccessV1>],
+        allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+            return Ok(Self::Legacy(HashMap::new()));
+        }
+        if effects.len() != function.blocks().len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "strided read effects do not correspond one-to-one with semantic MIR blocks"));
+        }
+        allocation.header::<Self>()?;
+        allocation.header::<Result<Self, ProductionRankedProjectionErrorV1>>()?;
+        allocation.header::<(usize, usize, usize)>()?;
+        let mut count = 0;
+        for effect in effects {
+            allocation.charge(1)?;
+            if effect.is_some() { count = source_ranked_consumer_resources_v18::add(count, 1)?; }
+        }
+        let mut rows = allocation.capacity(count)?;
+        for effect in effects {
+            allocation.charge(1)?;
+            if let Some(effect) = effect { allocation.push(&mut rows, (effect.view.root, None))?; }
+        }
+        allocation.sort_fixed_key(&mut rows, |row| row.0)?;
+        let mut unique = 0;
+        for index in 0..rows.len() {
+            allocation.charge(1)?;
+            if unique == 0 || rows[index].0 != rows[unique - 1].0 {
+                if index != unique {
+                    allocation.charge(1)?;
+                    rows.swap(index, unique);
+                }
+                unique += 1;
+            }
+        }
+        rows.truncate(unique);
+        Ok(Self::Source { function, effects, rows })
+    }
+
+    fn source_index(
+        &self, function: &SemanticFunctionDeclV1,
+        effects: &[Option<ProjectedReadViewAccessV1>], block: usize, root: u64,
+        allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<usize, ProductionRankedProjectionErrorV1> {
+        let Self::Source { function: original, effects: original_effects, rows } = self else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete("a source read cache is not a legacy map"));
+        };
+        if !std::ptr::eq(*original, function) || !std::ptr::eq(*original_effects, effects)
+            || effects.len() != function.blocks().len()
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a strided-read cache substituted its original function or effect list"));
+        }
+        allocation.header::<Result<usize, ProductionRankedProjectionErrorV1>>()?;
+        allocation.charge(1)?;
+        if effects.get(block).copied().flatten().map(|effect| effect.view.root) != Some(root) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a strided-read cache query changed its exact effect occurrence"));
+        }
+        let index = allocation.find_fixed_key(rows, &root, |row| row.0)?
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a strided-read cache omitted a required source root"))?;
+        allocation.charge(1)?;
+        Ok(index)
+    }
+
+    fn get(
+        &self, function: &SemanticFunctionDeclV1,
+        effects: &[Option<ProjectedReadViewAccessV1>], block: usize, root: u64,
+        allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<Option<&(ProjectedReadViewV1, ProjectedViewV1)>, ProductionRankedProjectionErrorV1> {
+        allocation.header::<Result<Option<&(ProjectedReadViewV1, ProjectedViewV1)>, ProductionRankedProjectionErrorV1>>()?;
+        match self {
+            Self::Legacy(rows) if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) => Ok(rows.get(&root)),
+            Self::Source { rows, .. } if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Source(_)) => {
+                let index = self.source_index(function, effects, block, root, allocation)?;
+                Ok(rows[index].1.as_ref())
+            }
+            _ => Err(ProductionRankedProjectionErrorV1::Incomplete("a strided-read cache changed its allocation route")),
+        }
+    }
+
+    fn insert(
+        &mut self, function: &SemanticFunctionDeclV1,
+        effects: &[Option<ProjectedReadViewAccessV1>], block: usize,
+        source: ProjectedReadViewV1, view: ProjectedViewV1,
+        allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        allocation.header::<Result<(), ProductionRankedProjectionErrorV1>>()?;
+        if matches!(self, Self::Legacy(_)) {
+            if !matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete("a strided-read cache changed its allocation route"));
+            }
+            let Self::Legacy(rows) = self else { unreachable!() };
+            rows.insert(source.root, (source, view));
+            return Ok(());
+        }
+        if !matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Source(_)) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete("a strided-read cache changed its allocation route"));
+        }
+        let index = self.source_index(function, effects, block, source.root, allocation)?;
+        allocation.charge(1)?;
+        if effects[block].as_ref().map(|effect| effect.view) != Some(source) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete("a strided-read cache changed its original view payload"));
+        }
+        let Self::Source { rows, .. } = self else { unreachable!() };
+        if rows[index].1.is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete("a strided-read cache was assigned twice"));
+        }
+        allocation.charge(1)?;
+        rows[index].1 = Some((source, view));
+        Ok(())
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn project_strided_read_effects_v1(
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
@@ -5953,21 +7795,35 @@ fn project_strided_read_effects_v1(
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
 ) -> Result<Vec<Option<GuardedRankedAccessV1>>, ProductionRankedProjectionErrorV1> {
+    project_strided_read_effects_core_v18(types, function, effects, stable_argument_origins,
+        arguments, next_argument, operations, next_value,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_strided_read_effects_core_v18(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1, effects: &[Option<ProjectedReadViewAccessV1>],
+    stable_argument_origins: &[Option<u32>], arguments: &mut [Option<u32>],
+    next_argument: &mut usize, operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Vec<Option<GuardedRankedAccessV1>>, ProductionRankedProjectionErrorV1> {
     if effects.len() != function.blocks().len() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "strided read effects do not correspond one-to-one with semantic MIR blocks",
         ));
     }
-    let mut views: HashMap<u64, (ProjectedReadViewV1, ProjectedViewV1)> = HashMap::new();
-    let mut projected = Vec::new();
-    projected.try_reserve_exact(effects.len()).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "strided read effect storage cannot be reserved",
-        )
-    })?;
-    for (block, effect) in function.blocks().iter().zip(effects.iter().copied()) {
+    allocation.header::<Result<Vec<Option<GuardedRankedAccessV1>>, ProductionRankedProjectionErrorV1>>()?;
+    allocation.header::<(ProjectedViewV1, ProductionRankedOperationV1, GuardedRankedAccessV1)>()?;
+    let mut views = StridedReadCacheV18::prepare(function, effects, allocation)?;
+    let mut projected = allocation.empty()?;
+    allocation.reserve(&mut projected, effects.len(), true,
+        "strided read effect storage cannot be reserved")?;
+    for (block_index, (block, effect)) in function.blocks().iter().zip(effects.iter().copied()).enumerate() {
+        allocation.charge(1)?;
         let Some(effect) = effect else {
-            projected.push(None);
+            allocation.push(&mut projected, None)?;
             continue;
         };
         if effect.view.allocation.writable {
@@ -5975,7 +7831,8 @@ fn project_strided_read_effects_v1(
                 "a checked shared read view rooted in writable allocation authority",
             ));
         }
-        let (view, rows, columns) = if let Some((source, view)) = views.get(&effect.view.root) {
+        let (view, rows, columns) = if let Some((source, view)) = views.get(function, effects,
+            block_index, effect.view.root, allocation)? {
             if *source != effect.view {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "one checked read-view origin changed its element, extent, or allocation contract",
@@ -5988,74 +7845,85 @@ fn project_strided_read_effects_v1(
             };
             (view.result, *rows, *columns)
         } else {
-            let rows = project_read_value_to_ranked_v1(
+            let rows = project_read_value_to_ranked_core_v18(
                 effect.view.rows,
                 stable_argument_origins,
                 arguments,
                 next_argument,
                 operations,
                 next_value,
+                allocation,
             )?;
-            let columns = project_read_value_to_ranked_v1(
+            let columns = project_read_value_to_ranked_core_v18(
                 effect.view.columns,
                 stable_argument_origins,
                 arguments,
                 next_argument,
                 operations,
                 next_value,
+                allocation,
             )?;
-            reserve_operation(operations)?;
+            reserve_operation_core_v18(operations, allocation)?;
             let result = next_value_id(next_value)?;
             let view = ProjectedViewV1 {
                 result,
                 element_width: type_width(types, effect.view.element)?,
                 writable: false,
-                shape: vec![DYNAMIC_EXTENT, DYNAMIC_EXTENT],
-                dynamic_extents: vec![rows, columns],
+                shape: allocation.copy_slice(&[DYNAMIC_EXTENT, DYNAMIC_EXTENT])?,
+                dynamic_extents: allocation.copy_slice(&[rows, columns])?,
                 memory_space: MemorySpaceAttr::Global,
                 allocation_origin: effect.view.allocation.allocation_origin,
                 noalias_class: effect.view.allocation.noalias_class,
             };
-            operations.push(ProductionRankedOperationV1::ViewInSpace {
+            let (shape, dynamic_extents) = if matches!(allocation,
+                source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+                (view.shape.clone(), view.dynamic_extents.clone())
+            } else {
+                (allocation.copy_slice(&view.shape)?, allocation.copy_slice(&view.dynamic_extents)?)
+            };
+            allocation.push(operations, ProductionRankedOperationV1::ViewInSpace {
                 result,
                 element_width: view.element_width,
                 writable: view.writable,
-                shape: view.shape.clone(),
-                dynamic_extents: view.dynamic_extents.clone(),
+                shape,
+                dynamic_extents,
                 memory_space: view.memory_space,
                 allocation_origin: view.allocation_origin,
                 noalias_class: view.noalias_class,
-            });
-            views.insert(effect.view.root, (effect.view, view));
+            })?;
+            views.insert(function, effects, block_index, effect.view, view, allocation)?;
             (result, rows, columns)
         };
-        let row = project_read_value_to_ranked_v1(
+        let row = project_read_value_to_ranked_core_v18(
             effect.row,
             stable_argument_origins,
             arguments,
             next_argument,
             operations,
             next_value,
+            allocation,
         )?;
-        let column = project_read_value_to_ranked_v1(
+        let column = project_read_value_to_ranked_core_v18(
             effect.column,
             stable_argument_origins,
             arguments,
             next_argument,
             operations,
             next_value,
+            allocation,
         )?;
-        projected.push(Some(GuardedRankedAccessV1 {
+        let access = GuardedRankedAccessV1 {
             view,
-            indices: vec![row, column],
+            indices: allocation.copy_slice(&[row, column])?,
             checked_success: None,
-            comparisons: vec![(row, rows), (column, columns)],
+            comparisons: allocation.copy_slice(&[(row, rows), (column, columns)])?,
             access: AccessKindAttr::Read,
             memory_space: MemorySpaceAttr::Global,
             source: block.terminator().source(),
             output_extent: None,
             semantic_site: None,
-        }));
+        };
+        allocation.push(&mut projected, Some(access))?;
     }
     Ok(projected)
 }
@@ -6110,6 +7978,7 @@ fn charged_unique_capability_successors_v1(
     Ok(successors)
 }
 
+#[cfg(test)]
 fn transfer_capability_statements_v1(
     function: &SemanticFunctionDeclV1,
     block_index: usize,
@@ -6194,6 +8063,7 @@ fn transfer_capability_statements_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn consume_capability_rvalue_operands_v1(
     rvalue: &SemanticRvalueKindV1,
     state: &mut ProjectedCapabilityStateV1,
@@ -6204,6 +8074,7 @@ fn consume_capability_rvalue_operands_v1(
     });
 }
 
+#[cfg(test)]
 fn consume_capability_operand_v1(
     state: &mut ProjectedCapabilityStateV1,
     operand: &SemanticOperandV1,
@@ -6237,6 +8108,7 @@ fn projected_value_is_shared_read_v1(value: &ProjectedCapabilityValueV1) -> bool
     )
 }
 
+#[cfg(test)]
 fn consume_capability_operands_v1(
     state: &mut ProjectedCapabilityStateV1,
     operands: &[SemanticOperandV1],
@@ -6246,16 +8118,19 @@ fn consume_capability_operands_v1(
     }
 }
 
+#[cfg(test)]
 fn invalidate_capability_place_v1(state: &mut ProjectedCapabilityStateV1, place: &SemanticPlaceV1) {
     invalidate_capability_local_v1(state, place.local().index() as usize);
 }
 
+#[cfg(test)]
 fn invalidate_capability_local_v1(state: &mut ProjectedCapabilityStateV1, local: usize) {
     if state.contains_key(&local) {
         state.insert(local, ProjectedCapabilityValueV1::Invalid);
     }
 }
 
+#[cfg(test)]
 fn capability_origin_from_enum_aggregate_v1(
     aggregate: &fe2o3_mir_model::semantic_mir_v1::SemanticAggregateRvalueV1,
     state: &ProjectedCapabilityStateV1,
@@ -6272,6 +8147,7 @@ fn capability_origin_from_enum_aggregate_v1(
         .transpose()
 }
 
+#[cfg(test)]
 fn capability_origin_from_assignment_operand_v1(
     operand: &SemanticOperandV1,
     state: &ProjectedCapabilityStateV1,
@@ -6363,6 +8239,7 @@ fn unwrap_capability_enum_value_v1(
     }
 }
 
+#[cfg(test)]
 fn projected_read_value_v1(
     operand: &SemanticOperandV1,
     constants: &[Option<u64>],
@@ -6372,6 +8249,7 @@ fn projected_read_value_v1(
         .or_else(|| simple_operand_local(operand).map(ProjectedReadValueV1::Local))
 }
 
+#[cfg(test)]
 fn authenticate_strided_read_v1(
     call: &SemanticDirectCallV1,
     state: &ProjectedCapabilityStateV1,
@@ -6419,6 +8297,7 @@ fn gfx950_transpose_profile_v1(
     }
 }
 
+#[cfg(test)]
 fn resolve_gfx950_transpose_tile_v1(
     operand: &SemanticOperandV1,
     state: &ProjectedCapabilityStateV1,
@@ -6452,6 +8331,7 @@ fn resolve_gfx950_transpose_tile_v1(
     candidates.next().is_none().then_some(candidate)
 }
 
+#[cfg(test)]
 fn project_gfx950_transpose_current_v1(
     call: &SemanticDirectCallV1,
     state: &ProjectedCapabilityStateV1,
@@ -6483,6 +8363,7 @@ fn project_gfx950_transpose_current_v1(
     }
 }
 
+#[cfg(test)]
 fn project_gfx950_transpose_stage_v1(
     call: &SemanticDirectCallV1,
     state: &ProjectedCapabilityStateV1,
@@ -6538,6 +8419,7 @@ fn project_gfx950_transpose_stage_v1(
     }
 }
 
+#[cfg(test)]
 fn project_gfx950_transpose_publish_v1(
     call: &SemanticDirectCallV1,
     state: &ProjectedCapabilityStateV1,
@@ -6576,6 +8458,7 @@ fn project_gfx950_transpose_publish_v1(
     }
 }
 
+#[cfg(test)]
 fn project_gfx950_transpose_read_v1(
     call: &SemanticDirectCallV1,
     state: &ProjectedCapabilityStateV1,
@@ -6620,6 +8503,7 @@ fn project_gfx950_transpose_read_v1(
     }
 }
 
+#[cfg(test)]
 fn transfer_capability_terminator_v1(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -7195,6 +9079,7 @@ fn transfer_capability_terminator_v1(
     })
 }
 
+#[cfg(test)]
 fn authenticate_tensor_load_v1(
     call: &SemanticDirectCallV1,
     state: &ProjectedCapabilityStateV1,
@@ -7233,6 +9118,7 @@ fn authenticate_tensor_load_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn project_tensor_load_origin_v1(
     call: &SemanticDirectCallV1,
     state: &ProjectedCapabilityStateV1,
@@ -7250,6 +9136,7 @@ fn project_tensor_load_origin_v1(
     ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(fragment))
 }
 
+#[cfg(test)]
 fn authenticate_tensor_instruction_v1(
     call: &SemanticDirectCallV1,
     state: &ProjectedCapabilityStateV1,
@@ -7280,6 +9167,19 @@ fn authenticate_tensor_instruction_v1(
     else {
         return Err("an MFMA accumulator without dominating zero or compatible prior MFMA");
     };
+    authenticate_tensor_components_v18(context_root, lhs, rhs, accumulator,
+        lhs_contract, rhs_contract, accumulator_contract)
+}
+
+fn authenticate_tensor_components_v18(
+    context_root: u64,
+    lhs: ProjectedMfmaOperandV1,
+    rhs: ProjectedMfmaOperandV1,
+    accumulator: ProjectedMfmaAccumulatorV1,
+    lhs_contract: SemanticMfmaOperandContractV1,
+    rhs_contract: SemanticMfmaOperandContractV1,
+    accumulator_contract: SemanticMfmaAccumulatorContractV1,
+) -> Result<AuthenticatedTensorInstructionV1, &'static str> {
     if lhs.contract != lhs_contract || rhs.contract != rhs_contract {
         return Err("an MFMA call whose operand metadata does not match its exact load producers");
     }
@@ -7430,6 +9330,7 @@ fn tensor_capability_root_v1(kind: u8, words: &[u64]) -> DigestV1 {
     DigestV1::from_untrusted_bytes(digest.finalize().into())
 }
 
+#[cfg(test)]
 fn capability_known_origin_v1(
     state: &ProjectedCapabilityStateV1,
     operand: &SemanticOperandV1,
@@ -7915,6 +9816,19 @@ fn project_generated_terminator_effects_v1(
 #[cfg(test)]
 include!("production_ranked_projection_v1/multi_entry_legacy_wrappers_v1_tests.rs");
 
+fn project_multi_source_site_v18(
+    multi: &mut Option<&mut multi_entry_induction_v1::Context<'_, '_>>,
+    block: usize,
+    statement: Option<usize>,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    match multi.as_deref_mut() {
+        Some(context) => canonical_assertion_facts_v1::project_source_site_v18(
+            context.facts, block, statement,
+        ),
+        None => Ok(true),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn project_intrinsic_contracts_with_multi_entry_v1(
     callables: &[SemanticCallableDeclV1],
@@ -7928,51 +9842,68 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
     ranked_ir: &mut String,
     mut multi: Option<&mut multi_entry_induction_v1::Context<'_, '_>>,
 ) -> Result<IntrinsicProjectionV1, ProductionRankedProjectionErrorV1> {
+    let mut allocation=source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_multi(&mut multi)?;
+    allocation.charge(callables.len())?;
     reject_retired_production_intrinsics_v1(callables)?;
     let local_count = function.locals().len();
-    let mut index_values = vec![None; local_count];
-    let mut grid_leaders = vec![None; local_count];
-    let mut option_predicates = vec![None; local_count];
-    let mut edges_by_source = vec![Vec::new(); local_count];
-    let mut enum_payload_stores = Vec::new();
-    let mut enum_payload_loads = Vec::new();
-    let option_producers = semantic_option_producers_v1(function, callables)
-        .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
-    let option_dominance = SemanticOptionDominanceV1::analyze(function, &option_producers)
-        .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
-    let enum_payload_dominance = SemanticEnumPayloadDominanceV1::analyze(function, types)
-        .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
-    let scalar_inventory = assertion_definition_inventory(function)?;
+    let mut index_values = allocation.optional(local_count)?;
+    let mut grid_leaders = allocation.optional(local_count)?;
+    let mut option_predicates = allocation.optional(local_count)?;
+    let mut edges_by_source = allocation.nested(local_count)?;
+    let mut enum_payload_stores = allocation.empty()?;
+    let mut enum_payload_loads = allocation.empty()?;
+    allocation.header::<(Vec<fe2o3_mir_model::SemanticOptionProducerV1>,SemanticOptionDominanceV1,SemanticEnumPayloadDominanceV1)>()?;
+    let (_option_producers,option_dominance,enum_payload_dominance)=
+        if matches!(allocation,source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+            let producers=semantic_option_producers_v1(function,callables)
+                .map_err(|error|ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
+            let option=SemanticOptionDominanceV1::analyze(function,&producers)
+                .map_err(|error|ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
+            let enums=SemanticEnumPayloadDominanceV1::analyze(function,types)
+                .map_err(|error|ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
+            (producers,option,enums)
+        } else {
+            let (producers,_)=fe2o3_mir_model::semantic_option_producers_with_meter_v18(function,callables,&mut allocation)
+                .map_err(optimized_source_projection_v18::dominance_error_v18)?;
+            let (option,_)=SemanticOptionDominanceV1::analyze_with_meter_v18(function,&producers,&mut allocation)
+                .map_err(optimized_source_projection_v18::dominance_error_v18)?;
+            let (enums,_)=SemanticEnumPayloadDominanceV1::analyze_with_meter_v18(function,types,&mut allocation)
+                .map_err(optimized_source_projection_v18::dominance_error_v18)?;
+            (producers,option,enums)
+        };
+    let scalar_inventory = assertion_definition_inventory_with_allocation_v18(function,&mut allocation)?;
     let LocalProvenanceV1 {
         stable_argument_origins,
         allocation_origins,
         allocation_provenance,
-    } = local_provenance_with_scalar_inventory_v1(
+    } = local_provenance_with_scalar_inventory_core_v18(
         callables,
         types,
         function,
         &scalar_inventory.counts,
         &scalar_inventory.address_escaped,
+        &mut allocation,
     )?;
-    let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
-    let capability_effects = project_authenticated_capabilities_v1(
-        callables,
-        function,
-        &enum_payload_dominance,
-        &local_allocations,
-        constants,
-    )?;
-    let capability_read_effects =
-        bind_capability_read_effects_to_call_blocks_v1(function, &capability_effects.global_reads)?;
+    let local_allocations = local_allocation_contracts_core_v18(
+        types, function, &allocation_origins, &mut allocation)?;
+    let capability_effects = if matches!(allocation,
+        source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        project_authenticated_capabilities_v1(callables, function, &enum_payload_dominance, &local_allocations, constants)?
+    } else {
+        live_capability_driver_v18::project(callables, function, &enum_payload_dominance,
+            &local_allocations, constants, &mut allocation)?
+    };
+    let capability_read_effects = bind_capability_read_effects_core_v18(function,
+        &capability_effects.global_reads, &mut allocation)?;
     let tensor_layouts = capability_effects.layouts;
     let transpose_workgroup_effects = capability_effects.transpose_workgroups;
     let read_view_sources = capability_effects.read_views;
     let mut edge_count = 0_usize;
-    let mut borrowed_locals = Vec::new();
-    let mut runtime_index_arguments = vec![None; local_count];
-    let mut runtime_slice_extent_arguments = vec![None; local_count];
+    let mut borrowed_locals = allocation.empty()?;
+    let mut runtime_index_arguments = allocation.filled(local_count, None)?;
+    let mut runtime_slice_extent_arguments = allocation.filled(local_count, None)?;
     let mut next_runtime_argument = 1_usize;
-    let read_view_effects = project_strided_read_effects_v1(
+    let read_view_effects = project_strided_read_effects_core_v18(
         types,
         function,
         &read_view_sources,
@@ -7981,15 +9912,20 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
         &mut next_runtime_argument,
         operations,
         next_value,
+        &mut allocation,
     )?;
     // Workgroup geometry and the runtime grid domain are independent. The
     // source launch contract authenticates the former; the latter remains
     // dynamic until host launch evidence is joined.
     let launch_extent = 0;
-    let local_definitions = scalar_inventory.counts.clone();
+    let local_definitions = allocation.copy_slice(&scalar_inventory.counts)?;
+    drop(allocation);
 
     for (block_index, block) in function.blocks().iter().enumerate() {
         for (statement_index, statement) in block.statements().iter().enumerate() {
+            if !project_multi_source_site_v18(&mut multi, block_index, Some(statement_index))? {
+                continue;
+            }
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
@@ -8082,6 +10018,9 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
             )?;
         }
 
+        if !project_multi_source_site_v18(&mut multi, block_index, None)? {
+            continue;
+        }
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
@@ -8299,7 +10238,10 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
 
     let mut index_worklist = VecDeque::new();
     let mut grid_worklist = VecDeque::new();
-    for block in function.blocks() {
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        if !project_multi_source_site_v18(&mut multi, block_index, None)? {
+            continue;
+        }
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
@@ -8715,6 +10657,9 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
     let mut direct_read_effects = vec![None; function.blocks().len()];
     let mut direct_write_effects = vec![None; function.blocks().len()];
     for (block_index, block) in function.blocks().iter().enumerate() {
+        if !project_multi_source_site_v18(&mut multi, block_index, None)? {
+            continue;
+        }
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
@@ -9586,8 +11531,11 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
     }
 
     let mut direct_switch_predicates = vec![None; local_count];
-    for block in function.blocks() {
-        for statement in block.statements() {
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        for (statement_index, statement) in block.statements().iter().enumerate() {
+            if !project_multi_source_site_v18(&mut multi, block_index, Some(statement_index))? {
+                continue;
+            }
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
@@ -9667,9 +11615,11 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
         &mut uniform_inductions,
         operations,
         next_value,
-        multi,
+        multi.as_deref_mut(),
     )?;
-    project_induction_body_predicates_v1(
+    {
+    let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_multi(&mut multi)?;
+    project_induction_body_predicates_core_v18(
         types,
         function,
         constants,
@@ -9680,9 +11630,13 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
         &mut next_runtime_argument,
         operations,
         next_value,
+        &mut allocation,
     )?;
-    let projected_switch_predicates =
-        switch_predicates(function, &option_predicates, &direct_switch_predicates)?;
+    }
+    let projected_switch_predicates = match multi.as_deref_mut() {
+        Some(context) => switch_predicates_with_facts_v18(function, &option_predicates, &direct_switch_predicates, context.facts)?,
+        None => switch_predicates(function, &option_predicates, &direct_switch_predicates)?,
+    };
     let deterministic_switches = project_deterministic_scalar_switches_v1(
         types,
         callables,
@@ -10225,7 +12179,7 @@ impl PipelineScalarProjectorV1<'_> {
                 let induction_local = induction.source_progress.induction.index() as usize;
                 if self
                     .assertion_proofs
-                    .address_escaped
+                    .address_escaped()
                     .get(induction_local)
                     .copied()
                     != Some(false)
@@ -10254,7 +12208,7 @@ impl PipelineScalarProjectorV1<'_> {
                 "a pipeline scalar local is outside the semantic local table",
             ),
         )?;
-        if self.assertion_proofs.address_escaped.get(local).copied() != Some(false) {
+        if self.assertion_proofs.address_escaped().get(local).copied() != Some(false) {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a pipeline scalar local has address-escaped value semantics",
             ));
@@ -10262,7 +12216,12 @@ impl PipelineScalarProjectorV1<'_> {
         if let Some(index) = self.index_values.get(local).copied().flatten() {
             return Ok(ProjectedPipelineScalarV1::Value(index.value));
         }
-        match self.assertion_proofs.definition_counts.get(local).copied() {
+        match self
+            .assertion_proofs
+            .definition_counts()
+            .get(local)
+            .copied()
+        {
             Some(0) => {
                 let SemanticLocalRoleV1::Argument(origin) = declaration.role() else {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -10288,7 +12247,7 @@ impl PipelineScalarProjectorV1<'_> {
         }
         let Some(definition) = self
             .assertion_proofs
-            .assignments
+            .assignments()
             .get(local)
             .copied()
             .flatten()
@@ -10345,12 +12304,17 @@ impl PipelineScalarProjectorV1<'_> {
                 "a cached pipeline induction bound is outside the semantic local table",
             ),
         )?;
-        if self.assertion_proofs.address_escaped.get(local).copied() != Some(false) {
+        if self.assertion_proofs.address_escaped().get(local).copied() != Some(false) {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a cached pipeline induction bound has address-escaped value semantics",
             ));
         }
-        match self.assertion_proofs.definition_counts.get(local).copied() {
+        match self
+            .assertion_proofs
+            .definition_counts()
+            .get(local)
+            .copied()
+        {
             Some(0) if matches!(declaration.role(), SemanticLocalRoleV1::Argument(_)) => Ok(()),
             Some(0) => Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a cached pipeline induction bound has no exact definition",
@@ -10358,7 +12322,7 @@ impl PipelineScalarProjectorV1<'_> {
             Some(1) => {
                 let Some(definition) = self
                     .assertion_proofs
-                    .assignments
+                    .assignments()
                     .get(local)
                     .copied()
                     .flatten()
@@ -10401,7 +12365,7 @@ impl PipelineScalarProjectorV1<'_> {
                 "a checked pipeline scalar lacks exact dominating overflow authority",
             ));
         };
-        let kind = match authenticated.checked.operation() {
+        let kind = match authenticated.checked().operation() {
             SemanticCheckedBinaryOpV1::Add => IndexBinaryKindAttr::Add,
             SemanticCheckedBinaryOpV1::Multiply => IndexBinaryKindAttr::Multiply,
             SemanticCheckedBinaryOpV1::Subtract => {
@@ -10410,20 +12374,20 @@ impl PipelineScalarProjectorV1<'_> {
                 ));
             }
         };
-        if !visiting.insert(authenticated.local) {
+        if !visiting.insert(authenticated.local()) {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a checked pipeline scalar expression is cyclic",
             ));
         }
-        let definition = authenticated.definition;
-        let left = self.project_operand(authenticated.checked.left(), definition, visiting);
+        let definition = authenticated.definition();
+        let left = self.project_operand(authenticated.checked().left(), definition, visiting);
         let right = match left {
             Ok(left) => self
-                .project_operand(authenticated.checked.right(), definition, visiting)
+                .project_operand(authenticated.checked().right(), definition, visiting)
                 .map(|right| (left, right)),
             Err(error) => Err(error),
         };
-        visiting.remove(&authenticated.local);
+        visiting.remove(&authenticated.local());
         let (left, right) = right?;
         if !self
             .assertion_proofs
@@ -12162,31 +14126,6 @@ fn bind_optional_induction_preheaders_v1(
     Ok(())
 }
 
-fn tuple_field_operand_local_v1(
-    operand: &SemanticOperandV1,
-    field: u32,
-) -> Option<SemanticLocalIdV1> {
-    let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand else {
-        return None;
-    };
-    matches!(
-        place.projections(),
-        [projection] if projection.kind() == SemanticProjectionKindV1::Field(field)
-    )
-    .then_some(place.local())
-}
-
-fn same_semantic_operand_value_v1(left: &SemanticOperandV1, right: &SemanticOperandV1) -> bool {
-    match (left, right) {
-        (SemanticOperandV1::Constant(left), SemanticOperandV1::Constant(right)) => left == right,
-        (
-            SemanticOperandV1::Copy(left) | SemanticOperandV1::Move(left),
-            SemanticOperandV1::Copy(right) | SemanticOperandV1::Move(right),
-        ) => left == right,
-        _ => false,
-    }
-}
-
 fn source_induction_update_v1<'a>(
     function: &'a SemanticFunctionDeclV1,
     graph: &ProjectedLoopCfgV1,
@@ -12297,8 +14236,8 @@ fn source_induction_update_parts_v1<'a>(
                     "a checked induction overflow assertion does not authenticate its exact Add result and success edge",
                 ));
             };
-            let producer_block = authenticated.definition.block;
-            let producer_statement = authenticated.definition.statement;
+            let producer_block = authenticated.definition().block;
+            let producer_statement = authenticated.definition().statement;
             let SemanticStatementKindV1::Assign(definition) =
                 function.blocks()[producer_block].statements()[producer_statement].kind()
             else {
@@ -12335,7 +14274,7 @@ fn source_induction_update_parts_v1<'a>(
                     "a checked induction producer does not terminate with an assertion",
                 ));
             };
-            if authenticated.assertion_block != producer_block
+            if authenticated.assertion_block() != producer_block
                 || target.target().index() as usize != latch_block
             {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -12370,7 +14309,7 @@ fn source_induction_update_parts_v1<'a>(
         left,
         local_definitions,
         assignment_sites,
-        &assertion_proofs.address_escaped,
+        assertion_proofs.address_escaped(),
         alias_work,
     )?;
     let right_origin = resolve_block_copy_alias_before_v1(
@@ -12379,7 +14318,7 @@ fn source_induction_update_parts_v1<'a>(
         right,
         local_definitions,
         assignment_sites,
-        &assertion_proofs.address_escaped,
+        assertion_proofs.address_escaped(),
         alias_work,
     )?;
     let step = if left_origin == Some(induction) {
@@ -12465,8 +14404,8 @@ fn project_uniform_inductions_with_multi_entry_v1(
 ) -> Result<Vec<ProjectedUniformInductionV1>, ProductionRankedProjectionErrorV1> {
     let graph = projected_loop_cfg_graph_v1(function)?;
     let mut semantic_ranges = SemanticAssertProofsV1::new(types, function)?;
-    let pure_uniform_definitions = semantic_ranges.assignments.clone();
-    let pure_uniform_address_escaped = semantic_ranges.address_escaped.clone();
+    let pure_uniform_definitions = semantic_ranges.assignments().to_vec();
+    let pure_uniform_address_escaped = semantic_ranges.address_escaped().to_vec();
     let mut graph_work = 0_usize;
     let mut alias_work = 0_usize;
     let mut inductions = Vec::new();
@@ -12575,7 +14514,7 @@ fn project_uniform_inductions_with_multi_entry_v1(
                 constants,
                 stable_argument_origins,
                 local_definitions,
-                &semantic_ranges.address_escaped,
+                semantic_ranges.address_escaped(),
             )
         {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -12898,8 +14837,8 @@ fn reconcile_source_progress_with_multi_entry_v1(
         induction_initialization_v1::without_context(function, inductions)?;
     }
     let mut semantic_ranges = SemanticAssertProofsV1::new(types, function)?;
-    let assignment_sites = semantic_ranges.assignments.clone();
-    let address_escaped = semantic_ranges.address_escaped.clone();
+    let assignment_sites = semantic_ranges.assignments().to_vec();
+    let address_escaped = semantic_ranges.address_escaped().to_vec();
     let mut alias_work = 0_usize;
     for induction in inductions.iter() {
         let source = &induction.source_progress;
@@ -13207,7 +15146,7 @@ fn resolve_block_copy_alias_before_v1(
 #[allow(clippy::too_many_arguments)]
 fn resolve_block_copy_alias_before_with_limit_v1(
     function: &SemanticFunctionDeclV1,
-    mut use_site: ScalarAssignmentSiteV1,
+    use_site: ScalarAssignmentSiteV1,
     operand: &SemanticOperandV1,
     local_definitions: &[u8],
     assignment_sites: &[Option<ScalarAssignmentSiteV1>],
@@ -13215,10 +15154,42 @@ fn resolve_block_copy_alias_before_with_limit_v1(
     work: &mut usize,
     work_limit: usize,
 ) -> Result<Option<SemanticLocalIdV1>, ProductionRankedProjectionErrorV1> {
+    resolve_block_copy_alias_before_core_v18(function, use_site, operand, local_definitions,
+        assignment_sites, address_escaped, work, work_limit,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+        .map_err(AliasResolutionErrorV18::original)
+}
+
+enum AliasResolutionErrorV18 {
+    Logical(ProductionRankedProjectionErrorV1),
+    Meter(ProductionRankedProjectionErrorV1),
+}
+
+impl AliasResolutionErrorV18 {
+    fn original(self) -> ProductionRankedProjectionErrorV1 {
+        match self { Self::Logical(error) | Self::Meter(error) => error }
+    }
+}
+
+impl From<ProductionRankedProjectionErrorV1> for AliasResolutionErrorV18 {
+    fn from(error: ProductionRankedProjectionErrorV1) -> Self { Self::Logical(error) }
+}
+
+fn resolve_block_copy_alias_before_core_v18(
+    function: &SemanticFunctionDeclV1,
+    mut use_site: ScalarAssignmentSiteV1,
+    operand: &SemanticOperandV1,
+    local_definitions: &[u8],
+    assignment_sites: &[Option<ScalarAssignmentSiteV1>],
+    address_escaped: &[bool],
+    work: &mut usize,
+    work_limit: usize,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Option<SemanticLocalIdV1>, AliasResolutionErrorV18> {
     let Some(block) = function.blocks().get(use_site.block) else {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "a uniform induction alias use is outside the semantic CFG",
-        ));
+        ).into());
     };
     if use_site.statement > block.statements().len()
         || local_definitions.len() != function.locals().len()
@@ -13227,12 +15198,13 @@ fn resolve_block_copy_alias_before_with_limit_v1(
     {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "uniform induction alias tables or use site are inconsistent",
-        ));
+        ).into());
     }
     let Some(mut current) = simple_operand_local(operand) else {
         return Ok(None);
     };
     loop {
+        allocation.charge(1).map_err(AliasResolutionErrorV18::Meter)?;
         *work = work
             .checked_add(1)
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -13241,13 +15213,13 @@ fn resolve_block_copy_alias_before_with_limit_v1(
         if *work > work_limit {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "uniform induction alias analysis exceeds its work limit",
-            ));
+            ).into());
         }
         let current_index = current.index() as usize;
         if address_escaped.get(current_index).copied() != Some(false) {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a uniform induction alias has address-escaped value semantics",
-            ));
+            ).into());
         }
         if local_definitions.get(current_index).copied() != Some(1) {
             return Ok(Some(current));
@@ -13261,7 +15233,7 @@ fn resolve_block_copy_alias_before_with_limit_v1(
         if definition.statement >= use_site.statement {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a uniform induction operand has a cyclic copy alias",
-            ));
+            ).into());
         }
         let Some(statement) = function
             .blocks()
@@ -13270,17 +15242,17 @@ fn resolve_block_copy_alias_before_with_limit_v1(
         else {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "a uniform induction alias definition is outside the semantic CFG",
-            ));
+            ).into());
         };
         let SemanticStatementKindV1::Assign(alias) = statement.kind() else {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "an indexed uniform induction alias changed semantic kind",
-            ));
+            ).into());
         };
         if !alias.destination().projections().is_empty() || alias.destination().local() != current {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "an indexed uniform induction alias changed destination",
-            ));
+            ).into());
         }
         let SemanticRvalueKindV1::Use(source) = alias.value().kind() else {
             return Ok(Some(current));
@@ -13329,114 +15301,16 @@ fn project_loop_graph_charge_v1(
     Ok(())
 }
 
-fn for_each_projected_loop_successor_v1(
-    function: &SemanticFunctionDeclV1,
-    kind: &SemanticTerminatorKindV1,
-    mut visit: impl FnMut(usize) -> Result<(), ProductionRankedProjectionErrorV1>,
-) -> Result<(), ProductionRankedProjectionErrorV1> {
-    let mut checked_target = |target: SemanticBlockIdV1| {
-        let target = target.index() as usize;
-        if target >= function.blocks().len() {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "a semantic CFG edge outside the function during loop analysis",
-            ));
-        }
-        visit(target)
-    };
-    match kind {
-        SemanticTerminatorKindV1::Goto(edge) => checked_target(edge.target())?,
-        SemanticTerminatorKindV1::SwitchInt { targets, .. } => {
-            for target in targets.values() {
-                checked_target(target.edge().target())?;
-            }
-            let otherwise = targets.otherwise().target().index() as usize;
-            if otherwise >= function.blocks().len() {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a semantic CFG edge outside the function during loop analysis",
-                ));
-            }
-            if !(targets.values().len() == 2
-                && targets.values().iter().any(|target| target.value() == 0)
-                && targets.values().iter().any(|target| target.value() == 1)
-                && switch_fallback_is_empty_unreachable_v1(function, otherwise))
-            {
-                checked_target(targets.otherwise().target())?;
-            }
-        }
-        SemanticTerminatorKindV1::Call(call) => {
-            if let Some(destination) = call.destination() {
-                checked_target(destination.edge().target())?;
-            }
-        }
-        SemanticTerminatorKindV1::Assert { target, .. }
-        | SemanticTerminatorKindV1::Drop { target, .. } => checked_target(target.target())?,
-        SemanticTerminatorKindV1::FalseEdge { .. } => {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a false edge before uniform induction CFG normalization",
-            ));
-        }
-        SemanticTerminatorKindV1::Return
-        | SemanticTerminatorKindV1::TailCall(_)
-        | SemanticTerminatorKindV1::UnwindResume
-        | SemanticTerminatorKindV1::UnwindTerminate
-        | SemanticTerminatorKindV1::Abort
-        | SemanticTerminatorKindV1::Unreachable => {}
-    }
-    Ok(())
-}
-
 fn projected_loop_cfg_graph_v1(
     function: &SemanticFunctionDeclV1,
 ) -> Result<ProjectedLoopCfgV1, ProductionRankedProjectionErrorV1> {
-    let block_count = function.blocks().len();
-    if block_count == 0 || block_count > MAX_RANKED_BOUNDS_BLOCKS {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "semantic CFG exceeds the ranked block limit before loop analysis",
-        ));
-    }
-    let mut successors = Vec::with_capacity(block_count);
-    let mut edge_count = 0_usize;
-    for block in function.blocks() {
-        let mut block_successors = Vec::new();
-        for_each_projected_loop_successor_v1(function, block.terminator().kind(), |target| {
-            block_successors.push(target);
-            Ok(())
-        })?;
-        block_successors.sort_unstable();
-        block_successors.dedup();
-        edge_count = edge_count.checked_add(block_successors.len()).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "semantic CFG edge count overflow during loop analysis",
-            ),
-        )?;
-        if edge_count > MAX_RANKED_BOUNDS_EDGES {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "semantic CFG exceeds the ranked edge limit before loop analysis",
-            ));
-        }
-        successors.push(block_successors);
-    }
-    let mut predecessors = vec![Vec::new(); block_count];
-    for (source, targets) in successors.iter().enumerate() {
-        for &target in targets {
-            predecessors[target].push(source);
-        }
-    }
-    let entry = function.entry().index() as usize;
-    if entry >= block_count {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "semantic entry block outside the function during loop analysis",
-        ));
-    }
-    let mut reachable = vec![false; block_count];
-    let mut pending = vec![entry];
-    while let Some(block) = pending.pop() {
-        if reachable[block] {
-            continue;
-        }
-        reachable[block] = true;
-        pending.extend(successors[block].iter().copied());
-    }
+    let graph = neutral_assertion::semantic_assertion_cfg_metered_v1(
+        function,
+        assertion_compatibility_limits_v1(),
+        &mut AssertionCompatibilityMeterV1::new(&mut 0),
+    )
+    .map_err(assertion_projection_error_v1)?;
+    let (successors, predecessors, reachable, entry) = graph.into_parts();
     Ok(ProjectedLoopCfgV1 {
         successors,
         predecessors,
@@ -13444,112 +15318,27 @@ fn projected_loop_cfg_graph_v1(
         entry,
     })
 }
-
 fn projected_loop_cfg_graph_paid_v1(
     function: &SemanticFunctionDeclV1,
     context: &mut induction_initialization_v1::Context<'_, '_>,
 ) -> Result<ProjectedLoopCfgV1, ProductionRankedProjectionErrorV1> {
-    use induction_initialization_v1::{Resource, resource, sum};
-    context.charge(4)?;
-    let count = function.blocks().len();
-    if count == 0 || count > MAX_RANKED_BOUNDS_BLOCKS {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "semantic CFG exceeds the ranked block limit before loop analysis",
-        ));
-    }
-    context.reserve(sum(
-        std::mem::size_of::<ProjectedLoopCfgV1>(),
-        std::mem::size_of::<Vec<usize>>()
-            .checked_mul(3)
-            .ok_or_else(|| resource(Resource::Arithmetic))?,
-    )?)?;
-    let mut successors = context.backing::<Vec<usize>>(count)?;
-    let mut predecessors = context.backing::<Vec<usize>>(count)?;
-    let mut degree = context.backing::<usize>(count)?;
-    context.charge(count)?;
-    degree.resize(count, 0);
-    let mut edges = 0usize;
-    for block in function.blocks() {
-        context.charge(2)?;
-        let mut capacity = 0usize;
-        for_each_projected_loop_successor_v1(function, block.terminator().kind(), |_| {
-            context.charge(2)?;
-            capacity = sum(capacity, 1)?;
-            Ok(())
-        })?;
-        let mut row = context.backing::<usize>(capacity)?;
-        for_each_projected_loop_successor_v1(function, block.terminator().kind(), |target| {
-            context.charge(2)?;
-            if row.len() == row.capacity() {
-                return Err(resource(Resource::Accounting));
-            }
-            row.push(target);
-            Ok(())
-        })?;
-        let logarithm = sum(1, usize::BITS as usize - row.len().leading_zeros() as usize)?;
-        context.charge(
-            row.len()
-                .checked_mul(logarithm)
-                .ok_or_else(|| resource(Resource::Arithmetic))?,
-        )?;
-        row.sort_unstable();
-        row.dedup();
-        edges = sum(edges, row.len())?;
-        if edges > MAX_RANKED_BOUNDS_EDGES {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "semantic CFG exceeds the ranked edge limit before loop analysis",
-            ));
+    struct Meter<'a, 'b, 'c>(&'a mut induction_initialization_v1::Context<'b, 'c>);
+    impl neutral_assertion::SemanticAssertionMeterV1 for Meter<'_, '_, '_> {
+        type Error = ProductionRankedProjectionErrorV1;
+        fn charge_work(&mut self, amount: usize) -> Result<(), Self::Error> {
+            self.0.charge(amount)
         }
-        for &target in &row {
-            context.charge(2)?;
-            degree[target] = sum(degree[target], 1)?;
-        }
-        successors.push(row);
-    }
-    for &size in &degree {
-        context.charge(1)?;
-        predecessors.push(context.backing::<usize>(size)?);
-    }
-    for (source, targets) in successors.iter().enumerate() {
-        context.charge(1)?;
-        for &target in targets {
-            context.charge(2)?;
-            if predecessors[target].len() == predecessors[target].capacity() {
-                return Err(resource(Resource::Accounting));
-            }
-            predecessors[target].push(source);
+        fn reserve_storage(&mut self, bytes: usize) -> Result<(), Self::Error> {
+            self.0.reserve(bytes)
         }
     }
-    let entry = function.entry().index() as usize;
-    if entry >= count {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "semantic entry block outside the function during loop analysis",
-        ));
-    }
-    let mut reachable = context.backing::<bool>(count)?;
-    let mut pending = context.backing::<usize>(count)?;
-    context.charge(sum(count, 1)?)?;
-    reachable.resize(count, false);
-    reachable[entry] = true;
-    pending.push(entry);
-    while !pending.is_empty() {
-        context.charge(2)?;
-        let block = pending
-            .pop()
-            .ok_or_else(|| resource(Resource::Accounting))?;
-        for &target in &successors[block] {
-            context.charge(3)?;
-            if !reachable[target] {
-                if pending.len() == pending.capacity() {
-                    return Err(resource(Resource::Accounting));
-                }
-                reachable[target] = true;
-                pending.push(target);
-            }
-        }
-    }
-    // Caller owns this graph inside a paid temporary scope. Degree/pending
-    // backing also stays charged until both have been destroyed here.
+    let graph = neutral_assertion::semantic_assertion_cfg_metered_v1(
+        function,
+        assertion_compatibility_limits_v1(),
+        &mut Meter(context),
+    )
+    .map_err(assertion_projection_error_v1)?;
+    let (successors, predecessors, reachable, entry) = graph.into_parts();
     Ok(ProjectedLoopCfgV1 {
         successors,
         predecessors,
@@ -13557,184 +15346,178 @@ fn projected_loop_cfg_graph_paid_v1(
         entry,
     })
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct UnsignedRangeProofV1 {
-    minimum: u128,
-    maximum: u128,
-}
-
-impl UnsignedRangeProofV1 {
-    const fn exact(value: u128) -> Self {
-        Self {
-            minimum: value,
-            maximum: value,
-        }
-    }
-
-    const fn is_exact(self, value: u128) -> bool {
-        self.minimum == value && self.maximum == value
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ScalarAssignmentSiteV1 {
-    block: usize,
-    statement: usize,
-}
-
-enum AssertionRangeOperandTaskV1 {
-    Constant {
-        ty: SemanticTypeIdV1,
-        bits: Option<u128>,
-    },
-    Local(usize),
-    CheckedResult {
-        local: usize,
-    },
-    ProjectedPlace(SemanticPlaceV1),
-}
-
-enum AssertionRangeExpressionTaskV1 {
-    Operand(AssertionRangeOperandTaskV1),
-    Binary {
-        operation: SemanticBinaryOpV1,
-        destination_maximum: Option<u128>,
-        left: AssertionRangeOperandTaskV1,
-        right: AssertionRangeOperandTaskV1,
-        left_source: SemanticOperandV1,
-        right_source: SemanticOperandV1,
-    },
-    Unsupported,
-}
-
-struct AssertionStrictUpperBoundStateV1 {
-    local: usize,
-    use_block: usize,
-    next_switch_block: usize,
-    range: Option<UnsignedRangeProofV1>,
-    can_reach_use: Vec<bool>,
-    stability_visited: Vec<usize>,
-    stability_pending: VecDeque<usize>,
-    stability_generation: usize,
-    proven_upper_bound: Option<u128>,
-}
-
-enum AssertionRangeFrameV1 {
-    Operand {
-        task: AssertionRangeOperandTaskV1,
-        use_site: ScalarAssignmentSiteV1,
-    },
-    FinishBinary {
-        operation: SemanticBinaryOpV1,
-        destination_maximum: Option<u128>,
-        left_source: SemanticOperandV1,
-        right_source: SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-    },
-    FinishCheckedResult {
-        local: usize,
-        relational_range: Option<UnsignedRangeProofV1>,
-    },
-    FinishProjectedPlace {
-        local: usize,
-    },
-    FinishLocalDefinition {
-        local: usize,
-        use_block: usize,
-        maximum: u128,
-    },
-    ContinueStrictUpperBound(AssertionStrictUpperBoundStateV1),
-    ApplyStrictUpperBoundCandidate {
-        state: AssertionStrictUpperBoundStateV1,
-        switch_block: usize,
-        success_target: usize,
-    },
-}
-
-fn push_assertion_range_frame_v1(
-    frames: &mut Vec<AssertionRangeFrameV1>,
-    frame: AssertionRangeFrameV1,
-) -> Result<(), ProductionRankedProjectionErrorV1> {
-    frames.try_reserve(1).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "assertion range evaluator frame storage cannot be reserved",
-        )
-    })?;
-    frames.push(frame);
-    Ok(())
-}
-
-fn push_assertion_range_value_v1(
-    values: &mut Vec<Option<UnsignedRangeProofV1>>,
-    value: Option<UnsignedRangeProofV1>,
-) -> Result<(), ProductionRankedProjectionErrorV1> {
-    values.try_reserve(1).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "assertion range evaluator value storage cannot be reserved",
-        )
-    })?;
-    values.push(value);
-    Ok(())
-}
-
-fn pop_assertion_range_value_v1(
-    values: &mut Vec<Option<UnsignedRangeProofV1>>,
-) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
-    values
-        .pop()
-        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "assertion range evaluator result stack is inconsistent",
-        ))
-}
-
-#[derive(Clone, Debug)]
-struct AuthenticatedCheckedBinaryValueV1 {
-    local: usize,
-    definition: ScalarAssignmentSiteV1,
-    assertion_block: usize,
-    checked: SemanticCheckedBinaryRvalueV1,
-}
-
-#[derive(Clone, Debug)]
-struct AuthenticatedScaledQuotientRemainderV1 {
-    divisor: SemanticOperandV1,
-    divisor_use: ScalarAssignmentSiteV1,
-    extent: SemanticOperandV1,
-    extent_use: ScalarAssignmentSiteV1,
-    scale: SemanticOperandV1,
-    scale_use: ScalarAssignmentSiteV1,
-    offset: SemanticOperandV1,
-    offset_use: ScalarAssignmentSiteV1,
-}
-
-#[derive(Clone, Debug)]
-struct AuthenticatedQuotientStrictBoundV1 {
-    maximum: u128,
-    factor: SemanticOperandV1,
-    factor_use: ScalarAssignmentSiteV1,
-}
-
 struct AssertionDefinitionInventoryV1 {
     counts: Vec<u8>,
-    blocks: Vec<Vec<usize>>,
     assignments: Vec<Option<ScalarAssignmentSiteV1>>,
     address_escaped: Vec<bool>,
 }
+fn assertion_definition_inventory(
+    function: &SemanticFunctionDeclV1,
+) -> Result<AssertionDefinitionInventoryV1, ProductionRankedProjectionErrorV1> {
+    let inventory = neutral_assertion::semantic_assertion_inventory_metered_v1(
+        function,
+        assertion_compatibility_limits_v1(),
+        &mut AssertionCompatibilityMeterV1::new(&mut 0),
+    )
+    .map_err(assertion_projection_error_v1)?;
+    let (counts, _, assignments, address_escaped) = inventory.into_parts();
+    Ok(AssertionDefinitionInventoryV1 {
+        counts,
+        assignments,
+        address_escaped,
+    })
+}
 
+fn assertion_definition_inventory_with_allocation_v18(
+    function: &SemanticFunctionDeclV1,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<AssertionDefinitionInventoryV1, ProductionRankedProjectionErrorV1> {
+    if matches!(allocation,source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        return assertion_definition_inventory(function);
+    }
+    allocation.header::<AssertionDefinitionInventoryV1>()?;
+    let inventory=neutral_assertion::semantic_assertion_inventory_live_v18(
+        function,assertion_compatibility_limits_v1(),allocation).map_err(assertion_projection_error_v1)?;
+    let (counts,_,assignments,address_escaped)=inventory.into_parts();
+    Ok(AssertionDefinitionInventoryV1 {counts,assignments,address_escaped})
+}
+
+// Legacy recipe compatibility only; source admission consumes neutral borrowed facts.
+use fe2o3_mir_model::semantic_assertion_v1 as neutral_assertion;
+use neutral_assertion::{
+    AuthenticatedCheckedBinaryValueV1, ScalarAssignmentSiteV1, UnsignedRangeProofV1,
+};
+#[cfg(test)]
+use neutral_assertion::{
+    AuthenticatedQuotientStrictBoundV1, AuthenticatedScaledQuotientRemainderV1,
+    SemanticAssertionMeterV1 as _,
+};
+
+fn assertion_compatibility_limits_v1() -> neutral_assertion::SemanticAssertionLimitsV1 {
+    // Explicit unbounded compatibility setting, not a live-storage guarantee.
+    neutral_assertion::SemanticAssertionLimitsV1::new(usize::MAX, usize::MAX)
+}
+struct AssertionCompatibilityMeterV1<'a> {
+    work: &'a mut usize,
+    total_work: usize,
+    storage: usize,
+    source: Option<&'a dyn SourceScalarResolverLeavesV18>,
+}
+impl<'a> AssertionCompatibilityMeterV1<'a> {
+    fn new(work: &'a mut usize) -> Self {
+        Self {
+            work,
+            total_work: 0,
+            storage: 0,
+            source: None,
+        }
+    }
+    fn with_source(mut self, source: Option<&'a dyn SourceScalarResolverLeavesV18>) -> Self {
+        self.source = source;
+        self
+    }
+}
+impl neutral_assertion::SemanticAssertionMeterV1 for AssertionCompatibilityMeterV1<'_> {
+    type Error = ProductionRankedProjectionErrorV1;
+    fn charge_work(&mut self, amount: usize) -> Result<(), Self::Error> {
+        if let Some(source) = self.source {
+            source.work(amount).map_err(ProductionRankedProjectionErrorV1::Unsupported)?;
+        }
+        self.total_work = self.total_work.checked_add(amount).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "semantic assertion total-work overflow",
+            ),
+        )?;
+        Ok(())
+    }
+    fn reserve_storage(&mut self, amount: usize) -> Result<(), Self::Error> {
+        if let Some(source) = self.source {
+            source.reserve(amount).map_err(ProductionRankedProjectionErrorV1::Unsupported)?;
+        }
+        self.storage = self.storage.checked_add(amount).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported("semantic assertion capacity overflow"),
+        )?;
+        Ok(())
+    }
+    fn charge_legacy_work(&mut self, amount: usize) -> Result<(), Self::Error> {
+        self.charge_work(amount)?;
+        project_loop_graph_charge_v1(self.work, amount)
+    }
+    fn charge_legacy_scan_work(&mut self, amount: usize) -> Result<(), Self::Error> {
+        self.charge_work(amount)?;
+        charge_statement_scan_equivalent_v1(self.work, amount)
+    }
+}
+#[cfg(test)]
+#[test]
+fn assertion_legacy_bulk_and_scan_diagnostics_do_not_discount_total_work() {
+    let mut bulk_visits = MAX_PROJECTED_LOOP_GRAPH_WORK_V1 - 1;
+    let mut scan_visits = MAX_PROJECTED_LOOP_GRAPH_WORK_V1 - 1;
+    let mut bulk = AssertionCompatibilityMeterV1::new(&mut bulk_visits);
+    let mut scan = AssertionCompatibilityMeterV1::new(&mut scan_visits);
+    assert!(bulk.charge_legacy_work(3).is_err());
+    assert!(scan.charge_legacy_scan_work(3).is_err());
+    assert_eq!(bulk.total_work, 3);
+    assert_eq!(scan.total_work, 3);
+    assert_eq!(*bulk.work, MAX_PROJECTED_LOOP_GRAPH_WORK_V1 + 2);
+    assert_eq!(*scan.work, MAX_PROJECTED_LOOP_GRAPH_WORK_V1 + 1);
+}
+
+fn assertion_projection_error_v1(
+    error: neutral_assertion::SemanticAssertionMeteredErrorV1<ProductionRankedProjectionErrorV1>,
+) -> ProductionRankedProjectionErrorV1 {
+    use neutral_assertion::{
+        SemanticAssertionErrorV1 as Local, SemanticAssertionMeteredErrorV1 as Error,
+    };
+    match error {
+        Error::Meter(error) => error,
+        Error::Analysis(Local::Unsupported(detail) | Local::InvalidModel(detail)) => {
+            ProductionRankedProjectionErrorV1::Unsupported(detail)
+        }
+        Error::Analysis(Local::Incomplete(detail)) => {
+            ProductionRankedProjectionErrorV1::Incomplete(detail)
+        }
+        Error::Analysis(Local::LogicalVisitLimit { .. }) => {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "uniform induction CFG analysis exceeds its work limit",
+            )
+        }
+        Error::Analysis(_) => ProductionRankedProjectionErrorV1::Unsupported(
+            "semantic assertion analysis resource limit or accounting failure",
+        ),
+    }
+}
 struct SemanticAssertProofsV1<'a> {
     types: &'a [SemanticTypeDeclV1],
     function: &'a SemanticFunctionDeclV1,
-    graph: ProjectedLoopCfgV1,
-    definition_counts: Vec<u8>,
-    block_definitions: Vec<Vec<usize>>,
-    address_escaped: Vec<bool>,
-    assignments: Vec<Option<ScalarAssignmentSiteV1>>,
-    checked_assertion_blocks: Vec<Vec<usize>>,
-    statement_definitions: Option<StatementDefinitionIndexV1>,
-    dominance: HashMap<(usize, usize), bool>,
-    zero_exclusion: HashMap<(usize, usize), bool>,
+    core: neutral_assertion::SemanticAssertionAnalysisV1<'a>,
+    // Historical visit diagnostics only. Actual work is additionally metered.
     work: usize,
+    scan_only: bool,
+    source: Option<&'a dyn SourceScalarResolverLeavesV18>,
+}
+
+struct LiveAssertionCompatibilityMeterV18<'m, 'b> {
+    work: &'m mut usize,
+    allocation: &'m mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'b>,
+}
+
+impl neutral_assertion::SemanticAssertionMeterV1 for LiveAssertionCompatibilityMeterV18<'_, '_> {
+    type Error = ProductionRankedProjectionErrorV1;
+    fn charge_work(&mut self, amount: usize) -> Result<(), Self::Error> {
+        self.allocation.charge(amount)
+    }
+    fn reserve_storage(&mut self, amount: usize) -> Result<(), Self::Error> {
+        neutral_assertion::SemanticAssertionMeterV1::reserve_storage(self.allocation, amount)
+    }
+    fn charge_legacy_work(&mut self, amount: usize) -> Result<(), Self::Error> {
+        self.allocation.charge(amount)?;
+        project_loop_graph_charge_v1(self.work, amount)
+    }
+    fn charge_legacy_scan_work(&mut self, amount: usize) -> Result<(), Self::Error> {
+        self.allocation.charge(amount)?;
+        charge_statement_scan_equivalent_v1(self.work, amount)
+    }
 }
 
 impl<'a> SemanticAssertProofsV1<'a> {
@@ -13742,43 +15525,144 @@ impl<'a> SemanticAssertProofsV1<'a> {
         types: &'a [SemanticTypeDeclV1],
         function: &'a SemanticFunctionDeclV1,
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
-        let graph = projected_loop_cfg_graph_v1(function)?;
-        let inventory = assertion_definition_inventory(function)?;
-        let mut checked_assertion_blocks = vec![Vec::new(); function.locals().len()];
-        for (block_index, block) in function.blocks().iter().enumerate() {
-            let SemanticTerminatorKindV1::Assert { condition, .. } = block.terminator().kind()
-            else {
-                continue;
-            };
-            let Some(local) = tuple_field_operand_local_v1(condition, 1) else {
-                continue;
-            };
-            let Some(blocks) = checked_assertion_blocks.get_mut(local.index() as usize) else {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a checked arithmetic assertion is outside the semantic local table",
-                ));
-            };
-            blocks.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "checked arithmetic assertion storage cannot be reserved",
-                )
-            })?;
-            blocks.push(block_index);
-        }
+        Self::new_with_source_v18(types, function, None)
+    }
+    fn new_with_source_v18(
+        types: &'a [SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+        source: Option<&'a dyn SourceScalarResolverLeavesV18>,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        let mut work = 0;
+        let core = neutral_assertion::SemanticAssertionAnalysisV1::new_metered(
+            types,
+            function,
+            assertion_compatibility_limits_v1(),
+            &mut AssertionCompatibilityMeterV1::new(&mut work).with_source(source),
+        )
+        .map_err(assertion_projection_error_v1)?;
         Ok(Self {
             types,
             function,
-            graph,
-            definition_counts: inventory.counts,
-            block_definitions: inventory.blocks,
-            address_escaped: inventory.address_escaped,
-            assignments: inventory.assignments,
-            checked_assertion_blocks,
-            statement_definitions: None,
-            dominance: HashMap::new(),
-            zero_exclusion: HashMap::new(),
-            work: 0,
+            core,
+            work,
+            scan_only: false,
+            source,
         })
+    }
+
+    fn new_live_v18(
+        types: &'a [SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+        allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete("live assertion analysis lost its source meter"));
+        }
+        // The neutral constructor pays its inline core header. The facade
+        // adds only its non-core fields, result frame and compatibility meter.
+        let facade = std::mem::size_of::<Self>()
+            .checked_sub(std::mem::size_of::<neutral_assertion::SemanticAssertionAnalysisV1<'_>>())
+            .ok_or_else(|| source_ranked_consumer_resources_v18::resource(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting))?;
+        neutral_assertion::SemanticAssertionMeterV1::reserve_storage(allocation, facade)?;
+        allocation.header::<Result<Self, ProductionRankedProjectionErrorV1>>()?;
+        allocation.header::<LiveAssertionCompatibilityMeterV18<'_, '_>>()?;
+        let mut work = 0;
+        let core = neutral_assertion::SemanticAssertionAnalysisV1::new_live_v18(
+            types, function, assertion_compatibility_limits_v1(),
+            &mut LiveAssertionCompatibilityMeterV18 { work: &mut work, allocation },
+        ).map_err(assertion_projection_error_v1)?;
+        Ok(Self { types, function, core, work, scan_only: false, source: None })
+    }
+
+    fn analyze_live_v18(
+        types: &'a [SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+        allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
+        if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+            return Self::analyze(types, function);
+        }
+        let mut proof = Self::new_live_v18(types, function, allocation)?;
+        allocation.header::<LiveAssertionCompatibilityMeterV18<'_, '_>>()?;
+        let outcomes = proof.core.legacy_recipe_assertions_live_v18(false,
+            &mut LiveAssertionCompatibilityMeterV18 { work: &mut proof.work, allocation })
+            .map_err(assertion_projection_error_v1)?;
+        let mut rows = allocation.capacity(outcomes.len())?;
+        for outcome in outcomes {
+            allocation.push(&mut rows, matches!(outcome,
+                neutral_assertion::SemanticAssertionLegacyDispositionV1::Proved
+                | neutral_assertion::SemanticAssertionLegacyDispositionV1::BoundsDeferred))?;
+        }
+        Ok(rows)
+    }
+
+    fn assignment_dominates_use_live_v18(
+        &mut self,
+        definition: ScalarAssignmentSiteV1,
+        use_block: usize,
+        use_statement: usize,
+        allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+            || self.scan_only || self.source.is_some()
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete("live body-predicate proof changed its query mode"));
+        }
+        allocation.header::<LiveAssertionCompatibilityMeterV18<'_, '_>>()?;
+        let mut meter = LiveAssertionCompatibilityMeterV18 { work: &mut self.work, allocation };
+        self.core.recipe_queries_live_v18(&mut meter)
+            .map_err(assertion_projection_error_v1)?
+            .assignment_dominates_use(definition, use_block, use_statement)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    fn block_dominates_live_v18(
+        &mut self,
+        dominator: usize,
+        block: usize,
+        allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+            || self.scan_only || self.source.is_some()
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete("live fixed-array proof changed its query mode"));
+        }
+        allocation.header::<LiveAssertionCompatibilityMeterV18<'_, '_>>()?;
+        let mut meter = LiveAssertionCompatibilityMeterV18 { work: &mut self.work, allocation };
+        self.core.recipe_queries_live_v18(&mut meter)
+            .map_err(assertion_projection_error_v1)?
+            .block_dominates(dominator, block)
+            .map_err(assertion_projection_error_v1)
+    }
+    fn definition_counts(&self) -> &[u8] {
+        self.core.definition_counts()
+    }
+    fn address_escaped(&self) -> &[bool] {
+        self.core.address_escaped()
+    }
+    fn assignments(&self) -> &[Option<ScalarAssignmentSiteV1>] {
+        self.core.assignments()
+    }
+    fn graph(&self) -> &neutral_assertion::SemanticAssertionCfgV1 {
+        self.core.graph()
+    }
+    fn enable_statement_index_v1(&mut self) -> Result<(), ProductionRankedProjectionErrorV1> {
+        self.core
+            .enable_statement_index_v1(&mut AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source))
+            .map_err(assertion_projection_error_v1)
+    }
+    #[cfg(test)]
+    fn force_statement_scan_for_test_v1(&mut self) {
+        self.scan_only = true;
+    }
+    #[cfg(test)]
+    fn has_statement_index_for_test_v1(&self) -> bool {
+        !self.scan_only && self.core.has_statement_index_v1()
+    }
+    #[cfg(test)]
+    fn seed_legacy_visits_for_test_v1(&mut self, visits: usize) {
+        self.work = visits;
     }
 
     fn analyze(
@@ -13786,76 +15670,81 @@ impl<'a> SemanticAssertProofsV1<'a> {
         function: &'a SemanticFunctionDeclV1,
     ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
         let mut proof = Self::new(types, function)?;
-        let mut proved = vec![false; function.blocks().len()];
-        for (block_index, block) in function.blocks().iter().enumerate() {
-            let SemanticTerminatorKindV1::Assert {
-                condition,
-                expected,
-                message,
-                ..
-            } = block.terminator().kind()
-            else {
-                continue;
-            };
-            if matches!(message, SemanticAssertMessageV1::BoundsCheck { .. }) {
-                proved[block_index] = true;
-                continue;
-            }
-            if proof.proves_literal_shift_assert_v1(condition, *expected, message, block_index)? {
-                proved[block_index] = true;
-                continue;
-            }
-            if proof.proves_checked_overflow_assert_v1(
-                condition,
-                *expected,
-                message,
-                block_index,
-            )? {
-                proved[block_index] = true;
-                continue;
-            }
-            proved[block_index] = proof
-                .range_at_operand(condition, block_index, block.statements().len())?
-                .is_some_and(|range| range.is_exact(u128::from(*expected)));
-        }
-        Ok(proved)
+        let outcomes = proof
+            .core
+            .legacy_recipe_assertions_v1(
+                false,
+                &mut AssertionCompatibilityMeterV1::new(&mut proof.work).with_source(proof.source),
+            )
+            .map_err(assertion_projection_error_v1)?;
+        Ok(outcomes
+            .into_iter()
+            .map(|outcome| {
+                matches!(
+                    outcome,
+                    neutral_assertion::SemanticAssertionLegacyDispositionV1::Proved
+                        | neutral_assertion::SemanticAssertionLegacyDispositionV1::BoundsDeferred
+                )
+            })
+            .collect())
     }
-
+    #[cfg(test)]
     fn analyze_defined_callable_asserts_v1(
         types: &'a [SemanticTypeDeclV1],
         function: &'a SemanticFunctionDeclV1,
     ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
         let mut proof = Self::new(types, function)?;
-        let mut proved = vec![false; function.blocks().len()];
-        for (block_index, block) in function.blocks().iter().enumerate() {
-            let SemanticTerminatorKindV1::Assert {
-                condition,
-                expected,
-                message,
-                ..
-            } = block.terminator().kind()
-            else {
-                continue;
-            };
-            let literal_shift =
-                proof.proves_literal_shift_assert_v1(condition, *expected, message, block_index)?;
-            proved[block_index] = literal_shift
-                || match message {
-                    SemanticAssertMessageV1::Overflow { .. } => proof
-                        .proves_checked_overflow_assert_v1(
-                            condition,
-                            *expected,
-                            message,
-                            block_index,
-                        )?,
-                    _ => proof
-                        .range_at_operand(condition, block_index, block.statements().len())?
-                        .is_some_and(|range| range.is_exact(u128::from(*expected))),
-                };
-        }
-        Ok(proved)
+        let outcomes = proof
+            .core
+            .legacy_recipe_assertions_v1(
+                true,
+                &mut AssertionCompatibilityMeterV1::new(&mut proof.work).with_source(proof.source),
+            )
+            .map_err(assertion_projection_error_v1)?;
+        Ok(outcomes
+            .into_iter()
+            .map(|outcome| {
+                outcome == neutral_assertion::SemanticAssertionLegacyDispositionV1::Proved
+            })
+            .collect())
     }
-
+    fn legacy_rule_v1(
+        &mut self,
+        condition: &SemanticOperandV1,
+        expected: bool,
+        message: &SemanticAssertMessageV1,
+        block: usize,
+        rule: neutral_assertion::SemanticAssertionLegacyRuleV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let Some(body) = self.function.blocks().get(block) else {
+            return Ok(false);
+        };
+        let SemanticTerminatorKindV1::Assert {
+            condition: actual,
+            expected: polarity,
+            message: actual_message,
+            ..
+        } = body.terminator().kind()
+        else {
+            return Ok(false);
+        };
+        if condition != actual || expected != *polarity || message != actual_message {
+            return Ok(false);
+        }
+        let block = u32::try_from(block).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported("legacy assertion block overflow")
+        })?;
+        let outcome = self
+            .core
+            .legacy_assertion_rule_v1(
+                SemanticBlockIdV1::from_index(block),
+                rule,
+                &mut AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source),
+            )
+            .map_err(assertion_projection_error_v1)?;
+        Ok(outcome == neutral_assertion::SemanticAssertionLegacyDispositionV1::Proved)
+    }
+    #[cfg(test)]
     fn proves_literal_shift_assert_v1(
         &mut self,
         condition: &SemanticOperandV1,
@@ -13863,151 +15752,14 @@ impl<'a> SemanticAssertProofsV1<'a> {
         message: &SemanticAssertMessageV1,
         block: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if !expected {
-            return Ok(false);
-        }
-        let SemanticAssertMessageV1::Overflow {
-            operation,
-            left: message_left,
-            right: message_right,
-        } = message
-        else {
-            return Ok(false);
-        };
-        if !matches!(
-            operation,
-            SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
-        ) {
-            return Ok(false);
-        }
-        let Some(bit_width) = self
-            .types
-            .get(message_left.ty().index() as usize)
-            .and_then(|ty| match ty.shape() {
-                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { bits, .. }) => {
-                    Some(*bits)
-                }
-                _ => None,
-            })
-        else {
-            return Ok(false);
-        };
-        let Some(message_shift_bits) = self
-            .types
-            .get(message_right.ty().index() as usize)
-            .and_then(|ty| match ty.shape() {
-                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
-                    signed: true,
-                    bits,
-                }) => Some(*bits),
-                _ => None,
-            })
-        else {
-            return Ok(false);
-        };
-        let SemanticOperandV1::Constant(message_shift) = message_right else {
-            return Ok(false);
-        };
-        let SemanticConstantValueV1::Scalar(message_shift) = message_shift.value() else {
-            return Ok(false);
-        };
-        if message_shift.bits() >= u128::from(bit_width) {
-            return Ok(false);
-        }
-
-        let Some(condition_local) = simple_operand_local(condition) else {
-            return Ok(false);
-        };
-        let Some(statement_count) = self
-            .function
-            .blocks()
-            .get(block)
-            .map(|block| block.statements().len())
-        else {
-            return Ok(false);
-        };
-        let Some(condition_site) = self.exact_reaching_assignment_v1(
-            condition_local.index() as usize,
-            ScalarAssignmentSiteV1 {
-                block,
-                statement: statement_count,
-            },
-        )?
-        else {
-            return Ok(false);
-        };
-        if condition_site.block != block {
-            return Ok(false);
-        }
-        let condition_statement =
-            &self.function.blocks()[block].statements()[condition_site.statement];
-        let SemanticStatementKindV1::Assign(condition_assignment) = condition_statement.kind()
-        else {
-            return Ok(false);
-        };
-        if !condition_assignment.destination().projections().is_empty()
-            || condition_assignment.destination().local() != condition_local
-        {
-            return Ok(false);
-        }
-        let SemanticRvalueKindV1::Binary {
-            operation: SemanticBinaryOpV1::LessThan,
-            left: compared_shift,
-            right: compared_width,
-        } = condition_assignment.value().kind()
-        else {
-            return Ok(false);
-        };
-        let Some(cast_local) = simple_operand_local(compared_shift) else {
-            return Ok(false);
-        };
-        let SemanticOperandV1::Constant(compared_width) = compared_width else {
-            return Ok(false);
-        };
-        let SemanticConstantValueV1::Scalar(compared_width_value) = compared_width.value() else {
-            return Ok(false);
-        };
-        let exact_rustc_shift_check_type = compared_shift.ty() == compared_width.ty()
-            && matches!(
-                self.types
-                    .get(compared_shift.ty().index() as usize)
-                    .map(|ty| ty.shape()),
-                Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
-                    signed: false,
-                    bits,
-                })) if *bits == message_shift_bits
-            );
-        if compared_width_value.bits() != u128::from(bit_width) || !exact_rustc_shift_check_type {
-            return Ok(false);
-        }
-
-        let Some(cast_site) =
-            self.exact_reaching_assignment_v1(cast_local.index() as usize, condition_site)?
-        else {
-            return Ok(false);
-        };
-        if cast_site.block != block || cast_site.statement >= condition_site.statement {
-            return Ok(false);
-        }
-        let cast_statement = &self.function.blocks()[block].statements()[cast_site.statement];
-        let SemanticStatementKindV1::Assign(cast_assignment) = cast_statement.kind() else {
-            return Ok(false);
-        };
-        if !cast_assignment.destination().projections().is_empty()
-            || cast_assignment.destination().local() != cast_local
-            || cast_assignment.value().result_type() != compared_shift.ty()
-        {
-            return Ok(false);
-        }
-        Ok(matches!(
-            cast_assignment.value().kind(),
-            SemanticRvalueKindV1::Cast {
-                kind: SemanticCastKindV1::Integer,
-                operand,
-            } if same_semantic_operand_value_v1(operand, message_right)
-        ))
+        self.legacy_rule_v1(
+            condition,
+            expected,
+            message,
+            block,
+            neutral_assertion::SemanticAssertionLegacyRuleV1::LiteralShift,
+        )
     }
-
     fn proves_checked_overflow_assert_v1(
         &mut self,
         condition: &SemanticOperandV1,
@@ -14015,191 +15767,14 @@ impl<'a> SemanticAssertProofsV1<'a> {
         message: &SemanticAssertMessageV1,
         block: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if expected {
-            return Ok(false);
-        }
-        let SemanticAssertMessageV1::Overflow {
-            operation,
-            left: message_left,
-            right: message_right,
-        } = message
-        else {
-            return Ok(false);
-        };
-        let Some(result_local) = tuple_field_operand_local_v1(condition, 1) else {
-            return Ok(false);
-        };
-        let local = result_local.index() as usize;
-        if self.definition_counts.get(local).copied() != Some(1)
-            || self.address_escaped.get(local).copied() != Some(false)
-        {
-            return Ok(false);
-        }
-        let Some(site) = self.assignments.get(local).copied().flatten() else {
-            return Ok(false);
-        };
-        if !self.assignment_dominates_use(
-            site,
+        self.legacy_rule_v1(
+            condition,
+            expected,
+            message,
             block,
-            self.function.blocks()[block].statements().len(),
-        )? {
-            return Ok(false);
-        }
-        let SemanticStatementKindV1::Assign(assignment) =
-            self.function.blocks()[site.block].statements()[site.statement].kind()
-        else {
-            return Ok(false);
-        };
-        let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else {
-            return Ok(false);
-        };
-        let checked_operation = match checked.operation() {
-            SemanticCheckedBinaryOpV1::Add => SemanticBinaryOpV1::Add,
-            SemanticCheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
-            SemanticCheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
-        };
-        if *operation != checked_operation
-            || !same_semantic_operand_value_v1(message_left, checked.left())
-            || !same_semantic_operand_value_v1(message_right, checked.right())
-        {
-            return Ok(false);
-        }
-        if checked.operation() == SemanticCheckedBinaryOpV1::Subtract {
-            if self.proves_scaled_quotient_remainder_nonnegative_v1(
-                checked.left(),
-                checked.right(),
-                site,
-                block,
-            )? {
-                return Ok(true);
-            }
-            if self.proves_authenticated_unsigned_lower_bound_subtraction_v1(checked, site)? {
-                return Ok(true);
-            }
-        }
-        if checked.operation() == SemanticCheckedBinaryOpV1::Multiply
-            && self.proves_strictly_bounded_unsigned_product_v1(checked, site)?
-        {
-            return Ok(true);
-        }
-        if checked.operation() == SemanticCheckedBinaryOpV1::Add
-            && self.proves_strictly_bounded_unsigned_flat_index_v1(checked, site)?
-        {
-            return Ok(true);
-        }
-        let left = self.range_at_operand(checked.left(), site.block, site.statement)?;
-        let right = self.range_at_operand(checked.right(), site.block, site.statement)?;
-        let maximum = self.scalar_unsigned_maximum(checked.left().ty());
-        Ok(Self::range_of_binary(checked_operation, left, right, maximum)?.is_some())
+            neutral_assertion::SemanticAssertionLegacyRuleV1::CheckedArithmetic,
+        )
     }
-
-    fn authenticated_checked_binary_value_v1(
-        &mut self,
-        operand: &SemanticOperandV1,
-        use_block: usize,
-        use_statement: usize,
-    ) -> Result<Option<AuthenticatedCheckedBinaryValueV1>, ProductionRankedProjectionErrorV1> {
-        let Some(result_local) = tuple_field_operand_local_v1(operand, 0) else {
-            return Ok(None);
-        };
-        let local = result_local.index() as usize;
-        let value =
-            self.authenticated_checked_binary_local_value_v1(local, use_block, use_statement)?;
-        Ok(value.filter(|value| {
-            value.checked.left().ty() == operand.ty() && value.checked.right().ty() == operand.ty()
-        }))
-    }
-
-    fn authenticated_checked_binary_local_value_v1(
-        &mut self,
-        local: usize,
-        use_block: usize,
-        use_statement: usize,
-    ) -> Result<Option<AuthenticatedCheckedBinaryValueV1>, ProductionRankedProjectionErrorV1> {
-        if self.definition_counts.get(local).copied() != Some(1)
-            || self.address_escaped.get(local).copied() != Some(false)
-        {
-            return Ok(None);
-        }
-        let Some(definition) = self.assignments.get(local).copied().flatten() else {
-            return Ok(None);
-        };
-        if !self.assignment_dominates_use(definition, use_block, use_statement)? {
-            return Ok(None);
-        }
-        let SemanticStatementKindV1::Assign(assignment) =
-            self.function.blocks()[definition.block].statements()[definition.statement].kind()
-        else {
-            return Ok(None);
-        };
-        let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else {
-            return Ok(None);
-        };
-        let checked_operation = match checked.operation() {
-            SemanticCheckedBinaryOpV1::Add => SemanticBinaryOpV1::Add,
-            SemanticCheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
-            SemanticCheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
-        };
-        let assertion_count = self
-            .checked_assertion_blocks
-            .get(local)
-            .map(Vec::len)
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "a checked arithmetic result is outside the assertion table",
-            ))?;
-        for assertion_index in 0..assertion_count {
-            self.charge(1)?;
-            let assertion_block = self.checked_assertion_blocks[local][assertion_index];
-            let SemanticTerminatorKindV1::Assert {
-                condition,
-                expected,
-                message,
-                target,
-                unwind,
-            } = self.function.blocks()[assertion_block].terminator().kind()
-            else {
-                unreachable!("indexed checked arithmetic assertion changed kind")
-            };
-            let exact_message = matches!(
-                message,
-                SemanticAssertMessageV1::Overflow { operation, left, right }
-                    if *operation == checked_operation
-                        && same_semantic_operand_value_v1(left, checked.left())
-                        && same_semantic_operand_value_v1(right, checked.right())
-            );
-            if tuple_field_operand_local_v1(condition, 1).map(|result| result.index() as usize)
-                != Some(local)
-                || *expected
-                || !exact_message
-                || target.role() != SemanticEdgeRoleV1::AssertSuccess
-                || !matches!(unwind, SemanticUnwindActionV1::Unreachable)
-            {
-                continue;
-            }
-            if !self.assignment_dominates_use(
-                definition,
-                assertion_block,
-                self.function.blocks()[assertion_block].statements().len(),
-            )? {
-                continue;
-            }
-            let success = target.target().index() as usize;
-            let assertion_dominates =
-                assertion_block != use_block && self.block_dominates(assertion_block, use_block)?;
-            let success_dominates =
-                success == use_block || self.block_dominates(success, use_block)?;
-            if assertion_dominates && success_dominates {
-                return Ok(Some(AuthenticatedCheckedBinaryValueV1 {
-                    local,
-                    definition,
-                    assertion_block,
-                    checked: checked.clone(),
-                }));
-            }
-        }
-        Ok(None)
-    }
-
     fn proves_authenticated_checked_binary_total_v1(
         &mut self,
         value: &AuthenticatedCheckedBinaryValueV1,
@@ -14209,15 +15784,381 @@ impl<'a> SemanticAssertProofsV1<'a> {
             expected,
             message,
             ..
-        } = self.function.blocks()[value.assertion_block]
+        } = self.function.blocks()[value.assertion_block()]
             .terminator()
             .kind()
         else {
-            unreachable!("authenticated checked arithmetic assertion changed kind")
+            return Ok(false);
         };
-        self.proves_checked_overflow_assert_v1(condition, *expected, message, value.assertion_block)
+        self.proves_checked_overflow_assert_v1(
+            condition,
+            *expected,
+            message,
+            value.assertion_block(),
+        )
+    }
+    fn charge(&mut self, amount: usize) -> Result<(), ProductionRankedProjectionErrorV1> {
+        self.core
+            .recipe_queries_v1(&mut AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source))
+            .charge(amount)
+            .map_err(assertion_projection_error_v1)
+    }
+    fn range_at_operand(
+        &mut self,
+        operand: &SemanticOperandV1,
+        block: usize,
+        statement: usize,
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .range_at_operand(operand, block, statement)
+            .map_err(assertion_projection_error_v1)
     }
 
+    fn scalar_unsigned_maximum(&self, ty: SemanticTypeIdV1) -> Option<u128> {
+        self.core.scalar_unsigned_maximum(ty)
+    }
+
+    #[cfg(test)]
+    fn literal_unsigned_subtraction_upper_range_v1(
+        &self,
+        checked: &SemanticCheckedBinaryRvalueV1,
+    ) -> Option<UnsignedRangeProofV1> {
+        self.core
+            .literal_unsigned_subtraction_upper_range_v1(checked)
+    }
+
+    fn range_of_binary(
+        operation: SemanticBinaryOpV1,
+        left: Option<UnsignedRangeProofV1>,
+        right: Option<UnsignedRangeProofV1>,
+        destination_maximum: Option<u128>,
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        neutral_assertion::SemanticAssertionRecipeQueriesV1::<AssertionCompatibilityMeterV1<'_>>::range_of_binary(operation, left, right, destination_maximum).map_err(assertion_projection_error_v1)
+    }
+
+    fn authenticated_checked_binary_value_v1(
+        &mut self,
+        operand: &SemanticOperandV1,
+        use_block: usize,
+        use_statement: usize,
+    ) -> Result<Option<AuthenticatedCheckedBinaryValueV1>, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .authenticated_checked_binary_value_v1(operand, use_block, use_statement)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn authenticated_scaled_quotient_remainder_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        right: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<AuthenticatedScaledQuotientRemainderV1>, ProductionRankedProjectionErrorV1>
+    {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .authenticated_scaled_quotient_remainder_v1(left, right, use_site)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn scaled_quotient_remainder_upper_range_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        right: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .scaled_quotient_remainder_upper_range_v1(left, right, use_site)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn proves_scaled_quotient_remainder_nonnegative_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        right: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+        use_block: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .proves_scaled_quotient_remainder_nonnegative_v1(left, right, use_site, use_block)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn proves_authenticated_unsigned_lower_bound_subtraction_v1(
+        &mut self,
+        checked: &SemanticCheckedBinaryRvalueV1,
+        subtraction_site: ScalarAssignmentSiteV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .proves_authenticated_unsigned_lower_bound_subtraction_v1(checked, subtraction_site)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn same_exact_unsigned_value_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        left_use: ScalarAssignmentSiteV1,
+        right: &SemanticOperandV1,
+        right_use: ScalarAssignmentSiteV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .same_exact_unsigned_value_v1(left, left_use, right, right_use)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn explicit_checked_product_maximum_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        left_use: ScalarAssignmentSiteV1,
+        right: &SemanticOperandV1,
+        right_use: ScalarAssignmentSiteV1,
+        use_site: ScalarAssignmentSiteV1,
+        required_type: Option<SemanticTypeIdV1>,
+    ) -> Result<Option<u128>, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .explicit_checked_product_maximum_v1(
+                left,
+                left_use,
+                right,
+                right_use,
+                use_site,
+                required_type,
+            )
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn same_checked_product_operand_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        left_use: ScalarAssignmentSiteV1,
+        right: &SemanticOperandV1,
+        right_use: ScalarAssignmentSiteV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .same_checked_product_operand_v1(left, left_use, right, right_use)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn proves_strictly_bounded_unsigned_product_v1(
+        &mut self,
+        checked: &SemanticCheckedBinaryRvalueV1,
+        product_site: ScalarAssignmentSiteV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .proves_strictly_bounded_unsigned_product_v1(checked, product_site)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn proves_strictly_bounded_unsigned_flat_index_v1(
+        &mut self,
+        checked: &SemanticCheckedBinaryRvalueV1,
+        sum_site: ScalarAssignmentSiteV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .proves_strictly_bounded_unsigned_flat_index_v1(checked, sum_site)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn proves_strictly_bounded_unsigned_nested_flat_index_v1(
+        &mut self,
+        checked: &SemanticCheckedBinaryRvalueV1,
+        sum_site: ScalarAssignmentSiteV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .proves_strictly_bounded_unsigned_nested_flat_index_v1(checked, sum_site)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn proves_strictly_bounded_unsigned_flat_index_path_v1(
+        &mut self,
+        operand: &SemanticOperandV1,
+        operand_use: ScalarAssignmentSiteV1,
+        sum_site: ScalarAssignmentSiteV1,
+        scalar_type: SemanticTypeIdV1,
+        offsets: &mut Vec<(SemanticOperandV1, ScalarAssignmentSiteV1)>,
+        remaining_offsets: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .proves_strictly_bounded_unsigned_flat_index_path_v1(
+                operand,
+                operand_use,
+                sum_site,
+                scalar_type,
+                offsets,
+                remaining_offsets,
+            )
+            .map_err(assertion_projection_error_v1)
+    }
+
+    #[cfg(test)]
+    fn quotient_strict_product_upper_bound_v1(
+        &mut self,
+        numerator: &SemanticOperandV1,
+        divisor: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<AuthenticatedQuotientStrictBoundV1>, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .quotient_strict_product_upper_bound_v1(numerator, divisor, use_site)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    fn assignment_dominates_use(
+        &mut self,
+        definition: ScalarAssignmentSiteV1,
+        use_block: usize,
+        use_statement: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .assignment_dominates_use(definition, use_block, use_statement)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    fn exact_reaching_assignment_v1(
+        &mut self,
+        local: usize,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<ScalarAssignmentSiteV1>, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .exact_reaching_assignment_v1(local, use_site)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    fn block_dominates(
+        &mut self,
+        dominator: usize,
+        block: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .block_dominates(dominator, block)
+            .map_err(assertion_projection_error_v1)
+    }
+
+    fn edge_set_dominates(
+        &mut self,
+        excluding_edges: &HashSet<(usize, usize)>,
+        block: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let mut meter = AssertionCompatibilityMeterV1::new(&mut self.work).with_source(self.source);
+        let mut query = if self.scan_only {
+            self.core.recipe_queries_by_scanning_v1(&mut meter)
+        } else {
+            self.core.recipe_queries_v1(&mut meter)
+        };
+        query
+            .edge_set_dominates(excluding_edges, block)
+            .map_err(assertion_projection_error_v1)
+    }
     fn proves_authenticated_checked_binary_total_for_pipeline_v1(
         &mut self,
         value: &AuthenticatedCheckedBinaryValueV1,
@@ -14229,18 +16170,18 @@ impl<'a> SemanticAssertProofsV1<'a> {
             return Ok(true);
         }
         let left = self.pipeline_operand_range_v1(
-            value.checked.left(),
+            value.checked().left(),
             projected_left,
-            value.definition,
+            value.definition(),
             uniform_inductions,
         )?;
         let right = self.pipeline_operand_range_v1(
-            value.checked.right(),
+            value.checked().right(),
             projected_right,
-            value.definition,
+            value.definition(),
             uniform_inductions,
         )?;
-        let operation = match value.checked.operation() {
+        let operation = match value.checked().operation() {
             SemanticCheckedBinaryOpV1::Add => SemanticBinaryOpV1::Add,
             SemanticCheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
             SemanticCheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
@@ -14249,7 +16190,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             operation,
             left,
             right,
-            self.scalar_unsigned_maximum(value.checked.left().ty()),
+            self.scalar_unsigned_maximum(value.checked().left().ty()),
         )?
         .is_some())
     }
@@ -14296,3894 +16237,6 @@ impl<'a> SemanticAssertProofsV1<'a> {
         }
         self.range_at_operand(operand, definition.block, definition.statement)
     }
-
-    fn range_at_operand(
-        &mut self,
-        operand: &SemanticOperandV1,
-        block: usize,
-        statement: usize,
-    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
-        if block >= self.function.blocks().len()
-            || statement > self.function.blocks()[block].statements().len()
-        {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a compiler-derived unsigned cast has a stale semantic use site",
-            ));
-        }
-        self.evaluate_assertion_range_operand_v1(operand, block, statement)
-    }
-
-    fn charge(&mut self, amount: usize) -> Result<(), ProductionRankedProjectionErrorV1> {
-        project_loop_graph_charge_v1(&mut self.work, amount)
-    }
-
-    fn scalar_unsigned_maximum(&self, ty: SemanticTypeIdV1) -> Option<u128> {
-        match self.types.get(ty.index() as usize)?.shape() {
-            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool) => Some(1),
-            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
-                signed: false,
-                bits,
-            }) => match *bits {
-                1..=127 => Some((1_u128 << bits) - 1),
-                128 => Some(u128::MAX),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    fn unsigned_integer_bits(&self, ty: SemanticTypeIdV1) -> Option<u16> {
-        match self.types.get(ty.index() as usize)?.shape() {
-            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
-                signed: false,
-                bits,
-            }) => Some(*bits),
-            _ => None,
-        }
-    }
-
-    fn literal_unsigned_subtraction_upper_range_v1(
-        &self,
-        checked: &SemanticCheckedBinaryRvalueV1,
-    ) -> Option<UnsignedRangeProofV1> {
-        if checked.operation() != SemanticCheckedBinaryOpV1::Subtract
-            || checked.left().ty() != checked.right().ty()
-            || self.unsigned_integer_bits(checked.left().ty()).is_none()
-        {
-            return None;
-        }
-        let SemanticOperandV1::Constant(minuend) = checked.left() else {
-            return None;
-        };
-        let SemanticConstantValueV1::Scalar(value) = minuend.value() else {
-            return None;
-        };
-        let maximum = self.scalar_unsigned_maximum(minuend.ty())?;
-        (value.bits() <= maximum).then_some(UnsignedRangeProofV1 {
-            minimum: 0,
-            maximum: value.bits(),
-        })
-    }
-
-    fn assertion_range_operand_task_v1(operand: &SemanticOperandV1) -> AssertionRangeOperandTaskV1 {
-        match operand {
-            SemanticOperandV1::Constant(constant) => AssertionRangeOperandTaskV1::Constant {
-                ty: constant.ty(),
-                bits: match constant.value() {
-                    SemanticConstantValueV1::Scalar(value) => Some(value.bits()),
-                    _ => None,
-                },
-            },
-            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
-                if tuple_field_operand_local_v1(operand, 0).is_some() {
-                    AssertionRangeOperandTaskV1::CheckedResult {
-                        local: place.local().index() as usize,
-                    }
-                } else if place.projections().is_empty() {
-                    AssertionRangeOperandTaskV1::Local(place.local().index() as usize)
-                } else {
-                    AssertionRangeOperandTaskV1::ProjectedPlace(place.clone())
-                }
-            }
-        }
-    }
-
-    fn assertion_range_expression_task_v1(
-        &self,
-        value: &fe2o3_mir_model::semantic_mir_v1::SemanticRvalueV1,
-    ) -> AssertionRangeExpressionTaskV1 {
-        let destination_maximum = self.scalar_unsigned_maximum(value.result_type());
-        match value.kind() {
-            SemanticRvalueKindV1::Use(operand) => AssertionRangeExpressionTaskV1::Operand(
-                Self::assertion_range_operand_task_v1(operand),
-            ),
-            SemanticRvalueKindV1::Cast {
-                kind: SemanticCastKindV1::Integer,
-                operand,
-            } if self
-                .unsigned_integer_bits(operand.ty())
-                .zip(self.unsigned_integer_bits(value.result_type()))
-                .is_some_and(|(source, destination)| destination >= source) =>
-            {
-                AssertionRangeExpressionTaskV1::Operand(Self::assertion_range_operand_task_v1(
-                    operand,
-                ))
-            }
-            SemanticRvalueKindV1::Binary {
-                operation,
-                left,
-                right,
-            } => AssertionRangeExpressionTaskV1::Binary {
-                operation: *operation,
-                destination_maximum,
-                left: Self::assertion_range_operand_task_v1(left),
-                right: Self::assertion_range_operand_task_v1(right),
-                left_source: left.clone(),
-                right_source: right.clone(),
-            },
-            _ => AssertionRangeExpressionTaskV1::Unsupported,
-        }
-    }
-
-    fn schedule_assertion_range_operand_v1(
-        frames: &mut Vec<AssertionRangeFrameV1>,
-        task: AssertionRangeOperandTaskV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<(), ProductionRankedProjectionErrorV1> {
-        push_assertion_range_frame_v1(frames, AssertionRangeFrameV1::Operand { task, use_site })
-    }
-
-    fn schedule_assertion_range_expression_v1(
-        frames: &mut Vec<AssertionRangeFrameV1>,
-        values: &mut Vec<Option<UnsignedRangeProofV1>>,
-        task: AssertionRangeExpressionTaskV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<(), ProductionRankedProjectionErrorV1> {
-        match task {
-            AssertionRangeExpressionTaskV1::Operand(operand) => {
-                Self::schedule_assertion_range_operand_v1(frames, operand, use_site)
-            }
-            AssertionRangeExpressionTaskV1::Binary {
-                operation,
-                destination_maximum,
-                left,
-                right,
-                left_source,
-                right_source,
-            } => {
-                push_assertion_range_frame_v1(
-                    frames,
-                    AssertionRangeFrameV1::FinishBinary {
-                        operation,
-                        destination_maximum,
-                        left_source,
-                        right_source,
-                        use_site,
-                    },
-                )?;
-                Self::schedule_assertion_range_operand_v1(frames, right, use_site)?;
-                Self::schedule_assertion_range_operand_v1(frames, left, use_site)
-            }
-            AssertionRangeExpressionTaskV1::Unsupported => {
-                push_assertion_range_value_v1(values, None)
-            }
-        }
-    }
-
-    fn schedule_assertion_local_narrowing_v1(
-        &mut self,
-        frames: &mut Vec<AssertionRangeFrameV1>,
-        local: usize,
-        use_block: usize,
-        maximum: u128,
-        result: Option<UnsignedRangeProofV1>,
-    ) -> Result<(), ProductionRankedProjectionErrorV1> {
-        // A live safe-Rust unsigned scalar always inhabits its declared bit
-        // width even when exact single-definition reconstruction is
-        // unavailable (for example, a loop-carried induction). This fallback
-        // is intentionally no stronger than the type invariant.
-        let result = result.or(Some(UnsignedRangeProofV1 {
-            minimum: 0,
-            maximum,
-        }));
-        let zero_is_excluded = self.zero_excluding_edge_dominates(local, use_block)?;
-        let result = match (result, zero_is_excluded) {
-            (Some(mut range), true) => {
-                range.minimum = range.minimum.max(1);
-                Some(range)
-            }
-            (None, true) => Some(UnsignedRangeProofV1 {
-                minimum: 1,
-                maximum,
-            }),
-            (result, false) => result,
-        };
-        let block_count = self.function.blocks().len();
-        let can_reach_use = self.blocks_reaching(use_block)?;
-        let mut stability_visited = Vec::new();
-        stability_visited
-            .try_reserve_exact(block_count)
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof upper-bound stability storage cannot be reserved",
-                )
-            })?;
-        stability_visited.resize(block_count, 0_usize);
-        let mut stability_pending = VecDeque::new();
-        stability_pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof upper-bound stability worklist cannot be reserved",
-            )
-        })?;
-        push_assertion_range_frame_v1(
-            frames,
-            AssertionRangeFrameV1::ContinueStrictUpperBound(AssertionStrictUpperBoundStateV1 {
-                local,
-                use_block,
-                next_switch_block: 0,
-                range: result,
-                can_reach_use,
-                stability_visited,
-                stability_pending,
-                stability_generation: 0,
-                proven_upper_bound: None,
-            }),
-        )
-    }
-
-    fn evaluate_assertion_range_operand_v1(
-        &mut self,
-        operand: &SemanticOperandV1,
-        use_block: usize,
-        use_statement: usize,
-    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
-        let mut frames = Vec::new();
-        let mut values = Vec::new();
-        let mut visiting = HashSet::new();
-        Self::schedule_assertion_range_operand_v1(
-            &mut frames,
-            Self::assertion_range_operand_task_v1(operand),
-            ScalarAssignmentSiteV1 {
-                block: use_block,
-                statement: use_statement,
-            },
-        )?;
-
-        while let Some(frame) = frames.pop() {
-            match frame {
-                AssertionRangeFrameV1::Operand { task, use_site } => {
-                    self.charge(1)?;
-                    match task {
-                        AssertionRangeOperandTaskV1::Constant { ty, bits } => {
-                            let Some(maximum) = self.scalar_unsigned_maximum(ty) else {
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            };
-                            let Some(bits) = bits else {
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            };
-                            let value = (bits <= maximum)
-                                .then_some(UnsignedRangeProofV1::exact(bits))
-                                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                                    "an unsigned scalar constant exceeds its semantic type",
-                                ))?;
-                            push_assertion_range_value_v1(&mut values, Some(value))?;
-                        }
-                        AssertionRangeOperandTaskV1::ProjectedPlace(place) => {
-                            self.charge(1)?;
-                            let local = place.local().index() as usize;
-                            if self.address_escaped.get(local).copied() != Some(false)
-                                || visiting.contains(&local)
-                            {
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            }
-                            let Some(site) = self.exact_reaching_assignment_v1(local, use_site)?
-                            else {
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            };
-                            let SemanticStatementKindV1::Assign(assignment) =
-                                self.function.blocks()[site.block].statements()[site.statement]
-                                    .kind()
-                            else {
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            };
-                            let projected = match place.projections() {
-                                [downcast, field] => {
-                                    let (
-                                        SemanticProjectionKindV1::Downcast(projected_variant),
-                                        SemanticProjectionKindV1::Field(projected_field),
-                                        SemanticRvalueKindV1::Aggregate(aggregate),
-                                    ) = (downcast.kind(), field.kind(), assignment.value().kind())
-                                    else {
-                                        push_assertion_range_value_v1(&mut values, None)?;
-                                        continue;
-                                    };
-                                    let SemanticAggregateKindV1::EnumVariant(actual_variant) =
-                                        aggregate.kind()
-                                    else {
-                                        push_assertion_range_value_v1(&mut values, None)?;
-                                        continue;
-                                    };
-                                    if projected_variant != *actual_variant {
-                                        push_assertion_range_value_v1(&mut values, None)?;
-                                        continue;
-                                    }
-                                    aggregate.operands().get(projected_field as usize)
-                                }
-                                [field] => {
-                                    let (
-                                        SemanticProjectionKindV1::Field(projected_field),
-                                        SemanticRvalueKindV1::Aggregate(aggregate),
-                                    ) = (field.kind(), assignment.value().kind())
-                                    else {
-                                        push_assertion_range_value_v1(&mut values, None)?;
-                                        continue;
-                                    };
-                                    if !matches!(
-                                        aggregate.kind(),
-                                        SemanticAggregateKindV1::Array
-                                            | SemanticAggregateKindV1::Tuple
-                                            | SemanticAggregateKindV1::Aggregate
-                                    ) {
-                                        push_assertion_range_value_v1(&mut values, None)?;
-                                        continue;
-                                    }
-                                    aggregate.operands().get(projected_field as usize)
-                                }
-                                _ => None,
-                            };
-                            let Some(projected) =
-                                projected.filter(|value| value.ty() == place.ty()).cloned()
-                            else {
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            };
-                            visiting.try_reserve(1).map_err(|_| {
-                                ProductionRankedProjectionErrorV1::Unsupported(
-                                    "assertion range evaluator path storage cannot be reserved",
-                                )
-                            })?;
-                            visiting.insert(local);
-                            push_assertion_range_frame_v1(
-                                &mut frames,
-                                AssertionRangeFrameV1::FinishProjectedPlace { local },
-                            )?;
-                            Self::schedule_assertion_range_operand_v1(
-                                &mut frames,
-                                Self::assertion_range_operand_task_v1(&projected),
-                                site,
-                            )?;
-                        }
-                        AssertionRangeOperandTaskV1::Local(local) => {
-                            self.charge(1)?;
-                            let (ty, is_argument) = self
-                                .function
-                                .locals()
-                                .get(local)
-                                .map(|declaration| {
-                                    (
-                                        declaration.ty(),
-                                        matches!(
-                                            declaration.role(),
-                                            SemanticLocalRoleV1::Argument(_)
-                                        ),
-                                    )
-                                })
-                                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                                    "an assertion proof local is outside the semantic local table",
-                                ))?;
-                            let Some(maximum) = self.scalar_unsigned_maximum(ty) else {
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            };
-                            if self.address_escaped.get(local).copied() != Some(false)
-                                || visiting.contains(&local)
-                            {
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            }
-                            visiting.try_reserve(1).map_err(|_| {
-                                ProductionRankedProjectionErrorV1::Unsupported(
-                                    "assertion range evaluator path storage cannot be reserved",
-                                )
-                            })?;
-                            visiting.insert(local);
-                            match self.definition_counts.get(local).copied() {
-                                Some(0) if is_argument => {
-                                    let minimum = if self
-                                        .zero_excluding_edge_dominates(local, use_site.block)?
-                                    {
-                                        1
-                                    } else {
-                                        0
-                                    };
-                                    self.schedule_assertion_local_narrowing_v1(
-                                        &mut frames,
-                                        local,
-                                        use_site.block,
-                                        maximum,
-                                        Some(UnsignedRangeProofV1 { minimum, maximum }),
-                                    )?;
-                                }
-                                Some(1) => {
-                                    let Some(site) = self.assignments.get(local).copied().flatten()
-                                    else {
-                                        self.schedule_assertion_local_narrowing_v1(
-                                            &mut frames,
-                                            local,
-                                            use_site.block,
-                                            maximum,
-                                            None,
-                                        )?;
-                                        continue;
-                                    };
-                                    if !self.assignment_dominates_use(
-                                        site,
-                                        use_site.block,
-                                        use_site.statement,
-                                    )? {
-                                        self.schedule_assertion_local_narrowing_v1(
-                                            &mut frames,
-                                            local,
-                                            use_site.block,
-                                            maximum,
-                                            None,
-                                        )?;
-                                        continue;
-                                    }
-                                    let SemanticStatementKindV1::Assign(assignment) =
-                                        self.function.blocks()[site.block].statements()
-                                            [site.statement]
-                                            .kind()
-                                    else {
-                                        return Err(
-                                            ProductionRankedProjectionErrorV1::Unsupported(
-                                                "an indexed assertion proof assignment changed semantic kind",
-                                            ),
-                                        );
-                                    };
-                                    let expression =
-                                        self.assertion_range_expression_task_v1(assignment.value());
-                                    push_assertion_range_frame_v1(
-                                        &mut frames,
-                                        AssertionRangeFrameV1::FinishLocalDefinition {
-                                            local,
-                                            use_block: use_site.block,
-                                            maximum,
-                                        },
-                                    )?;
-                                    Self::schedule_assertion_range_expression_v1(
-                                        &mut frames,
-                                        &mut values,
-                                        expression,
-                                        site,
-                                    )?;
-                                }
-                                Some(_) | None => {
-                                    self.schedule_assertion_local_narrowing_v1(
-                                        &mut frames,
-                                        local,
-                                        use_site.block,
-                                        maximum,
-                                        None,
-                                    )?;
-                                }
-                            }
-                        }
-                        AssertionRangeOperandTaskV1::CheckedResult { local } => {
-                            self.charge(1)?;
-                            if self.definition_counts.get(local).copied() != Some(1)
-                                || self.address_escaped.get(local).copied() != Some(false)
-                                || visiting.contains(&local)
-                            {
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            }
-                            visiting.try_reserve(1).map_err(|_| {
-                                ProductionRankedProjectionErrorV1::Unsupported(
-                                    "assertion range evaluator path storage cannot be reserved",
-                                )
-                            })?;
-                            visiting.insert(local);
-                            let Some(site) = self.assignments.get(local).copied().flatten() else {
-                                visiting.remove(&local);
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            };
-                            if !self.assignment_dominates_use(
-                                site,
-                                use_site.block,
-                                use_site.statement,
-                            )? {
-                                visiting.remove(&local);
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            }
-                            let SemanticStatementKindV1::Assign(assignment) =
-                                self.function.blocks()[site.block].statements()[site.statement]
-                                    .kind()
-                            else {
-                                visiting.remove(&local);
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            };
-                            let SemanticRvalueKindV1::CheckedBinary(checked) =
-                                assignment.value().kind()
-                            else {
-                                visiting.remove(&local);
-                                push_assertion_range_value_v1(&mut values, None)?;
-                                continue;
-                            };
-                            let operation = match checked.operation() {
-                                SemanticCheckedBinaryOpV1::Add => SemanticBinaryOpV1::Add,
-                                SemanticCheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
-                                SemanticCheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
-                            };
-                            let expression = AssertionRangeExpressionTaskV1::Binary {
-                                operation,
-                                destination_maximum: self
-                                    .scalar_unsigned_maximum(checked.left().ty()),
-                                left: Self::assertion_range_operand_task_v1(checked.left()),
-                                right: Self::assertion_range_operand_task_v1(checked.right()),
-                                left_source: checked.left().clone(),
-                                right_source: checked.right().clone(),
-                            };
-                            let authenticated = self
-                                .authenticated_checked_binary_local_value_v1(
-                                    local,
-                                    use_site.block,
-                                    use_site.statement,
-                                )?
-                                .is_some();
-                            let relational_range = match checked.operation() {
-                                SemanticCheckedBinaryOpV1::Subtract if authenticated => {
-                                    self.scaled_quotient_remainder_upper_range_v1(
-                                        checked.left(),
-                                        checked.right(),
-                                        site,
-                                    )?
-                                    .or_else(|| {
-                                        // On the exact checked-success edge, unsigned K-rhs
-                                        // lies in [0,K], even when independent ranges overlap.
-                                        self.literal_unsigned_subtraction_upper_range_v1(checked)
-                                    })
-                                }
-                                SemanticCheckedBinaryOpV1::Multiply if authenticated => self
-                                    .bounded_quotient_product_upper_range_v1(
-                                        checked.left(),
-                                        checked.right(),
-                                        site,
-                                    )?,
-                                _ => None,
-                            };
-                            push_assertion_range_frame_v1(
-                                &mut frames,
-                                AssertionRangeFrameV1::FinishCheckedResult {
-                                    local,
-                                    relational_range,
-                                },
-                            )?;
-                            Self::schedule_assertion_range_expression_v1(
-                                &mut frames,
-                                &mut values,
-                                expression,
-                                site,
-                            )?;
-                        }
-                    }
-                }
-                AssertionRangeFrameV1::FinishBinary {
-                    operation,
-                    destination_maximum,
-                    left_source,
-                    right_source,
-                    use_site,
-                } => {
-                    let right = pop_assertion_range_value_v1(&mut values)?;
-                    let left = pop_assertion_range_value_v1(&mut values)?;
-                    let mut result =
-                        Self::range_of_binary(operation, left, right, destination_maximum)?;
-                    if operation == SemanticBinaryOpV1::Divide
-                        && let Some(bound) = self.quotient_strict_product_upper_bound_v1(
-                            &left_source,
-                            &right_source,
-                            use_site,
-                        )?
-                    {
-                        let upper_bound = bound.maximum;
-                        result = Some(match result {
-                            Some(mut range) => {
-                                range.maximum = range.maximum.min(upper_bound);
-                                range
-                            }
-                            None => UnsignedRangeProofV1 {
-                                minimum: 0,
-                                maximum: upper_bound,
-                            },
-                        });
-                    }
-                    push_assertion_range_value_v1(&mut values, result)?;
-                }
-                AssertionRangeFrameV1::FinishCheckedResult {
-                    local,
-                    relational_range,
-                } => {
-                    let result = pop_assertion_range_value_v1(&mut values)?;
-                    visiting.remove(&local);
-                    let result = match (result, relational_range) {
-                        (Some(left), Some(right)) => {
-                            let minimum = left.minimum.max(right.minimum);
-                            let maximum = left.maximum.min(right.maximum);
-                            (minimum <= maximum)
-                                .then_some(UnsignedRangeProofV1 { minimum, maximum })
-                        }
-                        (Some(range), None) | (None, Some(range)) => Some(range),
-                        (None, None) => None,
-                    };
-                    push_assertion_range_value_v1(&mut values, result)?;
-                }
-                AssertionRangeFrameV1::FinishProjectedPlace { local } => {
-                    visiting.remove(&local);
-                }
-                AssertionRangeFrameV1::FinishLocalDefinition {
-                    local,
-                    use_block,
-                    maximum,
-                } => {
-                    let result = pop_assertion_range_value_v1(&mut values)?;
-                    self.schedule_assertion_local_narrowing_v1(
-                        &mut frames,
-                        local,
-                        use_block,
-                        maximum,
-                        result,
-                    )?;
-                }
-                AssertionRangeFrameV1::ContinueStrictUpperBound(mut state) => {
-                    let mut scheduled = None;
-                    while state.next_switch_block < self.function.blocks().len() {
-                        let switch_block = state.next_switch_block;
-                        state.next_switch_block += 1;
-                        self.charge(1)?;
-                        let Some((condition_local, false_target, true_target, statement_count)) =
-                            (|| {
-                                let block = &self.function.blocks()[switch_block];
-                                let SemanticTerminatorKindV1::SwitchInt {
-                                    discriminant,
-                                    targets,
-                                } = block.terminator().kind()
-                                else {
-                                    return None;
-                                };
-                                if targets.values().len() != 1 || targets.values()[0].value() != 0 {
-                                    return None;
-                                }
-                                let false_target =
-                                    targets.values()[0].edge().target().index() as usize;
-                                let true_target = targets.otherwise().target().index() as usize;
-                                if false_target == true_target {
-                                    return None;
-                                }
-                                Some((
-                                    simple_operand_local(discriminant)?.index() as usize,
-                                    false_target,
-                                    true_target,
-                                    block.statements().len(),
-                                ))
-                            })()
-                        else {
-                            continue;
-                        };
-                        if self.definition_counts.get(condition_local).copied() != Some(1)
-                            || self.address_escaped.get(condition_local).copied() != Some(false)
-                        {
-                            continue;
-                        }
-                        let Some(site) = self.assignments.get(condition_local).copied().flatten()
-                        else {
-                            continue;
-                        };
-                        if site.block != switch_block
-                            || !self.assignment_dominates_use(
-                                site,
-                                switch_block,
-                                statement_count,
-                            )?
-                        {
-                            continue;
-                        }
-                        let Some((left_local, right, success_target)) = (|| {
-                            let SemanticStatementKindV1::Assign(assignment) =
-                                self.function.blocks()[site.block].statements()[site.statement]
-                                    .kind()
-                            else {
-                                return None;
-                            };
-                            let SemanticRvalueKindV1::Binary {
-                                operation,
-                                left,
-                                right,
-                            } = assignment.value().kind()
-                            else {
-                                return None;
-                            };
-                            let success_target = match operation {
-                                SemanticBinaryOpV1::LessThan => true_target,
-                                SemanticBinaryOpV1::GreaterOrEqual => false_target,
-                                _ => return None,
-                            };
-                            Some((
-                                simple_operand_local(left)?.index() as usize,
-                                Self::assertion_range_operand_task_v1(right),
-                                success_target,
-                            ))
-                        })(
-                        ) else {
-                            continue;
-                        };
-                        let mut capture = site;
-                        if !self.local_is_value_preserving_alias_of(
-                            left_local,
-                            state.local,
-                            site.block,
-                            site.statement,
-                            Some(&mut capture),
-                        )? {
-                            continue;
-                        };
-                        if capture.block != switch_block || capture.statement > statement_count {
-                            continue;
-                        }
-                        // Earlier definitions precede the compared value. Any write from
-                        // its exact alias capture through the guard still invalidates it.
-                        self.charge(statement_count - capture.statement)?;
-                        if self.block_defines_local_in_statement_range_v1(
-                            switch_block,
-                            state.local,
-                            capture.statement,
-                            statement_count,
-                        ) {
-                            continue;
-                        }
-                        scheduled = Some((right, site, switch_block, success_target));
-                        break;
-                    }
-                    if let Some((task, site, switch_block, success_target)) = scheduled {
-                        push_assertion_range_frame_v1(
-                            &mut frames,
-                            AssertionRangeFrameV1::ApplyStrictUpperBoundCandidate {
-                                state,
-                                switch_block,
-                                success_target,
-                            },
-                        )?;
-                        Self::schedule_assertion_range_operand_v1(&mut frames, task, site)?;
-                    } else {
-                        if let Some(upper_bound) = state.proven_upper_bound {
-                            state.range = Some(match state.range {
-                                Some(mut range) => {
-                                    range.maximum = range.maximum.min(upper_bound);
-                                    range
-                                }
-                                None => UnsignedRangeProofV1 {
-                                    minimum: 0,
-                                    maximum: upper_bound,
-                                },
-                            });
-                            if state
-                                .range
-                                .is_some_and(|range| range.minimum > range.maximum)
-                            {
-                                state.range = None;
-                            }
-                        }
-                        visiting.remove(&state.local);
-                        push_assertion_range_value_v1(&mut values, state.range)?;
-                    }
-                }
-                AssertionRangeFrameV1::ApplyStrictUpperBoundCandidate {
-                    mut state,
-                    switch_block,
-                    success_target,
-                } => {
-                    let bound = pop_assertion_range_value_v1(&mut values)?;
-                    if let Some(candidate) = bound.and_then(|bound| bound.maximum.checked_sub(1)) {
-                        state.stability_generation = state
-                            .stability_generation
-                            .checked_add(1)
-                            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                                "assertion proof upper-bound stability generation overflowed",
-                            ))?;
-                        let mut edge = HashSet::new();
-                        edge.try_reserve(1).map_err(|_| {
-                            ProductionRankedProjectionErrorV1::Unsupported(
-                                "assertion proof upper-bound edge storage cannot be reserved",
-                            )
-                        })?;
-                        edge.insert((switch_block, success_target));
-                        if self.edge_set_dominates(&edge, state.use_block)?
-                            && self.local_is_stable_from_revalidating_edge_to_use(
-                                state.local,
-                                switch_block,
-                                success_target,
-                                state.use_block,
-                                &state.can_reach_use,
-                                &mut state.stability_visited,
-                                &mut state.stability_pending,
-                                state.stability_generation,
-                            )?
-                        {
-                            state.proven_upper_bound = Some(
-                                state
-                                    .proven_upper_bound
-                                    .map_or(candidate, |current| current.min(candidate)),
-                            );
-                        }
-                    }
-                    push_assertion_range_frame_v1(
-                        &mut frames,
-                        AssertionRangeFrameV1::ContinueStrictUpperBound(state),
-                    )?;
-                }
-            }
-        }
-
-        if !visiting.is_empty() || values.len() != 1 {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion range evaluator did not finish with one exact result",
-            ));
-        }
-        pop_assertion_range_value_v1(&mut values)
-    }
-
-    fn range_of_binary(
-        operation: SemanticBinaryOpV1,
-        left: Option<UnsignedRangeProofV1>,
-        right: Option<UnsignedRangeProofV1>,
-        destination_maximum: Option<u128>,
-    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
-        let (Some(left), Some(right)) = (left, right) else {
-            return Ok(None);
-        };
-        let range = match operation {
-            SemanticBinaryOpV1::Add => {
-                let (Some(minimum), Some(maximum), Some(destination_maximum)) = (
-                    left.minimum.checked_add(right.minimum),
-                    left.maximum.checked_add(right.maximum),
-                    destination_maximum,
-                ) else {
-                    return Ok(None);
-                };
-                (maximum <= destination_maximum)
-                    .then_some(UnsignedRangeProofV1 { minimum, maximum })
-            }
-            SemanticBinaryOpV1::Multiply => {
-                let (Some(minimum), Some(maximum), Some(destination_maximum)) = (
-                    left.minimum.checked_mul(right.minimum),
-                    left.maximum.checked_mul(right.maximum),
-                    destination_maximum,
-                ) else {
-                    return Ok(None);
-                };
-                (maximum <= destination_maximum)
-                    .then_some(UnsignedRangeProofV1 { minimum, maximum })
-            }
-            SemanticBinaryOpV1::Subtract if left.minimum >= right.maximum => {
-                Some(UnsignedRangeProofV1 {
-                    minimum: left.minimum - right.maximum,
-                    maximum: left.maximum - right.minimum,
-                })
-            }
-            SemanticBinaryOpV1::Divide if right.minimum != 0 => Some(UnsignedRangeProofV1 {
-                minimum: left.minimum / right.maximum,
-                maximum: left.maximum / right.minimum,
-            }),
-            SemanticBinaryOpV1::Remainder if right.minimum != 0 => Some(UnsignedRangeProofV1 {
-                minimum: 0,
-                maximum: left.maximum.min(right.maximum - 1),
-            }),
-            SemanticBinaryOpV1::Equal => Some(
-                if left.maximum < right.minimum || right.maximum < left.minimum {
-                    UnsignedRangeProofV1::exact(0)
-                } else if left.minimum == left.maximum && left == right {
-                    UnsignedRangeProofV1::exact(1)
-                } else {
-                    UnsignedRangeProofV1 {
-                        minimum: 0,
-                        maximum: 1,
-                    }
-                },
-            ),
-            SemanticBinaryOpV1::NotEqual => Some(
-                if left.maximum < right.minimum || right.maximum < left.minimum {
-                    UnsignedRangeProofV1::exact(1)
-                } else if left.minimum == left.maximum && left == right {
-                    UnsignedRangeProofV1::exact(0)
-                } else {
-                    UnsignedRangeProofV1 {
-                        minimum: 0,
-                        maximum: 1,
-                    }
-                },
-            ),
-            SemanticBinaryOpV1::LessThan => Some(if left.maximum < right.minimum {
-                UnsignedRangeProofV1::exact(1)
-            } else if left.minimum >= right.maximum {
-                UnsignedRangeProofV1::exact(0)
-            } else {
-                UnsignedRangeProofV1 {
-                    minimum: 0,
-                    maximum: 1,
-                }
-            }),
-            SemanticBinaryOpV1::LessOrEqual => Some(if left.maximum <= right.minimum {
-                UnsignedRangeProofV1::exact(1)
-            } else if left.minimum > right.maximum {
-                UnsignedRangeProofV1::exact(0)
-            } else {
-                UnsignedRangeProofV1 {
-                    minimum: 0,
-                    maximum: 1,
-                }
-            }),
-            SemanticBinaryOpV1::GreaterThan => Some(if left.minimum > right.maximum {
-                UnsignedRangeProofV1::exact(1)
-            } else if left.maximum <= right.minimum {
-                UnsignedRangeProofV1::exact(0)
-            } else {
-                UnsignedRangeProofV1 {
-                    minimum: 0,
-                    maximum: 1,
-                }
-            }),
-            SemanticBinaryOpV1::GreaterOrEqual => Some(if left.minimum >= right.maximum {
-                UnsignedRangeProofV1::exact(1)
-            } else if left.maximum < right.minimum {
-                UnsignedRangeProofV1::exact(0)
-            } else {
-                UnsignedRangeProofV1 {
-                    minimum: 0,
-                    maximum: 1,
-                }
-            }),
-            _ => None,
-        };
-        Ok(range)
-    }
-
-    fn authenticated_checked_binary_source_v1(
-        &mut self,
-        operand: &SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<Option<AuthenticatedCheckedBinaryValueV1>, ProductionRankedProjectionErrorV1> {
-        let mut operand = operand.clone();
-        let mut use_site = use_site;
-        let mut visited = HashSet::new();
-        loop {
-            self.charge(1)?;
-            if tuple_field_operand_local_v1(&operand, 0).is_some()
-                && let Some(value) = self.authenticated_checked_binary_value_v1(
-                    &operand,
-                    use_site.block,
-                    use_site.statement,
-                )?
-            {
-                return Ok(Some(value));
-            }
-            let Some(place) = raw_operand_place(&operand) else {
-                return Ok(None);
-            };
-            if !place.projections().is_empty() {
-                return Ok(None);
-            }
-            let local = place.local().index() as usize;
-            if !visited.insert(local) {
-                return Ok(None);
-            }
-            let Some(site) = self.exact_reaching_assignment_v1(local, use_site)? else {
-                return Ok(None);
-            };
-            let SemanticStatementKindV1::Assign(assignment) =
-                self.function.blocks()[site.block].statements()[site.statement].kind()
-            else {
-                return Ok(None);
-            };
-            let next = match assignment.value().kind() {
-                SemanticRvalueKindV1::Use(next) => next,
-                SemanticRvalueKindV1::Cast {
-                    kind: SemanticCastKindV1::Integer,
-                    operand: next,
-                } if self
-                    .unsigned_integer_bits(assignment.value().result_type())
-                    .zip(self.unsigned_integer_bits(next.ty()))
-                    .is_some_and(|(destination, source)| destination >= source) =>
-                {
-                    next
-                }
-                _ => return Ok(None),
-            };
-            operand = next.clone();
-            use_site = site;
-        }
-    }
-
-    fn exact_binary_source_v1(
-        &mut self,
-        operand: &SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-        expected_operation: SemanticBinaryOpV1,
-    ) -> Result<
-        Option<(ScalarAssignmentSiteV1, SemanticOperandV1, SemanticOperandV1)>,
-        ProductionRankedProjectionErrorV1,
-    > {
-        let mut operand = operand.clone();
-        let mut use_site = use_site;
-        let mut visited = HashSet::new();
-        loop {
-            self.charge(1)?;
-            let Some(place) = raw_operand_place(&operand) else {
-                return Ok(None);
-            };
-            let local = place.local().index() as usize;
-            if !visited.insert(local) {
-                return Ok(None);
-            }
-            let Some(site) = self.exact_reaching_assignment_v1(local, use_site)? else {
-                return Ok(None);
-            };
-            let SemanticStatementKindV1::Assign(assignment) =
-                self.function.blocks()[site.block].statements()[site.statement].kind()
-            else {
-                return Ok(None);
-            };
-            if place.projections().is_empty() {
-                match assignment.value().kind() {
-                    SemanticRvalueKindV1::Binary {
-                        operation,
-                        left,
-                        right,
-                    } if *operation == expected_operation => {
-                        return Ok(Some((site, left.clone(), right.clone())));
-                    }
-                    SemanticRvalueKindV1::Use(next) if next.ty() == place.ty() => {
-                        operand = next.clone();
-                        use_site = site;
-                        continue;
-                    }
-                    SemanticRvalueKindV1::Cast {
-                        kind: SemanticCastKindV1::Integer,
-                        operand: next,
-                    } if self
-                        .unsigned_integer_bits(assignment.value().result_type())
-                        .zip(self.unsigned_integer_bits(next.ty()))
-                        .is_some_and(|(destination, source)| destination >= source) =>
-                    {
-                        operand = next.clone();
-                        use_site = site;
-                        continue;
-                    }
-                    _ => return Ok(None),
-                }
-            }
-            let projected = match place.projections() {
-                [downcast, field] => {
-                    let (
-                        SemanticProjectionKindV1::Downcast(projected_variant),
-                        SemanticProjectionKindV1::Field(projected_field),
-                        SemanticRvalueKindV1::Aggregate(aggregate),
-                    ) = (downcast.kind(), field.kind(), assignment.value().kind())
-                    else {
-                        return Ok(None);
-                    };
-                    let SemanticAggregateKindV1::EnumVariant(actual_variant) = aggregate.kind()
-                    else {
-                        return Ok(None);
-                    };
-                    if projected_variant != *actual_variant {
-                        return Ok(None);
-                    }
-                    aggregate.operands().get(projected_field as usize)
-                }
-                [field] => {
-                    let (
-                        SemanticProjectionKindV1::Field(projected_field),
-                        SemanticRvalueKindV1::Aggregate(aggregate),
-                    ) = (field.kind(), assignment.value().kind())
-                    else {
-                        return Ok(None);
-                    };
-                    if !matches!(
-                        aggregate.kind(),
-                        SemanticAggregateKindV1::Array
-                            | SemanticAggregateKindV1::Tuple
-                            | SemanticAggregateKindV1::Aggregate
-                    ) {
-                        return Ok(None);
-                    }
-                    aggregate.operands().get(projected_field as usize)
-                }
-                _ => None,
-            };
-            let Some(projected) = projected.filter(|projected| projected.ty() == place.ty()) else {
-                return Ok(None);
-            };
-            operand = projected.clone();
-            use_site = site;
-        }
-    }
-
-    fn authenticated_scaled_quotient_remainder_v1(
-        &mut self,
-        left: &SemanticOperandV1,
-        right: &SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<Option<AuthenticatedScaledQuotientRemainderV1>, ProductionRankedProjectionErrorV1>
-    {
-        let Some(sum) = self.authenticated_checked_binary_source_v1(left, use_site)? else {
-            return Ok(None);
-        };
-        let Some(head_extent) = self.authenticated_checked_binary_source_v1(right, use_site)?
-        else {
-            return Ok(None);
-        };
-        if sum.checked.operation() != SemanticCheckedBinaryOpV1::Add
-            || head_extent.checked.operation() != SemanticCheckedBinaryOpV1::Multiply
-        {
-            return Ok(None);
-        }
-
-        for (scaled_operand, offset) in [
-            (sum.checked.left(), sum.checked.right()),
-            (sum.checked.right(), sum.checked.left()),
-        ] {
-            let Some(scaled) =
-                self.authenticated_checked_binary_source_v1(scaled_operand, sum.definition)?
-            else {
-                continue;
-            };
-            if scaled.checked.operation() != SemanticCheckedBinaryOpV1::Multiply {
-                continue;
-            }
-            for (quotient_operand, extent) in [
-                (head_extent.checked.left(), head_extent.checked.right()),
-                (head_extent.checked.right(), head_extent.checked.left()),
-            ] {
-                let Some((quotient_site, quotient_numerator, quotient_divisor)) = self
-                    .exact_binary_source_v1(
-                        quotient_operand,
-                        head_extent.definition,
-                        SemanticBinaryOpV1::Divide,
-                    )?
-                else {
-                    continue;
-                };
-                for (scaled_numerator, scale) in [
-                    (scaled.checked.left(), scaled.checked.right()),
-                    (scaled.checked.right(), scaled.checked.left()),
-                ] {
-                    if !same_semantic_operand_value_v1(scaled_numerator, &quotient_numerator) {
-                        continue;
-                    }
-                    let Some((divisor_site, divisor_extent, divisor_scale)) = self
-                        .exact_binary_source_v1(
-                            &quotient_divisor,
-                            quotient_site,
-                            SemanticBinaryOpV1::Divide,
-                        )?
-                    else {
-                        continue;
-                    };
-                    if !same_semantic_operand_value_v1(&divisor_extent, extent)
-                        || !same_semantic_operand_value_v1(&divisor_scale, scale)
-                        || !self.operand_has_globally_stable_value_at_v1(
-                            &quotient_numerator,
-                            quotient_site,
-                        )?
-                        || !self.operand_has_globally_stable_value_at_v1(extent, divisor_site)?
-                        || !self.operand_has_globally_stable_value_at_v1(scale, divisor_site)?
-                        || !self.operand_has_globally_stable_value_at_v1(
-                            &quotient_divisor,
-                            quotient_site,
-                        )?
-                    {
-                        continue;
-                    }
-                    return Ok(Some(AuthenticatedScaledQuotientRemainderV1 {
-                        divisor: quotient_divisor,
-                        divisor_use: quotient_site,
-                        extent: extent.clone(),
-                        extent_use: head_extent.definition,
-                        scale: scale.clone(),
-                        scale_use: scaled.definition,
-                        offset: offset.clone(),
-                        offset_use: sum.definition,
-                    }));
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    fn scaled_quotient_remainder_upper_range_v1(
-        &mut self,
-        left: &SemanticOperandV1,
-        right: &SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
-        let Some(remainder) =
-            self.authenticated_scaled_quotient_remainder_v1(left, right, use_site)?
-        else {
-            return Ok(None);
-        };
-        let Some(scale) = self.range_at_operand(
-            &remainder.scale,
-            remainder.scale_use.block,
-            remainder.scale_use.statement,
-        )?
-        else {
-            return Ok(None);
-        };
-        let Some(offset) = self.range_at_operand(
-            &remainder.offset,
-            remainder.offset_use.block,
-            remainder.offset_use.statement,
-        )?
-        else {
-            return Ok(None);
-        };
-        let Some(divisor) = self.range_at_operand(
-            &remainder.divisor,
-            remainder.divisor_use.block,
-            remainder.divisor_use.statement,
-        )?
-        else {
-            return Ok(None);
-        };
-        let Some(extent) = self.range_at_operand(
-            &remainder.extent,
-            remainder.extent_use.block,
-            remainder.extent_use.statement,
-        )?
-        else {
-            return Ok(None);
-        };
-        if scale.minimum == 0
-            || scale.minimum != scale.maximum
-            || divisor.minimum == 0
-            || offset.maximum >= scale.minimum
-        {
-            return Ok(None);
-        }
-        // For d=floor(extent/scale), q=floor(x/d), and offset<scale, the
-        // authenticated subtraction result is at most (d-1)*scale+offset.
-        Ok(extent
-            .maximum
-            .checked_sub(1)
-            .map(|maximum| UnsignedRangeProofV1 {
-                minimum: 0,
-                maximum,
-            }))
-    }
-
-    fn proves_scaled_quotient_remainder_nonnegative_v1(
-        &mut self,
-        left: &SemanticOperandV1,
-        right: &SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-        use_block: usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        let Some(remainder) =
-            self.authenticated_scaled_quotient_remainder_v1(left, right, use_site)?
-        else {
-            return Ok(false);
-        };
-        if self
-            .range_at_operand(
-                &remainder.divisor,
-                remainder.divisor_use.block,
-                remainder.divisor_use.statement,
-            )?
-            .is_none_or(|range| range.minimum == 0)
-            || self
-                .range_at_operand(
-                    &remainder.scale,
-                    remainder.scale_use.block,
-                    remainder.scale_use.statement,
-                )?
-                .is_none_or(|range| range.minimum == 0)
-        {
-            return Ok(false);
-        }
-
-        for (switch_block, block) in self.function.blocks().iter().enumerate() {
-            self.charge(1)?;
-            let SemanticTerminatorKindV1::SwitchInt {
-                discriminant,
-                targets,
-            } = block.terminator().kind()
-            else {
-                continue;
-            };
-            let [zero_target] = targets.values() else {
-                continue;
-            };
-            if zero_target.value() != 0
-                || zero_target.edge().role() != SemanticEdgeRoleV1::SwitchValue
-                || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
-            {
-                continue;
-            }
-            let false_target = zero_target.edge().target().index() as usize;
-            let true_target = targets.otherwise().target().index() as usize;
-            if false_target == true_target {
-                continue;
-            }
-            let Some(condition_local) = simple_operand_local(discriminant) else {
-                continue;
-            };
-            let condition_use = ScalarAssignmentSiteV1 {
-                block: switch_block,
-                statement: block.statements().len(),
-            };
-            let Some(condition_site) =
-                self.exact_reaching_assignment_v1(condition_local.index() as usize, condition_use)?
-            else {
-                continue;
-            };
-            let SemanticStatementKindV1::Assign(condition) =
-                self.function.blocks()[condition_site.block].statements()[condition_site.statement]
-                    .kind()
-            else {
-                continue;
-            };
-            let SemanticRvalueKindV1::Binary {
-                operation,
-                left: condition_left,
-                right: condition_right,
-            } = condition.value().kind()
-            else {
-                continue;
-            };
-            let (tested_remainder, success_target) = match operation {
-                SemanticBinaryOpV1::Equal
-                    if self.operand_is_exact_unsigned_zero(condition_right) =>
-                {
-                    (condition_left, true_target)
-                }
-                SemanticBinaryOpV1::Equal
-                    if self.operand_is_exact_unsigned_zero(condition_left) =>
-                {
-                    (condition_right, true_target)
-                }
-                SemanticBinaryOpV1::NotEqual
-                    if self.operand_is_exact_unsigned_zero(condition_right) =>
-                {
-                    (condition_left, false_target)
-                }
-                SemanticBinaryOpV1::NotEqual
-                    if self.operand_is_exact_unsigned_zero(condition_left) =>
-                {
-                    (condition_right, false_target)
-                }
-                _ => continue,
-            };
-            let Some((remainder_site, guarded_extent, guarded_scale)) = self
-                .exact_binary_source_v1(
-                    tested_remainder,
-                    condition_site,
-                    SemanticBinaryOpV1::Remainder,
-                )?
-            else {
-                continue;
-            };
-            if !self.same_exact_unsigned_value_v1(
-                &guarded_extent,
-                remainder_site,
-                &remainder.extent,
-                remainder.extent_use,
-            )? || !self.same_exact_unsigned_value_v1(
-                &guarded_scale,
-                remainder_site,
-                &remainder.scale,
-                remainder.scale_use,
-            )? {
-                continue;
-            }
-            // The exact remainder-zero edge makes extent=d*scale, so
-            // q*d<=x implies q*extent<=x*scale<=x*scale+offset.
-            let mut success_edge = HashSet::new();
-            success_edge.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "divisibility proof edge storage cannot be reserved",
-                )
-            })?;
-            success_edge.insert((switch_block, success_target));
-            if self.edge_set_dominates(&success_edge, use_block)? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    fn proves_authenticated_unsigned_lower_bound_subtraction_v1(
-        &mut self,
-        checked: &SemanticCheckedBinaryRvalueV1,
-        subtraction_site: ScalarAssignmentSiteV1,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if checked.operation() != SemanticCheckedBinaryOpV1::Subtract
-            || checked.left().ty() != checked.right().ty()
-            || self.unsigned_integer_bits(checked.left().ty()).is_none()
-        {
-            return Ok(false);
-        }
-
-        let block_count = self.function.blocks().len();
-        let can_reach_use = self.blocks_reaching(subtraction_site.block)?;
-        let mut stability_visited = Vec::new();
-        stability_visited
-            .try_reserve_exact(block_count)
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "unsigned subtraction lower-bound stability storage cannot be reserved",
-                )
-            })?;
-        stability_visited.resize(block_count, 0_usize);
-        let mut stability_pending = VecDeque::new();
-        stability_pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "unsigned subtraction lower-bound stability worklist cannot be reserved",
-            )
-        })?;
-        let mut stability_generation = 0_usize;
-
-        for (switch_block, block) in self.function.blocks().iter().enumerate() {
-            self.charge(1)?;
-            let SemanticTerminatorKindV1::SwitchInt {
-                discriminant,
-                targets,
-            } = block.terminator().kind()
-            else {
-                continue;
-            };
-            let [zero_target] = targets.values() else {
-                continue;
-            };
-            if zero_target.value() != 0
-                || zero_target.edge().role() != SemanticEdgeRoleV1::SwitchValue
-                || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
-                || zero_target.edge().target() == targets.otherwise().target()
-            {
-                continue;
-            }
-            let switch_use = ScalarAssignmentSiteV1 {
-                block: switch_block,
-                statement: block.statements().len(),
-            };
-            let Some(condition_local) = simple_operand_local(discriminant) else {
-                continue;
-            };
-            let Some(condition_site) =
-                self.exact_reaching_assignment_v1(condition_local.index() as usize, switch_use)?
-            else {
-                continue;
-            };
-            if condition_site.block != switch_block {
-                continue;
-            }
-            let SemanticStatementKindV1::Assign(condition) =
-                block.statements()[condition_site.statement].kind()
-            else {
-                continue;
-            };
-            let SemanticRvalueKindV1::Binary {
-                operation,
-                left,
-                right,
-            } = condition.value().kind()
-            else {
-                continue;
-            };
-            let false_target = zero_target.edge().target().index() as usize;
-            let true_target = targets.otherwise().target().index() as usize;
-            let (guarded_left, guarded_right, success_target) = match operation {
-                SemanticBinaryOpV1::GreaterOrEqual => (left, right, true_target),
-                SemanticBinaryOpV1::LessThan => (left, right, false_target),
-                SemanticBinaryOpV1::LessOrEqual => (right, left, true_target),
-                SemanticBinaryOpV1::GreaterThan => (right, left, false_target),
-                _ => continue,
-            };
-            if guarded_left.ty() != checked.left().ty()
-                || guarded_right.ty() != checked.right().ty()
-                || !self.same_edge_stable_unsigned_subtraction_value_v1(
-                    guarded_left,
-                    condition_site,
-                    checked.left(),
-                    success_target,
-                    subtraction_site,
-                    &can_reach_use,
-                    &mut stability_visited,
-                    &mut stability_pending,
-                    &mut stability_generation,
-                )?
-                || !self.same_edge_stable_unsigned_subtraction_value_v1(
-                    guarded_right,
-                    condition_site,
-                    checked.right(),
-                    success_target,
-                    subtraction_site,
-                    &can_reach_use,
-                    &mut stability_visited,
-                    &mut stability_pending,
-                    &mut stability_generation,
-                )?
-            {
-                continue;
-            }
-            if self.comparison_edge_authenticates_each_dynamic_use_v1(
-                switch_block,
-                success_target,
-                subtraction_site.block,
-            )? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn same_edge_stable_unsigned_subtraction_value_v1(
-        &mut self,
-        compared: &SemanticOperandV1,
-        comparison_site: ScalarAssignmentSiteV1,
-        expected: &SemanticOperandV1,
-        edge_target: usize,
-        use_site: ScalarAssignmentSiteV1,
-        can_reach_use: &[bool],
-        visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
-        generation: &mut usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if compared.ty() != expected.ty() || self.unsigned_integer_bits(compared.ty()).is_none() {
-            return Ok(false);
-        }
-        if let (Some(compared), Some(expected)) = (
-            simple_operand_local(compared),
-            simple_operand_local(expected),
-        ) && compared == expected
-        {
-            let local = compared.index() as usize;
-            let Some(comparison_block) = self.function.blocks().get(comparison_site.block) else {
-                return Ok(false);
-            };
-            if comparison_site.statement >= comparison_block.statements().len()
-                || self.block_defines_local_in_statement_range_v1(
-                    comparison_site.block,
-                    local,
-                    comparison_site.statement,
-                    comparison_site.statement + 1,
-                )
-            {
-                return Ok(false);
-            }
-            return self.local_stable_after_comparison_and_edge_to_use_v1(
-                local,
-                comparison_site,
-                edge_target,
-                use_site,
-                can_reach_use,
-                visited,
-                pending,
-                generation,
-            );
-        }
-        self.same_edge_stable_unsigned_value_v1(
-            compared,
-            comparison_site,
-            expected,
-            use_site,
-            edge_target,
-            use_site,
-            can_reach_use,
-            visited,
-            pending,
-            generation,
-        )
-    }
-
-    fn comparison_edge_authenticates_each_dynamic_use_v1(
-        &mut self,
-        comparison_block: usize,
-        success_target: usize,
-        use_block: usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        let block_count = self.function.blocks().len();
-        if comparison_block >= block_count
-            || success_target >= block_count
-            || use_block >= block_count
-        {
-            return Ok(false);
-        }
-        let mut success_edge = HashSet::new();
-        success_edge.try_reserve(1).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "comparison edge authentication storage cannot be reserved",
-            )
-        })?;
-        success_edge.insert((comparison_block, success_target));
-        if !self.edge_set_dominates(&success_edge, use_block)? {
-            return Ok(false);
-        }
-
-        let mut visited = Vec::new();
-        visited.try_reserve_exact(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "comparison edge reauthentication storage cannot be reserved",
-            )
-        })?;
-        visited.resize(block_count, false);
-        let mut pending = VecDeque::new();
-        pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "comparison edge reauthentication worklist cannot be reserved",
-            )
-        })?;
-        pending.push_back(use_block);
-        visited[use_block] = true;
-        while let Some(block) = pending.pop_front() {
-            self.charge(1)?;
-            self.charge(self.graph.successors[block].len())?;
-            for &successor in &self.graph.successors[block] {
-                if block == comparison_block && successor == success_target {
-                    continue;
-                }
-                if successor == use_block {
-                    return Ok(false);
-                }
-                if !visited[successor] {
-                    visited[successor] = true;
-                    pending.push_back(successor);
-                }
-            }
-        }
-        Ok(true)
-    }
-
-    fn same_exact_unsigned_value_v1(
-        &mut self,
-        left: &SemanticOperandV1,
-        left_use: ScalarAssignmentSiteV1,
-        right: &SemanticOperandV1,
-        right_use: ScalarAssignmentSiteV1,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        let Some((left, left_use)) = self.exact_unsigned_value_origin_v1(left, left_use)? else {
-            return Ok(false);
-        };
-        let Some((right, right_use)) = self.exact_unsigned_value_origin_v1(right, right_use)?
-        else {
-            return Ok(false);
-        };
-        match (&left, &right) {
-            (SemanticOperandV1::Constant(left), SemanticOperandV1::Constant(right)) => {
-                let (
-                    SemanticConstantValueV1::Scalar(left_value),
-                    SemanticConstantValueV1::Scalar(right_value),
-                ) = (left.value(), right.value())
-                else {
-                    return Ok(false);
-                };
-                Ok(self
-                    .scalar_unsigned_maximum(left.ty())
-                    .is_some_and(|maximum| left_value.bits() <= maximum)
-                    && self
-                        .scalar_unsigned_maximum(right.ty())
-                        .is_some_and(|maximum| right_value.bits() <= maximum)
-                    && left_value.bits() == right_value.bits())
-            }
-            _ => {
-                let (Some(left_local), Some(right_local)) =
-                    (simple_operand_local(&left), simple_operand_local(&right))
-                else {
-                    return Ok(false);
-                };
-                let local = left_local.index() as usize;
-                Ok(left_local == right_local
-                    && self.local_has_globally_stable_value_at(local, left_use)?
-                    && self.local_has_globally_stable_value_at(local, right_use)?)
-            }
-        }
-    }
-
-    fn exact_unsigned_value_origin_v1(
-        &mut self,
-        operand: &SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<
-        Option<(SemanticOperandV1, ScalarAssignmentSiteV1)>,
-        ProductionRankedProjectionErrorV1,
-    > {
-        let mut operand = operand.clone();
-        let mut use_site = use_site;
-        let mut visited = HashSet::new();
-        loop {
-            self.charge(1)?;
-            match &operand {
-                SemanticOperandV1::Constant(constant)
-                    if self.scalar_unsigned_maximum(constant.ty()).is_some() =>
-                {
-                    return Ok(Some((operand, use_site)));
-                }
-                SemanticOperandV1::Constant(_) => return Ok(None),
-                SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)
-                    if place.projections().is_empty()
-                        && self.scalar_unsigned_maximum(place.ty()).is_some() =>
-                {
-                    let local = place.local().index() as usize;
-                    if !visited.insert(local)
-                        || self.address_escaped.get(local).copied() != Some(false)
-                    {
-                        return Ok(None);
-                    }
-                    let Some(site) = self.exact_reaching_assignment_v1(local, use_site)? else {
-                        return Ok(self
-                            .local_has_globally_stable_value_at(local, use_site)?
-                            .then_some((operand, use_site)));
-                    };
-                    let SemanticStatementKindV1::Assign(assignment) =
-                        self.function.blocks()[site.block].statements()[site.statement].kind()
-                    else {
-                        return Ok(None);
-                    };
-                    let next = match assignment.value().kind() {
-                        SemanticRvalueKindV1::Use(next) if next.ty() == place.ty() => next,
-                        SemanticRvalueKindV1::Cast {
-                            kind: SemanticCastKindV1::Integer,
-                            operand: next,
-                        } if self
-                            .unsigned_integer_bits(assignment.value().result_type())
-                            .zip(self.unsigned_integer_bits(next.ty()))
-                            .is_some_and(|(destination, source)| destination >= source) =>
-                        {
-                            next
-                        }
-                        _ => return Ok(Some((operand, use_site))),
-                    };
-                    operand = next.clone();
-                    use_site = site;
-                }
-                _ => return Ok(None),
-            }
-        }
-    }
-
-    fn bounded_quotient_product_upper_range_v1(
-        &mut self,
-        left: &SemanticOperandV1,
-        right: &SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
-        for (quotient, extent) in [(left, right), (right, left)] {
-            let Some((quotient_site, numerator, divisor)) =
-                self.exact_binary_source_v1(quotient, use_site, SemanticBinaryOpV1::Divide)?
-            else {
-                continue;
-            };
-            let Some(bound) =
-                self.quotient_strict_product_upper_bound_v1(&numerator, &divisor, quotient_site)?
-            else {
-                continue;
-            };
-            if self
-                .range_at_operand(extent, use_site.block, use_site.statement)?
-                .is_none_or(|range| range.minimum == 0)
-            {
-                continue;
-            }
-            let Some(total_maximum) = self.explicit_checked_product_maximum_v1(
-                &bound.factor,
-                bound.factor_use,
-                extent,
-                use_site,
-                use_site,
-                None,
-            )?
-            else {
-                continue;
-            };
-            // q<factor and extent>0 make q*extent strictly smaller than the
-            // authenticated total product factor*extent.
-            let Some(maximum) = total_maximum.checked_sub(1) else {
-                continue;
-            };
-            return Ok(Some(UnsignedRangeProofV1 {
-                minimum: 0,
-                maximum,
-            }));
-        }
-        Ok(None)
-    }
-
-    fn explicit_checked_product_maximum_v1(
-        &mut self,
-        left: &SemanticOperandV1,
-        left_use: ScalarAssignmentSiteV1,
-        right: &SemanticOperandV1,
-        right_use: ScalarAssignmentSiteV1,
-        use_site: ScalarAssignmentSiteV1,
-        required_type: Option<SemanticTypeIdV1>,
-    ) -> Result<Option<u128>, ProductionRankedProjectionErrorV1> {
-        if required_type.is_some_and(|required| left.ty() != required || right.ty() != required) {
-            return Ok(None);
-        }
-        let assignment_count = self.assignments.len();
-        for local in 0..assignment_count {
-            self.charge(1)?;
-            if self.definition_counts.get(local).copied() != Some(1)
-                || self.address_escaped.get(local).copied() != Some(false)
-            {
-                continue;
-            }
-            let Some(definition) = self.assignments[local] else {
-                continue;
-            };
-            let SemanticStatementKindV1::Assign(assignment) =
-                self.function.blocks()[definition.block].statements()[definition.statement].kind()
-            else {
-                continue;
-            };
-            let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else {
-                continue;
-            };
-            if checked.operation() != SemanticCheckedBinaryOpV1::Multiply {
-                continue;
-            }
-            if required_type.is_some_and(|required| {
-                checked.left().ty() != required || checked.right().ty() != required
-            }) {
-                continue;
-            }
-            let operands_match =
-                self.same_checked_product_operand_v1(checked.left(), definition, left, left_use)?
-                    && self.same_checked_product_operand_v1(
-                        checked.right(),
-                        definition,
-                        right,
-                        right_use,
-                    )?
-                    || self.same_checked_product_operand_v1(
-                        checked.left(),
-                        definition,
-                        right,
-                        right_use,
-                    )? && self.same_checked_product_operand_v1(
-                        checked.right(),
-                        definition,
-                        left,
-                        left_use,
-                    )?;
-            if !operands_match {
-                continue;
-            }
-            let Some(maximum) = self.scalar_unsigned_maximum(checked.left().ty()) else {
-                continue;
-            };
-            if checked.right().ty() != checked.left().ty() {
-                continue;
-            }
-            if self
-                .authenticated_checked_binary_local_value_v1(
-                    local,
-                    use_site.block,
-                    use_site.statement,
-                )?
-                .is_some()
-            {
-                return Ok(Some(maximum));
-            }
-            for (switch_block, block) in self.function.blocks().iter().enumerate() {
-                self.charge(1)?;
-                let SemanticTerminatorKindV1::SwitchInt {
-                    discriminant,
-                    targets,
-                } = block.terminator().kind()
-                else {
-                    continue;
-                };
-                let [zero_target] = targets.values() else {
-                    continue;
-                };
-                if zero_target.value() != 0
-                    || zero_target.edge().role() != SemanticEdgeRoleV1::SwitchValue
-                    || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
-                    || zero_target.edge().target() == targets.otherwise().target()
-                {
-                    continue;
-                }
-                let switch_use = ScalarAssignmentSiteV1 {
-                    block: switch_block,
-                    statement: block.statements().len(),
-                };
-                if self.exact_checked_overflow_flag_source_local_v1(discriminant, switch_use)?
-                    != Some(local)
-                    || !self.assignment_dominates_use(
-                        definition,
-                        switch_block,
-                        block.statements().len(),
-                    )?
-                {
-                    continue;
-                }
-                let success_target = zero_target.edge().target().index() as usize;
-                let mut success_edge = HashSet::new();
-                success_edge.try_reserve(1).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "explicit checked product edge storage cannot be reserved",
-                    )
-                })?;
-                success_edge.insert((switch_block, success_target));
-                if self.edge_set_dominates(&success_edge, use_site.block)? {
-                    return Ok(Some(maximum));
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    fn same_checked_product_operand_v1(
-        &mut self,
-        left: &SemanticOperandV1,
-        left_use: ScalarAssignmentSiteV1,
-        right: &SemanticOperandV1,
-        right_use: ScalarAssignmentSiteV1,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if self.same_exact_unsigned_value_v1(left, left_use, right, right_use)? {
-            return Ok(true);
-        }
-        if left.ty() != right.ty() || self.unsigned_integer_bits(left.ty()).is_none() {
-            return Ok(false);
-        }
-        let (Some(left_local), Some(right_local)) =
-            (simple_operand_local(left), simple_operand_local(right))
-        else {
-            return Ok(false);
-        };
-        let local = left_local.index() as usize;
-        if left_local != right_local || self.address_escaped.get(local).copied() != Some(false) {
-            return Ok(false);
-        }
-        Ok(
-            self.local_is_stable_from_operand_use_site_v1(local, left_use, right_use)?
-                || self.local_is_stable_from_operand_use_site_v1(local, right_use, left_use)?,
-        )
-    }
-
-    fn local_is_stable_from_operand_use_site_v1(
-        &mut self,
-        local: usize,
-        capture_site: ScalarAssignmentSiteV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        let Some(block) = self.function.blocks().get(capture_site.block) else {
-            return Ok(false);
-        };
-        if capture_site.statement > block.statements().len() {
-            return Ok(false);
-        }
-        let capture_redefines_local = if capture_site.statement < block.statements().len() {
-            self.block_defines_local_in_statement_range_v1(
-                capture_site.block,
-                local,
-                capture_site.statement,
-                capture_site.statement + 1,
-            )
-        } else {
-            self.block_terminator_defines_local_v1(capture_site.block, local)
-        };
-        if capture_redefines_local {
-            return Ok(false);
-        }
-        self.local_is_stable_between_sites_v1(local, capture_site, use_site)
-    }
-
-    fn proves_strictly_bounded_unsigned_product_v1(
-        &mut self,
-        checked: &SemanticCheckedBinaryRvalueV1,
-        product_site: ScalarAssignmentSiteV1,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if checked.operation() != SemanticCheckedBinaryOpV1::Multiply
-            || checked.left().ty() != checked.right().ty()
-            || self.unsigned_integer_bits(checked.left().ty()).is_none()
-        {
-            return Ok(false);
-        }
-
-        for (bounded, factor) in [
-            (checked.left(), checked.right()),
-            (checked.right(), checked.left()),
-        ] {
-            for (switch_block, block) in self.function.blocks().iter().enumerate() {
-                self.charge(1)?;
-                let SemanticTerminatorKindV1::SwitchInt {
-                    discriminant,
-                    targets,
-                } = block.terminator().kind()
-                else {
-                    continue;
-                };
-                let [zero_target] = targets.values() else {
-                    continue;
-                };
-                if zero_target.value() != 0
-                    || zero_target.edge().role() != SemanticEdgeRoleV1::SwitchValue
-                    || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
-                    || zero_target.edge().target() == targets.otherwise().target()
-                {
-                    continue;
-                }
-                let switch_use = ScalarAssignmentSiteV1 {
-                    block: switch_block,
-                    statement: block.statements().len(),
-                };
-                let Some(condition_local) = simple_operand_local(discriminant) else {
-                    continue;
-                };
-                let Some(condition_site) = self
-                    .exact_reaching_assignment_v1(condition_local.index() as usize, switch_use)?
-                else {
-                    continue;
-                };
-                let SemanticStatementKindV1::Assign(condition) = self.function.blocks()
-                    [condition_site.block]
-                    .statements()[condition_site.statement]
-                    .kind()
-                else {
-                    continue;
-                };
-                let SemanticRvalueKindV1::Binary {
-                    operation,
-                    left,
-                    right,
-                } = condition.value().kind()
-                else {
-                    continue;
-                };
-                let false_target = zero_target.edge().target().index() as usize;
-                let true_target = targets.otherwise().target().index() as usize;
-                let (tested, upper, success_target) = match operation {
-                    SemanticBinaryOpV1::LessThan => (left, right, true_target),
-                    SemanticBinaryOpV1::GreaterOrEqual => (left, right, false_target),
-                    SemanticBinaryOpV1::GreaterThan => (right, left, true_target),
-                    SemanticBinaryOpV1::LessOrEqual => (right, left, false_target),
-                    _ => continue,
-                };
-                if tested.ty() != upper.ty()
-                    || tested.ty() != bounded.ty()
-                    || !self.same_exact_unsigned_value_v1(
-                        tested,
-                        condition_site,
-                        bounded,
-                        product_site,
-                    )?
-                {
-                    continue;
-                }
-                let mut success_edge = HashSet::new();
-                success_edge.try_reserve(1).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "strict product-bound edge storage cannot be reserved",
-                    )
-                })?;
-                success_edge.insert((switch_block, success_target));
-                if !self.edge_set_dominates(&success_edge, product_site.block)? {
-                    continue;
-                }
-                // Unsigned multiplication is monotone: on the exact strict
-                // edge, bounded < upper, and a successful checked upper*factor
-                // therefore proves bounded*factor fits the same scalar width.
-                if self
-                    .explicit_checked_product_maximum_v1(
-                        upper,
-                        condition_site,
-                        factor,
-                        product_site,
-                        product_site,
-                        Some(checked.left().ty()),
-                    )?
-                    .is_some()
-                {
-                    return Ok(true);
-                }
-            }
-        }
-        Ok(false)
-    }
-
-    fn proves_strictly_bounded_unsigned_flat_index_v1(
-        &mut self,
-        checked: &SemanticCheckedBinaryRvalueV1,
-        sum_site: ScalarAssignmentSiteV1,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if checked.operation() != SemanticCheckedBinaryOpV1::Add
-            || checked.left().ty() != checked.right().ty()
-            || self.unsigned_integer_bits(checked.left().ty()).is_none()
-        {
-            return Ok(false);
-        }
-
-        for (product_operand, offset) in [
-            (checked.left(), checked.right()),
-            (checked.right(), checked.left()),
-        ] {
-            let Some(product) =
-                self.authenticated_checked_binary_source_v1(product_operand, sum_site)?
-            else {
-                continue;
-            };
-            if product.checked.operation() != SemanticCheckedBinaryOpV1::Multiply
-                || product.checked.left().ty() != checked.left().ty()
-                || product.checked.right().ty() != checked.left().ty()
-            {
-                continue;
-            }
-
-            for (index, extent) in [
-                (product.checked.left(), product.checked.right()),
-                (product.checked.right(), product.checked.left()),
-            ] {
-                let index_bounds = self.authenticated_strict_unsigned_bounds_v1(
-                    index,
-                    product.definition,
-                    sum_site,
-                )?;
-                let offset_bounds =
-                    self.authenticated_strict_unsigned_bounds_v1(offset, sum_site, sum_site)?;
-                for (outer, outer_use) in &index_bounds {
-                    for (offset_extent, offset_extent_use) in &offset_bounds {
-                        if !self.same_exact_unsigned_value_v1(
-                            extent,
-                            product.definition,
-                            offset_extent,
-                            *offset_extent_use,
-                        )? {
-                            continue;
-                        }
-                        if self
-                            .explicit_checked_product_maximum_v1(
-                                outer,
-                                *outer_use,
-                                extent,
-                                product.definition,
-                                sum_site,
-                                Some(checked.left().ty()),
-                            )?
-                            .is_some()
-                        {
-                            // On the two exact strict-success edges, index<outer and
-                            // offset<extent. A successful checked outer*extent therefore
-                            // bounds index*extent+offset by outer*extent-1.
-                            return Ok(true);
-                        }
-                    }
-                }
-            }
-        }
-
-        if self.proves_strictly_bounded_unsigned_nested_flat_index_v1(checked, sum_site)? {
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
-    fn proves_strictly_bounded_unsigned_nested_flat_index_v1(
-        &mut self,
-        checked: &SemanticCheckedBinaryRvalueV1,
-        sum_site: ScalarAssignmentSiteV1,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        const MAX_NESTED_FLAT_INDEX_OFFSETS_V1: usize = 8;
-
-        if checked.operation() != SemanticCheckedBinaryOpV1::Add
-            || checked.left().ty() != checked.right().ty()
-            || self.unsigned_integer_bits(checked.left().ty()).is_none()
-        {
-            return Ok(false);
-        }
-        for (base_operand, tail_offset) in [
-            (checked.left(), checked.right()),
-            (checked.right(), checked.left()),
-        ] {
-            let mut offsets = Vec::new();
-            offsets
-                .try_reserve_exact(MAX_NESTED_FLAT_INDEX_OFFSETS_V1)
-                .map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "nested flat-index offset storage cannot be reserved",
-                    )
-                })?;
-            offsets.push((tail_offset.clone(), sum_site));
-            if self.proves_strictly_bounded_unsigned_flat_index_path_v1(
-                base_operand,
-                sum_site,
-                sum_site,
-                checked.left().ty(),
-                &mut offsets,
-                MAX_NESTED_FLAT_INDEX_OFFSETS_V1 - 1,
-            )? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    fn proves_strictly_bounded_unsigned_flat_index_path_v1(
-        &mut self,
-        operand: &SemanticOperandV1,
-        operand_use: ScalarAssignmentSiteV1,
-        sum_site: ScalarAssignmentSiteV1,
-        scalar_type: SemanticTypeIdV1,
-        offsets: &mut Vec<(SemanticOperandV1, ScalarAssignmentSiteV1)>,
-        remaining_offsets: usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        let Some(value) = self.authenticated_checked_binary_source_v1(operand, operand_use)? else {
-            return Ok(false);
-        };
-        if value.checked.left().ty() != scalar_type || value.checked.right().ty() != scalar_type {
-            return Ok(false);
-        }
-
-        if value.checked.operation() == SemanticCheckedBinaryOpV1::Multiply {
-            let mut combined_offset_maximum = Some(0_u128);
-            for (offset, offset_use) in offsets.iter() {
-                combined_offset_maximum = combined_offset_maximum
-                    .zip(self.range_at_operand(offset, offset_use.block, offset_use.statement)?)
-                    .and_then(|(combined, range)| combined.checked_add(range.maximum));
-            }
-
-            for (index, extent) in [
-                (value.checked.left(), value.checked.right()),
-                (value.checked.right(), value.checked.left()),
-            ] {
-                let numeric_offset_bound = self
-                    .range_at_operand(extent, value.definition.block, value.definition.statement)?
-                    .zip(combined_offset_maximum)
-                    .is_some_and(|(extent_range, offset_maximum)| {
-                        offset_maximum < extent_range.minimum
-                    });
-                if !numeric_offset_bound
-                    && !self.proves_nested_offset_sum_below_product_extent_v1(
-                        offsets,
-                        extent,
-                        value.definition,
-                        sum_site,
-                        scalar_type,
-                    )?
-                {
-                    continue;
-                }
-                let index_bounds = self.authenticated_strict_unsigned_bounds_v1(
-                    index,
-                    value.definition,
-                    sum_site,
-                )?;
-                for (outer, outer_use) in &index_bounds {
-                    if self
-                        .explicit_checked_product_maximum_v1(
-                            outer,
-                            *outer_use,
-                            extent,
-                            value.definition,
-                            sum_site,
-                            Some(scalar_type),
-                        )?
-                        .is_some()
-                    {
-                        // Every peeled add has an authenticated success edge.
-                        // The strict index edge and the summed unsigned offset
-                        // maxima therefore keep the result below the successful
-                        // checked outer*extent witness.
-                        return Ok(true);
-                    }
-                }
-            }
-            return Ok(false);
-        }
-
-        if value.checked.operation() != SemanticCheckedBinaryOpV1::Add || remaining_offsets == 0 {
-            return Ok(false);
-        }
-        for (next, offset) in [
-            (value.checked.left(), value.checked.right()),
-            (value.checked.right(), value.checked.left()),
-        ] {
-            offsets.push((offset.clone(), value.definition));
-            let proved = self.proves_strictly_bounded_unsigned_flat_index_path_v1(
-                next,
-                value.definition,
-                sum_site,
-                scalar_type,
-                offsets,
-                remaining_offsets - 1,
-            )?;
-            offsets.pop();
-            if proved {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    fn proves_nested_offset_sum_below_product_extent_v1(
-        &mut self,
-        offsets: &[(SemanticOperandV1, ScalarAssignmentSiteV1)],
-        extent: &SemanticOperandV1,
-        extent_use: ScalarAssignmentSiteV1,
-        sum_site: ScalarAssignmentSiteV1,
-        scalar_type: SemanticTypeIdV1,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        let Some(extent_product) =
-            self.authenticated_checked_binary_source_v1(extent, extent_use)?
-        else {
-            return Ok(false);
-        };
-        if extent_product.checked.operation() != SemanticCheckedBinaryOpV1::Multiply
-            || extent_product.checked.left().ty() != scalar_type
-            || extent_product.checked.right().ty() != scalar_type
-        {
-            return Ok(false);
-        }
-
-        for (scaled_offset_index, (scaled_offset, scaled_offset_use)) in offsets.iter().enumerate()
-        {
-            let Some(offset_product) =
-                self.authenticated_checked_binary_source_v1(scaled_offset, *scaled_offset_use)?
-            else {
-                continue;
-            };
-            if offset_product.checked.operation() != SemanticCheckedBinaryOpV1::Multiply
-                || offset_product.checked.left().ty() != scalar_type
-                || offset_product.checked.right().ty() != scalar_type
-            {
-                continue;
-            }
-
-            let mut residual_maximum = Some(0_u128);
-            for (offset_index, (offset, offset_use)) in offsets.iter().enumerate() {
-                if offset_index == scaled_offset_index {
-                    continue;
-                }
-                residual_maximum = residual_maximum
-                    .zip(self.range_at_operand(offset, offset_use.block, offset_use.statement)?)
-                    .and_then(|(combined, range)| combined.checked_add(range.maximum));
-            }
-            let Some(residual_maximum) = residual_maximum else {
-                continue;
-            };
-
-            for (inner_index, offset_stride) in [
-                (
-                    offset_product.checked.left(),
-                    offset_product.checked.right(),
-                ),
-                (
-                    offset_product.checked.right(),
-                    offset_product.checked.left(),
-                ),
-            ] {
-                let Some(stride_range) = self.range_at_operand(
-                    offset_stride,
-                    offset_product.definition.block,
-                    offset_product.definition.statement,
-                )?
-                else {
-                    continue;
-                };
-                if residual_maximum >= stride_range.minimum {
-                    continue;
-                }
-                let inner_bounds = self.authenticated_strict_unsigned_bounds_v1(
-                    inner_index,
-                    offset_product.definition,
-                    sum_site,
-                )?;
-                for (inner_upper, extent_stride) in [
-                    (
-                        extent_product.checked.left(),
-                        extent_product.checked.right(),
-                    ),
-                    (
-                        extent_product.checked.right(),
-                        extent_product.checked.left(),
-                    ),
-                ] {
-                    if !self.same_checked_product_operand_v1(
-                        offset_stride,
-                        offset_product.definition,
-                        extent_stride,
-                        extent_product.definition,
-                    )? {
-                        continue;
-                    }
-                    for (bound, bound_use) in &inner_bounds {
-                        if self.same_checked_product_operand_v1(
-                            bound,
-                            *bound_use,
-                            inner_upper,
-                            extent_product.definition,
-                        )? {
-                            // inner<inner_upper and residual<stride establish
-                            // inner*stride+residual < inner_upper*stride.
-                            return Ok(true);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(false)
-    }
-
-    fn authenticated_strict_unsigned_bounds_v1(
-        &mut self,
-        tested_value: &SemanticOperandV1,
-        tested_use: ScalarAssignmentSiteV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<Vec<(SemanticOperandV1, ScalarAssignmentSiteV1)>, ProductionRankedProjectionErrorV1>
-    {
-        if self.unsigned_integer_bits(tested_value.ty()).is_none() {
-            return Ok(Vec::new());
-        }
-        let can_reach_use = self.blocks_reaching(use_site.block)?;
-        let block_count = self.function.blocks().len();
-        let mut visited = Vec::new();
-        visited.try_reserve_exact(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "strict flat-index bound stability storage cannot be reserved",
-            )
-        })?;
-        visited.resize(block_count, 0_usize);
-        let mut pending = VecDeque::new();
-        pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "strict flat-index bound stability worklist cannot be reserved",
-            )
-        })?;
-        let mut generation = 0_usize;
-        let mut bounds = Vec::new();
-        bounds.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "strict flat-index bound result storage cannot be reserved",
-            )
-        })?;
-
-        for (switch_block, block) in self.function.blocks().iter().enumerate() {
-            self.charge(1)?;
-            let SemanticTerminatorKindV1::SwitchInt {
-                discriminant,
-                targets,
-            } = block.terminator().kind()
-            else {
-                continue;
-            };
-            let [zero_target] = targets.values() else {
-                continue;
-            };
-            if zero_target.value() != 0
-                || zero_target.edge().role() != SemanticEdgeRoleV1::SwitchValue
-                || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
-                || zero_target.edge().target() == targets.otherwise().target()
-            {
-                continue;
-            }
-            let switch_use = ScalarAssignmentSiteV1 {
-                block: switch_block,
-                statement: block.statements().len(),
-            };
-            let Some(condition_local) = simple_operand_local(discriminant) else {
-                continue;
-            };
-            let Some(condition_site) =
-                self.exact_reaching_assignment_v1(condition_local.index() as usize, switch_use)?
-            else {
-                continue;
-            };
-            if condition_site.block != switch_block {
-                continue;
-            }
-            let SemanticStatementKindV1::Assign(condition) =
-                block.statements()[condition_site.statement].kind()
-            else {
-                continue;
-            };
-            let SemanticRvalueKindV1::Binary {
-                operation,
-                left,
-                right,
-            } = condition.value().kind()
-            else {
-                continue;
-            };
-            let false_target = zero_target.edge().target().index() as usize;
-            let true_target = targets.otherwise().target().index() as usize;
-            let (tested, upper, success_target) = match operation {
-                SemanticBinaryOpV1::LessThan => (left, right, true_target),
-                SemanticBinaryOpV1::GreaterOrEqual => (left, right, false_target),
-                SemanticBinaryOpV1::GreaterThan => (right, left, true_target),
-                SemanticBinaryOpV1::LessOrEqual => (right, left, false_target),
-                _ => continue,
-            };
-            if tested.ty() != tested_value.ty()
-                || upper.ty() != tested_value.ty()
-                || !self.same_edge_stable_unsigned_value_v1(
-                    tested,
-                    condition_site,
-                    tested_value,
-                    tested_use,
-                    success_target,
-                    use_site,
-                    &can_reach_use,
-                    &mut visited,
-                    &mut pending,
-                    &mut generation,
-                )?
-                || !self.unsigned_operand_stable_from_edge_to_use_v1(
-                    upper,
-                    condition_site,
-                    success_target,
-                    use_site,
-                    &can_reach_use,
-                    &mut visited,
-                    &mut pending,
-                    &mut generation,
-                )?
-            {
-                continue;
-            }
-            let mut success_edge = HashSet::new();
-            success_edge.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "strict flat-index bound edge storage cannot be reserved",
-                )
-            })?;
-            success_edge.insert((switch_block, success_target));
-            if self.edge_set_dominates(&success_edge, tested_use.block)?
-                && self.edge_set_dominates(&success_edge, use_site.block)?
-            {
-                bounds.push((upper.clone(), condition_site));
-            }
-        }
-        Ok(bounds)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn same_edge_stable_unsigned_value_v1(
-        &mut self,
-        compared: &SemanticOperandV1,
-        comparison_site: ScalarAssignmentSiteV1,
-        expected: &SemanticOperandV1,
-        expected_use: ScalarAssignmentSiteV1,
-        edge_target: usize,
-        use_site: ScalarAssignmentSiteV1,
-        can_reach_use: &[bool],
-        visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
-        generation: &mut usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if compared.ty() != expected.ty() || self.unsigned_integer_bits(compared.ty()).is_none() {
-            return Ok(false);
-        }
-        if expected_use.block == use_site.block
-            && expected_use.statement == use_site.statement
-            && let (Some(compared_local), Some(expected_local)) = (
-                simple_operand_local(compared),
-                simple_operand_local(expected),
-            )
-            && compared_local == expected_local
-            && self
-                .address_escaped
-                .get(compared_local.index() as usize)
-                .copied()
-                == Some(false)
-        {
-            let local = compared_local.index() as usize;
-            if !self.comparison_edge_authenticates_each_dynamic_use_v1(
-                comparison_site.block,
-                edge_target,
-                use_site.block,
-            )? {
-                return Ok(false);
-            }
-            return self.local_stable_after_comparison_and_edge_to_use_v1(
-                local,
-                comparison_site,
-                edge_target,
-                use_site,
-                can_reach_use,
-                visited,
-                pending,
-                generation,
-            );
-        }
-        let Some((compared, compared_origin_use)) =
-            self.exact_same_type_use_alias_origin_v1(compared, comparison_site)?
-        else {
-            return Ok(false);
-        };
-        let Some((expected, expected_origin_use)) =
-            self.exact_same_type_use_alias_origin_v1(expected, expected_use)?
-        else {
-            return Ok(false);
-        };
-        match (&compared, &expected) {
-            (SemanticOperandV1::Constant(left), SemanticOperandV1::Constant(right)) => {
-                Ok(left.ty() == right.ty() && left.value() == right.value())
-            }
-            _ => {
-                let (Some(compared), Some(expected)) = (
-                    simple_operand_local(&compared),
-                    simple_operand_local(&expected),
-                ) else {
-                    return Ok(false);
-                };
-                if compared != expected {
-                    return Ok(false);
-                }
-                let local = compared.index() as usize;
-                if !self.local_is_stable_between_sites_v1(
-                    local,
-                    compared_origin_use,
-                    comparison_site,
-                )? || !self.local_is_stable_between_sites_v1(
-                    local,
-                    expected_origin_use,
-                    expected_use,
-                )? {
-                    return Ok(false);
-                }
-                self.local_stable_after_comparison_and_edge_to_use_v1(
-                    local,
-                    comparison_site,
-                    edge_target,
-                    use_site,
-                    can_reach_use,
-                    visited,
-                    pending,
-                    generation,
-                )
-            }
-        }
-    }
-
-    fn local_is_stable_between_sites_v1(
-        &mut self,
-        local: usize,
-        capture_site: ScalarAssignmentSiteV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        let block_count = self.function.blocks().len();
-        let Some(capture_block) = self.function.blocks().get(capture_site.block) else {
-            return Ok(false);
-        };
-        let Some(use_block) = self.function.blocks().get(use_site.block) else {
-            return Ok(false);
-        };
-        if local >= self.function.locals().len()
-            || capture_site.statement > capture_block.statements().len()
-            || use_site.statement > use_block.statements().len()
-            || self.address_escaped.get(local).copied() != Some(false)
-        {
-            return Ok(false);
-        }
-        if capture_site.block == use_site.block && capture_site.statement == use_site.statement {
-            return Ok(true);
-        }
-        if capture_site.block == use_site.block {
-            if capture_site.statement >= use_site.statement {
-                return Ok(false);
-            }
-            return Ok(!self.block_defines_local_in_statement_range_v1(
-                capture_site.block,
-                local,
-                capture_site
-                    .statement
-                    .saturating_add(1)
-                    .min(capture_block.statements().len()),
-                use_site.statement,
-            ));
-        }
-        if !self.assignment_dominates_use(capture_site, use_site.block, use_site.statement)?
-            || self.block_defines_local_in_statement_range_v1(
-                capture_site.block,
-                local,
-                capture_site
-                    .statement
-                    .saturating_add(1)
-                    .min(capture_block.statements().len()),
-                capture_block.statements().len(),
-            )
-            || self.block_terminator_defines_local_v1(capture_site.block, local)
-        {
-            return Ok(false);
-        }
-
-        let can_reach_use = self.blocks_reaching(use_site.block)?;
-        let mut visited = Vec::new();
-        visited.try_reserve_exact(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "strict flat-index capture stability storage cannot be reserved",
-            )
-        })?;
-        visited.resize(block_count, false);
-        let mut pending = VecDeque::new();
-        pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "strict flat-index capture stability worklist cannot be reserved",
-            )
-        })?;
-        self.charge(self.graph.successors[capture_site.block].len())?;
-        for successor in &self.graph.successors[capture_site.block] {
-            if can_reach_use[*successor] && !visited[*successor] {
-                visited[*successor] = true;
-                pending.push_back(*successor);
-            }
-        }
-        while let Some(block) = pending.pop_front() {
-            self.charge(1)?;
-            let defines_local = if block == use_site.block {
-                self.block_defines_local_in_statement_range_v1(block, local, 0, use_site.statement)
-            } else {
-                self.block_defines_local(block, local)
-            };
-            if defines_local {
-                return Ok(false);
-            }
-            if block == use_site.block {
-                continue;
-            }
-            self.charge(self.graph.successors[block].len())?;
-            for successor in &self.graph.successors[block] {
-                if can_reach_use[*successor] && !visited[*successor] {
-                    visited[*successor] = true;
-                    pending.push_back(*successor);
-                }
-            }
-        }
-        Ok(true)
-    }
-
-    fn block_terminator_defines_local_v1(&self, block: usize, local: usize) -> bool {
-        matches!(
-            self.function.blocks()[block].terminator().kind(),
-            SemanticTerminatorKindV1::Call(call)
-                if call.destination().and_then(|destination| {
-                    local_definition_index(destination.place())
-                }) == Some(local)
-        )
-    }
-
-    fn exact_same_type_use_alias_origin_v1(
-        &mut self,
-        operand: &SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<
-        Option<(SemanticOperandV1, ScalarAssignmentSiteV1)>,
-        ProductionRankedProjectionErrorV1,
-    > {
-        let expected_type = operand.ty();
-        if self.unsigned_integer_bits(expected_type).is_none() {
-            return Ok(None);
-        }
-        let mut operand = operand.clone();
-        let mut use_site = use_site;
-        let mut visited = HashSet::new();
-        loop {
-            self.charge(1)?;
-            match &operand {
-                SemanticOperandV1::Constant(constant) if constant.ty() == expected_type => {
-                    return Ok(Some((operand, use_site)));
-                }
-                SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)
-                    if place.projections().is_empty() && place.ty() == expected_type =>
-                {
-                    let local = place.local().index() as usize;
-                    if !visited.insert(local)
-                        || self.address_escaped.get(local).copied() != Some(false)
-                    {
-                        return Ok(None);
-                    }
-                    let Some(definition) = self.exact_reaching_assignment_v1(local, use_site)?
-                    else {
-                        return Ok(Some((operand, use_site)));
-                    };
-                    let SemanticStatementKindV1::Assign(assignment) =
-                        self.function.blocks()[definition.block].statements()[definition.statement]
-                            .kind()
-                    else {
-                        return Ok(None);
-                    };
-                    let SemanticRvalueKindV1::Use(next) = assignment.value().kind() else {
-                        return Ok(Some((operand, use_site)));
-                    };
-                    if assignment.value().result_type() != expected_type
-                        || next.ty() != expected_type
-                    {
-                        return Ok(None);
-                    }
-                    operand = next.clone();
-                    use_site = definition;
-                }
-                _ => return Ok(None),
-            }
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn unsigned_operand_stable_from_edge_to_use_v1(
-        &mut self,
-        operand: &SemanticOperandV1,
-        comparison_site: ScalarAssignmentSiteV1,
-        edge_target: usize,
-        use_site: ScalarAssignmentSiteV1,
-        can_reach_use: &[bool],
-        visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
-        generation: &mut usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if self.unsigned_integer_bits(operand.ty()).is_none() {
-            return Ok(false);
-        }
-        let Some(local) = simple_operand_local(operand) else {
-            return Ok(matches!(operand, SemanticOperandV1::Constant(_)));
-        };
-        self.local_stable_after_comparison_and_edge_to_use_v1(
-            local.index() as usize,
-            comparison_site,
-            edge_target,
-            use_site,
-            can_reach_use,
-            visited,
-            pending,
-            generation,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn local_stable_after_comparison_and_edge_to_use_v1(
-        &mut self,
-        local: usize,
-        comparison_site: ScalarAssignmentSiteV1,
-        edge_target: usize,
-        use_site: ScalarAssignmentSiteV1,
-        can_reach_use: &[bool],
-        visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
-        generation: &mut usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if self.address_escaped.get(local).copied() != Some(false)
-            || self.block_defines_local_in_statement_range_v1(
-                comparison_site.block,
-                local,
-                comparison_site.statement.saturating_add(1),
-                self.function.blocks()[comparison_site.block]
-                    .statements()
-                    .len(),
-            )
-        {
-            return Ok(false);
-        }
-        *generation =
-            generation
-                .checked_add(1)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "strict flat-index bound stability generation overflowed",
-                ))?;
-        self.local_is_stable_between_edge_and_site_v1(
-            local,
-            edge_target,
-            use_site,
-            can_reach_use,
-            visited,
-            pending,
-            *generation,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn local_is_stable_between_edge_and_site_v1(
-        &mut self,
-        local: usize,
-        edge_target: usize,
-        use_site: ScalarAssignmentSiteV1,
-        can_reach_use: &[bool],
-        visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
-        generation: usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        let block_count = self.function.blocks().len();
-        if local >= self.function.locals().len()
-            || edge_target >= block_count
-            || use_site.block >= block_count
-            || use_site.statement > self.function.blocks()[use_site.block].statements().len()
-            || can_reach_use.len() != block_count
-            || visited.len() != block_count
-            || !can_reach_use[edge_target]
-        {
-            return Ok(false);
-        }
-
-        pending.clear();
-        pending.push_back(edge_target);
-        visited[edge_target] = generation;
-        while let Some(block) = pending.pop_front() {
-            self.charge(1)?;
-            let defines_local = if block == use_site.block {
-                self.block_defines_local_in_statement_range_v1(block, local, 0, use_site.statement)
-            } else {
-                self.block_defines_local(block, local)
-            };
-            if defines_local {
-                return Ok(false);
-            }
-            if block == use_site.block {
-                continue;
-            }
-            self.charge(self.graph.successors[block].len())?;
-            for successor in &self.graph.successors[block] {
-                if can_reach_use[*successor] && visited[*successor] != generation {
-                    visited[*successor] = generation;
-                    pending.push_back(*successor);
-                }
-            }
-        }
-        Ok(true)
-    }
-
-    fn block_defines_local_in_statement_range_v1(
-        &self,
-        block: usize,
-        local: usize,
-        start: usize,
-        end: usize,
-    ) -> bool {
-        self.function.blocks()[block].statements()[start..end]
-            .iter()
-            .any(|statement| {
-                let mut defines_local = false;
-                visit_statement_definition_places(statement.kind(), &mut |place| {
-                    defines_local |= local_definition_index(place) == Some(local);
-                });
-                defines_local
-            })
-    }
-
-    fn exact_checked_overflow_flag_source_local_v1(
-        &mut self,
-        operand: &SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<Option<usize>, ProductionRankedProjectionErrorV1> {
-        let mut operand = operand.clone();
-        let mut use_site = use_site;
-        let mut visited = HashSet::new();
-        loop {
-            self.charge(1)?;
-            let Some(place) = raw_operand_place(&operand) else {
-                return Ok(None);
-            };
-            let local = place.local().index() as usize;
-            if !visited.insert(local) {
-                return Ok(None);
-            }
-            if let [field] = place.projections()
-                && matches!(field.kind(), SemanticProjectionKindV1::Field(1))
-                && self.scalar_unsigned_maximum(place.ty()) == Some(1)
-            {
-                return Ok(Some(local));
-            }
-            if !place.projections().is_empty() {
-                return Ok(None);
-            }
-            let Some(site) = self.exact_reaching_assignment_v1(local, use_site)? else {
-                return Ok(None);
-            };
-            let SemanticStatementKindV1::Assign(assignment) =
-                self.function.blocks()[site.block].statements()[site.statement].kind()
-            else {
-                return Ok(None);
-            };
-            let SemanticRvalueKindV1::Use(next) = assignment.value().kind() else {
-                return Ok(None);
-            };
-            operand = next.clone();
-            use_site = site;
-        }
-    }
-
-    fn operand_has_globally_stable_value_at_v1(
-        &mut self,
-        operand: &SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        match operand {
-            SemanticOperandV1::Constant(_) => Ok(true),
-            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)
-                if place.projections().is_empty() =>
-            {
-                self.local_has_globally_stable_value_at(place.local().index() as usize, use_site)
-            }
-            _ => Ok(false),
-        }
-    }
-
-    fn quotient_strict_product_upper_bound_v1(
-        &mut self,
-        numerator: &SemanticOperandV1,
-        divisor: &SemanticOperandV1,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<Option<AuthenticatedQuotientStrictBoundV1>, ProductionRankedProjectionErrorV1> {
-        let (Some(numerator_local), Some(divisor_local)) = (
-            simple_operand_local(numerator).map(|local| local.index() as usize),
-            simple_operand_local(divisor).map(|local| local.index() as usize),
-        ) else {
-            return Ok(None);
-        };
-        if self.address_escaped.get(numerator_local).copied() != Some(false)
-            || self.address_escaped.get(divisor_local).copied() != Some(false)
-            || self.definition_counts.get(divisor_local).copied() != Some(1)
-            || self
-                .range_at_operand(divisor, use_site.block, use_site.statement)?
-                .is_none_or(|range| range.minimum == 0)
-        {
-            return Ok(None);
-        }
-
-        let block_count = self.function.blocks().len();
-        let can_reach_use = self.blocks_reaching(use_site.block)?;
-        let mut stability_visited = Vec::new();
-        stability_visited
-            .try_reserve_exact(block_count)
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "quotient-bound stability storage cannot be reserved",
-                )
-            })?;
-        stability_visited.resize(block_count, 0_usize);
-        let mut stability_pending = VecDeque::new();
-        stability_pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "quotient-bound stability worklist cannot be reserved",
-            )
-        })?;
-        let mut stability_generation = 0_usize;
-        let mut proven_bound: Option<AuthenticatedQuotientStrictBoundV1> = None;
-
-        for (switch_block, block) in self.function.blocks().iter().enumerate() {
-            self.charge(1)?;
-            let SemanticTerminatorKindV1::SwitchInt {
-                discriminant,
-                targets,
-            } = block.terminator().kind()
-            else {
-                continue;
-            };
-            let [zero_target] = targets.values() else {
-                continue;
-            };
-            if zero_target.value() != 0
-                || zero_target.edge().role() != SemanticEdgeRoleV1::SwitchValue
-                || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
-            {
-                continue;
-            }
-            let false_target = zero_target.edge().target().index() as usize;
-            let true_target = targets.otherwise().target().index() as usize;
-            if false_target == true_target {
-                continue;
-            }
-            let Some(condition_local) = simple_operand_local(discriminant) else {
-                continue;
-            };
-            let condition_local = condition_local.index() as usize;
-            if self.definition_counts.get(condition_local).copied() != Some(1)
-                || self.address_escaped.get(condition_local).copied() != Some(false)
-            {
-                continue;
-            }
-            let Some(condition_site) = self.assignments.get(condition_local).copied().flatten()
-            else {
-                continue;
-            };
-            if condition_site.block != switch_block
-                || !self.assignment_dominates_use(
-                    condition_site,
-                    switch_block,
-                    block.statements().len(),
-                )?
-            {
-                continue;
-            }
-            let SemanticStatementKindV1::Assign(condition) =
-                block.statements()[condition_site.statement].kind()
-            else {
-                continue;
-            };
-            let SemanticRvalueKindV1::Binary {
-                operation,
-                left,
-                right,
-            } = condition.value().kind()
-            else {
-                continue;
-            };
-            let (tested, bound, success_target) = match operation {
-                SemanticBinaryOpV1::LessThan => (left, right, true_target),
-                SemanticBinaryOpV1::GreaterOrEqual => (left, right, false_target),
-                SemanticBinaryOpV1::GreaterThan => (right, left, true_target),
-                SemanticBinaryOpV1::LessOrEqual => (right, left, false_target),
-                _ => continue,
-            };
-            let Some(tested_local) = simple_operand_local(tested) else {
-                continue;
-            };
-            if !self.local_is_value_preserving_alias_of(
-                tested_local.index() as usize,
-                numerator_local,
-                condition_site.block,
-                condition_site.statement,
-                None,
-            )? || self.block_defines_local(switch_block, numerator_local)
-            {
-                continue;
-            }
-            let Some(product) =
-                self.authenticated_checked_binary_source_v1(bound, condition_site)?
-            else {
-                continue;
-            };
-            if product.checked.operation() != SemanticCheckedBinaryOpV1::Multiply {
-                continue;
-            }
-            let factor = if same_semantic_operand_value_v1(product.checked.left(), divisor) {
-                product.checked.right()
-            } else if same_semantic_operand_value_v1(product.checked.right(), divisor) {
-                product.checked.left()
-            } else {
-                continue;
-            };
-            let Some(factor_range) = self.range_at_operand(
-                factor,
-                product.definition.block,
-                product.definition.statement,
-            )?
-            else {
-                continue;
-            };
-            let Some(candidate) = factor_range.maximum.checked_sub(1) else {
-                continue;
-            };
-            let SemanticTerminatorKindV1::Assert { target, .. } = self.function.blocks()
-                [product.assertion_block]
-                .terminator()
-                .kind()
-            else {
-                continue;
-            };
-            if target.role() != SemanticEdgeRoleV1::AssertSuccess {
-                continue;
-            }
-            let product_success = target.target().index() as usize;
-            stability_generation = stability_generation.checked_add(1).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "quotient-bound stability generation overflowed",
-                ),
-            )?;
-            if !self.local_is_stable_between_edge_and_use(
-                numerator_local,
-                success_target,
-                use_site.block,
-                &can_reach_use,
-                &mut stability_visited,
-                &mut stability_pending,
-                stability_generation,
-            )? {
-                continue;
-            }
-            stability_generation = stability_generation.checked_add(1).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "quotient-bound stability generation overflowed",
-                ),
-            )?;
-            if !self.local_is_stable_between_edge_and_use(
-                divisor_local,
-                product_success,
-                use_site.block,
-                &can_reach_use,
-                &mut stability_visited,
-                &mut stability_pending,
-                stability_generation,
-            )? {
-                continue;
-            }
-            let mut edge = HashSet::new();
-            edge.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "quotient-bound edge storage cannot be reserved",
-                )
-            })?;
-            edge.insert((switch_block, success_target));
-            if !self.edge_set_dominates(&edge, use_site.block)? {
-                continue;
-            }
-            if proven_bound
-                .as_ref()
-                .is_none_or(|current| candidate < current.maximum)
-            {
-                proven_bound = Some(AuthenticatedQuotientStrictBoundV1 {
-                    maximum: candidate,
-                    factor: factor.clone(),
-                    factor_use: product.definition,
-                });
-            }
-        }
-        Ok(proven_bound)
-    }
-
-    fn assignment_dominates_use(
-        &mut self,
-        definition: ScalarAssignmentSiteV1,
-        use_block: usize,
-        use_statement: usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if definition.block == use_block {
-            return Ok(definition.statement < use_statement);
-        }
-        self.block_dominates(definition.block, use_block)
-    }
-
-    fn exact_reaching_assignment_v1(
-        &mut self,
-        local: usize,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<Option<ScalarAssignmentSiteV1>, ProductionRankedProjectionErrorV1> {
-        if self.address_escaped.get(local).copied() != Some(false) {
-            return Ok(None);
-        }
-        let Some(block) = self.function.blocks().get(use_site.block) else {
-            return Ok(None);
-        };
-        if use_site.statement > block.statements().len() {
-            return Ok(None);
-        }
-        let defining_statement = if let Some(index) = &self.statement_definitions {
-            let statement = index.before(local, use_site.block, use_site.statement);
-            let visits = statement.map_or(use_site.statement, |index| use_site.statement - index);
-            charge_statement_scan_equivalent_v1(&mut self.work, visits)?;
-            statement
-        } else {
-            let mut found = None;
-            for statement in (0..use_site.statement).rev() {
-                self.charge(1)?;
-                let kind = block.statements()[statement].kind();
-                let mut defines_local = false;
-                visit_statement_definition_places(kind, &mut |place| {
-                    defines_local |= local_definition_index(place) == Some(local);
-                });
-                if defines_local {
-                    found = Some(statement);
-                    break;
-                }
-            }
-            found
-        };
-        if let Some(statement) = defining_statement {
-            let kind = block.statements()[statement].kind();
-            return Ok(matches!(kind, SemanticStatementKindV1::Assign(assignment)
-                    if assignment.destination().projections().is_empty()
-                        && assignment.destination().local().index() as usize == local)
-            .then_some(ScalarAssignmentSiteV1 {
-                block: use_site.block,
-                statement,
-            }));
-        }
-        if self.definition_counts.get(local).copied() != Some(1) {
-            return Ok(None);
-        }
-        let Some(site) = self.assignments.get(local).copied().flatten() else {
-            return Ok(None);
-        };
-        self.assignment_dominates_use(site, use_site.block, use_site.statement)
-            .map(|dominates| dominates.then_some(site))
-    }
-
-    fn zero_excluding_edge_dominates(
-        &mut self,
-        local: usize,
-        use_block: usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if let Some(result) = self.zero_exclusion.get(&(local, use_block)).copied() {
-            return Ok(result);
-        }
-        let block_count = self.function.blocks().len();
-        let can_reach_use = self.blocks_reaching(use_block)?;
-        let mut excluding_edges = HashSet::new();
-        excluding_edges.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof zero-excluding edge storage cannot be reserved",
-            )
-        })?;
-        let mut stability_visited = Vec::new();
-        stability_visited
-            .try_reserve_exact(block_count)
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof stability storage cannot be reserved",
-                )
-            })?;
-        stability_visited.resize(block_count, 0_usize);
-        let mut stability_pending = VecDeque::new();
-        stability_pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof stability worklist cannot be reserved",
-            )
-        })?;
-        let mut stability_generation = 0_usize;
-        for (switch_block, block) in self.function.blocks().iter().enumerate() {
-            self.charge(1)?;
-            let SemanticTerminatorKindV1::SwitchInt {
-                discriminant,
-                targets,
-            } = block.terminator().kind()
-            else {
-                continue;
-            };
-            let Some(discriminant_local) =
-                simple_operand_local(discriminant).map(|value| value.index() as usize)
-            else {
-                continue;
-            };
-            if targets.values().len() != 1 || targets.values()[0].value() != 0 {
-                continue;
-            }
-            let zero_target = targets.values()[0].edge().target().index() as usize;
-            let nonzero_target = targets.otherwise().target().index() as usize;
-            let discriminant_is_tested = self.local_is_value_preserving_alias_of(
-                discriminant_local,
-                local,
-                switch_block,
-                block.statements().len(),
-                None,
-            )?;
-            let discriminant_is_tested = discriminant_is_tested
-                && (discriminant_local == local || !self.block_defines_local(switch_block, local));
-            let excluding_target = if discriminant_is_tested {
-                Some(nonzero_target)
-            } else {
-                self.comparison_zero_excluding_target(
-                    discriminant_local,
-                    local,
-                    switch_block,
-                    zero_target,
-                    nonzero_target,
-                )?
-            };
-            let Some(excluding_target) = excluding_target else {
-                continue;
-            };
-            if zero_target == nonzero_target {
-                continue;
-            }
-            stability_generation = stability_generation.checked_add(1).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof stability generation overflowed",
-                ),
-            )?;
-            let stable = self.local_is_stable_between_edge_and_use(
-                local,
-                excluding_target,
-                use_block,
-                &can_reach_use,
-                &mut stability_visited,
-                &mut stability_pending,
-                stability_generation,
-            )?;
-            if !stable {
-                continue;
-            }
-            excluding_edges.insert((switch_block, excluding_target));
-        }
-        let result = self.edge_set_dominates(&excluding_edges, use_block)?;
-        insert_assertion_proof_cache(&mut self.zero_exclusion, (local, use_block), result)?;
-        Ok(result)
-    }
-
-    fn blocks_reaching(
-        &mut self,
-        use_block: usize,
-    ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
-        let block_count = self.function.blocks().len();
-        if use_block >= block_count {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "an assertion proof reachability query is outside the semantic CFG",
-            ));
-        }
-        let mut can_reach_use = Vec::new();
-        can_reach_use.try_reserve_exact(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof reverse-reachability storage cannot be reserved",
-            )
-        })?;
-        can_reach_use.resize(block_count, false);
-        let mut reverse = VecDeque::new();
-        reverse.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof reverse-reachability worklist cannot be reserved",
-            )
-        })?;
-        reverse.push_back(use_block);
-        can_reach_use[use_block] = true;
-        while let Some(block) = reverse.pop_front() {
-            self.charge(1)?;
-            self.charge(self.graph.predecessors[block].len())?;
-            for predecessor in &self.graph.predecessors[block] {
-                if !can_reach_use[*predecessor] {
-                    can_reach_use[*predecessor] = true;
-                    reverse.push_back(*predecessor);
-                }
-            }
-        }
-        Ok(can_reach_use)
-    }
-
-    fn local_is_stable_between_edge_and_use(
-        &mut self,
-        local: usize,
-        edge_target: usize,
-        use_block: usize,
-        can_reach_use: &[bool],
-        visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
-        generation: usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        let block_count = self.function.blocks().len();
-        if local >= self.function.locals().len()
-            || edge_target >= block_count
-            || use_block >= block_count
-            || can_reach_use.len() != block_count
-            || visited.len() != block_count
-        {
-            return Ok(false);
-        }
-        if !can_reach_use[edge_target] {
-            return Ok(false);
-        }
-
-        pending.clear();
-        pending.push_back(edge_target);
-        visited[edge_target] = generation;
-        while let Some(block) = pending.pop_front() {
-            self.charge(1)?;
-            if self.block_defines_local(block, local) {
-                return Ok(false);
-            }
-            if block == use_block {
-                continue;
-            }
-            self.charge(self.graph.successors[block].len())?;
-            for successor in &self.graph.successors[block] {
-                if can_reach_use[*successor] && visited[*successor] != generation {
-                    visited[*successor] = generation;
-                    pending.push_back(*successor);
-                }
-            }
-        }
-        Ok(true)
-    }
-
-    /// Checks the value segment governed by a dominating conditional edge.
-    ///
-    /// A loop latch may redefine the tested local and return to the same
-    /// conditional. Crossing that conditional's success edge authenticates a
-    /// fresh value, so definitions which can reach the use only by crossing
-    /// the guard again do not invalidate its range. Definitions on any path
-    /// from the latest success edge to the use still reject the proof.
-    #[allow(clippy::too_many_arguments)]
-    fn local_is_stable_from_revalidating_edge_to_use(
-        &mut self,
-        local: usize,
-        guard_source: usize,
-        guard_target: usize,
-        use_block: usize,
-        can_reach_use: &[bool],
-        visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
-        generation: usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        let block_count = self.function.blocks().len();
-        if local >= self.function.locals().len()
-            || guard_source >= block_count
-            || guard_target >= block_count
-            || use_block >= block_count
-            || guard_source == guard_target
-            || can_reach_use.len() != block_count
-            || visited.len() != block_count
-        {
-            return Ok(false);
-        }
-
-        let reverse_generation =
-            generation
-                .checked_mul(2)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof revalidating-edge generation overflowed",
-                ))?;
-        let forward_generation = reverse_generation.checked_add(1).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof revalidating-edge generation overflowed",
-            ),
-        )?;
-
-        // Mark exactly the blocks that can reach the use without first
-        // returning to the guard. This excludes latch-side definitions whose
-        // only route back to the use crosses a fresh successful guard edge.
-        pending.clear();
-        pending.push_back(use_block);
-        visited[use_block] = reverse_generation;
-        while let Some(block) = pending.pop_front() {
-            self.charge(1)?;
-            self.charge(self.graph.predecessors[block].len())?;
-            for predecessor in &self.graph.predecessors[block] {
-                if *predecessor == guard_source
-                    || !can_reach_use[*predecessor]
-                    || visited[*predecessor] == reverse_generation
-                    || visited[*predecessor] == forward_generation
-                {
-                    continue;
-                }
-                visited[*predecessor] = reverse_generation;
-                pending.push_back(*predecessor);
-            }
-        }
-        if visited[guard_target] != reverse_generation {
-            return Ok(true);
-        }
-
-        pending.clear();
-        pending.push_back(guard_target);
-        visited[guard_target] = forward_generation;
-        while let Some(block) = pending.pop_front() {
-            self.charge(1)?;
-            if self.block_defines_local(block, local) {
-                return Ok(false);
-            }
-            if block == use_block {
-                continue;
-            }
-            self.charge(self.graph.successors[block].len())?;
-            for successor in &self.graph.successors[block] {
-                if visited[*successor] == reverse_generation {
-                    visited[*successor] = forward_generation;
-                    pending.push_back(*successor);
-                }
-            }
-        }
-        Ok(true)
-    }
-
-    fn comparison_zero_excluding_target(
-        &mut self,
-        condition_local: usize,
-        tested_local: usize,
-        switch_block: usize,
-        false_target: usize,
-        true_target: usize,
-    ) -> Result<Option<usize>, ProductionRankedProjectionErrorV1> {
-        let switch_use = ScalarAssignmentSiteV1 {
-            block: switch_block,
-            statement: self.function.blocks()[switch_block].statements().len(),
-        };
-        let Some(site) = self.exact_reaching_assignment_v1(condition_local, switch_use)? else {
-            return Ok(None);
-        };
-        if site.block != switch_block
-            && !self.local_has_globally_stable_value_at(
-                tested_local,
-                ScalarAssignmentSiteV1 {
-                    block: site.block,
-                    statement: site.statement,
-                },
-            )?
-        {
-            return Ok(None);
-        }
-        let SemanticStatementKindV1::Assign(assignment) =
-            self.function.blocks()[site.block].statements()[site.statement].kind()
-        else {
-            return Ok(None);
-        };
-        let SemanticRvalueKindV1::Binary {
-            operation,
-            left,
-            right,
-        } = assignment.value().kind()
-        else {
-            return Ok(None);
-        };
-        let left_local = simple_operand_local(left).map(|value| value.index() as usize);
-        let right_local = simple_operand_local(right).map(|value| value.index() as usize);
-        let left_is_tested = if let Some(left_local) = left_local {
-            self.local_is_value_preserving_alias_of(
-                left_local,
-                tested_local,
-                site.block,
-                site.statement,
-                None,
-            )?
-        } else {
-            false
-        };
-        let right_is_tested = if let Some(right_local) = right_local {
-            self.local_is_value_preserving_alias_of(
-                right_local,
-                tested_local,
-                site.block,
-                site.statement,
-                None,
-            )?
-        } else {
-            false
-        };
-        let compares_tested_local_to_zero = left_is_tested
-            && self.operand_is_exact_unsigned_zero(right)
-            || right_is_tested && self.operand_is_exact_unsigned_zero(left);
-        if !compares_tested_local_to_zero {
-            return Ok(None);
-        }
-        if site.block == switch_block && self.block_defines_local(switch_block, tested_local) {
-            return Ok(None);
-        }
-        Ok(match operation {
-            SemanticBinaryOpV1::Equal => Some(false_target),
-            SemanticBinaryOpV1::NotEqual => Some(true_target),
-            _ => None,
-        })
-    }
-
-    fn operand_is_exact_unsigned_zero(&self, operand: &SemanticOperandV1) -> bool {
-        let SemanticOperandV1::Constant(constant) = operand else {
-            return false;
-        };
-        self.scalar_unsigned_maximum(constant.ty()).is_some()
-            && matches!(
-                constant.value(),
-                SemanticConstantValueV1::Scalar(value) if value.bits() == 0
-            )
-    }
-
-    fn local_has_globally_stable_value_at(
-        &mut self,
-        local: usize,
-        use_site: ScalarAssignmentSiteV1,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if self.address_escaped.get(local).copied() != Some(false) {
-            return Ok(false);
-        }
-        match self.definition_counts.get(local).copied() {
-            Some(0) => Ok(true),
-            Some(1) => {
-                let Some(definition) = self.assignments.get(local).copied().flatten() else {
-                    return Ok(false);
-                };
-                self.assignment_dominates_use(definition, use_site.block, use_site.statement)
-            }
-            _ => Ok(false),
-        }
-    }
-
-    fn block_defines_local(&self, block: usize, local: usize) -> bool {
-        self.block_definitions
-            .get(block)
-            .is_some_and(|definitions| definitions.binary_search(&local).is_ok())
-    }
-
-    fn local_is_value_preserving_alias_of(
-        &mut self,
-        mut candidate: usize,
-        source: usize,
-        mut use_block: usize,
-        mut use_statement: usize,
-        capture: Option<&mut ScalarAssignmentSiteV1>,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        // Each followed definition must strictly precede its use in the same block, so
-        // the statement index is both the cycle guard and the stack-independent bound.
-        loop {
-            self.charge(1)?;
-            if self.address_escaped.get(candidate).copied() != Some(false) {
-                return Ok(false);
-            }
-            if candidate == source {
-                if let Some(capture) = capture {
-                    *capture = ScalarAssignmentSiteV1 {
-                        block: use_block,
-                        statement: use_statement,
-                    };
-                }
-                return Ok(true);
-            }
-            if self.definition_counts.get(candidate).copied() != Some(1) {
-                return Ok(false);
-            }
-            let Some(site) = self.assignments.get(candidate).copied().flatten() else {
-                return Ok(false);
-            };
-            if site.block != use_block
-                || !self.assignment_dominates_use(site, use_block, use_statement)?
-            {
-                return Ok(false);
-            }
-            let SemanticStatementKindV1::Assign(assignment) =
-                self.function.blocks()[site.block].statements()[site.statement].kind()
-            else {
-                return Ok(false);
-            };
-            let operand = match assignment.value().kind() {
-                SemanticRvalueKindV1::Use(operand) => Some(operand),
-                SemanticRvalueKindV1::Cast {
-                    kind: SemanticCastKindV1::Integer,
-                    operand,
-                } if self
-                    .unsigned_integer_bits(assignment.value().result_type())
-                    .zip(self.unsigned_integer_bits(operand.ty()))
-                    .is_some_and(|(destination, source)| destination >= source) =>
-                {
-                    Some(operand)
-                }
-                _ => None,
-            };
-            let Some(next) = operand.and_then(simple_operand_local) else {
-                return Ok(false);
-            };
-            candidate = next.index() as usize;
-            use_block = site.block;
-            use_statement = site.statement;
-        }
-    }
-
-    fn block_dominates(
-        &mut self,
-        dominator: usize,
-        block: usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if dominator >= self.graph.successors.len() || block >= self.graph.successors.len() {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "an assertion proof dominance query is outside the semantic CFG",
-            ));
-        }
-        if let Some(result) = self.dominance.get(&(dominator, block)).copied() {
-            return Ok(result);
-        }
-        if dominator == block {
-            let result = self.graph.reachable[block];
-            insert_assertion_proof_cache(&mut self.dominance, (dominator, block), result)?;
-            return Ok(result);
-        }
-        if !self.graph.reachable[dominator] || !self.graph.reachable[block] {
-            insert_assertion_proof_cache(&mut self.dominance, (dominator, block), false)?;
-            return Ok(false);
-        }
-        let node_count = self.graph.successors.len();
-        let mut visited = Vec::new();
-        visited.try_reserve_exact(node_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof dominance storage cannot be reserved",
-            )
-        })?;
-        visited.resize(node_count, false);
-        let mut pending = Vec::new();
-        pending.try_reserve(node_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof dominance worklist cannot be reserved",
-            )
-        })?;
-        if self.graph.entry != dominator {
-            visited[self.graph.entry] = true;
-            pending.push(self.graph.entry);
-        }
-        while let Some(current) = pending.pop() {
-            self.charge(1)?;
-            if current == block {
-                insert_assertion_proof_cache(&mut self.dominance, (dominator, block), false)?;
-                return Ok(false);
-            }
-            self.charge(self.graph.successors[current].len())?;
-            for successor in &self.graph.successors[current] {
-                if *successor != dominator && !visited[*successor] {
-                    visited[*successor] = true;
-                    pending.push(*successor);
-                }
-            }
-        }
-        insert_assertion_proof_cache(&mut self.dominance, (dominator, block), true)?;
-        Ok(true)
-    }
-
-    fn edge_set_dominates(
-        &mut self,
-        excluding_edges: &HashSet<(usize, usize)>,
-        block: usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if block >= self.graph.successors.len() {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "an assertion proof edge-set dominance query is outside the semantic CFG",
-            ));
-        }
-        if excluding_edges.is_empty() || !self.graph.reachable[block] {
-            return Ok(false);
-        }
-        let node_count = self.graph.successors.len();
-        let mut visited = Vec::new();
-        visited.try_reserve_exact(node_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof edge-dominance storage cannot be reserved",
-            )
-        })?;
-        visited.resize(node_count, false);
-        let mut pending = Vec::new();
-        pending.try_reserve(node_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof edge-dominance worklist cannot be reserved",
-            )
-        })?;
-        visited[self.graph.entry] = true;
-        pending.push(self.graph.entry);
-        while let Some(current) = pending.pop() {
-            self.charge(1)?;
-            if current == block {
-                return Ok(false);
-            }
-            self.charge(self.graph.successors[current].len())?;
-            for successor in &self.graph.successors[current] {
-                if !excluding_edges.contains(&(current, *successor)) && !visited[*successor] {
-                    visited[*successor] = true;
-                    pending.push(*successor);
-                }
-            }
-        }
-        Ok(true)
-    }
-}
-
-fn insert_assertion_proof_cache(
-    cache: &mut HashMap<(usize, usize), bool>,
-    key: (usize, usize),
-    value: bool,
-) -> Result<(), ProductionRankedProjectionErrorV1> {
-    insert_assertion_proof_cache_with_limit(
-        cache,
-        key,
-        value,
-        MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1,
-    )
-}
-
-fn insert_assertion_proof_cache_with_limit(
-    cache: &mut HashMap<(usize, usize), bool>,
-    key: (usize, usize),
-    value: bool,
-    limit: usize,
-) -> Result<(), ProductionRankedProjectionErrorV1> {
-    if !cache.contains_key(&key) {
-        if cache.len() >= limit {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof cache exceeds the bounded entry limit",
-            ));
-        }
-        cache.try_reserve(1).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof cache storage cannot be reserved",
-            )
-        })?;
-    }
-    cache.insert(key, value);
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -18786,10 +16839,10 @@ impl<'model, 'state, 'proof> PureUniformIndexProjectorV1<'model, 'state, 'proof>
         {
             return Ok(None);
         }
-        let local = authenticated.local;
-        let definition_block = authenticated.definition.block;
-        let definition_statement = authenticated.definition.statement;
-        let kind = match authenticated.checked.operation() {
+        let local = authenticated.local();
+        let definition_block = authenticated.definition().block;
+        let definition_statement = authenticated.definition().statement;
+        let kind = match authenticated.checked().operation() {
             SemanticCheckedBinaryOpV1::Add => IndexBinaryKindAttr::Add,
             SemanticCheckedBinaryOpV1::Multiply => IndexBinaryKindAttr::Multiply,
             SemanticCheckedBinaryOpV1::Subtract => return Ok(None),
@@ -18801,12 +16854,12 @@ impl<'model, 'state, 'proof> PureUniformIndexProjectorV1<'model, 'state, 'proof>
         }
         self.states.insert(local, PureUniformIndexStateV1::Visiting);
         let left = self.resolve_operand(
-            authenticated.checked.left(),
+            authenticated.checked().left(),
             definition_block,
             definition_statement,
         )?;
         let right = self.resolve_operand(
-            authenticated.checked.right(),
+            authenticated.checked().right(),
             definition_block,
             definition_statement,
         )?;
@@ -19026,10 +17079,26 @@ fn project_uniform_switch_operand_v1(
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
 ) -> Result<Option<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
+    project_uniform_switch_operand_core_v18(operand, constants, stable_argument_origins,
+        arguments, next_argument, operations, next_value,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn project_uniform_switch_operand_core_v18(
+    operand: &SemanticOperandV1,
+    constants: &[Option<u64>],
+    stable_argument_origins: &[Option<u32>],
+    arguments: &mut [Option<u32>],
+    next_argument: &mut usize,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Option<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
+    allocation.charge(1)?;
     if let Some(value) = constant_operand_value(operand, constants) {
-        reserve_operation(operations)?;
+        reserve_operation_core_v18(operations, allocation)?;
         let result = next_value_id(next_value)?;
-        operations.push(ProductionRankedOperationV1::IndexConstant { result, value });
+        allocation.push(operations, ProductionRankedOperationV1::IndexConstant { result, value })?;
         return Ok(Some(ProductionRankedValueV1::Local(result)));
     }
     let Some(local) = simple_operand_local(operand) else {
@@ -19351,24 +17420,41 @@ fn local_provenance_with_scalar_inventory_v1(
     definitions: &[u8],
     address_escaped: &[bool],
 ) -> Result<LocalProvenanceV1, ProductionRankedProjectionErrorV1> {
+    local_provenance_with_scalar_inventory_core_v18(callables, types, function,
+        definitions, address_escaped,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn local_provenance_with_scalar_inventory_core_v18(
+    callables: &[SemanticCallableDeclV1],
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    definitions: &[u8],
+    address_escaped: &[bool],
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<LocalProvenanceV1, ProductionRankedProjectionErrorV1> {
     let local_count = function.locals().len();
     if definitions.len() != local_count || address_escaped.len() != local_count {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "local provenance scalar custody tables do not match the semantic local table",
         ));
     }
-    let exclusive_owner_origins = exclusive_owner_carrier_v1::exclusive_owner_value_origins_v1(
+    allocation.header::<LocalProvenanceV1>()?;
+    allocation.header::<Result<LocalProvenanceV1, ProductionRankedProjectionErrorV1>>()?;
+    let exclusive_owner_origins = exclusive_owner_carrier_v1::exclusive_owner_value_origins_core_v18(
         callables,
         function,
         definitions,
+        allocation,
     )?;
-    let mut stable_argument_origins = vec![None; local_count];
-    let mut allocation_origins = vec![None; local_count];
-    let mut allocation_provenance = vec![None; local_count];
-    let mut stable_edges = vec![Vec::new(); local_count];
-    let mut allocation_edges = vec![Vec::new(); local_count];
-    let mut allocation_contract_edges = vec![Vec::new(); local_count];
+    let mut stable_argument_origins = allocation.filled(local_count, None)?;
+    let mut allocation_origins = allocation.filled(local_count, None)?;
+    let mut allocation_provenance = allocation.filled(local_count, None)?;
+    let mut stable_edges = allocation.nested(local_count)?;
+    let mut allocation_edges = allocation.nested(local_count)?;
+    let mut allocation_contract_edges = allocation.nested(local_count)?;
     for (local_index, local) in function.locals().iter().enumerate() {
+        allocation.charge(1)?;
         if let SemanticLocalRoleV1::Argument(argument) = local.role() {
             if definitions[local_index] == 0 && !address_escaped[local_index] {
                 stable_argument_origins[local_index] = Some(argument);
@@ -19380,7 +17466,9 @@ fn local_provenance_with_scalar_inventory_v1(
     }
     let mut edge_count = 0_usize;
     for block in function.blocks() {
+        allocation.charge(1)?;
         for statement in block.statements() {
+            allocation.charge(1)?;
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
@@ -19405,11 +17493,12 @@ fn local_provenance_with_scalar_inventory_v1(
                 if address_escaped.get(source).copied() == Some(false)
                     && !address_escaped[destination]
                 {
-                    push_local_provenance_edge_v1(
+                    push_local_provenance_edge_core_v18(
                         &mut stable_edges,
                         source,
                         destination,
                         &mut edge_count,
+                        allocation,
                     )?;
                 }
             };
@@ -19423,25 +17512,29 @@ fn local_provenance_with_scalar_inventory_v1(
                     operand,
                 } => simple_operand_local(operand),
                 SemanticRvalueKindV1::Borrow { place, .. } => {
+                    allocation.charge(place.projections().len())?;
                     borrowed_allocation_local_v1(function, place, &exclusive_owner_origins)
                 }
                 SemanticRvalueKindV1::AddressOf { place, .. } => {
+                    allocation.charge(place.projections().len())?;
                     reborrowed_allocation_local_v1(place)
                 }
                 _ => None,
             };
             if let Some(source) = allocation_source {
-                push_local_provenance_edge_v1(
+                push_local_provenance_edge_core_v18(
                     &mut allocation_edges,
                     source.index() as usize,
                     destination,
                     &mut edge_count,
+                    allocation,
                 )?;
-                push_local_provenance_edge_v1(
+                push_local_provenance_edge_core_v18(
                     &mut allocation_contract_edges,
                     source.index() as usize,
                     destination,
                     &mut edge_count,
+                    allocation,
                 )?;
             } else if let SemanticRvalueKindV1::Borrow { place, .. }
             | SemanticRvalueKindV1::AddressOf { place, .. } = assignment.value().kind()
@@ -19478,30 +17571,34 @@ fn local_provenance_with_scalar_inventory_v1(
                 // Pointer offsets retain only an authenticated external allocation
                 // contract. Private roots have no size/range contract and must not
                 // gain address-formation authority through raw pointer arithmetic.
-                push_local_provenance_edge_v1(
+                push_local_provenance_edge_core_v18(
                     &mut allocation_contract_edges,
                     source.index() as usize,
                     destination,
                     &mut edge_count,
+                    allocation,
                 )?;
             }
         }
     }
 
-    propagate_exact_local_origins_v1(
+    propagate_exact_local_origins_core_v18(
         &mut stable_argument_origins,
         &stable_edges,
         "a runtime index may derive from multiple kernel arguments",
+        allocation,
     )?;
-    propagate_exact_local_origins_v1(
+    propagate_exact_local_origins_core_v18(
         &mut allocation_provenance,
         &allocation_edges,
         "a local may alias multiple kernel allocation origins",
+        allocation,
     )?;
-    propagate_exact_local_origins_v1(
+    propagate_exact_local_origins_core_v18(
         &mut allocation_origins,
         &allocation_contract_edges,
         "a local may alias multiple kernel allocation origins",
+        allocation,
     )?;
     Ok(LocalProvenanceV1 {
         stable_argument_origins,
@@ -19515,6 +17612,14 @@ fn push_local_provenance_edge_v1(
     source: usize,
     destination: usize,
     edge_count: &mut usize,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    push_local_provenance_edge_core_v18(edges, source, destination, edge_count,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn push_local_provenance_edge_core_v18(
+    edges: &mut [Vec<usize>], source: usize, destination: usize, edge_count: &mut usize,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     if source >= edges.len() || destination >= edges.len() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -19532,13 +17637,9 @@ fn push_local_provenance_edge_v1(
             "local provenance edges exceed the charged projection limit",
         ));
     }
-    edges[source].try_reserve(1).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "local provenance edge storage cannot be reserved",
-        )
-    })?;
-    edges[source].push(destination);
-    Ok(())
+    allocation.reserve(&mut edges[source], 1, false,
+        "local provenance edge storage cannot be reserved")?;
+    allocation.push(&mut edges[source], destination)
 }
 
 fn propagate_exact_local_origins_v1<T: Copy + Eq>(
@@ -19546,29 +17647,37 @@ fn propagate_exact_local_origins_v1<T: Copy + Eq>(
     edges: &[Vec<usize>],
     conflict: &'static str,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    propagate_exact_local_origins_core_v18(origins, edges, conflict,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn propagate_exact_local_origins_core_v18<T: Copy + Eq>(
+    origins: &mut [Option<T>], edges: &[Vec<usize>], conflict: &'static str,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
     if origins.len() != edges.len() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "local provenance tables have inconsistent lengths",
         ));
     }
-    let mut worklist = VecDeque::new();
-    worklist.try_reserve(origins.len()).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "local provenance dataflow worklist cannot be reserved",
-        )
-    })?;
-    worklist.extend(
-        origins
-            .iter()
-            .enumerate()
-            .filter_map(|(local, origin)| origin.map(|_| local)),
-    );
+    allocation.header::<Result<(), ProductionRankedProjectionErrorV1>>()?;
+    let mut worklist = allocation.queue(origins.len(),
+        "local provenance dataflow worklist cannot be reserved")?;
+    for (local, origin) in origins.iter().enumerate() {
+        allocation.charge(1)?;
+        if origin.is_some() {
+            allocation.charge(1)?;
+            worklist.push_back(local);
+        }
+    }
     let mut work = 0_usize;
     while let Some(source) = worklist.pop_front() {
+        allocation.charge(1)?;
         let Some(origin) = origins[source] else {
             continue;
         };
         for &destination in &edges[source] {
+            allocation.charge(1)?;
             work = work
                 .checked_add(1)
                 .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -19581,6 +17690,7 @@ fn propagate_exact_local_origins_v1<T: Copy + Eq>(
             }
             match origins[destination] {
                 None => {
+                    allocation.charge(1)?;
                     origins[destination] = Some(origin);
                     worklist.push_back(destination);
                 }
@@ -19658,6 +17768,15 @@ fn local_allocation_contracts(
     function: &SemanticFunctionDeclV1,
     origins: &[Option<u32>],
 ) -> Result<Vec<Option<AllocationContractV1>>, ProductionRankedProjectionErrorV1> {
+    local_allocation_contracts_core_v18(types, function, origins,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn local_allocation_contracts_core_v18(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1, origins: &[Option<u32>],
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Vec<Option<AllocationContractV1>>, ProductionRankedProjectionErrorV1> {
     if origins.len() != function.locals().len() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "allocation-origin and semantic-local tables have different lengths",
@@ -19671,8 +17790,10 @@ fn local_allocation_contracts(
             "source ownership and semantic argument tables have different lengths",
         ));
     }
-    let mut arguments = vec![None; source_types.len()];
+    allocation.header::<Result<Vec<Option<AllocationContractV1>>, ProductionRankedProjectionErrorV1>>()?;
+    let mut arguments = allocation.filled(source_types.len(), None)?;
     for (argument_index, &ty) in source_types.iter().enumerate() {
+        allocation.charge(1)?;
         let type_decl = types.get(ty.index() as usize).ok_or(
             ProductionRankedProjectionErrorV1::Unsupported(
                 "a kernel argument type is outside the semantic type table",
@@ -19721,10 +17842,17 @@ fn local_allocation_contracts(
             },
         )?);
     }
-    Ok(origins
-        .iter()
-        .map(|origin| origin.and_then(|origin| arguments.get(origin as usize).copied().flatten()))
-        .collect())
+    if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        return Ok(origins.iter().map(|origin|
+            origin.and_then(|origin| arguments.get(origin as usize).copied().flatten())).collect());
+    }
+    let mut result = allocation.capacity(origins.len())?;
+    for origin in origins {
+        allocation.charge(1)?;
+        allocation.push(&mut result,
+            origin.and_then(|origin| arguments.get(origin as usize).copied().flatten()))?;
+    }
+    Ok(result)
 }
 
 fn volatile_load_frozen_shared_scalar_source_v1(
@@ -19828,10 +17956,11 @@ fn authenticated_source_allocation_contract_v1(
     pointee: SemanticAbiPointeeKindV1,
     abi_contract: AllocationContractV1,
 ) -> Result<AllocationContractV1, ProductionRankedProjectionErrorV1> {
+    // rustc may omit noalias at opt-level=0 or for pinned mutable pointees.
+    // Authenticate reference provenance without strengthening the ABI contract.
     Ok(match ownership {
         SemanticSourceArgumentOwnershipV1::UniqueBorrow
-            if abi_contract.noalias_class != 0
-                && matches!(
+            if matches!(
                     pointee,
                     SemanticAbiPointeeKindV1::MutableReference { .. }
                         | SemanticAbiPointeeKindV1::Box { .. }
@@ -20295,9 +18424,56 @@ fn switch_predicates(
         ));
     }
     let scalar_inventory = assertion_definition_inventory(function)?;
-    let mut predicates = direct_switch_predicates.to_vec();
+    switch_predicates_core_v18(function, option_predicates, direct_switch_predicates,
+        &scalar_inventory, &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn switch_predicates_with_facts_v18(
+    function: &SemanticFunctionDeclV1,
+    option_predicates: &[Option<GuardPredicateV1>],
+    direct_switch_predicates: &[Option<GuardPredicateV1>],
+    facts: &mut dyn ProjectedAssertionFactsV1,
+) -> Result<Vec<Option<GuardPredicateV1>>, ProductionRankedProjectionErrorV1> {
+    let mut allocation=source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(facts)?;
+    if matches!(allocation,source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        return switch_predicates(function,option_predicates,direct_switch_predicates);
+    }
+    if direct_switch_predicates.len()!=function.locals().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "direct switch predicates do not match the semantic local table"));
+    }
+    let scalar_inventory=assertion_definition_inventory_with_allocation_v18(function,&mut allocation)?;
+    switch_predicates_core_v18(function,option_predicates,direct_switch_predicates,&scalar_inventory,&mut allocation)
+}
+
+fn clone_guard_predicate_v18(
+    predicate: &GuardPredicateV1,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<GuardPredicateV1, ProductionRankedProjectionErrorV1> {
+    Ok(GuardPredicateV1 {comparisons: allocation.copy_slice(&predicate.comparisons)?})
+}
+
+fn switch_predicates_core_v18(
+    function: &SemanticFunctionDeclV1,
+    option_predicates: &[Option<GuardPredicateV1>],
+    direct_switch_predicates: &[Option<GuardPredicateV1>],
+    scalar_inventory: &AssertionDefinitionInventoryV1,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Vec<Option<GuardPredicateV1>>, ProductionRankedProjectionErrorV1> {
+    let mut predicates = if matches!(allocation,source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        direct_switch_predicates.to_vec()
+    } else {
+        let mut rows=allocation.capacity(direct_switch_predicates.len())?;
+        for predicate in direct_switch_predicates {
+            let copied=predicate.as_ref().map(|predicate| clone_guard_predicate_v18(predicate,allocation)).transpose()?;
+            allocation.push(&mut rows,copied)?;
+        }
+        rows
+    };
     for block in function.blocks() {
+        allocation.charge(1)?;
         for statement in block.statements() {
+            allocation.charge(1)?;
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
@@ -20323,10 +18499,11 @@ fn switch_predicates(
             }
             let Some(predicate) = option_predicates
                 .get(source.local().index() as usize)
-                .and_then(Clone::clone)
+                .and_then(Option::as_ref)
             else {
                 continue;
             };
+            let predicate=clone_guard_predicate_v18(predicate,allocation)?;
             let slot = predicates.get_mut(destination_index).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "an Option discriminant outside the semantic local table",
@@ -20389,8 +18566,27 @@ fn order_projected_block_effects(
     sources: Vec<ProjectedAccessSourceV1>,
     entry_operations: &mut Vec<ProductionRankedOperationV1>,
 ) -> Result<ProjectedSemanticBlockV1, ProductionRankedProjectionErrorV1> {
-    let mut source_at = vec![None; operations.len()];
+    order_projected_block_effects_core_v18(operations, guarded_sites, sources, entry_operations,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn order_projected_block_effects_core_v18(
+    operations: Vec<ProductionRankedOperationV1>,
+    guarded_sites: Vec<GuardedAccessSiteV1>,
+    sources: Vec<ProjectedAccessSourceV1>,
+    entry_operations: &mut Vec<ProductionRankedOperationV1>,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<ProjectedSemanticBlockV1, ProductionRankedProjectionErrorV1> {
+    allocation.header::<Result<ProjectedSemanticBlockV1, ProductionRankedProjectionErrorV1>>()?;
+    allocation.header::<std::iter::Peekable<std::vec::IntoIter<GuardedAccessSiteV1>>>()?;
+    allocation.header::<std::iter::Enumerate<std::vec::IntoIter<ProductionRankedOperationV1>>>()?;
+    allocation.header::<std::vec::IntoIter<ProjectedAccessSourceV1>>()?;
+    let mut source_at = allocation.filled(operations.len(), None)?;
+    let item_capacity = if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Source(_)) {
+        source_ranked_consumer_resources_v18::add(operations.len(), guarded_sites.len())?
+    } else { 0 };
     for source in sources {
+        allocation.charge(1)?;
         let slot = source_at.get_mut(source.operation).ok_or(
             ProductionRankedProjectionErrorV1::Unsupported(
                 "a projected access source outside its semantic block",
@@ -20410,20 +18606,23 @@ fn order_projected_block_effects(
         });
     }
     let mut sites = guarded_sites.into_iter().peekable();
-    let mut items = Vec::new();
+    let mut items = if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        Vec::new()
+    } else { allocation.capacity(item_capacity)? };
     for (index, operation) in operations.into_iter().enumerate() {
+        allocation.charge(1)?;
         while sites
             .peek()
             .is_some_and(|site| site.insertion_operation == index)
         {
-            items.push(ProjectedBlockItemV1::Guarded(
+            allocation.push(&mut items, ProjectedBlockItemV1::Guarded(
                 sites
                     .next()
                     .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                         "a peeked guarded access site disappeared before projection",
                     ))?
                     .access,
-            ));
+            ))?;
         }
         if sites
             .peek()
@@ -20440,21 +18639,173 @@ fn order_projected_block_effects(
                     "a pure ranked definition carried a memory-effect source",
                 ));
             }
-            reserve_operation(entry_operations)?;
-            entry_operations.push(operation);
+            reserve_operation_core_v18(entry_operations, allocation)?;
+            allocation.push(entry_operations, operation)?;
         } else {
-            items.push(ProjectedBlockItemV1::Effect { operation, source });
+            allocation.push(&mut items, ProjectedBlockItemV1::Effect { operation, source })?;
         }
     }
     for site in sites {
+        allocation.charge(1)?;
         if site.insertion_operation != source_at.len() {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "a checked access site is outside its semantic block",
             ));
         }
-        items.push(ProjectedBlockItemV1::Guarded(site.access));
+        allocation.push(&mut items, ProjectedBlockItemV1::Guarded(site.access))?;
     }
     Ok(ProjectedSemanticBlockV1 { items })
+}
+
+#[cfg(test)]
+mod ordered_source_block_tests_v18 {
+    use super::*;
+    use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work,
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget};
+    use source_ranked_consumer_resources_v18::{ProjectionAllocationV18, SourceAssertionMeterV18};
+    use std::mem::size_of;
+
+    struct CounterFacts<'a>(&'a mut dyn fe2o3_mir_model::SemanticAssertionMeterV1<Error = ProductionRankedProjectionErrorV1>);
+    impl ProjectedAssertionFactsV1 for CounterFacts<'_> {
+        fn projection_meter_v18(&mut self) -> Option<&mut dyn fe2o3_mir_model::SemanticAssertionMeterV1<Error = ProductionRankedProjectionErrorV1>> { Some(&mut *self.0) }
+        fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProductionRankedProjectionErrorV1> { self.0.charge_work(amount) }
+        fn private_array_initializer_count(&mut self, _: usize, _: usize) -> Result<Option<u64>, ProductionRankedProjectionErrorV1> { panic!("counter test does not inspect initializers") }
+        fn is_materialized_block(&mut self, _: usize) -> Result<bool, ProductionRankedProjectionErrorV1> { panic!("counter test grants no control authority") }
+        fn condition(&mut self, _: usize, _: bool, _: SemanticBlockIdV1) -> Result<canonical_assertion_facts_v1::ProjectedAssertionConditionV1, ProductionRankedProjectionErrorV1> { panic!("counter test grants no condition authority") }
+    }
+
+    fn inputs() -> (Vec<ProductionRankedOperationV1>, Vec<ProjectedAccessSourceV1>) {
+        let mut operations = vec![ProductionRankedOperationV1::IndexConstant {
+            result: ProductionRankedValueIdV1::new(0), value: 3,
+        }];
+        let mut sources = Vec::new();
+        for access in [AccessKindAttr::Read, AccessKindAttr::Write] {
+            let operation = operations.len();
+            operations.push(ProductionRankedOperationV1::AllocationEffect {
+                kind: access, memory_space: MemorySpaceAttr::Global,
+                allocation_origin: 1, noalias_class: 1,
+            });
+            sources.push(ProjectedAccessSourceV1 {
+                block: 7, operation, access, memory_space: MemorySpaceAttr::Global,
+                source: SemanticSourceProvenanceV1::unavailable(), output_extent: None,
+                semantic_site: Some(ProjectedSemanticAccessSiteV1 { block: 7, statement: Some(operation) }),
+            });
+        }
+        (operations, sources)
+    }
+
+    #[test]
+    fn ordered_source_block_has_independent_work_capacity_and_first_failure_oracles() {
+        let storage = size_of::<Result<ProjectedSemanticBlockV1, ProductionRankedProjectionErrorV1>>()
+            + size_of::<std::iter::Peekable<std::vec::IntoIter<GuardedAccessSiteV1>>>()
+            + size_of::<std::iter::Enumerate<std::vec::IntoIter<ProductionRankedOperationV1>>>()
+            + size_of::<std::vec::IntoIter<ProjectedAccessSourceV1>>()
+            + size_of::<Vec<Option<ProjectedEffectSourceV1>>>()
+            + 3 * size_of::<Option<ProjectedEffectSourceV1>>()
+            + size_of::<Vec<ProjectedBlockItemV1>>() + 3 * size_of::<ProjectedBlockItemV1>();
+        // Three source slots, two source rows, three operation visits and
+        // three moved outputs. Caller-owned entry capacity already has room.
+        let work = 11;
+        let (operations, sources) = inputs();
+        let mut legacy_entry = Vec::with_capacity(1);
+        let expected = order_projected_block_effects(operations, vec![], sources, &mut legacy_entry).unwrap();
+        for (work_limit, storage_limit) in [(work, storage), (work - 1, storage), (work, storage - 1)] {
+            let (operations, sources) = inputs();
+            let mut entry = Vec::with_capacity(1);
+            let mut ledger = Work::new(work_limit);
+            let mut budget = Budget::new(&mut ledger, 53 + storage_limit);
+            budget.reserve_storage(53).unwrap();
+            let result = order_projected_block_effects_core_v18(operations, vec![], sources, &mut entry,
+                &mut ProjectionAllocationV18::Source(&mut SourceAssertionMeterV18(&mut budget)));
+            if work_limit < work {
+                assert!(result.is_err());
+                assert_eq!((budget.storage(), budget.peak_storage()), (53 + storage, 53 + storage));
+                drop(budget);
+                assert_eq!(ledger.failed_work(), Some(work));
+            } else if storage_limit < storage {
+                assert!(result.is_err());
+                assert_eq!(budget.failed_storage(), Some(53 + storage));
+                assert_eq!(budget.work(), 5);
+            } else {
+                let projected = result.unwrap();
+                assert_eq!(projected, expected);
+                assert_eq!(entry, legacy_entry);
+                assert_eq!((budget.work(), budget.storage()), (work, 53 + storage));
+                drop(projected);
+                drop(entry);
+                budget.release_storage(storage).unwrap();
+                assert_eq!(budget.storage(), 53);
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_source_block_rejects_duplicate_and_out_of_range_source_rows() {
+        for out_of_range in [false, true] {
+            let (operations, mut sources) = inputs();
+            sources[1].operation = if out_of_range { 3 } else { sources[0].operation };
+            let mut ledger = Work::new(100);
+            let mut budget = Budget::new(&mut ledger, 100_000);
+            let mut entry = Vec::with_capacity(1);
+            assert!(order_projected_block_effects_core_v18(operations, vec![], sources, &mut entry,
+                &mut ProjectionAllocationV18::Source(&mut SourceAssertionMeterV18(&mut budget))).is_err());
+            assert!(entry.is_empty());
+        }
+    }
+
+    #[test]
+    fn source_access_counter_preparation_has_independent_header_capacity_and_work_oracles() {
+        type Key = (usize, Option<usize>);
+        type Row = (Key, u32);
+        let storage = size_of::<ProjectionAllocationV18<'_>>()
+            + size_of::<ProjectionAccessOrdinalsV18>() + size_of::<Vec<Row>>() + size_of::<Row>()
+            + size_of::<(usize, usize, usize, Key, Key)>()
+            + size_of::<Result<(), ProductionRankedProjectionErrorV1>>();
+        let source = inputs().1.remove(0);
+        for (work, limit) in [(3, storage), (2, storage), (3, storage - 1)] {
+            let mut ledger = Work::new(work);
+            let mut budget = Budget::new(&mut ledger, 19 + limit);
+            budget.reserve_storage(19).unwrap();
+            let result = ProjectionAccessOrdinalsV18::prepare(&[source],
+                &mut CounterFacts(&mut SourceAssertionMeterV18(&mut budget)));
+            if work < 3 {
+                assert!(result.is_err());
+                assert_eq!(budget.storage(), 19 + storage);
+                drop(budget);
+                assert_eq!(ledger.failed_work(), Some(3));
+            } else if limit < storage {
+                assert!(result.is_err());
+                assert_eq!(budget.failed_storage(), Some(19 + storage));
+                assert_eq!(budget.work(), 2);
+            } else {
+                let ProjectionAccessOrdinalsV18::Source(rows) = result.unwrap() else { panic!("source used the legacy hash table") };
+                assert_eq!(rows, [((7, Some(1)), 0)]);
+                assert_eq!((budget.work(), budget.storage()), (3, 19 + storage));
+            }
+        }
+    }
+
+    #[test]
+    fn source_access_counter_repeats_sites_without_merging_access_roles() {
+        let (_, mut sources) = inputs();
+        sources.push(sources[0]);
+        sources[0].semantic_site.as_mut().unwrap().block = usize::MAX;
+        sources[2].semantic_site = sources[0].semantic_site;
+        let mut ledger = Work::new(100);
+        let mut budget = Budget::new(&mut ledger, 100_000);
+        let mut meter = SourceAssertionMeterV18(&mut budget);
+        let mut facts = CounterFacts(&mut meter);
+        let mut counters = ProjectionAccessOrdinalsV18::prepare(&sources, &mut facts).unwrap();
+        let first = sources[0].semantic_site.unwrap();
+        assert_eq!(counters.current(Some(first), &mut facts).unwrap(), 0);
+        *counters.slot(first, &mut facts).unwrap() += 1;
+        assert_eq!(counters.current(sources[2].semantic_site, &mut facts).unwrap(), 1);
+        assert_eq!(counters.current(sources[1].semantic_site, &mut facts).unwrap(), 0);
+        assert!(counters.current(Some(ProjectedSemanticAccessSiteV1 { block: 0, statement: None }), &mut facts).is_err());
+        let ProjectionAccessOrdinalsV18::Source(rows) = counters else { unreachable!() };
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.capacity(), 3);
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20724,11 +19075,24 @@ fn projected_block_expansion(
     block: &ProjectedSemanticBlockV1,
     terminator: &ProjectedCfgTerminatorV1,
 ) -> Result<usize, ProductionRankedProjectionErrorV1> {
+    projected_block_expansion_core_v18(block, terminator,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn projected_block_expansion_core_v18(
+    block: &ProjectedSemanticBlockV1,
+    terminator: &ProjectedCfgTerminatorV1,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<usize, ProductionRankedProjectionErrorV1> {
     let mut count = 1_usize;
     for item in &block.items {
+        allocation.charge(1)?;
         if let ProjectedBlockItemV1::Guarded(access) = item {
+            let comparisons = if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+                GuardPredicateV1::for_access(access).comparisons.len()
+            } else { access.comparisons.len() };
             count = count
-                .checked_add(GuardPredicateV1::for_access(access).comparisons.len() + 2)
+                .checked_add(comparisons + 2)
                 .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                     "checked-access CFG block count overflow",
                 ))?;
@@ -20764,17 +19128,29 @@ fn live_induction_block_arguments(
 ) -> Result<Vec<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
     live.iter()
         .enumerate()
-        .map(|(argument, _)| {
-            Ok(ProductionRankedValueV1::BlockArgument {
-                block,
-                argument: u32::try_from(argument).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "live induction argument count does not fit u32",
-                    )
-                })?,
-            })
-        })
+        .map(|(argument, _)| live_induction_argument_v18(block,argument))
         .collect()
+}
+
+fn live_induction_argument_v18(block:u32,argument:usize)->Result<ProductionRankedValueV1,ProductionRankedProjectionErrorV1>{
+    Ok(ProductionRankedValueV1::BlockArgument {block,argument:u32::try_from(argument)
+        .map_err(|_|ProductionRankedProjectionErrorV1::Unsupported("live induction argument count does not fit u32"))?})
+}
+
+fn live_induction_block_arguments_with_allocation_v18(
+    block:u32,
+    live:&[usize],
+    allocation:&mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Vec<ProductionRankedValueV1>,ProductionRankedProjectionErrorV1> {
+    if matches!(allocation,source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        return live_induction_block_arguments(block,live);
+    }
+    let mut rows=allocation.capacity(live.len())?;
+    for argument in 0..live.len() {
+        let value=live_induction_argument_v18(block,argument)?;
+        allocation.push(&mut rows,value)?;
+    }
+    Ok(rows)
 }
 
 fn forward_live_inductions(
@@ -20784,23 +19160,34 @@ fn forward_live_inductions(
 ) -> Result<Vec<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
     target_live
         .iter()
-        .map(|target| {
-            let argument = source_live
-                .iter()
-                .position(|source| source == target)
-                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a ranked edge introduces an induction outside its preheader",
-                ))?;
-            Ok(ProductionRankedValueV1::BlockArgument {
-                block: source_block,
-                argument: u32::try_from(argument).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "live induction argument count does not fit u32",
-                    )
-                })?,
-            })
-        })
+        .map(|target|forward_live_induction_argument_v18(source_block,source_live,*target))
         .collect()
+}
+
+fn forward_live_induction_argument_v18(source_block:u32,source_live:&[usize],target:usize)
+    ->Result<ProductionRankedValueV1,ProductionRankedProjectionErrorV1>
+{
+    let argument=source_live.iter().position(|source|*source==target)
+        .ok_or(ProductionRankedProjectionErrorV1::Incomplete("a ranked edge introduces an induction outside its preheader"))?;
+    live_induction_argument_v18(source_block,argument)
+}
+
+fn forward_live_inductions_with_allocation_v18(
+    source_block:u32,
+    source_live:&[usize],
+    target_live:&[usize],
+    allocation:&mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Vec<ProductionRankedValueV1>,ProductionRankedProjectionErrorV1> {
+    if matches!(allocation,source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        return forward_live_inductions(source_block,source_live,target_live);
+    }
+    let mut rows=allocation.capacity(target_live.len())?;
+    for target in target_live {
+        allocation.charge(source_live.len())?;
+        let value=forward_live_induction_argument_v18(source_block,source_live,*target)?;
+        allocation.push(&mut rows,value)?;
+    }
+    Ok(rows)
 }
 
 fn build_ranked_cfg(
@@ -20827,8 +19214,12 @@ fn build_ranked_cfg(
             "semantic CFG projection lost a basic block",
         ));
     }
-    let mut proved_assertions = SemanticAssertProofsV1::analyze(types, function)?;
-    let body_predicates = indexed_induction_body_predicates_v1(function, uniform_inductions)?;
+    let (mut proved_assertions, body_predicates) = {
+        let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(assertion_facts)?;
+        let proved = SemanticAssertProofsV1::analyze_live_v18(types, function, &mut allocation)?;
+        let predicates = indexed_induction_body_predicates_core_v18(function, uniform_inductions, &mut allocation)?;
+        (proved, predicates)
+    };
     let mut has_multi_entry = false;
     for induction in uniform_inductions {
         has_multi_entry |= matches!(
@@ -20899,9 +19290,11 @@ fn build_ranked_cfg(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut allocation = source_ranked_consumer_resources_v18::ProjectionAllocationV18::from_facts(assertion_facts)?;
     let entry = function.entry().index() as usize;
-    let reachable = reachable_projected_blocks(entry, &terminators)?;
-    let live_inductions = (0..function.blocks().len())
+    let reachable = reachable_projected_blocks_core_v18(entry, &terminators, &mut allocation)?;
+    let live_inductions = if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        (0..function.blocks().len())
         .map(|block| {
             uniform_inductions
                 .iter()
@@ -20909,16 +19302,29 @@ fn build_ranked_cfg(
                 .filter_map(|(index, induction)| induction.contains_block(block).then_some(index))
                 .collect::<Vec<_>>()
         })
-        .collect::<Vec<_>>();
-    let mut base_blocks = vec![None; projected_blocks.len()];
+        .collect::<Vec<_>>()
+    } else {
+        let mut rows = allocation.capacity(function.blocks().len())?;
+        for block in 0..function.blocks().len() {
+            let mut live = allocation.empty()?;
+            for (index, induction) in uniform_inductions.iter().enumerate() {
+                allocation.charge(1 + (usize::BITS - induction.loop_blocks.len().leading_zeros()) as usize)?;
+                if induction.contains_block(block) { allocation.push(&mut live, index)?; }
+            }
+            allocation.push(&mut rows, live)?;
+        }
+        rows
+    };
+    let mut base_blocks = allocation.optional(projected_blocks.len())?;
     let mut block_count = 1_usize;
     for (index, (block, terminator)) in projected_blocks.iter().zip(&terminators).enumerate() {
+        allocation.charge(1)?;
         if !reachable[index] {
             continue;
         }
         base_blocks[index] = Some(block_count);
         block_count = block_count
-            .checked_add(projected_block_expansion(block, terminator)?)
+            .checked_add(projected_block_expansion_core_v18(block, terminator, &mut allocation)?)
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "semantic CFG block count overflow",
             ))?;
@@ -20928,6 +19334,7 @@ fn build_ranked_cfg(
             "semantic CFG projection exceeds the ranked block limit",
         ));
     }
+    allocation.charge(projected_blocks.len())?;
     let operation_count = projected_blocks
         .iter()
         .try_fold(entry_operations.len(), |count, block| {
@@ -20942,36 +19349,39 @@ fn build_ranked_cfg(
     let entry_target = base_blocks.get(entry).copied().flatten().ok_or(
         ProductionRankedProjectionErrorV1::Unsupported("semantic entry block outside the function"),
     )?;
+    allocation.charge(entry_operations.len())?;
     let mut next_value = entry_operations
         .iter()
         .filter_map(ranked_operation_last_result_v1)
         .map(ProductionRankedValueIdV1::get)
         .max()
         .map_or(0, |value| value.saturating_add(1));
-    let pipeline_values = prepare_pipeline_values_v1(&mut projected_blocks, &mut next_value)?;
-    let mut blocks = Vec::with_capacity(block_count);
-    blocks.push(ProductionRankedBlockV1::new(
+    let pipeline_values = prepare_pipeline_values_core_v18(&mut projected_blocks, &mut next_value, &mut allocation)?;
+    let mut blocks = allocation.capacity(block_count)?;
+    allocation.push(&mut blocks, ProductionRankedBlockV1::new(
         entry_operations,
         ProductionRankedTerminatorV1::Branch {
             target: ranked_block_id(entry_target)?,
         },
-    ));
-    let mut sources = Vec::new();
-    let mut executable_effect_sources = Vec::new();
+    ))?;
+    let mut sources = allocation.empty()?;
+    let mut executable_effect_sources = allocation.empty()?;
     for (semantic_index, (projected, terminator)) in
         projected_blocks.into_iter().zip(terminators).enumerate()
     {
+        allocation.charge(1)?;
         let Some(mut current) = base_blocks[semantic_index] else {
             continue;
         };
         let live = &live_inductions[semantic_index];
-        let mut operations = Vec::new();
+        let mut operations = allocation.empty()?;
         let mut generated_effect_ordinal = 0_u32;
         for item in projected.items {
+            allocation.charge(1)?;
             match item {
                 ProjectedBlockItemV1::Effect { operation, source } => {
                     if let Some(source) = source {
-                        sources.push(ProjectedAccessSourceV1 {
+                        allocation.push(&mut sources, ProjectedAccessSourceV1 {
                             block: current,
                             operation: operations.len(),
                             access: source.access,
@@ -20979,17 +19389,19 @@ fn build_ranked_cfg(
                             source: source.source,
                             output_extent: source.output_extent,
                             semantic_site: source.semantic_site,
-                        });
+                        })?;
                     }
-                    operations.push(operation);
+                    allocation.push(&mut operations, operation)?;
                 }
                 ProjectedBlockItemV1::Guarded(access) => {
-                    let predicate = GuardPredicateV1::for_access(&access);
+                    let predicate = if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+                        GuardPredicateV1::for_access(&access)
+                    } else { GuardPredicateV1 { comparisons: allocation.copy_slice(&access.comparisons)? } };
                     let access_block = current + predicate.comparisons.len();
                     let failure_block = access_block + 1;
                     let continuation = failure_block + 1;
                     if !live.is_empty() {
-                        append_predicate_blocks_with_index_arguments(
+                        append_predicate_blocks_with_index_arguments_core_v18(
                             &mut blocks,
                             current,
                             operations,
@@ -20997,15 +19409,17 @@ fn build_ranked_cfg(
                             access_block,
                             failure_block,
                             live.len(),
+                            &mut allocation,
                         )?;
                     } else {
-                        append_predicate_blocks(
+                        append_predicate_blocks_core_v18(
                             &mut blocks,
                             current,
                             operations,
                             &predicate,
                             access_block,
                             failure_block,
+                            &mut allocation,
                         )?;
                     }
                     let access_operations = if let Some(success) = access.checked_success {
@@ -21019,46 +19433,49 @@ fn build_ranked_cfg(
                                 "a predicated checked access is not one non-atomic read or write",
                             ));
                         }
-                        vec![ProductionRankedOperationV1::PredicatedAccess {
+                        allocation.one(ProductionRankedOperationV1::PredicatedAccess {
                             kind: access.access,
                             view: ProductionRankedValueV1::Local(access.view),
                             index: *index,
                             success,
-                        }]
+                        })?
                     } else {
-                        vec![ProductionRankedOperationV1::Access {
+                        allocation.one(ProductionRankedOperationV1::Access {
                             kind: access.access,
                             view: ProductionRankedValueV1::Local(access.view),
                             indices: access.indices,
-                        }]
+                        })?
                     };
                     if !live.is_empty() {
                         let block = ranked_block_id(access_block)?;
-                        push_block_at_with_index_arguments(
+                        push_block_at_core_v18(
                             &mut blocks,
                             access_block,
-                            u32::try_from(live.len()).map_err(|_| {
+                            Some(u32::try_from(live.len()).map_err(|_| {
                                 ProductionRankedProjectionErrorV1::Unsupported(
                                     "live induction argument count does not fit u32",
                                 )
-                            })?,
+                            })?),
                             access_operations,
                             ProductionRankedTerminatorV1::BranchArgs {
-                                arguments: live_induction_block_arguments(block, live)?,
+                                arguments: live_induction_block_arguments_with_allocation_v18(block, live, &mut allocation)?,
                                 target: ranked_block_id(continuation)?,
                             },
+                            &mut allocation,
                         )?;
                     } else {
-                        push_block_at(
+                        push_block_at_core_v18(
                             &mut blocks,
                             access_block,
+                            None,
                             access_operations,
                             ProductionRankedTerminatorV1::Branch {
                                 target: ranked_block_id(continuation)?,
                             },
+                            &mut allocation,
                         )?;
                     }
-                    sources.push(ProjectedAccessSourceV1 {
+                    allocation.push(&mut sources, ProjectedAccessSourceV1 {
                         block: access_block,
                         operation: 0,
                         access: access.access,
@@ -21066,15 +19483,18 @@ fn build_ranked_cfg(
                         source: access.source,
                         output_extent: access.output_extent,
                         semantic_site: access.semantic_site,
-                    });
-                    push_block_at(
+                    })?;
+                    let empty_operations = allocation.empty()?;
+                    push_block_at_core_v18(
                         &mut blocks,
                         failure_block,
-                        Vec::new(),
+                        None,
+                        empty_operations,
                         ProductionRankedTerminatorV1::Trap,
+                        &mut allocation,
                     )?;
                     current = continuation;
-                    operations = Vec::new();
+                    operations = allocation.empty()?;
                 }
                 ProjectedBlockItemV1::Pipeline(effect) => {
                     let access = match &effect {
@@ -21083,14 +19503,17 @@ fn build_ranked_cfg(
                         | ProjectedPipelineEffectV1::Event { .. } => None,
                     };
                     let first_operation = operations.len();
-                    materialize_pipeline_effect_v1(
+                    materialize_pipeline_effect_core_v18(
                         effect,
                         ranked_block_id(current)?,
                         live,
                         &mut operations,
                         &pipeline_values,
+                        &mut allocation,
                     )?;
                     if let Some(access) = access {
+                        allocation.charge(operations.len().checked_sub(first_operation).ok_or_else(||
+                            source_ranked_consumer_resources_v18::resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting))?)?;
                         let operation = operations[first_operation..]
                             .iter()
                             .rposition(|operation| {
@@ -21100,7 +19523,7 @@ fn build_ranked_cfg(
                             .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                                 "a pipeline access did not materialize one ranked memory effect",
                             ))?;
-                        sources.push(ProjectedAccessSourceV1 {
+                        allocation.push(&mut sources, ProjectedAccessSourceV1 {
                             block: current,
                             operation,
                             access,
@@ -21111,7 +19534,7 @@ fn build_ranked_cfg(
                                 block: semantic_index,
                                 statement: None,
                             }),
-                        });
+                        })?;
                     }
                 }
                 ProjectedBlockItemV1::GeneratedFromSemanticTerminator(effect) => {
@@ -21128,7 +19551,7 @@ fn build_ranked_cfg(
                     let ProjectedExecutableEffectOriginV1::GeneratedFromSemanticTerminator {
                         parent: _,
                     } = effect.origin;
-                    executable_effect_sources.push(ProductionRankedExecutableEffectSourceV1::new(
+                    allocation.push(&mut executable_effect_sources, ProductionRankedExecutableEffectSourceV1::new(
                         u32::try_from(semantic_index).map_err(|_| {
                             ProductionRankedProjectionErrorV1::Unsupported(
                                 "generated semantic block does not fit u32",
@@ -21147,25 +19570,33 @@ fn build_ranked_cfg(
                         })?,
                         ProductionRankedExecutableEffectOriginV1::GeneratedFromSemanticTerminator,
                         effect.recipe_identity,
-                    ));
-                    operations.push(effect.operation);
+                    ))?;
+                    allocation.push(&mut operations, effect.operation)?;
                 }
             }
         }
-        if let Some((induction_index, induction)) =
-            uniform_inductions
-                .iter()
-                .enumerate()
-                .find(|(_, induction)| match &induction.preheader_control {
-                    ProjectedInductionPreheaderControlV1::Multiple(entries) => {
-                        entries.contains(semantic_index)
-                    }
-                    _ => induction.initializer_block == semantic_index,
-                })
+        let mut preheader = None;
+        for (index, induction) in uniform_inductions.iter().enumerate() {
+            allocation.charge(1)?;
+            let matches = match &induction.preheader_control {
+                ProjectedInductionPreheaderControlV1::Multiple(entries) => {
+                    allocation.charge(1 + (usize::BITS - entries.rows.len().leading_zeros()) as usize)?;
+                    entries.contains(semantic_index)
+                }
+                _ => induction.initializer_block == semantic_index,
+            };
+            if matches { preheader = Some((index, induction)); break; }
+        }
+        if let Some((induction_index, induction)) = preheader
         {
             let block = ranked_block_id(current)?;
             let target_live = &live_inductions[induction.header];
             let exit_live = &live_inductions[induction.exit];
+            allocation.charge(source_ranked_consumer_resources_v18::add(
+                source_ranked_consumer_resources_v18::product(3, target_live.len())?,
+                source_ranked_consumer_resources_v18::add(live.len(),
+                    source_ranked_consumer_resources_v18::product(exit_live.len(),
+                        2 + (usize::BITS - live.len().leading_zeros()) as usize)?)?)?)?;
             if live.contains(&induction_index)
                 || exit_live.contains(&induction_index)
                 || target_live.len() != live.len().saturating_add(1)
@@ -21187,25 +19618,26 @@ fn build_ranked_cfg(
                     "a uniform induction preheader has inconsistent exact live induction sets",
                 ));
             }
-            let mut arguments = Vec::with_capacity(target_live.len());
+            let mut arguments = allocation.capacity(target_live.len())?;
             for target_induction in target_live {
                 if *target_induction == induction_index {
-                    arguments.push(induction.initial);
+                    allocation.push(&mut arguments, induction.initial)?;
                 } else {
+                    allocation.charge(live.len())?;
                     let source_argument = live
                         .iter()
                         .position(|source| source == target_induction)
                         .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                             "a uniform induction preheader introduces an unrelated live induction",
                         ))?;
-                    arguments.push(ProductionRankedValueV1::BlockArgument {
+                    allocation.push(&mut arguments, ProductionRankedValueV1::BlockArgument {
                         block,
                         argument: u32::try_from(source_argument).map_err(|_| {
                             ProductionRankedProjectionErrorV1::Unsupported(
                                 "live induction argument count does not fit u32",
                             )
                         })?,
-                    });
+                    })?;
                 }
             }
             let terminator = match (&induction.preheader_control, terminator) {
@@ -21235,7 +19667,7 @@ fn build_ranked_cfg(
                     ) =>
                 {
                     let (_, variant, projected_explicit_target) = switch.targets[0];
-                    let exit_arguments = forward_live_inductions(block, live, exit_live)?;
+                    let exit_arguments = forward_live_inductions_with_allocation_v18(block, live, exit_live, &mut allocation)?;
                     let (true_arguments, false_arguments) =
                         if projected_explicit_target == induction.header {
                             (arguments, exit_arguments)
@@ -21273,19 +19705,21 @@ fn build_ranked_cfg(
                     ));
                 }
             };
-            push_block_at_with_index_arguments(
+            push_block_at_core_v18(
                 &mut blocks,
                 current,
-                u32::try_from(live.len()).map_err(|_| {
+                Some(u32::try_from(live.len()).map_err(|_| {
                     ProductionRankedProjectionErrorV1::Unsupported(
                         "live induction argument count does not fit u32",
                     )
-                })?,
+                })?),
                 operations,
                 terminator,
+                &mut allocation,
             )?;
             continue;
         }
+        allocation.charge(uniform_inductions.len())?;
         if let Some((induction_index, induction)) = uniform_inductions
             .iter()
             .enumerate()
@@ -21293,20 +19727,21 @@ fn build_ranked_cfg(
         {
             let header = ranked_block_id(current)?;
             let body = projected_target(&base_blocks, induction.body_entry)?;
+            allocation.charge(live.len())?;
             let induction_argument = live
                 .iter()
                 .position(|candidate| *candidate == induction_index)
                 .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                     "a uniform induction header does not carry its induction value",
                 ))?;
-            push_block_at_with_index_arguments(
+            push_block_at_core_v18(
                 &mut blocks,
                 current,
-                u32::try_from(live.len()).map_err(|_| {
+                Some(u32::try_from(live.len()).map_err(|_| {
                     ProductionRankedProjectionErrorV1::Unsupported(
                         "live induction argument count does not fit u32",
                     )
-                })?,
+                })?),
                 operations,
                 ProductionRankedTerminatorV1::IndexLessThanArgs {
                     lhs: ProductionRankedValueV1::BlockArgument {
@@ -21318,22 +19753,26 @@ fn build_ranked_cfg(
                         })?,
                     },
                     rhs: induction.bound,
-                    true_arguments: forward_live_inductions(
+                    true_arguments: forward_live_inductions_with_allocation_v18(
                         header,
                         live,
                         &live_inductions[induction.body_entry],
+                        &mut allocation,
                     )?,
-                    false_arguments: forward_live_inductions(
+                    false_arguments: forward_live_inductions_with_allocation_v18(
                         header,
                         live,
                         &live_inductions[induction.exit],
+                        &mut allocation,
                     )?,
                     true_block: ranked_block_id(body)?,
                     false_block: ranked_block_id(projected_target(&base_blocks, induction.exit)?)?,
                 },
+                &mut allocation,
             )?;
             continue;
         }
+        allocation.charge(uniform_inductions.len())?;
         if let Some((induction_index, induction)) = uniform_inductions
             .iter()
             .enumerate()
@@ -21341,21 +19780,22 @@ fn build_ranked_cfg(
         {
             let latch = ranked_block_id(current)?;
             let target_live = &live_inductions[induction.header];
-            let arguments = forward_live_inductions(latch, live, target_live)?;
+            let arguments = forward_live_inductions_with_allocation_v18(latch, live, target_live, &mut allocation)?;
+            allocation.charge(target_live.len())?;
             let add_argument = target_live
                 .iter()
                 .position(|candidate| *candidate == induction_index)
                 .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                     "a uniform induction latch does not carry its induction value",
                 ))?;
-            push_block_at_with_index_arguments(
+            push_block_at_core_v18(
                 &mut blocks,
                 current,
-                u32::try_from(live.len()).map_err(|_| {
+                Some(u32::try_from(live.len()).map_err(|_| {
                     ProductionRankedProjectionErrorV1::Unsupported(
                         "live induction argument count does not fit u32",
                     )
-                })?,
+                })?),
                 operations,
                 ProductionRankedTerminatorV1::BranchArgsAddAt {
                     arguments,
@@ -21367,15 +19807,16 @@ fn build_ranked_cfg(
                     step: induction.step,
                     target: ranked_block_id(projected_target(&base_blocks, induction.header)?)?,
                 },
+                &mut allocation,
             )?;
             continue;
         }
         if !live.is_empty() {
             let block = ranked_block_id(current)?;
-            let arguments_for =
-                |target: usize| forward_live_inductions(block, live, &live_inductions[target]);
+            let arguments_for = |target: usize, allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>|
+                forward_live_inductions_with_allocation_v18(block, live, &live_inductions[target], allocation);
             if let Some(predicate) = body_predicates[semantic_index] {
-                let projected = materialize_induction_body_predicate_v1(
+                let projected = materialize_induction_body_predicate_core_v18(
                     function,
                     predicate,
                     &terminator,
@@ -21383,24 +19824,26 @@ fn build_ranked_cfg(
                     live,
                     &base_blocks,
                     &live_inductions,
+                    &mut allocation,
                 )?;
-                push_block_at_with_index_arguments(
+                push_block_at_core_v18(
                     &mut blocks,
                     current,
-                    u32::try_from(live.len()).map_err(|_| {
+                    Some(u32::try_from(live.len()).map_err(|_| {
                         ProductionRankedProjectionErrorV1::Unsupported(
                             "live induction argument count does not fit u32",
                         )
-                    })?,
+                    })?),
                     operations,
                     projected,
+                    &mut allocation,
                 )?;
                 continue;
             }
             let terminator = match terminator {
                 ProjectedCfgTerminatorV1::Branch(target) => {
                     ProductionRankedTerminatorV1::BranchArgs {
-                        arguments: arguments_for(target)?,
+                        arguments: arguments_for(target, &mut allocation)?,
                         target: ranked_block_id(projected_target(&base_blocks, target)?)?,
                     }
                 }
@@ -21409,7 +19852,7 @@ fn build_ranked_cfg(
                     true_block,
                     false_block: _,
                 } if predicate.comparisons.is_empty() => ProductionRankedTerminatorV1::BranchArgs {
-                    arguments: arguments_for(true_block)?,
+                    arguments: arguments_for(true_block, &mut allocation)?,
                     target: ranked_block_id(projected_target(&base_blocks, true_block)?)?,
                 },
                 ProjectedCfgTerminatorV1::Predicate {
@@ -21421,8 +19864,8 @@ fn build_ranked_cfg(
                     ProductionRankedTerminatorV1::IndexLessThanArgs {
                         lhs,
                         rhs,
-                        true_arguments: arguments_for(true_block)?,
-                        false_arguments: arguments_for(false_block)?,
+                        true_arguments: arguments_for(true_block, &mut allocation)?,
+                        false_arguments: arguments_for(false_block, &mut allocation)?,
                         true_block: ranked_block_id(projected_target(&base_blocks, true_block)?)?,
                         false_block: ranked_block_id(projected_target(&base_blocks, false_block)?)?,
                     }
@@ -21436,14 +19879,14 @@ fn build_ranked_cfg(
                     first_block,
                     second_block,
                 } => ProductionRankedTerminatorV1::AnalysisSplitArgs {
-                    control_dependencies: Vec::new(),
-                    first_arguments: arguments_for(first_block)?,
-                    second_arguments: arguments_for(second_block)?,
+                    control_dependencies: allocation.empty()?,
+                    first_arguments: arguments_for(first_block, &mut allocation)?,
+                    second_arguments: arguments_for(second_block, &mut allocation)?,
                     first_block: ranked_block_id(projected_target(&base_blocks, first_block)?)?,
                     second_block: ranked_block_id(projected_target(&base_blocks, second_block)?)?,
                 },
                 ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks: targets } => {
-                    append_analysis_multi_split_blocks_with_arguments(
+                    analysis_multi_split_v1::append_analysis_multi_split_blocks_with_arguments_core_v18(
                         &mut blocks,
                         current,
                         operations,
@@ -21451,12 +19894,13 @@ fn build_ranked_cfg(
                         &base_blocks,
                         live,
                         &live_inductions,
+                        &mut allocation,
                     )?;
                     continue;
                 }
                 ProjectedCfgTerminatorV1::ExactSwitch(switch) if switch.targets.is_empty() => {
                     ProductionRankedTerminatorV1::BranchArgs {
-                        arguments: arguments_for(switch.otherwise)?,
+                        arguments: arguments_for(switch.otherwise, &mut allocation)?,
                         target: ranked_block_id(projected_target(&base_blocks, switch.otherwise)?)?,
                     }
                 }
@@ -21465,8 +19909,8 @@ fn build_ranked_cfg(
                     ProductionRankedTerminatorV1::IndexEqualArgs {
                         lhs: switch.discriminant,
                         rhs: variant,
-                        true_arguments: arguments_for(target)?,
-                        false_arguments: arguments_for(switch.otherwise)?,
+                        true_arguments: arguments_for(target, &mut allocation)?,
+                        false_arguments: arguments_for(switch.otherwise, &mut allocation)?,
                         true_block: ranked_block_id(projected_target(&base_blocks, target)?)?,
                         false_block: ranked_block_id(projected_target(
                             &base_blocks,
@@ -21490,16 +19934,17 @@ fn build_ranked_cfg(
                     ));
                 }
             };
-            push_block_at_with_index_arguments(
+            push_block_at_core_v18(
                 &mut blocks,
                 current,
-                u32::try_from(live.len()).map_err(|_| {
+                Some(u32::try_from(live.len()).map_err(|_| {
                     ProductionRankedProjectionErrorV1::Unsupported(
                         "live induction argument count does not fit u32",
                     )
-                })?,
+                })?),
                 operations,
                 terminator,
+                &mut allocation,
             )?;
             continue;
         }
@@ -21509,80 +19954,93 @@ fn build_ranked_cfg(
                     "a projected CFG reaches a source block absent from the materialized graph",
                 ));
             }
-            ProjectedCfgTerminatorV1::Branch(target) => push_block_at(
+            ProjectedCfgTerminatorV1::Branch(target) => push_block_at_core_v18(
                 &mut blocks,
                 current,
+                None,
                 operations,
                 ProductionRankedTerminatorV1::Branch {
                     target: ranked_block_id(projected_target(&base_blocks, target)?)?,
                 },
+                &mut allocation,
             )?,
             ProjectedCfgTerminatorV1::Predicate {
                 predicate,
                 true_block,
                 false_block: _,
-            } if predicate.comparisons.is_empty() => push_block_at(
+            } if predicate.comparisons.is_empty() => push_block_at_core_v18(
                 &mut blocks,
                 current,
+                None,
                 operations,
                 ProductionRankedTerminatorV1::Branch {
                     target: ranked_block_id(projected_target(&base_blocks, true_block)?)?,
                 },
+                &mut allocation,
             )?,
             ProjectedCfgTerminatorV1::Predicate {
                 predicate,
                 true_block,
                 false_block,
-            } => append_predicate_blocks(
+            } => append_predicate_blocks_core_v18(
                 &mut blocks,
                 current,
                 operations,
                 &predicate,
                 projected_target(&base_blocks, true_block)?,
                 projected_target(&base_blocks, false_block)?,
+                &mut allocation,
             )?,
             ProjectedCfgTerminatorV1::AnalysisSplit {
                 first_block,
                 second_block,
-            } => push_block_at(
+            } => push_block_at_core_v18(
                 &mut blocks,
                 current,
+                None,
                 operations,
                 ProductionRankedTerminatorV1::AnalysisSplit {
-                    control_dependencies: Vec::new(),
+                    control_dependencies: allocation.empty()?,
                     first_block: ranked_block_id(projected_target(&base_blocks, first_block)?)?,
                     second_block: ranked_block_id(projected_target(&base_blocks, second_block)?)?,
                 },
+                &mut allocation,
             )?,
             ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks: targets } => {
-                append_analysis_multi_split_blocks(
+                analysis_multi_split_v1::append_analysis_multi_split_blocks_core_v18(
                     &mut blocks,
                     current,
                     operations,
                     &targets,
                     &base_blocks,
+                    &mut allocation,
                 )?;
             }
             ProjectedCfgTerminatorV1::ExactSwitch(switch) => {
-                append_exact_switch_blocks(
+                append_exact_switch_blocks_core_v18(
                     &mut blocks,
                     current,
                     operations,
                     &switch,
                     &base_blocks,
+                    &mut allocation,
                 )?;
             }
-            ProjectedCfgTerminatorV1::Return => push_block_at(
+            ProjectedCfgTerminatorV1::Return => push_block_at_core_v18(
                 &mut blocks,
                 current,
+                None,
                 operations,
                 ProductionRankedTerminatorV1::Return,
+                &mut allocation,
             )?,
-            ProjectedCfgTerminatorV1::Trap => push_block_at(
+            ProjectedCfgTerminatorV1::Trap => push_block_at_core_v18(
                 &mut blocks,
                 current,
+                None,
                 operations,
                 ProductionRankedTerminatorV1::Trap,
+                &mut allocation,
             )?,
         }
     }
@@ -21629,13 +20087,97 @@ fn ranked_operation_last_result_v1(
     }
 }
 
+#[derive(Debug)]
+enum ProjectedPipelineValuesV18 {
+    Legacy(HashMap<usize, ProductionRankedValueV1>),
+    Source(Vec<Option<ProductionRankedValueV1>>),
+}
+
+impl ProjectedPipelineValuesV18 {
+    fn insert(
+        &mut self, owner: usize, value: ProductionRankedValueV1,
+        allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<Option<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
+        match (self, allocation) {
+            (Self::Legacy(rows), source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) => Ok(rows.insert(owner, value)),
+            (Self::Source(rows), allocation @ source_ranked_consumer_resources_v18::ProjectionAllocationV18::Source(_)) => {
+                allocation.charge(1)?;
+                let slot = rows.get_mut(owner).ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a pipeline owner is outside the exact dense creation domain"))?;
+                Ok(slot.replace(value))
+            }
+            _ => Err(ProductionRankedProjectionErrorV1::Incomplete("pipeline values lost their allocation mode")),
+        }
+    }
+
+    fn get(
+        &self, owner: usize,
+        allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<Option<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
+        match (self, allocation) {
+            (Self::Legacy(rows), source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) => Ok(rows.get(&owner).copied()),
+            (Self::Source(rows), allocation @ source_ranked_consumer_resources_v18::ProjectionAllocationV18::Source(_)) => {
+                allocation.charge(1)?;
+                rows.get(owner).copied().ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a pipeline owner is outside the exact dense creation domain"))
+            }
+            _ => Err(ProductionRankedProjectionErrorV1::Incomplete("pipeline values lost their allocation mode")),
+        }
+    }
+
+    fn finish(
+        &self, allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        match (self, allocation) {
+            (Self::Legacy(_), source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) => Ok(()),
+            (Self::Source(rows), allocation @ source_ranked_consumer_resources_v18::ProjectionAllocationV18::Source(_)) => {
+                for row in rows {
+                    allocation.charge(1)?;
+                    if row.is_none() { return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "the exact pipeline creation domain contains an unfilled owner")); }
+                }
+                Ok(())
+            }
+            _ => Err(ProductionRankedProjectionErrorV1::Incomplete("pipeline values lost their allocation mode")),
+        }
+    }
+}
+
 fn prepare_pipeline_values_v1(
     projected_blocks: &mut [ProjectedSemanticBlockV1],
     next_value: &mut u32,
-) -> Result<HashMap<usize, ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
-    let mut pipeline_values = HashMap::new();
+) -> Result<ProjectedPipelineValuesV18, ProductionRankedProjectionErrorV1> {
+    prepare_pipeline_values_core_v18(projected_blocks, next_value,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn prepare_pipeline_values_core_v18(
+    projected_blocks: &mut [ProjectedSemanticBlockV1],
+    next_value: &mut u32,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<ProjectedPipelineValuesV18, ProductionRankedProjectionErrorV1> {
+    let mut pipeline_values = if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        ProjectedPipelineValuesV18::Legacy(HashMap::new())
+    } else {
+        allocation.header::<ProjectedPipelineValuesV18>()?;
+        let mut count = 0_usize;
+        for block in projected_blocks.iter() {
+            allocation.charge(1)?;
+            for item in &block.items {
+                allocation.charge(1)?;
+                if matches!(item, ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Create { .. })) {
+                    count = source_ranked_consumer_resources_v18::add(count, 1)?;
+                }
+            }
+        }
+        // Insert and final completion prove dense ordinals; the counted size
+        // alone is not evidence that an arbitrary owner is in this domain.
+        ProjectedPipelineValuesV18::Source(allocation.optional(count)?)
+    };
     for block in projected_blocks {
+        allocation.charge(1)?;
         for item in &mut block.items {
+            allocation.charge(1)?;
             let ProjectedBlockItemV1::Pipeline(effect) = item else {
                 continue;
             };
@@ -21645,7 +20187,7 @@ fn prepare_pipeline_values_v1(
                         "a workgroup pipeline creation result was not prepared",
                     ))?;
                     if pipeline_values
-                        .insert(*owner, ProductionRankedValueV1::Local(value))
+                        .insert(*owner, ProductionRankedValueV1::Local(value), allocation)?
                         .is_some()
                     {
                         return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -21656,7 +20198,7 @@ fn prepare_pipeline_values_v1(
                 ProjectedPipelineEffectV1::Event {
                     epoch, slot_result, ..
                 } => {
-                    prepare_pipeline_scalar_v1(epoch, next_value)?;
+                    prepare_pipeline_scalar_core_v18(epoch, next_value, allocation)?;
                     *slot_result = Some(next_value_id(next_value)?);
                 }
                 ProjectedPipelineEffectV1::Access {
@@ -21665,13 +20207,14 @@ fn prepare_pipeline_values_v1(
                     slot_result,
                     ..
                 } => {
-                    prepare_pipeline_scalar_v1(epoch, next_value)?;
-                    prepare_pipeline_scalar_v1(index, next_value)?;
+                    prepare_pipeline_scalar_core_v18(epoch, next_value, allocation)?;
+                    prepare_pipeline_scalar_core_v18(index, next_value, allocation)?;
                     *slot_result = Some(next_value_id(next_value)?);
                 }
             }
         }
     }
+    pipeline_values.finish(allocation)?;
     Ok(pipeline_values)
 }
 
@@ -21679,6 +20222,16 @@ fn prepare_pipeline_scalar_v1(
     scalar: &mut ProjectedPipelineScalarV1,
     next_value: &mut u32,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    prepare_pipeline_scalar_core_v18(scalar, next_value,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn prepare_pipeline_scalar_core_v18(
+    scalar: &mut ProjectedPipelineScalarV1,
+    next_value: &mut u32,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    allocation.charge(1)?;
     if let ProjectedPipelineScalarV1::Binary {
         result,
         left,
@@ -21686,8 +20239,8 @@ fn prepare_pipeline_scalar_v1(
         ..
     } = scalar
     {
-        prepare_pipeline_scalar_v1(left, next_value)?;
-        prepare_pipeline_scalar_v1(right, next_value)?;
+        prepare_pipeline_scalar_core_v18(left, next_value, allocation)?;
+        prepare_pipeline_scalar_core_v18(right, next_value, allocation)?;
         *result = Some(next_value_id(next_value)?);
     }
     Ok(())
@@ -21698,17 +20251,31 @@ fn materialize_pipeline_effect_v1(
     block: u32,
     live: &[usize],
     operations: &mut Vec<ProductionRankedOperationV1>,
-    pipeline_values: &HashMap<usize, ProductionRankedValueV1>,
+    pipeline_values: &ProjectedPipelineValuesV18,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    materialize_pipeline_effect_core_v18(effect, block, live, operations, pipeline_values,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn materialize_pipeline_effect_core_v18(
+    effect: ProjectedPipelineEffectV1,
+    block: u32,
+    live: &[usize],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    pipeline_values: &ProjectedPipelineValuesV18,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    allocation.charge(1)?;
     match effect {
         ProjectedPipelineEffectV1::Create { owner, result, .. } => {
             let result = result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                 "a workgroup pipeline creation result was not prepared",
             ))?;
-            debug_assert_eq!(
-                pipeline_values.get(&owner),
-                Some(&ProductionRankedValueV1::Local(result))
-            );
+            if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+                debug_assert_eq!(pipeline_values.get(owner, allocation)?, Some(ProductionRankedValueV1::Local(result)));
+            } else if pipeline_values.get(owner, allocation)? != Some(ProductionRankedValueV1::Local(result)) {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete("a pipeline creation changed its exact prepared result"));
+            }
         }
         ProjectedPipelineEffectV1::Event {
             owner,
@@ -21717,27 +20284,27 @@ fn materialize_pipeline_effect_v1(
             modulus,
             kind,
         } => {
-            let pipeline = pipeline_values.get(&owner).copied().ok_or(
+            let pipeline = pipeline_values.get(owner, allocation)?.ok_or(
                 ProductionRankedProjectionErrorV1::Incomplete(
                     "a workgroup pipeline event is not dominated by its creation",
                 ),
             )?;
-            let epoch = materialize_pipeline_scalar_v1(epoch, block, live, operations)?;
+            let epoch = materialize_pipeline_scalar_core_v18(epoch, block, live, operations, allocation)?;
             let slot_result = slot_result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                 "a workgroup pipeline event slot result was not prepared",
             ))?;
-            operations.push(ProductionRankedOperationV1::IndexBinary {
+            allocation.push(operations, ProductionRankedOperationV1::IndexBinary {
                 result: slot_result,
                 kind: IndexBinaryKindAttr::Remainder,
                 lhs: epoch,
                 rhs: modulus,
-            });
-            operations.push(ProductionRankedOperationV1::PipelineEvent {
+            })?;
+            allocation.push(operations, ProductionRankedOperationV1::PipelineEvent {
                 pipeline,
                 epoch,
                 slot: ProductionRankedValueV1::Local(slot_result),
                 kind,
-            });
+            })?;
         }
         ProjectedPipelineEffectV1::Access {
             view,
@@ -21747,22 +20314,25 @@ fn materialize_pipeline_effect_v1(
             modulus,
             kind,
         } => {
-            let epoch = materialize_pipeline_scalar_v1(epoch, block, live, operations)?;
-            let index = materialize_pipeline_scalar_v1(index, block, live, operations)?;
+            let epoch = materialize_pipeline_scalar_core_v18(epoch, block, live, operations, allocation)?;
+            let index = materialize_pipeline_scalar_core_v18(index, block, live, operations, allocation)?;
             let slot_result = slot_result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                 "a workgroup pipeline access slot result was not prepared",
             ))?;
-            operations.push(ProductionRankedOperationV1::IndexBinary {
+            allocation.push(operations, ProductionRankedOperationV1::IndexBinary {
                 result: slot_result,
                 kind: IndexBinaryKindAttr::Remainder,
                 lhs: epoch,
                 rhs: modulus,
-            });
-            operations.push(ProductionRankedOperationV1::Access {
+            })?;
+            let indices = if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+                vec![ProductionRankedValueV1::Local(slot_result), index]
+            } else { allocation.copy_slice(&[ProductionRankedValueV1::Local(slot_result), index])? };
+            allocation.push(operations, ProductionRankedOperationV1::Access {
                 kind,
                 view,
-                indices: vec![ProductionRankedValueV1::Local(slot_result), index],
-            });
+                indices,
+            })?;
         }
     }
     Ok(())
@@ -21774,9 +20344,22 @@ fn materialize_pipeline_scalar_v1(
     live: &[usize],
     operations: &mut Vec<ProductionRankedOperationV1>,
 ) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    materialize_pipeline_scalar_core_v18(scalar, block, live, operations,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn materialize_pipeline_scalar_core_v18(
+    scalar: ProjectedPipelineScalarV1,
+    block: u32,
+    live: &[usize],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    allocation.charge(1)?;
     match scalar {
         ProjectedPipelineScalarV1::Value(value) => Ok(value),
         ProjectedPipelineScalarV1::Induction { induction } => {
+            allocation.charge(live.len())?;
             let argument = live
                 .iter()
                 .position(|candidate| *candidate == induction)
@@ -21798,17 +20381,17 @@ fn materialize_pipeline_scalar_v1(
             left,
             right,
         } => {
-            let lhs = materialize_pipeline_scalar_v1(*left, block, live, operations)?;
-            let rhs = materialize_pipeline_scalar_v1(*right, block, live, operations)?;
+            let lhs = materialize_pipeline_scalar_core_v18(*left, block, live, operations, allocation)?;
+            let rhs = materialize_pipeline_scalar_core_v18(*right, block, live, operations, allocation)?;
             let result = result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                 "a workgroup pipeline scalar result was not prepared",
             ))?;
-            operations.push(ProductionRankedOperationV1::IndexBinary {
+            allocation.push(operations, ProductionRankedOperationV1::IndexBinary {
                 result,
                 kind,
                 lhs,
                 rhs,
-            });
+            })?;
             Ok(ProductionRankedValueV1::Local(result))
         }
     }
@@ -21818,14 +20401,24 @@ fn reachable_projected_blocks(
     entry: usize,
     terminators: &[ProjectedCfgTerminatorV1],
 ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
+    reachable_projected_blocks_core_v18(entry, terminators,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn reachable_projected_blocks_core_v18(
+    entry: usize,
+    terminators: &[ProjectedCfgTerminatorV1],
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
     if entry >= terminators.len() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "semantic entry block outside the function",
         ));
     }
-    let mut reachable = vec![false; terminators.len()];
-    let mut pending = vec![entry];
+    let mut reachable = allocation.filled(terminators.len(), false)?;
+    let mut pending = allocation.one(entry)?;
     while let Some(block) = pending.pop() {
+        allocation.charge(1)?;
         let slot =
             reachable
                 .get_mut(block)
@@ -21842,30 +20435,38 @@ fn reachable_projected_blocks(
                     "a projected CFG reaches a source block absent from the materialized graph",
                 ));
             }
-            ProjectedCfgTerminatorV1::Branch(target) => pending.push(*target),
+            ProjectedCfgTerminatorV1::Branch(target) => allocation.push(&mut pending, *target)?,
             ProjectedCfgTerminatorV1::Predicate {
                 predicate,
                 true_block,
                 false_block,
             } => {
-                pending.push(*true_block);
+                allocation.push(&mut pending, *true_block)?;
                 if !predicate.comparisons.is_empty() {
-                    pending.push(*false_block);
+                    allocation.push(&mut pending, *false_block)?;
                 }
             }
             ProjectedCfgTerminatorV1::AnalysisSplit {
                 first_block,
                 second_block,
             } => {
-                pending.push(*first_block);
-                pending.push(*second_block);
+                allocation.push(&mut pending, *first_block)?;
+                allocation.push(&mut pending, *second_block)?;
             }
             ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks } => {
-                pending.extend(blocks.iter().copied());
+                if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+                    pending.extend(blocks.iter().copied());
+                } else {
+                    for &target in blocks { allocation.push(&mut pending, target)?; }
+                }
             }
             ProjectedCfgTerminatorV1::ExactSwitch(switch) => {
-                pending.extend(switch.targets.iter().map(|(_, _, target)| *target));
-                pending.push(switch.otherwise);
+                if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+                    pending.extend(switch.targets.iter().map(|(_, _, target)| *target));
+                } else {
+                    for &(_, _, target) in &switch.targets { allocation.push(&mut pending, target)?; }
+                }
+                allocation.push(&mut pending, switch.otherwise)?;
             }
             ProjectedCfgTerminatorV1::Return | ProjectedCfgTerminatorV1::Trap => {}
         }
@@ -21892,26 +20493,55 @@ fn append_predicate_blocks(
     true_block: usize,
     false_block: usize,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    append_predicate_blocks_core_v18(blocks, first_block, first_operations, predicate,
+        true_block, false_block, &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn projected_first_operations_v18(
+    first: &mut Option<Vec<ProductionRankedOperationV1>>,
+    index: usize,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Vec<ProductionRankedOperationV1>, ProductionRankedProjectionErrorV1> {
+    if index != 0 { return allocation.empty(); }
+    if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        return first.as_ref().cloned().ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "ranked CFG first operations were already consumed"));
+    }
+    // The source route consumes its already-paid input, rather than cloning
+    // possibly nested operation payloads through an infallible allocation path.
+    first.take().ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+        "ranked CFG first operations were already consumed"))
+}
+
+fn append_predicate_blocks_core_v18(
+    blocks: &mut Vec<ProductionRankedBlockV1>,
+    first_block: usize,
+    first_operations: Vec<ProductionRankedOperationV1>,
+    predicate: &GuardPredicateV1,
+    true_block: usize,
+    false_block: usize,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
     if predicate.comparisons.is_empty() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "an empty predicate was materialized as conditional control flow",
         ));
     }
+    allocation.header::<Option<Vec<ProductionRankedOperationV1>>>()?;
+    let mut first_operations = Some(first_operations);
     for (index, &(lhs, rhs)) in predicate.comparisons.iter().enumerate() {
+        allocation.charge(1)?;
         let block = first_block + index;
-        let operations = if index == 0 {
-            first_operations.clone()
-        } else {
-            Vec::new()
-        };
+        let operations = projected_first_operations_v18(&mut first_operations, index, allocation)?;
         let next = if index + 1 == predicate.comparisons.len() {
             true_block
         } else {
             block + 1
         };
-        push_block_at(
+        push_block_at_core_v18(
             blocks,
             block,
+            None,
             operations,
             ProductionRankedTerminatorV1::IndexLessThan {
                 lhs,
@@ -21919,6 +20549,7 @@ fn append_predicate_blocks(
                 true_block: ranked_block_id(next)?,
                 false_block: ranked_block_id(false_block)?,
             },
+            allocation,
         )?;
     }
     Ok(())
@@ -21933,43 +20564,68 @@ fn append_predicate_blocks_with_index_arguments(
     false_block: usize,
     argument_count: usize,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    append_predicate_blocks_with_index_arguments_core_v18(blocks, first_block, first_operations,
+        predicate, true_block, false_block, argument_count,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn append_predicate_blocks_with_index_arguments_core_v18(
+    blocks: &mut Vec<ProductionRankedBlockV1>,
+    first_block: usize,
+    first_operations: Vec<ProductionRankedOperationV1>,
+    predicate: &GuardPredicateV1,
+    true_block: usize,
+    false_block: usize,
+    argument_count: usize,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
     if predicate.comparisons.is_empty() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "an empty predicate was materialized as conditional control flow",
         ));
     }
+    allocation.header::<Option<Vec<ProductionRankedOperationV1>>>()?;
+    let mut first_operations = Some(first_operations);
     for (index, &(lhs, rhs)) in predicate.comparisons.iter().enumerate() {
+        allocation.charge(1)?;
         let block = first_block + index;
-        let operations = if index == 0 {
-            first_operations.clone()
-        } else {
-            Vec::new()
-        };
+        let operations = projected_first_operations_v18(&mut first_operations, index, allocation)?;
         let next = if index + 1 == predicate.comparisons.len() {
             true_block
         } else {
             block + 1
         };
         let block_id = ranked_block_id(block)?;
-        let live = (0..argument_count).collect::<Vec<_>>();
-        let arguments = live_induction_block_arguments(block_id, &live)?;
-        push_block_at_with_index_arguments(
+        let arguments = if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+            let live = (0..argument_count).collect::<Vec<_>>();
+            live_induction_block_arguments(block_id, &live)?
+        } else {
+            let mut arguments = allocation.capacity(argument_count)?;
+            for index in 0..argument_count {
+                allocation.push(&mut arguments, live_induction_argument_v18(block_id, index)?)?;
+            }
+            arguments
+        };
+        push_block_at_core_v18(
             blocks,
             block,
-            u32::try_from(argument_count).map_err(|_| {
+            Some(u32::try_from(argument_count).map_err(|_| {
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "live induction argument count does not fit u32",
                 )
-            })?,
+            })?),
             operations,
             ProductionRankedTerminatorV1::IndexLessThanArgs {
                 lhs,
                 rhs,
-                true_arguments: arguments.clone(),
-                false_arguments: Vec::new(),
+                true_arguments: if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+                    arguments.clone()
+                } else { arguments },
+                false_arguments: allocation.empty()?,
                 true_block: ranked_block_id(next)?,
                 false_block: ranked_block_id(false_block)?,
             },
+            allocation,
         )?;
     }
     Ok(())
@@ -21982,31 +20638,45 @@ fn append_exact_switch_blocks(
     switch: &ProjectedDeterministicSwitchV1,
     base_blocks: &[Option<usize>],
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    append_exact_switch_blocks_core_v18(blocks, first_block, first_operations, switch, base_blocks,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn append_exact_switch_blocks_core_v18(
+    blocks: &mut Vec<ProductionRankedBlockV1>,
+    first_block: usize,
+    first_operations: Vec<ProductionRankedOperationV1>,
+    switch: &ProjectedDeterministicSwitchV1,
+    base_blocks: &[Option<usize>],
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
     if switch.targets.is_empty() {
-        return push_block_at(
+        return push_block_at_core_v18(
             blocks,
             first_block,
+            None,
             first_operations,
             ProductionRankedTerminatorV1::Branch {
                 target: ranked_block_id(projected_target(base_blocks, switch.otherwise)?)?,
             },
+            allocation,
         );
     }
+    allocation.header::<Option<Vec<ProductionRankedOperationV1>>>()?;
+    let mut first_operations = Some(first_operations);
     for (index, &(_, variant, target)) in switch.targets.iter().enumerate() {
+        allocation.charge(1)?;
         let block = first_block + index;
-        let operations = if index == 0 {
-            first_operations.clone()
-        } else {
-            Vec::new()
-        };
+        let operations = projected_first_operations_v18(&mut first_operations, index, allocation)?;
         let false_block = if index + 1 == switch.targets.len() {
             projected_target(base_blocks, switch.otherwise)?
         } else {
             block + 1
         };
-        push_block_at(
+        push_block_at_core_v18(
             blocks,
             block,
+            None,
             operations,
             ProductionRankedTerminatorV1::IndexEqual {
                 lhs: switch.discriminant,
@@ -22014,6 +20684,7 @@ fn append_exact_switch_blocks(
                 true_block: ranked_block_id(projected_target(base_blocks, target)?)?,
                 false_block: ranked_block_id(false_block)?,
             },
+            allocation,
         )?;
     }
     Ok(())
@@ -22025,13 +20696,27 @@ fn push_block_at(
     operations: Vec<ProductionRankedOperationV1>,
     terminator: ProductionRankedTerminatorV1,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    push_block_at_core_v18(blocks,expected,None,operations,terminator,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn push_block_at_core_v18(
+    blocks:&mut Vec<ProductionRankedBlockV1>,
+    expected:usize,
+    index_arguments:Option<u32>,
+    operations:Vec<ProductionRankedOperationV1>,
+    terminator:ProductionRankedTerminatorV1,
+    allocation:&mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<(),ProductionRankedProjectionErrorV1> {
     if blocks.len() != expected {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "semantic CFG projection produced non-canonical block numbering",
         ));
     }
-    blocks.push(ProductionRankedBlockV1::new(operations, terminator));
-    Ok(())
+    allocation.push(blocks,match index_arguments {
+        None=>ProductionRankedBlockV1::new(operations,terminator),
+        Some(count)=>ProductionRankedBlockV1::with_index_arguments(count,operations,terminator),
+    })
 }
 
 fn push_block_at_with_index_arguments(
@@ -22041,17 +20726,8 @@ fn push_block_at_with_index_arguments(
     operations: Vec<ProductionRankedOperationV1>,
     terminator: ProductionRankedTerminatorV1,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
-    if blocks.len() != expected {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "semantic CFG projection produced non-canonical block numbering",
-        ));
-    }
-    blocks.push(ProductionRankedBlockV1::with_index_arguments(
-        index_argument_count,
-        operations,
-        terminator,
-    ));
-    Ok(())
+    push_block_at_core_v18(blocks,expected,Some(index_argument_count),operations,terminator,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
 }
 
 fn ranked_block_id(block: usize) -> Result<u32, ProductionRankedProjectionErrorV1> {
@@ -22890,145 +21566,6 @@ fn local_definition_counts(function: &SemanticFunctionDeclV1) -> Vec<u8> {
     definitions
 }
 
-fn assertion_definition_inventory(
-    function: &SemanticFunctionDeclV1,
-) -> Result<AssertionDefinitionInventoryV1, ProductionRankedProjectionErrorV1> {
-    let local_count = function.locals().len();
-    let mut counts = vec![0_u8; local_count];
-    let mut assignments = vec![None; local_count];
-    let mut address_escaped = vec![false; local_count];
-    let mut blocks = Vec::new();
-    blocks
-        .try_reserve_exact(function.blocks().len())
-        .map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof definition-block storage cannot be reserved",
-            )
-        })?;
-    for (block_index, block) in function.blocks().iter().enumerate() {
-        let mut definitions = Vec::new();
-        let capacity = block
-            .statements()
-            .len()
-            .checked_mul(2)
-            .and_then(|value| value.checked_add(1))
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof block-definition capacity overflowed",
-            ))?;
-        definitions.try_reserve(capacity).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof block-definition storage cannot be reserved",
-            )
-        })?;
-        for (statement_index, statement) in block.statements().iter().enumerate() {
-            if let SemanticStatementKindV1::Assign(assignment) = statement.kind() {
-                if assignment.destination().projections().is_empty()
-                    && let Some(local) = local_definition_index(assignment.destination())
-                {
-                    let Some(slot) = assignments.get_mut(local) else {
-                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                            "an assertion proof assignment is outside the semantic local table",
-                        ));
-                    };
-                    if slot.is_none() {
-                        *slot = Some(ScalarAssignmentSiteV1 {
-                            block: block_index,
-                            statement: statement_index,
-                        });
-                    }
-                }
-                if let Some(slot) = address_escaped_local_index_v1(assignment.value().kind())
-                    .and_then(|local| address_escaped.get_mut(local))
-                {
-                    *slot = true;
-                }
-            }
-            visit_statement_definition_places(statement.kind(), &mut |place| {
-                if let Some(local) = local_definition_index(place) {
-                    if let Some(slot) = counts.get_mut(local) {
-                        *slot = slot.saturating_add(1);
-                    }
-                    definitions.push(local);
-                }
-            });
-        }
-        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
-            && let Some(local) = call
-                .destination()
-                .and_then(|destination| local_definition_index(destination.place()))
-        {
-            if let Some(slot) = counts.get_mut(local) {
-                *slot = slot.saturating_add(1);
-            }
-            definitions.push(local);
-        }
-        definitions.sort_unstable();
-        definitions.dedup();
-        blocks.push(definitions);
-    }
-    for (local, assignment) in assignments.iter_mut().enumerate() {
-        if counts.get(local).copied() != Some(1) {
-            *assignment = None;
-        }
-    }
-    Ok(AssertionDefinitionInventoryV1 {
-        counts,
-        blocks,
-        assignments,
-        address_escaped,
-    })
-}
-
-fn visit_statement_definition_places(
-    kind: &SemanticStatementKindV1,
-    visitor: &mut impl FnMut(&SemanticPlaceV1),
-) {
-    match kind {
-        SemanticStatementKindV1::Assign(assignment) => visitor(assignment.destination()),
-        SemanticStatementKindV1::Store(store) => visitor(store.destination()),
-        SemanticStatementKindV1::AtomicRmw(atomic) => {
-            visitor(atomic.destination());
-            visitor(atomic.address());
-        }
-        SemanticStatementKindV1::AtomicCompareExchange(atomic) => {
-            visitor(atomic.destination());
-            visitor(atomic.address());
-        }
-        SemanticStatementKindV1::SetDiscriminant { place, .. }
-        | SemanticStatementKindV1::Deinitialize(place) => visitor(place),
-        SemanticStatementKindV1::StorageLive(_)
-        | SemanticStatementKindV1::StorageDead(_)
-        | SemanticStatementKindV1::Assume(_)
-        | SemanticStatementKindV1::Nop => {}
-    }
-}
-
-fn local_definition_index(place: &SemanticPlaceV1) -> Option<usize> {
-    (!matches!(
-        place
-            .projections()
-            .first()
-            .map(|projection| projection.kind()),
-        Some(SemanticProjectionKindV1::Dereference)
-    ))
-    .then_some(place.local().index() as usize)
-}
-
-fn address_escaped_local_index_v1(kind: &SemanticRvalueKindV1) -> Option<usize> {
-    match kind {
-        SemanticRvalueKindV1::Borrow {
-            kind: SemanticBorrowKindV1::Mutable,
-            place,
-        }
-        | SemanticRvalueKindV1::AddressOf { place, .. } => local_definition_index(place),
-        SemanticRvalueKindV1::Borrow {
-            kind: SemanticBorrowKindV1::Shared | SemanticBorrowKindV1::Fake,
-            ..
-        } => None,
-        _ => None,
-    }
-}
-
 fn checked_reference_origin_for_place(
     place: &SemanticPlaceV1,
     origins: &[Option<CheckedReferenceOriginV1>],
@@ -23078,17 +21615,6 @@ fn checked_reference_origin(
     Ok(Some(origin.source))
 }
 
-fn transparent_operand_place(operand: &SemanticOperandV1) -> Option<&SemanticPlaceV1> {
-    transparent_place(raw_operand_place(operand)?)
-}
-
-fn raw_operand_place(operand: &SemanticOperandV1) -> Option<&SemanticPlaceV1> {
-    match operand {
-        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => Some(place),
-        SemanticOperandV1::Constant(_) => None,
-    }
-}
-
 fn enum_payload_projection(place: &SemanticPlaceV1) -> Option<(usize, u32)> {
     let [downcast, field] = place.projections() else {
         return None;
@@ -23098,28 +21624,6 @@ fn enum_payload_projection(place: &SemanticPlaceV1) -> Option<(usize, u32)> {
     };
     matches!(field.kind(), SemanticProjectionKindV1::Field(0))
         .then_some((place.local().index() as usize, variant))
-}
-
-fn transparent_place(place: &SemanticPlaceV1) -> Option<&SemanticPlaceV1> {
-    place
-        .projections()
-        .iter()
-        .all(|projection| {
-            matches!(
-                projection.kind(),
-                SemanticProjectionKindV1::Field(_)
-                    | SemanticProjectionKindV1::Downcast(_)
-                    | SemanticProjectionKindV1::OpaqueCast
-                    | SemanticProjectionKindV1::Subtype
-            )
-        })
-        .then_some(place)
-}
-
-fn simple_operand_local(operand: &SemanticOperandV1) -> Option<SemanticLocalIdV1> {
-    transparent_operand_place(operand)
-        .filter(|place| place.projections().is_empty())
-        .map(SemanticPlaceV1::local)
 }
 
 fn allocation_operand_local_v1(
@@ -23197,37 +21701,62 @@ fn simple_call_destination(
 fn reserve_operation(
     operations: &mut Vec<ProductionRankedOperationV1>,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    reserve_operation_core_v18(operations,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn reserve_operation_core_v18(
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
     if operations.len() == MAX_PROJECTED_OPERATIONS_V1 {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "a semantic intrinsic projection exceeding the ranked operation limit",
         ));
     }
-    operations.try_reserve(1).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "semantic intrinsic projection storage cannot be reserved",
-        )
-    })
+    allocation.reserve(operations, 1, false, "semantic intrinsic projection storage cannot be reserved")
 }
 
 fn projected_block_uses_bounds_check(
     block: &ProjectedSemanticBlockV1,
     check: ProjectedBoundsCheckV1,
 ) -> bool {
-    block.items.iter().any(|item| match item {
+    projected_block_uses_bounds_check_core_v18(block, check,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+        .expect("legacy bounds-use inspection has no fallible meter")
+}
+
+fn projected_block_uses_bounds_check_core_v18(
+    block: &ProjectedSemanticBlockV1,
+    check: ProjectedBoundsCheckV1,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    for item in &block.items {
+        allocation.charge(1)?;
+        let found = match item {
         ProjectedBlockItemV1::Effect {
             operation:
                 ProductionRankedOperationV1::Access { indices, .. }
                 | ProductionRankedOperationV1::AtomicAccess { indices, .. },
             ..
-        } => indices.contains(&check.index),
+        } => {
+            allocation.charge(indices.len())?;
+            indices.contains(&check.index)
+        },
         ProjectedBlockItemV1::Guarded(access) => {
-            access.indices.contains(&check.index)
-                && access.comparisons.contains(&(check.index, check.extent))
+            allocation.charge(access.indices.len())?;
+            if access.indices.contains(&check.index) {
+                allocation.charge(access.comparisons.len())?;
+                access.comparisons.contains(&(check.index, check.extent))
+            } else { false }
         }
         ProjectedBlockItemV1::Pipeline(_) => false,
         ProjectedBlockItemV1::GeneratedFromSemanticTerminator(_) => false,
         ProjectedBlockItemV1::Effect { .. } => false,
-    })
+        };
+        if found { return Ok(true); }
+    }
+    Ok(false)
 }
 
 fn retain_incomplete(
@@ -23788,7 +22317,12 @@ fn project_direct_call_accesses(
         Some(SemanticCallableDeclV1::Defined { function })
             if !callable_effects.is_exact_empty(*function)
     ) {
-        projected_views.require_unit_local_call(block_index, call, source)?;
+        match projected_views.call_projection_disposition_v18(block_index, call, source)? {
+            CallProjectionDispositionV18::CheckedUnitLocal => {}
+            CallProjectionDispositionV18::PendingStorage(pending) => {
+                projected_views.accept_pending_source_call_v18(pending)?;
+            }
+        }
     } else {
         require_bounds_neutral_callable(
             callables,
@@ -23932,16 +22466,26 @@ enum ConstantDefinitionV1 {
 fn constant_locals(
     function: &SemanticFunctionDeclV1,
 ) -> Result<Vec<Option<u64>>, ProductionRankedProjectionErrorV1> {
+    constant_locals_core_v18(
+        function,
+        &mut optimized_source_projection_v18::ConstantAllocationV18::Legacy,
+    )
+}
+
+fn constant_locals_core_v18(
+    function: &SemanticFunctionDeclV1,
+    allocation: &mut optimized_source_projection_v18::ConstantAllocationV18<'_, '_>,
+) -> Result<Vec<Option<u64>>, ProductionRankedProjectionErrorV1> {
     let local_count = function.locals().len();
-    let mut definitions = Vec::new();
-    definitions.try_reserve_exact(local_count).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "constant-local definition storage cannot be reserved",
-        )
-    })?;
+    let mut definitions = allocation.rows(local_count,
+        "constant-local definition storage cannot be reserved")?;
     definitions.resize(local_count, ConstantDefinitionV1::Missing);
     for block in function.blocks() {
+        allocation.charge(1)?;
         for statement in block.statements() {
+            // Escape, definition and invalidation visits are constant-time.
+            // The closed MIR destination visitor yields at most two places.
+            allocation.charge(3)?;
             if let SemanticStatementKindV1::Assign(assignment) = statement.kind()
                 && let Some(definition) = address_escaped_local_index_v1(assignment.value().kind())
                     .and_then(|local| definitions.get_mut(local))
@@ -23976,6 +22520,7 @@ fn constant_locals(
                 });
             }
         }
+        allocation.charge(1)?;
         if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
             && let Some(destination) = call.destination()
             && local_definition_index(destination.place()).is_some()
@@ -23987,29 +22532,23 @@ fn constant_locals(
             );
         }
     }
-    let mut states = Vec::new();
-    states.try_reserve_exact(local_count).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "constant-local resolution-state storage cannot be reserved",
-        )
-    })?;
+    let mut states = allocation.rows(local_count,
+        "constant-local resolution-state storage cannot be reserved")?;
     states.resize(local_count, 0_u8);
-    let mut values = Vec::new();
-    values.try_reserve_exact(local_count).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "constant-local value storage cannot be reserved",
-        )
-    })?;
+    let mut values = allocation.rows(local_count,
+        "constant-local value storage cannot be reserved")?;
     values.resize(local_count, None);
-    let mut path = Vec::new();
-    path.try_reserve_exact(local_count).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "constant-local resolution-path storage cannot be reserved",
-        )
-    })?;
+    let mut path = allocation.rows(local_count,
+        "constant-local resolution-path storage cannot be reserved")?;
+    // N root probes, at most N first visits, N terminating probes and N
+    // finalized path entries bound this exact shared functional-graph solver.
+    allocation.charge_linear_resolution(local_count)?;
     for index in 0..definitions.len() {
         resolve_constant_iterative(index, &definitions, &mut states, &mut values, &mut path);
     }
+    allocation.drop_rows(path)?;
+    allocation.drop_rows(states)?;
+    allocation.drop_rows(definitions)?;
     Ok(values)
 }
 
@@ -25560,6 +24099,169 @@ mod tests {
     include!("production_ranked_projection_v1/analysis_multi_split_v1_tests.rs");
     include!("production_ranked_projection_v1/induction_body_predicate_v1_tests.rs");
     include!("production_ranked_projection_v1/guarded_opaque_divisor_v1_tests.rs");
+
+    #[test]
+    fn source_origin_worklist_has_independent_exact_and_short_bounds() {
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation,
+            SourceAssertionMeterV18 as Meter};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        use std::mem::size_of;
+        // Three seed visits, one seed enqueue, three pops, four edge visits
+        // (including a repeated incidence), and two first-discovery enqueues.
+        let work = 13;
+        let floor = 31;
+        let storage = size_of::<Result<(), ProductionRankedProjectionErrorV1>>()
+            + size_of::<VecDeque<usize>>() + 3 * size_of::<usize>();
+        let edges = vec![vec![1, 1], vec![2], vec![1]];
+        for (work_limit, storage_limit) in [(work, storage), (work - 1, storage), (work, storage - 1)] {
+            let mut ledger = Work::new(work_limit);
+            let mut budget = Budget::new(&mut ledger, floor + storage_limit);
+            budget.reserve_storage(floor).unwrap();
+            let mut origins = [Some(9_u32), None, None];
+            let result = propagate_exact_local_origins_core_v18(&mut origins, &edges, "conflict",
+                &mut Allocation::Source(&mut Meter(&mut budget)));
+            if (work_limit, storage_limit) == (work, storage) {
+                result.unwrap();
+                assert_eq!(origins, [Some(9); 3]);
+                assert_eq!((budget.work(), budget.storage()), (work, floor + storage));
+            } else {
+                assert!(result.is_err());
+                if storage_limit < storage {
+                    assert_eq!(budget.failed_storage(), Some(floor + storage));
+                    assert_eq!(budget.work(), 0);
+                    assert_eq!(origins, [Some(9), None, None]);
+                } else {
+                    assert_eq!(budget.failed_work(), Some(work));
+                    assert_eq!(budget.storage(), floor + storage);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_origin_solver_retains_conflicts_and_dense_edge_custody() {
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation,
+            SourceAssertionMeterV18 as Meter};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        let edges = vec![vec![2], vec![2], vec![]];
+        let mut old = [Some(5_u32), Some(6), None];
+        let old_error = propagate_exact_local_origins_v1(&mut old, &edges, "distinct origins")
+            .unwrap_err();
+        let mut ledger = Work::new(100);
+        let mut budget = Budget::new(&mut ledger, 10000);
+        let mut actual = [Some(5_u32), Some(6), None];
+        let actual_error = propagate_exact_local_origins_core_v18(&mut actual, &edges,
+            "distinct origins", &mut Allocation::Source(&mut Meter(&mut budget))).unwrap_err();
+        assert_eq!(format!("{actual_error:?}"), format!("{old_error:?}"));
+        assert_eq!(actual, old);
+        assert!(budget.failed_work().is_none());
+        for (source, destination) in [(usize::MAX, 0), (0, usize::MAX)] {
+            let mut edges = vec![Vec::new(); 3];
+            let mut edge_count = 0;
+            let prior = (budget.work(), budget.storage());
+            assert!(matches!(push_local_provenance_edge_core_v18(&mut edges, source,
+                destination, &mut edge_count, &mut Allocation::Source(&mut Meter(&mut budget))),
+                Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a local provenance edge is outside the semantic local table"))));
+            assert_eq!(edge_count, 0);
+            assert!(edges.iter().all(Vec::is_empty));
+            assert_eq!((budget.work(), budget.storage()), prior);
+        }
+    }
+
+    fn source_borrowed_carrier_fixture_v18(mode: usize) -> SemanticFunctionDeclV1 {
+        let place = |index| SemanticPlaceV1::new(SemanticLocalIdV1::from_index(index),
+            vec![], POINTER_TYPE).unwrap();
+        let operand = |index| SemanticOperandV1::Move(place(index));
+        let mut statements = vec![
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(place(2),
+                SemanticRvalueV1::new(POINTER_TYPE, if mode == 1 {
+                    SemanticRvalueKindV1::Cast { kind: SemanticCastKindV1::Pointer, operand: operand(1) }
+                } else { SemanticRvalueKindV1::Use(operand(1)) })))),
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(place(3),
+                SemanticRvalueV1::new(POINTER_TYPE, SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Mutable, place: place(2),
+                })))),
+        ];
+        if mode == 2 { statements.push(statement(SemanticStatementKindV1::Deinitialize(place(2)))); }
+        projection_function_with_owned_argument(vec![
+            block(230, statements, SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(SemanticCallableIdV1::from_index(0),
+                    vec![operand(if mode == 3 { 2 } else { 3 }), constant(0)],
+                    Some(SemanticCallDestinationV1::new(
+                        SemanticPlaceV1::new(SemanticLocalIdV1::from_index(4), vec![], SCALAR_TYPE).unwrap(),
+                        cfg_edge(SemanticEdgeRoleV1::CallReturn, 1))),
+                    SemanticUnwindActionV1::Unreachable).unwrap())),
+            block(231, vec![], SemanticTerminatorKindV1::Return),
+        ], vec![
+            local(230, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+            local(231, POINTER_TYPE, SemanticLocalRoleV1::Argument(0)),
+            local(232, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            local(233, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            local(234, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+        ], if mode == 4 { SemanticSourceArgumentOwnershipV1::RawPointer }
+            else { SemanticSourceArgumentOwnershipV1::ExclusiveOwner })
+    }
+
+    #[test]
+    fn live_local_provenance_matches_original_owner_escape_and_receiver_census() {
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation,
+            SourceAssertionMeterV18 as Meter};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        let callables = [compiler_intrinsic_callable(
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+                disjoint_slice: POINTER_TYPE, index_witness: SCALAR_TYPE,
+                element: SCALAR_TYPE, raw_index: SCALAR_TYPE,
+            })];
+        let types = projection_types();
+        for mode in 0..5 {
+            let function = source_borrowed_carrier_fixture_v18(mode);
+            let inventory = assertion_definition_inventory(&function).unwrap();
+            let expected = local_provenance_with_scalar_inventory_v1(&callables, &types,
+                &function, &inventory.counts, &inventory.address_escaped).unwrap();
+            assert_eq!(expected.allocation_origins[3], if mode == 0 { Some(0) } else { None });
+            let mut ledger = Work::new(10000);
+            let mut budget = Budget::new(&mut ledger, 100000);
+            budget.reserve_storage(47).unwrap();
+            let actual = local_provenance_with_scalar_inventory_core_v18(&callables, &types,
+                &function, &inventory.counts, &inventory.address_escaped,
+                &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+            assert_eq!(actual, expected);
+            let old_contracts = local_allocation_contracts(&types, &function,
+                &expected.allocation_origins).unwrap();
+            let actual_contracts = local_allocation_contracts_core_v18(&types, &function,
+                &actual.allocation_origins, &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+            assert_eq!(actual_contracts, old_contracts);
+            assert!(budget.storage() > 47);
+            assert!(budget.failed_storage().is_none());
+            assert!(budget.failed_work().is_none());
+        }
+    }
+
+    #[test]
+    fn live_local_provenance_refuses_before_allocating_when_header_is_unpaid() {
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation,
+            SourceAssertionMeterV18 as Meter};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        let function = source_borrowed_carrier_fixture_v18(0);
+        let inventory = assertion_definition_inventory(&function).unwrap();
+        let floor = 29;
+        let header = std::mem::size_of::<LocalProvenanceV1>();
+        let mut ledger = Work::new(0);
+        let mut budget = Budget::new(&mut ledger, floor + header - 1);
+        budget.reserve_storage(floor).unwrap();
+        assert!(local_provenance_with_scalar_inventory_core_v18(&[], &projection_types(),
+            &function, &inventory.counts, &inventory.address_escaped,
+            &mut Allocation::Source(&mut Meter(&mut budget))).is_err());
+        assert_eq!((budget.work(), budget.storage()), (0, floor));
+        assert_eq!(budget.failed_storage(), Some(floor + header));
+        assert!(budget.failed_work().is_none());
+    }
+
     #[test]
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
         let unresolved = non_bounds_assert_function(tensor_operand(1));
@@ -29444,7 +28146,7 @@ mod tests {
                     },
                 )
                 .unwrap()
-                .map(|bound| bound.maximum),
+                .map(|bound| bound.maximum()),
             Some(u128::from(u64::MAX) - 1),
         );
 
@@ -29885,7 +28587,7 @@ mod tests {
                 None
             );
         }
-        proof.work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1;
+        proof.seed_legacy_visits_for_test_v1(MAX_PROJECTED_LOOP_GRAPH_WORK_V1);
         assert!(matches!(
             proof.range_at_operand(&typed_operand(3, U64_TYPE), 2, 1),
             Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -31202,7 +29904,7 @@ mod tests {
                 MutatedGuardShapeV1::ComparisonAlias => 2,
             };
             let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
-            assert!(proof.address_escaped[escaped]);
+            assert!(proof.address_escaped()[escaped]);
             assert_eq!(
                 proof
                     .range_at_operand(&typed_operand(1, U64_TYPE), 1, 0)
@@ -31492,21 +30194,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn assertion_proof_cache_is_bounded_and_overwrites_without_growth() {
-        let mut cache = HashMap::new();
-        insert_assertion_proof_cache_with_limit(&mut cache, (0, 0), true, 2).unwrap();
-        insert_assertion_proof_cache_with_limit(&mut cache, (1, 0), false, 2).unwrap();
-        insert_assertion_proof_cache_with_limit(&mut cache, (0, 0), false, 2).unwrap();
-        assert_eq!(cache.len(), 2);
-        assert_eq!(cache[&(0, 0)], false);
-        assert!(matches!(
-            insert_assertion_proof_cache_with_limit(&mut cache, (2, 0), true, 2),
-            Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof cache exceeds the bounded entry limit"
-            ))
-        ));
-    }
+    // Cache-limit regression moved with the private cache into mir-model resource tests.
 
     #[test]
     fn unresolved_binary_switch_keeps_live_and_unauthenticated_fallbacks() {
@@ -33637,19 +32325,9 @@ mod tests {
             .unwrap(),
         };
         assert!(
-            !scalar_defined_callable_terminator_v1(
-                &types,
-                &function,
-                1,
-                &[],
-                false,
-                &switch,
-                &mut vec![],
-                &mut 0,
-                &mut work,
-            )
-            .unwrap()
-            .empty_eligible
+            !scalar_callable_terminator_profile_v1(&types, &function, 1, &[], &switch, &mut work,)
+                .unwrap()
+                .empty_eligible()
         );
         let assertion = SemanticTerminatorKindV1::Assert {
             condition: typed_operand(0, BOOL_TYPE),
@@ -33659,19 +32337,16 @@ mod tests {
             unwind: SemanticUnwindActionV1::Unreachable,
         };
         assert!(
-            !scalar_defined_callable_terminator_v1(
+            !scalar_callable_terminator_profile_v1(
                 &types,
                 &function,
                 1,
                 &[],
-                true,
                 &assertion,
-                &mut vec![],
-                &mut 0,
                 &mut work,
             )
             .unwrap()
-            .empty_eligible
+            .empty_eligible()
         );
 
         let plain = |ty| {
@@ -33765,18 +32440,16 @@ mod tests {
             )
             .unwrap();
             assert!(
-                !scalar_defined_callable_call_v1(
+                !scalar_callable_terminator_profile_v1(
                     &types,
                     &function,
                     1,
                     &callables,
-                    &call,
-                    &mut vec![],
-                    &mut 0,
+                    &SemanticTerminatorKindV1::Call(call),
                     &mut work,
                 )
                 .unwrap()
-                .empty_eligible
+                .empty_eligible()
             );
         }
     }
@@ -39503,7 +38176,7 @@ mod tests {
         let types = assertion_proof_types();
         let function = greater_equal_false_upper_bound_function();
         let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
-        proof.work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1;
+        proof.seed_legacy_visits_for_test_v1(MAX_PROJECTED_LOOP_GRAPH_WORK_V1);
         assert!(matches!(
             proof.range_at_operand(&typed_operand(4, U64_TYPE), 4, 0),
             Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -39519,8 +38192,8 @@ mod tests {
         let constants = constant_locals(&function).unwrap();
         let definitions = local_definition_counts(&function);
         let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
-        let assignment_sites = proof.assignments.clone();
-        let address_escaped = proof.address_escaped.clone();
+        let assignment_sites = proof.assignments().to_vec();
+        let address_escaped = proof.address_escaped().to_vec();
         let mut arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;
         let mut operations = Vec::new();
@@ -40363,6 +39036,1613 @@ mod tests {
         assert_eq!(linked_private_writes, 1);
     }
 
+    mod live_capability_driver_v18_tests {
+        use super::*;
+        use live_capability_collections_v18::{Domain, State, Workspace, Slot};
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation, SourceAssertionMeterV18 as Meter};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget, CanonicalKernelIrWorkBudgetV1 as Work};
+
+        fn function(blocks: Vec<SemanticBasicBlockV1>) -> SemanticFunctionDeclV1 {
+            projection_function_with_locals(blocks, vec![
+                local(0, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(1, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ])
+        }
+
+        fn contract() -> SemanticMfmaOperandContractV1 {
+            SemanticMfmaOperandContractV1 { role: SemanticMfmaOperandRoleV1::A,
+                profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+                register_distribution: SemanticMfmaRegisterDistributionV1::Tile16x16, wave_width: 64 }
+        }
+
+        fn same_effects(left: &ProjectedCapabilityEffectsV1, right: &ProjectedCapabilityEffectsV1) {
+            assert_eq!(left.layouts, right.layouts);
+            assert_eq!(left.global_reads, right.global_reads);
+            assert_eq!(left.transpose_workgroups, right.transpose_workgroups);
+            assert_eq!(left.read_views, right.read_views);
+        }
+
+        fn typed_transfer_fixture(operation: SemanticCompilerIntrinsicOperationV1, arguments: Vec<SemanticOperandV1>,
+            state: ProjectedCapabilityStateV1, owners: [Option<usize>; 7], payloads: HashMap<usize, ProjectedMfmaOperandV1>,
+        ) -> Result<ProjectedCapabilityTerminatorEffectsV1, ProductionRankedProjectionErrorV1> {
+            let function = projection_function_with_locals(vec![
+                block(0, vec![], SemanticTerminatorKindV1::Call(launch_geometry_call(0, arguments, SCALAR_TYPE,
+                    SemanticUnwindActionV1::Unreachable))),
+                block(1, vec![], SemanticTerminatorKindV1::Return),
+            ], (0..7).map(|index| local(index, SCALAR_TYPE, if index == 0 { SemanticLocalRoleV1::Return }
+                else if index == 1 { SemanticLocalRoleV1::Temporary }
+                else { SemanticLocalRoleV1::Argument(u32::from(index - 2)) })).collect());
+            let callables = [compiler_intrinsic_callable(operation)];
+            let mut ledger = Work::new(1_000_000);
+            let mut budget = Budget::new(&mut ledger, 10_000_000);
+            live_capability_driver_v18::compare_transfer_backends_for_test(&callables, &function, &state,
+                &[None; 7], &[None; 7], &owners, &payloads, &mut Allocation::Source(&mut Meter(&mut budget)))
+        }
+
+        fn typed_operand_payload(role: SemanticMfmaOperandRoleV1) -> ProjectedMfmaOperandV1 {
+            ProjectedMfmaOperandV1 { contract: SemanticMfmaOperandContractV1 { role, ..contract() },
+                storage_layout: SemanticMfmaStorageLayoutV1::RowMajor, lane_root: 7,
+                allocation: AllocationContractV1 { allocation_origin: 1, noalias_class: 1,
+                    writable: false, singleton_object: false } }
+        }
+
+        #[test]
+        fn typed_pipeline_payload_and_mfma_share_one_transfer_across_backends() {
+            let lhs = typed_operand_payload(SemanticMfmaOperandRoleV1::A);
+            let rhs = typed_operand_payload(SemanticMfmaOperandRoleV1::B);
+            let mut owners = [None; 7]; owners[2] = Some(2);
+            let payloads = HashMap::from([(2, lhs)]);
+            let effect = typed_transfer_fixture(SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead {
+                pipeline: SCALAR_TYPE, element: SCALAR_TYPE,
+            }, vec![typed_operand(2, SCALAR_TYPE), constant(0), constant(0)], HashMap::new(), owners, payloads).unwrap();
+            assert_eq!(effect, ProjectedCapabilityTerminatorEffectsV1::default());
+
+            let accumulator = SemanticMfmaAccumulatorContractV1 { profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+                distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor, wave_width: 64 };
+            for missing_context in [false, true] {
+                let mut state = HashMap::from([
+                    (2, ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext { root: 8 })),
+                    (3, ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(lhs))),
+                    (4, ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(rhs))),
+                    (5, ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(ProjectedMfmaAccumulatorV1 {
+                        contract: accumulator, lane_root: 7, value_root: 9, flow_root: 9,
+                    }))),
+                ]);
+                if missing_context { state.remove(&2); }
+                let result = typed_transfer_fixture(SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                    context: SCALAR_TYPE, lhs_fragment: SCALAR_TYPE, rhs_fragment: SCALAR_TYPE, accumulator_fragment: SCALAR_TYPE,
+                    lhs: lhs.contract, rhs: rhs.contract, accumulator,
+                }, (2..6).map(|key| typed_operand(key, SCALAR_TYPE)).collect(), state, [None; 7], HashMap::new());
+                if missing_context {
+                    assert!(matches!(result, Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "an MFMA call without dominating compiler-issued matrix context"))));
+                } else { assert!(result.unwrap().layout.is_some()); }
+            }
+        }
+
+        #[test]
+        fn typed_transpose_zst_search_and_ambiguity_match_original_across_backends() {
+            let payload = typed_operand_payload(SemanticMfmaOperandRoleV1::B);
+            let contract = SemanticMfmaOperandContractV1 { role: SemanticMfmaOperandRoleV1::B,
+                profile: SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+                register_distribution: SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128, wave_width: 64 };
+            let tile = ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(
+                ProjectedGfx950TransposeTileV1 { state: ProjectedGfx950TransposeStateV1::Published,
+                    format: SemanticGfx950LdsTransposeFormatV1::Fp8E4M3, lane_root: 7, token_root: 11,
+                    source_allocation: Some(payload.allocation) }));
+            for ambiguous in [false, true] {
+                let mut state = HashMap::from([(2, tile)]);
+                if ambiguous { state.insert(3, tile); }
+                let result = typed_transfer_fixture(SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
+                    tile: SCALAR_TYPE, fragment: SCALAR_TYPE, contract, format: SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+                }, vec![SemanticOperandV1::Constant(SemanticConstantV1::new(SCALAR_TYPE, SemanticConstantValueV1::ZeroSized))],
+                    state, [None; 7], HashMap::new());
+                if ambiguous { assert!(result.is_err()); }
+                else { assert!(result.unwrap().transpose_workgroup.is_some()); }
+            }
+        }
+
+        #[test]
+        fn one_return_driver_has_an_independent_exact_work_oracle_and_owned_error_cleanup() {
+            let function = function(vec![block(0, vec![], SemanticTerminatorKindV1::Return)]);
+            let dominance = SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
+            let legacy = project_authenticated_capabilities_v1(&[], &function, &dominance, &[None; 2], &[None; 2]).unwrap();
+            let reference = project_authenticated_capabilities_reference_v18(&[], &function, &dominance, &[None; 2], &[None; 2]).unwrap();
+            same_effects(&reference, &legacy);
+            // Owners 5, empty-domain census 12, two propagations 9 each,
+            // payload census 1, effect initialization 4, final replay 8.
+            for limit in [47, 48] {
+                let mut ledger = Work::new(limit);
+                let mut budget = Budget::new(&mut ledger, 1_000_000);
+                budget.reserve_storage(43).unwrap();
+                let result = live_capability_driver_v18::project(&[], &function, &dominance, &[None; 2], &[None; 2],
+                    &mut Allocation::Source(&mut Meter(&mut budget)));
+                if limit == 48 {
+                    let effects = result.unwrap();
+                    same_effects(&effects, &legacy);
+                    assert_eq!(budget.work(), 48);
+                    drop(effects);
+                } else {
+                    assert!(result.is_err());
+                    assert_eq!(budget.failed_work(), Some(48));
+                }
+                let scratch = budget.storage() - 43;
+                assert!(scratch > 0);
+                // The private domain/workspace/states have already dropped.
+                budget.release_storage(scratch).unwrap();
+                assert_eq!(budget.storage(), 43);
+                if limit == 47 { assert_eq!(budget.failed_work(), Some(48)); }
+            }
+        }
+
+        #[test]
+        fn no_op_sparse_merge_preserves_backing_and_needs_no_row_reservation() {
+            use std::mem::size_of;
+            type R<T> = Result<T, ProductionRankedProjectionErrorV1>;
+            let function = function(vec![block(0, vec![], SemanticTerminatorKindV1::Return)]);
+            let domain = Domain { function: &function, keys: vec![0, 1] };
+            let value = ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext { root: 7 });
+            let bytes = 2 * size_of::<R<()>>() + size_of::<R<bool>>() + size_of::<(usize, usize, usize, bool)>();
+            for work in [7, 8] {
+                let mut state = State { domain: &domain, rows: vec![(0, ProjectedCapabilityValueV1::Invalid), (1, value)] };
+                let incoming = State { domain: &domain, rows: vec![(1, value)] };
+                let pointer = state.rows.as_ptr();
+                let capacity = state.rows.capacity();
+                let mut stored = 2;
+                let mut ledger = Work::new(work);
+                let mut budget = Budget::new(&mut ledger, bytes);
+                let result = state.merge(&incoming, &mut stored, &mut Allocation::Source(&mut Meter(&mut budget)));
+                if work == 8 { assert!(!result.unwrap()); assert_eq!(budget.work(), 8); }
+                else { assert!(result.is_err()); assert_eq!(budget.failed_work(), Some(8)); }
+                assert_eq!((state.rows.as_ptr(), state.rows.capacity(), stored), (pointer, capacity, 2));
+                assert_eq!(budget.storage(), bytes);
+                assert_eq!(state.rows, [(0, ProjectedCapabilityValueV1::Invalid), (1, value)]);
+            }
+        }
+
+        #[test]
+        fn borrowed_workspace_no_op_merge_has_exact_header_and_no_row_allocation() {
+            use std::mem::size_of;
+            type R<T> = Result<T, ProductionRankedProjectionErrorV1>;
+            let function = function(vec![block(0, vec![], SemanticTerminatorKindV1::Return)]);
+            let domain = Domain { function: &function, keys: vec![0, 1] };
+            let value = ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext { root: 7 });
+            let bytes = size_of::<&Workspace<'_, '_>>() + 2 * size_of::<R<()>>()
+                + size_of::<R<bool>>() + size_of::<(usize, usize, usize, bool)>();
+            for (work, storage) in [(8, bytes), (7, bytes), (8, bytes - 1)] {
+                let incoming = Workspace { domain: &domain,
+                    slots: vec![Slot { value: None, touched: false }, Slot { value: Some(value), touched: true }],
+                    touched: vec![1], present: 1, normalized: true };
+                let mut state = State { domain: &domain, rows: vec![(0, ProjectedCapabilityValueV1::Invalid), (1, value)] };
+                let pointer = state.rows.as_ptr();
+                let mut stored = 2;
+                let mut ledger = Work::new(work);
+                let mut budget = Budget::new(&mut ledger, storage);
+                let result = state.merge_workspace(&incoming, &mut stored, &mut Allocation::Source(&mut Meter(&mut budget)));
+                if work == 8 && storage == bytes {
+                    assert!(!result.unwrap());
+                    assert_eq!((budget.work(), budget.storage()), (8, bytes));
+                } else {
+                    assert!(result.is_err());
+                    if work == 7 { assert_eq!(budget.failed_work(), Some(8)); }
+                    else { assert_eq!(budget.failed_storage(), Some(bytes)); }
+                }
+                assert_eq!((state.rows.as_ptr(), stored), (pointer, 2));
+                assert_eq!(state.rows, [(0, ProjectedCapabilityValueV1::Invalid), (1, value)]);
+            }
+        }
+
+        #[test]
+        fn partial_normalize_and_clear_refusals_drop_private_workspace_before_owner_refund() {
+            type R<T> = Result<T, ProductionRankedProjectionErrorV1>;
+            let function = function(vec![block(0, vec![], SemanticTerminatorKindV1::Return)]);
+            let domain = Domain { function: &function, keys: vec![0, 1] };
+            let value = ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext { root: 7 });
+            for normalize in [true, false] {
+                let mut ledger = Work::new(2);
+                let headers = std::mem::size_of::<R<()>>()
+                    + if normalize { std::mem::size_of::<(usize, usize)>() } else { 0 };
+                let mut budget = Budget::new(&mut ledger, 43 + headers);
+                budget.reserve_storage(43).unwrap();
+                {
+                    let mut workspace = Workspace { domain: &domain,
+                        slots: vec![Slot { value: if normalize { None } else { Some(value) }, touched: true },
+                            Slot { value: Some(value), touched: true }],
+                        touched: vec![0, 1], present: if normalize { 1 } else { 2 }, normalized: false };
+                    let result = if normalize { workspace.normalize(&mut Allocation::Source(&mut Meter(&mut budget))) }
+                        else { workspace.clear(&mut Allocation::Source(&mut Meter(&mut budget))) };
+                    assert!(result.is_err());
+                    assert_eq!(budget.failed_work(), Some(3));
+                    assert_eq!((budget.work(), budget.storage(), budget.peak_storage()), (2, 43 + headers, 43 + headers));
+                    assert_eq!(budget.failed_storage(), None);
+                    assert_eq!(workspace.slots[0], Slot { value: None, touched: false });
+                    assert_eq!(workspace.slots[1], Slot { value: Some(value), touched: true });
+                    assert_eq!(workspace.touched, [0, 1]);
+                    assert!(!workspace.normalized);
+                }
+                let scratch = budget.storage() - 43;
+                budget.release_storage(scratch).unwrap();
+                assert_eq!(budget.storage(), 43);
+                assert_eq!(budget.failed_work(), Some(3));
+                let mut ledger = Work::new(2);
+                let mut short = Budget::new(&mut ledger, 43 + headers - 1);
+                short.reserve_storage(43).unwrap();
+                let mut workspace = Workspace { domain: &domain,
+                    slots: vec![Slot { value: Some(value), touched: true }; 2],
+                    touched: vec![0, 1], present: 2, normalized: false };
+                let result = if normalize { workspace.normalize(&mut Allocation::Source(&mut Meter(&mut short))) }
+                    else { workspace.clear(&mut Allocation::Source(&mut Meter(&mut short))) };
+                assert!(result.is_err());
+                assert_eq!((short.work(), short.failed_storage()), (0, Some(43 + headers)));
+                assert_eq!(short.failed_work(), None);
+                assert_eq!(workspace.slots, [Slot { value: Some(value), touched: true }; 2]);
+                assert_eq!(workspace.touched, [0, 1]);
+            }
+        }
+
+        #[test]
+        fn unreachable_retired_capability_is_not_validated_by_domain_census() {
+            let callables = [compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+                option_fragment: SCALAR_TYPE, view: SCALAR_TYPE, lane: SCALAR_TYPE, fragment: SCALAR_TYPE,
+                contract: contract(), storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+            })];
+            for reachable in [false, true] {
+                let function = function(vec![
+                    block(0, vec![], if reachable { SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)) }
+                        else { SemanticTerminatorKindV1::Return }),
+                    block(1, vec![], SemanticTerminatorKindV1::Call(launch_geometry_call(0, vec![], SCALAR_TYPE,
+                        SemanticUnwindActionV1::Unreachable))),
+                ]);
+                let dominance = SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
+                let legacy = project_authenticated_capabilities_v1(&callables, &function, &dominance, &[None; 2], &[None; 2]);
+                let reference = project_authenticated_capabilities_reference_v18(&callables, &function, &dominance, &[None; 2], &[None; 2]);
+                match (&reference, &legacy) {
+                    (Ok(reference), Ok(legacy)) => same_effects(reference, legacy),
+                    (Err(reference), Err(legacy)) => assert_eq!(format!("{reference:?}"), format!("{legacy:?}")),
+                    _ => panic!("shared Legacy changed the original semantic result"),
+                }
+                let mut ledger = Work::new(100_000);
+                let mut budget = Budget::new(&mut ledger, 1_000_000);
+                let live = live_capability_driver_v18::project(&callables, &function, &dominance, &[None; 2], &[None; 2],
+                    &mut Allocation::Source(&mut Meter(&mut budget)));
+                match (legacy, live) {
+                    (Ok(legacy), Ok(live)) if !reachable => same_effects(&legacy, &live),
+                    (Err(legacy), Err(live)) if reachable => assert_eq!(format!("{legacy:?}"), format!("{live:?}")),
+                    _ => panic!("live capability reachability changed the legacy semantic result"),
+                }
+            }
+        }
+
+        #[test]
+        fn real_capability_loop_and_duplicate_successors_match_legacy_states_and_semantic_work() {
+            let callables = [compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent {
+                context: SCALAR_TYPE,
+            })];
+            for remove in [false, true] {
+                let function = function(vec![
+                    block(0, vec![], SemanticTerminatorKindV1::Call(launch_geometry_call(0, vec![], SCALAR_TYPE,
+                        SemanticUnwindActionV1::Unreachable))),
+                    block(1, vec![], SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: constant(0),
+                        targets: SemanticSwitchTargetsV1::new(vec![
+                            SemanticSwitchTargetV1::new(0, cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2)),
+                            SemanticSwitchTargetV1::new(1, cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2)),
+                        ], cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 3)).unwrap(),
+                    }),
+                    block(2, vec![statement(if remove {
+                        SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(1))
+                    } else { SemanticStatementKindV1::Nop })],
+                        SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1))),
+                    block(3, vec![], SemanticTerminatorKindV1::Return),
+                ]);
+                let dominance = SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
+                let mut ledger = Work::new(100_000);
+                let mut budget = Budget::new(&mut ledger, 10_000_000);
+                let compared = live_capability_driver_v18::compare_initial_entries_for_test(&callables, &function, &dominance,
+                    &[None; 2], &[None; 2], &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+                assert!(compared >= 3);
+                let legacy = project_authenticated_capabilities_v1(&callables, &function, &dominance, &[None; 2], &[None; 2]).unwrap();
+                let reference = project_authenticated_capabilities_reference_v18(&callables, &function, &dominance, &[None; 2], &[None; 2]).unwrap();
+                same_effects(&reference, &legacy);
+                let live = live_capability_driver_v18::project(&callables, &function, &dominance, &[None; 2], &[None; 2],
+                    &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+                same_effects(&legacy, &live);
+            }
+        }
+
+        #[test]
+        fn mfma_resource_channel_is_outer_and_missing_context_stops_before_later_keys() {
+            let function = function(vec![block(0, vec![], SemanticTerminatorKindV1::Return)]);
+            let domain = Domain { function: &function, keys: vec![0] };
+            let call = launch_geometry_call(0, [0, 99, 99, 99].into_iter().map(|local| SemanticOperandV1::Copy(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], SCALAR_TYPE).unwrap())).collect(),
+                SCALAR_TYPE, SemanticUnwindActionV1::Unreachable);
+            let accumulator = SemanticMfmaAccumulatorContractV1 { profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+                distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor, wave_width: 64 };
+            for work in [4, 5] {
+                let mut workspace = Workspace { domain: &domain, slots: vec![Slot { value: None, touched: false }],
+                    touched: vec![], present: 0, normalized: true };
+                let mut ledger = Work::new(work);
+                let mut budget = Budget::new(&mut ledger, 1_000_000);
+                let result = live_capability_driver_v18::tensor_instruction_for_test(&function, &mut workspace, &call,
+                    contract(), accumulator, &mut Allocation::Source(&mut Meter(&mut budget)));
+                if work == 5 {
+                    assert!(matches!(result, Ok(Err("an MFMA call without dominating compiler-issued matrix context"))));
+                } else {
+                    assert!(result.is_err());
+                    assert_eq!(budget.failed_work(), Some(5));
+                }
+                assert!(workspace.slots[0].value.is_none());
+            }
+        }
+    }
+
+    mod live_capability_collection_v18_tests {
+        use super::*;
+        use live_capability_collections_v18::{Domain, Workspace, State, Slot, Row};
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation, SourceAssertionMeterV18 as Meter};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget, CanonicalKernelIrWorkBudgetV1 as Work};
+        use std::mem::size_of;
+        type R<T> = Result<T, ProductionRankedProjectionErrorV1>;
+
+        fn function() -> SemanticFunctionDeclV1 {
+            projection_function_with_locals(vec![block(0, vec![], SemanticTerminatorKindV1::Return)],
+                vec![local(0, U64_TYPE, SemanticLocalRoleV1::Return), local(1, U64_TYPE, SemanticLocalRoleV1::Argument(0))])
+        }
+
+        fn known(root: u64) -> ProjectedCapabilityValueV1 {
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext { root })
+        }
+
+        fn payload() -> ProjectedMfmaOperandV1 {
+            ProjectedMfmaOperandV1 {
+                contract: SemanticMfmaOperandContractV1 { role: SemanticMfmaOperandRoleV1::A,
+                    profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+                    register_distribution: SemanticMfmaRegisterDistributionV1::Tile16x16, wave_width: 64 },
+                storage_layout: SemanticMfmaStorageLayoutV1::RowMajor, lane_root: 7,
+                allocation: AllocationContractV1 { allocation_origin: 1, noalias_class: 1,
+                    writable: false, singleton_object: false },
+            }
+        }
+
+        #[test]
+        fn actual_key_census_has_independent_exact_header_capacity_and_visit_oracles() {
+            let function = function();
+            let bytes = size_of::<Domain<'_>>() + size_of::<R<Domain<'_>>>() + 3 * size_of::<usize>()
+                + size_of::<&mut usize>() + size_of::<&mut Vec<usize>>() + 3 * size_of::<R<()>>()
+                + size_of::<Vec<usize>>() + size_of::<usize>()
+                + size_of::<(usize, usize, usize, usize, usize)>();
+            // Each census visits two locals, one argument key, one block,
+            // one terminator and two owner slots. Then push and dedup one key.
+            for (work, storage) in [(16, bytes), (15, bytes), (16, bytes - 1)] {
+                let mut ledger = Work::new(work);
+                let mut budget = Budget::new(&mut ledger, 29 + storage);
+                budget.reserve_storage(29).unwrap();
+                let result = Domain::prepare(&function, &[None; 2], &mut Allocation::Source(&mut Meter(&mut budget)));
+                if work == 16 && storage == bytes {
+                    let domain = result.unwrap();
+                    assert_eq!(domain.keys, [1]);
+                    assert_eq!(domain.keys.capacity(), 1);
+                    assert_eq!((budget.work(), budget.storage()), (16, 29 + bytes));
+                    drop(domain);
+                    assert_eq!(budget.storage(), 29 + bytes);
+                    budget.release_storage(bytes).unwrap();
+                    assert_eq!(budget.storage(), 29);
+                } else {
+                    assert!(result.is_err());
+                    if storage < bytes { assert_eq!(budget.failed_storage(), Some(29 + bytes)); }
+                    else { drop(budget); assert_eq!(ledger.failed_work(), Some(16)); }
+                }
+            }
+            let mut ledger = Work::new(1000);
+            let mut budget = Budget::new(&mut ledger, 1_000_000);
+            let domain = Domain::prepare(&function, &[Some(usize::MAX), None],
+                &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+            assert_eq!(domain.keys, [1, usize::MAX]);
+            assert_eq!(domain.keys.capacity(), 2);
+        }
+
+        #[test]
+        fn workspace_exact_storage_and_first_touch_denial_are_atomic() {
+            let function = function();
+            let domain = Domain { function: &function, keys: vec![1] };
+            let storage = size_of::<Workspace<'_, '_>>() + size_of::<R<Workspace<'_, '_>>>()
+                + size_of::<Vec<Slot>>() + size_of::<Slot>() + size_of::<Vec<usize>>() + size_of::<usize>();
+            for (work, bytes) in [(1, storage), (0, storage), (1, storage - 1)] {
+                let mut ledger = Work::new(work);
+                let mut budget = Budget::new(&mut ledger, bytes);
+                let result = Workspace::new(&domain, &mut Allocation::Source(&mut Meter(&mut budget)));
+                if work == 1 && bytes == storage {
+                    let workspace = result.unwrap();
+                    assert_eq!((workspace.slots.capacity(), workspace.touched.capacity()), (1, 1));
+                    assert_eq!((budget.work(), budget.storage()), (1, storage));
+                } else { assert!(result.is_err()); }
+            }
+            for work in [5, 6] {
+                let mut ledger = Work::new(work);
+                let mut budget = Budget::new(&mut ledger, 1_000_000);
+                let mut workspace = Workspace::new(&domain, &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+                let result = workspace.insert(&function, 1, known(7), &mut Allocation::Source(&mut Meter(&mut budget)));
+                if work == 5 {
+                    assert!(result.is_err());
+                    assert_eq!(workspace.present, 0);
+                    assert!(workspace.touched.is_empty());
+                    assert_eq!(workspace.slots[0], Slot { value: None, touched: false });
+                    drop(budget);
+                    assert_eq!(ledger.failed_work(), Some(6));
+                } else { assert_eq!(result.unwrap(), None); assert_eq!(workspace.touched, [0]); }
+            }
+        }
+
+        #[test]
+        fn workspace_reinsert_reset_foreign_domain_and_unknown_keys_fail_closed() {
+            let function = function();
+            let foreign_function = function.clone();
+            let domain = Domain { function: &function, keys: vec![0, 1, usize::MAX] };
+            let foreign_domain = Domain { function: &function, keys: domain.keys.clone() };
+            let mut ledger = Work::new(10_000);
+            let mut budget = Budget::new(&mut ledger, 1_000_000);
+            let mut meter = Meter(&mut budget);
+            let mut allocation = Allocation::Source(&mut meter);
+            let mut workspace = Workspace::new(&domain, &mut allocation).unwrap();
+            assert!(workspace.get(&foreign_function, 1, &mut allocation).is_err());
+            assert!(workspace.insert(&function, 99, known(1), &mut allocation).is_err());
+            assert!(workspace.remove(&function, 99, &mut allocation).is_err());
+            for key in [usize::MAX, 1, 0] { workspace.insert(&function, key, known(key as u64), &mut allocation).unwrap(); }
+            assert_eq!(workspace.remove(&function, 1, &mut allocation).unwrap(), Some(known(1)));
+            workspace.insert(&function, 1, known(8), &mut allocation).unwrap();
+            assert_eq!(workspace.touched.len(), 3);
+            workspace.remove(&function, 0, &mut allocation).unwrap();
+            workspace.normalize(&mut allocation).unwrap();
+            assert_eq!(workspace.touched, [1, 2]);
+            assert!(!workspace.slots[0].touched);
+            let state = workspace.snapshot(&mut allocation).unwrap();
+            assert_eq!(state.rows, [(1, known(8)), (2, known(usize::MAX as u64))]);
+            let foreign = State { domain: &foreign_domain, rows: state.rows.clone() };
+            assert!(workspace.load(&foreign, &mut allocation).is_err());
+            assert_eq!(workspace.present, 2);
+            workspace.clear(&mut allocation).unwrap();
+            assert!(workspace.slots.iter().all(|slot| slot.value.is_none() && !slot.touched));
+            workspace.load(&state, &mut allocation).unwrap();
+            assert_eq!(workspace.snapshot(&mut allocation).unwrap().rows, state.rows);
+            workspace.insert(&function, 0, known(0), &mut allocation).unwrap();
+            assert_eq!(workspace.touched.len(), 3);
+            assert!(workspace.get(&function, 0, &mut Allocation::Legacy).is_err());
+        }
+
+        #[test]
+        fn sparse_merge_preserves_lattice_and_refuses_before_replacing_old_rows() {
+            let function = function();
+            let domain = Domain { function: &function, keys: vec![0, 1] };
+            let storage = 2 * size_of::<R<()>>() + size_of::<R<bool>>()
+                + size_of::<(usize, usize, usize, bool)>() + size_of::<Vec<Row>>() + 2 * size_of::<Row>();
+            // Validate 2+3, count 2, fill 2 visits + 2 pushes, commit 1.
+            for (work, bytes) in [(12, storage), (11, storage), (12, storage - 1)] {
+                let mut state = State { domain: &domain, rows: vec![(0, known(1))] };
+                let incoming = State { domain: &domain, rows: vec![(0, known(2)), (1, known(3))] };
+                let old = state.rows.clone();
+                let old_pointer = state.rows.as_ptr();
+                let mut stored = 1;
+                let mut ledger = Work::new(work);
+                let mut budget = Budget::new(&mut ledger, 31 + bytes);
+                budget.reserve_storage(31).unwrap();
+                let result = state.merge(&incoming, &mut stored, &mut Allocation::Source(&mut Meter(&mut budget)));
+                if work == 12 && bytes == storage {
+                    assert!(result.unwrap());
+                    assert_eq!(state.rows, [(0, ProjectedCapabilityValueV1::Invalid), (1, ProjectedCapabilityValueV1::Invalid)]);
+                    assert_eq!(stored, 2);
+                    assert_eq!((budget.work(), budget.storage()), (12, 31 + storage));
+                    let mut expected = HashMap::from([(0, known(1))]);
+                    merge_capability_states_v1(&mut expected, &HashMap::from([(0, known(2)), (1, known(3))])).unwrap();
+                    for (slot, value) in &state.rows { assert_eq!(expected.get(slot), Some(value)); }
+                } else {
+                    assert!(result.is_err());
+                    assert_eq!(state.rows, old);
+                    assert_eq!(state.rows.as_ptr(), old_pointer);
+                    assert_eq!(stored, 1);
+                    if bytes < storage { assert_eq!(budget.failed_storage(), Some(31 + storage)); }
+                    else { drop(budget); assert_eq!(ledger.failed_work(), Some(12)); }
+                }
+            }
+        }
+
+        #[test]
+        fn malformed_sparse_rows_do_not_reset_a_live_workspace() {
+            let function = function();
+            let domain = Domain { function: &function, keys: vec![0, 1] };
+            let mut ledger = Work::new(1000);
+            let mut budget = Budget::new(&mut ledger, 1_000_000);
+            let mut meter = Meter(&mut budget);
+            let mut allocation = Allocation::Source(&mut meter);
+            let mut workspace = Workspace::new(&domain, &mut allocation).unwrap();
+            workspace.insert(&function, 1, known(9), &mut allocation).unwrap();
+            for rows in [vec![(0, known(1)), (0, known(2))], vec![(1, known(1)), (0, known(2))], vec![(2, known(1))]] {
+                assert!(workspace.load(&State { domain: &domain, rows }, &mut allocation).is_err());
+                assert_eq!(workspace.get(&function, 1, &mut allocation).unwrap(), Some(known(9)));
+            }
+        }
+
+        #[test]
+        fn descending_key_mutations_have_logarithmic_lookup_work_and_no_row_shifts() {
+            let function = function();
+            for count in [8_usize, 16, 32] {
+                let domain = Domain { function: &function, keys: (0..count).collect() };
+                let mut ledger = Work::new(100_000);
+                let mut budget = Budget::new(&mut ledger, 1_000_000);
+                let mut workspace = Workspace::new(&domain, &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+                for key in (0..count).rev() {
+                    workspace.insert(&function, key, known(key as u64),
+                        &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+                }
+                // One initialization unit and at most log2(N)+1 comparisons
+                // plus four fixed mutation/query units per distinct insertion.
+                let insert_bound = count * (count.ilog2() as usize + 6);
+                assert!(budget.work() <= insert_bound);
+                assert_eq!(workspace.touched, (0..count).rev().collect::<Vec<_>>());
+                assert_eq!((workspace.slots.capacity(), workspace.touched.capacity()), (count, count));
+                let before = budget.work();
+                workspace.normalize(&mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+                let sort_bound = 4 * count * (count.ilog2() as usize + 1) + 2 * count;
+                assert!(budget.work() - before <= sort_bound);
+                assert_eq!(workspace.touched, (0..count).collect::<Vec<_>>());
+                let state = workspace.snapshot(&mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+                assert_eq!(state.rows.len(), count);
+            }
+        }
+
+        #[test]
+        fn empty_domain_keeps_zero_backing_and_refuses_unknown_keys() {
+            let function = function();
+            let domain = Domain { function: &function, keys: vec![] };
+            let mut ledger = Work::new(100);
+            let mut budget = Budget::new(&mut ledger, 1_000_000);
+            let mut meter = Meter(&mut budget);
+            let mut allocation = Allocation::Source(&mut meter);
+            let mut workspace = Workspace::new(&domain, &mut allocation).unwrap();
+            assert_eq!((workspace.slots.capacity(), workspace.touched.capacity()), (0, 0));
+            workspace.normalize(&mut allocation).unwrap();
+            let state = workspace.snapshot(&mut allocation).unwrap();
+            assert_eq!(state.rows.capacity(), 0);
+            workspace.load(&state, &mut allocation).unwrap();
+            assert!(workspace.insert(&function, usize::MAX, known(1), &mut allocation).is_err());
+            assert!(workspace.touched.is_empty());
+        }
+
+        #[test]
+        fn payload_exact_storage_and_resource_refusal_precede_semantic_conflict() {
+            use live_capability_collections_v18::Payloads;
+            let function = function();
+            let domain = Domain { function: &function, keys: vec![1] };
+            let bytes = size_of::<Payloads<'_, '_>>() + size_of::<R<Payloads<'_, '_>>>()
+                + size_of::<Vec<Option<ProjectedMfmaOperandV1>>>() + size_of::<Option<ProjectedMfmaOperandV1>>();
+            for (work, storage) in [(1, bytes), (0, bytes), (1, bytes - 1)] {
+                let mut ledger = Work::new(work);
+                let mut budget = Budget::new(&mut ledger, storage);
+                let result = Payloads::new(&domain, &mut Allocation::Source(&mut Meter(&mut budget)));
+                if work == 1 && storage == bytes {
+                    let payloads = result.unwrap();
+                    assert_eq!(payloads.rows, [None]);
+                    assert_eq!((budget.work(), budget.storage()), (1, bytes));
+                } else { assert!(result.is_err()); }
+            }
+            for work in [7, 8] {
+                let mut ledger = Work::new(work);
+                let mut budget = Budget::new(&mut ledger, 1_000_000);
+                let mut payloads = Payloads::new(&domain, &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+                payloads.insert(&function, 1, payload(), &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+                let altered = ProjectedMfmaOperandV1 { lane_root: 8, ..payload() };
+                let result = payloads.insert(&function, 1, altered, &mut Allocation::Source(&mut Meter(&mut budget)));
+                assert_eq!(payloads.rows, [Some(payload())]);
+                if work == 7 {
+                    let Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                        CanonicalAssertionErrorV1::SourceOwned(
+                            fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(error))))) = result else {
+                        panic!("resource refusal became a semantic payload conflict");
+                    };
+                    assert_eq!((error.actual(), error.limit()), (8, 7));
+                } else {
+                    assert!(matches!(result, Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "one workgroup pipeline receives incompatible typed payload layouts"))));
+                }
+            }
+        }
+
+        #[test]
+        fn payload_slots_preserve_conflicting_value_and_do_not_merge_distinct_keys() {
+            use live_capability_collections_v18::Payloads;
+            let function = function();
+            let domain = Domain { function: &function, keys: vec![1, usize::MAX] };
+            let value = payload();
+            let mut ledger = Work::new(1000);
+            let mut budget = Budget::new(&mut ledger, 1_000_000);
+            let mut meter = Meter(&mut budget);
+            let mut allocation = Allocation::Source(&mut meter);
+            let mut payloads = Payloads::new(&domain, &mut allocation).unwrap();
+            payloads.insert(&function, 1, value, &mut allocation).unwrap();
+            payloads.insert(&function, 1, value, &mut allocation).unwrap();
+            let altered = ProjectedMfmaOperandV1 { lane_root: 8, ..value };
+            assert!(matches!(payloads.insert(&function, 1, altered, &mut allocation),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "one workgroup pipeline receives incompatible typed payload layouts"))));
+            assert_eq!(payloads.get(&function, 1, &mut allocation).unwrap(), Some(value));
+            payloads.insert(&function, usize::MAX, altered, &mut allocation).unwrap();
+            assert_eq!(payloads.get(&function, usize::MAX, &mut allocation).unwrap(), Some(altered));
+            assert!(payloads.get(&function, 0, &mut allocation).is_err());
+        }
+    }
+
+    mod strided_read_live_cache_v18_tests {
+        use super::*;
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation,
+            SourceAssertionMeterV18 as Meter};
+        use std::mem::size_of;
+
+        fn function(count: usize) -> SemanticFunctionDeclV1 {
+            projection_function_with_locals(
+                (0..count).map(|index| block(index as u8, vec![], SemanticTerminatorKindV1::Return)).collect(),
+                (0..5).map(|index| local(index, U64_TYPE, if index == 0 {
+                    SemanticLocalRoleV1::Return
+                } else { SemanticLocalRoleV1::Argument(u32::from(index) - 1) })).collect())
+        }
+
+        fn effect(root: u64, runtime: bool) -> ProjectedReadViewAccessV1 {
+            let value = |index, constant| if runtime {
+                ProjectedReadValueV1::Local(SemanticLocalIdV1::from_index(index))
+            } else { ProjectedReadValueV1::Constant(constant) };
+            ProjectedReadViewAccessV1 {
+                view: ProjectedReadViewV1 { root, element: SCALAR_TYPE,
+                    allocation: AllocationContractV1 { allocation_origin: 7, noalias_class: 11,
+                        writable: false, singleton_object: false },
+                    rows: value(1, 8), columns: value(2, 16) },
+                row: value(3, 1), column: value(4, 2),
+            }
+        }
+
+        fn view() -> ProjectedViewV1 {
+            ProjectedViewV1 { result: ProductionRankedValueIdV1::new(0), element_width: 32,
+                writable: false, shape: vec![DYNAMIC_EXTENT; 2],
+                dynamic_extents: vec![ProductionRankedValueV1::Argument(1), ProductionRankedValueV1::Argument(2)],
+                memory_space: MemorySpaceAttr::Global, allocation_origin: 7, noalias_class: 11 }
+        }
+
+        // These formulas describe actual retained capacity and fixed stack
+        // payloads independently of the allocator's reported debit totals.
+        fn preparation_bytes(capacity: usize) -> usize {
+            size_of::<StridedReadCacheV18<'_, '_>>()
+                + size_of::<Result<StridedReadCacheV18<'_, '_>, ProductionRankedProjectionErrorV1>>()
+                + size_of::<(usize, usize, usize)>()
+                + size_of::<Vec<StridedReadCacheRowV18>>() + capacity * size_of::<StridedReadCacheRowV18>()
+                + size_of::<(usize, usize, usize, u64, u64)>()
+                + size_of::<Result<(), ProductionRankedProjectionErrorV1>>()
+        }
+
+        fn search_bytes() -> usize {
+            size_of::<Result<usize, ProductionRankedProjectionErrorV1>>()
+                + size_of::<(usize, usize, usize, u64)>()
+                + size_of::<Result<Option<usize>, ProductionRankedProjectionErrorV1>>()
+        }
+
+        type Outcome = (Result<Vec<Option<GuardedRankedAccessV1>>, ProductionRankedProjectionErrorV1>,
+            Vec<ProductionRankedOperationV1>, [Option<u32>; 5], usize, u32);
+
+        fn project(function: &SemanticFunctionDeclV1, effects: &[Option<ProjectedReadViewAccessV1>],
+            allocation: &mut Allocation<'_>) -> Outcome {
+            let mut operations = Vec::with_capacity(16);
+            let mut arguments = [None; 5];
+            let mut next_argument = 1;
+            let mut next_value = 0;
+            let result = project_strided_read_effects_core_v18(&assertion_proof_types(), function,
+                effects, &[None; 5], &mut arguments, &mut next_argument, &mut operations,
+                &mut next_value, allocation);
+            (result, operations, arguments, next_argument, next_value)
+        }
+
+        #[test]
+        fn sparse_preparation_accounts_headers_count_fill_sort_dedup_and_actual_capacity() {
+            let function = function(4);
+            let effects = [Some(effect(0, false)), None, Some(effect(0, false)), Some(effect(u64::MAX, false))];
+            let original = effects;
+            let storage = preparation_bytes(3);
+            // Four count visits, four fill visits, three pushes, six heap
+            // comparisons/swaps, three dedup visits and one compacting move.
+            let work = 4 + 4 + 3 + 6 + 3 + 1;
+            for (work_limit, storage_limit) in [(work, storage), (work - 1, storage), (work, storage - 1)] {
+                let mut ledger = Work::new(work_limit);
+                let mut budget = Budget::new(&mut ledger, 41 + storage_limit);
+                budget.reserve_storage(41).unwrap();
+                let result = StridedReadCacheV18::prepare(&function, &effects,
+                    &mut Allocation::Source(&mut Meter(&mut budget)));
+                assert_eq!(effects, original);
+                if work_limit < work {
+                    assert!(result.is_err());
+                    assert_eq!(budget.storage(), 41 + storage);
+                    drop(budget);
+                    assert_eq!(ledger.failed_work(), Some(work));
+                } else if storage_limit < storage {
+                    assert!(result.is_err());
+                    assert_eq!(budget.failed_storage(), Some(41 + storage));
+                    assert_eq!(budget.work(), 11);
+                } else {
+                    let cache = result.unwrap();
+                    let StridedReadCacheV18::Source { rows, .. } = &cache else { panic!("source used HashMap") };
+                    assert_eq!(rows.iter().map(|row| row.0).collect::<Vec<_>>(), [0, u64::MAX]);
+                    assert!(rows.iter().all(|row| row.1.is_none()));
+                    assert_eq!(rows.capacity(), 3);
+                    assert_eq!((budget.work(), budget.storage(), budget.peak_storage()),
+                        (work, 41 + preparation_bytes(rows.capacity()), 41 + storage));
+                    drop(cache);
+                    assert_eq!(budget.storage(), 41 + storage);
+                    budget.release_storage(storage).unwrap();
+                    assert_eq!(budget.storage(), 41);
+                }
+            }
+        }
+
+        #[test]
+        fn sparse_search_insert_and_first_denial_precede_slot_mutation() {
+            let function = function(1);
+            let effects = [Some(effect(u64::MAX, true))];
+            let storage = preparation_bytes(1) + search_bytes()
+                + size_of::<Result<(), ProductionRankedProjectionErrorV1>>();
+            // Four preparation units and five units for occurrence, search,
+            // cache slot, exact payload recheck and assignment.
+            for work_limit in [8, 9] {
+                let mut ledger = Work::new(work_limit);
+                let mut budget = Budget::new(&mut ledger, storage);
+                let mut cache = StridedReadCacheV18::prepare(&function, &effects,
+                    &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+                let projected = view();
+                let shape_pointer = projected.shape.as_ptr();
+                let result = cache.insert(&function, &effects, 0, effects[0].unwrap().view,
+                    projected, &mut Allocation::Source(&mut Meter(&mut budget)));
+                let StridedReadCacheV18::Source { rows, .. } = &cache else { unreachable!() };
+                assert_eq!(budget.storage(), storage);
+                if work_limit == 8 {
+                    assert!(result.is_err());
+                    assert!(rows[0].1.is_none());
+                    drop(budget);
+                    assert_eq!(ledger.failed_work(), Some(9));
+                } else {
+                    result.unwrap();
+                    assert_eq!(rows[0].1.as_ref().unwrap().1.shape.as_ptr(), shape_pointer);
+                    assert_eq!(budget.work(), 9);
+                }
+            }
+            let get_bytes = preparation_bytes(1) + search_bytes()
+                + size_of::<Result<Option<&(ProjectedReadViewV1, ProjectedViewV1)>, ProductionRankedProjectionErrorV1>>();
+            for (work_limit, storage_limit) in [(7, get_bytes), (6, get_bytes), (7, get_bytes - 1)] {
+                let mut ledger = Work::new(work_limit);
+                let mut budget = Budget::new(&mut ledger, storage_limit);
+                let cache = StridedReadCacheV18::prepare(&function, &effects,
+                    &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+                let result = cache.get(&function, &effects, 0, u64::MAX,
+                    &mut Allocation::Source(&mut Meter(&mut budget)));
+                if work_limit == 7 && storage_limit == get_bytes {
+                    assert!(result.unwrap().is_none());
+                    assert_eq!((budget.work(), budget.storage()), (7, get_bytes));
+                } else {
+                    assert!(result.is_err());
+                    if storage_limit < get_bytes { assert_eq!(budget.failed_storage(), Some(get_bytes)); }
+                    else { drop(budget); assert_eq!(ledger.failed_work(), Some(7)); }
+                }
+            }
+        }
+
+        #[test]
+        fn preparation_refuses_at_each_storage_and_work_phase_without_changing_inputs() {
+            let function = function(4);
+            let effects = [Some(effect(0, false)), None, Some(effect(0, false)), Some(effect(u64::MAX, false))];
+            let original = effects;
+            let stages = [
+                (size_of::<StridedReadCacheV18<'_, '_>>(), 0),
+                (size_of::<Result<StridedReadCacheV18<'_, '_>, ProductionRankedProjectionErrorV1>>(), 0),
+                (size_of::<(usize, usize, usize)>(), 0),
+                (size_of::<Vec<StridedReadCacheRowV18>>(), 4),
+                (3 * size_of::<StridedReadCacheRowV18>(), 4),
+                (size_of::<(usize, usize, usize, u64, u64)>(), 11),
+                (size_of::<Result<(), ProductionRankedProjectionErrorV1>>(), 11),
+            ];
+            let mut paid = 0;
+            for (bytes, work) in stages {
+                let mut ledger = Work::new(100);
+                let mut budget = Budget::new(&mut ledger, 13 + paid + bytes - 1);
+                budget.reserve_storage(13).unwrap();
+                assert!(StridedReadCacheV18::prepare(&function, &effects,
+                    &mut Allocation::Source(&mut Meter(&mut budget))).is_err());
+                assert_eq!((budget.work(), budget.storage(), budget.failed_storage()),
+                    (work, 13 + paid, Some(13 + paid + bytes)));
+                assert_eq!(effects, original);
+                paid += bytes;
+            }
+            assert_eq!(paid, preparation_bytes(3));
+            for limit in [0, 3, 4, 7, 10, 11, 16, 17, 20] {
+                let mut ledger = Work::new(limit);
+                let mut budget = Budget::new(&mut ledger, 1_000_000);
+                assert!(StridedReadCacheV18::prepare(&function, &effects,
+                    &mut Allocation::Source(&mut Meter(&mut budget))).is_err());
+                assert_eq!(effects, original);
+                drop(budget);
+                assert_eq!(ledger.failed_work(), Some(limit + 1));
+            }
+        }
+
+        #[test]
+        fn cache_rejects_foreign_equal_inputs_wrong_occurrences_missing_keys_and_reassignment() {
+            let function = function(2);
+            let foreign_function = function.clone();
+            let effects = [Some(effect(0, true)), Some(effect(u64::MAX, true))];
+            let foreign_effects = effects;
+            let mut ledger = Work::new(10_000);
+            let mut budget = Budget::new(&mut ledger, 1_000_000);
+            let mut meter = Meter(&mut budget);
+            let mut allocation = Allocation::Source(&mut meter);
+            let mut cache = StridedReadCacheV18::prepare(&function, &effects, &mut allocation).unwrap();
+            assert!(cache.get(&foreign_function, &effects, 0, 0, &mut allocation).is_err());
+            assert!(cache.get(&function, &foreign_effects, 0, 0, &mut allocation).is_err());
+            assert!(cache.get(&function, &effects[..1], 0, 0, &mut allocation).is_err());
+            assert!(cache.get(&function, &effects, 2, 0, &mut allocation).is_err());
+            assert!(cache.get(&function, &effects, 1, 0, &mut allocation).is_err());
+            assert!(cache.get(&function, &effects, 0, 99, &mut allocation).is_err());
+            assert!(cache.get(&function, &effects, 0, 0, &mut Allocation::Legacy).is_err());
+            let source = effects[0].unwrap().view;
+            let mut altered = source;
+            altered.rows = ProjectedReadValueV1::Constant(99);
+            assert!(cache.insert(&function, &effects, 0, altered, view(), &mut allocation).is_err());
+            cache.insert(&function, &effects, 0, source, view(), &mut allocation).unwrap();
+            assert!(cache.insert(&function, &effects, 0, source, view(), &mut allocation).is_err());
+            assert_eq!(cache.get(&function, &effects, 0, 0, &mut allocation).unwrap().unwrap().0, source);
+            let StridedReadCacheV18::Source { rows, .. } = &mut cache else { unreachable!() };
+            rows.pop();
+            assert!(cache.get(&function, &effects, 1, u64::MAX, &mut allocation).is_err());
+            let StridedReadCacheV18::Source { rows, .. } = &cache else { unreachable!() };
+            assert_eq!(rows.len(), 1);
+        }
+
+        #[test]
+        fn projection_reuses_equal_roots_but_keeps_aliased_roots_separate() {
+            for runtime in [false, true] {
+                let function = function(4);
+                let effects = [Some(effect(0, runtime)), None, Some(effect(0, runtime)), Some(effect(u64::MAX, runtime))];
+                let (expected, expected_ops, expected_args, expected_count, expected_value) =
+                    project(&function, &effects, &mut Allocation::Legacy);
+                let mut ledger = Work::new(10_000);
+                let mut budget = Budget::new(&mut ledger, 1_000_000);
+                let (actual, operations, arguments, count, value) = project(&function, &effects,
+                    &mut Allocation::Source(&mut Meter(&mut budget)));
+                let actual = actual.unwrap();
+                assert_eq!(actual, expected.unwrap());
+                assert_eq!((operations, arguments, count, value), (expected_ops, expected_args, expected_count, expected_value));
+                assert_eq!(actual[0].as_ref().unwrap().view, actual[2].as_ref().unwrap().view);
+                assert_ne!(actual[0].as_ref().unwrap().view, actual[3].as_ref().unwrap().view);
+                assert!(actual[1].is_none());
+            }
+        }
+
+        #[test]
+        fn projection_nested_payloads_have_independent_exact_and_short_bounds() {
+            let function = function(1);
+            let effects = [Some(effect(0, true))];
+            let storage = preparation_bytes(1)
+                + size_of::<Result<Vec<Option<GuardedRankedAccessV1>>, ProductionRankedProjectionErrorV1>>()
+                + size_of::<(ProjectedViewV1, ProductionRankedOperationV1, GuardedRankedAccessV1)>()
+                + size_of::<Vec<Option<GuardedRankedAccessV1>>>() + size_of::<Option<GuardedRankedAccessV1>>()
+                + size_of::<Result<Option<&(ProjectedReadViewV1, ProjectedViewV1)>, ProductionRankedProjectionErrorV1>>()
+                + 2 * search_bytes() + size_of::<Result<(), ProductionRankedProjectionErrorV1>>()
+                + 4 * size_of::<Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1>>()
+                + 2 * size_of::<Vec<u64>>() + 4 * size_of::<u64>()
+                + 3 * size_of::<Vec<ProductionRankedValueV1>>() + 6 * size_of::<ProductionRankedValueV1>()
+                + size_of::<Vec<(ProductionRankedValueV1, ProductionRankedValueV1)>>()
+                + 2 * size_of::<(ProductionRankedValueV1, ProductionRankedValueV1)>();
+            // Preparation 4, effect visit 1, lookup 3, four runtime-value
+            // queries, twelve nested copied elements, operation/output pushes
+            // 2 and exact insertion 5. Caller already owns operation backing.
+            let work = 4 + 1 + 3 + 4 + 12 + 2 + 5;
+            for (work_limit, storage_limit) in [(work, storage), (work - 1, storage), (work, storage - 1)] {
+                let mut ledger = Work::new(work_limit);
+                let mut budget = Budget::new(&mut ledger, 37 + storage_limit);
+                budget.reserve_storage(37).unwrap();
+                let (result, operations, arguments, count, value) = project(&function, &effects,
+                    &mut Allocation::Source(&mut Meter(&mut budget)));
+                if work_limit == work && storage_limit == storage {
+                    let result = result.unwrap();
+                    assert_eq!((budget.work(), budget.storage()), (work, 37 + storage));
+                    assert_eq!((arguments, count, value), ([None, Some(1), Some(2), Some(3), Some(4)], 5, 1));
+                    let ProductionRankedOperationV1::ViewInSpace { shape, dynamic_extents, .. } = &operations[0] else { unreachable!() };
+                    assert_eq!((shape.len(), shape.capacity(), dynamic_extents.len(), dynamic_extents.capacity()), (2, 2, 2, 2));
+                    let access = result[0].as_ref().unwrap();
+                    assert_eq!((access.indices.capacity(), access.comparisons.capacity()), (2, 2));
+                    drop(result);
+                    drop(operations);
+                    assert_eq!(budget.storage(), 37 + storage);
+                    budget.release_storage(storage).unwrap();
+                    assert_eq!(budget.storage(), 37);
+                } else {
+                    assert!(result.is_err());
+                    if storage_limit < storage { assert_eq!(budget.failed_storage(), Some(37 + storage)); }
+                    else { drop(budget); assert_eq!(ledger.failed_work(), Some(work)); }
+                }
+            }
+        }
+
+        #[test]
+        fn replay_preserves_conflict_and_earlier_projection_error_priority() {
+            let function = function(3);
+            for hostile in 0..7 {
+                let first = effect(0, false);
+                let mut second = first;
+                match hostile {
+                    0 => second.view.rows = ProjectedReadValueV1::Constant(9),
+                    1 => second.view.element = U64_TYPE,
+                    2 => second.view.allocation.allocation_origin += 1,
+                    3 => second.view.allocation.noalias_class += 1,
+                    4 => second.view.allocation.singleton_object = true,
+                    5 => second.view.allocation.writable = true,
+                    _ => second.view.columns = ProjectedReadValueV1::Constant(17),
+                }
+                let mut earlier = effect(1, false);
+                for prior_error in 0..3 {
+                    if prior_error == 1 { earlier.view.allocation.writable = true; }
+                    if prior_error == 2 {
+                        earlier.view.allocation.writable = false;
+                        earlier.row = ProjectedReadValueV1::Local(SemanticLocalIdV1::from_index(99));
+                    }
+                    let effects = [Some(first), Some(earlier), Some(second)];
+                    let (expected, expected_ops, expected_args, expected_count, expected_value) =
+                        project(&function, &effects, &mut Allocation::Legacy);
+                    let mut ledger = Work::new(10_000);
+                    let mut budget = Budget::new(&mut ledger, 1_000_000);
+                    let (actual, operations, arguments, count, value) = project(&function, &effects,
+                        &mut Allocation::Source(&mut Meter(&mut budget)));
+                    let ProductionRankedProjectionErrorV1::Unsupported(expected) = expected.unwrap_err() else { panic!("unexpected legacy refusal") };
+                    let ProductionRankedProjectionErrorV1::Unsupported(actual) = actual.unwrap_err() else { panic!("unexpected source refusal") };
+                    assert_eq!(actual, expected);
+                    assert_eq!((operations, arguments, count, value), (expected_ops, expected_args, expected_count, expected_value));
+                    if prior_error == 1 { assert_eq!(actual, "a checked shared read view rooted in writable allocation authority"); }
+                    if prior_error == 2 { assert_eq!(actual, "a strided read index origin outside the semantic local table"); }
+                }
+            }
+        }
+
+        #[test]
+        fn original_length_guard_and_read_value_denial_leave_caller_state_unchanged() {
+            let function = function(1);
+            let mut ledger = Work::new(0);
+            let mut budget = Budget::new(&mut ledger, 0);
+            let (result, operations, arguments, count, value) = project(&function, &[],
+                &mut Allocation::Source(&mut Meter(&mut budget)));
+            assert!(matches!(result, Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "strided read effects do not correspond one-to-one with semantic MIR blocks"))));
+            assert_eq!((operations.len(), arguments, count, value), (0, [None; 5], 1, 0));
+            assert_eq!((budget.work(), budget.storage(), budget.failed_storage()), (0, 0, None));
+            let mut ledger = Work::new(0);
+            let mut budget = Budget::new(&mut ledger, 10_000);
+            let mut arguments = [None; 5];
+            let mut count = 1;
+            let mut operations = Vec::new();
+            let mut value = 0;
+            assert!(project_read_value_to_ranked_core_v18(ProjectedReadValueV1::Local(SemanticLocalIdV1::from_index(1)),
+                &[None; 5], &mut arguments, &mut count, &mut operations, &mut value,
+                &mut Allocation::Source(&mut Meter(&mut budget))).is_err());
+            assert_eq!((operations.len(), arguments, count, value), (0, [None; 5], 1, 0));
+            drop(budget);
+            assert_eq!(ledger.failed_work(), Some(1));
+        }
+
+        #[test]
+        fn capability_read_binding_preserves_original_guard_and_exact_source_capacity() {
+            let function = function(2);
+            let reads = [Some(effect(0, false).view.allocation), None];
+            let expected = bind_capability_read_effects_to_call_blocks_v1(&function, &reads).unwrap();
+            let storage = size_of::<Result<Vec<Option<ProjectedCapabilityReadEffectV1>>, ProductionRankedProjectionErrorV1>>()
+                + size_of::<Vec<Option<ProjectedCapabilityReadEffectV1>>>()
+                + 2 * size_of::<Option<ProjectedCapabilityReadEffectV1>>();
+            for (work, bytes) in [(4, storage), (3, storage), (4, storage - 1)] {
+                let mut ledger = Work::new(work);
+                let mut budget = Budget::new(&mut ledger, bytes);
+                let result = bind_capability_read_effects_core_v18(&function, &reads,
+                    &mut Allocation::Source(&mut Meter(&mut budget)));
+                if work == 4 && bytes == storage {
+                    let result = result.unwrap();
+                    assert_eq!(result, expected);
+                    assert_eq!(result.capacity(), 2);
+                    assert_eq!((budget.work(), budget.storage()), (4, storage));
+                } else {
+                    assert!(result.is_err());
+                    if bytes < storage { assert_eq!((budget.failed_storage(), budget.work()), (Some(storage), 0)); }
+                    else { drop(budget); assert_eq!(ledger.failed_work(), Some(4)); }
+                }
+            }
+            let mut ledger = Work::new(0);
+            let mut budget = Budget::new(&mut ledger, 0);
+            assert!(matches!(bind_capability_read_effects_core_v18(&function, &[],
+                &mut Allocation::Source(&mut Meter(&mut budget))),
+                Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "capability read effects do not correspond one-to-one with semantic MIR blocks"))));
+            assert_eq!((budget.work(), budget.storage()), (0, 0));
+        }
+    }
+
+    #[test]
+    fn source_switch_predicate_core_pays_every_nested_copy_and_preserves_legacy() {
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,CanonicalKernelIrWorkBudgetV1 as Work};
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation,SourceAssertionMeterV18 as Meter};
+        use std::mem::size_of;
+        let function=projection_function_with_locals(
+            vec![block(206,vec![],SemanticTerminatorKindV1::Return)],
+            (0..3).map(|index|local(index,U64_TYPE,if index==0 {SemanticLocalRoleV1::Return} else {
+                SemanticLocalRoleV1::Temporary})).collect());
+        let value=ProductionRankedValueV1::Argument(0);
+        let direct=vec![Some(GuardPredicateV1{comparisons:vec![(value,value);2]}),None,
+            Some(GuardPredicateV1{comparisons:vec![(value,value)]})];
+        let options=vec![None;3];
+        let expected=switch_predicates(&function,&options,&direct).unwrap();
+        let inventory=assertion_definition_inventory(&function).unwrap();
+        let bytes=size_of::<Vec<Option<GuardPredicateV1>>>() +3*size_of::<Option<GuardPredicateV1>>()
+            +2*size_of::<Vec<(ProductionRankedValueV1,ProductionRankedValueV1)>>()
+            +3*size_of::<(ProductionRankedValueV1,ProductionRankedValueV1)>();
+        let work=7;
+        for (work_limit,storage_limit) in [(work,bytes),(work-1,bytes),(work,bytes-1)] {
+            let mut ledger=Work::new(work_limit);
+            let mut budget=Budget::new(&mut ledger,storage_limit);
+            let result=switch_predicates_core_v18(&function,&options,&direct,&inventory,
+                &mut Allocation::Source(&mut Meter(&mut budget)));
+            if work_limit==work && storage_limit==bytes {
+                assert_eq!(result.unwrap(),expected);
+                assert_eq!((budget.work(),budget.storage()),(work,bytes));
+            } else {
+                assert!(result.is_err());
+                if storage_limit<bytes {assert_eq!(budget.failed_storage(),Some(bytes));}
+            }
+        }
+    }
+
+    #[test]
+    fn source_cfg_reachability_accounts_duplicate_pending_incidences() {
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18, SourceAssertionMeterV18};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        use std::mem::size_of;
+        let terminators = [
+            ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks: vec![1; 32] },
+            ProjectedCfgTerminatorV1::Return,
+        ];
+        let expected = reachable_projected_blocks(0, &terminators).unwrap();
+        assert_eq!(expected, vec![true, true]);
+        // Two marks, one initial push/pop, 32 edge pushes/pops and 31 copied
+        // queue elements. Pending capacity must cover incidences, not blocks.
+        let work = 2 + 1 + 1 + 32 + 32 + 31;
+        let storage = size_of::<Vec<bool>>() + 2 * size_of::<bool>()
+            + size_of::<Vec<usize>>() + 63 * size_of::<usize>();
+        for (work_limit, storage_limit) in [(work, storage), (work - 1, storage), (work, storage - 1)] {
+            let mut ledger = Work::new(work_limit);
+            let mut budget = Budget::new(&mut ledger, storage_limit);
+            let result = reachable_projected_blocks_core_v18(0, &terminators,
+                &mut ProjectionAllocationV18::Source(&mut SourceAssertionMeterV18(&mut budget)));
+            if (work_limit, storage_limit) == (work, storage) {
+                assert_eq!(result.unwrap(), expected);
+                assert_eq!((budget.work(), budget.storage()), (work, storage));
+            } else {
+                assert!(result.is_err());
+                if storage_limit < storage { assert_eq!(budget.failed_storage(), Some(storage)); }
+            }
+        }
+    }
+
+    #[test]
+    fn source_control_expansion_consumes_nested_operations_without_cloning() {
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation, SourceAssertionMeterV18 as Meter};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        use std::mem::size_of;
+        let value = ProductionRankedValueV1::Argument(0);
+        let predicate = GuardPredicateV1 { comparisons: vec![(value, value); 2] };
+        let switch = ProjectedDeterministicSwitchV1 {
+            source_discriminant: typed_operand(0, SCALAR_TYPE),
+            discriminant: value, targets: vec![(0, value, 0), (1, value, 1)],
+            otherwise: 2, lane_uniform: false,
+        };
+        let make_operations = || vec![ProductionRankedOperationV1::Access {
+            kind: AccessKindAttr::Read, view: value, indices: vec![value; 3],
+        }];
+        for mode in 0..3 {
+            let run = |blocks: &mut Vec<ProductionRankedBlockV1>, operations, allocation: &mut Allocation<'_>| {
+                match mode {
+                    0 => append_predicate_blocks_core_v18(blocks, 0, operations, &predicate, 2, 3, allocation),
+                    1 => append_predicate_blocks_with_index_arguments_core_v18(blocks, 0, operations, &predicate, 2, 3, 2, allocation),
+                    _ => append_exact_switch_blocks_core_v18(blocks, 0, operations, &switch,
+                        &[Some(2), Some(3), Some(4)], allocation),
+                }
+            };
+            let mut expected = Vec::with_capacity(2);
+            run(&mut expected, make_operations(), &mut Allocation::Legacy).unwrap();
+            let work = if mode == 1 { 8 } else { 4 };
+            let storage = size_of::<Option<Vec<ProductionRankedOperationV1>>>()
+                + size_of::<Vec<ProductionRankedOperationV1>>()
+                + if mode == 1 {
+                    4 * size_of::<Vec<ProductionRankedValueV1>>() + 4 * size_of::<ProductionRankedValueV1>()
+                } else { 0 };
+            for (work_limit, storage_limit) in [(work, storage), (work - 1, storage), (work, storage - 1)] {
+                let mut ledger = Work::new(work_limit);
+                let mut budget = Budget::new(&mut ledger, storage_limit);
+                let mut actual = Vec::with_capacity(2);
+                let operations = make_operations();
+                let ProductionRankedOperationV1::Access { indices, .. } = &operations[0] else { unreachable!() };
+                let original_payload = indices.as_ptr();
+                let result = run(&mut actual, operations,
+                    &mut Allocation::Source(&mut Meter(&mut budget)));
+                if (work_limit, storage_limit) == (work, storage) {
+                    result.unwrap();
+                    assert_eq!(actual, expected);
+                    let ProductionRankedOperationV1::Access { indices, .. } = &actual[0].operations()[0] else { unreachable!() };
+                    assert_eq!(indices.as_ptr(), original_payload);
+                    assert_eq!((budget.work(), budget.storage()), (work, storage));
+                } else {
+                    assert!(result.is_err());
+                    if storage_limit < storage { assert_eq!(budget.failed_storage(), Some(storage)); }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_cfg_reachability_cannot_treat_absent_materialization_as_deadness() {
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18, SourceAssertionMeterV18};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        let mut work = Work::new(1000);
+        let mut budget = Budget::new(&mut work, 1000);
+        let result = reachable_projected_blocks_core_v18(0, &[
+            ProjectedCfgTerminatorV1::Branch(1), ProjectedCfgTerminatorV1::AbsentMaterialized,
+        ], &mut ProjectionAllocationV18::Source(&mut SourceAssertionMeterV18(&mut budget)));
+        assert!(matches!(result, Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a projected CFG reaches a source block absent from the materialized graph"
+        ))));
+    }
+
+    fn source_pipeline_creation_fixture_v18(owners: &[usize]) -> Vec<ProjectedSemanticBlockV1> {
+        vec![ProjectedSemanticBlockV1 { items: owners.iter().enumerate().map(|(index, &owner)| {
+            ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Create {
+                owner, result: Some(ProductionRankedValueIdV1::new(index as u32)),
+                view: ProductionRankedValueV1::Argument(0), buffers: 2, prefetch_distance: 1,
+            })
+        }).collect() }]
+    }
+
+    #[test]
+    fn source_pipeline_ordinal_domain_is_complete_and_order_independent() {
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation, SourceAssertionMeterV18 as Meter};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        use std::mem::size_of;
+        let work = 14; // Six scan visits, fill, two inserts, completion and two lookups.
+        let storage = size_of::<ProjectedPipelineValuesV18>()
+            + size_of::<Vec<Option<ProductionRankedValueV1>>>()
+            + 2 * size_of::<Option<ProductionRankedValueV1>>();
+        for owners in [[0, 1], [1, 0]] {
+            let mut legacy_blocks = source_pipeline_creation_fixture_v18(&owners);
+            let legacy = prepare_pipeline_values_v1(&mut legacy_blocks, &mut 5).unwrap();
+            for (work_limit, storage_limit) in [(work, storage), (work - 1, storage), (work, storage - 1)] {
+                let mut ledger = Work::new(work_limit);
+                let mut budget = Budget::new(&mut ledger, storage_limit);
+                let mut blocks = source_pipeline_creation_fixture_v18(&owners);
+                let result = (|| {
+                    let mut meter = Meter(&mut budget);
+                    let mut allocation = Allocation::Source(&mut meter);
+                    let values = prepare_pipeline_values_core_v18(&mut blocks, &mut 5, &mut allocation)?;
+                    for owner in 0..2 {
+                        assert_eq!(values.get(owner, &mut allocation)?, legacy.get(owner, &mut Allocation::Legacy)?);
+                    }
+                    Ok::<_, ProductionRankedProjectionErrorV1>(())
+                })();
+                if (work_limit, storage_limit) == (work, storage) {
+                    result.unwrap();
+                    assert_eq!((budget.work(), budget.storage()), (work, storage));
+                } else {
+                    assert!(result.is_err());
+                    if storage_limit < storage { assert_eq!(budget.failed_storage(), Some(storage)); }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_pipeline_ordinals_reject_duplicates_holes_and_foreign_modes() {
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation, SourceAssertionMeterV18 as Meter};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        for owners in [vec![0, 0], vec![0, 2], vec![usize::MAX]] {
+            let mut ledger = Work::new(1000);
+            let mut budget = Budget::new(&mut ledger, 10000);
+            let mut blocks = source_pipeline_creation_fixture_v18(&owners);
+            let result = prepare_pipeline_values_core_v18(&mut blocks, &mut 5,
+                &mut Allocation::Source(&mut Meter(&mut budget)));
+            assert!(matches!(result, Err(ProductionRankedProjectionErrorV1::Incomplete(_))));
+            assert!(budget.storage() < 1000, "a sparse ordinal must not size the dense allocation");
+        }
+        let value = ProductionRankedValueV1::Argument(0);
+        let incomplete = ProjectedPipelineValuesV18::Source(vec![Some(value), None]);
+        let mut ledger = Work::new(1000);
+        let mut budget = Budget::new(&mut ledger, 1000);
+        assert!(matches!(incomplete.finish(&mut Allocation::Source(&mut Meter(&mut budget))),
+            Err(ProductionRankedProjectionErrorV1::Incomplete("the exact pipeline creation domain contains an unfilled owner"))));
+        assert!(incomplete.get(0, &mut Allocation::Legacy).is_err());
+        assert!(incomplete.finish(&mut Allocation::Legacy).is_err());
+        let legacy = ProjectedPipelineValuesV18::Legacy(HashMap::new());
+        assert!(legacy.get(0, &mut Allocation::Source(&mut Meter(&mut budget))).is_err());
+    }
+
+    #[test]
+    fn source_induction_capture_has_independent_exact_resource_bounds() {
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation,
+            SourceAssertionMeterV18 as Meter};
+        use std::mem::size_of;
+        let storage = size_of::<Result<(SemanticStatementKindV1, SemanticTerminatorKindV1),
+                ProductionRankedProjectionErrorV1>>()
+            + 3 * size_of::<Vec<SemanticProjectionV1>>()
+            + size_of::<Vec<SemanticSwitchTargetV1>>() + size_of::<SemanticSwitchTargetV1>();
+        // One source-shape visit, three shape operands, three copied operands,
+        // and the one switch target copied into its exact-sized backing.
+        let work = 8;
+        for polarity in [0, 1] {
+            for reversed in [false, true] {
+                let function = induction_body_predicate_function_v1(
+                    BodyPredicateFixtureV1::Exact, polarity, reversed);
+                let block = &function.blocks()[2];
+                let statement = block.statements().last().unwrap().kind();
+                let terminator = block.terminator().kind();
+                let expected = copy_induction_body_source_v18(statement, terminator,
+                    &mut Allocation::Legacy).unwrap();
+                for (work_limit, storage_limit) in [(work, storage), (work - 1, storage), (work, storage - 1)] {
+                    let mut ledger = Work::new(work_limit);
+                    let mut budget = Budget::new(&mut ledger, storage_limit);
+                    let result = copy_induction_body_source_v18(statement, terminator,
+                        &mut Allocation::Source(&mut Meter(&mut budget)));
+                    if (work_limit, storage_limit) == (work, storage) {
+                        assert_eq!(result.unwrap(), expected);
+                        assert_eq!((budget.work(), budget.storage()), (work, storage));
+                    } else {
+                        assert!(result.is_err());
+                        if storage_limit < storage {
+                            assert_eq!(budget.failed_storage(), Some(storage));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_induction_capture_preserves_move_and_rejects_other_source_shapes() {
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18 as Allocation,
+            SourceAssertionMeterV18 as Meter};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work};
+        let function = induction_body_predicate_function_v1(BodyPredicateFixtureV1::Exact, 1, true);
+        let body = &function.blocks()[2];
+        let statement = body.statements().last().unwrap().kind();
+        let terminator = body.terminator().kind();
+        let mut ledger = Work::new(10_000);
+        let mut budget = Budget::new(&mut ledger, 100_000);
+        let operand = SemanticOperandV1::Move(typed_place(1, SCALAR_TYPE));
+        let copied = copy_induction_body_operand_v18(&operand,
+            &mut Allocation::Source(&mut Meter(&mut budget))).unwrap();
+        assert_eq!(copied, operand);
+        assert!(matches!(copied, SemanticOperandV1::Move(_)));
+        let wrong_arithmetic = typed_assignment(3, BOOL_TYPE, SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::Equal,
+            left: typed_operand(1, SCALAR_TYPE), right: typed_constant(SCALAR_TYPE, 768, 4),
+        });
+        for (statement, terminator) in [
+            (wrong_arithmetic.kind(), terminator),
+            (statement, &SemanticTerminatorKindV1::Return),
+        ] {
+            assert!(matches!(copy_induction_body_source_v18(statement, terminator,
+                &mut Allocation::Source(&mut Meter(&mut budget))),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(_))));
+        }
+    }
+
+    #[test]
+    fn source_induction_alias_meter_refusal_is_not_optional_precision() {
+        use source_ranked_consumer_resources_v18::ProjectionAllocationV18 as Allocation;
+        struct RefuseSecondVisit { visits: usize, fail: bool }
+        impl neutral_assertion::SemanticAssertionMeterV1 for RefuseSecondVisit {
+            type Error = ProductionRankedProjectionErrorV1;
+            fn charge_work(&mut self, amount: usize) -> Result<(), Self::Error> {
+                self.visits += amount;
+                if self.fail && self.visits >= 2 {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete("original injected meter refusal"));
+                }
+                Ok(())
+            }
+            fn reserve_storage(&mut self, _: usize) -> Result<(), Self::Error> { Ok(()) }
+        }
+        let types = assertion_proof_types();
+        let function = induction_body_predicate_function_v1(BodyPredicateFixtureV1::CyclicAlias, 0, false);
+        let constants = constant_locals(&function).unwrap();
+        for fail in [false, true] {
+            let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+            let counts = proof.definition_counts().to_vec();
+            let mut meter = RefuseSecondVisit { visits: 0, fail };
+            let mut historical_work = 0;
+            let result = induction_predicate_source_operand_core_v18(
+                &types, &function, &typed_operand(4, SCALAR_TYPE),
+                ScalarAssignmentSiteV1 { block: 2, statement: 1 }, &constants, &counts,
+                &mut InductionPredicateProofsV18::Source(&mut proof), &[], &mut historical_work,
+                &mut Allocation::Source(&mut meter));
+            if fail {
+                assert!(matches!(result, Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "original injected meter refusal"))));
+                assert_eq!((meter.visits, historical_work), (2, 0));
+            } else {
+                assert!(matches!(result, Ok(None)));
+                assert_eq!((meter.visits, historical_work), (3, 2));
+            }
+        }
+        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        let counts = proof.definition_counts().to_vec();
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1);
+        let mut budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 100_000);
+        let mut historical_work = 0;
+        let result = induction_predicate_source_operand_core_v18(
+            &types, &function, &typed_operand(4, SCALAR_TYPE),
+            ScalarAssignmentSiteV1 { block: 2, statement: 1 }, &constants, &counts,
+            &mut InductionPredicateProofsV18::Source(&mut proof), &[], &mut historical_work,
+            &mut Allocation::Source(&mut source_ranked_consumer_resources_v18::SourceAssertionMeterV18(&mut budget)));
+        let Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+            CanonicalAssertionErrorV1::SourceOwned(
+                fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(error))))) = result else {
+            panic!("the observed original work refusal became optional alias precision");
+        };
+        assert_eq!((error.actual(), error.limit(), historical_work), (2, 1, 0));
+    }
+
+    struct LiveBoundsFactsV18<'a> {
+        meter: &'a mut dyn fe2o3_mir_model::SemanticAssertionMeterV1<Error = ProductionRankedProjectionErrorV1>,
+        disposition: canonical_assertion_facts_v1::ProjectedSourceSiteControlV18,
+        controls: usize,
+    }
+
+    impl ProjectedAssertionFactsV1 for LiveBoundsFactsV18<'_> {
+        fn projection_meter_v18(&mut self) -> Option<&mut dyn fe2o3_mir_model::SemanticAssertionMeterV1<Error = ProductionRankedProjectionErrorV1>> { Some(&mut *self.meter) }
+        fn source_site_control_v18(&mut self, _: usize, _: Option<usize>) -> Result<Option<canonical_assertion_facts_v1::ProjectedSourceSiteControlV18>, ProductionRankedProjectionErrorV1> {
+            self.controls += 1;
+            Ok(Some(self.disposition))
+        }
+        fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProductionRankedProjectionErrorV1> { self.meter.charge_work(amount) }
+        fn private_array_initializer_count(&mut self, _: usize, _: usize) -> Result<Option<u64>, ProductionRankedProjectionErrorV1> { panic!("bounds core does not query array initializers") }
+        fn is_materialized_block(&mut self, _: usize) -> Result<bool, ProductionRankedProjectionErrorV1> { panic!("bounds core requires the complete source control disposition") }
+        fn condition(&mut self, _: usize, _: bool, _: SemanticBlockIdV1) -> Result<canonical_assertion_facts_v1::ProjectedAssertionConditionV1, ProductionRankedProjectionErrorV1> { panic!("bounds core does not manufacture assertion proofs") }
+    }
+
+    #[test]
+    fn live_bounds_core_preserves_dynamic_literal_and_fixed_array_results() {
+        use source_ranked_consumer_resources_v18::SourceAssertionMeterV18;
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget, CanonicalKernelIrWorkBudgetV1 as Work};
+        let types = assertion_proof_types();
+        let functions = [
+            bounds_check_function(SemanticBinaryOpV1::LessThan, true, false, false),
+            literal_bounds_check_function(1, 4),
+            fixed_guard_function(FixedGuardOptions { extent: 4, ..Default::default() }),
+        ];
+        for function in functions {
+            let constants = constant_locals(&function).unwrap();
+            let mut legacy_operations = Vec::new();
+            let mut legacy_next = 0;
+            let legacy = project_rust_bounds_checks_with_ordinary_v1(&types, &function, 3,
+                &[], &[], None, &mut legacy_operations, &mut legacy_next).unwrap();
+            let mut work = Work::new(1_000_000);
+            let mut budget = Budget::new(&mut work, 1_000_000);
+            let mut meter = SourceAssertionMeterV18(&mut budget);
+            let mut facts = LiveBoundsFactsV18 { meter: &mut meter,
+                disposition: canonical_assertion_facts_v1::ProjectedSourceSiteControlV18::Retained, controls: 0 };
+            let mut operations = Vec::new();
+            let mut next = 0;
+            let live = project_rust_bounds_checks_core_v18(&types, &function, 3, &[], &[], None,
+                &mut operations, &mut next, &constants, Some(&mut facts)).unwrap();
+            assert_eq!(facts.controls, function.blocks().len());
+            assert_eq!(live.checks, legacy.checks);
+            assert_eq!(live.argument_count, legacy.argument_count);
+            assert_eq!(operations, legacy_operations);
+            assert_eq!(next, legacy_next);
+        }
+    }
+
+    #[test]
+    fn live_fixed_bounds_core_keeps_wrong_comparison_message_index_and_edge_refusals() {
+        use source_ranked_consumer_resources_v18::SourceAssertionMeterV18;
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget, CanonicalKernelIrWorkBudgetV1 as Work};
+        let types = assertion_proof_types();
+        for options in [
+            FixedGuardOptions { extent: 4, wrong_comparison: true, ..Default::default() },
+            FixedGuardOptions { extent: 4, wrong_message: true, ..Default::default() },
+            FixedGuardOptions { extent: 4, late_index: true, ..Default::default() },
+            FixedGuardOptions { extent: 4, bypass: true, ..Default::default() },
+            FixedGuardOptions { extent: 4, expected_false: true, ..Default::default() },
+        ] {
+            let function = fixed_guard_function(options);
+            let constants = constant_locals(&function).unwrap();
+            let legacy = project_rust_bounds_checks_with_ordinary_v1(&types, &function, 0,
+                &[], &[], None, &mut Vec::new(), &mut 0);
+            let mut work = Work::new(1_000_000);
+            let mut budget = Budget::new(&mut work, 1_000_000);
+            let mut meter = SourceAssertionMeterV18(&mut budget);
+            let mut facts = LiveBoundsFactsV18 { meter: &mut meter,
+                disposition: canonical_assertion_facts_v1::ProjectedSourceSiteControlV18::Retained, controls: 0 };
+            let live = project_rust_bounds_checks_core_v18(&types, &function, 0, &[], &[], None,
+                &mut Vec::new(), &mut 0, &constants, Some(&mut facts));
+            let (Err(legacy), Err(live)) = (legacy, live) else { panic!("invalid fixed-array guard was accepted") };
+            assert_eq!(live.to_string(), legacy.to_string());
+        }
+    }
+
+    #[test]
+    fn live_bounds_core_refuses_before_control_queries_when_first_header_is_short() {
+        use source_ranked_consumer_resources_v18::{ProjectionAllocationV18, SourceAssertionMeterV18};
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget, CanonicalKernelIrWorkBudgetV1 as Work,
+            CanonicalKernelIrVerificationResourceErrorV1 as Resource};
+        let types = assertion_proof_types();
+        let function = fixed_guard_function(FixedGuardOptions { extent: 4, ..Default::default() });
+        let constants = constant_locals(&function).unwrap();
+        let header = std::mem::size_of::<ProjectionAllocationV18<'_>>();
+        let mut work = Work::new(0);
+        let mut budget = Budget::new(&mut work, header - 1);
+        let mut meter = SourceAssertionMeterV18(&mut budget);
+        let mut facts = LiveBoundsFactsV18 { meter: &mut meter,
+            disposition: canonical_assertion_facts_v1::ProjectedSourceSiteControlV18::Retained, controls: 0 };
+        let mut operations = Vec::new();
+        let mut next = 0;
+        let result = project_rust_bounds_checks_core_v18(&types, &function, 0, &[], &[], None,
+            &mut operations, &mut next, &constants, Some(&mut facts));
+        assert_eq!((facts.controls, next, operations.len()), (0, 0, 0));
+        let Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(CanonicalAssertionErrorV1::SourceOwned(
+            fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(Resource::Storage(error))))) = result else {
+            panic!("first live bounds header refusal lost its resource classification");
+        };
+        assert_eq!((error.actual(), error.limit()), (header, header - 1));
+        drop(facts);
+        drop(meter);
+        assert_eq!((budget.storage(), budget.work(), budget.failed_storage()), (0, 0, Some(header)));
+    }
+
+    #[test]
+    fn live_bounds_core_distinguishes_complete_dead_control_from_mixed_sites() {
+        use source_ranked_consumer_resources_v18::SourceAssertionMeterV18;
+        use canonical_assertion_facts_v1::ProjectedSourceSiteControlV18 as Control;
+        use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget, CanonicalKernelIrWorkBudgetV1 as Work};
+        let types = assertion_proof_types();
+        let function = fixed_guard_function(FixedGuardOptions { extent: 4, wrong_comparison: true, ..Default::default() });
+        let constants = constant_locals(&function).unwrap();
+        // These synthetic dispositions exercise only the consumer's dispatch.
+        // The production adapter obtains them from the complete checked transition.
+        for disposition in [Control::RemovedUnreachable, Control::Mixed] {
+            let mut work = Work::new(100_000);
+            let mut budget = Budget::new(&mut work, 100_000);
+            let mut meter = SourceAssertionMeterV18(&mut budget);
+            let mut facts = LiveBoundsFactsV18 { meter: &mut meter, disposition, controls: 0 };
+            let mut operations = Vec::new();
+            let mut next = 0;
+            let result = project_rust_bounds_checks_core_v18(&types, &function, 0, &[], &[], None,
+                &mut operations, &mut next, &constants, Some(&mut facts));
+            assert!(operations.is_empty());
+            assert_eq!(next, 0);
+            match disposition {
+                Control::RemovedUnreachable => {
+                    assert!(result.unwrap().checks.is_empty());
+                    assert_eq!(facts.controls, function.blocks().len());
+                }
+                Control::Mixed => assert!(matches!(result, Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "partially surviving source site requires exact ranked segment projection")))),
+                Control::Retained | Control::OriginalUnmaterialized => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_constant_core_preserves_alias_cycles_and_multiple_definitions() {
+        use fe2o3_kernel_ir::{
+            CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work,
+        };
+        let definitions = [
+            (2, SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 7, 8))),
+            (3, SemanticRvalueKindV1::Use(typed_operand(2, U64_TYPE))),
+            (4, SemanticRvalueKindV1::Use(typed_operand(5, U64_TYPE))),
+            (5, SemanticRvalueKindV1::Use(typed_operand(4, U64_TYPE))),
+            (6, SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 1, 8))),
+            (6, SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 2, 8))),
+        ];
+        let function = projection_function_with_locals(
+            vec![block(206, definitions.into_iter().map(|(local, value)| {
+                typed_assignment(local, U64_TYPE, value)
+            }).collect(), SemanticTerminatorKindV1::Return)],
+            (0..8).map(|index| local(index, U64_TYPE, if index == 0 {
+                SemanticLocalRoleV1::Return
+            } else if index == 1 {
+                SemanticLocalRoleV1::Argument(0)
+            } else {
+                SemanticLocalRoleV1::Temporary
+            })).collect(),
+        );
+        let expected = constant_locals(&function).unwrap();
+        assert_eq!(&expected[2..], &[Some(7), Some(7), None, None, None, None]);
+        let mut work = Work::new(1_000_000);
+        let mut budget = Budget::new(&mut work, 1_000_000);
+        let actual = constant_locals_core_v18(&function,
+            &mut optimized_source_projection_v18::ConstantAllocationV18::Source(&mut budget)).unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(budget.work(), 8 * function.locals().len() + 2 + 3 * 6);
+        assert_eq!(budget.storage(), std::mem::size_of::<Vec<Option<u64>>>()
+            + actual.capacity() * std::mem::size_of::<Option<u64>>());
+        optimized_source_projection_v18::check_constant_owner_for_test_v18(
+            &function, &function, actual).unwrap();
+        let copied = function.clone();
+        assert!(optimized_source_projection_v18::check_constant_owner_for_test_v18(
+            &function, &copied, expected.clone()).is_err());
+        assert!(optimized_source_projection_v18::check_constant_owner_for_test_v18(
+            &function, &function, expected[..expected.len() - 1].to_vec()).is_err());
+    }
+
+    #[test]
+    fn bounded_constant_core_has_independent_exact_and_one_short_resource_oracles() {
+        use fe2o3_kernel_ir::{
+            CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+            CanonicalKernelIrWorkBudgetV1 as Work,
+        };
+        use std::mem::size_of;
+        let (statements, locals) = linear_scalar_alias_chain_v1(1024, U64_TYPE);
+        let statement_count = statements.len();
+        let count = locals.len();
+        let function = projection_function_with_locals(
+            vec![block(206, statements, SemanticTerminatorKindV1::Return)], locals);
+        let expected = constant_locals(&function).unwrap();
+        let work_limit = 8 * count + 2 + 3 * statement_count;
+        let storage_limit = 4 * size_of::<Vec<usize>>() + count * (
+            size_of::<ConstantDefinitionV1>() + size_of::<u8>()
+                + size_of::<Option<u64>>() + size_of::<usize>());
+        for (short_work, short_storage) in [(false, false), (true, false), (false, true)] {
+            let mut work = Work::new(work_limit - usize::from(short_work));
+            let mut budget = Budget::new(&mut work, storage_limit - usize::from(short_storage));
+            let result = constant_locals_core_v18(&function,
+                &mut optimized_source_projection_v18::ConstantAllocationV18::Source(&mut budget));
+            if short_work {
+                let Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    CanonicalAssertionErrorV1::SourceOwned(
+                        fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                            Resource::Work(error))))) = result else { panic!("lost work refusal"); };
+                assert_eq!((error.actual(), error.limit()), (work_limit, work_limit - 1));
+                assert_eq!(budget.peak_storage(), storage_limit);
+                assert_eq!(budget.failed_storage(), None);
+            } else if short_storage {
+                let Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    CanonicalAssertionErrorV1::SourceOwned(
+                        fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                            Resource::Storage(error))))) = result else { panic!("lost storage refusal"); };
+                assert_eq!((error.actual(), error.limit()), (storage_limit, storage_limit - 1));
+                assert_eq!(budget.failed_storage(), Some(storage_limit));
+                assert_eq!(budget.work(), 4 * count + 2 + 3 * statement_count);
+            } else {
+                let values = result.unwrap();
+                assert_eq!(values, expected);
+                assert_eq!(budget.work(), work_limit);
+                assert_eq!(budget.peak_storage(), storage_limit);
+                let retained = size_of::<Vec<Option<u64>>>()
+                    + values.capacity() * size_of::<Option<u64>>();
+                assert_eq!(budget.storage(), retained);
+                drop(values);
+                budget.release_storage(retained).unwrap();
+                assert_eq!(budget.storage(), 0);
+            }
+        }
+    }
+
     #[test]
     fn pipeline_free_capability_projection_skips_a_large_irrelevant_alias_graph() {
         let (statements, locals) = linear_scalar_alias_chain_v1(16_384, U64_TYPE);
@@ -40613,8 +40893,8 @@ mod tests {
         let definitions = local_definition_counts(&function);
         let graph = projected_loop_cfg_graph_v1(&function).unwrap();
         let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
-        let assignment_sites = proof.assignments.clone();
-        let address_escaped = proof.address_escaped.clone();
+        let assignment_sites = proof.assignments().to_vec();
+        let address_escaped = proof.address_escaped().to_vec();
         for root in [2, 3] {
             let mut arguments = vec![None; function.locals().len()];
             let mut next_argument = 1;

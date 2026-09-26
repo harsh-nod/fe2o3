@@ -942,3 +942,24 @@ mod canonical_ranked_policy_tests {
 mod canonical_ranked_native_loop_tests {
     include!("production_canonical_ranked_native_loops_v1_tests.rs");
 }
+
+mod canonical_private_tests {
+    include!("production_canonical_ranked_private_v1_tests.rs");
+    mod helpers {
+        include!("production_canonical_ranked_private_helpers_v1_tests.rs");
+    }
+    mod resources {
+        include!("production_canonical_ranked_private_resources_v1_tests.rs");
+    }
+}
+
+mod canonical_scalar_source_tests {
+    include!("production_canonical_scalar_source_v1_tests.rs");
+}
+
+mod canonical_assertion_tests {
+    include!("production_canonical_assertion_v1_tests.rs");
+    mod hostile {
+        include!("production_canonical_assertion_hostile_v1_tests.rs");
+    }
+}

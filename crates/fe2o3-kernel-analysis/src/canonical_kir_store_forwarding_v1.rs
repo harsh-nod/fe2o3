@@ -435,7 +435,12 @@ fn check_modules(
         functions,
         kernels,
         required_capabilities,
+        storage_layouts,
     } = input;
+    // O(1) old-profile eligibility, separate from prepaid legacy equality.
+    if !storage_layouts.is_empty() || !output.storage_layouts.is_empty() {
+        return Err(Error::Rule("legacy profile excludes storage layouts"));
+    }
     if id != &output.id
         || kernels != &output.kernels
         || required_capabilities != &output.required_capabilities
@@ -526,3 +531,42 @@ fn check_modules(
 #[cfg(test)]
 #[path = "canonical_kir_store_forwarding_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod legacy_storage_schema_tests {
+    use fe2o3_kernel_ir::{Module, ScalarType, StorageLayoutKindV1, StorageLayoutV1};
+
+    fn eligible(input: &Module, output: &Module) -> bool {
+        // Empty function rosters perform no legacy variable traversal.
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(0);
+        let mut budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+            &mut work,
+            usize::MAX,
+        );
+        budget.reserve_storage(11).unwrap();
+        let result = super::check_modules(input, output, &[], &mut budget);
+        assert_eq!((budget.work(), budget.storage()), (0, 11));
+        result.is_ok()
+    }
+
+    #[test]
+    fn canonical_kir_store_forwarding_v1_refuses_nonempty_storage_tables() {
+        let empty = Module::new("ordinary");
+        assert!(eligible(&empty, &empty));
+        let mut occupied = empty.clone();
+        occupied.storage_layouts.push(StorageLayoutV1 {
+            size: 1,
+            alignment: 1,
+            kind: StorageLayoutKindV1::Scalar(ScalarType::U8),
+        });
+        assert!(!eligible(&occupied, &empty));
+        assert!(!eligible(&empty, &occupied));
+        // Equal, structurally valid tables are still outside the old profile.
+        assert!(!eligible(&occupied, &occupied));
+        let mut other = occupied.clone();
+        other.storage_layouts[0].kind = StorageLayoutKindV1::Scalar(ScalarType::I8);
+        assert!(!eligible(&occupied, &other));
+        let renamed = Module::new("different");
+        assert!(!eligible(&empty, &renamed));
+    }
+}

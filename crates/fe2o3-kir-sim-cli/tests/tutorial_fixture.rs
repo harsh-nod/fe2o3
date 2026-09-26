@@ -56,6 +56,12 @@ fn committed_tutorial_fixture_is_canonical_and_reproducible() {
     assert_eq!(result["hardware_observed"], false);
     assert_eq!(result["hardware_validation"], false);
     assert_eq!(result["performance_prediction"], false);
+    assert_eq!(
+        result["target_profile"]["identity"],
+        "amdgpu_gfx942_little_endian_v2"
+    );
+    assert_eq!(result["target_profile"]["index_bits"], 64);
+    assert_eq!(result["target_profile"]["max_workgroup_invocations"], 1_024);
     assert_eq!(result["kir"]["sha256"], KIR_IDENTITY_SHA256);
     assert_eq!(result["kir"]["canonical_bytes"], KIR_CANONICAL_BYTES);
     assert_eq!(result["counts"]["arguments"], 1);
@@ -71,7 +77,7 @@ fn committed_tutorial_fixture_is_canonical_and_reproducible() {
     );
     assert_eq!(
         result["schedule"]["transcript_sha256"],
-        "a9c2892473af3eeeda6466fbaebd03672800cea54738ae80528863abd491acf3"
+        "9aa645a59cb83f2c5c1d36e8741cc285683692f98299a5834d8d1822f0ba67ea"
     );
     assert_eq!(result["schedule"]["coverage"]["decisions"], 4);
     assert_eq!(result["schedule"]["coverage"]["workgroups"], 1);

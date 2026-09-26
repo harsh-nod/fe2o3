@@ -11,17 +11,33 @@ pub fn build_canonical_ranked_candidate_v1<'i, 'g, 'm>(
     metadata: &'i Metadata<'g, 'm>,
     budget: &mut Budget<'_>,
 ) -> Result<(Candidate<'i, 'g, 'm>, CanonicalRankedCandidateStorageV1)> {
+    build_candidate(
+        inventory,
+        metadata,
+        inventory.owner().module(),
+        effects::operation,
+        budget,
+    )
+}
+
+pub(super) fn build_candidate<'i, 'g, 'm, O>(
+    inventory: &'i Inventory<'g, O>,
+    metadata: &'i Metadata<'g, 'm, O>,
+    module: &'g fe2o3_kernel_ir::Module,
+    classify: Classifier,
+    budget: &mut Budget<'_>,
+) -> Result<(Candidate<'i, 'g, 'm, O>, CanonicalRankedCandidateStorageV1)> {
     control::transaction(budget, |budget| {
         budget.charge_work(1)?;
         if !inventory.belongs_to(metadata.owner) {
             return Err(Error::ForeignMetadata);
         }
         let mut count = 0usize;
-        visit(inventory, metadata, budget, |_, _| {
+        visit(inventory, metadata, module, classify, budget, |_, _| {
             count = add(count, 1)?;
             Ok(())
         })?;
-        budget.reserve_storage(size_of::<Candidate<'_, '_, '_>>())?;
+        budget.reserve_storage(size_of::<Candidate<'_, '_, '_, O>>())?;
         let requested = payload::<Row>(count)?;
         budget.reserve_storage(requested)?;
         budget.charge_work(count)?;
@@ -32,7 +48,7 @@ pub fn build_canonical_ranked_candidate_v1<'i, 'g, 'm>(
         // drops the vector before the surrounding transaction restores its floor.
         let actual = payload::<Row>(rows.capacity())?;
         budget.reserve_storage(actual.checked_sub(requested).ok_or(Resource::Accounting)?)?;
-        visit(inventory, metadata, budget, |item, _| {
+        visit(inventory, metadata, module, classify, budget, |item, _| {
             if rows.len() >= count || rows.len() >= rows.capacity() {
                 return Err(Error::InconsistentInventory);
             }
@@ -48,9 +64,11 @@ pub fn build_canonical_ranked_candidate_v1<'i, 'g, 'm>(
     })
 }
 
-fn visit(
-    inventory: &Inventory<'_>,
-    metadata: &Metadata<'_, '_>,
+fn visit<O>(
+    inventory: &Inventory<'_, O>,
+    metadata: &Metadata<'_, '_, O>,
+    module: &fe2o3_kernel_ir::Module,
+    classify: Classifier,
     budget: &mut Budget<'_>,
     mut emit: impl FnMut(Row, &mut Budget<'_>) -> Result<()>,
 ) -> Result<()> {
@@ -62,6 +80,16 @@ fn visit(
         row(Subject::Module, Role::Module, Obligations::NONE),
         budget,
     )?;
+    for index in 0..module.storage_layouts.len() {
+        push(
+            row(
+                Subject::StorageLayout(index),
+                Role::StorageLayout,
+                storage::layout_obligations(),
+            ),
+            budget,
+        )?;
+    }
     for index in 0..inventory.kernels().len() {
         push(
             row(
@@ -97,7 +125,7 @@ fn visit(
     }
     for (index, op) in inventory.operations().iter().enumerate() {
         budget.charge_work(1)?;
-        let (class, mut obligations) = effects::operation(index, &op.operation.kind)?;
+        let (class, mut obligations) = classify(index, &op.operation.kind)?;
         if !op.compiler_ordering().is_empty() {
             obligations = obligations
                 .with(Obligation::Ordering)
@@ -156,7 +184,7 @@ fn visit(
             budget,
         )?;
     }
-    effects::requirements(inventory, budget, |owner, ordinal, budget| {
+    effects::requirements(inventory, module, budget, |owner, ordinal, budget| {
         push(
             row(
                 Subject::Requirement { owner, ordinal },

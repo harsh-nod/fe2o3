@@ -26,6 +26,7 @@ mod gfx942_ordered_region_v31;
 mod nominal_pointer_sized_v35;
 mod saturating_integer_v30;
 mod target_properties;
+mod type_containment_v1;
 mod wave64_shuffle_v33;
 mod wire_schema_membership_v1;
 
@@ -2015,142 +2016,19 @@ impl SemanticTypeDeclV1 {
 /// This is an ABI transport predicate, not a numerical-type classification.
 /// Every retained layout and ABI fact must agree before a consumer may replace
 /// the aggregate carrier with its physical scalar field.
-fn exact_inert_zero_sized_marker_v1(
-    types: &[SemanticTypeDeclV1],
-    ty: SemanticTypeIdV1,
-    visiting: &mut BTreeSet<SemanticTypeIdV1>,
-) -> bool {
-    if !visiting.insert(ty) {
-        return false;
-    }
-    let Some(marker) = types.get(ty.index() as usize) else {
-        visiting.remove(&ty);
-        return false;
-    };
-    let layout = marker.layout();
-    let properties = marker.abi_properties();
-    let exact_layout = layout.size_bytes() == Some(0)
-        && layout.rustc_size_bytes() == 0
-        && layout.alignment_bytes() == 1
-        && layout.unadjusted_abi_alignment_bytes() == 1
-        && layout.max_repr_alignment_bytes().is_none()
-        && layout.largest_niche().is_none()
-        && !layout.is_uninhabited()
-        && matches!(
-            layout.variants(),
-            SemanticRustcVariantsV1::Single { index: 0 }
-        )
-        && matches!(
-            layout.backend_repr(),
-            SemanticBackendReprV1::Memory { sized: true }
-        )
-        && !properties.pass_indirectly_in_non_rustic_abis()
-        && !properties.has_unsized_foreign_tail()
-        && properties.rustc_layout_is_noundef()
-        && properties.first_pointee().is_none()
-        && properties.second_pointee().is_none()
-        && marker.rust_type_kind() == SemanticRustTypeKindV1::Ordinary;
-    let exact_shape = match (marker.shape(), layout.fields(), layout.details()) {
-        (
-            SemanticTypeShapeV1::Aggregate(fields) | SemanticTypeShapeV1::Tuple(fields),
-            SemanticFieldsShapeV1::Arbitrary {
-                source_order_offsets_bytes,
-                memory_order_source_indices,
-            },
-            SemanticTypeLayoutDetailsV1::Aggregate(details),
-        ) => {
-            source_order_offsets_bytes.len() == fields.fields().len()
-                && memory_order_source_indices.len() == fields.fields().len()
-                && source_order_offsets_bytes.iter().all(|offset| *offset == 0)
-                && details.field_offsets().len() == fields.fields().len()
-                && details.field_offsets().iter().all(|offset| *offset == 0)
-                && details.padding().is_empty()
-                && fields
-                    .fields()
-                    .iter()
-                    .copied()
-                    .all(|field| exact_inert_zero_sized_marker_v1(types, field, visiting))
-        }
-        _ => false,
-    };
-    visiting.remove(&ty);
-    exact_layout && exact_shape
-}
 
 pub fn exact_transparent_scalar_carrier_field_v1(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Option<SemanticTypeIdV1> {
-    let carrier = types.get(ty.index() as usize)?;
-    let SemanticTypeShapeV1::Aggregate(fields) = carrier.shape() else {
-        return None;
-    };
-    let [field, markers @ ..] = fields.fields() else {
-        return None;
-    };
-    let field_decl = types.get(field.index() as usize)?;
-    if !matches!(field_decl.shape(), SemanticTypeShapeV1::Scalar(_)) {
-        return None;
-    }
-    let carrier_layout = carrier.layout();
-    let field_layout = field_decl.layout();
-    let exact_scalar_repr = matches!(
-        carrier_layout.backend_repr(),
-        SemanticBackendReprV1::Scalar(SemanticBackendScalarV1::Initialized { .. })
-    ) && carrier_layout.backend_repr() == field_layout.backend_repr();
-    let exact_fields = matches!(
-        (carrier_layout.fields(), carrier_layout.details()),
-        (
-            SemanticFieldsShapeV1::Arbitrary {
-                source_order_offsets_bytes,
-                memory_order_source_indices,
-            },
-            SemanticTypeLayoutDetailsV1::Aggregate(layout),
-        ) if source_order_offsets_bytes.len() == fields.fields().len()
-            && memory_order_source_indices.len() == fields.fields().len()
-            && source_order_offsets_bytes.first() == Some(&0)
-            && layout.field_offsets() == source_order_offsets_bytes.as_ref()
-            && layout.padding().is_empty()
-    ) && matches!(field_layout.fields(), SemanticFieldsShapeV1::Primitive);
-    let exact_details = matches!(field_layout.details(), SemanticTypeLayoutDetailsV1::None);
-    let exact_variants = matches!(
-        carrier_layout.variants(),
-        SemanticRustcVariantsV1::Single { index: 0 }
-    ) && matches!(
-        field_layout.variants(),
-        SemanticRustcVariantsV1::Single { index: 0 }
-    );
-    let exact_layout = carrier_layout.size_bytes() == field_layout.size_bytes()
-        && carrier_layout.rustc_size_bytes() == field_layout.rustc_size_bytes()
-        && carrier_layout.alignment_bytes() == field_layout.alignment_bytes()
-        && carrier_layout.unadjusted_abi_alignment_bytes()
-            == field_layout.unadjusted_abi_alignment_bytes()
-        && carrier_layout.max_repr_alignment_bytes() == field_layout.max_repr_alignment_bytes()
-        && carrier_layout.largest_niche().is_none()
-        && field_layout.largest_niche().is_none()
-        && !carrier_layout.is_uninhabited()
-        && !field_layout.is_uninhabited();
-    let exact_abi_properties = [carrier, field_decl].into_iter().all(|ty| {
-        let properties = ty.abi_properties();
-        !properties.pass_indirectly_in_non_rustic_abis()
-            && !properties.has_unsized_foreign_tail()
-            && properties.rustc_layout_is_noundef()
-            && properties.first_pointee().is_none()
-            && properties.second_pointee().is_none()
-            && ty.rust_type_kind() == SemanticRustTypeKindV1::Ordinary
-    });
-    let exact_markers = markers
-        .iter()
-        .copied()
-        .all(|marker| exact_inert_zero_sized_marker_v1(types, marker, &mut BTreeSet::new()));
-    (exact_scalar_repr
-        && exact_fields
-        && exact_details
-        && exact_variants
-        && exact_layout
-        && exact_abi_properties
-        && exact_markers)
-        .then_some(*field)
+    // Compatibility-only adapter: no storage or proof-authority guarantee.
+    crate::semantic_scalar_carrier_v1::exact_transparent_scalar_carrier_field_metered_v1(
+        types,
+        ty,
+        &mut crate::semantic_scalar_carrier_v1::UnmeteredCarrierCompatibilityV1,
+    )
+    .ok()
+    .flatten()
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -3177,8 +3055,12 @@ impl SemanticProjectionV1 {
             SemanticProjectionKindV1::ConstantIndex {
                 offset,
                 minimum_length,
-                from_end: _,
-            } if offset >= minimum_length => {
+                from_end,
+            } if if from_end {
+                offset == 0 || offset > minimum_length
+            } else {
+                offset >= minimum_length
+            } => {
                 return Err(SemanticMirErrorV1::InvalidProjectionShape);
             }
             SemanticProjectionKindV1::Subslice {
@@ -7564,6 +7446,7 @@ fn validate_request(
         validate_type(&mut context, SemanticTypeIdV1(index as u32), ty)?;
         execution_roles |= matches!(ty.rust_type_kind, SemanticRustTypeKindV1::Execution(_));
     }
+    type_containment_v1::validate(&mut context)?;
     if execution_roles {
         context.owned_execution_roles = capability_v29::owned_role_types(&mut context)?;
     }
@@ -14261,12 +14144,18 @@ fn validate_rvalue(
             }
         }
         SemanticRvalueKindV1::Length(place) => {
-            validate_place(context, function, location, place)?;
-            if !matches!(
-                type_shape(context, place.ty),
-                SemanticTypeShapeV1::Array { .. }
-            ) || !is_unsigned_integer_type(context.request, rvalue.result_type)
-            {
+            let metadata = validate_place_metadata(context, function, location, place)?;
+            let valid = match type_shape(context, place.ty) {
+                SemanticTypeShapeV1::Array { .. } => {
+                    is_unsigned_integer_type(context.request, rvalue.result_type)
+                }
+                SemanticTypeShapeV1::Slice { .. } => {
+                    metadata == Some(SemanticPointerMetadataV1::SliceLength)
+                        && is_unsigned_integer_with_bits(context.request, rvalue.result_type, 64)
+                }
+                _ => false,
+            };
+            if !valid {
                 return invalid_type_operation(SemanticTypeOperationV1::Length, location);
             }
         }
@@ -14633,6 +14522,15 @@ fn validate_place(
     location: SemanticMirLocationV1,
     place: &SemanticPlaceV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    validate_place_metadata(context, function, location, place).map(|_| ())
+}
+
+fn validate_place_metadata(
+    context: &mut ValidationContextV1<'_>,
+    function: &SemanticFunctionDeclV1,
+    location: SemanticMirLocationV1,
+    place: &SemanticPlaceV1,
+) -> Result<Option<SemanticPointerMetadataV1>, SemanticMirErrorV1> {
     context.reference(
         SemanticMirReferenceV1::Local,
         place.local.0,
@@ -14647,6 +14545,7 @@ fn validate_place(
     )?;
     let mut current_type = function.locals[place.local.0 as usize].ty;
     let mut downcast_variant = None;
+    let mut metadata = None;
     for projection in &place.projections {
         context.one()?;
         context.type_reference(projection.result_type, location)?;
@@ -14661,12 +14560,15 @@ fn validate_place(
                 else {
                     return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
                 };
+                metadata = Some(pointer.metadata);
                 pointer.pointee
             }
             SemanticProjectionKindV1::Field(field) => {
                 let field = field as usize;
                 match type_shape(context, current_type) {
-                    SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => {
+                    SemanticTypeShapeV1::Tuple(fields)
+                    | SemanticTypeShapeV1::Aggregate(fields)
+                    | SemanticTypeShapeV1::Union(fields) => {
                         fields.fields.get(field).copied().ok_or(
                             SemanticMirErrorV1::InvalidTypeOperation {
                                 operation: SemanticTypeOperationV1::Projection,
@@ -14721,15 +14623,14 @@ fn validate_place(
                 }
             }
             SemanticProjectionKindV1::ConstantIndex { minimum_length, .. } => {
-                let SemanticTypeShapeV1::Array { element, length } =
-                    type_shape(context, current_type)
-                else {
-                    return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
-                };
-                if minimum_length > *length {
-                    return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
+                match type_shape(context, current_type) {
+                    SemanticTypeShapeV1::Array { element, length }
+                        if minimum_length <= *length => *element,
+                    SemanticTypeShapeV1::Slice { element } => *element,
+                    _ => {
+                        return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
+                    }
                 }
-                *element
             }
             SemanticProjectionKindV1::Subslice { from, to, from_end } => {
                 let SemanticTypeShapeV1::Array { element, length } =
@@ -14781,12 +14682,31 @@ fn validate_place(
             }
         };
         require_type(expected, projection.result_type, location)?;
+        // Metadata follows the current unsized place, not an earlier pointer carrier.
+        match projection.kind {
+            SemanticProjectionKindV1::Field(_) => {
+                if context.request.types[current_type.0 as usize].layout.size_bytes.is_some()
+                    || context.request.types[projection.result_type.0 as usize]
+                        .layout.size_bytes.is_some()
+                {
+                    metadata = None;
+                }
+            }
+            SemanticProjectionKindV1::Index(_)
+            | SemanticProjectionKindV1::ConstantIndex { .. }
+            | SemanticProjectionKindV1::Subslice { .. }
+            | SemanticProjectionKindV1::Downcast(_) => metadata = None,
+            SemanticProjectionKindV1::Dereference
+            | SemanticProjectionKindV1::OpaqueCast
+            | SemanticProjectionKindV1::Subtype => {}
+        }
         current_type = projection.result_type;
     }
     if downcast_variant.is_some() {
         return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
     }
-    require_type(current_type, place.ty, location)
+    require_type(current_type, place.ty, location)?;
+    Ok(metadata)
 }
 
 fn invalid_type_operation<T>(
@@ -20030,6 +19950,10 @@ fn encode_assert_message(
         SemanticAssertMessageV1::ResumedAfterPanic => writer.u8(7),
     }
 }
+
+#[cfg(test)]
+#[path = "semantic_mir_v1/constant_index_boundaries_v1_tests.rs"]
+mod constant_index_boundaries_v1_tests;
 
 #[cfg(test)]
 mod private_tests {

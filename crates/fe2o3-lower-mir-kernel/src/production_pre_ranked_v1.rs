@@ -97,6 +97,7 @@ pub struct ProductionPreRankedKirOwnerV1 {
     limits: ProductionSemanticKirLimitsV1,
     launch_roots: Box<[RetainedRankedLaunchRootV1]>,
     helper_memory: SealedHelperMemoryV1,
+    kernel_abi: Option<kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>,
 }
 
 /// Borrowed helper facts from one immutable materialization and its validated
@@ -140,6 +141,42 @@ impl<'a> ProductionEmptyEffectHelpersV1<'a> {
 }
 
 impl ProductionPreRankedKirOwnerV1 {
+    /// Materializes the compatibility pre-ranked owner with an explicit original
+    /// kernel ABI profile. The existing complete source/root/descriptor capture
+    /// is mandatory; absent profiles never imply Global address space.
+    /// Only original direct entries are admitted here; adjusted wrapper ABIs
+    /// continue to require the scoped source materialization route.
+    ///
+    /// This is not another optimizer or production-pipeline selector. The
+    /// profile header and backing join the existing retained analysis receipt,
+    /// and survive ranked attachment and independent source reconstruction.
+    /// The ordinary constructor's phase-local accounting exclusions and
+    /// ordinary-Result cleanup contract remain unchanged.
+    pub fn try_materialize_with_kernel_abi_budget_v18(
+        semantic_ssa: ProductionSemanticSsaOwnerV1,
+        source_launch: crate::ProductionSourceLaunchRosterV1,
+        kernel_abi: ProductionKernelArgumentAbiInputV18<'_>,
+        limits: ProductionSemanticKirLimitsV1,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<Self, ProductionPreRankedKirErrorV1> {
+        let floor = budget.storage();
+        let result = (|| {
+            budget.reserve_storage(std::mem::size_of::<
+                kernel_argument_abi_v18::CapturedKernelArgumentAbiV18,
+            >())?;
+            let profile = kernel_argument_abi_v18::CapturedKernelArgumentAbiV18::capture(
+                &semantic_ssa, kernel_abi, budget,
+            )?;
+            Self::try_materialize_origins_with_profile_v18(
+                semantic_ssa, source_launch, limits, None, Some(profile), budget,
+            ).map(|(owner, _)| owner)
+        })();
+        let release = budget.storage().checked_sub(floor)
+            .ok_or(AssertOriginResourceV1::Accounting)?;
+        budget.release_storage(release)?;
+        result
+    }
+
     /// Materializes the retained SSA plans once, using the full source launch
     /// roster. No ranked verification receipt is accepted at this stage.
     ///
@@ -204,10 +241,24 @@ impl ProductionPreRankedKirOwnerV1 {
     }
 
     fn try_materialize_origins_with_scalar_capture_v1(
+        semantic_ssa: ProductionSemanticSsaOwnerV1,
+        source_launch: crate::ProductionSourceLaunchRosterV1,
+        limits: ProductionSemanticKirLimitsV1,
+        scalar_capture: Option<scalar_ssa_emission_v1::Recorder>,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<(Self, Option<scalar_ssa_emission_v1::Recorder>), ProductionPreRankedKirErrorV1>
+    {
+        Self::try_materialize_origins_with_profile_v18(
+            semantic_ssa, source_launch, limits, scalar_capture, None, budget,
+        )
+    }
+
+    fn try_materialize_origins_with_profile_v18(
         mut semantic_ssa: ProductionSemanticSsaOwnerV1,
         source_launch: crate::ProductionSourceLaunchRosterV1,
         limits: ProductionSemanticKirLimitsV1,
         scalar_capture: Option<scalar_ssa_emission_v1::Recorder>,
+        kernel_abi: Option<kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>,
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> Result<(Self, Option<scalar_ssa_emission_v1::Recorder>), ProductionPreRankedKirErrorV1>
     {
@@ -228,11 +279,12 @@ impl ProductionPreRankedKirOwnerV1 {
             module,
             correspondence,
             requires_source,
-        } = lower_pending_module_with_assert_origins_v1(
+        } = lower_pending_module_with_profile_v18(
             &semantic_ssa,
             limits,
             &launch_roots,
             &mut emitted_origins,
+            kernel_abi.as_ref(),
         )?;
         // Keep the frozen legacy bytes for existing publication/replay consumers.
         // Their transient inverse validation is not another retained graph.
@@ -282,6 +334,13 @@ impl ProductionPreRankedKirOwnerV1 {
         )?
         .checked_add(capture.transferred_storage())
         .ok_or(HelperMemoryResourceV1::Arithmetic)?;
+        if let Some(profile) = &kernel_abi {
+            helper_memory.analysis_storage = argument_sum_v1(&[
+                helper_memory.analysis_storage,
+                std::mem::size_of_val(profile),
+                profile.retained_storage(),
+            ])?;
+        }
         Ok((
             Self {
                 semantic_ssa,
@@ -294,6 +353,7 @@ impl ProductionPreRankedKirOwnerV1 {
                 limits,
                 launch_roots,
                 helper_memory,
+                kernel_abi,
             },
             scalar_capture,
         ))
@@ -416,20 +476,31 @@ impl ProductionMaterializedRankedModuleReceiptV1 {
 
 #[derive(Debug)]
 enum RetainedProductionKirModuleV1 {
-    Legacy(Module),
+    Legacy {
+        module: Module,
+        kernel_abi: Option<kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>,
+    },
     Connected {
         executable: fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
         storage: fe2o3_kernel_ir::CanonicalKernelIrReplayStorageV12,
         assert_origins: SealedAssertOriginsV1,
         source_launch: crate::ProductionSourceLaunchRosterV1,
         helper_memory: SealedHelperMemoryV1,
+        kernel_abi: Option<kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>,
     },
 }
 
 impl RetainedProductionKirModuleV1 {
+    fn kernel_abi(&self) -> Option<&kernel_argument_abi_v18::CapturedKernelArgumentAbiV18> {
+        match self {
+            Self::Legacy { kernel_abi, .. } => kernel_abi.as_ref(),
+            Self::Connected { kernel_abi, .. } => kernel_abi.as_ref(),
+        }
+    }
+
     const fn module(&self) -> &Module {
         match self {
-            Self::Legacy(module) => module,
+            Self::Legacy { module, .. } => module,
             Self::Connected { executable, .. } => executable.module(),
         }
     }
@@ -443,6 +514,29 @@ impl std::ops::Deref for RetainedProductionKirModuleV1 {
 }
 
 impl ProductionSemanticKirOwnerV1 {
+    /// Newly retained profile storage of an explicit ranked-first compatibility
+    /// owner. Reserve this while using a caller-owned verification ledger, and
+    /// release it only after the owner drops. Historical legacy graph/source
+    /// allocation exclusions are unchanged. Connected pre-ranked owners return
+    /// zero here because their existing analysis receipt already pays the profile.
+    pub fn legacy_kernel_abi_storage_v18(&self) -> Result<usize, ProductionSemanticKirErrorV1> {
+        match &self.module {
+            RetainedProductionKirModuleV1::Legacy { kernel_abi: Some(profile), .. } =>
+                argument_sum_v1(&[std::mem::size_of_val(profile), profile.retained_storage()])
+                    .map_err(Into::into),
+            _ => Ok(0),
+        }
+    }
+
+    fn require_legacy_kernel_abi_floor_v18(&self, budget: &ArgumentBudgetV1<'_>)
+        -> Result<(), ProductionSemanticKirErrorV1>
+    {
+        if budget.storage() < self.legacy_kernel_abi_storage_v18()? {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        Ok(())
+    }
+
     /// Attaches checked ranked custody without invoking executable lowering.
     /// Existing `verify_equivalence` remains an explicit reconstruction audit.
     /// Graph, origin and helper receipts remain caller-reserved across this consuming
@@ -485,6 +579,7 @@ impl ProductionSemanticKirOwnerV1 {
             limits,
             launch_roots,
             helper_memory,
+            kernel_abi,
         } = materialized;
         let semantic = semantic_ssa.source_semantic();
         let mut generic_checks = Vec::with_capacity(roots.len());
@@ -522,6 +617,7 @@ impl ProductionSemanticKirOwnerV1 {
                 assert_origins,
                 source_launch,
                 helper_memory,
+                kernel_abi,
             },
             canonical_kernel_ir,
             correspondence,
@@ -538,7 +634,7 @@ impl ProductionSemanticKirOwnerV1 {
     ) -> Option<&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12> {
         match &self.module {
             RetainedProductionKirModuleV1::Connected { executable, .. } => Some(executable),
-            RetainedProductionKirModuleV1::Legacy(_) => None,
+            RetainedProductionKirModuleV1::Legacy { .. } => None,
         }
     }
 
@@ -548,7 +644,7 @@ impl ProductionSemanticKirOwnerV1 {
     ) -> Option<fe2o3_kernel_ir::CanonicalKernelIrReplayStorageV12> {
         match &self.module {
             RetainedProductionKirModuleV1::Connected { storage, .. } => Some(*storage),
-            RetainedProductionKirModuleV1::Legacy(_) => None,
+            RetainedProductionKirModuleV1::Legacy { .. } => None,
         }
     }
 
@@ -564,7 +660,7 @@ impl ProductionSemanticKirOwnerV1 {
                 semantic_ssa: &self.semantic_ssa,
                 origins: assert_origins,
             }),
-            RetainedProductionKirModuleV1::Legacy(_) => None,
+            RetainedProductionKirModuleV1::Legacy { .. } => None,
         }
     }
 
@@ -576,7 +672,7 @@ impl ProductionSemanticKirOwnerV1 {
             RetainedProductionKirModuleV1::Connected { assert_origins, .. } => {
                 Some(assert_origins.storage)
             }
-            RetainedProductionKirModuleV1::Legacy(_) => None,
+            RetainedProductionKirModuleV1::Legacy { .. } => None,
         }
     }
 
@@ -589,7 +685,7 @@ impl ProductionSemanticKirOwnerV1 {
             RetainedProductionKirModuleV1::Connected { helper_memory, .. } => {
                 Some(helper_memory.storage)
             }
-            RetainedProductionKirModuleV1::Legacy(_) => None,
+            RetainedProductionKirModuleV1::Legacy { .. } => None,
         }
     }
 
@@ -600,7 +696,7 @@ impl ProductionSemanticKirOwnerV1 {
             RetainedProductionKirModuleV1::Connected { helper_memory, .. } => {
                 Some(helper_memory.analysis_storage)
             }
-            RetainedProductionKirModuleV1::Legacy(_) => None,
+            RetainedProductionKirModuleV1::Legacy { .. } => None,
         }
     }
 
@@ -608,7 +704,7 @@ impl ProductionSemanticKirOwnerV1 {
     pub const fn source_launch_roster(&self) -> Option<&crate::ProductionSourceLaunchRosterV1> {
         match &self.module {
             RetainedProductionKirModuleV1::Connected { source_launch, .. } => Some(source_launch),
-            RetainedProductionKirModuleV1::Legacy(_) => None,
+            RetainedProductionKirModuleV1::Legacy { .. } => None,
         }
     }
 }

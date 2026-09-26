@@ -1,3 +1,5 @@
+include!("production_scoped_source_cleanup_v29_tests.rs");
+
 fn owning_source_fixture(
     kind: ModuleFixture,
     preexisting: bool,
@@ -240,13 +242,15 @@ fn scoped_source_owner_replay_rejects_metadata_changes_with_the_same_graph() {
                 assert!(roots[1].coordinates.anchors.rows.pop().is_some());
             }
             6 => {
-                roots
+                let origin = &mut roots
                     .iter_mut()
                     .flat_map(|root| &mut root.source_slots.slots)
                     .next()
                     .unwrap()
-                    .origin
-                    .local += 1
+                    .origin;
+                origin.identity = ScopedAllocationIdentityV29::LegacyLocal(
+                    origin.legacy_local().unwrap() + 1,
+                );
             }
             7 => roots[0].source_slots.instances[0].slots.end += 1,
             8 => roots[1].insertions[0].after.first += 1,
@@ -430,7 +434,17 @@ fn scoped_source_owner_unwind_after_graph_admission_restores_capture_ownership()
             )
         }));
         SCOPED_SLOT_OBSERVER_V29.set(previous);
-        assert!(result.is_err());
+        assert!(matches!(
+            result.expect("the inner source-reference callback has a typed panic contract"),
+            Err(ScopedModuleErrorV29::Source(
+                ProductionSemanticKirErrorV1::Unsupported {
+                    function: 0,
+                    block: None,
+                    statement: None,
+                    detail: "source reference callback panicked",
+                }
+            ))
+        ));
         assert_eq!(OWNING_REPLAY_ROOT_VISITS.get(), 6);
         assert!(donor.is_none());
         assert_eq!(budget.storage(), MODULE_FLOOR + capture);

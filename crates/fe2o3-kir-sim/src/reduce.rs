@@ -9,6 +9,7 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
+use crate::model::TargetIdentityWireV2;
 use crate::resident::reserved_vec_bytes;
 use crate::schedule::{
     ReductionScheduleSourceV1, schedule_context_identity, schedule_context_identity_with_dynamic,
@@ -29,6 +30,7 @@ pub const MAX_FAILURE_REDUCTION_RETAINED_DECISIONS_V1: usize = crate::MAX_SCHEDU
 pub const MAX_PERSISTED_FAILURE_REDUCTION_BYTES_V1: usize = 768 * 1024 * 1024;
 
 const REPORT_SCHEMA_V1: &str = "fe2o3-simulation-failure-reduction-v1";
+const REPORT_SCHEMA_V2: &str = "fe2o3-simulation-failure-reduction-v2";
 const FINGERPRINT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/FAILURE-FINGERPRINT/V1\0";
 const REPRODUCER_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/FAILURE-REPRODUCER/V1\0";
 const REPORT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/FAILURE-REDUCTION-REPORT/V1\0";
@@ -783,6 +785,10 @@ fn unsupported_failure(kind: &SimulationExecutionErrorKindV1) -> Option<&'static
             Some("allocation_bytes_limit")
         }
         SimulationExecutionErrorKindV1::TotalBytesLimit { .. } => Some("total_bytes_limit"),
+        SimulationExecutionErrorKindV1::StorageResidentLimit { .. } => {
+            Some("storage_resident_limit")
+        }
+        SimulationExecutionErrorKindV1::StorageViolation { .. } => Some("storage_violation"),
         SimulationExecutionErrorKindV1::AllocationFailure => Some("allocation_failure"),
         SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { .. } => {
             Some("workgroup_scheduler_no_progress")
@@ -850,6 +856,8 @@ fn failure_class(kind: &SimulationExecutionErrorKindV1) -> &'static str {
         K::AllocationLimit { .. } => "allocation_limit",
         K::AllocationBytesLimit { .. } => "allocation_bytes_limit",
         K::TotalBytesLimit { .. } => "total_bytes_limit",
+        K::StorageResidentLimit { .. } => "storage_resident_limit",
+        K::StorageViolation { .. } => "storage_violation",
         K::AllocationFailure => "allocation_failure",
         K::MissingFunction(_) => "missing_function",
         K::MissingBody(_) => "missing_body",
@@ -902,6 +910,7 @@ fn hash_execution_detail(hash: &mut Sha256, kind: &SimulationExecutionErrorKindV
         }
         K::AllocationBytesLimit { actual, limit }
         | K::TotalBytesLimit { actual, limit }
+        | K::StorageResidentLimit { actual, limit }
         | K::ScheduleDecisionLimit { actual, limit }
         | K::ScheduleResidentLimit { actual, limit } => {
             hash.update((*actual as u64).to_le_bytes());
@@ -918,7 +927,9 @@ fn hash_execution_detail(hash: &mut Sha256, kind: &SimulationExecutionErrorKindV
             hash.update((*expected as u64).to_le_bytes());
             hash.update((*actual as u64).to_le_bytes());
         }
-        K::UndefinedIntegerOperation(detail) | K::InternalInvariant(detail) => {
+        K::UndefinedIntegerOperation(detail)
+        | K::InternalInvariant(detail)
+        | K::StorageViolation { reason: detail } => {
             hash_bytes(hash, detail.as_bytes());
         }
         K::PointerDistanceDifferentAllocation {
@@ -1107,6 +1118,7 @@ fn reproducer_identity(
 
 fn report_identity(report: &SimulationFailureReductionReportV1) -> [u8; 32] {
     let mut hash = Sha256::new();
+    report.target.hash_profile_identity(&mut hash);
     hash.update(REPORT_DOMAIN_V1);
     hash.update(report.kir_wire_version.to_le_bytes());
     hash.update(report.kir_sha256);
@@ -1271,6 +1283,8 @@ struct ReportWireV1 {
     kir_canonical_bytes: u64,
     context_sha256: String,
     index_bits: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target_identity: Option<TargetIdentityWireV2>,
     simulation_limits: LimitsWireV1,
     reduction_limits: ReductionLimitsWireV1,
     original_schedule: ScheduleWireV1,
@@ -1293,6 +1307,8 @@ struct ReportEncodeWireV1<'a> {
     kir_canonical_bytes: u64,
     context_sha256: HexWireV1<'a>,
     index_bits: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_identity: Option<TargetIdentityWireV2>,
     simulation_limits: LimitsWireV1,
     reduction_limits: ReductionLimitsWireV1,
     original_schedule: ScheduleWireV1,
@@ -1310,7 +1326,11 @@ struct ReportEncodeWireV1<'a> {
 impl<'a> From<&'a SimulationFailureReductionReportV1> for ReportEncodeWireV1<'a> {
     fn from(report: &'a SimulationFailureReductionReportV1) -> Self {
         Self {
-            schema: REPORT_SCHEMA_V1,
+            schema: if report.target.amd_profile().is_some() {
+                REPORT_SCHEMA_V2
+            } else {
+                REPORT_SCHEMA_V1
+            },
             kir_wire_version: report.kir_wire_version,
             kir_sha256: HexWireV1(&report.kir_sha256),
             kir_canonical_bytes: report.kir_canonical_bytes,
@@ -1319,6 +1339,10 @@ impl<'a> From<&'a SimulationFailureReductionReportV1> for ReportEncodeWireV1<'a>
                 IndexWidthV1::Bits32 => 32,
                 IndexWidthV1::Bits64 => 64,
             },
+            target_identity: report
+                .target
+                .amd_profile()
+                .map(|_| TargetIdentityWireV2::from_target(report.target)),
             simulation_limits: report.simulation_limits.into(),
             reduction_limits: report.reduction_limits.into(),
             original_schedule: report.original_schedule.into(),
@@ -1569,15 +1593,22 @@ impl TryFrom<ReportWireV1> for SimulationFailureReductionReportV1 {
     type Error = SimulationFailureReductionCodecErrorV1;
 
     fn try_from(wire: ReportWireV1) -> Result<Self, Self::Error> {
-        if wire.schema != REPORT_SCHEMA_V1 {
+        if wire.schema != REPORT_SCHEMA_V1 && wire.schema != REPORT_SCHEMA_V2 {
             return Err(Self::Error::UnsupportedSchema);
         }
         if wire.grants_execution_authority || wire.predicts_hardware_timing {
             return Err(Self::Error::InvalidIdentity);
         }
-        let target = match wire.index_bits {
-            32 => SimulationTargetV1::little_endian(IndexWidthV1::Bits32),
-            64 => SimulationTargetV1::little_endian(IndexWidthV1::Bits64),
+        let target = match (wire.schema.as_str(), wire.target_identity) {
+            (REPORT_SCHEMA_V1, None) => match wire.index_bits {
+                32 => SimulationTargetV1::little_endian(IndexWidthV1::Bits32),
+                64 => SimulationTargetV1::little_endian(IndexWidthV1::Bits64),
+                _ => return Err(Self::Error::InvalidTarget),
+            },
+            (REPORT_SCHEMA_V2, Some(identity)) => identity
+                .target(wire.index_bits)
+                .filter(|target| target.amd_profile().is_some())
+                .ok_or(Self::Error::InvalidTarget)?,
             _ => return Err(Self::Error::InvalidTarget),
         };
         let limits: SimulationLimitsV1 = wire.simulation_limits.into();
@@ -1928,6 +1959,40 @@ mod tests {
         ];
         for failure in failures {
             assert!(unsupported_failure(&failure).is_some(), "{failure:?}");
+        }
+    }
+
+    #[test]
+    fn storage_failures_keep_details_without_becoming_legacy_reduction_targets() {
+        use SimulationExecutionErrorKindV1 as K;
+        let failures = [
+            K::StorageResidentLimit {
+                actual: 2,
+                limit: 1,
+            },
+            K::StorageResidentLimit {
+                actual: 3,
+                limit: 1,
+            },
+            K::StorageResidentLimit {
+                actual: 2,
+                limit: 0,
+            },
+            K::StorageViolation {
+                reason: "partial relocation copy",
+            },
+            K::StorageViolation {
+                reason: "stale variant view",
+            },
+        ];
+        let mut identities = std::collections::BTreeSet::new();
+        for failure in failures {
+            let class = failure_class(&failure);
+            assert_eq!(unsupported_failure(&failure), Some(class));
+            assert!(!is_known_failure_class(class));
+            let mut hash = Sha256::new();
+            hash_execution_detail(&mut hash, &failure);
+            assert!(identities.insert(<[u8; 32]>::from(hash.finalize())));
         }
     }
 

@@ -965,8 +965,20 @@ fn measured_peak_minus_one_records_exact_first_denial_for_strict_successor() {
             panic!("expected independent loop replay Storage refusal")
         };
         assert_eq!((error.actual(), error.limit()), (peak, peak - 1));
-        assert_eq!(peak, 43_224);
-        assert_eq!((budget.work(), budget.peak_storage()), (21_884, 43_112));
+        #[allow(dead_code)]
+        struct PriorModuleHeader {
+            id: fe2o3_kernel_ir::ModuleId,
+            functions: Vec<Function>,
+            kernels: Vec<Kernel>,
+            required_capabilities: std::collections::BTreeSet<fe2o3_kernel_ir::TargetCapability>,
+        }
+        let layout_header = std::mem::size_of::<Vec<fe2o3_kernel_ir::StorageLayoutV1>>();
+        assert_eq!(std::mem::size_of::<Module>(),
+            std::mem::size_of::<PriorModuleHeader>() + layout_header);
+        // Input, candidate and admitted output coexist during independent replay.
+        let added_headers = 3 * layout_header;
+        assert_eq!(peak, 43_224 + added_headers);
+        assert_eq!((budget.work(), budget.peak_storage()), (21_884, 43_112 + added_headers));
     }
     assert_eq!(work.failed_work(), None);
     assert_eq!(sibling, vec![0xa5; 43]);

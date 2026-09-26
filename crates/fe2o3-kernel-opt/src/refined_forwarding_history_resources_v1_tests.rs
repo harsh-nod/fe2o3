@@ -59,6 +59,7 @@ fn transition_pending_prefix(p: &Complete, replay: bool) -> (usize, usize) {
         input.edges().len(),
         input.edges().len(),
         input.edges().len(),
+        input.blocks().len(), // Selected successor cache precedes reachability.
         input.blocks().len(),
     ];
     for count in fill_counts {

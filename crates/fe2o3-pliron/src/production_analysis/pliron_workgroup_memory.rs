@@ -406,6 +406,16 @@ fn run_pliron_workgroup_memory_observed_inner_v1(
     analyses: &mut PlironAnalysisManagerV1,
     observer: WorkgroupObserverV1<'_, '_, '_>,
 ) -> PlironWorkgroupMemoryReportV1 {
+    if analyses.has_native_obligations_v1() {
+        if let (Some(observer), Some(failure)) = (observer, analyses.native_guard_denial_v1()) {
+            observer.deny(failure);
+        }
+        return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
+            detail:
+                "native byte, alias, initialization and publication obligations remain unresolved"
+                    .to_owned(),
+        });
+    }
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
         Ok(inventory) => inventory,
@@ -972,6 +982,7 @@ fn memory_order_failure_detail(failure: PlironMemoryOrderAnalysisFailureV1) -> S
     match failure {
         PlironMemoryOrderAnalysisFailureV1::Trace(failure) => trace_failure_detail(failure),
         PlironMemoryOrderAnalysisFailureV1::Provenance(detail) => detail,
+        PlironMemoryOrderAnalysisFailureV1::MemoryOrder(PlironMemoryOrderFailureV1::NativeObligations) => "native byte and memory-order obligations remain unresolved".to_owned(),
         PlironMemoryOrderAnalysisFailureV1::MemoryOrder(
             PlironMemoryOrderFailureV1::UnresolvedAddress { location },
         ) => format!(

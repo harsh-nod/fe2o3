@@ -79,6 +79,7 @@ fn cache_pointer_allocation_failure(
 pub(super) struct AccessDerivationContext<'analysis, 'module> {
     definitions: &'analysis Definitions<'module>,
     value_types: &'analysis BTreeMap<ValueId, Type>,
+    allocations: &'analysis [FormalAllocationParameter],
     allocation_by_value: &'analysis BTreeMap<ValueId, FormalAllocationIdentity>,
     private_load_sources: &'analysis BTreeMap<ValueId, ValueId>,
     pointer_derivations: PointerDerivationCache,
@@ -89,6 +90,7 @@ impl<'analysis, 'module> AccessDerivationContext<'analysis, 'module> {
     pub(super) fn new(
         definitions: &'analysis Definitions<'module>,
         value_types: &'analysis BTreeMap<ValueId, Type>,
+        allocations: &'analysis [FormalAllocationParameter],
         allocation_by_value: &'analysis BTreeMap<ValueId, FormalAllocationIdentity>,
         private_load_sources: &'analysis BTreeMap<ValueId, ValueId>,
         guarded: Option<GuardedAnalysisV1<'module>>,
@@ -96,12 +98,43 @@ impl<'analysis, 'module> AccessDerivationContext<'analysis, 'module> {
         Self {
             definitions,
             value_types,
+            allocations,
             allocation_by_value,
             private_load_sources,
             pointer_derivations: PointerDerivationCache::default(),
             guarded,
         }
     }
+}
+
+fn effective_access_space(
+    pointer: ValueId,
+    access: MemoryAccess,
+    allocation: FormalAllocationIdentity,
+    location: FunctionOperationLocation,
+    context: &AccessDerivationContext<'_, '_>,
+) -> Result<AddressSpace, FormalMemoryIncompleteReason> {
+    let unsupported = || FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+        location,
+        pointer,
+    };
+    let Some(Type::Pointer(ty)) = context.value_types.get(&pointer) else {
+        return Err(unsupported());
+    };
+    if ty.address_space != access.address_space {
+        return Err(unsupported());
+    }
+    let ordinal = context
+        .allocations
+        .binary_search_by_key(&allocation, |row| row.identity)
+        .map_err(|_| unsupported())?;
+    let plane = context.allocations[ordinal].address_space;
+    // The caller has resolved the complete checked alias graph to this root.
+    // Generic syntax alone is never sufficient to choose a concrete plane.
+    if plane != access.address_space && access.address_space != AddressSpace::Generic {
+        return Err(unsupported());
+    }
+    Ok(plane)
 }
 
 pub(super) fn derive_access(
@@ -161,7 +194,13 @@ pub(super) fn derive_access(
         location,
         allocation: pointer_expression.allocation,
         kind,
-        address_space: access.address_space,
+        address_space: effective_access_space(
+            pointer,
+            access,
+            pointer_expression.allocation,
+            location,
+            context,
+        )?,
         byte_offset: pointer_expression.byte_offset.into_byte_expression(),
         byte_width,
         alignment: u64::from(access.alignment),
@@ -199,7 +238,7 @@ pub(super) fn derive_conservative_guarded_access(
         location,
         allocation,
         kind: FormalMemoryAccessKind::Read,
-        address_space: access.address_space,
+        address_space: effective_access_space(pointer, access, allocation, location, context)?,
         byte_offset: ByteExpression::Unbounded,
         byte_width,
         alignment: u64::from(access.alignment),
@@ -302,10 +341,16 @@ fn derive_pointer_allocation_cached(
             };
             match &operation.kind {
                 OperationKind::Cast {
-                    kind: CastKind::RestrictPointerAccess,
+                    kind: CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric,
                     value,
                     ..
                 } => {
+                    if value_types.get(value).and_then(|ty| {
+                        checked_address_cast_source_v18(operation, ty)
+                    }) != Some(*value) {
+                        failure_origin = Some(current);
+                        break 'derivation Err(PointerDerivationFailure::AtAccess(current));
+                    }
                     reverse_dependencies
                         .entry(*value)
                         .or_default()
@@ -484,10 +529,17 @@ fn derive_pointer_expression_cached(
                 };
                 match &operation.kind {
                     OperationKind::Cast {
-                        kind: CastKind::RestrictPointerAccess,
+                        kind: CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric,
                         value: source,
                         ..
                     } => {
+                        if value_types.get(source).and_then(|ty| {
+                            checked_address_cast_source_v18(operation, ty)
+                        }) != Some(*source) {
+                            visiting.remove(&value);
+                            cache.expressions.insert(value, Err(unsupported(value)));
+                            continue;
+                        }
                         work.push(PointerWork::Alias {
                             value,
                             source: *source,

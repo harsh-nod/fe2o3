@@ -385,12 +385,14 @@ fn budget_request() -> InertSemanticMirRequestV1 {
 
 #[test]
 fn local_and_block_identity_scans_have_an_exact_validation_work_boundary() {
-    const EXACT_VALIDATION_WORK: u64 = 49;
+    // One scalar type adds four containment visits and no child/variant steps.
+    const EXACT_VALIDATION_WORK: u64 = 49 + 4;
 
     let exact = SemanticMirLimitsV1::default()
         .with_limit(SemanticMirResourceV1::ValidationWork, EXACT_VALIDATION_WORK)
         .unwrap();
-    budget_request().admit(exact).unwrap();
+    let admitted = budget_request().admit(exact).unwrap();
+    assert_eq!(admitted.types(), &[u32_type()]);
 
     let one_short = SemanticMirLimitsV1::default()
         .with_limit(

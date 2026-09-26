@@ -15,6 +15,7 @@ enum CallInstanceEmissionErrorV1 {
     MissingTerminator,
     ForeignBlock,
     ExecutionTransport,
+    StorageTransport,
     CalleeFrameAllocation,
     CalleeWorkgroupAllocation,
     CalleeCollective,
@@ -127,8 +128,44 @@ fn call_splice_type_eq_v1(
             (Type::Unit, Type::Unit) => return Ok(true),
             (Type::Scalar(a), Type::Scalar(b)) => return Ok(a == b),
             (Type::Vector(a), Type::Vector(b)) => return Ok(a == b),
+            (Type::StorageObject(a), Type::StorageObject(b)) => return Ok(a == b),
             _ => return Ok(false),
         }
+    }
+}
+
+#[cfg(test)]
+mod storage_type_equality_tests_v29 {
+    use super::*;
+
+    fn compare(left: &Type, right: &Type, limit: usize) -> Result<bool, CallInstanceEmissionErrorV1> {
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(limit);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+        let result = call_splice_type_eq_v1(left, right, &mut budget);
+        assert_eq!(budget.storage(), 0);
+        result
+    }
+
+    #[test]
+    fn exact_storage_schema_identity_is_structural_equality_not_source_authority() {
+        let cell = Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(7));
+        let other = Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(8));
+        assert!(compare(&cell, &cell, 1).unwrap());
+        assert!(!compare(&cell, &other, 1).unwrap());
+        assert!(!compare(&cell, &Type::Scalar(ScalarType::U32), 1).unwrap());
+        let pointer = Type::pointer(cell.clone(), AddressSpace::Private, AccessMode::ReadWrite);
+        assert!(compare(&pointer, &pointer, 2).unwrap());
+        for changed in [
+            Type::pointer(other, AddressSpace::Private, AccessMode::ReadWrite),
+            Type::pointer(cell.clone(), AddressSpace::Private, AccessMode::ReadOnly),
+            Type::pointer(cell, AddressSpace::Generic, AccessMode::ReadWrite),
+        ] {
+            assert!(!compare(&pointer, &changed, 2).unwrap());
+        }
+        assert!(matches!(compare(&pointer, &pointer, 1), Err(CallInstanceEmissionErrorV1::Resource(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(_)))));
+        let execution = Type::Execution(fe2o3_kernel_ir::ExecutionRoleV15::Context);
+        assert!(matches!(compare(&execution, &execution, 1), Err(CallInstanceEmissionErrorV1::ExecutionTransport)));
     }
 }
 
@@ -241,6 +278,7 @@ fn call_splice_check_callee_operation_v1(
     use CallInstanceEmissionErrorV1 as Error;
     use OperationKind as Op;
     match kind {
+        Op::Storage(_) => Err(Error::StorageTransport),
         Op::Execution(_) => Err(Error::ExecutionTransport),
         Op::Alloca { .. } => Err(Error::CalleeFrameAllocation),
         Op::WorkgroupMemory(_) => Err(Error::CalleeWorkgroupAllocation),
@@ -278,6 +316,22 @@ fn call_splice_check_callee_operation_v1(
         | Op::VectorStore(_)
         | Op::VectorLayoutConvert(_) => Ok(()),
     }
+}
+
+#[cfg(test)]
+#[test]
+fn storage_call_splicing_requires_storage_correspondence_v1() {
+    let operation = OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::Project {
+        base: ValueId(0),
+        step: fe2o3_kernel_ir::StorageProjectionV1::Field(0),
+    });
+    assert_eq!(
+        call_splice_check_callee_operation_v1(&operation),
+        Err(CallInstanceEmissionErrorV1::StorageTransport)
+    );
+    assert!(
+        call_splice_check_callee_operation_v1(&OperationKind::Constant(Constant::U32(9))).is_ok()
+    );
 }
 
 #[cfg(test)]
@@ -331,6 +385,48 @@ fn call_splice_check_body_with_scoped_frame_v29(
     frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<usize, CallInstanceEmissionErrorV1> {
+    call_splice_check_body_with_scoped_inline_v30(function, index, callee, frame, None, budget)
+}
+
+include!("production_scoped_inline_callee_v30.rs");
+include!("production_scoped_storage_callee_v29.rs");
+include!("production_scoped_lane_query_callee_v29.rs");
+
+fn call_splice_check_body_with_scoped_inline_v30(
+    function: &Function,
+    index: &CallSpliceIndexV1<'_>,
+    callee: bool,
+    frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
+    inline: Option<&ScopedInlineCalleeV30<'_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<usize, CallInstanceEmissionErrorV1> {
+    call_splice_check_body_with_scoped_storage_v29(function, index, callee, frame, inline, None, budget)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn call_splice_check_body_with_scoped_storage_v29(
+    function: &Function,
+    index: &CallSpliceIndexV1<'_>,
+    callee: bool,
+    frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
+    inline: Option<&ScopedInlineCalleeV30<'_>>,
+    storage: Option<&ScopedStorageCalleeV29<'_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<usize, CallInstanceEmissionErrorV1> {
+    call_splice_check_body_with_scoped_queries_v29(function, index, callee, frame, inline, storage, None, budget)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn call_splice_check_body_with_scoped_queries_v29(
+    function: &Function,
+    index: &CallSpliceIndexV1<'_>,
+    callee: bool,
+    frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
+    inline: Option<&ScopedInlineCalleeV30<'_>>,
+    storage: Option<&ScopedStorageCalleeV29<'_>>,
+    lane: Option<&ScopedLaneCalleeV29<'_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<usize, CallInstanceEmissionErrorV1> {
     let body = function
         .body
         .as_ref()
@@ -348,6 +444,14 @@ fn call_splice_check_body_with_scoped_frame_v29(
                     frame.filter(|_| matches!(operation.kind, OperationKind::Alloca { .. }))
                 {
                     frame.check(block.id, ordinal, operation, budget)?;
+                } else if let Some(inline) =
+                    inline.filter(|_| matches!(operation.kind, OperationKind::InlineAssembly(_)))
+                {
+                    inline.check(function, budget)?;
+                } else if let Some(storage) = storage.filter(|_| matches!(operation.kind, OperationKind::Storage(_))) {
+                    storage.check(function, budget)?;
+                } else if let Some(lane) = lane.filter(|_| matches!(operation.kind, OperationKind::Wave(_))) {
+                    lane.check(function, budget)?;
                 } else {
                     call_splice_check_callee_operation_v1(&operation.kind)?;
                 }
@@ -464,17 +568,81 @@ fn splice_production_call_instance_v1(
 }
 
 fn splice_production_call_instance_with_scoped_frame_v29(
-    mut caller: Function,
-    mut callee: Function,
+    caller: Function,
+    callee: Function,
     site: FunctionOperationLocation,
     entry: BlockId,
     continuation: BlockId,
     frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<SplicedCallInstanceV1, CallInstanceEmissionErrorV1> {
+    splice_production_call_instance_with_scoped_parts_v29(
+        caller,
+        callee,
+        site,
+        entry,
+        continuation,
+        frame,
+        None,
+        budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn splice_production_call_instance_with_scoped_parts_v29(
+    caller: Function,
+    callee: Function,
+    site: FunctionOperationLocation,
+    entry: BlockId,
+    continuation: BlockId,
+    frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
+    parts: Option<(
+        &ScopedDeferredScalarViewV29<'_, '_, '_>,
+        &ScopedDeferredScalarViewV29<'_, '_, '_>,
+    )>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<SplicedCallInstanceV1, CallInstanceEmissionErrorV1> {
+    splice_production_call_instance_with_source_storage_v29(caller, callee, site, entry, continuation, frame, parts, None, budget)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn splice_production_call_instance_with_source_storage_v29(
+    caller: Function,
+    callee: Function,
+    site: FunctionOperationLocation,
+    entry: BlockId,
+    continuation: BlockId,
+    frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
+    parts: Option<(&ScopedDeferredScalarViewV29<'_, '_, '_>, &ScopedDeferredScalarViewV29<'_, '_, '_>)>,
+    storage: Option<ScopedStorageCalleeSourceV29<'_, '_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<SplicedCallInstanceV1, CallInstanceEmissionErrorV1> {
+    splice_production_call_instance_with_source_queries_v29(caller, callee, site, entry, continuation,
+        frame, parts, storage, None, budget)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn splice_production_call_instance_with_source_queries_v29(
+    mut caller: Function,
+    mut callee: Function,
+    site: FunctionOperationLocation,
+    entry: BlockId,
+    continuation: BlockId,
+    frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
+    parts: Option<(&ScopedDeferredScalarViewV29<'_, '_, '_>, &ScopedDeferredScalarViewV29<'_, '_, '_>)>,
+    storage: Option<ScopedStorageCalleeSourceV29<'_, '_, '_>>,
+    lane: Option<ScopedLaneCalleeSourceV29<'_, '_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<SplicedCallInstanceV1, CallInstanceEmissionErrorV1> {
     let mut scratch = 0_usize;
     let mut retained = 0_usize;
     let result = (|| {
+        // These new fixed envelopes exist even when no lane proof is requested.
+        call_splice_charge_storage_v1(argument_sum_v1(&[
+            std::mem::size_of::<Option<ScopedLaneCalleeSourceV29<'_, '_, '_>>>(),
+            std::mem::size_of::<Option<ScopedLaneCalleeV29<'_>>>(),
+            std::mem::size_of::<Result<Option<ScopedLaneCalleeV29<'_>>, CallInstanceEmissionErrorV1>>(),
+        ])?, budget, &mut scratch)?;
         budget.charge_work(1)?;
         if callee.role != fe2o3_kernel_ir::FunctionRole::InternalHelper
             || caller.role == fe2o3_kernel_ir::FunctionRole::ExternalImport
@@ -482,8 +650,18 @@ fn splice_production_call_instance_with_scoped_frame_v29(
             return Err(CallInstanceEmissionErrorV1::InvalidRole);
         }
         let (block_index, returns, callee_entry, callee_blocks, result_components) = {
-            let caller_index = call_splice_index_v1(&caller, budget, &mut scratch)?;
-            let callee_index = call_splice_index_v1(&callee, budget, &mut scratch)?;
+            let caller_index = call_splice_index_with_deferred_parts_v29(
+                &caller,
+                parts.map(|pair| pair.0),
+                budget,
+                &mut scratch,
+            )?;
+            let callee_index = call_splice_index_with_deferred_parts_v29(
+                &callee,
+                parts.map(|pair| pair.1),
+                budget,
+                &mut scratch,
+            )?;
             if !call_splice_disjoint_v1(
                 caller_index.blocks.iter(),
                 callee_index.blocks.iter(),
@@ -507,11 +685,23 @@ fn splice_production_call_instance_with_scoped_frame_v29(
                 }
             }
             call_splice_check_body_v1(&caller, &caller_index, false, budget)?;
-            let returns = call_splice_check_body_with_scoped_frame_v29(
+            let inline = parts
+                .map(|(_, parts)| {
+                    parts.inline_callee_v30(&callee, &callee_index, budget, &mut scratch)
+                })
+                .transpose()?;
+            let storage = storage.as_ref().map(|source| source.permit(&callee, &callee_index, budget, &mut scratch)).transpose()?;
+            let lane = if let Some(source) = lane.as_ref() {
+                Some(source.prepare(&callee, budget, &mut scratch)?)
+            } else { None };
+            let returns = call_splice_check_body_with_scoped_queries_v29(
                 &callee,
                 &callee_index,
                 true,
                 frame,
+                inline.as_ref(),
+                storage.as_ref(),
+                lane.as_ref(),
                 budget,
             )?;
             let caller_body = caller.body.as_ref().unwrap();

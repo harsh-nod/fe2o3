@@ -1,0 +1,11 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: gpu.call
+// CHECK: outside the closed ranked operation allowlist
+// The native signature is real; text alone supplies no source/callee closure grant.
+builtin.func @private_typed_call: builtin.function <(builtin.integer ui64) -> ()>
+{
+  ^entry(v: builtin.integer ui64):
+    answer = gpu.call (v) [] [gpu_call_callee: builtin.string "typed_leaf", gpu_call_signature: builtin.type builtin.function <(builtin.integer ui64) -> (builtin.integer ui64)>]: <(builtin.integer ui64) -> (builtin.integer ui64)>;
+    kernel.return () [] []: <() -> ()>
+}

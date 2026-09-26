@@ -6,7 +6,10 @@ use crate::{ExecutionOperationV15, ExecutionRoleV15, SemanticExecutionInstancePa
 mod tests;
 
 fn require_v15(writer: &Writer<'_>) -> Result<(), KernelIrEncodeError> {
-    if writer.version == KERNEL_IR_VERSION_V15 {
+    if matches!(
+        writer.version,
+        KERNEL_IR_VERSION_V15 | KERNEL_IR_VERSION_V18
+    ) {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {

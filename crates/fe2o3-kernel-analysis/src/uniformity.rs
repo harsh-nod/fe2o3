@@ -287,7 +287,8 @@ fn collect_uniform_helper_candidate(
                         candidate.structurally_supported = false;
                     }
                 },
-                OperationKind::Execution(_)
+                OperationKind::Storage(_)
+                | OperationKind::Execution(_)
                 | OperationKind::VerificationContract(_)
                 | OperationKind::Alloca { .. }
                 | OperationKind::Atomic(_)
@@ -790,7 +791,8 @@ impl<'a> Analyzer<'a> {
 
     fn operation_variation(&self, operation: &Operation) -> Variation {
         match &operation.kind {
-            OperationKind::Execution(_)
+            OperationKind::Storage(_)
+            | OperationKind::Execution(_)
             | OperationKind::VerificationContract(_)
             | OperationKind::VectorLoad(_)
             | OperationKind::VectorStore(_) => Variation::Varying,
@@ -2226,6 +2228,8 @@ impl<'a> UnsignedRangeAnalysis<'a> {
                 CastKind::ZeroExtend => source_range.max <= target_range.max,
                 CastKind::Bitcast => source_range.max == target_range.max,
                 CastKind::RestrictPointerAccess
+                | CastKind::PointerToGeneric
+                | CastKind::SliceToGeneric
                 | CastKind::Truncate
                 | CastKind::SignExtend
                 | CastKind::FloatExtend
@@ -2492,6 +2496,8 @@ fn cast_result_range(
         CastKind::Bitcast if source_type.max == target_type.max => Some(source),
         CastKind::Truncate => Some(target_type),
         CastKind::RestrictPointerAccess
+        | CastKind::PointerToGeneric
+        | CastKind::SliceToGeneric
         | CastKind::ZeroExtend
         | CastKind::SignExtend
         | CastKind::FloatExtend
@@ -3372,3 +3378,70 @@ fn immediate_postdominator(
 
 #[cfg(test)]
 mod source_ordered_definitions_v1_tests;
+
+#[cfg(test)]
+mod storage_variation_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{
+        AccessMode, MemoryAccess, Signature, StorageLayoutIdV1, StorageOperationV1,
+        StorageProjectionV1, ValueDef,
+    };
+    #[test]
+    fn storage_results_are_varying_and_do_not_make_a_pure_helper_summary() {
+        let pointer = Type::pointer(
+            Type::StorageObject(StorageLayoutIdV1(0)),
+            AddressSpace::Private,
+            AccessMode::ReadWrite,
+        );
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(Operation::new(
+            vec![ValueDef::new(ValueId(1), pointer.clone())],
+            OperationKind::Storage(StorageOperationV1::Project {
+                base: ValueId(0),
+                step: StorageProjectionV1::Field(0),
+            }),
+        ));
+        block.operations.push(Operation::new(
+            vec![ValueDef::new(ValueId(2), Type::Scalar(ScalarType::U32))],
+            OperationKind::Storage(StorageOperationV1::ReadValue {
+                address: ValueId(1),
+                access: MemoryAccess::new(AddressSpace::Private, 4),
+            }),
+        ));
+        block.operations.push(Operation::new(
+            vec![ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U32))],
+            OperationKind::Constant(Constant::U32(9)),
+        ));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let function = Function::internal_helper(
+            "storage",
+            Signature::new(vec![pointer], vec![]),
+            vec![ValueId(0)],
+            vec![block],
+        );
+        let report = analyze_function(&function);
+        assert_eq!(report.values.get(&ValueId(1)), Some(&Variation::Varying));
+        assert_eq!(report.values.get(&ValueId(2)), Some(&Variation::Varying));
+        assert_eq!(
+            report.values.get(&ValueId(3)),
+            Some(&Variation::GridUniform)
+        );
+        let id = function.id.clone();
+        let mut module = Module::new("storage_variation");
+        module.functions.push(function);
+        // Isolate the effect-free projection: a read-effect fallback is not enough.
+        module.functions[0].body.as_mut().unwrap().blocks[0]
+            .operations
+            .retain(|operation| {
+                matches!(
+                    operation.kind,
+                    OperationKind::Storage(StorageOperationV1::Project { .. })
+                )
+            });
+        assert!(
+            !collect_uniform_helper_candidate(&module, &id, &mut BTreeSet::new())
+                .structurally_supported
+        );
+    }
+}

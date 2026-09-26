@@ -16,6 +16,18 @@ mod reduce;
 mod resident;
 mod schedule;
 mod soft_float;
+mod storage_inputs_v29;
+mod storage_request_view_v29;
+
+pub use storage_inputs_v29::{
+    SimulationInputOriginV29, SimulationObjectComponentV29, SimulationObjectRangeV29,
+    SimulationObjectViewV29, SimulationObjectRelocationV29, SimulationObjectImageErrorV29,
+    SimulationObjectImageV29, SimulationStorageArgumentV29, SimulationStorageBackingV29,
+    SimulationSharedStorageV29, SimulationStorageRequestV29, SimulationObservedPointeeV29,
+    SimulationPointerObservationV29, SimulationRelocationObservationV29, SimulationObjectObservationV29,
+    SimulationStorageArgumentObservationV29, SimulationStorageBackingObservationV29,
+    SimulationSharedStorageObservationV29,
+};
 
 pub use capability::{
     POINTER_CAPABILITY_ROWS_V1, SCALAR_CAPABILITY_ROWS_V1,
@@ -51,6 +63,11 @@ pub use execute::{
     SimulationHappensBeforeReasonV1, SimulationMemoryConflictV1, SimulationObservationFailureV1,
     SimulationOrderedMemoryConflictV1, SimulationOutOfBoundsV2, SimulationRaceAssessmentV1,
     WorkgroupBarrierMismatchV1, WorkgroupParticipantV1,
+    SimulationExecutionV18, simulate_canonical_storage_debugged_with_sink_v18,
+    simulate_canonical_storage_v18, simulate_canonical_storage_with_sinks_v18,
+    SimulationStorageExecutionV29, simulate_canonical_storage_inputs_v29,
+    simulate_canonical_storage_inputs_debugged_with_sink_v29,
+    simulate_canonical_storage_inputs_with_sinks_v29,
 };
 pub use explore::{
     MAX_EXPLORATION_RETAINED_DECISIONS_V1, MAX_EXPLORATION_SCHEDULES_V1,

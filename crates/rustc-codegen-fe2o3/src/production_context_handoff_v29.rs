@@ -64,7 +64,7 @@ pub(crate) fn check_context_handoff_v29(
     .map_err(ProductionPipelineError::ContextHandoff)
 }
 
-fn execution_source_v29<'receipt>(
+pub(super) fn execution_source_v29<'receipt>(
     entries: &'receipt RetainedContextEntriesV29,
     ssa: &ProductionSemanticSsaOwnerV1,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
@@ -279,3 +279,6 @@ impl<'tcx> super::ProductionCompilation<'tcx, super::CollectedRustStage<'tcx>> {
             .map(|_| ())
     }
 }
+
+#[path = "production_pipeline_tile_scalar_source_v29.rs"]
+pub(crate) mod tile_scalar_source_v29;

@@ -22,6 +22,13 @@ const REPORT_BYTES: usize = 2 * 1024 * 1024;
 
 #[path = "production_pending_context_source_v29_tests.rs"]
 mod pending_source_tests;
+#[path = "production_pipeline_source_owned_v18_tests.rs"]
+mod source_owned_v18_tests;
+#[path = "production_pipeline_optimized_source_hostile_v18_tests.rs"]
+mod optimized_source_v18_tests;
+
+#[path = "production_pipeline_optimized_policies_v18_tests.rs"]
+mod optimized_policies_v18_tests;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct SourceObservation {
@@ -651,6 +658,44 @@ fn check_actual_sources(cases: &[(&str, &str)], expected_derives: usize, profile
     );
 }
 
+fn collect_actual_source_validation_v29(
+    failures: &mut Vec<String>,
+    case: &str,
+    validate: impl FnOnce(),
+) {
+    // A failed oracle still fails the parent, but does not hide later cases.
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(validate)) {
+        let detail = payload.downcast_ref::<String>().map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("non-string validation panic");
+        failures.push(format!("{case}: validation failed: {detail}"));
+    }
+}
+
+#[test]
+fn actual_source_matrix_keeps_validation_failures_and_visits_remaining_cases() {
+    let mut failures = Vec::new();
+    let mut visited = Vec::new();
+    for case in 0..5 {
+        collect_actual_source_validation_v29(&mut failures, &format!("case-{case}"), || {
+            visited.push(case);
+            match case {
+                1 => std::panic::panic_any("borrowed validation error"),
+                2 => std::panic::panic_any(String::from("owned validation error")),
+                3 => std::panic::panic_any(17u32),
+                _ => {},
+            }
+        });
+    }
+    assert_eq!(visited, [0, 1, 2, 3, 4]);
+    assert_eq!(failures, [
+        "case-1: validation failed: borrowed validation error",
+        "case-2: validation failed: owned validation error",
+        "case-3: validation failed: non-string validation panic",
+    ]);
+    assert!(std::panic::catch_unwind(|| assert!(failures.is_empty())).is_err());
+}
+
 fn run_actual_sources<T: Serialize + serde::de::DeserializeOwned + std::fmt::Debug>(
     cases: &[(&str, &str)],
     profiles: &[(u8, u8)],
@@ -837,10 +882,22 @@ fn run_actual_sources<T: Serialize + serde::de::DeserializeOwned + std::fmt::Deb
                     serde_json::to_string(&observation).unwrap(),
                     String::from_utf8_lossy(&child.stdout)
                 );
-                validate(opt, mir, label, observation, &mut observations);
+                collect_actual_source_validation_v29(
+                    &mut failures,
+                    &format!("{target}/opt{opt}/mir{mir}/{label}"),
+                    || validate(opt, mir, label, observation, &mut observations),
+                );
             }
         }
         std::fs::remove_dir_all(&dependency_target).unwrap();
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[path = "production_tile_scalar_source_v29_tests.rs"]
+mod tile_scalar_source_tests;
+
+#[path = "production_sdk_allocation_capture_source_v29_tests.rs"]
+mod sdk_allocation_capture_source_tests;
+#[path = "production_source_reference_cell_source_v29_tests.rs"]
+mod source_reference_cell_source_tests;

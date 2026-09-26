@@ -131,6 +131,8 @@ pub(crate) enum ErrorKind {
     ExecutionAllocationLimit,
     ExecutionAllocationBytesLimit,
     ExecutionTotalBytesLimit,
+    ExecutionStorageResidentLimit,
+    ExecutionStorageViolation,
     ExecutionAllocationFailure,
     ExecutionMissingFunction,
     ExecutionMissingBody,

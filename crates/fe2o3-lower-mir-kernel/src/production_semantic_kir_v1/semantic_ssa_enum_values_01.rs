@@ -287,11 +287,21 @@ fn analyze_promoted_enum_variants_v1(
     for (local, value) in &control_flow_ssa.entry_definitions {
         budget.charge_work(1)?;
         if control_flow_ssa.ssa_value_locals.contains(local) {
+            let entry_live_in = control_flow_ssa.live_in(function.entry().index());
+            budget.charge_work(entry_live_in.len())?;
+            let header_value = if entry_live_in.contains(local) {
+                SsaValueV1::BlockArgument {
+                    block: SsaBlockIdV1::new(function.entry().index()),
+                    variable: fe2o3_mir_model::SsaVariableIdV1::new(*local),
+                }
+            } else {
+                *value
+            };
             record_block_entry_value_v1(
                 &mut entry_values_by_block,
                 function.entry().index(),
                 *local,
-                *value,
+                header_value,
                 &mut budget,
             )?;
         }
@@ -657,9 +667,7 @@ struct SemanticEnumPayloadComponentStorageV1 {
 struct SemanticRetainedLocalSlotV1 {
     pointer: ValueId,
     semantic_type: SemanticTypeIdV1,
-    kernel_type: Type,
-    alignment: u32,
-    array: Option<SemanticRetainedArrayLayoutV1>,
+    storage: SemanticRetainedStorageV29,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -718,6 +726,8 @@ enum SemanticValueBindingV1 {
     )]
     ExecutionReferent(SemanticExecutionBorrowBindingV29),
     MovedExecution,
+    SourceReference(SemanticSourceReferenceBindingV29),
+    SourceInactive(SemanticSourceInactiveBindingV29),
     Aggregate(Vec<SemanticValueBindingV1>),
     Enum {
         discriminant: ValueId,
@@ -847,6 +857,8 @@ fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
         SemanticValueBindingV1::ExecutionBorrow(_) => "nominal execution borrow",
         SemanticValueBindingV1::ExecutionReferent(_) => "borrowed execution referent",
         SemanticValueBindingV1::MovedExecution => "moved execution value",
+        SemanticValueBindingV1::SourceReference(_) => "checked source reference",
+        SemanticValueBindingV1::SourceInactive(_) => "inactive source transport",
         SemanticValueBindingV1::Aggregate(_) => "aggregate",
         SemanticValueBindingV1::Enum {
             variant: Some(_), ..
@@ -895,6 +907,8 @@ fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBin
         | SemanticValueBindingV1::ExecutionBorrow(_)
         | SemanticValueBindingV1::ExecutionReferent(_)
         | SemanticValueBindingV1::MovedExecution
+        | SemanticValueBindingV1::SourceReference(_)
+        | SemanticValueBindingV1::SourceInactive(_)
         | SemanticValueBindingV1::Unmaterialized
         | SemanticValueBindingV1::Enum { .. }
         | SemanticValueBindingV1::OptionPointer { .. }
@@ -922,6 +936,10 @@ impl SemanticValueBindingV1 {
                 Err("unmaterialized enum payload has no ordinary SSA representation")
             }
             Self::MovedExecution => Err("moved execution value cannot be observed"),
+            Self::SourceInactive(_) => Err("inactive source transport cannot be observed"),
+            Self::SourceReference(_) => {
+                Err("source reference requires its checked owner and projection")
+            }
             Self::Execution(_) | Self::ExecutionBorrow(_) | Self::ExecutionReferent(_) => {
                 Err("execution binding has no ordinary scalar representation")
             }
@@ -955,21 +973,32 @@ impl SemanticValueBindingV1 {
     }
 
     fn append_values(&self, values: &mut Vec<(ValueId, Type)>) -> Result<(), &'static str> {
+        self.visit_values_v1(&mut LegacyTransportCollectorV1(values))
+    }
+
+    fn visit_values_v1<V: SemanticTransportVisitorV1>(
+        &self,
+        visitor: &mut V,
+    ) -> Result<(), V::Error> {
+        use BorrowedTransportTypeV1::{Existing, Pointer};
+        visitor.node()?;
         match self {
             Self::Value {
                 ty: Type::Execution(_),
                 ..
             } => {
-                return Err("execution role requires a nominal producer binding");
+                return Err(V::invalid(
+                    "execution role requires a nominal producer binding",
+                ));
             }
-            Self::Value { id, ty } => values.push((*id, ty.clone())),
-            Self::IndexWitness { id, .. } => values.push((*id, Type::INDEX)),
+            Self::Value { id, ty } => visitor.component(*id, Existing(ty))?,
+            Self::IndexWitness { id, .. } => visitor.component(*id, Existing(&Type::INDEX))?,
             Self::WaveLane { value, .. } => {
-                values.push((*value, Type::Scalar(ScalarType::U32)));
+                visitor.component(*value, Existing(&Type::Scalar(ScalarType::U32)))?;
             }
             Self::Aggregate(fields) => {
                 for field in fields {
-                    field.append_values(values)?;
+                    field.visit_values_v1(visitor)?;
                 }
             }
             Self::MatrixFragment {
@@ -978,10 +1007,19 @@ impl SemanticValueBindingV1 {
             | Self::AccumulatorFragment {
                 values: components, ..
             } => {
-                values.extend(components.iter().cloned());
+                for (value, ty) in components {
+                    visitor.component(*value, Existing(ty))?;
+                }
             }
             Self::Gfx950LdsTransposeTile { storage, .. } => {
-                values.push((*storage, gfx950_lds_transpose_pointer_type_v1()));
+                visitor.component(
+                    *storage,
+                    Pointer {
+                        pointee: &Type::Scalar(ScalarType::U8),
+                        address_space: AddressSpace::Workgroup,
+                        access: AccessMode::ReadWrite,
+                    },
+                )?;
             }
             Self::Enum {
                 discriminant,
@@ -989,24 +1027,39 @@ impl SemanticValueBindingV1 {
                 payloads,
                 ..
             } => {
-                if payloads
-                    .values()
-                    .flatten()
-                    .any(semantic_binding_contains_execution_v29)
-                {
-                    return Err("execution bindings cannot be flattened through enum payloads");
+                for fields in payloads.values() {
+                    visitor.node()?;
+                    for field in fields {
+                        if semantic_transport_contains_execution_v1(field, visitor)? {
+                            return Err(V::invalid(
+                                "execution bindings cannot be flattened through enum payloads",
+                            ));
+                        }
+                    }
                 }
-                values.push((*discriminant, discriminant_ty.clone()));
+                visitor.component(*discriminant, Existing(discriminant_ty))?;
             }
             Self::Unit => {}
             Self::Unmaterialized => {
-                return Err("unmaterialized enum payload has no ordinary SSA representation");
+                return Err(V::invalid(
+                    "unmaterialized enum payload has no ordinary SSA representation",
+                ));
             }
             Self::MovedExecution => {
-                return Err("moved execution value cannot be observed");
+                return Err(V::invalid("moved execution value cannot be observed"));
+            }
+            Self::SourceInactive(_) => {
+                return Err(V::invalid("inactive source transport cannot be observed"));
+            }
+            Self::SourceReference(_) => {
+                return Err(V::invalid(
+                    "source reference requires checked call or CFG transport",
+                ));
             }
             Self::Execution(_) | Self::ExecutionBorrow(_) | Self::ExecutionReferent(_) => {
-                return Err("execution binding has no ordinary SSA representation");
+                return Err(V::invalid(
+                    "execution binding has no ordinary SSA representation",
+                ));
             }
             Self::MathContext
             | Self::CollectiveContext
@@ -1020,10 +1073,41 @@ impl SemanticValueBindingV1 {
             | Self::OptionComponentWitness { .. }
             | Self::GridLeader { .. }
             | Self::OptionGridLeader { .. } => {
-                return Err("capability value has no ordinary SSA representation");
+                return Err(V::invalid(
+                    "capability value has no ordinary SSA representation",
+                ));
             }
         }
         Ok(())
+    }
+}
+
+fn semantic_transport_contains_execution_v1<V: SemanticTransportVisitorV1>(
+    binding: &SemanticValueBindingV1,
+    visitor: &mut V,
+) -> Result<bool, V::Error> {
+    visitor.node()?;
+    match binding {
+        SemanticValueBindingV1::Aggregate(fields) => {
+            for field in fields {
+                if semantic_transport_contains_execution_v1(field, visitor)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        SemanticValueBindingV1::Enum { payloads, .. } => {
+            for fields in payloads.values() {
+                visitor.node()?;
+                for field in fields {
+                    if semantic_transport_contains_execution_v1(field, visitor)? {
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(false)
+        }
+        _ => Ok(semantic_binding_contains_execution_v29(binding)),
     }
 }
 

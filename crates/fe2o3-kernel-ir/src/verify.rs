@@ -260,7 +260,7 @@ pub(crate) fn valid_scalar_cast(kind: CastKind, from: ScalarType, to: ScalarType
     };
 
     match kind {
-        CastKind::RestrictPointerAccess => false,
+        CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric => false,
         CastKind::Truncate => from.is_integer() && to.is_integer() && from_width > to_width,
         CastKind::ZeroExtend => {
             (from == ScalarType::Bool || (from.is_integer() && !from.is_signed_integer()))

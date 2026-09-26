@@ -1,8 +1,16 @@
-fn build(
+pub(in super::super) fn build(
     types: Vec<SemanticTypeDeclV1>,
     functions: Vec<SemanticFunctionDeclV1>,
     callables: Vec<SemanticCallableDeclV1>,
 ) -> ProductionSemanticSsaOwnerV1 {
+    try_build(types, functions, callables).unwrap()
+}
+
+fn try_build(
+    types: Vec<SemanticTypeDeclV1>,
+    functions: Vec<SemanticFunctionDeclV1>,
+    callables: Vec<SemanticCallableDeclV1>,
+) -> Result<ProductionSemanticSsaOwnerV1, ProductionSemanticSsaErrorV1> {
     let admitted = InertSemanticMirRequestV1::new_with_callables(
         SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),
         types,
@@ -21,7 +29,6 @@ fn build(
             .unwrap(),
         ProductionSemanticSsaLimitsV1::default(),
     )
-    .unwrap()
 }
 
 pub(in super::super) fn root_assertion_slot_owner() -> ProductionSemanticSsaOwnerV1 {
@@ -335,6 +342,12 @@ pub(in super::super) fn assertion_slots_owner(
 pub(in super::super) fn initialization_owner(
     config: InitializationFixtureV29,
 ) -> ProductionSemanticSsaOwnerV1 {
+    try_initialization_owner(config).unwrap()
+}
+
+pub(in super::super) fn try_initialization_owner(
+    config: InitializationFixtureV29,
+) -> Result<ProductionSemanticSsaOwnerV1, ProductionSemanticSsaErrorV1> {
     let original = repeated_slot_owner();
     let semantic = original.source_semantic();
     let mut types = semantic.types().to_vec();
@@ -472,7 +485,7 @@ pub(in super::super) fn initialization_owner(
         block(143, exit, SemanticTerminatorKindV1::Return),
     ];
     functions[3] = function(130, helper.role(), helper.abi().clone(), locals, blocks);
-    build(types, functions, semantic.callables().to_vec())
+    try_build(types, functions, semantic.callables().to_vec())
 }
 
 pub(in super::super) fn initialization_array_owner(whole: bool) -> ProductionSemanticSsaOwnerV1 {
@@ -677,6 +690,48 @@ pub(in super::super) fn repeated_owner() -> ProductionSemanticSsaOwnerV1 {
     build(semantic.types().to_vec(), functions, callables)
 }
 
+pub(in super::super) fn repeated_reference_owner() -> ProductionSemanticSsaOwnerV1 {
+    let original = repeated_owner();
+    let semantic = original.source_semantic();
+    let mut types = semantic.types().to_vec();
+    let shared = reference(&mut types, U32, SemanticMutabilityV1::Immutable, false);
+    let mut functions = semantic.functions().to_vec();
+    let helper = &functions[3];
+    let mut locals = helper.locals().to_vec();
+    assert_eq!(locals.len(), 2);
+    locals.push(local(135, shared, SemanticLocalRoleV1::Temporary));
+    let dereference = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(2),
+        vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32).unwrap()],
+        U32,
+    )
+    .unwrap();
+    functions[3] = function(
+        130,
+        helper.role(),
+        helper.abi().clone(),
+        locals,
+        vec![block(
+            134,
+            vec![
+                assign(
+                    place(2, shared),
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Shared,
+                        place: place(1, U32),
+                    },
+                ),
+                assign(
+                    place(0, U32),
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(dereference)),
+                ),
+            ],
+            SemanticTerminatorKindV1::Return,
+        )],
+    );
+    build(types, functions, semantic.callables().to_vec())
+}
+
 pub(in super::super) fn array_owner(branches: bool) -> ProductionSemanticSsaOwnerV1 {
     let original = lifecycle_owner(branches);
     let semantic = original.source_semantic();
@@ -791,3 +846,7 @@ pub(in super::super) fn repeated_slot_owner() -> ProductionSemanticSsaOwnerV1 {
         semantic.callables().to_vec(),
     )
 }
+include!("production_scoped_tile_source_fixtures_v29_tests.rs");
+
+#[path = "production_tile_global_reads_v29_tests.rs"]
+mod tile_global_reads;

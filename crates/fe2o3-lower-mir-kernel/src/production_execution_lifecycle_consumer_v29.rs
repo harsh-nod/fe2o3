@@ -16,7 +16,7 @@ trait ExecutionLifecycleConsumerV29 {
 
     fn produce(
         &mut self,
-        lowering: &mut SemanticFunctionLoweringV1<'_>,
+        lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
         block: SemanticBlockIdV1,
         call: &SemanticDirectCallV1,
         operation: SemanticExecutionOperationV29,
@@ -25,18 +25,18 @@ trait ExecutionLifecycleConsumerV29 {
 
     fn normal_return(
         &mut self,
-        lowering: &mut SemanticFunctionLoweringV1<'_>,
+        lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
         block: SemanticBlockIdV1,
         operations: &[Operation],
     ) -> Result<(), ProductionSemanticKirErrorV1>;
 
     fn finish(
         &mut self,
-        lowering: &mut SemanticFunctionLoweringV1<'_>,
+        lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
     ) -> Result<PendingLifecycleEventsV29, ProductionSemanticKirErrorV1>;
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn take_execution_lifecycle_events_v29(
         &mut self,
     ) -> Result<Option<PendingLifecycleEventsV29>, ProductionSemanticKirErrorV1> {

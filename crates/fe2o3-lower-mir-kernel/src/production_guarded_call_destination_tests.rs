@@ -5,7 +5,7 @@ use super::*;
 fn with_guarded_result_context<R>(
     projected: bool,
     run: impl FnOnce(
-        &mut SemanticFunctionLoweringV1<'_>,
+        &mut SemanticFunctionLoweringV1<'_, '_>,
         &SemanticDirectCallV1,
     ) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
@@ -21,7 +21,7 @@ fn with_guarded_result_context<R>(
 }
 
 fn install_result_slot(
-    lowering: &mut SemanticFunctionLoweringV1<'_>,
+    lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
     projected: bool,
     operations: &mut Vec<Operation>,
 ) -> Result<ValueId, ProductionSemanticKirErrorV1> {
@@ -71,13 +71,11 @@ fn install_result_slot(
         lowering
             .retained_local_slots
             .insert(
-                3,
+                ScopedAllocationIdentityV29::LegacyLocal(3),
                 SemanticRetainedLocalSlotV1 {
                     pointer,
                     semantic_type,
-                    kernel_type,
-                    alignment,
-                    array: None,
+                    storage: SemanticRetainedStorageV29::ScalarArray { kernel_type, alignment, array: None },
                 }
             )
             .is_none()
@@ -220,6 +218,60 @@ fn assert_saved_projected_address(operations: &[Operation]) {
 }
 
 #[test]
+fn call_destination_preparation_keeps_attached_scan_budget_and_restores_ledger() {
+    for projected in [false, true] {
+        with_guarded_result_context(projected, |fixture, call| {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(0);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 37);
+            budget.reserve_storage(37).unwrap();
+            let mut lowering = SemanticFunctionLoweringV1::new(
+                fixture.types,
+                fixture.callables,
+                fixture.function,
+                SemanticParameterBindingsV1 {
+                    declarations: &[],
+                    values: &[],
+                    types: &[],
+                    local_bindings: None,
+                },
+                None,
+                None,
+                BTreeSet::new(),
+                1,
+                false,
+                32,
+            )?;
+            assert!(lowering.execution.is_none());
+            assert!(lowering.scoped_memory.is_none());
+            lowering.emission_work = Some(&mut budget);
+            let next_value = lowering.next_value;
+            let mut operations = Vec::new();
+            let result = lowering.prepare_call_destination_v1(
+                SemanticBlockIdV1::from_index(0),
+                call.destination().unwrap().place(),
+                &mut operations,
+            );
+            if projected {
+                assert!(matches!(result,
+                    Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Work(_)
+                    ))));
+            } else {
+                assert!(matches!(result, Ok(PreparedSemanticCallDestinationV1::Unprojected)));
+            }
+            assert!(lowering.emission_work.is_some());
+            assert!(operations.is_empty());
+            assert_eq!(lowering.emitted_operations, 0);
+            assert_eq!(lowering.next_value, next_value);
+            drop(lowering);
+            assert_eq!(budget.storage(), 37);
+            assert_eq!(budget.work(), 0);
+            Ok(())
+        }).unwrap();
+    }
+}
+
+#[test]
 fn guarded_result_store_reuses_the_exact_load_and_branch_predicate() {
     for projected in [false, true] {
         with_guarded_result_context(projected, |lowering, call| {
@@ -276,11 +328,12 @@ fn guarded_result_retains_the_existing_slot_type_rejection() {
     with_guarded_result_context(false, |lowering, call| {
         let mut operations = Vec::new();
         install_result_slot(lowering, false, &mut operations)?;
-        lowering
+        let slot = lowering
             .retained_local_slots
-            .get_mut(&3)
-            .unwrap()
-            .kernel_type = Type::Scalar(ScalarType::U64);
+            .get_mut(&ScopedAllocationIdentityV29::LegacyLocal(3))
+            .unwrap();
+        let SemanticRetainedStorageV29::ScalarArray { kernel_type, .. } = &mut slot.storage else { panic!("scalar fixture"); };
+        *kernel_type = Type::Scalar(ScalarType::U64);
         assert!(matches!(
             lowering.lower_call(SemanticBlockIdV1::from_index(0), call, &mut operations),
             Err(ProductionSemanticKirErrorV1::Unsupported {

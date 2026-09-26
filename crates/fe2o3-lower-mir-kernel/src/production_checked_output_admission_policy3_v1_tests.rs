@@ -48,7 +48,7 @@ fn scalar_source(extra_block: bool, borrowed: bool) -> ProductionPreRankedKirOwn
     );
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
-    ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+    materialize_with_fixture_kernel_abi_v18(
         ssa,
         launch,
         ProductionSemanticKirLimitsV1::default(),

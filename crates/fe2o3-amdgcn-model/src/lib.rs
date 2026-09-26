@@ -34,6 +34,8 @@ pub use descriptor_physical_abi_v3::{
 pub use device_math::*;
 pub use gfx950::*;
 pub use lowering::*;
+// V18's target component remains crate-private until source, target binding,
+// descriptor and replay custody are composed; it grants no production authority.
 pub use native_v12_text_descriptor_replay_v1::*;
 pub use native_v12_text_descriptor_replay_v3::{
     NativeV12TextDescriptorReplayErrorV3, NativeV12TextDescriptorReplayStorageV3,

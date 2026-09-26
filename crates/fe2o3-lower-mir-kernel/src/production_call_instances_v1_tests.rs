@@ -15,6 +15,9 @@ mod availability_tests {
     include!("production_execution_availability_v29_tests.rs");
 }
 
+#[path = "production_call_control_v1_tests.rs"]
+mod call_control_tests;
+
 #[derive(Clone, Copy)]
 enum Case {
     Ordinary,
@@ -158,6 +161,14 @@ fn function(
 }
 
 fn fixture(case: Case, capture: bool) -> ProductionSemanticSsaOwnerV1 {
+    fixture_with(case, capture, |_| {})
+}
+
+fn fixture_with(
+    case: Case,
+    capture: bool,
+    edit: impl FnOnce(&mut Vec<SemanticFunctionDeclV1>),
+) -> ProductionSemanticSsaOwnerV1 {
     let unit = SemanticTypeDeclV1::new(
         SemanticTypeIdentityV1::from_sha256([4; 32]),
         SemanticLayoutIdentityV1::from_sha256([4; 32]),
@@ -397,6 +408,7 @@ fn fixture(case: Case, capture: bool) -> ProductionSemanticSsaOwnerV1 {
             vec![block(100, vec![], SemanticTerminatorKindV1::Return)],
         ));
     }
+    edit(&mut functions);
     let callables = (0..functions.len())
         .map(|index| {
             SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(index as u32))
@@ -661,5 +673,68 @@ fn exact_resource_limits_and_consumer_storage_preserve_the_owner_floor() {
         );
         assert_eq!(budget.storage(), FLOOR + 7);
         budget.release_storage(7).unwrap();
+    }
+}
+
+#[test]
+fn call_instance_cleanup_preserves_selected_errors_panics_and_original_custody() {
+    let owner = fixture(Case::Ordinary, true);
+    for fault in 0..3 {
+        for exit in 0..3 {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+            let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+            let mut budget = Budget::new(&mut work, usize::MAX);
+            let mut foreign = Budget::new(&mut foreign_work, usize::MAX);
+            budget.reserve_storage(FLOOR).unwrap();
+            let mut before_cleanup = None;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_production_call_instances_v1(&owner, ROOT, &mut budget, |plan, budget| {
+                    assert!(!plan.instances().is_empty());
+                    let original = budget.storage();
+                    assert!(original > FLOOR + 1);
+                    match fault {
+                        0 => budget.reserve_storage(7).unwrap(),
+                        1 => budget.release_storage(1).unwrap(),
+                        _ => {
+                            foreign.reserve_storage(original + 17).unwrap();
+                            foreign.charge_work(3).unwrap();
+                            std::mem::swap(budget, &mut foreign);
+                        }
+                    }
+                    before_cleanup = Some((budget.storage(), budget.work(), original));
+                    match exit {
+                        0 => Ok::<_, Error>(()),
+                        1 => Err(Error::InvalidParameter),
+                        _ => std::panic::resume_unwind(Box::new(0x1135_u64)),
+                    }
+                })
+            }));
+            let (held, charged, original) = before_cleanup.expect("actual consumer ran");
+            match outcome {
+                Ok(result) => assert_eq!(
+                    result,
+                    if exit == 1 {
+                        Err(Error::InvalidParameter)
+                    } else if fault == 0 {
+                        Ok(())
+                    } else {
+                        Err(Error::Resource(ResourceError::Accounting))
+                    },
+                    "fault={fault}, exit={exit}",
+                ),
+                Err(payload) => {
+                    assert_eq!(exit, 2);
+                    assert_eq!(payload.downcast_ref::<u64>(), Some(&0x1135));
+                }
+            }
+            assert_eq!(budget.work(), charged, "cleanup performs no traversal");
+            assert_eq!(budget.storage(), if fault == 0 { FLOOR + 7 } else { held });
+            if fault == 2 {
+                assert_eq!(foreign.storage(), original, "original ledger is untouched");
+                std::mem::swap(&mut budget, &mut foreign);
+                foreign.release_storage(foreign.storage()).unwrap();
+            }
+            budget.release_storage(budget.storage()).unwrap();
+        }
     }
 }

@@ -4,6 +4,7 @@
 enum SemanticAnchorInputV1<'a> {
     Historical(ProductionSemanticAnchorKirIdentityV1),
     Native(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12),
+    Storage(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18),
 }
 
 impl ProductionSemanticAnchorKirIdentityV1 {
@@ -24,6 +25,20 @@ impl SemanticAnchorInputV1<'_> {
         module: &Module,
     ) -> Result<ProductionSemanticAnchorKirIdentityV1, LoweringErrors> {
         match self {
+            Self::Storage(owner) => {
+                if !std::ptr::eq(module, owner.module()) {
+                    return Err(LoweringErrors::one(
+                        LoweringLocation::module(module),
+                        LoweringDiagnosticCode::SemanticAnchorIdentityMismatch,
+                        "storage anchors require the actual borrowed V18 owner",
+                    ));
+                }
+                Ok(ProductionSemanticAnchorKirIdentityV1 {
+                    version: 18,
+                    sha256: *owner.identity().digest(),
+                    byte_len: owner.identity().canonical_length(),
+                })
+            }
             Self::Historical(identity) => {
                 validate_semantic_anchor_identity_v1(module, identity)?;
                 Ok(identity)

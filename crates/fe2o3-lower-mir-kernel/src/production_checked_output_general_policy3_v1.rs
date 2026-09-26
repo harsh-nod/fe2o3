@@ -2,6 +2,7 @@ use super::*;
 use fe2o3_kernel_analysis::CanonicalKirInventoryV1;
 use fe2o3_kernel_ir::{CanonicalKirOperationCoordinateV1, CanonicalKirOperationOriginV1};
 
+pub(in crate::production_semantic_kir_v1) use private_memory::canonical_private_reader::with_canonical_private_source_reader_v1;
 #[path = "production_checked_output_general_census_policy3_v1.rs"]
 mod census;
 #[path = "production_checked_output_constant_shifts_v1.rs"]

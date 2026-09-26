@@ -75,7 +75,7 @@ fn slice_owner(
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> ProductionPreRankedKirOwnerV1 {
     let (ssa, launch) = slice_source(changed_index, elided);
-    ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+    materialize_with_fixture_kernel_abi_v18(
         ssa,
         launch,
         ProductionSemanticKirLimitsV1::default(),
@@ -273,7 +273,7 @@ fn control_owner(
         |_| "slice_control_root".into(),
         &[U32],
     );
-    ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+    materialize_with_fixture_kernel_abi_v18(
         ssa,
         launch,
         ProductionSemanticKirLimitsV1::default(),
@@ -384,7 +384,7 @@ fn two_slice_owner(
         &[U32],
         2,
     );
-    ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+    materialize_with_fixture_kernel_abi_v18(
         ssa,
         launch,
         ProductionSemanticKirLimitsV1::default(),

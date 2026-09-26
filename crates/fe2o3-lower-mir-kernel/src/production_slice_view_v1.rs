@@ -12,6 +12,8 @@ use fe2o3_kernel_ir::{
 
 type SliceResult<T> = Result<T, ProductionSemanticKirErrorV1>;
 
+include!("production_optimized_source_slice_v18.rs");
+
 /// Inert source access and controlling assertion locators, not an admitted view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionSliceAccessSiteV1 {
@@ -165,7 +167,7 @@ impl ProductionPreRankedKirOwnerV1 {
             budget,
             |origins, budget| {
                 SliceQuery {
-                    owner: self,
+                    owner: SliceOwnerV18::Legacy(self),
                     inventory,
                     function,
                     site,
@@ -179,51 +181,206 @@ impl ProductionPreRankedKirOwnerV1 {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         };
         self.with_checked_arguments_v1(site.root, site.function, budget, |arguments| {
-            let mut matches = 0_usize;
-            arguments.visit_nodes(|node| {
-                if matches!(node.coverage(), ProductionArgumentCoverageV1::Parameter(value)
-                    if value.slot() == argument as usize)
-                {
-                    matches += 1;
-                }
-                Ok(())
-            })?;
-            if matches != 1 {
-                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-            }
-            let mut use_view = Some(use_view);
-            let mut result = None;
-            arguments.visit_nodes(|source| {
-                if matches!(source.coverage(), ProductionArgumentCoverageV1::Parameter(value)
-                    if value.slot() == argument as usize)
-                {
-                    let visit = use_view
-                        .take()
-                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-                    result = Some(visit(&ProductionSliceAccessViewV1 {
-                        facts: &facts,
-                        source,
-                    })?);
-                }
-                Ok(())
-            })?;
-            result.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+            with_slice_argument_v18(arguments.data, arguments.budget, &facts, argument, use_view)
         })
     }
 }
 
-struct SliceQuery<'a, 's> {
-    owner: &'a ProductionPreRankedKirOwnerV1,
-    inventory: &'a CanonicalKirInventoryV1<'a>,
+fn with_slice_argument_v18<R>(
+    arguments: ArgumentViewDataV1<'_>,
+    budget: &mut SliceBudget<'_>,
+    facts: &SliceFacts<'_>,
+    argument: u32,
+    use_view: impl for<'s> FnOnce(&ProductionSliceAccessViewV1<'s>) -> SliceResult<R>,
+) -> SliceResult<R> {
+    let mut matches = 0_usize;
+    arguments.visit_nodes_scoped(budget, |node, _| {
+        if matches!(node.coverage(), ProductionArgumentCoverageV1::Parameter(value)
+            if value.slot() == argument as usize)
+        {
+            matches += 1;
+        }
+        Ok(())
+    })?;
+    if matches != 1 {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
+    let mut use_view = Some(use_view);
+    let mut result = None;
+    arguments.visit_nodes_scoped(budget, |source, _| {
+        if matches!(source.coverage(), ProductionArgumentCoverageV1::Parameter(value)
+            if value.slot() == argument as usize)
+        {
+            let visit = use_view
+                .take()
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            result = Some(visit(&ProductionSliceAccessViewV1 { facts, source })?);
+        }
+        Ok(())
+    })?;
+    result.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+}
+
+impl ProductionSourceCorrespondenceV18<'_> {
+    /// Joins a selected-body read to the original root ABI and actual carrier.
+    /// The local hint belongs to the selected body, never a reused root local.
+    /// Bounds, value transport and assertion-success correspondence are checked;
+    /// this grants no allocation, borrow, initialization or execution authority.
+    pub fn with_checked_slice_access_v18<R>(
+        &self,
+        root: usize,
+        instance: usize,
+        site: ProductionSliceAccessSiteV1,
+        budget: &mut SliceBudget<'_>,
+        use_view: impl for<'s> FnOnce(
+            &ProductionSliceAccessViewV1<'s>,
+            Option<SemanticLocalIdV1>,
+        ) -> SliceResult<R>,
+    ) -> SourceOwnedResultV18<R> {
+        self.retain_query((|| {
+            self.query(budget)?;
+            let semantic = self.source.source_semantic(budget)?;
+            let (original_root, function_ordinal) = self.source.root(root, budget)?;
+            let (source_function, incoming) = self.source.instance(root, instance, budget)?;
+            let selection = semantic
+                .select_kernel_body_for_root_v1(original_root)
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "selected slice source body",
+                ))?;
+            budget.charge_work(4)?;
+            let source_root = semantic
+                .functions()
+                .get(original_root.index() as usize)
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "original slice root declaration",
+                ))?;
+            let selected = semantic
+                .functions()
+                .get(source_function.index() as usize)
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "selected slice declaration",
+                ))?;
+            if site.root != original_root
+                || site.function != source_function
+                || selection.body() != source_function
+                || (selection.body() == original_root && (instance != 0 || incoming.is_some()))
+                || (selection.body() != original_root && incoming != Some((0, source_root.entry())))
+            {
+                return self
+                    .source
+                    .missing("slice source/root/forwarding association");
+            }
+            let function = self.inventory.functions().get(function_ordinal).ok_or(
+                ProductionSourceOwnedViewErrorV18::Binding("slice physical root function"),
+            )?;
+            let facts = super::value_origin_v1::with_whole_value_origins_v18(
+                self,
+                function.coordinate,
+                budget,
+                |origins, budget| {
+                    SliceQuery {
+                        owner: SliceOwnerV18::Source {
+                            relation: self,
+                            root,
+                            instance,
+                        },
+                        inventory: self.inventory,
+                        function,
+                        site,
+                        origins,
+                    }
+                    .facts(budget)
+                    .map_err(source_argument_error_v18)
+                },
+            )?;
+            let SliceDefinition::FunctionArgument {
+                function: input_function,
+                argument,
+            } = facts.input
+            else {
+                return self
+                    .source
+                    .missing("slice has no whole original input carrier");
+            };
+            if input_function != function.coordinate {
+                return self
+                    .source
+                    .missing("slice input belongs to another physical root");
+            }
+            budget.charge_work(selected.locals().len())?;
+            self.with_root_argument_data_v18(root, budget, |arguments, budget| {
+                with_slice_argument_v18(arguments, budget, &facts, argument, |view| {
+                    let mut direct_local = None;
+                    if view.source().source_path().is_empty() {
+                        for (ordinal, local) in selected.locals().iter().enumerate() {
+                            if local.role()
+                                == SemanticLocalRoleV1::Argument(view.source().source_argument())
+                            {
+                                if local.ty() != view.source().source().ty()
+                                    || direct_local.is_some()
+                                {
+                                    return Err(
+                                        ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                                    );
+                                }
+                                direct_local = Some(SemanticLocalIdV1::from_index(
+                                    u32::try_from(ordinal)
+                                        .map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                                ));
+                            }
+                        }
+                    }
+                    use_view(view, direct_local)
+                })
+            })
+        })())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SliceOwnerV18<'a> {
+    Legacy(&'a ProductionPreRankedKirOwnerV1),
+    Source {
+        relation: &'a ProductionSourceCorrespondenceV18<'a>,
+        root: usize,
+        instance: usize,
+    },
+    Optimized {
+        relation: &'a ProductionSourceCorrespondenceV18<'a>,
+        optimized: &'a ProductionOptimizedSourceCorrespondenceV18<'a>,
+        root: usize,
+        instance: usize,
+        retained_allocations: &'a [SliceOperation],
+    },
+}
+
+struct SliceQuery<'a, 's, O = fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12> {
+    owner: SliceOwnerV18<'a>,
+    inventory: &'a CanonicalKirInventoryV1<'a, O>,
     function: &'a CanonicalKirFunctionRefV1<'a>,
     site: ProductionSliceAccessSiteV1,
-    origins: &'s super::value_origin_v1::WholeValueOriginsV1<'a>,
+    origins: &'s super::value_origin_v1::WholeValueOriginsV1<'a, O>,
 }
 
 fn slice_inventory_error(error: CanonicalKirInventoryErrorV1) -> ProductionSemanticKirErrorV1 {
     match error {
         CanonicalKirInventoryErrorV1::Resource(error) => error.into(),
         CanonicalKirInventoryErrorV1::InconsistentOwner => {
+            ProductionSemanticKirErrorV1::CorrespondenceMismatch
+        }
+    }
+}
+
+fn source_slice_query_error_v18(
+    error: ProductionSourceOwnedViewErrorV18,
+) -> ProductionSemanticKirErrorV1 {
+    match error {
+        ProductionSourceOwnedViewErrorV18::Resource(error) => error.into(),
+        // The original query failure remains in the actual source guard. This
+        // internal adapter carries no construction or replacement-source path.
+        ProductionSourceOwnedViewErrorV18::Binding(_)
+        | ProductionSourceOwnedViewErrorV18::Analysis(_)
+        | ProductionSourceOwnedViewErrorV18::Source(_) => {
             ProductionSemanticKirErrorV1::CorrespondenceMismatch
         }
     }
@@ -259,7 +416,7 @@ fn slice_function<'a>(
     Ok(function)
 }
 
-impl<'a> SliceQuery<'a, '_> {
+impl<'a, O> SliceQuery<'a, '_, O> {
     fn operation(
         &self,
         coordinate: SliceOperation,
@@ -294,6 +451,38 @@ impl<'a> SliceQuery<'a, '_> {
                 self.site
                     .unsupported("slice access has conflicting or ungrounded SSA origins")
             })
+    }
+
+    fn descriptor_origin(
+        &self,
+        mut value: ValueId,
+        budget: &mut SliceBudget<'_>,
+    ) -> SliceResult<SliceDefinition> {
+        let steps = self.function.definitions.len().checked_add(1)
+            .ok_or(ArgumentResourceV1::Arithmetic)?;
+        for _ in 0..steps {
+            budget.charge_work(1)?;
+            let origin = self.origin(value, budget)?;
+            if matches!(self.owner, SliceOwnerV18::Source { .. } | SliceOwnerV18::Optimized { .. })
+                && let SliceDefinition::Result { operation, result: 0 } = origin
+            {
+                let operation = self.operation(operation, budget)?;
+                if let OperationKind::Cast { kind: CastKind::SliceToGeneric, value: input, to } = &operation.operation.kind {
+                    let definition = self.inventory.definition_for_value(self.function.coordinate, *input, budget)
+                        .map_err(slice_inventory_error)?.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                    if !source_descriptor_widening_v29(definition.ty, to)
+                        || operation.operation.results.len() != 1
+                        || operation.operation.results[0].ty != *to
+                    {
+                        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                    }
+                    value = *input;
+                    continue;
+                }
+            }
+            return Ok(origin);
+        }
+        Err(self.site.unsupported("slice descriptor transport is cyclic"))
     }
 
     fn defining_operation(
@@ -336,18 +525,32 @@ impl<'a> SliceQuery<'a, '_> {
                 return Ok(false);
             };
             let actual = self.operation(operation, budget)?;
-            budget.charge_work(self.owner.correspondence.synthetic_operation_spans().len())?;
             let block = &self.inventory.blocks()
                 [self.function.blocks.start + operation.block.block as usize];
             let location =
                 FunctionOperationLocation::new(block.block.id, operation.operation as usize);
-            if retained_local_storage_allocation_v1(
-                actual.operation,
-                location,
-                &self.owner.correspondence,
-                self.site.root,
-                self.site.function,
-            ) {
+            let retained = match self.owner {
+                SliceOwnerV18::Legacy(owner) => {
+                    budget.charge_work(owner.correspondence.synthetic_operation_spans().len())?;
+                    retained_local_storage_allocation_v1(
+                        actual.operation,
+                        location,
+                        &owner.correspondence,
+                        self.site.root,
+                        self.site.function,
+                    )
+                }
+                SliceOwnerV18::Source { relation, root, .. } => relation
+                    .retained_scalar_allocation(root, operation, budget)
+                    .map_err(source_slice_query_error_v18)?,
+                SliceOwnerV18::Optimized { retained_allocations, .. } => {
+                    budget.charge_work(call_splice_search_work_v1(retained_allocations.len()))?;
+                    retained_allocations.binary_search_by_key(
+                        &(operation.block.block, operation.operation),
+                        |row| (row.block.block, row.operation)).is_ok()
+                }
+            };
+            if retained {
                 return Ok(true);
             }
             match &actual.operation.kind {
@@ -365,7 +568,10 @@ impl<'a> SliceQuery<'a, '_> {
     }
 
     fn source_span(&self, budget: &mut SliceBudget<'_>) -> SliceResult<(BlockId, u32, u32)> {
-        let rows = &self.owner.correspondence;
+        let SliceOwnerV18::Legacy(owner) = self.owner else {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        };
+        let rows = &owner.correspondence;
         let mut selected = None;
         match self.site.statement {
             Some(statement) => {
@@ -409,7 +615,50 @@ impl<'a> SliceQuery<'a, '_> {
         selected.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
     }
 
-    fn access(&self, budget: &mut SliceBudget<'_>) -> SliceResult<SliceAccess> {
+    fn visit_site_operations(
+        &self,
+        budget: &mut SliceBudget<'_>,
+        mut visit: impl FnMut(
+            &'a CanonicalKirOperationRefV1<'a>,
+            &mut SliceBudget<'_>,
+        ) -> SliceResult<()>,
+    ) -> SliceResult<()> {
+        if let SliceOwnerV18::Optimized { optimized, root, instance, .. } = self.owner {
+            return optimized.visit_source_operations(root, instance, self.site.block,
+                self.site.statement, budget, |disposition, budget| {
+                    if let ProductionOptimizedSourceSpanV18::Operation(
+                        ProductionOptimizedSourceOperationV18::Retained { output, .. }
+                    ) = disposition {
+                        visit(self.operation(output, budget).map_err(source_emission_error_v18)?, budget)
+                            .map_err(source_emission_error_v18)?;
+                    }
+                    Ok(())
+                }).map_err(source_slice_query_error_v18);
+        }
+        if let SliceOwnerV18::Source {
+            relation,
+            root,
+            instance,
+        } = self.owner
+        {
+            let rows = relation
+                .source_operation_rows(root, instance, self.site.block, self.site.statement, budget)
+                .map_err(source_slice_query_error_v18)?;
+            for row in rows {
+                let mapped = relation
+                    .mapped_source_operation(row.location, budget)
+                    .map_err(source_slice_query_error_v18)?;
+                match mapped {
+                    ProductionSourceOperationV18::Operation(coordinate) => {
+                        visit(self.operation(coordinate, budget)?, budget)?;
+                    }
+                    ProductionSourceOperationV18::Gap { .. }
+                    | ProductionSourceOperationV18::RemovedCall
+                    | ProductionSourceOperationV18::NoOperations => {}
+                }
+            }
+            return Ok(());
+        }
         let (block, first, count) = self.source_span(budget)?;
         let block = self
             .inventory
@@ -426,9 +675,16 @@ impl<'a> SliceQuery<'a, '_> {
             .and_then(|operations| operations.get(first as usize..end as usize))
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         budget.charge_work(operations.len())?;
+        for operation in operations {
+            visit(operation, budget)?;
+        }
+        Ok(())
+    }
+
+    fn access(&self, budget: &mut SliceBudget<'_>) -> SliceResult<SliceAccess> {
         let mut ordinal = 0_u32;
         let mut selected = None;
-        for operation in operations {
+        self.visit_site_operations(budget, |operation, budget| {
             let effects = self
                 .inventory
                 .effects()
@@ -481,7 +737,8 @@ impl<'a> SliceQuery<'a, '_> {
                     .site
                     .unsupported("source slice span has an unmodeled memory effect"));
             }
-        }
+            Ok(())
+        })?;
         selected.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
     }
 
@@ -540,7 +797,9 @@ impl<'a> SliceQuery<'a, '_> {
                 .site
                 .unsupported("checked slice correspondence requires a plain read"));
         };
-        if memory.address_space != AddressSpace::Global || memory.volatile || access.effect != 0 {
+        if !matches!(memory.address_space, AddressSpace::Global | AddressSpace::Generic)
+            || (memory.address_space == AddressSpace::Generic && matches!(self.owner, SliceOwnerV18::Legacy(_)))
+            || memory.volatile || access.effect != 0 {
             return Err(self
                 .site
                 .unsupported("checked slice correspondence requires a nonvolatile global read"));
@@ -564,27 +823,7 @@ impl<'a> SliceQuery<'a, '_> {
                 .site
                 .unsupported("slice read address has no exact slice data carrier"));
         };
-        let assertion = self.owner.assert_origins().assert_condition(
-            self.site.root,
-            self.site.function,
-            self.site.assertion,
-            budget,
-        )?;
-        let SemanticKirAssertConditionOutcomeV1::Emitted {
-            definition,
-            success_edge,
-            ..
-        } = assertion.outcome()
-        else {
-            return Err(self
-                .site
-                .unsupported("slice assertion was elided by an existing rule"));
-        };
-        if !assertion.expected() || assertion.semantic_success() != self.site.block {
-            return Err(self
-                .site
-                .unsupported("slice read is not the selected positive assertion successor"));
-        }
+        let (definition, success_edge) = self.assertion_endpoint(budget)?;
         let edges = self
             .inventory
             .edges()
@@ -643,14 +882,27 @@ impl<'a> SliceQuery<'a, '_> {
                 .site
                 .unsupported("slice assertion does not use a slice length"));
         };
-        let input = self.origin(data_slice, budget)?;
-        if input != self.origin(length_slice, budget)? {
+        let input = self.descriptor_origin(data_slice, budget)?;
+        if input != self.descriptor_origin(length_slice, budget)? {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
         if !matches!(input, SliceDefinition::FunctionArgument { .. }) {
             return Err(self
                 .site
                 .unsupported("slice carrier is not exact whole-entry transport"));
+        }
+        let SliceDefinition::FunctionArgument { function, argument } = input else { unreachable!() };
+        let Type::Slice(root_slice) = self.function.function.signature.parameters
+            .get(argument as usize).ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+        else { return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch); };
+        let Type::Slice(data_type) = self.inventory.definition_for_value(self.function.coordinate, data_slice, budget)
+            .map_err(slice_inventory_error)?.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?.ty
+        else { return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch); };
+        if function != self.function.coordinate || root_slice.address_space != AddressSpace::Global
+            || data_type.address_space != memory.address_space
+            || root_slice.element != data_type.element || root_slice.access != data_type.access
+        {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
         let carrier = |value, budget: &mut SliceBudget<'_>| -> SliceResult<SliceDefinition> {
             let definition = self
@@ -672,5 +924,38 @@ impl<'a> SliceQuery<'a, '_> {
             memory: *memory,
             loaded_type,
         })
+    }
+
+    fn assertion_endpoint(&self, budget: &mut SliceBudget<'_>)
+        -> SliceResult<(SliceDefinition, fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1)>
+    {
+        let assertion = match self.owner {
+            SliceOwnerV18::Legacy(owner) => owner.assert_origins().assert_condition(
+                self.site.root, self.site.function, self.site.assertion, budget)?,
+            SliceOwnerV18::Source { relation, root, instance }
+            | SliceOwnerV18::Optimized { relation, root, instance, .. } => relation
+                .assertion(root, instance, self.site.assertion, budget)
+                .map_err(source_slice_query_error_v18)?,
+        };
+        let SemanticKirAssertConditionOutcomeV1::Emitted { definition, success_edge, .. } = assertion.outcome()
+        else {
+            return Err(self.site.unsupported("slice assertion was elided by an existing rule"));
+        };
+        if !assertion.expected() || assertion.semantic_success() != self.site.block {
+            return Err(self.site.unsupported("slice read is not the selected positive assertion successor"));
+        }
+        if let SliceOwnerV18::Optimized { optimized, root, instance, .. } = self.owner {
+            let SemanticKirOptimizedAssertOutcomeV1::Conditional { condition, success, .. } =
+                optimized.assertion(root, instance, self.site.assertion, budget)
+                    .map_err(source_slice_query_error_v18)?
+            else {
+                return Err(self.site.unsupported("optimized selected or elided slice assertion needs formal bounds continuation"));
+            };
+            let fe2o3_kernel_analysis::CanonicalKirEdgePlacementV1::Retained(success) = success else {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            };
+            return Ok((condition.definition, success));
+        }
+        Ok((definition, success_edge))
     }
 }

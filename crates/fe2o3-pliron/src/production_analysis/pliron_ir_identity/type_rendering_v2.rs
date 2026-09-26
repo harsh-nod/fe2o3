@@ -1,11 +1,12 @@
 // The pinned closed recursive printers (builtin FunctionType and GPU
 // PointerType, SliceType, FixedVectorTypeV12) emit '<' before formatting any
 // child TypeHandle. FunctionType's TypeSig prints ' -> ', not a closing pair.
-// PipelineType and RankedViewType have one pair but no child types; all other
-// admitted types are leaves. A delimiter-bearing leaf at structural depth 64
-// therefore needs 65 open pairs. This guard bounds formatting recursion only;
+// PipelineType, RankedViewType and ExecutionRoleTypeV18 have one pair but no
+// child types. StorageObjectTypeV18 has two pairs, including its fixed-field
+// table key attribute. A storage leaf at structural depth 64 therefore needs
+// 66 open pairs. This guard bounds formatting recursion only;
 // the typed walk still checks exact depth, node counts, and semantic admission.
-const MAX_TYPE_RENDER_DELIMITERS_V2: usize = MAX_PLIRON_IDENTITY_TYPE_NESTING_V1 + 1;
+const MAX_TYPE_RENDER_DELIMITERS_V2: usize = MAX_PLIRON_IDENTITY_TYPE_NESTING_V1 + 2;
 
 #[derive(Default)]
 struct TypeRenderNestingV2 {
@@ -62,6 +63,9 @@ mod type_rendering_v2_tests {
     use super::*;
     use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
         InvocationReceiptFailureV1, InvocationReceiptV1,
+    };
+    use dialect_gpu::storage_types_v18::{
+        ExecutionRoleTypeV18, StorageObjectTypeV18, StorageOrdinalAttrV18, StorageTableKeyAttrV18,
     };
 
     fn rendering_receipt() -> (InvocationReceiptV1, ProductionAnalysisResourceUpperBoundV1) {
@@ -261,6 +265,219 @@ mod type_rendering_v2_tests {
         })
     }
 
+    fn storage_leaf_v18(context: &Context, digest: [u8; 32], length: u64, row: u32) -> TypeHandle {
+        StorageObjectTypeV18::get(
+            context,
+            StorageTableKeyAttrV18::new(digest, length),
+            StorageOrdinalAttrV18(row),
+        )
+        .into()
+    }
+
+    fn identity_for_v18_leaf(
+        leaf: impl FnOnce(&Context) -> TypeHandle,
+        wrappers: usize,
+    ) -> PlironIrStructuralIdentityV1 {
+        let mut context = setup();
+        dialect_gpu::register_dialect(&mut context).unwrap();
+        let mut ty = leaf(&context);
+        for depth in 0..wrappers {
+            ty = if depth % 2 == 0 {
+                dialect_gpu::optimization_v1::PointerType::get(
+                    &context,
+                    ty,
+                    dialect_gpu::AddressSpaceAttr::Private,
+                    dialect_gpu::optimization_v1::AccessModeAttr::ReadWrite,
+                )
+                .into()
+            } else {
+                dialect_gpu::optimization_v1::SliceType::get(
+                    &context,
+                    ty,
+                    dialect_gpu::AddressSpaceAttr::Private,
+                    dialect_gpu::optimization_v1::AccessModeAttr::ReadOnly,
+                )
+                .into()
+            };
+        }
+        let signature = FunctionType::get(&context, vec![ty], vec![]);
+        let function = FuncOp::new(&mut context, "identity_v18".try_into().unwrap(), signature);
+        dialect_kernel::ReturnOp::new(&mut context)
+            .get_operation()
+            .insert_at_back(function.get_entry_block(&context), &context);
+        let identity = derive_pliron_ir_structural_identity_v1(&context, &function).unwrap();
+        assert!(!identity.grants_operational_semantics_or_refinement_authority());
+        identity
+    }
+
+    #[test]
+    fn v18_storage_identity_keeps_every_key_byte_length_row_and_wrapper() {
+        for wrappers in [0, 1, 3] {
+            let baseline =
+                identity_for_v18_leaf(|context| storage_leaf_v18(context, [0; 32], 4, 0), wrappers);
+            let independent =
+                identity_for_v18_leaf(|context| storage_leaf_v18(context, [0; 32], 4, 0), wrappers);
+            assert!(baseline.exactly_matches(&independent));
+            for byte in 0..32 {
+                let mut digest = [0; 32];
+                digest[byte] = 1;
+                let changed = identity_for_v18_leaf(
+                    |context| storage_leaf_v18(context, digest, 4, 0),
+                    wrappers,
+                );
+                assert!(!baseline.exactly_matches(&changed), "key byte {byte}");
+            }
+            for (length, row) in [(5, 0), (u64::MAX, 0), (4, 1), (4, u32::MAX)] {
+                let changed = identity_for_v18_leaf(
+                    |context| storage_leaf_v18(context, [0; 32], length, row),
+                    wrappers,
+                );
+                assert!(!baseline.exactly_matches(&changed));
+            }
+            let changed = identity_for_v18_leaf(
+                |context| storage_leaf_v18(context, [0; 32], 4, 0),
+                wrappers + 1,
+            );
+            assert!(!baseline.exactly_matches(&changed));
+        }
+    }
+
+    #[test]
+    fn v18_execution_identity_keeps_role_and_geometry_without_owner_authority() {
+        let mut identities = Vec::new();
+        for (role, lanes, elements) in [
+            (1, 0, 0),
+            (2, 0, 0),
+            (3, 1, 1),
+            (4, 1, 1),
+            (3, 2, 1),
+            (3, 1, 2),
+            (3, 256, 125),
+        ] {
+            let make = |context: &Context| {
+                ExecutionRoleTypeV18::get(
+                    context,
+                    StorageOrdinalAttrV18(role),
+                    StorageOrdinalAttrV18(lanes),
+                    StorageOrdinalAttrV18(elements),
+                )
+                .into()
+            };
+            let identity = identity_for_v18_leaf(make, 0);
+            assert!(identity.exactly_matches(&identity_for_v18_leaf(make, 0)));
+            for earlier in &identities {
+                assert!(!identity.exactly_matches(earlier));
+            }
+            identities.push(identity);
+        }
+    }
+
+    #[test]
+    fn v18_identity_refuses_malformed_storage_and_execution_leaves_under_pointers() {
+        let mut context = setup();
+        dialect_gpu::register_dialect(&mut context).unwrap();
+        let mut invalid = (0..4)
+            .map(|length| storage_leaf_v18(&context, [0; 32], length, 0))
+            .collect::<Vec<_>>();
+        for (role, lanes, elements) in [
+            (0, 0, 0),
+            (5, 1, 1),
+            (1, 1, 0),
+            (2, 0, 1),
+            (3, 0, 1),
+            (3, 257, 1),
+            (4, 1, 0),
+            (4, 1, 126),
+        ] {
+            invalid.push(
+                ExecutionRoleTypeV18::get(
+                    &context,
+                    StorageOrdinalAttrV18(role),
+                    StorageOrdinalAttrV18(lanes),
+                    StorageOrdinalAttrV18(elements),
+                )
+                .into(),
+            );
+        }
+        for leaf in invalid {
+            let pointer = dialect_gpu::optimization_v1::PointerType::get(
+                &context,
+                leaf,
+                dialect_gpu::AddressSpaceAttr::Private,
+                dialect_gpu::optimization_v1::AccessModeAttr::ReadWrite,
+            )
+            .into();
+            for ty in [leaf, pointer] {
+                assert!(matches!(
+                    validate_and_count_type_handle_v1(
+                        &context,
+                        ty,
+                        PlironPreserveLocationV1::Function
+                    ),
+                    Err(PlironIrIdentityErrorV1::UnsupportedType { .. })
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn v18_structural_names_do_not_extend_the_legacy_bridge_type_profile() {
+        let mut context = setup();
+        dialect_gpu::register_dialect(&mut context).unwrap();
+        let object = storage_leaf_v18(&context, [0; 32], 4, 0);
+        let role: TypeHandle = ExecutionRoleTypeV18::get(
+            &context,
+            StorageOrdinalAttrV18(1),
+            StorageOrdinalAttrV18(0),
+            StorageOrdinalAttrV18(0),
+        )
+        .into();
+        for ty in [object, role] {
+            assert_eq!(validate_and_count_type_handle_v1(
+                &context, ty, PlironPreserveLocationV1::Function,
+            ).unwrap(), 1);
+            assert!(
+                !crate::kir_bridge_v1::ranked_data_type_node_is_supported_v2(&*ty.deref(&context))
+            );
+        }
+    }
+
+    #[test]
+    fn v18_storage_rendering_preserves_exact_depth_and_refuses_one_over() {
+        let mut context = setup();
+        dialect_gpu::register_dialect(&mut context).unwrap();
+        let leaf = storage_leaf_v18(&context, [u8::MAX; 32], u64::MAX, u32::MAX);
+        let depth = MAX_PLIRON_IDENTITY_TYPE_NESTING_V1;
+        let exact = nested_function(&context, depth, leaf);
+        assert_eq!(
+            validate_and_count_type_handle_v1(&context, exact, PlironPreserveLocationV1::Function)
+                .unwrap(),
+            depth + 1,
+        );
+        let expected = format!("{}", exact.disp(&context));
+        let (_, encoded) =
+            render_type_handle(&context, exact, PlironPreserveLocationV1::Function, None).unwrap();
+        assert_eq!(encoded, expected);
+        let over = nested_function(&context, depth + 1, leaf);
+        assert!(matches!(
+            validate_and_count_type_handle_v1(&context, over, PlironPreserveLocationV1::Function),
+            Err(PlironIrIdentityErrorV1::ResourceLimitExceeded {
+                resource: "type rendering nesting", actual, limit, ..
+            }) if actual == depth + 3 && limit == depth + 2
+        ));
+        let ordinary = nested_function(
+            &context,
+            depth + 1,
+            PipelineType::new(&context, 3, 2).unwrap().into(),
+        );
+        assert!(matches!(
+            validate_and_count_type_handle_v1(&context, ordinary, PlironPreserveLocationV1::Function),
+            Err(PlironIrIdentityErrorV1::ResourceLimitExceeded {
+                resource: "type nesting depth", actual, limit, ..
+            }) if actual == depth + 1 && limit == depth
+        ));
+    }
+
     #[test]
     fn type_rendering_preserves_exact_limit_with_delimited_leaf() {
         let context = setup();
@@ -284,10 +501,10 @@ mod type_rendering_v2_tests {
     }
 
     #[test]
-    fn type_rendering_stops_one_over_before_descending() {
+    fn type_rendering_stops_two_over_single_pair_leaf_before_descending() {
         let context = setup();
         let leaf = PipelineType::new(&context, 3, 2).unwrap().into();
-        let ty = nested_function(&context, MAX_PLIRON_IDENTITY_TYPE_NESTING_V1 + 1, leaf);
+        let ty = nested_function(&context, MAX_PLIRON_IDENTITY_TYPE_NESTING_V1 + 2, leaf);
         assert!(matches!(
             validate_and_count_type_handle_v1(&context, ty, PlironPreserveLocationV1::Function),
             Err(PlironIrIdentityErrorV1::ResourceLimitExceeded {
@@ -367,6 +584,18 @@ mod type_rendering_v2_tests {
         let over = nested_function(&context, 3, data);
         assert!(matches!(
             validate_and_count_type_handle_v1(&context, over, PlironPreserveLocationV1::Function),
+            Err(PlironIrIdentityErrorV1::ResourceLimitExceeded {
+                resource: "type nesting depth",
+                ..
+            })
+        ));
+        let render_over = nested_function(&context, 4, data);
+        assert!(matches!(
+            validate_and_count_type_handle_v1(
+                &context,
+                render_over,
+                PlironPreserveLocationV1::Function
+            ),
             Err(PlironIrIdentityErrorV1::ResourceLimitExceeded {
                 resource: "type rendering nesting",
                 ..

@@ -29,9 +29,6 @@ fn definition_index_check_queries_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
 ) {
-    let mut indexed = SemanticAssertProofsV1::new(types, function).unwrap();
-    indexed.statement_definitions = Some(StatementDefinitionIndexV1::new(function).unwrap());
-    let mut scanned = SemanticAssertProofsV1::new(types, function).unwrap();
     for block in 0..=function.blocks().len() {
         let length = function
             .blocks()
@@ -44,8 +41,11 @@ fn definition_index_check_queries_v1(
                     MAX_PROJECTED_LOOP_GRAPH_WORK_V1 - 1,
                     MAX_PROJECTED_LOOP_GRAPH_WORK_V1,
                 ] {
-                    indexed.work = initial;
-                    scanned.work = initial;
+                    let mut indexed = SemanticAssertProofsV1::new(types, function).unwrap();
+                    indexed.enable_statement_index_v1().unwrap();
+                    let mut scanned = SemanticAssertProofsV1::new(types, function).unwrap();
+                    indexed.seed_legacy_visits_for_test_v1(initial);
+                    scanned.seed_legacy_visits_for_test_v1(initial);
                     let site = ScalarAssignmentSiteV1 { block, statement };
                     assert_eq!(
                         definition_index_result_v1(
@@ -145,7 +145,11 @@ fn statement_definition_index_matches_reverse_scan_for_every_definition_kind() {
     }
     // Both atomic definition visits stay represented; inventory counts are not deduplicated.
     assert_eq!(
-        index.rows.iter().filter(|row| **row == (1, 0, 11)).count(),
+        index
+            .rows()
+            .iter()
+            .filter(|row| **row == (1, 0, 11))
+            .count(),
         2
     );
     definition_index_check_queries_v1(&assertion_proof_types(), &function);
@@ -307,8 +311,8 @@ fn statement_definition_index_virtual_debit_matches_unit_loop_at_every_boundary(
 fn statement_definition_index_is_sparse_deterministic_and_function_local() {
     let empty = aggregate_function_v2(vec![statement(SemanticStatementKindV1::Nop)]);
     let empty_index = StatementDefinitionIndexV1::new(&empty).unwrap();
-    assert!(empty_index.rows.is_empty());
-    assert_eq!(empty_index.rows.capacity(), 0);
+    assert!(empty_index.rows().is_empty());
+    assert_eq!(empty_index.capacity(), 0);
     let first = aggregate_function_v2(vec![
         aggregate_assignment_v2(2, SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(7))),
         statement(SemanticStatementKindV1::Nop),
@@ -322,8 +326,8 @@ fn statement_definition_index_is_sparse_deterministic_and_function_local() {
     assert_eq!(first_index.before(2, 0, 2), Some(0));
     assert_eq!(second_index.before(2, 0, 2), Some(1));
     assert_eq!(
-        first_index.rows,
-        StatementDefinitionIndexV1::new(&first).unwrap().rows
+        first_index.rows(),
+        StatementDefinitionIndexV1::new(&first).unwrap().rows()
     );
     assert_eq!(first_index.before(2, usize::MAX, usize::MAX), None);
     assert_eq!(first_index.before(usize::MAX, 0, usize::MAX), None);
@@ -350,10 +354,10 @@ fn statement_definition_index_retains_actual_gpu_values_errors_and_resolver_clea
         for initial in [0, MAX_PROJECTED_LOOP_GRAPH_WORK_V1] {
             let mut indexed = GpuSemanticExpressionResolverV2::new(&types, &function).unwrap();
             let mut scanned = GpuSemanticExpressionResolverV2::new(&types, &function).unwrap();
-            assert!(indexed.definitions.statement_definitions.is_some());
-            scanned.definitions.statement_definitions = None;
-            indexed.definitions.work = initial;
-            scanned.definitions.work = initial;
+            assert!(indexed.definitions.has_statement_index_for_test_v1());
+            scanned.definitions.force_statement_scan_for_test_v1();
+            indexed.definitions.seed_legacy_visits_for_test_v1(initial);
+            scanned.definitions.seed_legacy_visits_for_test_v1(initial);
             let site = ScalarAssignmentSiteV1 {
                 block: 0,
                 statement: 3,
@@ -405,7 +409,7 @@ fn statement_definition_index_retains_future_and_self_use_refusals_without_cycle
         };
         let mut indexed = GpuSemanticExpressionResolverV2::new(&types, &function).unwrap();
         let mut scanned = GpuSemanticExpressionResolverV2::new(&types, &function).unwrap();
-        scanned.definitions.statement_definitions = None;
+        scanned.definitions.force_statement_scan_for_test_v1();
         let actual = indexed.resolve_store_v2(
             function.blocks()[0].statements()[site.statement].kind(),
             site,
@@ -436,7 +440,7 @@ fn statement_definition_index_large_prefix_changes_search_not_logical_work() {
     statements.resize_with(STATEMENTS, || statement(SemanticStatementKindV1::Nop));
     let function = aggregate_function_v2(statements);
     let index = StatementDefinitionIndexV1::new(&function).unwrap();
-    assert_eq!(index.rows.len(), 1);
+    assert_eq!(index.rows().len(), 1);
     // Two linear construction walks plus Q binary predecessor lookups replace
     // Q*STATEMENTS statement visits. This is a count argument, not a timing claim.
     for _ in 0..STATEMENTS {
@@ -444,7 +448,7 @@ fn statement_definition_index_large_prefix_changes_search_not_logical_work() {
     }
     let types = aggregate_types_v2();
     let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
-    proof.statement_definitions = Some(index);
+    proof.enable_statement_index_v1().unwrap();
     let result = proof
         .exact_reaching_assignment_v1(
             2,

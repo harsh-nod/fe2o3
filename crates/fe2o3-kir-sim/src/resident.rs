@@ -70,16 +70,19 @@ pub(crate) fn reserved_vec_bytes<T>(elements: usize) -> Option<usize> {
     values.capacity().checked_mul(size_of::<T>())
 }
 
-pub(crate) fn bool_vec_storage_bytes(capacity_bits: usize) -> Option<usize> {
-    capacity_bits.checked_add(7)?.checked_div(8)
+pub(crate) fn bool_vec_storage_bytes(capacity_elements: usize) -> Option<usize> {
+    // Rust Vec<bool> stores ordinary bool elements; it is not a packed bitset.
+    capacity_elements.checked_mul(size_of::<bool>())
 }
 
 pub(crate) fn partitioned_bool_vec_storage_bytes(
-    total_bits: usize,
+    total_elements: usize,
     partitions: usize,
 ) -> Option<usize> {
-    let nonempty = total_bits.min(partitions);
-    bool_vec_storage_bytes(total_bits)?.checked_add(nonempty.checked_mul(size_of::<usize>())?)
+    // Preserve the conservative per-vector reservation slack in addition to
+    // charging every element of the exact-reserved initialization payload.
+    let nonempty = total_elements.min(partitions);
+    bool_vec_storage_bytes(total_elements)?.checked_add(nonempty.checked_mul(size_of::<usize>())?)
 }
 
 pub(crate) fn reserved_bool_vec_bytes(elements: usize) -> Option<usize> {
@@ -155,7 +158,39 @@ fn hash_map_bucket_bytes<K, V>(buckets: usize) -> Option<usize> {
 /// Returns heap bytes retained by a decoded module, excluding the inline
 /// `Module` value itself.
 pub(crate) fn module_retained_heap_bytes(module: &Module) -> Option<usize> {
+    if !module.storage_layouts.is_empty() {
+        return None;
+    }
+    module_retained_heap_with_storage_v1(module)
+}
+
+pub(crate) fn storage_module_retained_bytes_v1(
+    verified: &fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>,
+) -> Option<usize> {
+    let mut resident =
+        ResidentLedger::new(module_retained_heap_with_storage_v1(verified.module())?);
+    resident.add_bytes(size_of::<Module>())?;
+    resident.add_bytes(size_of::<
+        fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'_>,
+    >())?;
+    for row in verified.storage().layouts().rows() {
+        use fe2o3_kernel_ir::StorageLayoutKindV1;
+        match &row.kind {
+            StorageLayoutKindV1::Record(fields) | StorageLayoutKindV1::Union(fields) => {
+                resident.add_vec::<fe2o3_kernel_ir::StorageFieldV1>(fields.len())?;
+            }
+            StorageLayoutKindV1::Variants { variants, .. } => {
+                resident.add_vec::<fe2o3_kernel_ir::StorageVariantV1>(variants.len())?;
+            }
+            _ => {}
+        }
+    }
+    Some(resident.bytes())
+}
+
+fn module_retained_heap_with_storage_v1(module: &Module) -> Option<usize> {
     let mut resident = ResidentLedger::new(0);
+    resident.add_vec::<fe2o3_kernel_ir::StorageLayoutV1>(module.storage_layouts.capacity())?;
     resident.add_bytes(module.id.retained_capacity_bytes())?;
     resident.add_vec::<Function>(module.functions.capacity())?;
     for function in &module.functions {
@@ -277,7 +312,8 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_)
-        | OperationKind::VerificationContract(_) => Some(()),
+        | OperationKind::VerificationContract(_)
+        | OperationKind::Storage(_) => Some(()),
     }
 }
 
@@ -293,7 +329,11 @@ fn add_type_boxes(resident: &mut ResidentLedger, ty: &Type) -> Option<()> {
                 resident.add_box::<Type>()?;
                 &slice.element
             }
-            Type::Unit | Type::Scalar(_) | Type::Vector(_) | Type::Execution(_) => return Some(()),
+            Type::Unit
+            | Type::Scalar(_)
+            | Type::Vector(_)
+            | Type::Execution(_)
+            | Type::StorageObject(_) => return Some(()),
         };
     }
 }
@@ -392,6 +432,28 @@ fn add_plain_btree_set<T: Ord>(resident: &mut ResidentLedger, values: &BTreeSet<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_legacy_resident_census_checks_eligibility_and_empty_capacity() {
+        use fe2o3_kernel_ir::{StorageLayoutIdV1, StorageLayoutKindV1, StorageLayoutV1};
+        let mut module = Module::new("storage_census");
+        let old = module_retained_heap_bytes(&module).unwrap();
+        module.storage_layouts.try_reserve_exact(3).unwrap();
+        assert_eq!(
+            module_retained_heap_bytes(&module),
+            Some(old + module.storage_layouts.capacity() * size_of::<StorageLayoutV1>())
+        );
+        assert_eq!(
+            type_retained_heap_bytes(&Type::StorageObject(StorageLayoutIdV1(0))),
+            Some(0)
+        );
+        module.storage_layouts.push(StorageLayoutV1 {
+            size: 4,
+            alignment: 4,
+            kind: StorageLayoutKindV1::Scalar(fe2o3_kernel_ir::ScalarType::U32),
+        });
+        assert_eq!(module_retained_heap_bytes(&module), None);
+    }
     use fe2o3_kernel_ir::{
         AccessMode, BasicBlock, BlockId, Function, FunctionId, Gfx950LdsTransposeFormatV1,
         Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, Kernel, LaunchDomain,
@@ -507,16 +569,37 @@ mod tests {
     }
 
     #[test]
-    fn boolean_vector_capacity_is_charged_as_packed_bits() {
-        let bytes = reserved_bool_vec_bytes(1_025).unwrap();
-        assert!(bytes >= 1_025_usize.div_ceil(8));
-        assert!(bytes < 1_025);
-        let partitioned = partitioned_bool_vec_storage_bytes(17, 17).unwrap();
-        let mut actual = 0usize;
-        for _ in 0..17 {
-            actual += reserved_bool_vec_bytes(1).unwrap();
+    fn boolean_vector_capacity_is_charged_as_actual_elements() {
+        for requested in [0, 1, 7, 8, 9, 1_025, 4_096] {
+            let mut actual = Vec::<bool>::new();
+            actual.try_reserve_exact(requested).unwrap();
+            let expected = actual.capacity().checked_mul(size_of::<bool>()).unwrap();
+            assert_eq!(bool_vec_storage_bytes(actual.capacity()), Some(expected));
+            assert_eq!(reserved_bool_vec_bytes(requested), Some(expected));
         }
-        assert!(partitioned >= actual);
+        assert_eq!(bool_vec_storage_bytes(usize::MAX), Some(usize::MAX));
+    }
+
+    #[test]
+    fn partitioned_boolean_vectors_cover_actual_reserved_capacity() {
+        for (total, partitions) in [(0, 0), (1, 1), (17, 17), (1_025, 1), (1_025, 17)] {
+            let mut remaining: usize = total;
+            let mut actual_bytes = 0usize;
+            for index in 0..partitions {
+                let count = remaining.div_ceil(partitions - index);
+                let mut actual = Vec::<bool>::new();
+                actual.try_reserve_exact(count).unwrap();
+                actual_bytes += actual.capacity() * size_of::<bool>();
+                remaining -= count;
+            }
+            assert_eq!(remaining, 0);
+            let charged = partitioned_bool_vec_storage_bytes(total, partitions).unwrap();
+            assert!(
+                charged >= actual_bytes,
+                "{total} elements in {partitions} vectors"
+            );
+        }
+        assert_eq!(partitioned_bool_vec_storage_bytes(usize::MAX, 1), None);
     }
 
     #[test]

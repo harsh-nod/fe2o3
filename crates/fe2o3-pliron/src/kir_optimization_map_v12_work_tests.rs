@@ -158,3 +158,23 @@ fn immutable_output_census_rejects_growth_before_replay_scratch_allocation() {
     assert_eq!(budget.peak_storage(), 17);
     assert_eq!(budget.failed_storage(), None);
 }
+
+#[test]
+fn private_call_whole_entry_pinned_map_layout_equivalence_premises() {
+    // Pinned 64-bit nightly only; not a portable repr(Rust) layout guarantee.
+    fn same<A, B>() {
+        assert_eq!(size_of::<A>(), size_of::<B>());
+        assert_eq!(std::mem::align_of::<A>(), std::mem::align_of::<B>());
+    }
+    assert_eq!((size_of::<usize>(), std::mem::align_of::<usize>()), (8, 8));
+    type KindShape = Option<Option<u32>>;
+    type NodeShape = (KindShape, Option<KirOptimizationEndpointV12>, Option<u32>);
+    type ChangeShape = (u32, [u32; 2]);
+    type EventShape = (u8, ChangeShape);
+    type PassShape = (PlironOptimizationPassV1, u64, u64, usize, usize);
+    same::<Kind, KindShape>();
+    same::<Node, NodeShape>();
+    same::<Change, ChangeShape>();
+    same::<Event, EventShape>();
+    same::<PassSpan, PassShape>();
+}

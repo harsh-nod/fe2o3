@@ -5,9 +5,213 @@ trait SemanticEmissionBudgetV1 {
     fn reserve_storage(&mut self, amount: usize) -> Result<(), ProductionSemanticKirErrorV1>;
     fn release_storage(&mut self, amount: usize) -> Result<(), ProductionSemanticKirErrorV1>;
     fn storage(&self) -> usize;
+
+    fn emission_service_slot_v1(&self) -> Option<usize> {
+        self.prepared_input_slot_v1()
+    }
+
+    fn emission_service_work_v1(&self) -> Option<usize> {
+        None
+    }
+
+    fn release_emission_service_storage_v1(
+        &mut self,
+        plan: Option<&SourceReferencePlanV29<'_, '_>>,
+        slot: usize,
+        ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+        required: usize,
+        bytes: usize,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.permits_prepared_input_refund_v1(plan, slot, ledger, required, bytes)
+            && self.release_storage(bytes).is_ok()
+        {
+            return Ok(());
+        }
+        if let Some(root) = plan.and_then(|plan| plan.storage_root.as_ref()) {
+            root.deny_active_root_refund();
+        }
+        Err(ArgumentResourceV1::Accounting.into())
+    }
+
+    fn prepared_input_slot_v1(&self) -> Option<usize> {
+        None
+    }
+
+    fn permits_prepared_input_refund_v1(
+        &self,
+        source: Option<&SourceReferencePlanV29<'_, '_>>,
+        slot: usize,
+        ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+        required: usize,
+        bytes: usize,
+    ) -> bool {
+        let _ = (source, slot, ledger, required, bytes);
+        false
+    }
+
+    // Only the concrete owner slot can lend reference-plan queries through this
+    // erased interface. Alternative meters refuse without touching their ledger.
+    fn source_reference_owner_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        plan.failure.record_resource(ArgumentResourceV1::Accounting);
+        Err(plan
+            .failure
+            .first_error()
+            .unwrap_or_else(|| ArgumentResourceV1::Accounting.into()))
+    }
+
+    fn source_reference_representation_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        loan: usize,
+    ) -> Result<SourceReferenceRepresentationV29, ProductionSemanticKirErrorV1> {
+        let _ = loan;
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+    }
+
+    fn source_reference_charge_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        amount: usize,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.source_reference_owner_v29(plan)?;
+        self.charge_work(amount)
+            .inspect_err(|error| source_reference_record_failure_v29(plan, error))
+    }
+
+    fn source_reference_scalar_cell_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        loan: usize,
+    ) -> Result<Option<(usize, SourceReferenceScalarCellV29)>, ProductionSemanticKirErrorV1> {
+        let _ = loan;
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+    }
+
+    fn source_reference_object_pointer_type_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        loan: usize,
+    ) -> Result<Type, ProductionSemanticKirErrorV1> {
+        let _ = loan;
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+    }
+
+    fn source_reference_selected_pointer_type_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        node: usize,
+        expected: SemanticTypeIdV1,
+    ) -> Result<Option<Type>, ProductionSemanticKirErrorV1> {
+        let _ = (node, expected);
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+            .inspect_err(|error| source_reference_record_failure_v29(plan, error))
+    }
+
+    fn source_reference_reserve_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        amount: usize,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.source_reference_owner_v29(plan)?;
+        self.reserve_storage(amount)
+            .inspect_err(|error| source_reference_record_failure_v29(plan, error))
+    }
+
+    fn source_object_projection_v29<'path>(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        ty: SemanticTypeIdV1,
+        schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+        path: &'path [SemanticProjectionV1],
+    ) -> Result<Vec<source_storage_v29::SourceSelectedComponentV29<'path>>, ProductionSemanticKirErrorV1> {
+        let _ = (ty, schema, path);
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+            .inspect_err(|error| source_reference_record_failure_v29(plan, error))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn source_object_storage_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        cell: usize,
+        instance: ProductionCallInstanceIdV1,
+        local: SemanticLocalIdV1,
+        generation: u32,
+        schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+    ) -> Result<SemanticRetainedStorageV29, ProductionSemanticKirErrorV1> {
+        let _ = (cell, instance, local, generation, schema);
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+    }
+
+    fn source_physical_object_count_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+    ) -> Result<usize, ProductionSemanticKirErrorV1> {
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+    }
+
+    // Closed validation-only query. No owned storage representation escapes.
+    #[allow(clippy::too_many_arguments)]
+    fn source_object_storage_matches_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        cell: usize,
+        instance: ProductionCallInstanceIdV1,
+        local: SemanticLocalIdV1,
+        generation: u32,
+        schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+        extent: Option<(u64, u32)>,
+    ) -> Result<bool, ProductionSemanticKirErrorV1> {
+        let _ = (cell, instance, local, generation, schema, extent);
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+    }
 }
 
 impl SemanticEmissionBudgetV1 for ArgumentBudgetV1<'_> {
+    fn source_object_storage_matches_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        cell: usize,
+        instance: ProductionCallInstanceIdV1,
+        local: SemanticLocalIdV1,
+        generation: u32,
+        schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+        extent: Option<(u64, u32)>,
+    ) -> Result<bool, ProductionSemanticKirErrorV1> {
+        source_object_storage_matches_v29(plan, cell, instance, local, generation, schema, extent, self)
+    }
+
+    fn source_physical_object_count_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+    ) -> Result<usize, ProductionSemanticKirErrorV1> {
+        source_physical_object_count_v29(plan, self)
+    }
+
+    fn source_object_projection_v29<'path>(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        ty: SemanticTypeIdV1,
+        schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+        path: &'path [SemanticProjectionV1],
+    ) -> Result<Vec<source_storage_v29::SourceSelectedComponentV29<'path>>, ProductionSemanticKirErrorV1> {
+        source_object_projection_v29(plan, ty, schema, path, self)
+    }
+    fn emission_service_work_v1(&self) -> Option<usize> {
+        Some(self.work())
+    }
+
     fn work_ledger_identity_v1(&self) -> fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1 {
         ArgumentBudgetV1::work_ledger_identity_v1(self)
     }
@@ -26,6 +230,89 @@ impl SemanticEmissionBudgetV1 for ArgumentBudgetV1<'_> {
 
     fn storage(&self) -> usize {
         ArgumentBudgetV1::storage(self)
+    }
+
+    fn prepared_input_slot_v1(&self) -> Option<usize> {
+        Some(self as *const ArgumentBudgetV1<'_> as usize)
+    }
+
+    fn permits_prepared_input_refund_v1(
+        &self,
+        source: Option<&SourceReferencePlanV29<'_, '_>>,
+        slot: usize,
+        ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+        required: usize,
+        bytes: usize,
+    ) -> bool {
+        let Some(after) = self.storage().checked_sub(bytes) else {
+            return false;
+        };
+        slot == self as *const ArgumentBudgetV1<'_> as usize
+            && ledger == self.work_ledger_identity_v1()
+            && self.storage() >= required
+            && source.is_none_or(|plan| {
+                plan.slot == slot
+                    && plan.ledger == ledger
+                    && after >= plan.retained_floor
+                    && plan.root == plan.instances.root()
+                    && plan.source == *plan.instances.owner().source_semantic_sha256()
+                    && plan.ssa == plan.instances.owner().identity()
+                    && plan.storage_root.as_ref().is_none_or(|root| {
+                        root.permits_cleanup_refund(plan.instances, &plan.failure, bytes, self)
+                    })
+            })
+    }
+
+    fn source_reference_owner_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        plan.check_owner(plan.instances, self)
+    }
+
+    fn source_reference_representation_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        loan: usize,
+    ) -> Result<SourceReferenceRepresentationV29, ProductionSemanticKirErrorV1> {
+        plan.require_promoted(loan, self)
+    }
+
+    fn source_reference_scalar_cell_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        loan: usize,
+    ) -> Result<Option<(usize, SourceReferenceScalarCellV29)>, ProductionSemanticKirErrorV1> {
+        plan.scalar_cell(loan, self)
+    }
+
+    fn source_reference_object_pointer_type_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        loan: usize,
+    ) -> Result<Type, ProductionSemanticKirErrorV1> {
+        source_reference_object_pointer_type_v29(plan, loan, self)
+    }
+
+    fn source_reference_selected_pointer_type_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        node: usize,
+        expected: SemanticTypeIdV1,
+    ) -> Result<Option<Type>, ProductionSemanticKirErrorV1> {
+        source_reference_selected_pointer_type_v29(plan, node, expected, self)
+    }
+
+    fn source_object_storage_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        cell: usize,
+        instance: ProductionCallInstanceIdV1,
+        local: SemanticLocalIdV1,
+        generation: u32,
+        schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+    ) -> Result<SemanticRetainedStorageV29, ProductionSemanticKirErrorV1> {
+        source_object_storage_v29(plan, cell, instance, local, generation, schema, self)
     }
 }
 
@@ -185,6 +472,7 @@ fn emission_binding_clone_type_v1(
             leaf => {
                 *destination = match leaf {
                     Type::Unit => Type::Unit,
+                    Type::StorageObject(id) => Type::StorageObject(*id),
                     Type::Scalar(scalar) => Type::Scalar(*scalar),
                     Type::Vector(vector) => Type::Vector(*vector),
                     Type::Execution(role) => Type::Execution(*role),
@@ -248,6 +536,47 @@ fn emission_clone_binding_inner_v1(
     use SemanticValueBindingV1 as Binding;
     budget.charge_work(1)?;
     Ok(match binding {
+        Binding::SourceInactive(inactive) => {
+            budget.charge_work(7)?;
+            budget.reserve_storage(std::mem::size_of::<SemanticSourceInactiveBindingV29>())?;
+            let mut values = emission_vec_v1(inactive.values.len(), budget)?;
+            for value in &inactive.values {
+                budget.charge_work(1)?;
+                values.push(ValueDef::new(
+                    value.id,
+                    emission_binding_clone_type_v1(&value.ty, budget)?,
+                ));
+            }
+            Binding::SourceInactive(SemanticSourceInactiveBindingV29 {
+                owner: inactive.owner,
+                source: inactive.source,
+                ssa: inactive.ssa,
+                root: inactive.root,
+                node: inactive.node,
+                source_type: inactive.source_type,
+                values,
+            })
+        }
+        Binding::SourceReference(reference) => {
+            budget.reserve_storage(std::mem::size_of::<SemanticSourceReferenceBindingV29>())?;
+            let mut values = emission_vec_v1(reference.values.len(), budget)?;
+            for value in &reference.values {
+                budget.charge_work(1)?;
+                values.push(ValueDef::new(
+                    value.id,
+                    emission_binding_clone_type_v1(&value.ty, budget)?,
+                ));
+            }
+            Binding::SourceReference(SemanticSourceReferenceBindingV29 {
+                owner: reference.owner,
+                source: reference.source,
+                ssa: reference.ssa,
+                root: reference.root,
+                origin: reference.origin,
+                source_type: reference.source_type,
+                values,
+            })
+        }
         Binding::Aggregate(fields) => {
             Binding::Aggregate(emission_binding_clone_fields_v1(fields, budget)?)
         }
@@ -381,7 +710,7 @@ fn emission_clone_binding_inner_v1(
     })
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn with_emission_budget_v1<T>(
         &mut self,
         body: impl FnOnce(
@@ -401,7 +730,14 @@ impl SemanticFunctionLoweringV1<'_> {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self, &mut *budget)));
         self.emission_work = Some(budget);
         match result {
-            Ok(result) => result,
+            Ok(result) => {
+                if let Err(error) = &result
+                    && let Some(references) = self.execution.as_ref().and_then(|row| row.references)
+                {
+                    source_reference_record_failure_v29(references.plan, error);
+                }
+                result
+            }
             Err(payload) => std::panic::resume_unwind(payload),
         }
     }
@@ -464,5 +800,39 @@ mod emission_budget_tests {
         assert_eq!(rows.capacity(), old_capacity);
         assert!(budget.storage() >= old_capacity + 2 * old_capacity.max(2));
         assert!(budget.work() >= 8);
+    }
+}
+
+#[cfg(test)]
+mod storage_emission_copy_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, StorageLayoutIdV1};
+    #[test]
+    fn storage_terminal_copy_preserves_id_without_copying_a_layout_table() {
+        let input = Type::pointer(
+            Type::slice(
+                Type::StorageObject(StorageLayoutIdV1(31)),
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ),
+            AddressSpace::Private,
+            AccessMode::ReadWrite,
+        );
+        let mut work = Work::new(3);
+
+        {
+            let mut budget = ArgumentBudgetV1::new(&mut work, 11 + 2 * std::mem::size_of::<Type>());
+            budget.reserve_storage(11).unwrap();
+            let copied = emission_binding_clone_type_v1(&input, &mut budget).unwrap();
+            assert_eq!(copied, input);
+            assert_eq!(budget.storage(), 11 + 2 * std::mem::size_of::<Type>());
+            drop(copied);
+            budget
+                .release_storage(2 * std::mem::size_of::<Type>())
+                .unwrap();
+            assert_eq!(budget.storage(), 11);
+        }
+        assert_eq!(work.work(), 3);
     }
 }

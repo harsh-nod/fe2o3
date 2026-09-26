@@ -51,13 +51,16 @@ text through `CHECK-ERROR`. This is an in-repository lit-style runner, not a
 claim that `llvm-lit` or LLVM `FileCheck` executes the fixtures.
 
 Successful fixtures require exact planner replay and equality with a second
-construction. The 49-file corpus covers live and dead diamond merges, loop
+construction. The corpus covers live and dead diamond merges, loop
 preheaders, two-latch and nested loops, multiway branches, duplicate and
 critical edges, irreducible control flow, unreachable pruning, edge-local
 normal/unwind definitions, partial initialization, undefined uses and
 transports, canonical identity, input limits, and the retained-memory promotion
-boundary. Focused Rust tests additionally exercise sparse storage for
-nonpromotable events, a 65,536-variable by 2,048-block CFG with zero or one
+boundary. Static-field fixtures check old-root uses followed by new-root
+definitions, self-move ordering, and loop-carried root versions. These are
+planner event equations, not tests of Rust projection classification or
+executable field updates. Focused Rust tests additionally exercise sparse
+storage for nonpromotable events, a 65,536-variable by 2,048-block CFG with zero or one
 promotable local, a 12,000-block linear dominance-frontier case, a 4,096 by
 4,096 sparse-IDF case, and 63/64/65-variable bit-word boundaries across merges,
 kills, and edge definitions. The
@@ -79,8 +82,18 @@ The semantic suite covers disjoint partial moves, exact field
 reinitialization, maybe-moved joins and loops, rejected parent/child and union
 access, exact single-consumer transparent borrows, borrow escape and multi-use,
 and authenticated implicit `WorkgroupLdsScope` entry values. The lowerer suite
-checks that KIR seeds only the certified ambient value. Compiler-side kernel
-matrices then exercise the same plan and block-argument transport, including
+also checks static tuple/aggregate field updates, exact projected types,
+preserved copies and moved siblings, and root versions across branches and
+loops. Independent helper controls check exact and one-short resources and
+reject malformed field paths. KIR seeds only the certified ambient value.
+Holder-availability tests cover complete, absent and maybe-absent aggregate
+representations, normal-return edge definitions, kills, loops, duplicate edges,
+unreachable blocks and failure-only tails. Original-source capture tests
+check that retained/promoted classifications match the final occurrence join.
+The retained-holder lit cases exercise the resulting planner input contract;
+they do not replace those production-classifier tests or prove memory
+initializedness.
+Compiler-side kernel matrices then exercise the same plan and block-argument transport, including
 typed component witnesses, through real rustc extraction.
 
 The ignored, toolchain-qualified

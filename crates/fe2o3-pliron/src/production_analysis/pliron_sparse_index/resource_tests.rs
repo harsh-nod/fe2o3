@@ -14,6 +14,7 @@ mod resource_upper_bound_tests {
         let affine = SparseAffineIndexV1::constant(7);
         let variants = [
             SparseIndexFactV1::Unknown,
+            SparseIndexFactV1::UnsignedUpperBound { inclusive: u64::MAX },
             SparseIndexFactV1::Affine(affine.clone()),
             SparseIndexFactV1::Remainder {
                 dividend: affine.clone(),

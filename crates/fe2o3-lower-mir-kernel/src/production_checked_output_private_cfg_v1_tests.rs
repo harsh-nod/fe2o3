@@ -118,7 +118,7 @@ fn anchors(module: &Module, expected: &[(usize, usize)]) {
         let proof = super::super::check(inventory, 1024, &mut budget).unwrap();
         assert!(proof.is_for(inventory));
         let actual: Vec<_> = proof
-            .latest_stores
+            .latest_stores()
             .iter()
             .enumerate()
             .filter_map(|(read, store)| store.map(|store| (read, store)))
@@ -149,16 +149,16 @@ fn anchors(module: &Module, expected: &[(usize, usize)]) {
             let function = load.coordinate.block.function;
             let read_definition = index(inventory, function, load_pointer, &mut budget).unwrap();
             let store_definition = index(inventory, function, store_pointer, &mut budget).unwrap();
-            let read_address = proof.definitions[read_definition].unwrap();
-            let store_address = proof.definitions[store_definition].unwrap();
+            let read_address = proof.address(read_definition).unwrap();
+            let store_address = proof.address(store_definition).unwrap();
             assert_eq!(
                 (
-                    read_address.allocation,
-                    read_address.start + read_address.offset
+                    read_address.allocation(),
+                    read_address.start() + read_address.offset()
                 ),
                 (
-                    store_address.allocation,
-                    store_address.start + store_address.offset
+                    store_address.allocation(),
+                    store_address.start() + store_address.offset()
                 )
             );
             let value = index(inventory, function, value, &mut budget).unwrap();
@@ -443,65 +443,37 @@ fn volatile_access_is_still_refused_before_dataflow() {
 }
 
 #[test]
-fn transfer_reset_kills_its_whole_extent_without_erasing_other_cells() {
-    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(WORK);
-    let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
-    let events = [
-        Event::Reset {
-            start: 8,
-            length: 2,
-        },
-        Event::Read(8),
-        Event::Read(9),
-        Event::Read(10),
-    ];
-    let mut state = [Some(11), Some(12), Some(13)];
-    let mut reads = vec![];
-    transfer(
-        &events,
-        0..events.len(),
-        8,
-        &mut state,
-        &mut budget,
-        |ordinal, anchor, _| {
-            reads.push((ordinal, anchor));
-            Ok(())
-        },
-    )
-    .unwrap();
-    assert_eq!(state, [None, None, Some(13)]);
-    assert_eq!(reads, vec![(1, None), (2, None), (3, Some(13))]);
-}
-
-#[test]
-fn ring_queue_has_fixed_capacity_checked_indices_and_exact_fifo() {
-    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(WORK);
-    let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
-    let mut queue = Queue::new(2, &mut budget).unwrap();
-    queue.push(1, &mut budget).unwrap();
-    queue.push(1, &mut budget).unwrap();
-    queue.push(0, &mut budget).unwrap();
-    assert_eq!(queue.length, 2);
-    assert_eq!(queue.pop(&mut budget).unwrap(), Some(1));
-    queue.push(1, &mut budget).unwrap();
-    assert_eq!(queue.pop(&mut budget).unwrap(), Some(0));
-    assert_eq!(queue.pop(&mut budget).unwrap(), Some(1));
-    assert_eq!(queue.pop(&mut budget).unwrap(), None);
-    assert!(matches!(
-        queue.push(2, &mut budget),
-        Err(E::Resource(AssertOriginResourceV1::Arithmetic))
-    ));
-    assert!(matches!(
-        row_start(usize::MAX, 2),
-        Err(E::Resource(AssertOriginResourceV1::Arithmetic))
-    ));
-    queue.reset(&mut budget).unwrap();
-    assert_eq!(queue.length, 0);
-    queue.length = queue.rows.len();
-    assert!(matches!(
-        queue.push(0, &mut budget),
-        Err(E::Resource(AssertOriginResourceV1::Arithmetic))
-    ));
-    assert_eq!(queue.length, 2);
-    assert!(queue.queued.iter().all(|queued| !queued));
+fn legacy_adapter_delegates_to_the_same_neutral_anchors_and_preserves_its_receipt_contract() {
+    use fe2o3_kernel_analysis::{
+        CanonicalKirPrivateMemoryLimitsV1, check_canonical_kir_private_memory_v1,
+    };
+    with_inventory(&split(), |inventory, floor| {
+        let mut old_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(WORK);
+        let mut scoped_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(WORK);
+        let mut old = AssertOriginBudgetV1::new(&mut old_work, STORAGE);
+        let mut scoped = AssertOriginBudgetV1::new(&mut scoped_work, STORAGE);
+        old.reserve_storage(floor).unwrap();
+        scoped.reserve_storage(floor).unwrap();
+        let legacy = super::super::check(inventory, 1024, &mut old).unwrap();
+        let (neutral, receipt) = check_canonical_kir_private_memory_v1(
+            inventory,
+            CanonicalKirPrivateMemoryLimitsV1 { max_cells: 1024 },
+            &mut scoped,
+        )
+        .unwrap();
+        assert_eq!(scoped.storage(), floor);
+        scoped.reserve_storage(receipt.retained_storage()).unwrap();
+        assert_eq!(legacy.latest_stores(), neutral.latest_stores());
+        assert_eq!(neutral.latest_stores(), &[None, None, None, Some(2)]);
+        assert!(legacy.is_for(inventory) && neutral.is_for(inventory));
+        assert_eq!(old.work(), 337);
+        assert_eq!(scoped.work(), 345);
+        assert_eq!(old.storage(), floor + 864);
+        assert_eq!(receipt.retained_storage(), 372);
+        drop(legacy);
+        old.release_storage(864).unwrap();
+        drop(neutral);
+        scoped.release_storage(372).unwrap();
+        assert_eq!((old.storage(), scoped.storage()), (floor, floor));
+    });
 }

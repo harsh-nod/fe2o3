@@ -11,29 +11,67 @@ fn selector_prefix(terminator: &Terminator) -> usize {
     ))
 }
 
-impl State<'_, '_, '_, '_> {
+impl<O> State<'_, '_, '_, '_, O> {
     pub(super) fn edge_possible(&self, edge: usize, budget: &mut Budget<'_>) -> Result<bool> {
         budget.charge_work(1)?;
         let row = &self.input.edges()[edge];
-        let block = &self.input.blocks()[index::block(self.input, row.coordinate.source, budget)?];
-        if !matches!(block.terminator, Terminator::ConditionalBranch { .. }) {
-            return Ok(true);
+        let block = index::block(self.input, row.coordinate.source, budget)?;
+        let selected = self.selected_edges[block];
+        Ok(selected == NONE || row.coordinate.successor as usize == selected)
+    }
+
+    // Scalar facts grow monotonically. Refresh once per fixed-point round, not
+    // for each edge or phi argument, so a wide switch scans its keys once.
+    fn refresh_selected_edges(&mut self, budget: &mut Budget<'_>) -> Result<()> {
+        for (ordinal, block) in self.input.blocks().iter().enumerate() {
+            budget.charge_work(1)?;
+            self.selected_edges[ordinal] = NONE;
+            if selector_prefix(block.terminator) == 0 { continue; }
+            let condition = self.input.uses()[block.terminator_uses.start].definition;
+            let known = self.literal(condition, budget)?;
+            self.selected_edges[ordinal] = match block.terminator {
+                Terminator::ConditionalBranch { .. } => match known {
+                    Some(super::Literal { ty: ScalarType::Bool, bits: 1 }) => 0,
+                    Some(super::Literal { ty: ScalarType::Bool, bits: 0 }) => 1,
+                    _ => NONE,
+                },
+                Terminator::Switch { cases, .. } => match known {
+                    Some(value) if value.ty.is_integer() => {
+                        budget.charge_work(cases.len())?;
+                        cases.iter().position(|case| value.bits == u128::from(case.value)).unwrap_or(cases.len())
+                    }
+                    _ if cases.is_empty() => 0,
+                    _ => NONE,
+                },
+                Terminator::IntegerSwitch { cases, .. } => match known {
+                    Some(value) if value.ty.is_integer() => {
+                        budget.charge_work(cases.len())?;
+                        cases.iter().position(|case| value == super::values::literal(&case.value)).unwrap_or(cases.len())
+                    }
+                    _ if cases.is_empty() => 0,
+                    _ => NONE,
+                },
+                _ => NONE,
+            };
         }
-        let condition = self.input.uses()[block.terminator_uses.start].definition;
-        Ok(match self.literal(condition, budget)? {
-            Some(super::Literal {
-                ty: ScalarType::Bool,
-                bits: 1,
-            }) => row.coordinate.successor == 0,
-            Some(super::Literal {
-                ty: ScalarType::Bool,
-                bits: 0,
-            }) => row.coordinate.successor == 1,
-            _ => true,
-        })
+        Ok(())
+    }
+
+    pub(super) fn selected_successor(
+        &self,
+        block: usize,
+        _budget: &mut Budget<'_>,
+    ) -> Result<Option<fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1>> {
+        let selected = self.selected_edges[block];
+        if selected == NONE { return Ok(None); }
+        Ok(Some(fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
+            source: self.input.blocks()[block].coordinate,
+            successor: u32::try_from(selected).map_err(|_| Error::Arithmetic)?,
+        }))
     }
 
     pub(super) fn mark_reachable(&mut self, budget: &mut Budget<'_>) -> Result<()> {
+        self.refresh_selected_edges(budget)?;
         let input = self.input;
         budget.charge_work(self.reachable.len())?;
         self.reachable.fill(0);
@@ -132,7 +170,7 @@ impl State<'_, '_, '_, '_> {
                     return Err(Error::Rule("merge connector"));
                 }
                 // Includes a default-only Switch/IntegerSwitch. A constant
-                // conditional may first select its exact surviving occurrence.
+                // selector may first select its exact surviving occurrence.
                 for candidate in self.input.blocks()[source].edges.clone() {
                     budget.charge_work(1)?;
                     if candidate != edge && self.edge_possible(candidate, budget)? {
@@ -170,7 +208,8 @@ impl State<'_, '_, '_, '_> {
         let folded = matches!(
             (tail.terminator, block.terminator),
             (
-                Terminator::ConditionalBranch { .. },
+                Terminator::ConditionalBranch { .. } | Terminator::Switch { .. }
+                    | Terminator::IntegerSwitch { .. },
                 Terminator::Branch { .. }
             )
         );

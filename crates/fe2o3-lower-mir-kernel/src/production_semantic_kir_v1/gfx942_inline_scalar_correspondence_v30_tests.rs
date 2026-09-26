@@ -467,7 +467,7 @@ fn exact_owner_replay_rejects_distinct_equal_value_operand_substitution() {
         expression(kind, ProductionOverflowContractV2::Wrapping),
     )
     .unwrap();
-    let RetainedProductionKirModuleV1::Legacy(module) = &mut owner.module else {
+    let RetainedProductionKirModuleV1::Legacy { module, .. } = &mut owner.module else {
         panic!("fixture owner changed")
     };
     let assembly = module.functions[0]

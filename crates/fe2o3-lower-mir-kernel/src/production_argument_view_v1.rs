@@ -127,20 +127,31 @@ struct AdjustedArgumentShapeV1 {
 #[derive(Clone, Copy)]
 struct ArgumentViewDataV1<'a> {
     semantic: &'a AdmittedInertSemanticMirV1,
-    instance: &'a SemanticKirFunctionCorrespondenceV1,
+    semantic_function: SemanticFunctionIdV1,
     target: &'a Function,
     logical: &'a fe2o3_mir_model::SemanticLogicalArgumentMapV1<'a>,
     physical: &'a [IndexedArgumentTraceV1<'a>],
     ignored: &'a [Option<&'a SemanticKirIgnoredParameterBindingV1>],
     shapes: &'a [AdjustedArgumentShapeV1],
+    cleanup: &'a ScopedSourceCleanupV29,
+    custody: ArgumentQueryCustodyV18,
+}
+
+#[derive(Clone, Copy)]
+struct ArgumentQueryCustodyV18 {
+    slot: usize,
+    ledger: ArgumentLedgerV1,
+    floor: usize,
 }
 
 /// Scoped checked entry correspondence over one owner-qualified function.
 ///
 /// This borrows existing MIR/KIR and temporary indices; it is not an executable
 /// graph, current SSA provenance, borrow authority, or a proof/launch receipt.
-/// All indices stay charged while the view lives. Ordinary Result returns
-/// restore scratch accounting; unwinding and allocator/RSS bounds are not claimed.
+/// All indices stay charged while the view lives. Healthy returns and unwinding
+/// drop scratch before refund; observed slot, ledger or live-floor loss denies
+/// all enclosing refunds. Selected errors and raw panic payloads are preserved.
+/// Allocator/RSS bounds are not claimed.
 ///
 /// Copied inert identities may leave a visit; borrowed nodes and paths may not.
 /// ```
@@ -183,13 +194,14 @@ struct ArgumentViewDataV1<'a> {
 /// ```
 pub struct ProductionArgumentViewV1<'s, 'w> {
     data: ArgumentViewDataV1<'s>,
+    association: &'s SemanticKirFunctionCorrespondenceV1,
     budget: &'s mut ArgumentBudgetV1<'w>,
 }
 
 impl<'s, 'w> ProductionArgumentViewV1<'s, 'w> {
     /// Exact root, semantic function, physical function, and role association.
     pub fn association(&self) -> &'s SemanticKirFunctionCorrespondenceV1 {
-        self.data.instance
+        self.association
     }
     /// Prepays a complete traversal of whole-source mappings, including empty tuples.
     pub fn source_arguments(
@@ -198,6 +210,7 @@ impl<'s, 'w> ProductionArgumentViewV1<'s, 'w> {
         impl ExactSizeIterator<Item = fe2o3_mir_model::SemanticSourceArgumentV1<'s>> + use<'s>,
         ProductionSemanticKirErrorV1,
     > {
+        self.data.check(self.budget)?;
         self.budget.charge_work(argument_sum_v1(&[
             1,
             argument_product_v1(self.data.logical.source_arguments().len(), 12)?,
@@ -212,6 +225,7 @@ impl<'s, 'w> ProductionArgumentViewV1<'s, 'w> {
         impl ExactSizeIterator<Item = fe2o3_mir_model::SemanticAdjustedArgumentV1<'s>> + use<'s>,
         ProductionSemanticKirErrorV1,
     > {
+        self.data.check(self.budget)?;
         self.budget.charge_work(argument_sum_v1(&[
             1,
             argument_product_v1(self.data.logical.adjusted_arguments().len(), 12)?,
@@ -225,6 +239,7 @@ impl<'s, 'w> ProductionArgumentViewV1<'s, 'w> {
         local: SemanticLocalIdV1,
     ) -> Result<Option<&'s SemanticKirIgnoredParameterBindingV1>, ProductionSemanticKirErrorV1>
     {
+        self.data.check(self.budget)?;
         self.budget.charge_work(4)?;
         Ok(self
             .data
@@ -252,23 +267,16 @@ impl<'s, 'w> ProductionArgumentViewV1<'s, 'w> {
         self.visit_nodes_with_budget_v1(|node, _| visit(node))
     }
 
-    // Private trusted-consumer plumbing, not a new public custody boundary.
-    // Reserve retained outputs before entering: the traversal refunds its scratch
-    // to its entry floor on ordinary Result exits, exactly as the public visitor.
-    // Like that visitor, this method does not add unwind or ledger-substitution
-    // protection; callers must not release/replace backing or retain allocations
-    // charged above a traversal scratch floor.
+    // Retained outputs must be prepaid before entering. Every callback checks
+    // its complete live path floor before any enclosing scratch can be refunded.
     fn visit_nodes_with_budget_v1(
         &mut self,
-        mut visit: impl for<'n, 'b> FnMut(
+        visit: impl for<'n, 'b> FnMut(
             ProductionArgumentNodeV1<'n>,
             &'b mut ArgumentBudgetV1<'w>,
         ) -> Result<(), ProductionSemanticKirErrorV1>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        let floor = self.budget.storage();
-        let result = self.data.visit_nodes(self.budget, &mut visit);
-        self.budget.release_storage(self.budget.storage() - floor)?;
-        result
+        self.data.visit_nodes_scoped(self.budget, visit)
     }
 }
 
@@ -318,8 +326,10 @@ impl ProductionSemanticKirOwnerV1 {
             &mut ProductionArgumentViewV1<'s, 'w>,
         ) -> Result<R, ProductionSemanticKirErrorV1>,
     ) -> Result<R, ProductionSemanticKirErrorV1> {
+        self.require_legacy_kernel_abi_floor_v18(budget)?;
         with_owner_arguments_v1(
-            self.semantic_ssa.source_semantic(),
+            &self.semantic_ssa,
+            self.module.kernel_abi(),
             self.module(),
             &self.correspondence,
             (root, function),
@@ -352,7 +362,8 @@ impl ProductionPreRankedKirOwnerV1 {
         ) -> Result<R, ProductionSemanticKirErrorV1>,
     ) -> Result<R, ProductionSemanticKirErrorV1> {
         with_owner_arguments_v1(
-            self.semantic_ssa.source_semantic(),
+            &self.semantic_ssa,
+            self.kernel_abi.as_ref(),
             self.executable.module(),
             &self.correspondence,
             (root, function),
@@ -363,7 +374,8 @@ impl ProductionPreRankedKirOwnerV1 {
 }
 
 fn with_owner_arguments_v1<'w, R>(
-    semantic: &AdmittedInertSemanticMirV1,
+    owner: &ProductionSemanticSsaOwnerV1,
+    kernel_abi: Option<&kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>,
     module: &Module,
     rows: &SemanticKirCorrespondenceV1,
     selected: (SemanticFunctionIdV1, SemanticFunctionIdV1),
@@ -372,6 +384,7 @@ fn with_owner_arguments_v1<'w, R>(
         &mut ProductionArgumentViewV1<'s, 'w>,
     ) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
+    let semantic = owner.source_semantic();
     budget.charge_work(argument_sum_v1(&[
         rows.lowered_functions.len(),
         rows.parameter_bindings.len(),
@@ -392,7 +405,8 @@ fn with_owner_arguments_v1<'w, R>(
     let target = module
         .function(&instance.kernel_ir_function)
         .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-    with_parameter_correspondence_v1(
+    let descriptor_root = descriptor_root_for_entry_v18(owner, kernel_abi, instance, budget)?;
+    with_parameter_correspondence_profile_v18(
         semantic,
         instance,
         target,
@@ -407,6 +421,7 @@ fn with_owner_arguments_v1<'w, R>(
                 same(row.correspondence_owner, row.semantic_function)
             }),
         },
+        descriptor_root,
         budget,
         use_view,
     )
@@ -419,11 +434,42 @@ fn argument_group_v1<T>(rows: &[T], same: impl Fn(&T) -> bool) -> &[T] {
 }
 
 impl<'s> ArgumentViewDataV1<'s> {
+    fn check(&self, budget: &ArgumentBudgetV1<'_>) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.custody.slot != std::ptr::from_ref(budget) as usize
+            || self.custody.ledger != budget.work_ledger_identity_v1()
+            || budget.storage() < self.custody.floor
+        {
+            self.cleanup.deny_refund();
+        }
+        if self.cleanup.is_denied() {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        Ok(())
+    }
+
+    fn visit_nodes_scoped<'work>(
+        &self,
+        budget: &mut ArgumentBudgetV1<'work>,
+        mut visit: impl for<'n, 'b> FnMut(
+            ProductionArgumentNodeV1<'n>,
+            &'b mut ArgumentBudgetV1<'work>,
+        ) -> Result<(), ProductionSemanticKirErrorV1>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.check(budget)?;
+        with_argument_scratch_v18(self.cleanup, budget, |budget| {
+            self.visit_nodes(budget, &mut |node, budget| {
+                let floor = budget.storage();
+                scoped_source_attempt_v29(self.cleanup, budget, floor, |budget| visit(node, budget))
+            })
+        })
+    }
+
     fn physical(
         &self,
         slot: usize,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Option<ProductionPhysicalArgumentV1<'s>>, ProductionSemanticKirErrorV1> {
+        self.check(budget)?;
         budget.charge_work(40)?;
         let Some(&value) = self
             .target
@@ -466,7 +512,7 @@ impl<'s> ArgumentViewDataV1<'s> {
             &'b mut ArgumentBudgetV1<'work>,
         ) -> Result<(), ProductionSemanticKirErrorV1>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        let function = &self.semantic.functions()[self.instance.semantic_function.index() as usize];
+        let function = &self.semantic.functions()[self.semantic_function.index() as usize];
         let outer = (function.abi().extern_abi()
             == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall)
             .then_some(function.abi().fixed_count());
@@ -527,10 +573,9 @@ impl<'s> ArgumentViewDataV1<'s> {
             &'b mut ArgumentBudgetV1<'work>,
         ) -> Result<(), ProductionSemanticKirErrorV1>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        let floor = budget.storage();
-        let result = self.walk_adjusted(source, mapped, shape, budget, visit);
-        budget.release_storage(budget.storage() - floor)?;
-        result
+        with_argument_scratch_v18(self.cleanup, budget, |budget| {
+            self.walk_adjusted(source, mapped, shape, budget, visit)
+        })
     }
 
     fn walk_adjusted<'work>(

@@ -1175,3 +1175,6 @@ mod saturating_source;
 mod shift_source;
 #[path = "production_rustc_driver_checked_output_simulation_v1_tests.rs"]
 mod simulation;
+
+#[path = "production_tile_global_reads_source_v29_tests.rs"]
+mod tile_global_reads;

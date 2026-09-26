@@ -1,5 +1,5 @@
 // Non-inlined index call bodies keep unrelated intrinsic temporaries off the dispatcher stack.
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     #[inline(never)]
     fn lower_intrinsic_thread_index_1d_v1(
         &mut self,
@@ -228,10 +228,8 @@ impl SemanticFunctionLoweringV1<'_> {
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         Ok({
             self.require_call_argument_count(block, call, 1)?;
-            let (slice, slice_ty) = self
-                .lower_operand(block, None, &call.arguments()[0], operations)?
-                .value()
-                .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+            let (slice, slice_ty) =
+                self.lower_allocation_carrier_receiver_v29(block, call, 0, operations)?;
             if !matches!(slice_ty, Type::Slice(_)) {
                 return Err(unsupported(
                     0,

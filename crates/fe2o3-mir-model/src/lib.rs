@@ -2,12 +2,14 @@ mod control_flow;
 mod executable;
 mod executable_wire;
 mod mem2reg;
+pub mod semantic_assertion_v1;
 mod semantic_constant;
 mod semantic_logical_arguments;
 mod semantic_masked_shift_v1;
 mod semantic_memory;
 pub mod semantic_mir_v1;
 mod semantic_option_dominance;
+mod semantic_scalar_carrier_v1;
 mod semantic_type;
 pub mod semantic_type_v2;
 mod semantic_u32_induction;
@@ -75,7 +77,8 @@ pub use semantic_memory::{
 pub use semantic_option_dominance::{
     MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1, SemanticEnumPayloadAvailabilityV1,
     SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceErrorV1,
-    SemanticOptionDominanceV1, SemanticOptionProducerV1, semantic_option_producers_v1,
+    SemanticOptionDominanceV1, SemanticOptionDominanceMeteredErrorV18, SemanticOptionProducerV1,
+    semantic_option_producers_v1, semantic_option_producers_with_meter_v18,
 };
 pub use semantic_type::{
     MirAddressSpace, MirAggregateLayout, MirEnumEncoding, MirEnumType, MirField, MirLayout,
@@ -102,6 +105,7 @@ pub use semantic_u32_induction::{
     analyze_semantic_u32_induction_no_overflow_reachable_with_limits_v2,
     analyze_semantic_u32_induction_no_overflow_v1,
     analyze_semantic_u32_induction_no_overflow_with_limits_v1,
+    analyze_semantic_u32_induction_no_overflow_with_meter_v18,
     analyze_semantic_u32_induction_no_overflow_with_ssa_plan_v2,
 };
 pub use semantic_u32_induction_evidence_v1::{
@@ -119,4 +123,12 @@ pub use ssa::{
     SsaEdgeInputV1, SsaEdgeRoleV1, SsaEventV1, SsaInputSiteV1, SsaPlanIdentityV1,
     SsaPlannerErrorV1, SsaPlannerLimitsV1, SsaPlannerResourceReportV1, SsaPlannerResourceV1,
     SsaResolvedEventV1, SsaValueV1, SsaVariableIdV1, plan_ssa_v1, plan_ssa_with_limits_v1,
+};
+
+pub use semantic_assertion_v1::{
+    SemanticAssertionAnalysisV1, SemanticAssertionErrorV1, SemanticAssertionFactV1,
+    SemanticAssertionLimitsV1, SemanticAssertionMeterV1, SemanticAssertionMeteredErrorV1,
+    SemanticAssertionNotProvedV1, SemanticAssertionOutcomeV1, SemanticAssertionProofKindV1,
+    SemanticAssertionRefutationV1, SemanticAssertionResourceObservationV1,
+    SemanticCallableDecisionV1, SemanticDefinedCallableSummariesV1,
 };

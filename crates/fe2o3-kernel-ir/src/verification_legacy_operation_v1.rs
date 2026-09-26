@@ -32,8 +32,22 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
         operation: &Operation,
         location: &VerificationDiagnosticLocationV1<'_>,
     ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+        self.verify_legacy_operation_in_context_v1(operation, location, None)
+    }
+
+    pub(crate) fn verify_legacy_operation_in_context_v1(
+        &mut self,
+        operation: &Operation,
+        location: &VerificationDiagnosticLocationV1<'_>,
+        storage: Option<&crate::StructurallyCheckedModuleStorageV1<'module>>,
+    ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
         self.budget.charge_work(1)?;
         match &operation.kind {
+            OperationKind::Storage(_) => self.emit_fixed(
+                location,
+                DiagnosticCode::InvalidSemanticOperation,
+                "storage operations require the distinct storage-aware verifier",
+            ),
             OperationKind::VerificationContract(
                 crate::VerificationContractOperationV12::WorkgroupPipelineEvent {
                     storage,
@@ -115,7 +129,41 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                             && to_pointer.access == AccessMode::ReadOnly,
                         DiagnosticCode::InvalidCast,
                     ),
-                    (CastKind::RestrictPointerAccess, _, _) => (false, DiagnosticCode::InvalidCast),
+                    (
+                        CastKind::PointerToGeneric,
+                        Type::Pointer(from_pointer),
+                        Type::Pointer(to_pointer),
+                    ) => (
+                        matches!(
+                            from_pointer.address_space,
+                            AddressSpace::Global
+                                | AddressSpace::Constant
+                                | AddressSpace::Private
+                                | AddressSpace::Workgroup
+                        ) && to_pointer.address_space == AddressSpace::Generic
+                            && from_pointer.access == to_pointer.access
+                            && (from_pointer.address_space != AddressSpace::Constant
+                                || from_pointer.access == AccessMode::ReadOnly)
+                            && verification_types_equal_v1(
+                                &from_pointer.pointee,
+                                &to_pointer.pointee,
+                                self.budget,
+                            )?,
+                        DiagnosticCode::InvalidCast,
+                    ),
+                    (CastKind::SliceToGeneric, Type::Slice(from), Type::Slice(to)) => (
+                        matches!(from.address_space, AddressSpace::Global
+                            | AddressSpace::Constant | AddressSpace::Private | AddressSpace::Workgroup)
+                            && to.address_space == AddressSpace::Generic
+                            && from.access == to.access
+                            && (from.address_space != AddressSpace::Constant
+                                || from.access == AccessMode::ReadOnly)
+                            && verification_types_equal_v1(&from.element, &to.element, self.budget)?,
+                        DiagnosticCode::InvalidCast,
+                    ),
+                    (CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric, _, _) => {
+                        (false, DiagnosticCode::InvalidCast)
+                    }
                     (_, Type::Scalar(from_scalar), Type::Scalar(to_scalar)) => (
                         valid_scalar_cast(*kind, *from_scalar, *to_scalar),
                         DiagnosticCode::InvalidCast,
@@ -207,7 +255,14 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                 address_space,
                 alignment,
             } => {
-                if !verification_type_is_storable_v15(element, self.budget)?
+                let storable = if let Some(storage) = storage {
+                    self.verify_storage_allocation_element_v1(
+                        storage, element, *alignment, location,
+                    )?
+                } else {
+                    verification_type_is_storable_v15(element, self.budget)?
+                };
+                if !storable
                     || !matches!(
                         address_space,
                         AddressSpace::Private | AddressSpace::Workgroup
@@ -376,7 +431,16 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                 self.verify_workgroup_barrier_v1(barrier, location)
             }
             OperationKind::WorkgroupMemory(memory) => {
-                self.verify_workgroup_memory_v1(operation, memory, location)
+                if let Some(storage) = storage {
+                    self.verify_workgroup_memory_in_context_v1(
+                        operation,
+                        memory,
+                        location,
+                        Some(storage),
+                    )
+                } else {
+                    self.verify_workgroup_memory_v1(operation, memory, location)
+                }
             }
             OperationKind::Gfx950LdsTranspose(transpose) => {
                 self.verify_gfx950_lds_transpose_v1(operation, transpose, location)

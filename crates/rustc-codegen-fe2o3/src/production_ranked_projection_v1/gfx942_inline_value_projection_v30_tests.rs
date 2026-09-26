@@ -604,7 +604,9 @@ fn call_index_and_recursive_expression_share_existing_budgets() {
     let function = fixture(call(vec![constant(5)], 1), vec![], vec![output()]);
     let callables = [marker(Instruction::VMovB32, false)];
     let mut resolver = GpuSemanticExpressionResolverV2::new(&types, &function).unwrap();
-    resolver.definitions.work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1;
+    resolver
+        .definitions
+        .seed_legacy_visits_for_test_v1(MAX_PROJECTED_LOOP_GRAPH_WORK_V1);
     assert!(
         resolver
             .with_gfx942_inline_callables_v30(&callables)
@@ -936,7 +938,9 @@ fn inline_liveness_consumes_the_existing_exact_graph_work_budget() {
     assert!(work > 0);
     for extra in 0..=1 {
         let mut resolver = resolver();
-        resolver.definitions.work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1 - work + extra;
+        resolver
+            .definitions
+            .seed_legacy_visits_for_test_v1(MAX_PROJECTED_LOOP_GRAPH_WORK_V1 - work + extra);
         let result = resolver.resolve_store_v2(
             function.blocks()[1].statements()[0].kind(),
             ScalarAssignmentSiteV1 {

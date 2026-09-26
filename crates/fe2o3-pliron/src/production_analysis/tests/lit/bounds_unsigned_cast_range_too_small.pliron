@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-BOUNDS-002]
+// CHECK: cannot prove Read is in bounds
+builtin.func @bounds_unsigned_cast_range_too_small: builtin.function <(kernel.index ) -> ()>
+{
+  ^entry_block1v1(input_v0: kernel.index ):
+    view_v1 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global]: <() -> (kernel.ranked_view <32,false,[255]>)>;
+    narrowed_v2 = kernel.index_unsigned_cast (input_v0) [] [kernel_unsigned_bit_width: kernel.index_value 8]: <(kernel.index ) -> (kernel.index )>;
+    kernel.access (view_v1, narrowed_v2) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[255]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

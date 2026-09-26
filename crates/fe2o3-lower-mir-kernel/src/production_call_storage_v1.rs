@@ -149,19 +149,41 @@ impl CallReturnBufferV1 {
             signatures.len().checked_ilog2().unwrap_or(0) as usize + 2,
             24,
         )?;
+        Self::for_function_widths_v29(
+            function, callables, return_width, budget,
+            |_, _, function, budget| {
+                budget.charge_work(lookup)?;
+                // Unreachable targets need not belong to the retained helper closure.
+                Ok(signatures.get(&function).map_or(0, |signature| signature.result_types.len()))
+            },
+        )
+    }
+
+    // Both callers prepay the original block roster. Only the checked physical
+    // width lookup differs; count, overflow, reservation and settlement are shared.
+    fn for_function_widths_v29(
+        function: &SemanticFunctionDeclV1,
+        callables: &[SemanticCallableDeclV1],
+        return_width: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+        mut width: impl FnMut(
+            SemanticBlockIdV1, &SemanticDirectCallV1, SemanticFunctionIdV1,
+            &mut ArgumentBudgetV1<'_>,
+        ) -> Result<usize, ProductionSemanticKirErrorV1>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let (mut count, mut components) = (0_usize, 0_usize);
-        for block in function.blocks() {
+        for (ordinal, block) in function.blocks().iter().enumerate() {
             let width = match block.terminator().kind() {
                 SemanticTerminatorKindV1::Return => return_width,
                 SemanticTerminatorKindV1::Call(call) => {
                     if let Some(SemanticCallableDeclV1::Defined { function }) =
                         callables.get(call.callee().index() as usize)
                     {
-                        budget.charge_work(lookup)?;
-                        // Unreachable targets need not belong to the retained helper closure.
-                        signatures
-                            .get(function)
-                            .map_or(0, |signature| signature.result_types.len())
+                        width(
+                            SemanticBlockIdV1::from_index(u32::try_from(ordinal)
+                                .map_err(|_| ArgumentResourceV1::Arithmetic)?),
+                            call, *function, budget,
+                        )?
                     } else {
                         0
                     }

@@ -576,6 +576,12 @@ fn compiler_intrinsic_accepts_transparent_borrow_v1(
                 ..
             },
         ) => argument == 0 && source_type == *context,
+        SemanticCompilerIntrinsicOperationV1::Execution(
+            fe2o3_mir_model::semantic_mir_v1::SemanticExecutionOperationV29::MaskedTileLoadU32 {
+                workgroup,
+                ..
+            },
+        ) => argument == 0 && source_type == *workgroup,
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent { scope, .. }
         | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { scope, .. } => {
             argument == 0 && source_type == *scope
@@ -708,6 +714,9 @@ fn compiler_intrinsic_accepts_transparent_borrow_v1(
     }
 }
 
+// Grammar-only test view. Production ReplayDriver refines holder availability
+// before publishing any promotion decision.
+#[cfg(test)]
 pub(super) fn semantic_function_ssa_input_v1(
     function: &SemanticFunctionDeclV1,
     types: Option<&[SemanticTypeDeclV1]>,
@@ -723,6 +732,7 @@ pub(super) fn semantic_function_ssa_input_v1(
     ))
 }
 
+#[cfg(test)]
 pub(super) fn semantic_function_ssa_input_with_observer_v1<
     O: emission_v1::SemanticSsaEmissionObserverV1,
 >(
@@ -980,15 +990,26 @@ pub fn authenticated_ambient_workgroup_lds_scope_zst_v1(
 
 fn classify_storage_observable_locals_v1(
     function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
     promotable: &mut [bool],
-) {
+) -> (usize, usize) {
+    let mut projection_work = 0;
+    let mut field_updates = 0_usize;
     for (block_index, block) in function.blocks().iter().enumerate() {
         for (statement_index, statement) in block.statements().iter().enumerate() {
             match statement.kind() {
                 SemanticStatementKindV1::Assign(assignment) => {
-                    if !assignment.destination().projections().is_empty() {
-                        mark_local_storage_observable_v1(assignment.destination(), promotable);
+                    if static_field_assignment_v1(
+                        function, types, assignment.destination(), &mut projection_work,
+                    ) {
+                        field_updates = field_updates.saturating_add(1);
+                    } else if !assignment.destination().projections().is_empty() {
+                        mark_local_storage_observable_v1(
+                            assignment.destination(),
+                            promotable,
+                            &mut projection_work,
+                        );
                     }
                     classify_rvalue_storage_v1(
                         assignment.value().kind(),
@@ -997,26 +1018,55 @@ fn classify_storage_observable_locals_v1(
                             statement: statement_index as u32,
                         }),
                         promotable,
+                        &mut projection_work,
                     );
                 }
                 SemanticStatementKindV1::Store(store) => {
-                    mark_local_storage_observable_v1(store.destination(), promotable);
+                    mark_local_storage_observable_v1(
+                        store.destination(),
+                        promotable,
+                        &mut projection_work,
+                    );
                 }
                 SemanticStatementKindV1::AtomicRmw(operation) => {
                     if !operation.destination().projections().is_empty() {
-                        mark_local_storage_observable_v1(operation.destination(), promotable);
+                        mark_local_storage_observable_v1(
+                            operation.destination(),
+                            promotable,
+                            &mut projection_work,
+                        );
                     }
-                    mark_local_storage_observable_v1(operation.address(), promotable);
+                    mark_local_storage_observable_v1(
+                        operation.address(),
+                        promotable,
+                        &mut projection_work,
+                    );
                 }
                 SemanticStatementKindV1::AtomicCompareExchange(operation) => {
                     if !operation.destination().projections().is_empty() {
-                        mark_local_storage_observable_v1(operation.destination(), promotable);
+                        mark_local_storage_observable_v1(
+                            operation.destination(),
+                            promotable,
+                            &mut projection_work,
+                        );
                     }
-                    mark_local_storage_observable_v1(operation.address(), promotable);
+                    mark_local_storage_observable_v1(
+                        operation.address(),
+                        promotable,
+                        &mut projection_work,
+                    );
+                }
+                SemanticStatementKindV1::Deinitialize(place)
+                    if super::partial_moves::is_static_local_deinitialize_v1(place) =>
+                {
+                    // Removing a logical value does not expose its backing.
+                    // The partial-state certificate validates the exact path
+                    // and every later use, including joins and reinitialization.
+                    projection_work = projection_work.saturating_add(place.projections().len());
                 }
                 SemanticStatementKindV1::SetDiscriminant { place, .. }
                 | SemanticStatementKindV1::Deinitialize(place) => {
-                    mark_local_storage_observable_v1(place, promotable);
+                    mark_local_storage_observable_v1(place, promotable, &mut projection_work);
                 }
                 SemanticStatementKindV1::Assume(_) => {}
                 SemanticStatementKindV1::StorageLive(_)
@@ -1029,12 +1079,16 @@ fn classify_storage_observable_locals_v1(
                 if let Some(destination) = call.destination()
                     && !destination.place().projections().is_empty()
                 {
-                    mark_local_storage_observable_v1(destination.place(), promotable);
+                    mark_local_storage_observable_v1(
+                        destination.place(),
+                        promotable,
+                        &mut projection_work,
+                    );
                 }
             }
             SemanticTerminatorKindV1::TailCall(_) | SemanticTerminatorKindV1::SwitchInt { .. } => {}
             SemanticTerminatorKindV1::Drop { place, .. } => {
-                mark_local_storage_observable_v1(place, promotable);
+                mark_local_storage_observable_v1(place, promotable, &mut projection_work);
             }
             SemanticTerminatorKindV1::Assert { .. } => {}
             SemanticTerminatorKindV1::Goto(_)
@@ -1046,21 +1100,49 @@ fn classify_storage_observable_locals_v1(
             | SemanticTerminatorKindV1::Unreachable => {}
         }
     }
+    (projection_work, field_updates)
+}
+
+fn static_field_assignment_v1(
+    function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
+    destination: &SemanticPlaceV1,
+    work: &mut usize,
+) -> bool {
+    if destination.projections().is_empty() { return false; }
+    let Some(types) = types else { return false };
+    *work = work.saturating_add(3);
+    let Some(local) = function.locals().get(destination.local().index() as usize) else {
+        return false;
+    };
+    let mut ty = local.ty();
+    for projection in destination.projections() {
+        *work = work.saturating_add(4);
+        let SemanticProjectionKindV1::Field(field) = projection.kind() else { return false };
+        let Some(SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields)) =
+            types.get(ty.index() as usize).map(SemanticTypeDeclV1::shape)
+        else { return false };
+        let Some(next) = fields.fields().get(field as usize).copied() else { return false };
+        if next != projection.result_type() { return false; }
+        ty = next;
+    }
+    ty == destination.ty()
 }
 
 fn classify_rvalue_storage_v1(
     value: &SemanticRvalueKindV1,
     transparent_borrow: bool,
     promotable: &mut [bool],
+    projection_work: &mut usize,
 ) {
     match value {
         SemanticRvalueKindV1::Borrow { .. } if transparent_borrow => {}
         SemanticRvalueKindV1::Borrow { place, .. }
         | SemanticRvalueKindV1::AddressOf { place, .. } => {
-            mark_local_storage_observable_v1(place, promotable);
+            mark_local_storage_observable_v1(place, promotable, projection_work);
         }
         SemanticRvalueKindV1::Load(load) => {
-            mark_local_storage_observable_v1(load.source(), promotable);
+            mark_local_storage_observable_v1(load.source(), promotable, projection_work);
         }
         SemanticRvalueKindV1::Use(_)
         | SemanticRvalueKindV1::Unary { .. }
@@ -1074,14 +1156,18 @@ fn classify_rvalue_storage_v1(
     }
 }
 
-fn mark_local_storage_observable_v1(place: &SemanticPlaceV1, promotable: &mut [bool]) {
-    let rooted_behind_pointer = matches!(
-        place
-            .projections()
-            .first()
-            .map(|projection| projection.kind()),
-        Some(SemanticProjectionKindV1::Dereference),
-    );
+fn mark_local_storage_observable_v1(
+    place: &SemanticPlaceV1,
+    promotable: &mut [bool],
+    projection_work: &mut usize,
+) {
+    // A dereference after aggregate projections still crosses the root allocation.
+    // Charge the full possible scan; saturation fails the checked auxiliary sum.
+    *projection_work = projection_work.saturating_add(place.projections().len());
+    let rooted_behind_pointer = place
+        .projections()
+        .iter()
+        .any(|projection| projection.kind() == SemanticProjectionKindV1::Dereference);
     if !rooted_behind_pointer
         && let Some(value) = promotable.get_mut(place.local().index() as usize)
     {

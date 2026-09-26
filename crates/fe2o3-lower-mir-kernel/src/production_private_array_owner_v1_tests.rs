@@ -53,6 +53,49 @@ fn array_owner(case: ArrayCase) -> ProductionPreRankedKirOwnerV1 {
     array_owner_at_body(case, false).unwrap()
 }
 
+#[test]
+fn private_array_relocated_blocks_preserve_original_source_coordinates() {
+    let owner = array_owner(ArrayCase::Write { sparse: false });
+    let semantic = owner.semantic_ssa().source_semantic();
+    let rows = &owner.correspondence.private_arrays;
+    let instance = rows.instances[0];
+    let mut slot = rows.slots[instance.slot_start];
+    let mut effect = rows.effects[instance.effect_start];
+    let mut body = owner.executable().module().functions[instance.module_function_ordinal]
+        .body.as_ref().unwrap().clone();
+    assert_eq!(body.blocks.len(), 1);
+    let physical = BlockId(91);
+    body.blocks[0].id = physical;
+    slot.count_location.block = physical;
+    slot.alloca_location.block = physical;
+    effect.gep_location.block = physical;
+    effect.memory_location.block = physical;
+    effect.offset_location.as_mut().unwrap().block = physical;
+    let PrivateArrayIndexV1::Local { direct_definition: Some(ref mut definition), .. } = effect.original_index else {
+        panic!("original index is a direct unsigned local");
+    };
+    definition.block = physical;
+    assert_eq!(effect.semantic_block, 0);
+    let function = &semantic.functions()[instance.function.index() as usize];
+    let check = |blocks| {
+        let mut work = PrivateArrayRecorderBudgetV1::new(1, 10_000).unwrap();
+        private_array_exact_physical_relation_v1(
+            semantic.types(), function, &body, instance.owner, instance.function,
+            &slot, &effect, blocks, 10_000, &mut work,
+        )
+    };
+    assert!(matches!(check(PrivateArrayPhysicalBlocksV1 { allocation: physical, access: physical }), Ok(0)));
+    assert!(matches!(check(PrivateArrayPhysicalBlocksV1 { allocation: BlockId(92), access: physical }),
+        Err(PrivateArrayRelationErrorV1::Mismatch("private counted allocation prologue changed"))));
+    assert!(matches!(check(PrivateArrayPhysicalBlocksV1 { allocation: physical, access: BlockId(92) }),
+        Err(PrivateArrayRelationErrorV1::Mismatch("private array effect is outside its exact source operation span"))));
+    let mut work = PrivateArrayRecorderBudgetV1::new(1, 10_000).unwrap();
+    assert!(matches!(private_array_exact_relation_v1(
+        semantic.types(), function, &body, instance.owner, instance.function,
+        &slot, &effect, 10_000, &mut work,
+    ), Err(PrivateArrayRelationErrorV1::Mismatch("private counted allocation prologue changed"))));
+}
+
 fn array_owner_at_body(
     case: ArrayCase,
     helper: bool,

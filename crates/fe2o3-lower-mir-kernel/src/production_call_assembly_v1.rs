@@ -76,6 +76,7 @@ fn with_checked_call_site_v1<'w, R>(
             let mut view = ProductionCallViewV1 {
                 entry: ProductionArgumentViewV1 {
                     data: entry.data,
+                    association: entry.association,
                     budget: &mut *entry.budget,
                 },
                 caller: site.caller,

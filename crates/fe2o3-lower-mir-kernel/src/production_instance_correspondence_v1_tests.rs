@@ -7,6 +7,202 @@ use production_call_instances_v1::{
 #[path = "production_instance_coordinates_owner_v1_tests.rs"]
 mod coordinates_owner_tests;
 
+pub(in super) fn scalar_lowering_scratch_storage_v29(output: &LoweredFunctionResultV1) -> usize {
+    assert!(output.scoped_slot_origins.as_ref().is_none_or(Vec::is_empty));
+    assert!(output.function.body.as_ref().unwrap().blocks.iter().all(|block| {
+        block.operations.iter().all(|operation| {
+            !matches!(operation.kind, OperationKind::Alloca { .. })
+        })
+    }));
+    // Low-level emission leaves scratch paid for its enclosing ownership scope.
+    // These slot-free fixtures own that scope: one original map header, one
+    // cloned map header, and the clone's two result envelopes. No map rows or
+    // type payloads exist. Use an independent empty-map type, not ledger deltas.
+    type EmptyMap = BTreeMap<(), ()>;
+    2usize
+        .checked_mul(std::mem::size_of::<EmptyMap>())
+        .unwrap()
+        .checked_add(
+            2usize
+                .checked_mul(std::mem::size_of::<
+                    Result<EmptyMap, ProductionSemanticKirErrorV1>,
+                >())
+                .unwrap(),
+        )
+        .unwrap()
+}
+
+pub(in super) fn scalar_archive_storage_v1(
+    output: &LoweredFunctionResultV1,
+    instances: &ProductionCallInstancePlanV1<'_>,
+    instance: ProductionCallInstanceIdV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> usize {
+    use std::mem::size_of;
+    assert_eq!(output.source_call_instance, Some(instance));
+    let archive = output.execution_observation.as_ref().unwrap();
+    archive
+        .check_original_v29(instances, instance, budget)
+        .unwrap();
+    assert!(archive.bindings.values().all(|binding| matches!(
+        binding,
+        SemanticValueBindingV1::Unit
+            | SemanticValueBindingV1::Value {
+                ty: Type::Scalar(_),
+                ..
+            }
+    )));
+    // These cursors have no nominal identity plan and therefore no seed slots.
+    assert!(archive.retained_seeds.is_empty());
+
+    // Scalar fixtures have no deep payload. Independently count the pinned map
+    // split allowance, one boxed binding per actual row, and the archive header.
+    let node = 32usize
+        .checked_mul(size_of::<(SsaValueV1, Box<SemanticValueBindingV1>, usize)>())
+        .unwrap();
+    let map = (0..archive.bindings.len())
+        .try_fold(0usize, |bytes, previous| {
+            let levels = previous.checked_ilog2().unwrap_or(0) as usize + 2;
+            bytes
+                .checked_add(levels.checked_mul(node).unwrap())
+                .and_then(|bytes| bytes.checked_add(size_of::<SemanticValueBindingV1>()))
+        })
+        .unwrap();
+    let owned = size_of::<ExecutionArchiveV29>().checked_add(map).unwrap();
+    assert_eq!(archive.credit.bytes, owned);
+    // These fixtures use cursors without source-reference plans, so their
+    // carrier descriptor maps stay empty. Original-place carrier planning
+    // prepays only the table header; it no longer creates a compatibility vector.
+    let function = instances
+        .owner()
+        .source_semantic()
+        .functions()
+        .get(instances.instance(instance).unwrap().function().index() as usize)
+        .unwrap();
+    assert_eq!(archive.locals.len(), function.locals().len());
+    let carrier_scratch = size_of::<ExecutionCfgCarriersV29>();
+    // The seed copy and planning scratch stay outside archive.credit; the
+    // fixture's enclosing ownership scope remains responsible for their cleanup.
+    owned
+        .checked_add(
+            archive
+                .retained_seeds
+                .capacity()
+                .checked_mul(size_of::<Option<SemanticExecutionBindingV29>>())
+                .unwrap(),
+        )
+        .unwrap()
+        .checked_add(carrier_scratch)
+        .unwrap()
+        .checked_add(scalar_transport_planning_storage_v29(instances, instance))
+        .unwrap()
+}
+
+fn scalar_transport_planning_storage_v29(
+    instances: &ProductionCallInstancePlanV1<'_>,
+    instance: ProductionCallInstanceIdV1,
+) -> usize {
+    use std::mem::size_of;
+    // A test-only storage model for whole-place scalar fixtures. It walks the
+    // original source and captured transport roster, never the measured ledger
+    // or production resolver. Capability/borrow/projected inputs are excluded.
+    #[allow(dead_code)]
+    enum Key { Local(u32, u32), Payload(u32, u32, u32, u32) }
+    fn entry<K, V>(previous: usize) -> usize {
+        (previous.checked_ilog2().unwrap_or(0) as usize + 2)
+            * 32 * size_of::<(K, V, usize)>()
+    }
+    fn resolve(
+        local: u32,
+        definitions: &[Vec<Option<u32>>],
+        promoted: &BTreeSet<u32>,
+        memo: &mut BTreeSet<u32>,
+        visiting: &mut BTreeSet<u32>,
+    ) -> usize {
+        let mut bytes = size_of::<Key>()
+            + size_of::<Option<SemanticPromotedBindingV1>>()
+            + size_of::<Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1>>()
+            // resolve_local's closure borrows the original local and type.
+            + size_of::<(&SemanticLocalIdV1, &SemanticTypeIdV1)>();
+        if memo.contains(&local) || visiting.contains(&local) { return bytes; }
+        bytes += entry::<Key, ()>(visiting.len());
+        assert!(visiting.insert(local));
+        // Every scalar origin is non-capability. The first definition therefore
+        // returns None, following its source only for an exact whole-place use.
+        if promoted.contains(&local)
+            && let Some(Some(source)) = definitions[local as usize].first()
+        {
+            bytes += resolve(*source, definitions, promoted, memo, visiting);
+        }
+        assert!(visiting.remove(&local));
+        bytes += entry::<Key, Option<SemanticPromotedBindingV1>>(memo.len());
+        assert!(memo.insert(local));
+        bytes
+    }
+    let original = instances.instance(instance).unwrap();
+    let model = instances.owner().source_semantic();
+    let function = &model.functions()[original.function().index() as usize];
+    let plan = original.ssa().plan();
+    let promoted: BTreeSet<_> = plan.promoted_variables().iter().map(|local| local.get()).collect();
+    let mut transported = BTreeSet::new();
+    for block in plan.reverse_postorder() {
+        transported.extend(plan.transport_variables(*block).unwrap().iter().map(|local| local.get()));
+    }
+    if transported.is_empty() { return 0; }
+    let mut definitions = vec![Vec::new(); function.locals().len()];
+    for block in function.blocks() {
+        for statement in block.statements() {
+            match statement.kind() {
+                SemanticStatementKindV1::Assign(assignment) => {
+                    let destination = assignment.destination();
+                    assert!(destination.projections().is_empty());
+                    let source = match assignment.value().kind() {
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) => {
+                            assert!(place.projections().is_empty());
+                            assert_eq!(place.ty(), destination.ty());
+                            Some(place.local().index())
+                        }
+                        SemanticRvalueKindV1::Borrow { .. } | SemanticRvalueKindV1::AddressOf { .. } =>
+                            panic!("scalar oracle excludes capability/address definitions"),
+                        _ => None,
+                    };
+                    definitions[destination.local().index() as usize].push(source);
+                }
+                SemanticStatementKindV1::Nop => {}
+                _ => panic!("scalar oracle excludes source storage/invalidation statements"),
+            }
+        }
+        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+            && let Some(destination) = call.destination()
+        {
+            assert!(destination.place().projections().is_empty());
+            definitions[destination.place().local().index() as usize].push(None);
+        }
+    }
+    let (mut memo, mut visiting) = (BTreeSet::new(), BTreeSet::new());
+    let mut bytes = 0;
+    for local in transported {
+        bytes += size_of::<BTreeSet<u32>>();
+        let mut visited = BTreeSet::new();
+        let mut current = local;
+        loop {
+            assert!(promoted.contains(&current));
+            let declaration = &function.locals()[current as usize];
+            assert!(matches!(model.types()[declaration.ty().index() as usize].shape(),
+                SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)));
+            bytes += entry::<u32, ()>(visited.len());
+            assert!(visited.insert(current), "fixture transport aliases are acyclic");
+            bytes += resolve(current, &definitions, &promoted, &mut memo, &mut visiting);
+            if declaration.role().is_entry_argument() { break; }
+            let [Some(source)] = definitions[current as usize].as_slice() else { break; };
+            if !promoted.contains(source) { break; }
+            current = *source;
+        }
+    }
+    assert!(visiting.is_empty());
+    bytes
+}
+
 fn with_plan(test: impl FnOnce(&ProductionCallInstancePlanV1<'_>, &mut ArgumentBudgetV1<'_>)) {
     with_plan_owner(resource_tests::helper_closure_semantic_owner(), test);
 }
@@ -210,7 +406,9 @@ fn lower_pair(
         caller.call_returns.sites.rows.len() + callee.call_returns.sites.rows.len(),
         caller.call_returns.components.rows.len() + callee.call_returns.components.rows.len(),
     )
-    .unwrap();
+    .unwrap()
+        + scalar_lowering_scratch_storage_v29(&caller)
+        + scalar_lowering_scratch_storage_v29(&callee);
     (caller, callee, storage)
 }
 
@@ -235,7 +433,9 @@ fn cursor_selected_instance_cannot_be_relabelled_on_append() {
             caller.call_returns.sites.rows.len(),
             caller.call_returns.components.rows.len(),
         )
-        .unwrap();
+        .unwrap()
+            + scalar_lowering_scratch_storage_v29(&caller)
+            + scalar_archive_storage_v1(&caller, plan, plan.root(), budget);
         caller.source_call_instance = plan.calls(plan.root()).unwrap()[0].child();
         let storage = storage
             + caller

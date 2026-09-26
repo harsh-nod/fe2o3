@@ -97,9 +97,6 @@ fn native_switch_preserves_every_repeated_successor_use() {
             ),
             "work upper bound",
         );
-        assert!(matches!(
-            prescan(context, &local),
-            Err(PlironIrIdentityErrorV1::UnsupportedOperation { .. })
-        ));
+        assert!(prescan(context, &local).is_ok());
     }
 }

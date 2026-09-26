@@ -1,0 +1,217 @@
+// This collection is private to the pending original-source transaction. A row
+// is omitted from private memory only after every actual guard query succeeds.
+struct SourceIssuedAccessesV29<'scope, 'owner, 'source> {
+    instances: &'scope ExecutionInstancesV29<'owner>,
+    source_index: &'scope SourceAddressSourceIndexV29<'source>,
+    actual: SourceIssuedActualV29<'source>,
+    originals: BTreeMap<usize, SourceIssuedOriginalV29<'scope, 'owner, 'source>>,
+    issuers: BTreeSet<(usize, SsaValueV1)>,
+    queries: Vec<SourceIssuedAccessV29>,
+    transports: Vec<SourceIssuedRootTransportV29>,
+    owned: usize,
+    slot: usize,
+    ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    floor: usize,
+}
+
+impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
+    fn new(references: &SourceReferencePlanV29<'_, '_>, instances: &'scope ExecutionInstancesV29<'owner>,
+        source_index: &'scope SourceAddressSourceIndexV29<'source>, budget: &mut ArgumentBudgetV1<'_>)
+        -> Result<Self, ProductionSemanticKirErrorV1>
+    {
+        references.check_owner(instances, budget)?;
+        let floor = budget.storage();
+        budget.reserve_storage(argument_sum_v1(&[std::mem::size_of::<Self>(),
+            std::mem::size_of::<Result<Self, ProductionSemanticKirErrorV1>>()])?)?;
+        let mut actual = SourceIssuedActualV29::from_function(&source_index.pending.function, budget)?;
+        actual.bind_root_arguments(references, &source_index.pending.function, budget)?;
+        let owned = budget.storage().checked_sub(floor).ok_or(ArgumentResourceV1::Accounting)?;
+        Ok(Self { instances, source_index, actual, originals: BTreeMap::new(), issuers: BTreeSet::new(),
+            queries: Vec::new(), transports: Vec::new(), owned, slot: std::ptr::from_ref(budget) as usize,
+            ledger: budget.work_ledger_identity_v1(), floor })
+    }
+
+    fn check(&self, budget: &mut ArgumentBudgetV1<'_>) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.slot != std::ptr::from_ref(budget) as usize || self.ledger != budget.work_ledger_identity_v1()
+            || budget.storage() < argument_sum_v1(&[self.floor, self.owned])? {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        Ok(())
+    }
+
+    fn access(&mut self, references: &SourceReferenceEmissionV29<'_, '_>, instance: ProductionCallInstanceIdV1,
+        anchor: usize, row: &ScopedMemoryAnchorV29, place: &SemanticPlaceV1,
+        budget: &mut ArgumentBudgetV1<'_>) -> Result<bool, ProductionSemanticKirErrorV1>
+    {
+        self.check(budget)?;
+        references.plan.check_owner(self.instances, budget)?;
+        let before = budget.storage();
+        budget.reserve_storage(argument_sum_v1(&[
+            std::mem::size_of::<Result<Option<SourceIssuedRecipeV29>, ProductionSemanticKirErrorV1>>(),
+            std::mem::size_of::<Result<bool, ProductionSemanticKirErrorV1>>(),
+            std::mem::size_of::<SourceIssuedRecipeV29>(),
+            std::mem::size_of::<Result<Option<&ValueDef>, ProductionSemanticKirErrorV1>>(),
+            std::mem::size_of::<Constant>(),
+            std::mem::size_of::<SourceIssuedRootTransportV29>(),
+            std::mem::size_of::<Result<SourceIssuedRootTransportV29, ProductionSemanticKirErrorV1>>(),
+        ])?)?;
+        charge_execution_cfg_lookup_v29(self.originals.len(), budget)?;
+        if !self.originals.contains_key(&instance.index()) {
+            let original = SourceIssuedOriginalV29::new(self.instances, instance, self.source_index, budget)?;
+            reserve_execution_cfg_map_entry_v29::<usize, SourceIssuedOriginalV29<'_, '_, '_>>(self.originals.len(), budget)?;
+            self.originals.insert(instance.index(), original);
+        }
+        charge_execution_cfg_lookup_v29(self.originals.len(), budget)?;
+        let original = self.originals.get_mut(&instance.index()).ok_or_else(source_issued_error_v29)?;
+        budget.charge_work(5)?;
+        let frame = row.source.ok_or_else(source_issued_error_v29)?;
+        let Some(ScopedMemoryRoleV29::Operand(role)) = frame.role else { return Err(source_issued_error_v29()); };
+        if place.projections().len() != 1
+            || place.projections()[0].kind() != SemanticProjectionKindV1::Dereference {
+            return Err(source_issued_error_v29());
+        }
+        let definition = original.use_value(frame.site, role, place, budget)?;
+        let recipe = original.resolve(definition, budget)?;
+        let accepted = if let Some(recipe) = recipe {
+            if recipe.form != SourceIssuedFormV29::Pointer { return Err(source_issued_error_v29()); }
+            original.check_archive(definition, recipe, budget)?;
+            let function = self.instances.instance(instance).ok_or_else(source_issued_error_v29)?.declaration();
+            if function.locals()[place.local().index() as usize].ty() != recipe.pointer_type
+                || lower_scalar_type(self.instances.owner().source_semantic().types(), place.ty())? != Type::Scalar(recipe.element) {
+                return Err(source_issued_error_v29());
+            }
+            let key = (instance.index(), recipe.issuer);
+            charge_execution_cfg_lookup_v29(self.issuers.len(), budget)?;
+            if !self.issuers.contains(&key) {
+                let transport = original.actual_issuer(recipe, references, &self.actual, budget)?;
+                emission_push_v1(&mut self.transports, transport, budget)?;
+                reserve_execution_cfg_map_entry_v29::<(usize, SsaValueV1), ()>(self.issuers.len(), budget)?;
+                self.issuers.insert(key);
+            }
+            self.source_index.frame_gap(instance, frame, row.block, row.position, budget)?;
+            let operation = self.source_index.emitted.operation(instance, row.block, row.position, budget)?;
+            let occurrences = self.instances.occurrences(instance).ok_or_else(source_issued_error_v29)?;
+            check_scoped_payload_v29(function, &occurrences, row, operation, budget)?;
+            let access = source_address_value_access_v29(operation)?.ok_or_else(source_issued_error_v29)?;
+            if access.object || access.pointer != recipe.pointer || access.access.address_space != AddressSpace::Global
+                || access.access.volatile || access.access.alignment == 0
+                || u64::from(access.access.alignment) > self.instances.owner().source_semantic().types()[place.ty().index() as usize]
+                    .layout().alignment_bytes()
+                || (access.writing && recipe.access != AccessMode::ReadWrite)
+                || *self.actual.value(access.value, budget)?.ty != Type::Scalar(recipe.element)
+                || !matches!(row.kind, ScopedMemoryAnchorKindV29::Access { pointer, .. } if pointer == access.pointer) {
+                return Err(source_issued_error_v29());
+            }
+            check_source_issued_payload_v29(original, row, operation, &self.actual, budget)?;
+            let (block, _) = self.source_index.emitted.point(instance, row.block,
+                u32::try_from(row.position).map_err(|_| ArgumentResourceV1::Arithmetic)?, budget)?
+                .ok_or_else(source_issued_error_v29)?;
+            emission_push_v1(&mut self.queries, SourceIssuedAccessV29 {
+                instance: instance.index(), anchor, present: recipe.present, block, checked: false,
+            }, budget)?;
+            true
+        } else { false };
+        self.owned = argument_sum_v1(&[self.owned,
+            budget.storage().checked_sub(before).ok_or(ArgumentResourceV1::Accounting)?])?;
+        Ok(accepted)
+    }
+
+    fn finish(mut self, budget: &mut ArgumentBudgetV1<'_>) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.check(budget)?;
+        let before = budget.storage();
+        call_splice_sort_work_v1(argument_product_v1(self.queries.len(), 2)?, budget)
+            .map_err(source_address_call_error_v29)?;
+        self.queries.sort_unstable_by_key(|query| (query.instance, query.anchor));
+        for pair in self.queries.windows(2) {
+            budget.charge_work(2)?;
+            if (pair[0].instance, pair[0].anchor) == (pair[1].instance, pair[1].anchor) {
+                return Err(source_issued_error_v29());
+            }
+        }
+        budget.reserve_storage(argument_sum_v1(&[
+            std::mem::size_of::<Vec<SourceIssuedGuardV29>>(),
+            std::mem::size_of::<Result<Vec<SourceIssuedGuardV29>, ProductionSemanticKirErrorV1>>(),
+            std::mem::size_of::<Result<(), ProductionSemanticKirErrorV1>>(),
+            std::mem::size_of::<Vec<std::ops::Range<usize>>>(),
+            std::mem::size_of::<Result<Vec<std::ops::Range<usize>>, ProductionSemanticKirErrorV1>>(),
+            3 * std::mem::size_of::<usize>(),
+        ])?)?;
+        let guards = source_issued_guards_v29(&self.source_index.pending.function, &self.actual, budget)?;
+        // Precompute ranges outside the CFG scope: it exclusively owns the
+        // ledger and permits only closed, live-metered graph queries inside.
+        let mut ranges = emission_vec_v1(self.queries.len(), budget)?;
+        for query in &self.queries {
+            budget.charge_work(argument_product_v1(call_splice_search_work_v1(guards.len()), 2)?)?;
+            let first = guards.partition_point(|guard| guard.present < query.present);
+            let end = guards.partition_point(|guard| guard.present <= query.present);
+            ranges.push(first..end);
+        }
+        budget.charge_work(self.transports.len())?;
+        fe2o3_kernel_ir::with_function_control_flow_v1(&self.source_index.pending.function, Default::default(), budget, |view| {
+            for transport in &mut self.transports {
+                transport.checked = transport.receiver == transport.input
+                    || view.unique_value_origin(transport.receiver)? == Some(transport.input);
+            }
+            for (query, range) in self.queries.iter_mut().zip(&ranges) {
+                for guard in &guards[range.clone()] {
+                    if view.success_edge_dominates(guard.block, guard.edge, query.block)? {
+                        query.checked = true;
+                        break;
+                    }
+                }
+            }
+            Ok(())
+        }).map_err(|error| match error {
+            fe2o3_kernel_ir::FunctionControlFlowScopeErrorV1::Resource(error) => error.into(),
+            _ => source_issued_error_v29(),
+        })?;
+        for transport in &self.transports {
+            budget.charge_work(1)?;
+            if !transport.checked { return Err(source_issued_error_v29()); }
+        }
+        for query in &self.queries {
+            budget.charge_work(1)?;
+            if !query.checked { return Err(source_issued_error_v29()); }
+        }
+        let extra = budget.storage().checked_sub(before).ok_or(ArgumentResourceV1::Accounting)?;
+        let owned = argument_sum_v1(&[self.owned, extra])?;
+        drop((self, guards, ranges));
+        budget.release_storage(owned)?;
+        Ok(())
+    }
+}
+
+fn check_source_issued_payload_v29(original: &SourceIssuedOriginalV29<'_, '_, '_>, row: &ScopedMemoryAnchorV29,
+    operation: &Operation, actual: &SourceIssuedActualV29<'_>, budget: &mut ArgumentBudgetV1<'_>)
+    -> Result<(), ProductionSemanticKirErrorV1>
+{
+    let ScopedMemoryAnchorKindV29::Access { payload: Some(payload), .. } = row.kind
+        else { return Err(source_issued_error_v29()); };
+    if matches!(payload, ScopedMemoryPayloadV29::Load { .. }) { return Ok(()); }
+    let ScopedMemoryPayloadV29::Store { value, source: ScopedMemoryStoreSourceV29::Operand { site, role, source, .. } } = payload
+        else { return Err(source_issued_error_v29()); };
+    let function = original.instances.instance(original.instance).ok_or_else(source_issued_error_v29)?.declaration();
+    match (source, scoped_source_operand_v29(function, site, role)) {
+        (ScopedMemoryOperandSourceV29::Place(occurrence @ ScopedMemoryOccurrenceV29::Promoted { .. }),
+            Some(SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place))) => {
+            let archive = original.source_index.sidecar(original.instance, budget)?.execution_observation.as_ref()
+                .ok_or_else(source_issued_error_v29)?;
+            archive.check_original_v29(original.instances, original.instance, budget)?;
+            check_scoped_payload_archive_v29(&archive.bindings, place, occurrence, value, budget)
+        }
+        (ScopedMemoryOperandSourceV29::Constant, Some(SemanticOperandV1::Constant(source))) => {
+            budget.charge_work(5)?;
+            let SemanticConstantValueV1::Scalar(bits) = source.value() else { return Err(source_issued_error_v29()); };
+            let ty = lower_scalar_type(original.instances.owner().source_semantic().types(), source.ty())?;
+            let expected = lower_constant(ty, *bits)?;
+            let Some(Operation { kind: OperationKind::Constant(actual), results }) = actual.value(value, budget)?.operation
+                else { return Err(source_issued_error_v29()); };
+            if results.len() != 1 || results[0].id != value || *actual != expected
+                || !matches!(operation.kind, OperationKind::Store { value: stored, .. } if stored == value) {
+                return Err(source_issued_error_v29());
+            }
+            Ok(())
+        }
+        _ => Err(source_issued_error_v29()),
+    }
+}

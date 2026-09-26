@@ -61,6 +61,8 @@ impl CrGuardV1 {
     }
 }
 
+include!("production_canonical_ranked_private_v1.rs");
+include!("production_canonical_assertion_checks_v1.rs");
 /// Complete original-source facts attached to the one canonical graph.
 /// Construction is owner-only. Facts do not discharge ranked obligations.
 /// Every query uses the original Budget slot/ledger and complete live floor;

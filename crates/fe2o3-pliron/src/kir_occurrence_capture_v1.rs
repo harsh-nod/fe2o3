@@ -1268,7 +1268,8 @@ impl State {
                 self.validate_occurrences(ctx, new)?;
                 let old_id = self.op(old)?;
                 let new_id = self.op(new)?;
-                if !Operation::is_op::<dialect_gpu::optimization_v1::CondBranchOp>(old, ctx)
+                if !(Operation::is_op::<dialect_gpu::optimization_v1::CondBranchOp>(old, ctx)
+                    || Operation::is_op::<dialect_gpu::switch_v3::SwitchOpV3>(old, ctx))
                     || !Operation::is_op::<dialect_gpu::optimization_v1::BranchOp>(new, ctx)
                     || self.operations.rows[old_id].selected_replacement.is_some()
                     || self.operations.rows[new_id].input.is_some()
@@ -1604,11 +1605,21 @@ impl Capture {
             FixedPolicy::Integer6,
         )
     }
-    fn finish_data(
+    pub(crate) fn finish_policy3_v18(
         &self,
         ctx: &Context,
         roster: &LiveRosterV12,
-        map: &crate::kir_optimization_map_v12::MapData,
+        map: &crate::KirOptimizationMapPolicy3V18,
+        output: &Module,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_data(ctx, roster, map.neutral_data_v18(), output, FixedPolicy::Checked3)
+    }
+
+    fn finish_data<I>(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::kir_optimization_map_v12::MapData<I>,
         output: &Module,
         policy: FixedPolicy,
     ) -> Result<KirNeutralOccurrenceRowsV1> {
@@ -1769,9 +1780,9 @@ fn assemble_occurrence_rows(
 include!("kir_commutative_capture_v1.rs");
 /// Values use the already retained, independently lifecycle-checked old-map
 /// witness. This does not infer operands from that map or alter its wire bytes.
-fn derive_definition_rows(
+fn derive_definition_rows<I>(
     state: &mut State,
-    map: &crate::kir_optimization_map_v12::MapData,
+    map: &crate::kir_optimization_map_v12::MapData<I>,
     rows: &mut KirNeutralOccurrenceRowsV1,
 ) -> Result<()> {
     let count = map.neutral_node_count_v1();

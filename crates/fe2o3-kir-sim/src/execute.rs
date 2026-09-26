@@ -34,6 +34,7 @@ use crate::schedule::{
     SchedulePrepareErrorV1,
 };
 use crate::soft_float::{SoftFloatErrorV1, SoftFloatOperationV1};
+use crate::storage_request_view_v29::SimulationRequestRefV29;
 use crate::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1,
     DynamicWorkgroupMemoryRequestV1, EventPolicyV1, IndexWidthV1, NoopSimulationDebugSinkV1,
@@ -58,6 +59,80 @@ mod ordered_program_v17;
 #[path = "execute_ordered_region_v16.rs"]
 mod ordered_region_v16;
 
+#[path = "execute_storage_copy_v1.rs"]
+mod storage_copy_v1;
+#[path = "execute_storage_resources_v1.rs"]
+mod storage_resources_v1;
+#[path = "execute_storage_v1.rs"]
+mod storage_v1;
+#[path = "execute_canonical_storage_v18.rs"]
+mod canonical_storage_v18;
+#[path = "execute_storage_values_v1.rs"]
+mod storage_values_v1;
+#[path = "execute_storage_views_v1.rs"]
+mod storage_views_v1;
+#[path = "execute_storage_input_geometry_v29.rs"]
+mod storage_input_geometry_v29;
+#[path = "execute_storage_input_import_v29.rs"]
+mod storage_input_import_v29;
+#[path = "execute_storage_input_export_v29.rs"]
+mod storage_input_export_v29;
+#[path = "execute_storage_tags_v29.rs"]
+mod storage_tags_v29;
+#[path = "execute_canonical_storage_inputs_v29.rs"]
+mod canonical_storage_inputs_v29;
+use storage_copy_v1::*;
+use storage_resources_v1::*;
+use storage_v1::*;
+use storage_values_v1::*;
+use storage_views_v1::*;
+use storage_input_geometry_v29::*;
+use storage_input_import_v29::*;
+use storage_input_export_v29::*;
+use storage_tags_v29::*;
+pub use canonical_storage_inputs_v29::*;
+pub use canonical_storage_v18::{
+    SimulationExecutionV18, simulate_canonical_storage_debugged_with_sink_v18,
+    simulate_canonical_storage_v18, simulate_canonical_storage_with_sinks_v18,
+};
+
+#[cfg(test)]
+#[path = "execute_storage_copy_v1_tests.rs"]
+mod storage_copy_tests_v1;
+#[cfg(test)]
+#[path = "execute_storage_resources_v1_tests.rs"]
+mod storage_resources_tests_v1;
+#[cfg(test)]
+#[path = "execute_storage_v1_tests.rs"]
+mod storage_tests_v1;
+#[cfg(test)]
+#[path = "execute_storage_values_v1_tests.rs"]
+mod storage_values_tests_v1;
+#[cfg(test)]
+#[path = "execute_storage_views_v1_tests.rs"]
+mod storage_views_tests_v1;
+
+#[cfg(test)]
+#[path = "execute_pointer_to_generic_v18_tests.rs"]
+mod pointer_to_generic_tests_v18;
+
+#[cfg(test)]
+#[path = "execute_slice_to_generic_v18_tests.rs"]
+mod slice_to_generic_tests_v18;
+
+#[cfg(test)]
+#[path = "storage_inputs_v29_tests.rs"]
+mod storage_inputs_tests_v29;
+#[cfg(test)]
+#[path = "execute_storage_input_admission_v29_tests.rs"]
+mod storage_input_admission_tests_v29;
+#[cfg(test)]
+#[path = "execute_storage_input_values_v29_tests.rs"]
+mod storage_input_values_tests_v29;
+#[cfg(test)]
+#[path = "execute_storage_input_relocations_v29_tests.rs"]
+mod storage_input_relocations_tests_v29;
+
 /// Ephemeral execution event kind. This is an in-process adapter, not a durable trace schema.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SimulationEventKindV1 {
@@ -79,7 +154,7 @@ pub enum SimulationEventKindV1 {
     Terminator,
     /// The terminator selected this target after resolving its outgoing values.
     Branch { target: BlockId },
-    /// A scalar load and initialization check completed successfully.
+    /// An admitted memory read completed; object padding need not be initialized.
     MemoryRead {
         allocation: u64,
         offset: usize,
@@ -558,6 +633,13 @@ pub enum SimulationExecutionErrorKindV1 {
         actual: usize,
         limit: usize,
     },
+    StorageResidentLimit {
+        actual: usize,
+        limit: usize,
+    },
+    StorageViolation {
+        reason: &'static str,
+    },
     AllocationFailure,
     MissingFunction(FunctionId),
     MissingBody(FunctionId),
@@ -663,6 +745,8 @@ impl SimulationExecutionErrorKindV1 {
             | Self::AllocationLimit { .. }
             | Self::AllocationBytesLimit { .. }
             | Self::TotalBytesLimit { .. }
+            | Self::StorageResidentLimit { .. }
+            | Self::StorageViolation { .. }
             | Self::AllocationFailure
             | Self::UnknownBlock(_)
             | Self::MissingTerminator(_)
@@ -1204,6 +1288,9 @@ enum RuntimeValue {
     Scalar(ScalarBitsV1),
     Pointer(PointerValue),
     Slice(SliceValue),
+    StoragePointer(StorageAddressV1),
+    StorageSlice(StorageSliceV1),
+    StorageVector(StorageVectorValueV1),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1216,6 +1303,18 @@ struct PointerValue {
     lower_bound: usize,
     upper_bound: usize,
     abi_argument_ordinal: u32,
+    storage_guard: Option<usize>,
+    generic_exposed: bool,
+}
+
+impl PointerValue {
+    fn visible_address_space(&self) -> AddressSpace {
+        if self.generic_exposed {
+            AddressSpace::Generic
+        } else {
+            self.address_space
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1228,9 +1327,22 @@ struct SliceValue {
     byte_offset: usize,
     byte_len: usize,
     abi_argument_ordinal: u32,
+    storage_guard: Option<usize>,
+    generic_exposed: bool,
+}
+
+impl SliceValue {
+    fn visible_address_space(&self) -> AddressSpace {
+        if self.generic_exposed {
+            AddressSpace::Generic
+        } else {
+            self.address_space
+        }
+    }
 }
 
 struct Allocation {
+    input: Option<StorageInputAllocationV29>,
     address_space: AddressSpace,
     access: AccessMode,
     alignment: u32,
@@ -1238,6 +1350,7 @@ struct Allocation {
     initialized: Vec<bool>,
     workgroup_published: Vec<bool>,
     workgroup_writer: Vec<u64>,
+    storage: StorageAllocationV1,
 }
 
 struct WorkgroupAllocation {
@@ -1251,13 +1364,18 @@ struct WorkgroupAllocation {
 struct PreparedStore<'a> {
     bytes: &'a mut [u8],
     initialized: &'a mut [bool],
+    storage: &'a mut StorageAllocationV1,
+    start: usize,
+    end: usize,
 }
 
 impl PreparedStore<'_> {
     fn commit(self, value: ScalarBitsV1) {
+        self.storage
+            .invalidate(self.start, self.end, self.initialized);
         let raw = value.bits().to_le_bytes();
         self.bytes.copy_from_slice(&raw[..self.bytes.len()]);
-        self.initialized.fill(true);
+        self.initialized[self.start..self.end].fill(true);
     }
 }
 
@@ -1268,6 +1386,9 @@ struct Memory {
     next_allocation: u64,
     allocations_created: usize,
     live_bytes: usize,
+    storage_accounting: StorageAccountingV1,
+    storage_invocation: std::cell::Cell<Option<SimulationInvocationV1>>,
+    storage_vectors: Vec<StorageVectorV1>,
 }
 
 impl Memory {
@@ -1291,6 +1412,9 @@ impl Memory {
             next_allocation: 1,
             allocations_created: 0,
             live_bytes: 0,
+            storage_accounting: StorageAccountingV1::new(limits),
+            storage_invocation: std::cell::Cell::new(None),
+            storage_vectors: Vec::new(),
         })
     }
 
@@ -1334,6 +1458,7 @@ impl Memory {
         self.allocations.insert(
             id,
             Allocation {
+                input: None,
                 address_space,
                 access,
                 alignment,
@@ -1341,6 +1466,7 @@ impl Memory {
                 initialized,
                 workgroup_published,
                 workgroup_writer,
+                storage: StorageAllocationV1::new(address_space, self.storage_invocation.get()),
             },
         );
         Ok(id)
@@ -1386,6 +1512,9 @@ impl Memory {
                 "released allocation live-byte accounting",
             ),
         )?;
+        let storage_bytes = allocation.storage.backing_bytes()?;
+        drop(allocation);
+        self.storage_accounting.release(storage_bytes);
         Ok(true)
     }
 
@@ -1405,6 +1534,9 @@ impl Memory {
             .byte_offset
             .checked_add(width)
             .ok_or(SimulationExecutionErrorKindV1::PointerOffsetOverflow)?;
+        allocation
+            .storage
+            .raw_read(pointer.byte_offset, end, &self.storage_accounting)?;
         if allocation.initialized[pointer.byte_offset..end]
             .iter()
             .any(|initialized| !initialized)
@@ -1471,7 +1603,7 @@ impl Memory {
         validate_access(
             allocation,
             pointer,
-            MemoryAccess::new(pointer.address_space, alignment),
+            MemoryAccess::new(pointer.visible_address_space(), alignment),
             width,
             false,
         )?;
@@ -1479,6 +1611,9 @@ impl Memory {
             .byte_offset
             .checked_add(width)
             .ok_or(SimulationExecutionErrorKindV1::PointerOffsetOverflow)?;
+        allocation
+            .storage
+            .raw_read(pointer.byte_offset, end, &self.storage_accounting)?;
         if allocation.initialized[pointer.byte_offset..end]
             .iter()
             .any(|initialized| !initialized)
@@ -1517,10 +1652,12 @@ impl Memory {
         width: usize,
     ) -> Result<(), SimulationExecutionErrorKindV1> {
         let allocation = self.allocation(pointer)?;
+        self.storage_accounting
+            .charge(allocation.storage.mutation_work()?)?;
         validate_access(
             allocation,
             pointer,
-            MemoryAccess::new(pointer.address_space, alignment),
+            MemoryAccess::new(pointer.visible_address_space(), alignment),
             width,
             true,
         )
@@ -1551,6 +1688,15 @@ impl Memory {
         width: usize,
         workgroup_writer: Option<u64>,
     ) {
+        let destination_allocation = self
+            .allocations
+            .get_mut(&destination.allocation)
+            .expect("validated copy destination remains live");
+        destination_allocation.storage.invalidate(
+            destination.byte_offset,
+            destination.byte_offset + width,
+            &mut destination_allocation.initialized,
+        );
         for relative in 0..width {
             let source_offset = source.byte_offset + relative;
             let destination_offset = destination.byte_offset + relative;
@@ -1583,6 +1729,8 @@ impl Memory {
         let allocation = self.allocations.get_mut(&pointer.allocation).ok_or(
             SimulationExecutionErrorKindV1::InternalInvariant("validated allocation remained live"),
         )?;
+        self.storage_accounting
+            .charge(allocation.storage.mutation_work()?)?;
         let end = pointer
             .byte_offset
             .checked_add(width)
@@ -1592,13 +1740,18 @@ impl Memory {
                 "validated store byte range remained live",
             ),
         )?;
-        let initialized = allocation
-            .initialized
-            .get_mut(pointer.byte_offset..end)
-            .ok_or(SimulationExecutionErrorKindV1::InternalInvariant(
+        if end > allocation.initialized.len() {
+            return Err(SimulationExecutionErrorKindV1::InternalInvariant(
                 "validated store initialization range remained live",
-            ))?;
-        Ok(PreparedStore { bytes, initialized })
+            ));
+        }
+        Ok(PreparedStore {
+            bytes,
+            initialized: &mut allocation.initialized,
+            storage: &mut allocation.storage,
+            start: pointer.byte_offset,
+            end,
+        })
     }
 
     fn mark_workgroup_store(
@@ -1679,6 +1832,9 @@ impl Memory {
         if allocation.address_space != pointer.address_space {
             return Err(SimulationExecutionErrorKindV1::AddressSpaceMismatch);
         }
+        allocation
+            .storage
+            .guard(pointer.storage_guard, &self.storage_accounting)?;
         Ok(allocation)
     }
 }
@@ -1700,7 +1856,7 @@ fn validate_access(
     width: usize,
     write: bool,
 ) -> Result<(), SimulationExecutionErrorKindV1> {
-    if access.address_space != pointer.address_space {
+    if access.address_space != pointer.visible_address_space() {
         return Err(SimulationExecutionErrorKindV1::AddressSpaceMismatch);
     }
     if write
@@ -1790,6 +1946,7 @@ fn out_of_bounds_detail_v2(
 
 struct Engine<'a, S> {
     module: &'a fe2o3_kernel_ir::Module,
+    storage: Option<&'a fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'a>>,
     function_module_indices: Vec<usize>,
     block_indices: Vec<HashMap<BlockId, usize>>,
     function_ssa_values: Vec<usize>,
@@ -1810,7 +1967,6 @@ struct Engine<'a, S> {
     debug_delivery_stopped: bool,
     schedule_identity: SimulationScheduleIdentityV1,
     schedule_decision: u64,
-    steps: u64,
     events: u64,
     reserved_event_closures: u64,
     event_delivery_stopped: bool,
@@ -1875,8 +2031,8 @@ enum CallTarget {
     Trap,
 }
 
-fn debug_value(value: &RuntimeValue) -> SimulationDebugValueV1 {
-    match value {
+fn debug_value(value: &RuntimeValue) -> Option<SimulationDebugValueV1> {
+    Some(match value {
         RuntimeValue::Scalar(value) => SimulationDebugValueV1::Scalar(*value),
         RuntimeValue::Pointer(value) => SimulationDebugValueV1::Pointer {
             allocation: value.allocation,
@@ -1896,7 +2052,10 @@ fn debug_value(value: &RuntimeValue) -> SimulationDebugValueV1 {
             byte_offset: value.byte_offset,
             byte_len: value.byte_len,
         },
-    }
+        RuntimeValue::StoragePointer(_)
+        | RuntimeValue::StorageSlice(_)
+        | RuntimeValue::StorageVector(_) => return None,
+    })
 }
 
 fn capture_debug_stack(
@@ -1949,14 +2108,18 @@ fn capture_debug_stack(
                 required: u64::try_from(value_count).unwrap_or(u64::MAX),
             };
         }
-        values.extend(
-            ordered
-                .into_iter()
-                .map(|(value, observed)| SimulationDebugBindingV1 {
-                    value: *value,
-                    observed: debug_value(observed),
-                }),
-        );
+        for (value, observed) in ordered {
+            let Some(observed) = debug_value(observed) else {
+                return SimulationDebugCollectionV1::Unavailable {
+                    reason: SimulationDebugUnavailableReasonV1::NotCaptured,
+                    required: 0,
+                };
+            };
+            values.push(SimulationDebugBindingV1 {
+                value: *value,
+                observed,
+            });
+        }
         let Some(function_ordinal) = function_module_indices.get(frame.function_index).copied()
         else {
             return SimulationDebugCollectionV1::Unavailable {
@@ -1985,6 +2148,16 @@ fn capture_debug_memory(
     memory: &Memory,
     limits: SimulationDebugCaptureLimitsV1,
 ) -> SimulationDebugCollectionV1<SimulationDebugAllocationV1> {
+    if memory
+        .allocations
+        .values()
+        .any(|allocation| !allocation.storage.relocations.is_empty())
+    {
+        return SimulationDebugCollectionV1::Unavailable {
+            reason: SimulationDebugUnavailableReasonV1::NotCaptured,
+            required: 0,
+        };
+    }
     if memory.allocations.len() > limits.max_allocations_per_checkpoint() {
         return SimulationDebugCollectionV1::Unavailable {
             reason: SimulationDebugUnavailableReasonV1::AllocationLimit,
@@ -2069,16 +2242,39 @@ pub(crate) fn conservative_execution_resident_bytes(
     workgroup_allocation_sites: usize,
     workgroup_static_bytes: usize,
 ) -> Option<usize> {
-    let arguments = request.arguments.len();
-    let shared = request.shared_buffers.len();
+    conservative_execution_resident_bytes_v29(admitted_resident_bytes,
+        SimulationRequestRefV29::Legacy(request), limits, reserved_call_depth,
+        reachable_ssa_values, plan_identity_bytes, reachable_indices_capacity,
+        execution_index_resident_bytes, maximum_reachable_identifier_bytes,
+        workgroup_participants, workgroup_allocation_sites, workgroup_static_bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn conservative_execution_resident_bytes_v29(
+    admitted_resident_bytes: usize,
+    request: SimulationRequestRefV29<'_>,
+    limits: SimulationLimitsV1,
+    reserved_call_depth: usize,
+    reachable_ssa_values: usize,
+    plan_identity_bytes: usize,
+    reachable_indices_capacity: usize,
+    execution_index_resident_bytes: usize,
+    maximum_reachable_identifier_bytes: usize,
+    workgroup_participants: usize,
+    workgroup_allocation_sites: usize,
+    workgroup_static_bytes: usize,
+) -> Option<usize> {
+    let arguments = request.argument_count();
+    let shared = request.backing_count();
     let mut resident = ResidentLedger::new(admitted_resident_bytes);
     resident.add_bytes(size_of::<Engine<'static, NoopSimulationEventSinkV1>>())?;
     resident.add_bytes(reserved_vec_bytes::<RaceTracker>(1)?)?;
-    resident.add_bytes(size_of::<SimulationRequestV1>())?;
     resident.add_bytes(size_of::<SimulationPlanV1>())?;
     resident.add_bytes(size_of::<SimulationExecutionV1>())?;
+    resident.add_bytes(size_of::<StorageExecutionCompletionV1>())?;
+    resident.add_bytes(size_of::<StorageExecutionScheduleV1<'static>>())?;
+    resident.add_bytes(size_of::<StorageScheduleCompletionV1>())?;
     resident.add_bytes(reserved_vec_bytes::<SimulationSupplementalV1>(1)?)?;
-    resident.add_bytes(request.kernel.retained_capacity_bytes())?;
     resident.add_bytes(plan_identity_bytes)?;
     resident.add_vec::<usize>(reachable_indices_capacity)?;
     resident.add_bytes(execution_index_resident_bytes)?;
@@ -2093,37 +2289,12 @@ pub(crate) fn conservative_execution_resident_bytes(
     )?;
 
     // The borrowed request and completed result coexist with simulated memory at copy-back.
-    resident.add_product(
-        request.arguments.capacity(),
-        size_of::<SimulationArgumentV1>(),
-    )?;
-    resident.add_product(
-        request.shared_buffers.capacity(),
-        size_of::<SharedBufferV1>(),
-    )?;
-    for argument in &request.arguments {
-        if let SimulationArgumentV1::Buffer(buffer) = argument {
-            resident.add_bytes(buffer.retained_payload_capacity_bytes()?)?;
-        }
-    }
-    for backing in &request.shared_buffers {
-        resident.add_bytes(backing.buffer.retained_payload_capacity_bytes()?)?;
-    }
-    resident.add_bytes(reserved_vec_bytes::<SimulationArgumentV1>(arguments)?)?;
-    resident.add_bytes(reserved_vec_bytes::<SharedBufferV1>(shared)?)?;
-    for argument in &request.arguments {
-        if let SimulationArgumentV1::Buffer(buffer) = argument {
-            resident.add_bytes(reserved_vec_bytes::<u8>(buffer.bytes().len())?)?;
-            resident.add_bytes(reserved_bool_vec_bytes(buffer.initialized().len())?)?;
-        }
-    }
-    for backing in &request.shared_buffers {
-        resident.add_bytes(reserved_vec_bytes::<u8>(backing.buffer.bytes().len())?)?;
-        resident.add_bytes(reserved_bool_vec_bytes(backing.buffer.initialized().len())?)?;
-    }
+    request.retain_input(&mut resident)?;
+    request.retain_output(&mut resident)?;
+    resident.add_bytes(size_of::<StorageInputContextV29<'_>>())?;
 
-    // Allocation payloads use exact reservation on the pinned toolchain. Rust's
-    // specialized `Vec<bool>` reports capacity in bits, not bytes.
+    // Allocation payloads use exact reservation on the pinned toolchain.
+    // Vec<bool> capacity counts ordinary bool elements, each charged in bytes.
     resident.add_bytes(limits.max_total_bytes)?;
     resident.add_bytes(partitioned_bool_vec_storage_bytes(
         limits.max_total_bytes,
@@ -2401,25 +2572,10 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
         site: &CompactSite,
         count: usize,
     ) -> Result<(), SimulationExecutionErrorV1> {
-        let count = u64::try_from(count).unwrap_or(u64::MAX);
-        let Some(steps) = self.steps.checked_add(count) else {
-            return Err(self.at(
-                *site,
-                SimulationExecutionErrorKindV1::StepLimit {
-                    limit: self.limits.max_steps,
-                },
-            ));
-        };
-        if steps > self.limits.max_steps {
-            return Err(self.at(
-                *site,
-                SimulationExecutionErrorKindV1::StepLimit {
-                    limit: self.limits.max_steps,
-                },
-            ));
-        }
-        self.steps = steps;
-        Ok(())
+        self.memory
+            .storage_accounting
+            .charge(count)
+            .map_err(|kind| self.at(*site, kind))
     }
 
     fn event(
@@ -2614,22 +2770,8 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
         site: CompactSite,
         memory: &fe2o3_kernel_ir::WorkgroupMemory,
     ) -> Result<PointerValue, SimulationExecutionErrorV1> {
-        let Type::Scalar(element) = memory.element else {
-            return Err(self.at(
-                site,
-                SimulationExecutionErrorKindV1::InternalInvariant(
-                    "preflighted scalar workgroup memory",
-                ),
-            ));
-        };
-        let element_bytes = self.target.scalar_bytes(element).ok_or_else(|| {
-            self.at(
-                site,
-                SimulationExecutionErrorKindV1::InternalInvariant(
-                    "preflighted workgroup memory element",
-                ),
-            )
-        })?;
+        let (element, element_bytes, _) =
+            storage_allocation_element_v1(self, &memory.element, memory.alignment, &site)?;
         let bytes = match memory.extent {
             WorkgroupMemoryExtent::Static(elements) => usize::try_from(elements)
                 .ok()
@@ -2647,6 +2789,16 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 ),
             )
         })?;
+        if matches!(memory.element, Type::StorageObject(_))
+            && (bytes == 0 || bytes % element_bytes != 0)
+        {
+            return Err(self.at(
+                site,
+                storage_violation_v1(
+                    "storage workgroup extent must contain complete nonempty objects",
+                ),
+            ));
+        }
         if let Some(existing) = self
             .workgroup_allocations
             .iter()
@@ -2669,6 +2821,8 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 lower_bound: 0,
                 upper_bound: bytes,
                 abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
+                storage_guard: None,
+                generic_exposed: false,
             });
         }
 
@@ -2722,6 +2876,8 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             lower_bound: 0,
             upper_bound: bytes,
             abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
+            storage_guard: None,
+            generic_exposed: false,
         })
     }
 
@@ -3332,6 +3488,50 @@ fn execute(
     sink: &mut impl SimulationEventSinkV1,
     debug_sink: &mut impl SimulationDebugSinkV1,
 ) -> Result<SimulationExecutionV1, SimulationExecutionErrorV1> {
+    execute_module_v1(
+        &admitted.module,
+        None,
+        Some(admitted.identity),
+        request,
+        configuration,
+        sink,
+        debug_sink,
+    )?
+    .canonical(admitted.identity)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_module_v1<'a>(
+    module: &'a Module,
+    storage: Option<&'a fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'a>>,
+    identity: Option<SimulationKernelIrIdentityV1>,
+    request: &SimulationRequestV1,
+    configuration: ExecutionConfiguration<'_>,
+    sink: &'a mut impl SimulationEventSinkV1,
+    debug_sink: &'a mut impl SimulationDebugSinkV1,
+) -> Result<StorageExecutionCompletionV1, SimulationExecutionErrorV1> {
+    execute_inputs_v29(module, storage, identity, LegacyStorageInputsV29(request), configuration, sink, debug_sink)
+}
+
+fn execute_inputs_v29<'a, I: StorageInputProfileV29>(
+    module: &'a Module,
+    storage: Option<&'a fe2o3_kernel_ir::VerifiedStorageKernelIrModuleV1<'a>>,
+    identity: Option<SimulationKernelIrIdentityV1>,
+    inputs: I,
+    configuration: ExecutionConfiguration<'_>,
+    sink: &'a mut impl SimulationEventSinkV1,
+    debug_sink: &'a mut impl SimulationDebugSinkV1,
+) -> Result<StorageExecutionCompletionV1<I::Argument, I::Backing>, SimulationExecutionErrorV1> {
+    let request = inputs.request();
+    match (storage, identity) {
+        (Some(verified), None) if std::ptr::eq(verified.module(), module) => {}
+        (None, Some(_)) => {}
+        _ => {
+            return Err(top_level_error(storage_violation_v1(
+                "execution module/profile association mismatch",
+            )));
+        }
+    }
     let ExecutionConfiguration {
         target,
         limits,
@@ -3350,10 +3550,10 @@ fn execute(
                 "preflighted workgroup participant count",
             ))
         })?;
-    let mut schedule = PreparedScheduleV1::prepare(
+    let mut schedule = StorageExecutionScheduleV1::prepare_inputs_v29(
         schedule,
-        admitted.identity,
-        request,
+        identity,
+        request.legacy(),
         plan.dynamic_workgroup_memory,
         target,
         limits,
@@ -3362,8 +3562,7 @@ fn execute(
         resident_offset,
     )
     .map_err(|error| top_level_error(schedule_prepare_error(error)))?;
-    let indices =
-        build_execution_indices(&admitted.module, &plan.reachable_function_indices, target)?;
+    let indices = build_execution_indices(module, &plan.reachable_function_indices, target)?;
     let actual_index_resident_bytes =
         execution_indices_resident_bytes(&indices).ok_or_else(|| {
             top_level_error(SimulationExecutionErrorKindV1::InternalInvariant(
@@ -3396,13 +3595,30 @@ fn execute(
         })?;
     let entry_module_index = function_module_indices[entry_index];
     drop(function_indices);
-    let entry = &admitted.module.functions[entry_module_index];
-    let memory = Memory::new(
-        request.arguments.len(),
-        request.shared_buffers.len(),
+    let entry = &module.functions[entry_module_index];
+    let mut memory = Memory::new(
+        request.argument_count(),
+        request.backing_count(),
         limits,
     )
     .map_err(top_level_error)?;
+    let resident_floor = plan
+        .resident_bytes()
+        .checked_add(resident_offset)
+        .and_then(|bytes| bytes.checked_add(schedule.initial_resident_bytes()))
+        .ok_or_else(|| {
+            top_level_error(SimulationExecutionErrorKindV1::StorageResidentLimit {
+                actual: usize::MAX,
+                limit: limits.max_resident_bytes,
+            })
+        })?;
+    memory
+        .storage_accounting
+        .hold(resident_floor)
+        .map_err(top_level_error)?;
+    let parameters = inputs.initialize(&mut StorageInputContextV29 {
+        memory: &mut memory, target, limits,
+    }, storage, entry)?;
     let mut accesses = HashMap::new();
     accesses
         .try_reserve(limits.max_memory_access_records)
@@ -3414,7 +3630,8 @@ fn execute(
     let debug_origin_requested =
         debug_capture.is_enabled() && debug_sink.wants_operation_origin_v1();
     let mut engine = Engine {
-        module: &admitted.module,
+        module,
+        storage,
         function_module_indices,
         block_indices,
         function_ssa_values,
@@ -3435,7 +3652,6 @@ fn execute(
         debug_delivery_stopped: !debug_capture.is_enabled(),
         schedule_identity: schedule.identity(),
         schedule_decision: 0,
-        steps: 0,
         events: 0,
         reserved_event_closures: 0,
         event_delivery_stopped: false,
@@ -3449,8 +3665,6 @@ fn execute(
         race_trackers: Vec::new(),
         workgroup_allocations,
     };
-    initialize_shared_buffers(&mut engine, request)?;
-    let parameters = initialize_arguments(&mut engine, entry, request)?;
     let invocation_site = entry
         .body
         .as_ref()
@@ -3564,6 +3778,30 @@ fn execute(
             }
         }
     }
+    finish_execution(
+        &engine,
+        schedule,
+        identity,
+        &inputs,
+        &parameters,
+        &plan,
+        [invocations, workgroups, scheduled_slots],
+    )
+}
+
+// Copy-back and schedule sealing run after the machines stop. Keep their
+// temporary results off the stack while the iterative call engine is active.
+#[inline(never)]
+fn finish_execution<I: StorageInputProfileV29>(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    schedule: StorageExecutionScheduleV1<'_>,
+    identity: Option<SimulationKernelIrIdentityV1>,
+    inputs: &I,
+    parameters: &[RuntimeValue],
+    plan: &SimulationPlanV1,
+    counts: [u64; 3],
+) -> Result<StorageExecutionCompletionV1<I::Argument, I::Backing>, SimulationExecutionErrorV1> {
+    let [invocations, workgroups, scheduled_slots] = counts;
     if invocations != plan.invocations
         || workgroups != plan.workgroups
         || scheduled_slots != plan.scheduled_slots
@@ -3574,29 +3812,27 @@ fn execute(
             )),
         );
     }
-    let arguments = copy_back_arguments(&engine.memory, &request.arguments)?;
-    let shared_buffers = copy_back_shared_buffers(&engine.memory, &request.shared_buffers)?;
+    let (arguments, shared_buffers) = inputs.copy_back(engine, parameters)?;
     let conflict_assessment = engine.conflict_assessment();
     let schedule = schedule
-        .finish(
+        .finish_inputs_v29(
             plan.workgroups,
-            admitted.identity,
-            request,
+            identity,
+            inputs.request().legacy(),
             plan.dynamic_workgroup_memory,
-            target,
-            limits,
+            engine.target,
+            engine.limits,
         )
         .map_err(|error| engine.fail(SimulationExecutionErrorKindV1::ScheduleReplay(error)))?;
-    let supplemental = collect_supplemental_observations(&engine, schedule.records)?;
-    Ok(SimulationExecutionV1 {
-        identity: admitted.identity,
+    let supplemental = collect_supplemental_observations(engine, schedule.records)?;
+    Ok(StorageExecutionCompletionV1 {
         dynamic_workgroup_memory: plan.dynamic_workgroup_memory,
         arguments,
         shared_buffers,
         invocations_executed: invocations,
         workgroups_visited: workgroups,
         scheduled_slots_visited: scheduled_slots,
-        steps_executed: engine.steps,
+        steps_executed: engine.memory.storage_accounting.steps(),
         events_emitted: engine.events,
         schedule: schedule.identity,
         schedule_transcript_identity: schedule.transcript_identity,
@@ -3677,7 +3913,7 @@ fn execute_cooperative_workgroup<'a>(
     machines: &mut [InvocationMachine<'a>],
     invocation_site: &CompactSite,
     invocations: &mut u64,
-    schedule: &mut PreparedScheduleV1<'_>,
+    schedule: &mut StorageExecutionScheduleV1<'_>,
     canonical_order: bool,
 ) -> Result<(), SimulationExecutionErrorV1> {
     let workgroup = machines
@@ -3701,7 +3937,7 @@ fn execute_cooperative_workgroup<'a>(
                     continue;
                 }
                 schedule
-                    .selected(machine.invocation, phase)
+                    .selected(machine.invocation, phase, &engine.memory.storage_accounting)
                     .map_err(|error| engine.fail(schedule_prepare_error(error)))?;
                 engine.schedule_decision = schedule.current_decision() - 1;
                 engine.select_debug_invocation(Some(machine.invocation));
@@ -3775,11 +4011,11 @@ fn advance_runnable_machine<'a>(
     machine: &mut InvocationMachine<'a>,
     invocation_site: &CompactSite,
     invocations: &mut u64,
-    schedule: &mut PreparedScheduleV1<'_>,
+    schedule: &mut StorageExecutionScheduleV1<'_>,
     phase: u64,
 ) -> Result<(), SimulationExecutionErrorV1> {
     schedule
-        .selected(machine.invocation, phase)
+        .selected(machine.invocation, phase, &engine.memory.storage_accounting)
         .map_err(|error| engine.fail(schedule_prepare_error(error)))?;
     engine.schedule_decision = schedule.current_decision() - 1;
     engine.select_debug_invocation(Some(machine.invocation));
@@ -4112,7 +4348,7 @@ fn resolve_ready_waves<'a>(
 fn resolve_ready_collectives<'a>(
     engine: &mut Engine<'a, impl SimulationEventSinkV1>,
     machines: &mut [InvocationMachine<'a>],
-    schedule: &mut PreparedScheduleV1<'_>,
+    schedule: &mut StorageExecutionScheduleV1<'_>,
     phase: &mut u64,
 ) -> Result<usize, SimulationExecutionErrorV1> {
     let mut resolved = 0_usize;
@@ -4342,7 +4578,7 @@ fn complete_collective_lane<'a>(
 fn release_workgroup_barrier<'a>(
     engine: &mut Engine<'a, impl SimulationEventSinkV1>,
     machines: &mut [InvocationMachine<'a>],
-    schedule: &mut PreparedScheduleV1<'_>,
+    schedule: &mut StorageExecutionScheduleV1<'_>,
     phase: &mut u64,
 ) -> Result<(), SimulationExecutionErrorV1> {
     for machine in machines.iter() {
@@ -4563,7 +4799,7 @@ fn observe_preexisting_allocations(
 }
 
 fn initialize_arguments(
-    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    engine: &mut StorageInputContextV29<'_>,
     entry: &Function,
     request: &SimulationRequestV1,
 ) -> Result<Vec<RuntimeValue>, SimulationExecutionErrorV1> {
@@ -4577,12 +4813,26 @@ fn initialize_arguments(
         .zip(&entry.signature.parameters)
         .enumerate()
     {
+        if let SimulationArgumentV1::Buffer(buffer) = argument {
+            allocate_argument(engine, index, buffer, AddressSpace::Global)?;
+        }
+        parameters.push(initialize_registered_argument_v29(engine, index, argument, ty)?);
+    }
+    Ok(parameters)
+}
+
+fn initialize_registered_argument_v29(
+    engine: &StorageInputContextV29<'_>,
+    index: usize,
+    argument: &SimulationArgumentV1,
+    ty: &Type,
+) -> Result<RuntimeValue, SimulationExecutionErrorV1> {
         let argument_ordinal = u32::try_from(index).map_err(|_| {
             engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
                 "preflighted ABI argument ordinal",
             ))
         })?;
-        let parameter = match (argument, ty) {
+        match (argument, ty) {
             (SimulationArgumentV1::Scalar(value), Type::Scalar(_)) => {
                 Ok(RuntimeValue::Scalar(*value))
             }
@@ -4594,7 +4844,8 @@ fn initialize_arguments(
                         )),
                     );
                 };
-                let allocation = allocate_argument(engine, index, buffer, AddressSpace::Global)?;
+                let allocation = engine.memory.argument_allocations.get(index).copied().flatten()
+                    .ok_or_else(|| engine.fail(storage_violation_v1("registered scalar argument allocation is absent")))?;
                 Ok(RuntimeValue::Slice(SliceValue {
                     allocation,
                     elements: buffer.element_count(engine.target).map_err(|_| {
@@ -4608,6 +4859,8 @@ fn initialize_arguments(
                     byte_offset: 0,
                     byte_len: buffer.bytes().len(),
                     abi_argument_ordinal: argument_ordinal,
+                    storage_guard: None,
+                    generic_exposed: false,
                 }))
             }
             (SimulationArgumentV1::Buffer(buffer), Type::Pointer(pointer)) => {
@@ -4618,7 +4871,8 @@ fn initialize_arguments(
                         )),
                     );
                 };
-                let allocation = allocate_argument(engine, index, buffer, AddressSpace::Global)?;
+                let allocation = engine.memory.argument_allocations.get(index).copied().flatten()
+                    .ok_or_else(|| engine.fail(storage_violation_v1("registered scalar argument allocation is absent")))?;
                 Ok(RuntimeValue::Pointer(PointerValue {
                     allocation,
                     byte_offset: 0,
@@ -4628,6 +4882,8 @@ fn initialize_arguments(
                     lower_bound: 0,
                     upper_bound: buffer.bytes().len(),
                     abi_argument_ordinal: argument_ordinal,
+                    storage_guard: None,
+                    generic_exposed: false,
                 }))
             }
             (SimulationArgumentV1::BufferView(view), Type::Slice(slice)) => {
@@ -4661,6 +4917,8 @@ fn initialize_arguments(
                     byte_offset: view.byte_offset(),
                     byte_len,
                     abi_argument_ordinal: argument_ordinal,
+                    storage_guard: None,
+                    generic_exposed: false,
                 }))
             }
             (SimulationArgumentV1::BufferView(view), Type::Pointer(pointer)) => {
@@ -4701,6 +4959,8 @@ fn initialize_arguments(
                     lower_bound: view.byte_offset(),
                     upper_bound,
                     abi_argument_ordinal: argument_ordinal,
+                    storage_guard: None,
+                    generic_exposed: false,
                 }))
             }
             _ => Err(
@@ -4708,14 +4968,11 @@ fn initialize_arguments(
                     "preflighted argument shape",
                 )),
             ),
-        }?;
-        parameters.push(parameter);
-    }
-    Ok(parameters)
+        }
 }
 
 fn initialize_shared_buffers(
-    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    engine: &mut StorageInputContextV29<'_>,
     request: &SimulationRequestV1,
 ) -> Result<(), SimulationExecutionErrorV1> {
     for shared in &request.shared_buffers {
@@ -4750,7 +5007,7 @@ fn initialize_shared_buffers(
 }
 
 fn allocate_argument(
-    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    engine: &mut StorageInputContextV29<'_>,
     index: usize,
     buffer: &BufferArgumentV1,
     address_space: AddressSpace,
@@ -4785,7 +5042,14 @@ fn copy_back_arguments(
         .try_reserve_exact(source.len())
         .map_err(|_| top_level_error(SimulationExecutionErrorKindV1::AllocationFailure))?;
     for (index, argument) in source.iter().enumerate() {
-        let output = match argument {
+        arguments.push(copy_back_argument_v29(memory, index, argument)?);
+    }
+    Ok(arguments)
+}
+
+fn copy_back_argument_v29(memory: &Memory, index: usize, argument: &SimulationArgumentV1)
+    -> Result<SimulationArgumentV1, SimulationExecutionErrorV1> {
+        Ok(match argument {
             SimulationArgumentV1::Scalar(value) => SimulationArgumentV1::Scalar(*value),
             SimulationArgumentV1::Buffer(buffer) => {
                 let allocation_id = memory.argument_allocations[index].ok_or_else(|| {
@@ -4798,6 +5062,11 @@ fn copy_back_arguments(
                         allocation: allocation_id,
                     })
                 })?;
+                if !allocation.storage.relocations.is_empty() {
+                    return Err(top_level_error(storage_violation_v1(
+                        "raw output cannot export symbolic pointer representations",
+                    )));
+                }
                 SimulationArgumentV1::Buffer(buffer.with_contents(
                     try_clone_slice(&allocation.bytes).map_err(top_level_error)?,
                     try_clone_slice(&allocation.initialized).map_err(top_level_error)?,
@@ -4806,10 +5075,7 @@ fn copy_back_arguments(
             SimulationArgumentV1::BufferView(view) => {
                 SimulationArgumentV1::BufferView(view.clone())
             }
-        };
-        arguments.push(output);
-    }
-    Ok(arguments)
+        })
 }
 
 fn copy_back_shared_buffers(
@@ -4831,6 +5097,11 @@ fn copy_back_shared_buffers(
                 allocation: *allocation_id,
             })
         })?;
+        if !allocation.storage.relocations.is_empty() {
+            return Err(top_level_error(storage_violation_v1(
+                "raw shared output cannot export symbolic pointer representations",
+            )));
+        }
         let buffer = shared.buffer.with_contents(
             try_clone_slice(&allocation.bytes).map_err(top_level_error)?,
             try_clone_slice(&allocation.initialized).map_err(top_level_error)?,
@@ -6406,10 +6677,13 @@ fn execute_operation(
     values: &HashMap<ValueId, RuntimeValue>,
     frame_allocations: &mut Vec<FrameAllocation>,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
-    // Choose the execution frame before entering either implementation. Calling the
-    // assembly helper from the large non-assembly match would combine their debug
-    // stack frames, even though an assembly operation needs only the small helper.
-    if matches!(&operation.kind, OperationKind::InlineAssembly(_)) {
+    // Dispatch before entering the sibling evaluators so their operand and error
+    // temporaries do not accumulate in a shared debug-build stack frame.
+    engine.memory.storage_invocation.set(engine.invocation);
+    if matches!(&operation.kind, OperationKind::Storage(_)) {
+        let site = operation_site(function_index, block, ordinal);
+        execute_storage_v1(engine, values, operation, &site)
+    } else if matches!(&operation.kind, OperationKind::InlineAssembly(_)) {
         let site = operation_site(function_index, block, ordinal);
         execute_inline_assembly(engine, values, operation, &site)
     } else if matches!(&operation.kind, OperationKind::Gfx942OrderedRegion(_)) {
@@ -6418,29 +6692,32 @@ fn execute_operation(
     } else if matches!(&operation.kind, OperationKind::Gfx942OrderedProgram(_)) {
         let site = operation_site(function_index, block, ordinal);
         ordered_program_v17::execute(engine, values, operation, &site)
+    } else if matches!(
+        &operation.kind,
+        OperationKind::Constant(_)
+            | OperationKind::Intrinsic(_)
+            | OperationKind::Unary { .. }
+            | OperationKind::Binary { .. }
+            | OperationKind::Compare { .. }
+            | OperationKind::Cast { .. }
+            | OperationKind::Select { .. }
+            | OperationKind::Call { .. }
+    ) {
+        execute_value_operation(engine, function_index, block, ordinal, operation, values)
     } else {
-        execute_non_assembly_operation(
-            engine,
-            function_index,
-            block,
-            ordinal,
-            operation,
-            values,
-            frame_allocations,
-        )
+        let site = operation_site(function_index, block, ordinal);
+        execute_memory_operation(engine, operation, values, frame_allocations, site)
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn execute_non_assembly_operation(
+fn execute_value_operation(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
     function_index: usize,
     block: &BasicBlock,
     ordinal: usize,
     operation: &Operation,
     values: &HashMap<ValueId, RuntimeValue>,
-    frame_allocations: &mut Vec<FrameAllocation>,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
     let site = operation_site(function_index, block, ordinal);
     let one = |value| Ok(SmallResults::One(value));
@@ -6494,19 +6771,85 @@ fn execute_non_assembly_operation(
             )))
         }
         OperationKind::Cast { kind, value, to } => {
-            if *kind == CastKind::RestrictPointerAccess {
-                let RuntimeValue::Pointer(mut pointer) =
-                    runtime_value(engine, values, *value, &site)?.clone()
-                else {
+            if *kind == CastKind::SliceToGeneric {
+                let mut exposed = runtime_value(engine, values, *value, &site)?.clone();
+                let (space, access, generic) = match &mut exposed {
+                    RuntimeValue::Slice(slice) =>
+                        (slice.address_space, slice.access, &mut slice.generic_exposed),
+                    RuntimeValue::StorageSlice(slice) => {
+                        let pointer = &mut slice.address.pointer;
+                        (pointer.address_space, pointer.access, &mut pointer.generic_exposed)
+                    }
+                    _ => return Err(engine.at(site,
+                        storage_violation_v1("generic slice exposure requires a whole slice"))),
+                };
+                if *generic || !matches!(space, AddressSpace::Global | AddressSpace::Constant
+                    | AddressSpace::Private | AddressSpace::Workgroup)
+                    || (space == AddressSpace::Constant && access != AccessMode::ReadOnly)
+                {
+                    return Err(engine.at(site,
+                        storage_violation_v1("generic slice exposure requires a concrete source")));
+                }
+                *generic = true;
+                if !storage_runtime_type_matches_v1(engine, &exposed, to, &site)? {
+                    return Err(engine.at(site,
+                        storage_violation_v1("generic slice exposure changes element or access")));
+                }
+                return one(exposed);
+            }
+            if *kind == CastKind::PointerToGeneric {
+                let mut exposed = runtime_value(engine, values, *value, &site)?.clone();
+                let pointer = match &mut exposed {
+                    RuntimeValue::Pointer(pointer) => pointer,
+                    RuntimeValue::StoragePointer(address) => &mut address.pointer,
+                    _ => {
+                        return Err(engine.at(
+                            site,
+                            storage_violation_v1("generic exposure requires a pointer"),
+                        ));
+                    }
+                };
+                if pointer.generic_exposed
+                    || (pointer.address_space == AddressSpace::Constant
+                        && pointer.access != AccessMode::ReadOnly)
+                    || !matches!(
+                        pointer.address_space,
+                        AddressSpace::Global
+                            | AddressSpace::Constant
+                            | AddressSpace::Private
+                            | AddressSpace::Workgroup
+                    )
+                {
                     return Err(engine.at(
                         site,
-                        SimulationExecutionErrorKindV1::InternalInvariant(
-                            "preflighted pointer access restriction",
-                        ),
+                        storage_violation_v1("generic exposure requires a concrete source"),
                     ));
+                }
+                pointer.generic_exposed = true;
+                if !storage_runtime_type_matches_v1(engine, &exposed, to, &site)? {
+                    return Err(engine.at(
+                        site,
+                        storage_violation_v1("generic exposure changes pointee or access"),
+                    ));
+                }
+                return one(exposed);
+            }
+            if *kind == CastKind::RestrictPointerAccess {
+                let mut restricted = runtime_value(engine, values, *value, &site)?.clone();
+                let pointer = match &mut restricted {
+                    RuntimeValue::Pointer(pointer) => pointer,
+                    RuntimeValue::StoragePointer(address) => &mut address.pointer,
+                    _ => {
+                        return Err(engine.at(
+                            site,
+                            SimulationExecutionErrorKindV1::InternalInvariant(
+                                "preflighted pointer access restriction",
+                            ),
+                        ));
+                    }
                 };
                 pointer.access = AccessMode::ReadOnly;
-                return one(RuntimeValue::Pointer(pointer));
+                return one(restricted);
             }
             let value = scalar_value(engine, values, *value, &site)?;
             let Type::Scalar(to) = to else {
@@ -6574,20 +6917,33 @@ fn execute_non_assembly_operation(
                 )),
             }
         }
+        _ => Err(engine.at(
+            site,
+            SimulationExecutionErrorKindV1::InternalInvariant(
+                "non-value operation reached value evaluator",
+            ),
+        )),
+    }
+}
+
+#[inline(never)]
+fn execute_memory_operation(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    operation: &Operation,
+    values: &HashMap<ValueId, RuntimeValue>,
+    frame_allocations: &mut Vec<FrameAllocation>,
+    site: CompactSite,
+) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
+    let one = |value| Ok(SmallResults::One(value));
+    match &operation.kind {
         OperationKind::Alloca {
             element,
             count,
             address_space,
             alignment,
         } => {
-            let Type::Scalar(element) = element else {
-                return Err(engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::InternalInvariant(
-                        "preflighted scalar allocation",
-                    ),
-                ));
-            };
+            let (element, element_bytes, storage_layout) =
+                storage_allocation_element_v1(engine, element, *alignment, &site)?;
             if *address_space != AddressSpace::Private {
                 return Err(engine.at(
                     site,
@@ -6604,14 +6960,6 @@ fn execute_non_assembly_operation(
                 .map_err(|kind| engine.at(site, kind))?,
                 None => 1,
             };
-            let element_bytes = engine.target.scalar_bytes(*element).ok_or_else(|| {
-                engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::InternalInvariant(
-                        "preflighted allocation element",
-                    ),
-                )
-            })?;
             let bytes = count.checked_mul(element_bytes).ok_or_else(|| {
                 engine.at(
                     site,
@@ -6621,6 +6969,12 @@ fn execute_non_assembly_operation(
                     },
                 )
             })?;
+            if storage_layout.is_some() && bytes == 0 {
+                return Err(engine.at(
+                    site,
+                    storage_violation_v1("storage private extent must contain a nonempty object"),
+                ));
+            }
             engine
                 .memory
                 .validate_allocation(bytes, engine.limits)
@@ -6658,34 +7012,48 @@ fn execute_non_assembly_operation(
                 },
                 reserved,
             )?;
-            one(RuntimeValue::Pointer(PointerValue {
+            let pointer = PointerValue {
                 allocation: id,
                 byte_offset: 0,
-                element: *element,
+                element,
                 address_space: AddressSpace::Private,
                 access: AccessMode::ReadWrite,
                 lower_bound: 0,
                 upper_bound: bytes,
                 abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
-            }))
+                storage_guard: None,
+                generic_exposed: false,
+            };
+            one(match storage_layout {
+                Some(layout) => RuntimeValue::StoragePointer(StorageAddressV1 { pointer, layout }),
+                None => RuntimeValue::Pointer(pointer),
+            })
         }
         OperationKind::SliceLength { slice } => {
-            let RuntimeValue::Slice(slice) = runtime_value(engine, values, *slice, &site)? else {
-                return Err(engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::RuntimeType {
-                        value: Some(*slice),
-                        expected: "slice",
-                    },
-                ));
+            let elements = match runtime_value(engine, values, *slice, &site)? {
+                RuntimeValue::Slice(slice) => slice.elements,
+                RuntimeValue::StorageSlice(slice) => slice.elements,
+                _ => {
+                    return Err(engine.at(
+                        site,
+                        SimulationExecutionErrorKindV1::RuntimeType {
+                            value: Some(*slice),
+                            expected: "slice",
+                        },
+                    ));
+                }
             };
             one(RuntimeValue::Scalar(
-                ScalarBitsV1::index(slice.elements as u64, engine.target).map_err(|_| {
+                ScalarBitsV1::index(elements as u64, engine.target).map_err(|_| {
                     engine.at(site, SimulationExecutionErrorKindV1::IntegerOutOfRange)
                 })?,
             ))
         }
         OperationKind::SliceData { slice } => {
+            if let RuntimeValue::StorageSlice(value) = runtime_value(engine, values, *slice, &site)?
+            {
+                return one(RuntimeValue::StoragePointer(value.address.clone()));
+            }
             let RuntimeValue::Slice(slice) = runtime_value(engine, values, *slice, &site)? else {
                 return Err(engine.at(
                     site,
@@ -6715,6 +7083,8 @@ fn execute_non_assembly_operation(
                 lower_bound: slice.byte_offset,
                 upper_bound,
                 abi_argument_ordinal: slice.abi_argument_ordinal,
+                storage_guard: slice.storage_guard,
+                generic_exposed: slice.generic_exposed,
             }))
         }
         OperationKind::GetElementPointer { base, offset } => {
@@ -6862,9 +7232,16 @@ fn execute_non_assembly_operation(
             engine.observe_and_commit_store(&site, pointer_value, stored, bytes)?;
             Ok(SmallResults::None)
         }
-        OperationKind::WorkgroupMemory(memory) => one(RuntimeValue::Pointer(
-            engine.workgroup_pointer(site, memory)?,
-        )),
+        OperationKind::WorkgroupMemory(memory) => {
+            let pointer = engine.workgroup_pointer(site, memory)?;
+            one(match &memory.element {
+                Type::StorageObject(layout) => RuntimeValue::StoragePointer(StorageAddressV1 {
+                    pointer,
+                    layout: *layout,
+                }),
+                _ => RuntimeValue::Pointer(pointer),
+            })
+        }
         OperationKind::Atomic(atomic) => execute_atomic(engine, values, atomic, &site),
         OperationKind::Fence(fence) => {
             if fence.semantics.ordering != MemoryOrdering::Relaxed {
@@ -6885,7 +7262,16 @@ fn execute_non_assembly_operation(
         OperationKind::MemoryIntrinsic(intrinsic) => {
             execute_memory_intrinsic(engine, values, intrinsic, &site)
         }
-        OperationKind::Execution(_)
+        OperationKind::Constant(_)
+        | OperationKind::Intrinsic(_)
+        | OperationKind::Unary { .. }
+        | OperationKind::Binary { .. }
+        | OperationKind::Compare { .. }
+        | OperationKind::Cast { .. }
+        | OperationKind::Select { .. }
+        | OperationKind::Call { .. }
+        | OperationKind::Storage(_)
+        | OperationKind::Execution(_)
         | OperationKind::Barrier(_)
         | OperationKind::WorkgroupBarrier(_)
         | OperationKind::Matrix(_)
@@ -7908,6 +8294,8 @@ fn guarded_transpose_source_byte(
         lower_bound: source.byte_offset,
         upper_bound: source.byte_offset + source.byte_len,
         abi_argument_ordinal: source.abi_argument_ordinal,
+        storage_guard: source.storage_guard,
+        generic_exposed: source.generic_exposed,
     };
     let pointer = pointer_at_byte(engine, &base, index, ScalarType::U8, site)?;
     let value = execute_pointer_load(
@@ -8083,7 +8471,7 @@ fn bind_typed_value(
     value: RuntimeValue,
     site: &CompactSite,
 ) -> Result<(), SimulationExecutionErrorV1> {
-    if runtime_type(&value) != definition.ty {
+    if !storage_runtime_type_matches_v1(engine, &value, &definition.ty, site)? {
         return Err(engine.at(
             *site,
             SimulationExecutionErrorKindV1::RuntimeType {
@@ -8108,22 +8496,6 @@ fn bind_runtime_value(
     }
     values.insert(id, value);
     Ok(())
-}
-
-fn runtime_type(value: &RuntimeValue) -> Type {
-    match value {
-        RuntimeValue::Scalar(value) => Type::Scalar(value.ty()),
-        RuntimeValue::Pointer(pointer) => Type::pointer(
-            Type::Scalar(pointer.element),
-            pointer.address_space,
-            pointer.access,
-        ),
-        RuntimeValue::Slice(slice) => Type::slice(
-            Type::Scalar(slice.element),
-            slice.address_space,
-            slice.access,
-        ),
-    }
 }
 
 fn runtime_value<'a>(
@@ -8584,8 +8956,8 @@ fn execute_cast(
                 "preflighted cast target",
             ))?;
     let bits = match kind {
-        CastKind::RestrictPointerAccess => {
-            unreachable!("pointer access restriction is not a scalar cast")
+        CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric => {
+            unreachable!("pointer casts are not scalar casts")
         }
         CastKind::Truncate => value.bits() & mask(to_width),
         CastKind::ZeroExtend | CastKind::Bitcast => value.bits(),
@@ -8596,7 +8968,7 @@ fn execute_cast(
         | CastKind::FloatToInteger => unreachable!("handled software-float cast"),
     };
     let structurally_valid = match kind {
-        CastKind::RestrictPointerAccess => false,
+        CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric => false,
         CastKind::Truncate => to_width < from_width,
         CastKind::ZeroExtend | CastKind::SignExtend => to_width > from_width,
         CastKind::Bitcast => to_width == from_width,
@@ -8693,6 +9065,7 @@ mod tests {
             },
         );
         let allocation = Allocation {
+            input: None,
             address_space: AddressSpace::Global,
             access: AccessMode::WriteOnly,
             alignment: 4,
@@ -8700,6 +9073,7 @@ mod tests {
             initialized: vec![true; 4],
             workgroup_published: vec![],
             workgroup_writer: vec![],
+            storage: StorageAllocationV1::new(AddressSpace::Global, None),
         };
         let values = HashMap::from([
             (
@@ -8713,6 +9087,8 @@ mod tests {
                     lower_bound: 0,
                     upper_bound: 4,
                     abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
+                    storage_guard: None,
+                    generic_exposed: false,
                 }),
             ),
             (
@@ -8728,6 +9104,7 @@ mod tests {
         let mut debug_sink = NoopSimulationDebugSinkV1;
         let mut engine = Engine {
             module: &module,
+            storage: None,
             function_module_indices: vec![0],
             block_indices: vec![HashMap::new()],
             function_ssa_values: vec![0],
@@ -8744,6 +9121,9 @@ mod tests {
                 next_allocation: 8,
                 allocations_created: 1,
                 live_bytes: 4,
+                storage_accounting: StorageAccountingV1::new(SimulationLimitsV1::default()),
+                storage_invocation: std::cell::Cell::new(None),
+                storage_vectors: Vec::new(),
             },
             sink: &mut sink,
             debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
@@ -8755,7 +9135,6 @@ mod tests {
             debug_delivery_stopped: true,
             schedule_identity: SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
             schedule_decision: 0,
-            steps: 0,
             events: 0,
             reserved_event_closures: 0,
             event_delivery_stopped: false,
@@ -8858,6 +9237,7 @@ mod tests {
     #[test]
     fn write_only_simulator_memory_accepts_stores_and_rejects_reads() {
         let allocation = Allocation {
+            input: None,
             address_space: AddressSpace::Global,
             access: AccessMode::WriteOnly,
             alignment: 4,
@@ -8865,6 +9245,7 @@ mod tests {
             initialized: vec![true; 4],
             workgroup_published: vec![],
             workgroup_writer: vec![],
+            storage: StorageAllocationV1::new(AddressSpace::Global, None),
         };
         let pointer = PointerValue {
             allocation: 7,
@@ -8875,6 +9256,8 @@ mod tests {
             lower_bound: 0,
             upper_bound: 4,
             abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
+            storage_guard: None,
+            generic_exposed: false,
         };
         assert!(out_of_bounds_detail_v2(&pointer, 8, 4).abi_view.is_none());
         let access = MemoryAccess::new(AddressSpace::Global, 4);
@@ -8891,6 +9274,9 @@ mod tests {
             next_allocation: 8,
             allocations_created: 1,
             live_bytes: 4,
+            storage_accounting: StorageAccountingV1::new(SimulationLimitsV1::default()),
+            storage_invocation: std::cell::Cell::new(None),
+            storage_vectors: Vec::new(),
         };
         let width = memory
             .validate_store(

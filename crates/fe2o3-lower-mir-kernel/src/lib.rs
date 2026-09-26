@@ -11,9 +11,38 @@ mod production_formal_memory_evidence_v4;
 mod production_formal_memory_v1;
 mod production_lineage_evidence_v3;
 mod production_masked_shift_query_v1;
+mod production_semantic_assertion_query_v1;
 mod production_semantic_kir_v1;
 mod production_source_launch_v1;
 pub use production_semantic_kir_v1::ProductionMemoryDischargeFailureV1;
+pub use production_semantic_kir_v1::{
+    ProductionOptimizedSourceCorrespondenceV18,
+    ProductionLifecycleCheckedNativePoliciesV18, ProductionOptimizedExecutionKindV18,
+    ProductionOptimizedExecutionRecipesV18, ProductionSourceNativeLifecycleErrorV18,
+    ProductionSourceNativeLifecycleDiagnosticV18,
+    ProductionOptimizedSourceOperationV18, ProductionOptimizedSourceGapV18,
+    ProductionOptimizedSourceTerminatorV18, ProductionOptimizedSourceSpanV18,
+    ProductionOptimizedSourceGapIntervalV18, ProductionOptimizedSourceEffectsV18,
+    ProductionOptimizedSourceCfgEventV18, ProductionOptimizedSourceCfgRootV18,
+    ProductionOptimizedSourceAllocationV18, ProductionOptimizedSourceMemoryAccessV18,
+    ProductionOptimizedSourcePayloadV18,
+    ProductionKernelArgumentAbiArgumentV18, ProductionKernelArgumentAbiInputV18,
+    ProductionKernelArgumentAbiKindV18, ProductionKernelArgumentAbiRootV18,
+    ProductionKernelByValueAbiV29, ProductionKernelIgnoredArgumentAbiV29,
+    ProductionKernelInlineArgumentAbiV29,
+    ProductionPreparedSourceV18, ProductionSourceCorrespondenceV18, ProductionSourceOperationV18,
+    ProductionSourceOwnedViewErrorV18, ProductionSourceOwnedViewV18,
+    ProductionSourceOptimizationErrorV18,
+    ProductionSourceRankedAccessV18,
+    ProductionOptimizedSourceAnalysisV18,
+    ProductionOptimizedSourceBlockControlV18, ProductionOptimizedSourceSiteControlV18,
+    ProductionOptimizedSourceFormalErrorV18,
+    ProductionOptimizedSourceScalarLeavesV18, ProductionOptimizedSourceScalarStoreV18,
+    ProductionOptimizedSourceScalarStoreDispositionV18,
+    ProductionOptimizedSliceAccessViewV18,
+    ProductionSourceScalarArgumentV18, ProductionSourceScalarLeavesV18,
+    ProductionSourceScalarInputV18, ProductionSourceScalarStoreV18,
+};
 pub use production_source_launch_v1::*;
 
 pub use production_context_roots_v1::*;
@@ -25,6 +54,7 @@ pub use production_formal_memory_evidence_v4::*;
 pub use production_formal_memory_v1::*;
 pub use production_lineage_evidence_v3::*;
 pub use production_masked_shift_query_v1::*;
+pub use production_semantic_assertion_query_v1::*;
 pub use production_semantic_kir_v1::*;
 
 use std::{
@@ -1501,3 +1531,11 @@ mod raw_owner_safety_tests {
         );
     }
 }
+
+#[path = "production_tile_global_reads_v29.rs"]
+mod tile_global_reads_v29;
+pub use tile_global_reads_v29::{
+    ProductionCheckedTileGlobalReadsV29, ProductionTileGlobalReadAdmissionV29,
+    ProductionTileGlobalReadAliasV29, ProductionTileGlobalReadErrorV29,
+    with_checked_tile_global_reads_v29,
+};

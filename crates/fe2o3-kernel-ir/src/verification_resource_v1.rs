@@ -103,6 +103,24 @@ impl Error for CanonicalKernelIrVerificationResourceErrorV1 {
     }
 }
 
+impl From<crate::FormalGuardedMemoryResourceErrorV1>
+    for CanonicalKernelIrVerificationResourceErrorV1
+{
+    fn from(error: crate::FormalGuardedMemoryResourceErrorV1) -> Self {
+        use crate::FormalGuardedMemoryResourceErrorV1 as Formal;
+        // Conversion preserves an observed error; it does not observe or charge a meter.
+        match error {
+            Formal::Work(error) => Self::Work(error),
+            Formal::Storage { actual, limit } => Self::Storage(
+                CanonicalKernelIrVerificationStorageLimitV1::new(actual, limit),
+            ),
+            Formal::Allocation => Self::Allocation,
+            Formal::Accounting => Self::Accounting,
+            Formal::Arithmetic => Self::Arithmetic,
+        }
+    }
+}
+
 /// Shared work and verifier-local live-storage ledger for one verification.
 ///
 /// Every work charge and storage reservation is admitted before the associated
@@ -112,10 +130,161 @@ impl Error for CanonicalKernelIrVerificationResourceErrorV1 {
 /// each caller's accounting contract; this ledger is not an allocator/RSS meter.
 pub struct CanonicalKernelIrVerificationResourceBudgetV1<'work> {
     work: &'work mut CanonicalKernelIrWorkBudgetV1,
+    storage: Storage<'work>,
+}
+
+struct StorageState {
     storage: usize,
     peak_storage: usize,
     failed_storage: Option<usize>,
     storage_limit: usize,
+}
+
+impl StorageState {
+    const fn new(storage_limit: usize) -> Self {
+        Self {
+            storage: 0,
+            peak_storage: 0,
+            failed_storage: None,
+            storage_limit,
+        }
+    }
+}
+
+enum Storage<'ledger> {
+    Inline(StorageState),
+    Borrowed(&'ledger mut StorageState),
+}
+
+impl Storage<'_> {
+    const fn state(&self) -> &StorageState {
+        match self {
+            Self::Inline(state) => state,
+            Self::Borrowed(state) => state,
+        }
+    }
+
+    fn state_mut(&mut self) -> &mut StorageState {
+        match self {
+            Self::Inline(state) => state,
+            Self::Borrowed(state) => state,
+        }
+    }
+}
+
+/// Move-only owner of a persistent work and verification-storage ledger.
+///
+/// Construction takes an existing work meter by value, preserving its accepted
+/// prefix, limit, and first denial. Storage starts empty: this is not a conversion
+/// from a borrowed resource budget and does not adopt its live reservations.
+/// The supplied work type remains `Copy`; callers control any earlier copies.
+/// All counters are stored inline; borrowing a view allocates nothing.
+///
+/// Each view borrows the same owned work meter and storage state. Finishing or
+/// unwinding a view does not release storage; callers explicitly service retained
+/// owners and use the existing budget scopes for scratch cleanup. This is logical
+/// accounting, not verification, completion, or compiler authority.
+///
+/// The owner cannot be cloned or copied:
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+/// fn duplicate(ledger: Owned) { let _ = ledger.clone(); }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+/// fn duplicate(ledger: Owned) -> (Owned, Owned) { (ledger, ledger) }
+/// ```
+pub struct CanonicalKernelIrOwnedVerificationResourceBudgetV1 {
+    work: CanonicalKernelIrWorkBudgetV1,
+    storage: StorageState,
+}
+
+impl CanonicalKernelIrOwnedVerificationResourceBudgetV1 {
+    /// Takes an existing work meter, preserving its prefix and denial history,
+    /// and starts empty storage accounting with the supplied limit.
+    pub const fn new(work: CanonicalKernelIrWorkBudgetV1, storage_limit: usize) -> Self {
+        Self {
+            work,
+            storage: StorageState::new(storage_limit),
+        }
+    }
+
+    /// Borrows this account's exact work and persistent storage state.
+    ///
+    /// The view cannot escape the callback. A work-identity token from it is
+    /// meaningful only during the active borrow, not across moves of this owner.
+    /// Replacing the view never replaces or refunds this account: all changes
+    /// already made through the original view remain, including scoped scratch
+    /// that cannot be cleaned up after replacement. Operations on a replacement
+    /// budget affect that budget's account. No state is copied back on return or
+    /// unwind; dropping either view performs no automatic storage release.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    /// fn escape(ledger: &mut Owned) { let _view = ledger.with_budget(|view| view); }
+    /// ```
+    ///
+    /// A moved-out original view cannot escape either:
+    ///
+    /// ```compile_fail
+    /// use fe2o3_kernel_ir::{
+    ///     CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned,
+    ///     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    ///     CanonicalKernelIrWorkBudgetV1 as Work,
+    /// };
+    /// fn escape(ledger: &mut Owned, replacement_work: &'static mut Work) {
+    ///     let _view = ledger.with_budget(|view| {
+    ///         std::mem::replace(view, Budget::new(replacement_work, 0))
+    ///     });
+    /// }
+    /// ```
+    pub fn with_budget<T>(
+        &mut self,
+        operation: impl for<'a> FnOnce(&mut CanonicalKernelIrVerificationResourceBudgetV1<'a>) -> T,
+    ) -> T {
+        let mut budget = CanonicalKernelIrVerificationResourceBudgetV1 {
+            work: &mut self.work,
+            storage: Storage::Borrowed(&mut self.storage),
+        };
+        operation(&mut budget)
+    }
+
+    /// Returns accepted cumulative work, including the supplied work prefix.
+    pub const fn work(&self) -> usize {
+        self.work.work()
+    }
+
+    /// Returns the first rejected cumulative work, including the supplied history.
+    pub const fn failed_work(&self) -> Option<usize> {
+        self.work.failed_work()
+    }
+
+    /// Returns the cumulative-work limit of the supplied work meter.
+    pub const fn work_limit(&self) -> usize {
+        self.work.limit()
+    }
+
+    /// Returns accepted live storage retained across views.
+    pub const fn storage(&self) -> usize {
+        self.storage.storage
+    }
+
+    /// Returns peak storage, including rolled-back scratch from earlier views.
+    pub const fn peak_storage(&self) -> usize {
+        self.storage.peak_storage
+    }
+
+    /// Returns the first rejected live-storage total across all views.
+    pub const fn failed_storage(&self) -> Option<usize> {
+        self.storage.failed_storage
+    }
+
+    /// Returns the persistent live-storage limit.
+    pub const fn storage_limit(&self) -> usize {
+        self.storage.storage_limit
+    }
 }
 
 /// Equality-only identity of a borrowed live Work meter, not its Budget slot.
@@ -132,10 +301,7 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
     pub fn new(work: &'work mut CanonicalKernelIrWorkBudgetV1, storage_limit: usize) -> Self {
         Self {
             work,
-            storage: 0,
-            peak_storage: 0,
-            failed_storage: None,
-            storage_limit,
+            storage: Storage::Inline(StorageState::new(storage_limit)),
         }
     }
 
@@ -156,20 +322,21 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
         &mut self,
         amount: usize,
     ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
-        let Some(storage) = self.storage.checked_add(amount) else {
-            self.failed_storage.get_or_insert(usize::MAX);
+        let state = self.storage.state_mut();
+        let Some(storage) = state.storage.checked_add(amount) else {
+            state.failed_storage.get_or_insert(usize::MAX);
             return Err(CanonicalKernelIrVerificationResourceErrorV1::Storage(
-                CanonicalKernelIrVerificationStorageLimitV1::new(usize::MAX, self.storage_limit),
+                CanonicalKernelIrVerificationStorageLimitV1::new(usize::MAX, state.storage_limit),
             ));
         };
-        if storage > self.storage_limit {
-            self.failed_storage.get_or_insert(storage);
+        if storage > state.storage_limit {
+            state.failed_storage.get_or_insert(storage);
             return Err(CanonicalKernelIrVerificationResourceErrorV1::Storage(
-                CanonicalKernelIrVerificationStorageLimitV1::new(storage, self.storage_limit),
+                CanonicalKernelIrVerificationStorageLimitV1::new(storage, state.storage_limit),
             ));
         }
-        self.storage = storage;
-        self.peak_storage = self.peak_storage.max(storage);
+        state.storage = storage;
+        state.peak_storage = state.peak_storage.max(storage);
         Ok(())
     }
 
@@ -179,22 +346,75 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
         &mut self,
         amount: usize,
     ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
-        let Some(storage) = self.storage.checked_sub(amount) else {
+        let state = self.storage.state_mut();
+        let Some(storage) = state.storage.checked_sub(amount) else {
             return Err(CanonicalKernelIrVerificationResourceErrorV1::Accounting);
         };
-        self.storage = storage;
+        state.storage = storage;
         Ok(())
     }
 
     pub(crate) const fn storage_checkpoint(&self) -> usize {
-        self.storage
+        self.storage()
+    }
+
+    /// Runs a bounded operation on this same ledger, with prepaid outer work
+    /// and scratch. Nested operations must charge this ledger, never a fresh
+    /// budget. `entry_work` is charged before checking the input-owner floor;
+    /// the rest of `work` is charged before reserving `scratch` or calling out.
+    ///
+    /// Returns entry storage on success, error, and unwind, retaining work,
+    /// peak, and denial history. The callback must preserve the reserved frame
+    /// and ledger identity. A replaced ledger is never released. Returned
+    /// owners are unreserved: callers must reserve their retained charge before
+    /// keeping them. This is logical accounting, not admission or authority.
+    pub fn with_prepaid_scope<T, E: From<CanonicalKernelIrVerificationResourceErrorV1>>(
+        &mut self,
+        input_floor: usize,
+        entry_work: usize,
+        work: usize,
+        scratch: usize,
+        operation: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        use CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+        self.charge_work(entry_work)?;
+        if self.storage() < input_floor {
+            return Err(Resource::Accounting.into());
+        }
+        self.charge_work(work.checked_sub(entry_work).ok_or(Resource::Arithmetic)?)?;
+        let floor = self.storage();
+        let ledger = self.work_ledger_identity_v1();
+        self.reserve_storage(scratch)?;
+        let protected_floor = self.storage();
+        let result = catch_unwind(AssertUnwindSafe(|| operation(self)));
+        let frame_intact = self.storage() >= protected_floor;
+        let cleanup = if self.work_ledger_identity_v1() == ledger {
+            self.storage()
+                .checked_sub(floor)
+                .ok_or(Resource::Accounting)
+                .and_then(|release| self.release_storage(release))
+        } else {
+            Err(Resource::Accounting)
+        };
+        match result {
+            Ok(result) => {
+                cleanup?;
+                if !frame_intact {
+                    return Err(Resource::Accounting.into());
+                }
+                result
+            }
+            Err(panic) => resume_unwind(panic),
+        }
     }
 
     pub(crate) fn rollback_storage(
         &mut self,
         checkpoint: usize,
     ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
-        let Some(release) = self.storage.checked_sub(checkpoint) else {
+        let Some(release) = self.storage().checked_sub(checkpoint) else {
             return Err(CanonicalKernelIrVerificationResourceErrorV1::Accounting);
         };
         self.release_storage(release)
@@ -221,30 +441,147 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
         self.work.work()
     }
 
+    /// First rejected cumulative work on this exact borrowed ledger.
+    /// This is observational only and never clears or refunds the failure.
+    pub const fn failed_work(&self) -> Option<usize> {
+        self.work.failed_work()
+    }
+
     /// Returns accepted live verifier-local storage.
     pub const fn storage(&self) -> usize {
-        self.storage
+        self.storage.state().storage
     }
 
     /// Returns peak verifier-local storage, including rolled-back scratch.
     pub const fn peak_storage(&self) -> usize {
-        self.peak_storage
+        self.storage.state().peak_storage
     }
 
     /// Returns the first rejected live-storage total, when present.
     pub const fn failed_storage(&self) -> Option<usize> {
-        self.failed_storage
+        self.storage.state().failed_storage
     }
 
     /// Returns the verifier-local live-storage limit.
     pub const fn storage_limit(&self) -> usize {
-        self.storage_limit
+        self.storage.state().storage_limit
     }
 }
 
 #[cfg(test)]
+#[path = "verification_owned_resource_v1_tests.rs"]
+mod owned_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formal_resource_conversion_is_lossless_for_all_variants_and_extreme_counts() {
+        use crate::FormalGuardedMemoryResourceErrorV1 as Formal;
+        for formal in [
+            Formal::Allocation,
+            Formal::Accounting,
+            Formal::Arithmetic,
+            Formal::Storage {
+                actual: 0,
+                limit: 0,
+            },
+            Formal::Storage {
+                actual: usize::MAX,
+                limit: 0,
+            },
+            Formal::Storage {
+                actual: 0,
+                limit: usize::MAX,
+            },
+            Formal::Storage {
+                actual: usize::MAX,
+                limit: usize::MAX,
+            },
+        ] {
+            assert_eq!(
+                Formal::from(CanonicalKernelIrVerificationResourceErrorV1::from(formal)),
+                formal
+            );
+        }
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(0);
+        let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 0);
+        let resource = budget.charge_work(usize::MAX).unwrap_err();
+        let formal = Formal::from(resource);
+        assert_eq!(
+            CanonicalKernelIrVerificationResourceErrorV1::from(formal),
+            resource
+        );
+        assert!(
+            matches!(formal, Formal::Work(error) if error.actual() == usize::MAX && error.limit() == 0)
+        );
+    }
+
+    #[test]
+    fn inert_formal_conversion_does_not_create_or_replace_observed_meter_failures() {
+        use crate::FormalGuardedMemoryResourceErrorV1 as Formal;
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(5);
+        let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 7);
+        budget.charge_work(2).unwrap();
+        budget.reserve_storage(3).unwrap();
+        let inert = CanonicalKernelIrVerificationResourceErrorV1::from(Formal::Storage {
+            actual: usize::MAX,
+            limit: 0,
+        });
+        assert!(
+            matches!(inert, CanonicalKernelIrVerificationResourceErrorV1::Storage(error)
+            if error.actual() == usize::MAX && error.limit() == 0)
+        );
+        assert_eq!(budget.failed_storage(), None);
+        assert_eq!(
+            (budget.work(), budget.storage(), budget.peak_storage()),
+            (2, 3, 3)
+        );
+        let observed_work = budget.charge_work(4).unwrap_err();
+        let observed_storage = budget.reserve_storage(5).unwrap_err();
+        for observed in [observed_work, observed_storage] {
+            assert_eq!(
+                CanonicalKernelIrVerificationResourceErrorV1::from(Formal::from(observed)),
+                observed
+            );
+        }
+        let _ = CanonicalKernelIrVerificationResourceErrorV1::from(Formal::Accounting);
+        assert_eq!(budget.failed_storage(), Some(8));
+        assert_eq!(
+            (budget.work(), budget.storage(), budget.peak_storage()),
+            (2, 3, 3)
+        );
+        drop(budget);
+        assert_eq!(work.failed_work(), Some(6));
+        assert_eq!(work.work(), 2);
+    }
+
+    #[test]
+    fn prepaid_scope_honors_variable_entry_cost_before_callback_or_scratch() {
+        type Resource = CanonicalKernelIrVerificationResourceErrorV1;
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(100);
+        let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 100);
+        budget.reserve_storage(9).unwrap();
+        let result =
+            budget.with_prepaid_scope::<(), Resource>(10, 3, 7, 20, |_| panic!("unpaid input"));
+        assert!(matches!(result, Err(Resource::Accounting)));
+        assert_eq!(budget.work(), 3);
+        let result =
+            budget.with_prepaid_scope::<(), Resource>(9, 4, 3, 20, |_| panic!("invalid quota"));
+        assert!(matches!(result, Err(Resource::Arithmetic)));
+        assert_eq!(budget.work(), 7);
+        assert_eq!(budget.peak_storage(), 9);
+        budget
+            .with_prepaid_scope::<(), Resource>(9, 0, 7, 20, |budget| {
+                assert_eq!(budget.storage(), 29);
+                budget.charge_work(5)
+            })
+            .unwrap();
+        assert_eq!(budget.storage(), 9);
+        assert_eq!(budget.work(), 19);
+        assert_eq!(budget.peak_storage(), 29);
+    }
 
     #[test]
     fn work_identity_follows_the_meter_not_the_resource_budget_slot() {

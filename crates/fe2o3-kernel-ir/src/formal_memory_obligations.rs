@@ -12,14 +12,32 @@ use crate::{
     analyze_control_flow, analyze_interprocedural_effects_from_verified_v1, verify_module_ref,
 };
 
+#[cfg(test)]
+mod distinct_invocation_v1_tests;
 mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
+pub(crate) use guarded_access_v1::origins::structural_origins_v1;
 mod pointer_derivation;
 mod private_slots;
 mod receipt_v1;
+mod storage_discriminant_v18;
 
 pub use guarded_access_v1::FormalGuardedMemoryResourceErrorV1;
+pub use guarded_access_v1::{
+    CanonicalGuardedGlobalReadErrorV1, CanonicalGuardedGlobalReadFactV1,
+    CanonicalGuardedGlobalReadLimitsV1, CanonicalGuardedGlobalReadOutcomeV1,
+    CanonicalGuardedGlobalReadReasonV1, CanonicalGuardedNoWrapFactV1,
+    CanonicalGuardedPredicateFactV1, CheckedCanonicalGuardedGlobalReadsV1,
+    with_canonical_guarded_global_reads_v1,
+    CanonicalGuardedGlobalReadFactV18, CanonicalGuardedGlobalReadOutcomeV18,
+    CanonicalGuardedNoWrapFactV18, CanonicalGuardedPredicateFactV18,
+    CheckedCanonicalGuardedGlobalReadsV18, with_canonical_guarded_global_reads_v18,
+};
 pub use receipt_v1::*;
+pub use storage_discriminant_v18::{
+    CanonicalStorageDiscriminantReadErrorV18, CanonicalStorageDiscriminantReadObligationV18,
+    StorageDiscriminantReadRequirementV18, derive_canonical_storage_discriminant_read_v18,
+};
 
 use guarded_access_v1::{GuardedAnalysisV1, GuardedControlV1, GuardedResourceErrorV1};
 use pointer_derivation::{
@@ -813,6 +831,7 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
     let mut context = AccessDerivationContext::new(
         &definitions,
         &value_types,
+        &allocations,
         &allocation_by_value,
         &private_load_sources,
         guarded,
@@ -825,6 +844,23 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
         }
         for (operation_index, operation) in block.operations.iter().enumerate() {
             let location = FunctionOperationLocation::new(block.id, operation_index);
+            let proven_private = match operation.kind {
+                OperationKind::Load { pointer, access }
+                | OperationKind::Store { pointer, access, .. }
+                | OperationKind::GuardedLoad { pointer, access, .. }
+                | OperationKind::GuardedStore { pointer, access, .. }
+                    if access.address_space == AddressSpace::Generic => {
+                        let exact = definitions.exact_ssa_origin(pointer, &value_types)
+                            .and_then(|origin| value_types.get(&origin))
+                            .is_some_and(|ty| matches!(ty, Type::Pointer(p) if p.address_space == AddressSpace::Private));
+                        exact || if let Some(guarded) = &mut context.guarded {
+                            guarded.proven_pointer_space_v18(pointer)? == Some(AddressSpace::Private)
+                        } else {
+                            false
+                        }
+                    }
+                _ => false,
+            };
             match &operation.kind {
                 OperationKind::Call { callee, .. }
                     if !operation.has_complete_effect_summary()
@@ -839,7 +875,7 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                 }
                 OperationKind::Call { .. } => {}
                 OperationKind::Load { access, .. }
-                    if access.address_space == AddressSpace::Private => {}
+                    if access.address_space == AddressSpace::Private || proven_private => {}
                 OperationKind::Load { pointer, access } => {
                     if let Some(invocations) = access_invocations {
                         match derive_access(
@@ -864,13 +900,16 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                     }
                 }
                 OperationKind::Store { access, .. }
-                    if access.address_space == AddressSpace::Private => {}
+                    if access.address_space == AddressSpace::Private || proven_private => {}
                 OperationKind::Store {
                     pointer, access, ..
                 }
                 | OperationKind::GuardedStore {
                     pointer, access, ..
                 } => {
+                    if proven_private {
+                        continue;
+                    }
                     if let Some(invocations) = access_invocations {
                         match derive_access(
                             location,
@@ -906,7 +945,7 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                 // coordinate. It creates no caller-visible write or alias obligation.
                 OperationKind::Gfx950LdsTranspose(_) => {}
                 OperationKind::GuardedLoad { access, .. }
-                    if access.address_space == AddressSpace::Private => {}
+                    if access.address_space == AddressSpace::Private || proven_private => {}
                 OperationKind::GuardedLoad {
                     pointer,
                     access,
@@ -990,7 +1029,8 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                         operation,
                         &value_types,
                     ) => {}
-                OperationKind::Execution(_)
+                OperationKind::Storage(_)
+                | OperationKind::Execution(_)
                 | OperationKind::Gfx942OrderedRegion(_)
                 | OperationKind::Gfx942OrderedProgram(_)
                 | OperationKind::VerificationContract(_)
@@ -1272,29 +1312,79 @@ impl Definitions<'_> {
             let Some((operation, _)) = self.operations.get(&current) else {
                 return Some(current);
             };
-            let OperationKind::Cast {
-                kind: CastKind::RestrictPointerAccess,
-                value: source,
-                to,
-            } = &operation.kind
-            else {
+            if !matches!(
+                operation.kind,
+                OperationKind::Cast {
+                    kind: CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric,
+                    ..
+                }
+            ) {
                 return Some(current);
-            };
-            let (Some(Type::Pointer(from)), Type::Pointer(to_pointer)) =
-                (value_types.get(source), to)
-            else {
-                return None;
-            };
-            if from.pointee != to_pointer.pointee
-                || from.address_space != to_pointer.address_space
-                || from.access != AccessMode::ReadWrite
-                || to_pointer.access != AccessMode::ReadOnly
-            {
-                return None;
             }
-            current = *source;
+            let OperationKind::Cast { value: source, .. } = operation.kind else {
+                unreachable!()
+            };
+            current = checked_address_cast_source_v18(operation, value_types.get(&source)?)?;
         }
     }
+}
+
+fn checked_address_cast_source_v18(operation: &Operation, from: &Type) -> Option<ValueId> {
+    if matches!(operation.kind, OperationKind::Cast { kind: CastKind::SliceToGeneric, .. }) {
+        checked_slice_cast_source_v18(operation, from)
+    } else {
+        checked_pointer_cast_source_v18(operation, from)
+    }
+}
+
+fn checked_slice_cast_source_v18(operation: &Operation, from: &Type) -> Option<ValueId> {
+    let OperationKind::Cast { kind: CastKind::SliceToGeneric, value, to } = &operation.kind else {
+        return None;
+    };
+    let [result] = operation.results.as_slice() else { return None; };
+    let (Type::Slice(from), Type::Slice(target)) = (from, to) else { return None; };
+    (result.ty == *to && from.element == target.element && from.access == target.access
+        && matches!(from.address_space, AddressSpace::Global | AddressSpace::Constant
+            | AddressSpace::Private | AddressSpace::Workgroup)
+        && target.address_space == AddressSpace::Generic
+        && (from.address_space != AddressSpace::Constant || from.access == AccessMode::ReadOnly))
+        .then_some(*value)
+}
+
+fn checked_pointer_cast_source_v18(operation: &Operation, from: &Type) -> Option<ValueId> {
+    let OperationKind::Cast { kind, value, to } = &operation.kind else {
+        return None;
+    };
+    let [result] = operation.results.as_slice() else {
+        return None;
+    };
+    let (Type::Pointer(from), Type::Pointer(target)) = (from, to) else {
+        return None;
+    };
+    if result.ty != *to || from.pointee != target.pointee {
+        return None;
+    }
+    let valid = match kind {
+        CastKind::RestrictPointerAccess => {
+            from.address_space == target.address_space
+                && from.access == AccessMode::ReadWrite
+                && target.access == AccessMode::ReadOnly
+        }
+        CastKind::PointerToGeneric => {
+            matches!(
+                from.address_space,
+                AddressSpace::Global
+                    | AddressSpace::Constant
+                    | AddressSpace::Private
+                    | AddressSpace::Workgroup
+            ) && target.address_space == AddressSpace::Generic
+                && from.access == target.access
+                && (from.address_space != AddressSpace::Constant
+                    || from.access == AccessMode::ReadOnly)
+        }
+        _ => false,
+    };
+    valid.then_some(*value)
 }
 
 #[derive(Clone, Copy)]
@@ -1320,126 +1410,7 @@ impl OriginSummary {
 fn compute_unique_block_parameter_origins(
     inputs: &BTreeMap<ValueId, Vec<ValueId>>,
 ) -> BTreeMap<ValueId, Option<ValueId>> {
-    let values = inputs.keys().copied().collect::<Vec<_>>();
-    let positions = values
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(position, value)| (value, position))
-        .collect::<BTreeMap<_, _>>();
-    let mut edges = vec![Vec::new(); values.len()];
-    let mut reverse_edges = vec![Vec::new(); values.len()];
-    let mut local_origins = vec![OriginSummary::Empty; values.len()];
-    let mut invalid = vec![false; values.len()];
-    for (value, incoming) in inputs {
-        let position = positions[value];
-        invalid[position] = incoming.is_empty();
-        for input in incoming {
-            if let Some(dependency) = positions.get(input).copied() {
-                edges[position].push(dependency);
-                reverse_edges[dependency].push(position);
-            } else {
-                local_origins[position].include(*input);
-            }
-        }
-        edges[position].sort_unstable();
-        edges[position].dedup();
-    }
-
-    let mut visited = vec![false; values.len()];
-    let mut postorder = Vec::with_capacity(values.len());
-    for start in 0..values.len() {
-        if visited[start] {
-            continue;
-        }
-        visited[start] = true;
-        let mut stack = vec![(start, 0usize)];
-        while let Some((node, next_edge)) = stack.pop() {
-            if let Some(dependency) = edges[node].get(next_edge).copied() {
-                stack.push((node, next_edge + 1));
-                if !visited[dependency] {
-                    visited[dependency] = true;
-                    stack.push((dependency, 0));
-                }
-            } else {
-                postorder.push(node);
-            }
-        }
-    }
-
-    let mut component_of = vec![usize::MAX; values.len()];
-    let mut component_count = 0usize;
-    for start in postorder.into_iter().rev() {
-        if component_of[start] != usize::MAX {
-            continue;
-        }
-        component_of[start] = component_count;
-        let mut stack = vec![start];
-        while let Some(node) = stack.pop() {
-            for dependent in &reverse_edges[node] {
-                if component_of[*dependent] == usize::MAX {
-                    component_of[*dependent] = component_count;
-                    stack.push(*dependent);
-                }
-            }
-        }
-        component_count += 1;
-    }
-
-    let mut dependencies = vec![BTreeSet::new(); component_count];
-    let mut dependents = vec![BTreeSet::new(); component_count];
-    let mut component_origins = vec![OriginSummary::Empty; component_count];
-    let mut component_invalid = vec![false; component_count];
-    for node in 0..values.len() {
-        let component = component_of[node];
-        component_invalid[component] |= invalid[node];
-        match local_origins[node] {
-            OriginSummary::One(origin) => component_origins[component].include(origin),
-            OriginSummary::Ambiguous => component_invalid[component] = true,
-            OriginSummary::Empty => {}
-        }
-        for dependency in &edges[node] {
-            let dependency = component_of[*dependency];
-            if component != dependency {
-                dependencies[component].insert(dependency);
-                dependents[dependency].insert(component);
-            }
-        }
-    }
-
-    let mut remaining_dependencies = dependencies.iter().map(BTreeSet::len).collect::<Vec<_>>();
-    let mut pending = remaining_dependencies
-        .iter()
-        .enumerate()
-        .filter_map(|(component, count)| (*count == 0).then_some(component))
-        .collect::<Vec<_>>();
-    let mut component_results = vec![None; component_count];
-    while let Some(component) = pending.pop() {
-        let mut summary = component_origins[component];
-        let mut failed = component_invalid[component];
-        for dependency in &dependencies[component] {
-            match component_results[*dependency] {
-                Some(origin) => summary.include(origin),
-                None => failed = true,
-            }
-        }
-        component_results[component] = match (failed, summary) {
-            (false, OriginSummary::One(origin)) => Some(origin),
-            _ => None,
-        };
-        for dependent in &dependents[component] {
-            remaining_dependencies[*dependent] -= 1;
-            if remaining_dependencies[*dependent] == 0 {
-                pending.push(*dependent);
-            }
-        }
-    }
-
-    values
-        .into_iter()
-        .enumerate()
-        .map(|(position, value)| (value, component_results[component_of[position]]))
-        .collect()
+    guarded_access_v1::origins::legacy(inputs)
 }
 
 #[derive(Clone, Copy)]
@@ -1941,7 +1912,9 @@ fn proves_distinct_invocation_disjointness(
     left: &FormalMemoryAccess,
     right: &FormalMemoryAccess,
 ) -> bool {
-    if left.invocations.last() == 0 || right.invocations.last() == 0 {
+    // Only the same singleton on both sides excludes every distinct invocation pair.
+    if left.invocations == right.invocations && left.invocations.start() == left.invocations.last()
+    {
         return true;
     }
     if left.byte_offset == right.byte_offset && left.byte_width == right.byte_width {

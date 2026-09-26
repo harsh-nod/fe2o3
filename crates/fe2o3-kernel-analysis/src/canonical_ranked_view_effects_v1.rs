@@ -95,6 +95,7 @@ pub(super) fn operation(ordinal: usize, op: &Op) -> Result<(OperationClass, Obli
         ),
         Op::VectorStore(_) => (C::VectorStore, memory.with(O::RaceFreedom)),
         Op::VectorLayoutConvert(_) => (C::VectorLayoutConvert, scalar.with(O::Tensor)),
+        Op::Storage(_) => return Err(Error::UnsupportedStorageOperation { ordinal }),
         Op::Execution(_) => {
             return Err(Error::UnsupportedOperation {
                 ordinal,
@@ -189,12 +190,13 @@ pub(super) fn metadata(kind: CanonicalRankedMetadataKindV1) -> Obligations {
 /// Every declared capability occurrence and every operation-derived requirement
 /// remains anchored to N. The visitor is allocation-free; the caller pays for
 /// each publication separately from operation classification before callbacks.
-pub(super) fn requirements(
-    inventory: &Inventory<'_>,
+pub(super) fn requirements<O>(
+    inventory: &Inventory<'_, O>,
+    module: &fe2o3_kernel_ir::Module,
     budget: &mut Budget<'_>,
     mut visit: impl FnMut(RequirementOwner, usize, &mut Budget<'_>) -> Result<()>,
 ) -> Result<()> {
-    for ordinal in 0..inventory.owner().module().required_capabilities.len() {
+    for ordinal in 0..module.required_capabilities.len() {
         visit(RequirementOwner::Module, ordinal, budget)?;
     }
     for (kernel, row) in inventory.kernels().iter().enumerate() {
@@ -239,4 +241,46 @@ pub(super) fn requirements(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod storage_profile_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        AddressSpace, MemoryAccess, StorageCopyOverlapV1, StorageOperationV1, StorageProjectionV1,
+        ValueId,
+    };
+
+    #[test]
+    fn storage_has_no_legacy_ranked_classification_or_implied_wire_version() {
+        let access = MemoryAccess::new(AddressSpace::Private, 4);
+        for storage in [
+            StorageOperationV1::Project {
+                base: ValueId(0),
+                step: StorageProjectionV1::Field(0),
+            },
+            StorageOperationV1::ReadValue {
+                address: ValueId(0),
+                access,
+            },
+            StorageOperationV1::WriteValue {
+                address: ValueId(0),
+                value: ValueId(1),
+                access,
+            },
+            StorageOperationV1::CopyObject {
+                source: ValueId(0),
+                destination: ValueId(1),
+                source_access: access,
+                destination_access: access,
+                overlap: StorageCopyOverlapV1::MayOverlap,
+            },
+        ] {
+            assert_eq!(
+                operation(7, &Op::Storage(storage)),
+                Err(Error::UnsupportedStorageOperation { ordinal: 7 })
+            );
+        }
+        assert!(operation(7, &Op::Constant(fe2o3_kernel_ir::Constant::U32(9))).is_ok());
+    }
 }

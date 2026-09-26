@@ -3,8 +3,8 @@
 pub enum ProductionPendingScopedSourceErrorV29 {
     /// Source, lowering, correspondence or resource validation failed.
     Source(ProductionSemanticKirErrorV1),
-    /// The complete canonical V15 graph failed admission or replay.
-    Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15),
+    /// The complete canonical V18 graph and table failed admission or replay.
+    Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18),
     /// Capture of genuine source SSA occurrences failed.
     Occurrences(fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1),
 }
@@ -87,12 +87,44 @@ impl ProductionPendingScopedSourceOwnerV29 {
     /// accounting domain. Any preexisting occurrence capture must already be
     /// reserved and remains separately caller-accounted, including on failure.
     ///
-    /// On error or panic all newly adopted data drops before restoring the entry
-    /// storage floor. Work is never refunded.
+    /// On error or panic newly adopted data drops before permitted rollback.
+    /// Lost source custody prevents every containing refund. Work is never refunded.
     pub fn try_materialize_with_budget(
         owner: ProductionSemanticSsaOwnerV1,
         launch: crate::ProductionSourceLaunchRosterV1,
         input: crate::ProductionExecutionSourceInputV29<'_>,
+        limits: ProductionSemanticKirLimitsV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionPendingScopedSourceErrorV29> {
+        Self::materialize_with_optional_kernel_abi_v18(owner, launch, input, None, limits, budget)
+    }
+
+    /// Materializes the same pending source owner with its complete original
+    /// kernel descriptor ABI. No execution or memory-access authority is issued.
+    ///
+    /// The original descriptor/source census is authenticated before emission
+    /// and retained for independent replay. Preexisting occurrence storage keeps
+    /// the historical Pending contract: it remains separately caller-accounted.
+    /// Lost cleanup custody prevents containing refunds just as in the unprofiled
+    /// constructor. The profile cannot recover a concrete space from Generic.
+    pub fn try_materialize_with_kernel_abi_budget_v18(
+        owner: ProductionSemanticSsaOwnerV1,
+        launch: crate::ProductionSourceLaunchRosterV1,
+        input: crate::ProductionExecutionSourceInputV29<'_>,
+        kernel_abi: ProductionKernelArgumentAbiInputV18<'_>,
+        limits: ProductionSemanticKirLimitsV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionPendingScopedSourceErrorV29> {
+        Self::materialize_with_optional_kernel_abi_v18(
+            owner, launch, input, Some(kernel_abi), limits, budget,
+        )
+    }
+
+    fn materialize_with_optional_kernel_abi_v18(
+        owner: ProductionSemanticSsaOwnerV1,
+        launch: crate::ProductionSourceLaunchRosterV1,
+        input: crate::ProductionExecutionSourceInputV29<'_>,
+        kernel_abi: Option<ProductionKernelArgumentAbiInputV18<'_>>,
         limits: ProductionSemanticKirLimitsV1,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionPendingScopedSourceErrorV29> {
@@ -103,18 +135,23 @@ impl ProductionPendingScopedSourceOwnerV29 {
         {
             return Err(ScopedModuleErrorV29::from(ArgumentResourceV1::Accounting).into());
         }
-        scoped_module_attempt_v29(budget, floor, move |budget| {
-            let input = {
-                let source = ExecutionLifecycleSourceV29::new(&owner, &launch, input, budget)?;
-                OwnedExecutionInputV29::capture(&source, budget)?
-            };
-            let mut donor = Some(ScopedSourceInputsV29 {
-                owner,
-                launch,
-                input,
-            });
-            SourceOwnedScopedModuleV29::try_new(&mut donor, limits, budget)
+        with_scoped_source_cleanup_v29(budget, floor, move |cleanup, budget| {
+            let floor = budget.storage();
+            scoped_source_attempt_v29(cleanup, budget, floor, move |budget| {
+                let mut source = capture_pending_source_inputs_v18(owner, launch, input, budget)?;
+                if let Some(kernel_abi) = kernel_abi {
+                    source.input.capture_kernel_argument_abi_v18(
+                        &source.owner,
+                        kernel_abi,
+                        budget,
+                    )?;
+                }
+                let mut donor = Some(source);
+                SourceOwnedScopedModuleV29::try_new_with_cleanup(
+                    &mut donor, limits, cleanup, budget,
+                )
                 .map(|inner| Self { inner })
+            })
         })
         .map_err(Into::into)
     }
@@ -135,8 +172,8 @@ impl ProductionPendingScopedSourceOwnerV29 {
         self.inner.pending.graph.module()
     }
 
-    /// Returns the identity of the complete pending canonical V15 graph.
-    pub fn pending_identity(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV15 {
+    /// Returns the identity of the complete pending canonical V18 graph and table.
+    pub fn pending_identity(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV18 {
         self.inner.pending.graph.identity()
     }
 
@@ -159,4 +196,19 @@ impl ProductionPendingScopedSourceOwnerV29 {
     pub fn adopted_storage(&self) -> usize {
         self.inner.retained_storage
     }
+}
+
+// Capture owns the projection before any module table or root-emission scope
+// exists. The producer and the source-owning continuation share this exact join.
+fn capture_pending_source_inputs_v18(
+    owner: ProductionSemanticSsaOwnerV1,
+    launch: crate::ProductionSourceLaunchRosterV1,
+    input: crate::ProductionExecutionSourceInputV29<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<ScopedSourceInputsV29, ScopedModuleErrorV29> {
+    let input = {
+        let source = ExecutionLifecycleSourceV29::new(&owner, &launch, input, budget)?;
+        OwnedExecutionInputV29::capture(&source, budget)?
+    };
+    Ok(ScopedSourceInputsV29 { owner, launch, input })
 }

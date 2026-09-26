@@ -2140,27 +2140,38 @@ fn one_decision_schedule_resident_bytes(
     let plan = module
         .preflight(request, target, SimulationLimitsV1::default())
         .unwrap();
-    let error = module
-        .simulate_scheduled(
+    let mut resident = plan.resident_bytes();
+    // Recording allocates at preparation and first decision. Follow each exact
+    // refusal threshold so the witness tests measure the whole execution peak.
+    for _ in 0..8 {
+        match module.simulate_scheduled(
             request,
             target,
             SimulationLimitsV1 {
-                max_resident_bytes: plan.resident_bytes(),
+                max_resident_bytes: resident,
                 ..SimulationLimitsV1::default()
             },
             SimulationScheduleRequestV1::RecordSeeded {
                 seed: 1,
                 max_decisions,
             },
-        )
-        .unwrap_err();
-    match error {
-        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
-            kind: SimulationExecutionErrorKindV1::ScheduleResidentLimit { actual, .. },
-            ..
-        }) => actual,
-        other => panic!("expected exact scheduled resident requirement, got {other:?}"),
+        ) {
+            Ok(execution) => {
+                assert_eq!(execution.schedule_record().unwrap().decisions().len(), 1);
+                return resident;
+            }
+            Err(SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                kind: SimulationExecutionErrorKindV1::ScheduleResidentLimit { actual, limit },
+                ..
+            })) => {
+                assert_eq!(limit, resident);
+                assert!(actual > resident);
+                resident = actual;
+            }
+            other => panic!("expected exact scheduled resident requirement, got {other:?}"),
+        }
     }
+    panic!("one-decision recording exceeded its bounded allocation stages")
 }
 
 #[test]
@@ -4862,6 +4873,73 @@ fn many_zero_byte_arguments_have_an_exact_resident_boundary() {
             limit: (accounted - 1) as u64,
         }
     );
+}
+
+#[test]
+fn initialized_mask_spare_capacity_is_counted_in_bytes_through_copy_back() {
+    let target = SimulationTargetV1::amdgpu_64();
+    let pointer = Type::pointer(
+        Type::Scalar(ScalarType::U8),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    );
+    let admitted = admitted(empty_kernel_module(
+        "mask_capacity",
+        Signature::new(vec![pointer], vec![]),
+        vec![ValueId(0)],
+    ));
+    let request = |capacity| {
+        let mut initialized = Vec::with_capacity(capacity);
+        initialized.push(true);
+        let retained = initialized.capacity() * size_of::<bool>();
+        let buffer = BufferArgumentV1::new(
+            ScalarType::U8,
+            AccessMode::ReadWrite,
+            1,
+            vec![31],
+            initialized,
+            target,
+        )
+        .unwrap();
+        (
+            SimulationRequestV1::new(
+                "mask_capacity", [1, 1, 1], [1, 1, 1],
+                vec![SimulationArgumentV1::Buffer(buffer)],
+            ),
+            retained,
+        )
+    };
+    let (compact, compact_bytes) = request(1);
+    let (spare, spare_bytes) = request(4_096);
+    let limits = SimulationLimitsV1 {
+        max_call_depth: 1,
+        max_ssa_values: 1,
+        max_allocations: 1,
+        max_allocation_bytes: 1,
+        max_total_bytes: 1,
+        max_memory_access_records: 1,
+        ..SimulationLimitsV1::default()
+    };
+    let compact_resident = admitted.preflight(&compact, target, limits).unwrap().resident_bytes();
+    let spare_resident = admitted.preflight(&spare, target, limits).unwrap().resident_bytes();
+    assert_eq!(spare_resident - compact_resident, spare_bytes - compact_bytes);
+    for request in [&compact, &spare] {
+        let resident = admitted.preflight(request, target, limits).unwrap().resident_bytes();
+        assert_eq!(
+            admitted.preflight(request, target, SimulationLimitsV1 {
+                max_resident_bytes: resident - 1, ..limits
+            }).unwrap_err(),
+            SimulationPreflightErrorV1::ResourceLimit {
+                resource: "resident bytes",
+                actual: resident as u64,
+                limit: (resident - 1) as u64,
+            },
+        );
+        let completed = admitted.simulate(request, target, SimulationLimitsV1 {
+            max_resident_bytes: resident, ..limits
+        }).unwrap();
+        assert_eq!(completed.arguments(), request.arguments.as_slice());
+    }
 }
 
 #[test]

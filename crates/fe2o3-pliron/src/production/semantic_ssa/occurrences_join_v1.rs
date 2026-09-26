@@ -29,9 +29,10 @@ pub(super) fn join(
                 && block.successors.end <= rows.successors.len()
         })?;
         let actual = &input.blocks()[index];
-        meter.require(2, function, Some(id), || {
+        meter.require(3, function, Some(id), || {
             block.events.len() == actual.events().len()
                 && block.successors.len() == actual.edges().len()
+                && block.terminal_failure_start == actual.terminal_failure_start()
         })?;
         let reachable = plan.is_reachable(id);
         let resolved = plan.resolved_events(id);

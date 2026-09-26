@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @bounds_unsigned_cast_range: builtin.function <(kernel.index ) -> ()>
+{
+  ^entry_block1v1(input_v0: kernel.index ):
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 9, gpu_execution_global_x: gpu.execution_extent 1, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 1, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 1, gpu_execution_domain: gpu.execution_domain PotentiallyPartial]: <() -> ()>;
+    view_v1 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global]: <() -> (kernel.ranked_view <32,false,[256]>)>;
+    narrowed_v2 = kernel.index_unsigned_cast (input_v0) [] [kernel_unsigned_bit_width: kernel.index_value 8]: <(kernel.index ) -> (kernel.index )>;
+    kernel.access (view_v1, narrowed_v2) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[256]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

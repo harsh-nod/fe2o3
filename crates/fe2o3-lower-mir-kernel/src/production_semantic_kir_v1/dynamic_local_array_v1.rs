@@ -160,7 +160,7 @@ impl<'a> FixedArrayGuardAnalysisV1<'a> {
     }
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     #[allow(clippy::too_many_arguments)]
     fn lower_dynamic_local_array_v1(
         &mut self,
@@ -172,9 +172,10 @@ impl SemanticFunctionLoweringV1<'_> {
         fields: &[SemanticValueBindingV1],
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let source_function = self.semantic_function.index();
         let refuse = |detail| {
             unsupported(
-                self.semantic_function.index(),
+                source_function,
                 Some(block.index()),
                 statement,
                 detail,
@@ -194,9 +195,7 @@ impl SemanticFunctionLoweringV1<'_> {
             || self.function.locals()[place.local().index() as usize]
                 .role()
                 .is_entry_argument()
-            || self
-                .retained_local_slots
-                .contains_key(&place.local().index())
+            || self.legacy_retained_slot_v29(place.local())?.is_some()
             || !matches!(
                 self.types[element.index() as usize].shape(),
                 SemanticTypeShapeV1::Scalar(_)

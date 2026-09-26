@@ -178,7 +178,7 @@ fn coordinated_return_graph_and_anchor_substitution_still_requires_full_replay()
     let owner = ProductionSemanticKirOwnerV1 {
         canonical_kernel_ir: ProductionCanonicalKernelIrV1::from_module(graph.clone()).unwrap(),
         semantic_ssa: source,
-        module: RetainedProductionKirModuleV1::Legacy(graph),
+        module: RetainedProductionKirModuleV1::Legacy { module: graph, kernel_abi: None },
         correspondence: rows,
         limits,
         launch_roots: Some(roots),

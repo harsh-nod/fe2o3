@@ -143,6 +143,18 @@ fn prepare_ownership_contracts_with_observation_v1(
     analyses: &mut PlironAnalysisManagerV1,
     observer: OwnershipObserverV1<'_, '_, '_>,
 ) -> Result<PreparedOwnershipContractsV1, HierarchicalOwnershipReportV1> {
+    if analyses.has_native_obligations_v1() {
+        if let (Some(observer), Some(failure)) = (observer, analyses.native_guard_denial_v1()) {
+            observer.deny(failure);
+        }
+        return Err(one(
+            HierarchicalOwnershipFindingV1::SparseIndexAnalysisIncomplete {
+                detail:
+                    "native byte, alias, initialization and lifetime obligations remain unresolved"
+                        .to_owned(),
+            },
+        ));
+    }
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
         Ok(inventory) => inventory,

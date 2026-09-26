@@ -9,11 +9,15 @@ description = "Bounded detached MIR-to-kernel Pliron lowering service for fe2o3.
 readme = "README.md"
 publish = false
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fe2o3_source_storage_root_custody_ui)', 'cfg(fe2o3_source_storage_root_custody_ui_case, values("positive", "state", "path", "origins", "view", "owned", "capture", "install", "plan", "custody", "recorded"))', 'cfg(fe2o3_cursor_escape_direct_v1)', 'cfg(fe2o3_cursor_escape_nested_v1)', 'cfg(fe2o3_cursor_buffer_escape_direct_v1)', 'cfg(fe2o3_cursor_buffer_escape_nested_v1)', 'cfg(fe2o3_raw_admission_ui_case, values("raw_graph", "unfinished_graph", "checked_path", "physical_escape", "physical_capture", "forged_completion"))'] }
+
 [dependencies]
 dialect-gpu.workspace = true
 dialect-kernel.workspace = true
 dialect-mir = { workspace = true, features = ["pliron"] }
 fe2o3-kernel-analysis = { workspace = true, default-features = false }
+fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
 # Final output admission consumes the sealed fixed-policy owner, not pass algorithms.
 fe2o3-kernel-opt.workspace = true
@@ -27,4 +31,3 @@ dialect-amdgcn.workspace = true
 fe2o3-amd-target.workspace = true
 # Differential execution of lowered test programs; never a production dependency.
 fe2o3-kir-sim.workspace = true
-fe2o3-kernel-descriptor.workspace = true

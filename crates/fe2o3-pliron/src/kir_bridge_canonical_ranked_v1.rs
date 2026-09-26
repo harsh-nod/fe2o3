@@ -6,10 +6,17 @@ use pliron::builtin::{attributes::IdentifierAttr, op_interfaces::ATTR_KEY_SYM_NA
 type Budget<'w> = CanonicalKernelIrVerificationResourceBudgetV1<'w>;
 type Resource = CanonicalKernelIrVerificationResourceErrorV1;
 
+#[path = "kir_bridge_canonical_private_profile_v1.rs"]
+pub(crate) mod private_profile;
+#[path = "kir_bridge_canonical_trap_profile_v1.rs"]
+mod trap_profile;
+use crate::production_analysis::canonical_ranked_checks_v1::private::CanonicalPrivateGraphFactsV1;
+
 pub(crate) struct NativeCanonicalRankedProjectionV1<'g> {
     graph: KirPlironGraphV12<'g>,
     witness: NativeBridgeWitnessV1,
     epoch: u64,
+    terminal: Option<trap_profile::NativeTrapModuleV1>,
 }
 
 fn unsupported(function: usize, block: Option<usize>, operation: Option<usize>) -> Failure {
@@ -78,9 +85,18 @@ fn profile(
                 Some(
                     Terminator::Branch { .. }
                         | Terminator::ConditionalBranch { .. }
+                        | Terminator::Switch { .. }
+                        | Terminator::IntegerSwitch { .. }
                         | Terminator::Return { .. }
                 )
             ) {
+                return Err(unsupported(fi, Some(bi), None));
+            }
+            if let Some(Terminator::Switch {
+                selector, cases, ..
+            }) = &block.terminator
+                && !source_legacy_representable(function, *selector, cases, budget)?
+            {
                 return Err(unsupported(fi, Some(bi), None));
             }
         }
@@ -138,16 +154,38 @@ impl<'g> NativeCanonicalRankedProjectionV1<'g> {
         input: &'g VerifiedCanonicalKernelIrModuleV12,
         budget: &mut Budget<'_>,
     ) -> Result<Self, Failure> {
-        profile(input, budget)?;
+        Self::import_profile(input, budget, None)
+    }
+
+    fn import_profile(
+        input: &'g VerifiedCanonicalKernelIrModuleV12,
+        budget: &mut Budget<'_>,
+        private: Option<&CanonicalPrivateGraphFactsV1<'_, '_>>,
+    ) -> Result<Self, Failure> {
+        match private {
+            None => profile(input, budget)?,
+            Some(facts) if std::ptr::eq(facts.inventory().owner(), input) => {}
+            Some(_) => return Err(Failure::ExactGraph),
+        }
         budget.reserve_storage(std::mem::size_of::<Self>())?;
         let (graph, witness) = import_native_neutral_v1(input, budget)?;
         let epoch = epoch(&graph.session.context)?;
+        let terminal = match private {
+            Some(facts) => trap_profile::NativeTrapModuleV1::capture(
+                facts,
+                &graph.session.context,
+                graph.session.operations[&graph.root.identity],
+                budget,
+            )?,
+            None => None,
+        };
         let mut result = Self {
             graph,
             witness,
             epoch,
+            terminal,
         };
-        result.check(budget)?;
+        result.check_profile(budget, private)?;
         Ok(result)
     }
 
@@ -162,7 +200,11 @@ impl<'g> NativeCanonicalRankedProjectionV1<'g> {
         Ok(())
     }
 
-    fn check_schema(&self, budget: &mut Budget<'_>) -> Result<(), Failure> {
+    fn check_schema(
+        &self,
+        budget: &mut Budget<'_>,
+        private: Option<&CanonicalPrivateGraphFactsV1<'_, '_>>,
+    ) -> Result<(), Failure> {
         self.graph.validate_custody_v12()?;
         let context = &self.graph.session.context;
         let root = self.graph.session.operations[&self.graph.root.identity];
@@ -193,7 +235,13 @@ impl<'g> NativeCanonicalRankedProjectionV1<'g> {
             let raw = function.deref(context);
             let name = symbol(&raw)?;
             budget.charge_work(name.len())?;
-            if !generated_symbol(name, functions)
+            let module_ordinal = match &self.terminal {
+                Some(terminal) => terminal
+                    .module_ordinal(functions)
+                    .ok_or(Failure::NativeSchema)?,
+                None => functions,
+            };
+            if !generated_symbol(name, module_ordinal)
                 || !Operation::is_op::<FuncOp>(function, context)
                 || raw.num_regions() != 1
                 || raw.get_num_operands() != 0
@@ -222,11 +270,28 @@ impl<'g> NativeCanonicalRankedProjectionV1<'g> {
                             &["gpu_cast_kind"]
                         } else if Operation::is_op::<CondBranchOp>(operation, context) {
                             &["operand_segment_sizes"]
+                        } else if Operation::is_op::<dialect_gpu::switch_v3::SwitchOpV3>(
+                            operation, context,
+                        ) {
+                            &[
+                                "gpu_switch_kind",
+                                "gpu_switch_cases",
+                                "gpu_switch_offsets",
+                                "operand_segment_sizes",
+                            ]
                         } else if Operation::is_op::<PlironSelectOp>(operation, context)
                             || Operation::is_op::<BranchOp>(operation, context)
                             || Operation::is_op::<ReturnOp>(operation, context)
                         {
                             &[]
+                        } else if private.is_some() {
+                            private_profile::keys(context, operation)
+                                .or_else(|| {
+                                    private
+                                        .filter(|facts| facts.has_terminal_pairs())
+                                        .and_then(|_| trap_profile::keys(context, operation))
+                                })
+                                .ok_or(Failure::NativeSchema)?
                         } else {
                             return Err(Failure::NativeSchema);
                         };
@@ -238,7 +303,14 @@ impl<'g> NativeCanonicalRankedProjectionV1<'g> {
             }
             functions += 1;
         }
-        if functions != self.owner().module().functions.len() {
+        if functions
+            != self
+                .terminal
+                .as_ref()
+                .map_or(self.owner().module().functions.len(), |terminal| {
+                    terminal.len()
+                })
+        {
             return Err(Failure::NativeSchema);
         }
         // Kernel order/roles are canonical metadata, not native symbol names.
@@ -258,11 +330,15 @@ impl<'g> NativeCanonicalRankedProjectionV1<'g> {
                 }
             }
             let ordinal = definition.ok_or(Failure::NativeSchema)?;
-            budget.charge_work(ordinal.checked_add(1).ok_or(Resource::Arithmetic)?)?;
+            let native_ordinal = match &self.terminal {
+                Some(terminal) => terminal.native_ordinal(ordinal, budget)?,
+                None => ordinal,
+            };
+            budget.charge_work(native_ordinal.checked_add(1).ok_or(Resource::Arithmetic)?)?;
             let live = block
                 .deref(context)
                 .iter(context)
-                .nth(ordinal)
+                .nth(native_ordinal)
                 .ok_or(Failure::NativeSchema)?;
             let raw = live.deref(context);
             let name = symbol(&raw)?;
@@ -275,8 +351,19 @@ impl<'g> NativeCanonicalRankedProjectionV1<'g> {
     }
 
     pub(crate) fn check(&mut self, budget: &mut Budget<'_>) -> Result<(), Failure> {
+        self.check_profile(budget, None)
+    }
+
+    fn check_profile(
+        &mut self,
+        budget: &mut Budget<'_>,
+        private: Option<&CanonicalPrivateGraphFactsV1<'_, '_>>,
+    ) -> Result<(), Failure> {
         self.check_epoch()?;
-        self.check_schema(budget)?;
+        self.check_schema(budget, private)?;
+        if let Some(facts) = private {
+            private_profile::check_calls(self, facts, budget)?;
+        }
         let floor = budget.storage();
         let extracted = self
             .graph
@@ -302,7 +389,11 @@ impl<'g> NativeCanonicalRankedProjectionV1<'g> {
         run: impl FnOnce(&Context, &FuncOp) -> T,
     ) -> Result<T, Failure> {
         self.check_epoch()?;
-        budget.charge_work(ordinal.checked_add(1).ok_or(Resource::Arithmetic)?)?;
+        let native_ordinal = match &self.terminal {
+            Some(terminal) => terminal.native_ordinal(ordinal, budget)?,
+            None => ordinal,
+        };
+        budget.charge_work(native_ordinal.checked_add(1).ok_or(Resource::Arithmetic)?)?;
         let context = &self.graph.session.context;
         let root = self.graph.session.operations[&self.graph.root.identity];
         let region = root.deref(context).get_region(0);
@@ -314,7 +405,7 @@ impl<'g> NativeCanonicalRankedProjectionV1<'g> {
         let pointer = block
             .deref(context)
             .iter(context)
-            .nth(ordinal)
+            .nth(native_ordinal)
             .ok_or(Failure::NativeSchema)?;
         let function =
             Operation::get_op::<FuncOp>(pointer, context).ok_or(Failure::NativeSchema)?;

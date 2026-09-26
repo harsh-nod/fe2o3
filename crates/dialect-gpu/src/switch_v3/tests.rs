@@ -9,6 +9,7 @@ use pliron::{
 };
 
 include!("verification_tests.rs");
+include!("folding_tests.rs");
 
 fn context() -> Context {
     let mut ctx = Context::new();

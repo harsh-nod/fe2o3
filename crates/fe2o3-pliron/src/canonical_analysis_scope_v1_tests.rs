@@ -16,6 +16,17 @@ use std::mem::{align_of, size_of};
 
 type ScopeResult<T> = Result<T, CanonicalAnalysisScopeErrorV1>;
 
+pub(super) fn disposal_headers<T, E>() -> usize {
+    if !std::mem::needs_drop::<T>() { return 0; }
+    type Payload = Box<dyn std::any::Any + Send>;
+    size_of::<Result<Result<T, E>, Payload>>()
+        + size_of::<AssertUnwindSafe<T>>()
+        + 4 * size_of::<Payload>()
+        + size_of::<AssertUnwindSafe<Payload>>()
+        + 2 * size_of::<Result<(), Payload>>()
+        + size_of::<std::ops::Range<usize>>() + size_of::<usize>()
+}
+
 fn sparse_engine_extra_header_bytes() -> usize {
     // Engine adds heads/next/queue/unresolved, queued, and five cursors to
     // the report. All fields share pointer alignment, so no padding is lost.
@@ -706,17 +717,28 @@ fn inventory_callback_floor_loss_is_sticky_without_recreating_incoming_storage()
             budget.reserve_storage(floor).unwrap();
             let result =
                 with_canonical_analysis_scope_v1(&owner, &mut budget, |scope| -> ScopeResult<()> {
-                    let failed = scope.with_inventory_v1(|_, budget| {
-                        let release = if below_incoming { header + 1 } else { 1 };
-                        budget.release_storage(release).unwrap();
-                        inventory_callback_exit(mode)
-                    });
-                    assert!(matches!(
-                        failed,
-                        Err(CanonicalAnalysisScopeErrorV1::Resource(
-                            Resource::Accounting
-                        ))
-                    ));
+                    let failed = catch_unwind(AssertUnwindSafe(|| {
+                        scope.with_inventory_v1(|_, budget| {
+                            let release = if below_incoming { header + 1 } else { 1 };
+                            budget.release_storage(release).unwrap();
+                            inventory_callback_exit(mode)
+                        })
+                    }));
+                    match (mode, failed) {
+                        (
+                            0,
+                            Ok(Err(CanonicalAnalysisScopeErrorV1::Resource(Resource::Accounting))),
+                        ) => {}
+                        (
+                            1,
+                            Ok(Err(CanonicalAnalysisScopeErrorV1::Resource(Resource::Arithmetic))),
+                        ) => {}
+                        (2, Err(payload)) => assert_eq!(
+                            payload.downcast_ref::<&str>(),
+                            Some(&"inventory callback sentinel")
+                        ),
+                        (_, other) => panic!("lost callback chronology: {other:?}"),
+                    }
                     assert!(scope.poisoned.get());
                     assert_eq!(scope.budget.work(), 12);
                     let retry: ScopeResult<()> =
@@ -738,7 +760,11 @@ fn inventory_callback_floor_loss_is_sticky_without_recreating_incoming_storage()
             ));
             assert_eq!(
                 budget.storage(),
-                if below_incoming { floor - 1 } else { floor }
+                if below_incoming {
+                    floor - 1
+                } else {
+                    floor + header - 1
+                }
             );
             assert_eq!(budget.peak_storage(), floor + header);
             assert_eq!(budget.work(), 12);
@@ -787,7 +813,10 @@ fn inventory_callback_slot_mismatch_and_recovery_never_reenable_the_scope() {
             Resource::Accounting
         ))
     ));
-    assert_eq!(budget.storage(), floor);
+    assert_eq!(
+        budget.storage(),
+        floor + size_of::<CanonicalKirInventoryV1<'_>>()
+    );
     assert_eq!(budget.work(), 6);
     drop(budget);
     assert_eq!(work.failed_work(), None);
@@ -821,13 +850,18 @@ fn inventory_callback_same_slot_foreign_ledger_is_neither_debited_nor_refunded()
         budget.reserve_storage(floor).unwrap();
         let original_ledger = budget.work_ledger_identity_v1();
         let foreign_ledger = foreign.work_ledger_identity_v1();
-        let result = inventory_callback_replace_ledger(&owner, &mut budget, &mut foreign, mode);
-        assert!(matches!(
-            result,
-            Err(CanonicalAnalysisScopeErrorV1::Resource(
-                Resource::Accounting
-            ))
-        ));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            inventory_callback_replace_ledger(&owner, &mut budget, &mut foreign, mode)
+        }));
+        match (mode, result) {
+            (0, Ok(Err(CanonicalAnalysisScopeErrorV1::Resource(Resource::Accounting)))) => {}
+            (1, Ok(Err(CanonicalAnalysisScopeErrorV1::Resource(Resource::Arithmetic)))) => {}
+            (2, Err(payload)) => assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&"inventory callback sentinel")
+            ),
+            (_, other) => panic!("lost callback chronology: {other:?}"),
+        }
         assert!(budget.work_ledger_identity_v1() == foreign_ledger);
         assert!(foreign.work_ledger_identity_v1() == original_ledger);
         assert_eq!((budget.work(), foreign.work()), (0, 12));
@@ -890,7 +924,7 @@ fn inventory_callback_foreign_entry_poison_survives_restoring_original_ledger() 
             Resource::Accounting
         ))
     ));
-    assert_eq!((budget.storage(), foreign.storage()), (floor, live));
+    assert_eq!((budget.storage(), foreign.storage()), (live, live));
     assert_eq!((budget.work(), foreign.work()), (6, 0));
     assert_eq!(foreign.failed_storage(), None);
 }
@@ -949,8 +983,10 @@ fn inventory_callback_rejected_result_observes_displaced_backing_paid_during_dro
         + size_of::<std::cell::RefCell<Option<Budget<'_>>>>()
         + size_of::<Cell<Option<(usize, usize, CanonicalKernelIrWorkLedgerIdentityV1)>>>();
     let floor = retained + 17 + output_headers;
-    let live = floor + size_of::<CanonicalKirInventoryV1<'_>>();
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(12);
+    let live = floor + size_of::<CanonicalKirInventoryV1<'_>>()
+        + disposal_headers::<InventoryCallbackDropBudget<'_, '_>, CanonicalAnalysisScopeErrorV1>();
+    // Unchanged outer4 + inventory2 + request6 + rejected-value drop/retry5.
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(17);
     let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(0);
     let mut budget = Budget::new(&mut work, live);
     let mut replacement = Budget::new(&mut foreign_work, live);
@@ -973,11 +1009,11 @@ fn inventory_callback_rejected_result_observes_displaced_backing_paid_during_dro
             Resource::Accounting
         ))
     ));
-    assert!(observed.get() == Some((live, 12, ledger)));
+    assert!(observed.get() == Some((live, 17, ledger)));
     assert!(budget.work_ledger_identity_v1() == foreign_ledger);
     assert_eq!((budget.storage(), budget.work()), (live, 0));
     let mut original = recovered.borrow_mut().take().unwrap();
-    assert_eq!((original.storage(), original.work()), (live, 12));
+    assert_eq!((original.storage(), original.work()), (live, 17));
     // The returned value and all scope dependencies are now gone.
     std::mem::swap(&mut budget, &mut original);
     budget.release_storage(live - floor).unwrap();

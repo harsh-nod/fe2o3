@@ -1,13 +1,16 @@
 //! Same-graph affine execution ownership. This is not source or schedule authentication.
+//! V15 requires acyclic control flow. Checked storage/V18 admits cycles only
+//! when every edge agrees on exact ownership state; this does not prove termination.
 
 use crate::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as ResourceError, DiagnosticCode,
     ExecutionOperationV15 as Execution, ExecutionRoleV15 as Role, Function, FunctionRole,
-    MeteredIndexedControlFlowV1, Module, Operation, OperationKind, Terminator, Type, ValueId,
-    VerificationDefinitionSiteV1, VerificationDiagnosticCollectorV1,
-    VerificationDiagnosticLocationV1, VerificationFunctionStateV1, clone_diagnostic_location_v1,
-    emit_fixed_v1, function_diagnostic_location_v1,
+    MeteredIndexedControlFlowV1, Module, Operation, OperationKind,
+    StructurallyCheckedModuleStorageV1, Terminator, Type, ValueId, VerificationDefinitionSiteV1,
+    VerificationDiagnosticCollectorV1, VerificationDiagnosticLocationV1,
+    VerificationFunctionStateV1, clone_diagnostic_location_v1, emit_fixed_v1,
+    function_diagnostic_location_v1,
 };
 
 pub(crate) fn invalid_execution_type_v15(
@@ -21,7 +24,9 @@ pub(crate) fn invalid_execution_type_v15(
             Type::Execution(role) => return Ok(!allow_direct || role.validate().is_err()),
             Type::Pointer(pointer) => ty = &pointer.pointee,
             Type::Slice(slice) => ty = &slice.element,
-            Type::Unit | Type::Scalar(_) | Type::Vector(_) => return Ok(false),
+            Type::Unit | Type::Scalar(_) | Type::Vector(_) | Type::StorageObject(_) => {
+                return Ok(false);
+            }
         }
         allow_direct = false;
     }
@@ -87,6 +92,51 @@ pub(crate) fn verify_execution_lifecycle_v15(
     diagnostics: &mut VerificationDiagnosticCollectorV1,
     budget: &mut Budget<'_>,
 ) -> Result<(), ResourceError> {
+    verify_with_profile(
+        module,
+        function,
+        definitions,
+        control_flow,
+        diagnostics,
+        budget,
+        LifecycleProfile::AcyclicV15,
+    )
+}
+
+pub(crate) fn verify_storage_execution_lifecycle_v18(
+    storage: &StructurallyCheckedModuleStorageV1<'_>,
+    function: &Function,
+    definitions: &VerificationFunctionStateV1<'_>,
+    control_flow: Option<&MeteredIndexedControlFlowV1>,
+    diagnostics: &mut VerificationDiagnosticCollectorV1,
+    budget: &mut Budget<'_>,
+) -> Result<(), ResourceError> {
+    verify_with_profile(
+        storage.module(),
+        function,
+        definitions,
+        control_flow,
+        diagnostics,
+        budget,
+        LifecycleProfile::ExactBackedgesV18,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum LifecycleProfile {
+    AcyclicV15,
+    ExactBackedgesV18,
+}
+
+fn verify_with_profile(
+    module: &Module,
+    function: &Function,
+    definitions: &VerificationFunctionStateV1<'_>,
+    control_flow: Option<&MeteredIndexedControlFlowV1>,
+    diagnostics: &mut VerificationDiagnosticCollectorV1,
+    budget: &mut Budget<'_>,
+    profile: LifecycleProfile,
+) -> Result<(), ResourceError> {
     let mut scratch = 0;
     let result = verify_inner(
         module,
@@ -96,12 +146,14 @@ pub(crate) fn verify_execution_lifecycle_v15(
         diagnostics,
         budget,
         &mut scratch,
+        profile,
     );
     // Diagnostic buffers belong to the caller and survive this local scratch owner.
     let released = budget.release_storage(scratch);
     result.and(released)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verify_inner(
     module: &Module,
     function: &Function,
@@ -110,6 +162,7 @@ fn verify_inner(
     diagnostics: &mut VerificationDiagnosticCollectorV1,
     budget: &mut Budget<'_>,
     scratch: &mut usize,
+    profile: LifecycleProfile,
 ) -> Result<(), ResourceError> {
     let Some(body) = &function.body else {
         return Ok(());
@@ -134,7 +187,7 @@ fn verify_inner(
     };
     let flow = control_flow.indexed_v15();
     let blocks = flow.block_count();
-    if !acyclic(flow, budget)? {
+    if matches!(profile, LifecycleProfile::AcyclicV15) && !acyclic(flow, budget)? {
         return fail(
             diagnostics,
             location,
@@ -330,6 +383,8 @@ fn verify_inner(
                 .ok_or(ResourceError::Accounting)?;
             budget.charge_work(count)?;
             if let Some(expected) = &incoming[target] {
+                // Exact equality makes the recorded state a fixed point, including
+                // on backedges. Changed ownership is rejected, never widened.
                 if expected != &state {
                     return fail(
                         diagnostics,
@@ -632,3 +687,7 @@ fn apply_execution(
 #[cfg(test)]
 #[path = "verification_execution_lifecycle_v15_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "verification_execution_lifecycle_v18_tests.rs"]
+mod storage_tests;

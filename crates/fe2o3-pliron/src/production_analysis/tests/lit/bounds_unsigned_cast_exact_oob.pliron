@@ -1,0 +1,13 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-BOUNDS-004]
+// CHECK: computes index 255
+builtin.func @bounds_unsigned_cast_exact_oob: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    view_v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global]: <() -> (kernel.ranked_view <32,false,[1]>)>;
+    input_v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 511]: <() -> (kernel.index )>;
+    narrowed_v2 = kernel.index_unsigned_cast (input_v1) [] [kernel_unsigned_bit_width: kernel.index_value 8]: <(kernel.index ) -> (kernel.index )>;
+    kernel.access (view_v0, narrowed_v2) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[1]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

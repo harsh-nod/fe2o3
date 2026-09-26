@@ -21,11 +21,32 @@ pub(super) fn exclusive_owner_value_origins_v1(
     .map(|(origins, _)| origins)
 }
 
+pub(super) fn exclusive_owner_value_origins_core_v18(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    definitions: &[u8],
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Vec<Option<u32>>, ProductionRankedProjectionErrorV1> {
+    origins_with_allocation_v18(callables, function, definitions,
+        MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1, allocation).map(|(origins, _)| origins)
+}
+
 pub(super) fn origins_with_limit(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     definitions: &[u8],
     limit: usize,
+) -> Result<(Vec<Option<u32>>, usize), ProductionRankedProjectionErrorV1> {
+    origins_with_allocation_v18(callables, function, definitions, limit,
+        &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+}
+
+fn origins_with_allocation_v18(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    definitions: &[u8],
+    limit: usize,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
 ) -> Result<(Vec<Option<u32>>, usize), ProductionRankedProjectionErrorV1> {
     let count = function.locals().len();
     if definitions.len() != count {
@@ -33,14 +54,17 @@ pub(super) fn origins_with_limit(
             "ExclusiveOwner carrier definitions do not match the local table",
         ));
     }
+    allocation.header::<Result<(Vec<Option<u32>>, usize), ProductionRankedProjectionErrorV1>>()?;
     let mut work = 0;
     charge(&mut work, limit, count)?;
+    allocation.charge(count)?;
     charge(
         &mut work,
         limit,
         function.abi().source_argument_ownership().len(),
     )?;
-    let mut origins = filled(count, None)?;
+    allocation.charge(function.abi().source_argument_ownership().len())?;
+    let mut origins = filled_core_v18(count, None, allocation)?;
     if !function
         .abi()
         .source_argument_ownership()
@@ -48,10 +72,18 @@ pub(super) fn origins_with_limit(
     {
         return Ok((origins, work));
     }
-    let mut scan = CarrierScan::new(count, limit, work)?;
+    let mut scan = CarrierScan::new(count, limit, work, allocation)?;
     scan.charge(count)?;
-    let mut copies = filled(count, Vec::<usize>::new())?;
-    let mut borrows = Vec::new();
+    let mut copies = if matches!(scan.allocation,
+        source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
+    {
+        filled(count, Vec::<usize>::new())?
+    } else {
+        let mut copies = scan.allocation.capacity(count)?;
+        copies.resize_with(count, Vec::<usize>::new);
+        copies
+    };
+    let mut borrows = scan.allocation.empty()?;
     let mut edge_count = 0;
     for (index, local) in function.locals().iter().enumerate() {
         scan.charge(1)?;
@@ -102,11 +134,12 @@ pub(super) fn origins_with_limit(
                             scan.operand(operand, exact.is_some(), false)?;
                             if let Some(source) = exact {
                                 scan.charge(1)?;
-                                push_local_provenance_edge_v1(
+                                push_local_provenance_edge_core_v18(
                                     &mut copies,
                                     source,
                                     destination_index,
                                     &mut edge_count,
+                                    scan.allocation,
                                 )?;
                             }
                         }
@@ -118,10 +151,10 @@ pub(super) fn origins_with_limit(
                             // use census has excluded aliasing, writes and escapes.
                             scan.place(place, true, false)?;
                             scan.charge(1)?;
-                            borrows.try_reserve(1).map_err(|_| {
-                                failure("ExclusiveOwner carrier borrow storage cannot be reserved")
-                            })?;
-                            borrows.push((place.local().index() as usize, destination_index));
+                            scan.allocation.reserve(&mut borrows, 1, false,
+                                "ExclusiveOwner carrier borrow storage cannot be reserved")?;
+                            scan.allocation.push(&mut borrows,
+                                (place.local().index() as usize, destination_index))?;
                         }
                         value => {
                             value.try_visit_operands(|operand| {
@@ -260,16 +293,19 @@ pub(super) fn origins_with_limit(
     }
     // The propagation helper scans all locals, initializes a bounded queue,
     // pops each reached local at most once, and visits each edge at most once.
-    scan.charge(
+    // Keep the original independent historical limit, while the source route
+    // debits the actual shared solver's queue and edge visits below.
+    charge(&mut scan.work, scan.limit,
         count
             .checked_mul(3)
             .and_then(|value| value.checked_add(edge_count))
             .ok_or(failure("ExclusiveOwner carrier work accounting overflowed"))?,
     )?;
-    propagate_exact_local_origins_v1(
+    propagate_exact_local_origins_core_v18(
         &mut origins,
         &copies,
         "an ExclusiveOwner carrier has conflicting argument origins",
+        scan.allocation,
     )?;
     Ok((origins, scan.work))
 }
@@ -305,19 +341,34 @@ fn filled<T: Clone>(count: usize, value: T) -> Result<Vec<T>, ProductionRankedPr
     Ok(values)
 }
 
-struct CarrierScan {
+fn filled_core_v18<T: Copy>(
+    count: usize, value: T,
+    allocation: &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'_>,
+) -> Result<Vec<T>, ProductionRankedProjectionErrorV1> {
+    if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
+        return filled(count, value);
+    }
+    // The caller paid the census's initialization visits before this reserve.
+    let mut rows = allocation.capacity(count)?;
+    rows.resize(count, value);
+    Ok(rows)
+}
+
+struct CarrierScan<'a, 'm> {
     bad_carrier: Vec<bool>,
     bad_receiver: Vec<bool>,
     receiver_uses: Vec<u8>,
     work: usize,
     limit: usize,
+    allocation: &'a mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'m>,
 }
 
-impl CarrierScan {
+impl<'a, 'm> CarrierScan<'a, 'm> {
     fn new(
         count: usize,
         limit: usize,
         mut work: usize,
+        allocation: &'a mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'m>,
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
         charge(
             &mut work,
@@ -326,17 +377,22 @@ impl CarrierScan {
                 .checked_mul(3)
                 .ok_or(failure("ExclusiveOwner carrier work accounting overflowed"))?,
         )?;
+        allocation.charge(count.checked_mul(3)
+            .ok_or(failure("ExclusiveOwner carrier work accounting overflowed"))?)?;
+        allocation.header::<Self>()?;
         Ok(Self {
-            bad_carrier: filled(count, false)?,
-            bad_receiver: filled(count, false)?,
-            receiver_uses: filled(count, 0)?,
+            bad_carrier: filled_core_v18(count, false, allocation)?,
+            bad_receiver: filled_core_v18(count, false, allocation)?,
+            receiver_uses: filled_core_v18(count, 0, allocation)?,
             work,
             limit,
+            allocation,
         })
     }
 
     fn charge(&mut self, amount: usize) -> Result<(), ProductionRankedProjectionErrorV1> {
-        charge(&mut self.work, self.limit, amount)
+        charge(&mut self.work, self.limit, amount)?;
+        self.allocation.charge(amount)
     }
 
     fn local(
@@ -407,4 +463,18 @@ fn charge(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod live_layout_tests_v18 {
+    use super::*;
+    use std::mem::{align_of, size_of};
+
+    #[test]
+    fn live_carrier_header_includes_the_borrowed_meter_and_existing_scan_state() {
+        type Header = (Vec<bool>, Vec<bool>, Vec<u8>, usize, usize,
+            &'static mut source_ranked_consumer_resources_v18::ProjectionAllocationV18<'static>);
+        assert_eq!(size_of::<CarrierScan<'_, '_>>(), size_of::<Header>());
+        assert_eq!(align_of::<CarrierScan<'_, '_>>(), align_of::<Header>());
+    }
 }

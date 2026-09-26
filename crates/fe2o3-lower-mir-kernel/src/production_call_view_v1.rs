@@ -40,13 +40,15 @@ impl ProductionCallArgumentNodeV1<'_> {
 pub enum ProductionCallDestinationV1<'a> {
     /// SSA or ignored local; there is no result store.
     Local,
-    /// Unprojected local backed by retained private storage.
+    /// Unprojected local backed by retained private storage; the exact Store or
+    /// source-checked Storage::WriteValue is exposed without granting memory authority.
     Retained(&'a Operation),
     /// Projected source place, with the exact prepared-address operation range.
     Projected {
         /// May be empty when the address already exists.
         preparation: &'a [Operation],
-        /// Exact unguarded store of the call's scalar result.
+        /// Exact unguarded Store or source-checked Storage::WriteValue of the scalar result.
+        /// This view does not independently authorize typed object memory access.
         store: &'a Operation,
     },
 }

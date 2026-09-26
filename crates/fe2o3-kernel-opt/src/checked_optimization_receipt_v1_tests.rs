@@ -444,7 +444,7 @@ fn empty_decode_check_exact_and_one_under_storage_bound_coexisting_headers() {
     let view = size_of::<CheckedCanonicalKirTransitionV1<'_, '_, '_, '_>>();
     let state = 2 * size_of::<&CanonicalKirInventoryV1<'_>>()
         + size_of::<CanonicalKirTransitionCandidateV1<'_>>()
-        + 18 * size_of::<Vec<usize>>();
+        + 19 * size_of::<Vec<usize>>();
     let peak = receipt_storage + inventories + view + state;
     let input = admit(&Module::new("m"));
     let checked = prepare(&input);

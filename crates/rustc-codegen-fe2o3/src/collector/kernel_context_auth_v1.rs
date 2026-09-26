@@ -22,6 +22,11 @@ pub(crate) struct CapturedContextProducersV1<'tcx> {
     proofs: Vec<CapturedProducerV1<'tcx>>,
 }
 
+struct OriginalContextProducersV1<'tcx> {
+    declarations: Vec<kernel_context_frontend_v1::DeclaredContextEntryV1<'tcx>>,
+    proofs: Vec<CapturedProducerV1<'tcx>>,
+}
+
 struct CapturedProducerV1<'tcx> {
     root: Instance<'tcx>,
     helper: Instance<'tcx>,
@@ -140,6 +145,26 @@ fn require_context_receipt_roster_v1<T: Eq>(
 pub(crate) fn capture_context_producers_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> Result<CapturedContextProducersV1<'tcx>, CollectError> {
+    finish_context_producer_capture_v1(tcx, capture_original_context_producers_v1(tcx)?)
+}
+
+#[cfg(test)]
+pub(crate) fn capture_context_producers_batch_for_test_v1<'tcx, const COUNT: usize>(
+    tcx: TyCtxt<'tcx>,
+) -> Result<Vec<CapturedContextProducersV1<'tcx>>, CollectError> {
+    // Each transaction gets a fresh original-source authentication, not a clone
+    // of another receipt. Finish signatures only after all source borrows end.
+    let originals = (0..COUNT)
+        .map(|_| capture_original_context_producers_v1(tcx))
+        .collect::<Result<Vec<_>, _>>()?;
+    originals.into_iter()
+        .map(|original| finish_context_producer_capture_v1(tcx, original))
+        .collect()
+}
+
+fn capture_original_context_producers_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> Result<OriginalContextProducersV1<'tcx>, CollectError> {
     let declarations = kernel_context_frontend_v1::decode_v1(tcx)?;
     let mut proofs: Vec<CapturedProducerV1<'tcx>> = Vec::with_capacity(declarations.len());
     for declaration in &declarations {
@@ -209,6 +234,14 @@ pub(crate) fn capture_context_producers_v1<'tcx>(
             original_mir_sha256,
         });
     }
+    Ok(OriginalContextProducersV1 { declarations, proofs })
+}
+
+fn finish_context_producer_capture_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    original: OriginalContextProducersV1<'tcx>,
+) -> Result<CapturedContextProducersV1<'tcx>, CollectError> {
+    let OriginalContextProducersV1 { declarations, proofs } = original;
     // FnAbi can request optimized MIR to deduce parameter attributes. Capture
     // every original root before those queries can steal any producer body.
     for proof in &proofs {

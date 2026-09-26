@@ -332,3 +332,102 @@ fn arithmetic_overflow_refuses_before_allocation() {
     assert_eq!(budget.storage(), 0);
     assert_eq!(budget.work(), 1);
 }
+
+fn with_transfers(
+    seeds: &[State],
+    edges: &[(usize, usize, u8)],
+    work_limit: usize,
+    storage_limit: usize,
+    consume: impl FnOnce(&[State]),
+) -> (Result<()>, usize, usize) {
+    let mut meter = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+    let mut budget = Budget::new(&mut meter, storage_limit);
+    budget.reserve_storage(FLOOR).unwrap();
+    let result = (|| {
+        let mut graph = OriginWorkV1::<u8, u8>::new(seeds.len(), edges.len(), &mut budget)?;
+        for &seed in seeds { graph.seed_next(seed, &mut budget)?; }
+        for &(source, target, delta) in edges { graph.add_transfer(source, target, delta, &mut budget)?; }
+        let solved = graph.solve_with(&mut budget, |delta, value, budget| {
+            budget.charge_work(1)?;
+            value.checked_add(delta).ok_or(OriginWorkErrorV1::Shape)
+        })?;
+        consume(&solved);
+        Ok(())
+    })();
+    budget.release_storage(budget.storage() - FLOOR).unwrap();
+    assert_eq!(budget.storage(), FLOOR);
+    (result, budget.work(), budget.peak_storage())
+}
+
+#[test]
+fn exact_transfers_compose_without_grounding_uninitialized_cycles() {
+    let seeds = [State::Exact(2), State::Pending, State::Pending, State::Pending, State::Pending];
+    let mut edges = vec![(0, 1, 3), (1, 2, 4), (2, 3, 0), (3, 2, 0)];
+    for _ in 0..2 {
+        with_transfers(&seeds, &edges, LIMIT, LIMIT, |actual| {
+            assert_eq!(actual, [State::Exact(2), State::Exact(5), State::Exact(9), State::Exact(9), State::Unknown]);
+        }).0.unwrap();
+        edges.reverse();
+    }
+    // A conflicting displacement, not merely a conflicting root, poisons a join.
+    edges.push((0, 2, 8));
+    with_transfers(&seeds, &edges, LIMIT, LIMIT, |actual| {
+        assert_eq!(actual, [State::Exact(2), State::Exact(5), State::Unknown, State::Unknown, State::Unknown]);
+    }).0.unwrap();
+    // A transfer label cannot manufacture a source for a pure incoming cycle.
+    with_transfers(&[State::Exact(0), State::Pending, State::Pending],
+        &[(1, 1, 1), (1, 2, 1), (0, 2, 0)], LIMIT, LIMIT, |actual| {
+            assert_eq!(actual, [State::Exact(0), State::Unknown, State::Unknown]);
+        }).0.unwrap();
+}
+
+#[test]
+fn nonzero_transfer_cycle_is_a_conflict_not_an_unbounded_iteration() {
+    with_transfers(&[State::Exact(0), State::Pending], &[(0, 1, 1), (1, 1, 1)], LIMIT, LIMIT, |actual| {
+        assert_eq!(actual, [State::Exact(0), State::Unknown]);
+    }).0.unwrap();
+    let (result, _, _) = with_transfers(&[State::Exact(255), State::Pending], &[(0, 1, 1)], LIMIT, LIMIT, |_| panic!("overflow published"));
+    assert_eq!(result, Err(OriginWorkErrorV1::Shape));
+}
+
+#[test]
+fn transferred_edges_preserve_exact_independent_resource_boundaries() {
+    let seeds = [State::Exact(0), State::Pending, State::Pending];
+    let edges = [(0, 1, 3), (1, 2, 4)];
+    // The old 36-work graph plus two charged transfers. Each labelled link has
+    // two usize indices and one byte label padded to machine-word alignment.
+    let work = 38;
+    let bytes = 3 * (std::mem::size_of::<State>() + 2 * std::mem::size_of::<usize>() + 1)
+        + 6 * std::mem::size_of::<usize>();
+    let (result, spent, peak) = with_transfers(&seeds, &edges, work, FLOOR + bytes, |actual| {
+        assert_eq!(actual, [State::Exact(0), State::Exact(3), State::Exact(7)]);
+    });
+    result.unwrap();
+    assert_eq!((spent, peak), (work, FLOOR + bytes));
+    for (work_limit, storage_limit, is_work) in [(work - 1, FLOOR + bytes, true), (work, FLOOR + bytes - 1, false)] {
+        let (result, _, _) = with_transfers(&seeds, &edges, work_limit, storage_limit, |_| panic!("short allowance published"));
+        assert!(matches!((result, is_work),
+            (Err(OriginWorkErrorV1::Resource(Resource::Work(_))), true)
+                | (Err(OriginWorkErrorV1::Resource(Resource::Storage(_))), false)));
+    }
+}
+
+#[test]
+fn transfer_callbacks_cannot_publish_after_losing_graph_custody() {
+    let mut meter = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+    let mut budget = Budget::new(&mut meter, LIMIT);
+    budget.reserve_storage(FLOOR).unwrap();
+    let mut graph = OriginWorkV1::<u8, ()>::new(2, 1, &mut budget).unwrap();
+    graph.seed_next(State::Exact(1), &mut budget).unwrap();
+    graph.seed_next(State::Pending, &mut budget).unwrap();
+    graph.add_transfer(0, 1, (), &mut budget).unwrap();
+    let mut entered = false;
+    let result = graph.solve_with(&mut budget, |(), value, budget| {
+        entered = true;
+        budget.release_storage(budget.storage() - FLOOR)?;
+        Ok(value)
+    });
+    assert!(entered);
+    assert_eq!(result, Err(OriginWorkErrorV1::Resource(Resource::Accounting)));
+    assert_eq!(budget.storage(), FLOOR);
+}

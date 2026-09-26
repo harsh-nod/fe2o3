@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 
 use dialect_kernel::{
     CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DimensionOp, IndexBinaryKindAttr,
-    IndexBinaryOp, IndexConstantOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedViewOp,
+    IndexBinaryOp, IndexConstantOp, IndexUnsignedCastOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedViewOp,
     ranked_view_type,
 };
 use pliron::{
@@ -146,6 +146,8 @@ impl SparseAffineIndexV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SparseIndexFactV1 {
     Unknown,
+    // Range-only knowledge: equality of these facts is not value equality.
+    UnsignedUpperBound { inclusive: u64 },
     Affine(SparseAffineIndexV1),
     MachineOverflow(SparseMachineOverflowV1),
     Remainder {
@@ -240,6 +242,7 @@ impl SparseIndexFactV1 {
         match self {
             Self::Affine(affine) => Some(affine),
             Self::Unknown
+            | Self::UnsignedUpperBound { .. }
             | Self::MachineOverflow(_)
             | Self::Remainder { .. }
             | Self::CheckedTiled2D(_)
@@ -254,6 +257,7 @@ impl SparseIndexFactV1 {
                 dividend.is_constant().map(|value| value % modulus)
             }
             Self::Unknown
+            | Self::UnsignedUpperBound { .. }
             | Self::MachineOverflow(_)
             | Self::Remainder { .. }
             | Self::CheckedTiled2D(_)
@@ -264,6 +268,7 @@ impl SparseIndexFactV1 {
     pub fn evaluate(&self, invocation: &[u64]) -> Option<u64> {
         match self {
             Self::Unknown => None,
+            Self::UnsignedUpperBound { .. } => None,
             Self::MachineOverflow(_) => None,
             Self::Affine(affine) => affine.evaluate(invocation),
             Self::Remainder { dividend, modulus } if *modulus != 0 => {
@@ -278,6 +283,7 @@ impl SparseIndexFactV1 {
     pub fn maximum(&self, launch_extents: &[u64]) -> Option<u64> {
         match self {
             Self::Unknown => None,
+            Self::UnsignedUpperBound { inclusive } => Some(*inclusive),
             Self::MachineOverflow(_) => None,
             Self::Affine(affine) => affine.maximum(launch_extents),
             Self::Remainder { modulus, .. } => modulus.checked_sub(1),
@@ -848,6 +854,16 @@ fn derive_operation(
             dimension,
         )));
     }
+    if let Some(cast) = operation.downcast_ref::<IndexUnsignedCastOp>() {
+        let Some(inclusive) = cast.inclusive_upper_bound(context) else {
+            return known(SparseIndexFactV1::Unknown);
+        };
+        let source = lookup(cast.source(context), lattice, definition_indices);
+        let SparseIndexLatticeV1::Known(source) = source else {
+            return SparseIndexLatticeV1::Pending;
+        };
+        return known(derive_unsigned_cast(source, inclusive, launch_extents));
+    }
     if let Some(dimension) = operation.downcast_ref::<DimensionOp>() {
         let Some(dimension_index) = dimension
             .dimension(context)
@@ -949,6 +965,29 @@ fn derive_operation(
 
 const fn known(fact: SparseIndexFactV1) -> SparseIndexLatticeV1 {
     SparseIndexLatticeV1::Known(fact)
+}
+
+fn derive_unsigned_cast(
+    source: SparseIndexFactV1,
+    inclusive: u64,
+    launch_extents: &[u64],
+) -> SparseIndexFactV1 {
+    if matches!(source, SparseIndexFactV1::MachineOverflow(_)) || inclusive == u64::MAX {
+        return source;
+    }
+    if let Some(value) = source.constant_value() {
+        return SparseIndexFactV1::Affine(SparseAffineIndexV1::constant(value & inclusive));
+    }
+    if source.maximum(launch_extents).is_some_and(|maximum| maximum <= inclusive) {
+        return source;
+    }
+    match source {
+        SparseIndexFactV1::Affine(dividend) => SparseIndexFactV1::Remainder {
+            dividend,
+            modulus: inclusive + 1,
+        },
+        _ => SparseIndexFactV1::UnsignedUpperBound { inclusive },
+    }
 }
 
 fn charge_uses(use_count: &mut usize, additional: usize) -> Result<(), SparseIndexFailureV1> {

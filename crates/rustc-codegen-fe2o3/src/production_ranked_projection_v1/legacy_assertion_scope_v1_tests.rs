@@ -863,6 +863,7 @@ mod legacy_scope_tests {
         moved: bool,
         alias: bool,
         binary: bool,
+        nominal: bool,
     ) -> (
         Vec<SemanticTypeDeclV1>,
         SemanticFunctionDeclV1,
@@ -898,13 +899,32 @@ mod legacy_scope_tests {
                 SemanticAggregateTypeV1::new(vec![A_U64, A_UNIT]).unwrap(),
             ),
         ));
+        let parameter = if nominal {
+            let wrapper = SemanticTypeIdV1::from_index(types.len() as u32);
+            types.push(SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256(bytes(238)),
+                SemanticLayoutIdentityV1::from_sha256(bytes(238)),
+                SemanticTypeLayoutV1::aggregate_with_backend_repr(Some(8), 8,
+                    *types[A_BOOL_PTR.index() as usize].layout().backend_repr(), false,
+                    SemanticAggregateLayoutV1::new(vec![0, 0], vec![]).unwrap()).unwrap(),
+                SemanticTypeShapeV1::Aggregate(
+                    SemanticAggregateTypeV1::new(vec![A_BOOL_PTR, A_UNIT]).unwrap()),
+            ).with_rustc_abi_properties(SemanticTypeAbiPropertiesV1::new(false, false)
+                .with_scalar_pointee_info(Some(SemanticAbiPointeeInfoV1::new(
+                    SemanticAbiPointeeKindV1::Raw, 0, 1).unwrap()), None)));
+            wrapper
+        } else { A_BOOL_PTR };
+        let pointer_projections = |local| {
+            if nominal && matches!(local, 1 | 2) {
+                vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), A_BOOL_PTR).unwrap()]
+            } else { vec![] }
+        };
         let dereference = |local| {
+            let mut projections = pointer_projections(local);
+            projections.push(SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, A_U32).unwrap());
             SemanticPlaceV1::new(
                 SemanticLocalIdV1::from_index(local),
-                vec![
-                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, A_U32)
-                        .unwrap(),
-                ],
+                projections,
                 A_U32,
             )
             .unwrap()
@@ -922,7 +942,7 @@ mod legacy_scope_tests {
                 3,
                 A_BOOL_PTR,
                 SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
-                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], A_BOOL_PTR)
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), pointer_projections(1), A_BOOL_PTR)
                         .unwrap(),
                 )),
             ));
@@ -956,12 +976,12 @@ mod legacy_scope_tests {
         let original = assertion_root_with_access(
             vec![
                 (A_UNIT, SemanticLocalRoleV1::Return),
-                (A_BOOL_PTR, SemanticLocalRoleV1::Argument(0)),
-                (A_BOOL_PTR, SemanticLocalRoleV1::Argument(1)),
+                (parameter, SemanticLocalRoleV1::Argument(0)),
+                (parameter, SemanticLocalRoleV1::Argument(1)),
                 (A_BOOL_PTR, SemanticLocalRoleV1::Temporary),
                 (witness, SemanticLocalRoleV1::Temporary),
             ],
-            vec![A_BOOL_PTR, A_BOOL_PTR],
+            vec![parameter, parameter],
             vec![
                 block(
                     220,
@@ -1087,6 +1107,75 @@ mod legacy_scope_tests {
         .unwrap()
     }
 
+    fn ordered_pointer_profile_v18(
+        ssa: &ProductionSemanticSsaOwnerV1,
+    ) -> Vec<fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiArgumentV18> {
+        use fe2o3_kernel_descriptor::{DeviceLayoutDescriptorV1, DeviceLayoutRecordV1,
+            LogicalArgumentV1, ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeDescriptorV3,
+            SourceTypeRecordV1, ValidName};
+        let semantic = ssa.source_semantic();
+        let function = &semantic.functions()[0];
+        assert_eq!(function.abi().source_input_types().len(), 2);
+        function.abi().source_input_types().iter().enumerate().map(|(ordinal, ty)| {
+            let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::global_mut_pointer(ScalarTypeV1::U32));
+            let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::global_mut_pointer(ScalarTypeV1::U32));
+            fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiArgumentV18 {
+                semantic_type_identity: semantic.types()[ty.index() as usize].identity(),
+                kind: fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiKindV18::Descriptor {
+                    source: SourceTypeDescriptorV3::GlobalMutPointer(ScalarTypeV1::U32),
+                    argument: LogicalArgumentV1::global_mut_pointer(ordinal as u16,
+                        ValidName::new(format!("arg{ordinal}")).unwrap(), &source, &layout,
+                        ordinal as u32 * 8).unwrap(),
+                },
+            }
+        }).collect()
+    }
+
+    #[test]
+    fn bare_raw_ordered_effect_arguments_stay_generic_and_cannot_claim_nominal_global_profile() {
+        use fe2o3_lower_mir_kernel::{ProductionKernelArgumentAbiInputV18,
+            ProductionKernelArgumentAbiRootV18, ProductionPreRankedKirErrorV1,
+            ProductionPreRankedKirOwnerV1, ProductionSemanticKirErrorV1,
+            ProductionSemanticKirLimitsV1};
+        for explicit in [false, true] {
+            let (types, function, callables) = ordered_effect_source_v1(false, false, true, false, false);
+            let ssa = ordered_effect_ssa_v1(types, function, callables);
+            let arguments = ordered_pointer_profile_v18(&ssa);
+            let binding = bytes(247);
+            let roots = [ProductionKernelArgumentAbiRootV18 {
+                kernel_binding: &binding, export: A_NAME, arguments: &arguments,
+                explicit_argument_bytes: 16, kernarg_alignment_bytes: 8,
+            }];
+            let launch = source_launch_roster_for_ranked_inputs_v1(&ssa,
+                &[ranked_root_input_1d(A_NAME, 247, 1)]).unwrap();
+            let mut work = Work::new(
+                usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap());
+            let mut budget = Budget::new(&mut work, crate::production_canonical_phase_policy_v1::STORAGE_LIMIT);
+            let result = if explicit {
+                ProductionPreRankedKirOwnerV1::try_materialize_with_kernel_abi_budget_v18(
+                    ssa, launch, ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                    ProductionSemanticKirLimitsV1::default(), &mut budget)
+            } else {
+                ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+                    ssa, launch, ProductionSemanticKirLimitsV1::default(), &mut budget)
+            };
+            assert_eq!(budget.storage(), 0);
+            if explicit {
+                assert!(matches!(result, Err(ProductionPreRankedKirErrorV1::Lowering(
+                    ProductionSemanticKirErrorV1::Unsupported { detail:
+                        "kernel argument ABI profile differs from the complete original descriptor/source contract", .. }
+                ))), "a raw pointer is not the nominal owned wrapper: {result:?}");
+            } else {
+                let owner = result.unwrap();
+                let parameters = &owner.executable().module().functions[0].signature.parameters;
+                assert_eq!(parameters.len(), 2);
+                assert!(parameters.iter().all(|ty| matches!(ty,
+                    fe2o3_kernel_ir::Type::Pointer(pointer)
+                    if pointer.address_space == fe2o3_kernel_ir::AddressSpace::Generic)));
+            }
+        }
+    }
+
     fn ordered_effect_attach_v1(
         store: bool,
         moved: bool,
@@ -1102,10 +1191,25 @@ mod legacy_scope_tests {
             ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirLimitsV1,
             ProductionSemanticKirOwnerV1,
         };
-        let (types, function, callables) = ordered_effect_source_v1(store, moved, alias, binary);
+        let (types, function, callables) = ordered_effect_source_v1(store, moved, alias, binary, true);
         let inputs = [ranked_root_input_1d(A_NAME, 247, 1)];
         let ssa = ordered_effect_ssa_v1(types.clone(), function.clone(), callables.clone());
-        let materialized = materialize_ranked_fixture_v1(ssa, &inputs).unwrap();
+        let arguments = ordered_pointer_profile_v18(&ssa);
+        let binding = bytes(247);
+        let profile_roots = [fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiRootV18 {
+            kernel_binding: &binding, export: A_NAME, arguments: &arguments,
+            explicit_argument_bytes: 16, kernarg_alignment_bytes: 8,
+        }];
+        let launch = source_launch_roster_for_ranked_inputs_v1(&ssa, &inputs).unwrap();
+        let mut work = Work::new(
+            usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap());
+        let mut budget = Budget::new(&mut work, crate::production_canonical_phase_policy_v1::STORAGE_LIMIT);
+        let materialized = fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_kernel_abi_budget_v18(
+            ssa, launch, fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18 { roots: &profile_roots },
+            ProductionSemanticKirLimitsV1::default(), &mut budget).unwrap();
+        assert_eq!(budget.storage(), 0);
+        assert!(materialized.executable().module().functions[0].signature.parameters.iter().all(|ty|
+            matches!(ty, fe2o3_kernel_ir::Type::Pointer(pointer) if pointer.address_space == fe2o3_kernel_ir::AddressSpace::Global)));
         let memory = materialized
             .executable()
             .module()
@@ -1208,11 +1312,19 @@ mod legacy_scope_tests {
             let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
                 source, root.lowering, root.ranked_ir, root.access_sources, root.executable_effect_sources,
             ).unwrap();
-            ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
-                receipt,
-                ProductionSemanticKirLimitsV1::default(),
-                1,
-            )
+            let result = ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks_with_kernel_abi_budget_v18(
+                receipt, fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18 { roots: &profile_roots },
+                ProductionSemanticKirLimitsV1::default(), 1, &mut budget);
+            assert_eq!(budget.storage(), 0);
+            if let Ok(owner) = &result {
+                let retained = owner.legacy_kernel_abi_storage_v18().unwrap();
+                assert!(retained > 0);
+                budget.reserve_storage(retained).unwrap();
+                owner.verify_equivalence_with_budget_v1(&mut budget).unwrap();
+                assert_eq!(budget.storage(), retained);
+                budget.release_storage(retained).unwrap();
+            }
+            result
         } else {
             ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(
                 materialized_ranked_fixture_receipt_v1(materialized, root),
@@ -1700,6 +1812,49 @@ mod legacy_scope_tests {
         .with_kernel_entry(old.kernel_entry().unwrap().clone())
     }
 
+    fn private_slice_profile_argument_v18(
+        identity: SemanticTypeIdentityV1,
+    ) -> fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiArgumentV18 {
+        use fe2o3_kernel_descriptor::{DeviceLayoutDescriptorV1, DeviceLayoutRecordV1,
+            LogicalArgumentV1, ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeDescriptorV3,
+            SourceTypeRecordV1, ValidName};
+        let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::U32));
+        let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::U32));
+        fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiArgumentV18 {
+            semantic_type_identity: identity,
+            kind: fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiKindV18::Descriptor {
+                source: SourceTypeDescriptorV3::SharedSlice(ScalarTypeV1::U32),
+                argument: LogicalArgumentV1::shared_slice(0,
+                    ValidName::new("arg0".to_owned()).unwrap(), &source, &layout, 0).unwrap(),
+            },
+        }
+    }
+
+    fn private_slice_profile_materialize_v18(
+        ssa: ProductionSemanticSsaOwnerV1,
+    ) -> fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
+        use fe2o3_lower_mir_kernel::{ProductionKernelArgumentAbiInputV18,
+            ProductionKernelArgumentAbiRootV18, ProductionPreRankedKirOwnerV1,
+            ProductionSemanticKirLimitsV1};
+        let arguments = [private_slice_profile_argument_v18(
+            ssa.source_semantic().types()[COMPOSITION_REF.index() as usize].identity())];
+        let binding = bytes(247);
+        let roots = [ProductionKernelArgumentAbiRootV18 { kernel_binding: &binding,
+            export: A_NAME, arguments: &arguments, explicit_argument_bytes: 16,
+            kernarg_alignment_bytes: 8 }];
+        let launch = source_launch_roster_for_ranked_inputs_v1(&ssa,
+            &[ranked_root_input_1d(A_NAME, 247, 64)]).unwrap();
+        let mut work = Work::new(
+            usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap());
+        let mut budget = Budget::new(&mut work,
+            crate::production_canonical_phase_policy_v1::STORAGE_LIMIT);
+        let owner = ProductionPreRankedKirOwnerV1::try_materialize_with_kernel_abi_budget_v18(
+            ssa, launch, ProductionKernelArgumentAbiInputV18 { roots: &roots },
+            ProductionSemanticKirLimitsV1::default(), &mut budget).unwrap();
+        assert_eq!(budget.storage(), 0);
+        owner
+    }
+
     fn private_slice_composition_attach_v1(
         mode: PrivateSliceCompositionV1,
         legacy: bool,
@@ -1721,8 +1876,7 @@ mod legacy_scope_tests {
         let types = private_slice_composition_types_v1();
         let function = private_slice_composition_source_v1(mode);
         let ssa = assertion_ssa_functions(types.clone(), vec![function.clone()]);
-        let materialized =
-            materialize_ranked_fixture_v1(ssa, &[ranked_root_input_1d(A_NAME, 247, 64)]).unwrap();
+        let materialized = private_slice_profile_materialize_v18(ssa);
         let reads = if matches!(
             mode,
             PrivateSliceCompositionV1::TwoReads | PrivateSliceCompositionV1::InitializerTwoReads
@@ -1859,6 +2013,13 @@ mod legacy_scope_tests {
             "private write does not shift a later site's canonical read cursor"
         );
         if legacy {
+            let arguments = [private_slice_profile_argument_v18(
+                types[COMPOSITION_REF.index() as usize].identity())];
+            let binding = bytes(247);
+            let profile_roots = [fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiRootV18 {
+                kernel_binding: &binding, export: A_NAME, arguments: &arguments,
+                explicit_argument_bytes: 16, kernarg_alignment_bytes: 8,
+            }];
             let source = assertion_ssa_functions(types, vec![function])
                 .into_source_owner()
                 .unwrap();
@@ -1872,11 +2033,24 @@ mod legacy_scope_tests {
             let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
                 source, root.lowering, root.ranked_ir, root.access_sources, root.executable_effect_sources,
             ).unwrap();
-            ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
-                receipt,
-                ProductionSemanticKirLimitsV1::default(),
-                1,
-            )
+            let mut work = Work::new(
+                usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap());
+            let mut budget = Budget::new(&mut work,
+                crate::production_canonical_phase_policy_v1::STORAGE_LIMIT);
+            let result = ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks_with_kernel_abi_budget_v18(
+                receipt, fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18 {
+                    roots: &profile_roots,
+                }, ProductionSemanticKirLimitsV1::default(), 1, &mut budget);
+            assert_eq!(budget.storage(), 0);
+            if let Ok(owner) = &result {
+                let retained = owner.legacy_kernel_abi_storage_v18().unwrap();
+                assert!(retained > 0, "the ranked-first owner retains its original ABI profile");
+                budget.reserve_storage(retained).unwrap();
+                owner.verify_equivalence_with_budget_v1(&mut budget).unwrap();
+                assert_eq!(budget.storage(), retained);
+                budget.release_storage(retained).unwrap();
+            }
+            result
         } else {
             ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(
                 materialized_ranked_fixture_receipt_v1(materialized, root),

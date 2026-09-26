@@ -3,6 +3,12 @@
 use super::{LoweringDiagnosticCode, LoweringErrors, LoweringLocation};
 use fe2o3_kernel_ir::{Module, OperationKind, Type};
 
+pub(super) fn check_storage_v18_module(
+    context: &super::storage_native_v18::StorageEmissionContextV18<'_>,
+) -> Result<(), LoweringErrors> {
+    super::storage_preflight_v18::check(context)
+}
+
 /// Check the whole module before graph selection or textual emission. Uncalled
 /// declarations, unreachable blocks, and dead results are still input syntax.
 pub(super) fn reject_unsupported_v12_module(module: &Module) -> Result<(), LoweringErrors> {
@@ -31,6 +37,13 @@ fn reject_unsupported_module(
     module: &Module,
     ordered: Option<OrderedProfile>,
 ) -> Result<(), LoweringErrors> {
+    if !module.storage_layouts.is_empty() {
+        return Err(LoweringErrors::one(
+            LoweringLocation::module(module),
+            LoweringDiagnosticCode::UnsupportedType,
+            "legacy AMDGPU lowering does not admit module-owned storage layouts",
+        ));
+    }
     for function in &module.functions {
         for ty in function
             .signature
@@ -42,7 +55,7 @@ fn reject_unsupported_module(
                 return Err(LoweringErrors::one(
                     LoweringLocation::device_function(module, function),
                     LoweringDiagnosticCode::UnsupportedType,
-                    "AMDGPU LLVM lowering does not support V12 vector or V15 execution types in function signatures",
+                    "AMDGPU LLVM lowering does not support vector, execution, or storage-object types in function signatures",
                 ));
             }
         }
@@ -58,7 +71,7 @@ fn reject_unsupported_module(
                 return Err(LoweringErrors::one(
                     LoweringLocation::device_block(module, function, block.id),
                     LoweringDiagnosticCode::UnsupportedType,
-                    "AMDGPU LLVM lowering does not support V12 vector or V15 execution block parameters",
+                    "AMDGPU LLVM lowering does not support vector, execution, or storage-object block parameters",
                 ));
             }
             for (ordinal, operation) in block.operations.iter().enumerate() {
@@ -88,6 +101,13 @@ fn reject_unsupported_module(
                             ));
                         }
                         None
+                    }
+                    OperationKind::Storage(_) => {
+                        return Err(LoweringErrors::one(
+                            LoweringLocation::device_operation(module, function, block.id, ordinal),
+                            LoweringDiagnosticCode::UnsupportedOperation,
+                            "storage operations require storage-aware AMDGPU lowering",
+                        ));
                     }
                     OperationKind::Execution(_) => {
                         return Err(LoweringErrors::one(
@@ -148,7 +168,7 @@ fn reject_unsupported_module(
                     return Err(LoweringErrors::one(
                         LoweringLocation::device_operation(module, function, block.id, ordinal),
                         LoweringDiagnosticCode::UnsupportedType,
-                        "AMDGPU LLVM lowering does not support embedded or result V12 vector or V15 execution types",
+                        "AMDGPU LLVM lowering does not support embedded or result vector, execution, or storage-object types",
                     ));
                 }
             }
@@ -160,7 +180,7 @@ fn reject_unsupported_module(
 fn contains_unsupported_type(mut ty: &Type) -> bool {
     loop {
         match ty {
-            Type::Vector(_) | Type::Execution(_) => return true,
+            Type::Vector(_) | Type::Execution(_) | Type::StorageObject(_) => return true,
             Type::Pointer(pointer) => ty = &pointer.pointee,
             Type::Slice(slice) => ty = &slice.element,
             Type::Unit | Type::Scalar(_) => return false,
@@ -355,5 +375,81 @@ mod tests {
         );
         let errors = reject_unsupported_v12_module(&module(operation)).unwrap_err();
         assert!(errors.contains(LoweringDiagnosticCode::UnsupportedType));
+    }
+}
+
+#[cfg(test)]
+mod storage_profile_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{
+        AccessMode, AddressSpace, BasicBlock, BlockId, Function, Operation, ScalarType, Signature,
+        Terminator, ValueId,
+    };
+
+    #[test]
+    fn storage_syntax_and_unused_tables_refuse_before_legacy_emission() {
+        let mut module = Module::new("storage_profile");
+        assert!(reject_unsupported_v12_module(&module).is_ok());
+        module
+            .storage_layouts
+            .push(fe2o3_kernel_ir::StorageLayoutV1 {
+                size: 4,
+                alignment: 4,
+                kind: fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(ScalarType::U32),
+            });
+        assert!(
+            reject_unsupported_v12_module(&module)
+                .unwrap_err()
+                .contains(LoweringDiagnosticCode::UnsupportedType)
+        );
+        module.storage_layouts.clear();
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(Operation::new(
+            vec![],
+            OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::Project {
+                base: ValueId(0),
+                step: fe2o3_kernel_ir::StorageProjectionV1::Field(0),
+            }),
+        ));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        module.functions.push(Function::internal_helper(
+            "dead",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        ));
+        assert!(
+            reject_unsupported_v12_module(&module)
+                .unwrap_err()
+                .contains(LoweringDiagnosticCode::UnsupportedOperation)
+        );
+    }
+
+    #[test]
+    fn storage_pointees_cannot_enter_the_legacy_target_type_profile() {
+        let storage = Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(0));
+        for ty in [
+            storage.clone(),
+            Type::pointer(
+                storage.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+            Type::slice(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert!(contains_unsupported_type(&ty));
+            let mut module = Module::new("dead_signature");
+            module.functions.push(Function::external_import(
+                "dead",
+                Signature::new(vec![ty], vec![]),
+            ));
+            assert!(
+                reject_unsupported_v12_module(&module)
+                    .unwrap_err()
+                    .contains(LoweringDiagnosticCode::UnsupportedType)
+            );
+        }
+        assert!(!contains_unsupported_type(&Type::Scalar(ScalarType::U32)));
     }
 }

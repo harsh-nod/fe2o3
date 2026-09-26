@@ -1,0 +1,11 @@
+// RUN: fe2o3-pliron-lit --passes=gpu-cse %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: gpu.cast
+builtin.func @slice_to_generic_wrong_element: builtin.function <(gpu.slice <builtin.integer ui32,Global,ReadOnly>) -> ()>
+{
+  ^entry(source: gpu.slice <builtin.integer ui32,Global,ReadOnly>):
+    first = gpu.cast (source) [] [gpu_cast_kind: gpu.cast_kind SliceToGeneric]: <(gpu.slice <builtin.integer ui32,Global,ReadOnly>) -> (gpu.slice <builtin.integer si32,Generic,ReadOnly>)>;
+    kernel.return () [] []: <() -> ()>
+}

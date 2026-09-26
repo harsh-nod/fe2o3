@@ -344,6 +344,12 @@ mod checked_neutral_optimization_v1;
 mod integer_continuation;
 #[path = "neutral_optimization_policy3_v1.rs"]
 mod policy3;
+#[path = "neutral_optimization_v18.rs"]
+pub(crate) mod storage_v18;
+pub use storage_v18::{
+    CheckedNeutralKernelIrOwnerV18, KirNeutralOptimizationErrorV18,
+    KirNeutralOptimizationOutputV18, optimize_neutral_kernel_ir_v18,
+};
 pub use checked_neutral_optimization_v1::{
     CheckedNeutralKernelIrOwnerV1, KirCheckedNeutralOptimizationErrorV1,
     KirCheckedNeutralOptimizationStorageV1, KirNeutralOwnedOriginStorageV1,

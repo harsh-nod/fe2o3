@@ -16,6 +16,9 @@ pub(crate) fn verification_types_equal_v1(
         (Type::Scalar(left), Type::Scalar(right)) => left == right,
         (Type::Execution(left), Type::Execution(right)) => left == right,
         (Type::Vector(left), Type::Vector(right)) => left == right,
+        // This private comparator is used within one module's verification.
+        // Ordinal equality alone is not cross-module layout compatibility.
+        (Type::StorageObject(left), Type::StorageObject(right)) => left == right,
         (Type::Pointer(left), Type::Pointer(right)) => {
             left.address_space == right.address_space
                 && left.access == right.access
@@ -65,6 +68,8 @@ pub(crate) struct VerificationTypeFactsV15 {
     pub(crate) invalid_execution_role: bool,
     pub(crate) contains_execution_role: bool,
     pub(crate) storable: bool,
+    pub(crate) storage_object: Option<crate::StorageLayoutIdV1>,
+    pub(crate) bare_storage_object: bool,
 }
 
 /// Validates vector and execution nodes in one traversal, charging each type
@@ -94,6 +99,15 @@ pub(crate) fn verification_type_facts_v15(
                     invalid_execution_role: nested || role.validate().is_err(),
                     contains_execution_role: true,
                     storable: false,
+                    ..VerificationTypeFactsV15::default()
+                });
+            }
+            Type::StorageObject(id) => {
+                return Ok(VerificationTypeFactsV15 {
+                    storage_object: Some(*id),
+                    bare_storage_object: !nested,
+                    storable,
+                    ..VerificationTypeFactsV15::default()
                 });
             }
             Type::Pointer(pointer) => ty = &pointer.pointee,
@@ -116,7 +130,7 @@ pub(crate) fn verification_type_is_storable_v15(
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
     match ty {
-        Type::Unit | Type::Slice(_) | Type::Execution(_) => Ok(false),
+        Type::Unit | Type::Slice(_) | Type::Execution(_) | Type::StorageObject(_) => Ok(false),
         Type::Scalar(_) | Type::Vector(_) => Ok(true),
         Type::Pointer(pointer) => {
             Ok(!verification_type_facts_v15(&pointer.pointee, budget)?.contains_execution_role)

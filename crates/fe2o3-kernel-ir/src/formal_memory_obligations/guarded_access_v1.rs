@@ -10,6 +10,17 @@ use std::mem::size_of;
 #[path = "runtime_slice_read_v1.rs"]
 mod runtime_slice_read_v1;
 
+#[path = "canonical_guarded_reads_v1.rs"]
+mod canonical_reads;
+#[path = "guarded_meter_v1.rs"]
+mod meter;
+#[path = "guarded_origins_v1.rs"]
+pub(super) mod origins;
+#[path = "guarded_predicates_v1.rs"]
+mod predicates;
+pub use canonical_reads::*;
+use meter::GuardMeter;
+
 impl FormalAliasRegionV1 {
     pub(super) fn union(self, other: Self) -> Self {
         match (self, other) {
@@ -173,14 +184,6 @@ impl GuardLedger {
         verification_bounded_sort_by_v1(rows, width, &mut Budget::new(&mut self.work, 0), compare)
             .map_err(Into::into)
     }
-    fn find<T>(
-        &mut self,
-        rows: &[T],
-        compare: impl FnMut(&T) -> std::cmp::Ordering,
-    ) -> Result<Option<usize>, ResourceError> {
-        verification_find_last_by_v1(rows, 1, &mut Budget::new(&mut self.work, 0), compare)
-            .map_err(Into::into)
-    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -193,12 +196,18 @@ struct Edge {
 struct ControlRow {
     block: BlockId,
     interval: Option<(u32, u32)>,
+    // Unique reachable entering edge; dominated backedges cannot first enter.
     incoming: Option<Edge>,
 }
-pub(super) struct GuardedControlV1 {
-    ledger: GuardLedger,
+pub(super) struct GuardedControlV1<M = GuardLedger> {
+    ledger: M,
     rows: Vec<ControlRow>,
     entry: BlockId,
+}
+
+enum GuardedControlCollectionV1<M> {
+    Selected(GuardedControlV1<M>),
+    Unselected(M),
 }
 
 impl GuardedControlV1 {
@@ -206,8 +215,30 @@ impl GuardedControlV1 {
         function: &Function,
         flow: &IndexedControlFlow,
     ) -> Result<Option<Self>, ResourceError> {
+        Self::collect_with_ledger(function, flow, GuardLedger::new(flow.work().total)?)
+    }
+}
+
+impl<M: GuardMeter> GuardedControlV1<M> {
+    fn collect_with_ledger(
+        function: &Function,
+        flow: &IndexedControlFlow,
+        ledger: M,
+    ) -> Result<Option<Self>, ResourceError> {
+        Ok(
+            match Self::collect_preserving_ledger(function, flow, ledger)? {
+                GuardedControlCollectionV1::Selected(control) => Some(control),
+                GuardedControlCollectionV1::Unselected(_) => None,
+            },
+        )
+    }
+
+    fn collect_preserving_ledger(
+        function: &Function,
+        flow: &IndexedControlFlow,
+        mut ledger: M,
+    ) -> Result<GuardedControlCollectionV1<M>, ResourceError> {
         let body = function.body.as_ref().ok_or(ResourceError::Accounting)?;
-        let mut ledger = GuardLedger::new(flow.work().total)?;
         ledger.charge(32)?;
         let mut selected = false;
         for block in &body.blocks {
@@ -216,13 +247,15 @@ impl GuardedControlV1 {
                 ledger.charge(2)?;
                 selected |= matches!(operation.kind, OperationKind::Select { .. })
                     || matches!(operation.kind, OperationKind::Load { access, .. }
-                        if access.address_space == AddressSpace::Global && !access.volatile);
+                        if matches!(access.address_space, AddressSpace::Global | AddressSpace::Generic)
+                            && !access.volatile);
             }
         }
         if !selected {
-            return Ok(None);
+            // The live caller must continue its census on this same local meter.
+            return Ok(GuardedControlCollectionV1::Unselected(ledger));
         }
-        let headers = size_of::<GuardedAnalysisV1<'_>>()
+        let headers = size_of::<GuardedAnalysisV1<'_, M>>()
             .checked_add(5 * size_of::<Vec<()>>())
             .ok_or(ResourceError::Arithmetic)?;
         ledger.storage(headers)?;
@@ -248,6 +281,14 @@ impl GuardedControlV1 {
                 ledger.charge(lookup.checked_add(8).ok_or(ResourceError::Arithmetic)?)?;
                 let source = flow.edge_source(*edge).ok_or(ResourceError::Accounting)?;
                 if flow.is_reachable(source) {
+                    ledger.charge(lookup.checked_add(4).ok_or(ResourceError::Arithmetic)?)?;
+                    let source_interval = flow.formal_guard_dominator_interval_v1(source);
+                    if matches!((interval, source_interval),
+                        (Some((start, end)), Some((source_start, source_end)))
+                        if start <= source_start && source_end <= end)
+                    {
+                        continue;
+                    }
                     count = count.checked_add(1).ok_or(ResourceError::Arithmetic)?;
                     incoming = Some(Edge {
                         source,
@@ -265,7 +306,7 @@ impl GuardedControlV1 {
             });
         }
         ledger.sort(&mut rows, 1, |a, b| a.block.cmp(&b.block))?;
-        Ok(Some(Self {
+        Ok(GuardedControlCollectionV1::Selected(Self {
             ledger,
             rows,
             entry: body.blocks[0].id,
@@ -274,9 +315,17 @@ impl GuardedControlV1 {
 }
 
 #[derive(Clone, Copy)]
+enum PointerPlane {
+    Unvisited,
+    Pending(Option<usize>),
+    Resolved(Option<AddressSpace>),
+}
+
+#[derive(Clone, Copy)]
 struct DefinitionRow<'module> {
     value: ValueId,
     operation: &'module Operation,
+    plane: PointerPlane,
 }
 #[derive(Clone, Copy)]
 struct ParameterRow<'module> {
@@ -297,8 +346,8 @@ struct Recipe {
     address_space: AddressSpace,
 }
 
-pub(super) struct GuardedAnalysisV1<'module> {
-    pub(super) ledger: GuardLedger,
+pub(super) struct GuardedAnalysisV1<'module, M = GuardLedger> {
+    pub(super) ledger: M,
     control: Vec<ControlRow>,
     definitions: Vec<DefinitionRow<'module>>,
     parameters: Vec<ParameterRow<'module>>,
@@ -308,28 +357,15 @@ pub(super) struct GuardedAnalysisV1<'module> {
     rank_one: bool,
 }
 
-impl<'module> GuardedAnalysisV1<'module> {
+impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
     pub(super) fn new(
-        seed: GuardedControlV1,
+        seed: GuardedControlV1<M>,
         definitions: &Definitions<'module>,
         function: &'module Function,
         rank_one: bool,
     ) -> Result<Self, ResourceError> {
-        let GuardedControlV1 {
-            ledger,
-            rows,
-            entry,
-        } = seed;
-        let mut result = Self {
-            ledger,
-            control: rows,
-            definitions: Vec::new(),
-            parameters: Vec::new(),
-            truths: Vec::new(),
-            recipes: Vec::new(),
-            runtime_reads: runtime_slice_read_v1::RuntimeReadState::default(),
-            rank_one,
-        };
+        let entry = seed.entry;
+        let mut result = Self::empty(seed, rank_one);
         result
             .ledger
             .reserve(&mut result.definitions, definitions.operations.len())?;
@@ -338,8 +374,50 @@ impl<'module> GuardedAnalysisV1<'module> {
             result.definitions.push(DefinitionRow {
                 value: *value,
                 operation,
+                plane: PointerPlane::Unvisited,
             });
         }
+        result.collect_parameters_and_truths(function, entry)?;
+        result.collect_runtime_reads(definitions, function)?;
+        result.collect_recipes()?;
+        Ok(result)
+    }
+
+    fn empty(seed: GuardedControlV1<M>, rank_one: bool) -> Self {
+        Self {
+            ledger: seed.ledger,
+            control: seed.rows,
+            definitions: Vec::new(),
+            parameters: Vec::new(),
+            truths: Vec::new(),
+            recipes: Vec::new(),
+            runtime_reads: runtime_slice_read_v1::RuntimeReadState::default(),
+            rank_one,
+        }
+    }
+
+    fn collect_parameters_and_truths(
+        &mut self,
+        function: &'module Function,
+        entry: BlockId,
+    ) -> Result<(), ResourceError> {
+        self.collect_parameters_and_truths_impl::<false>(function, entry)
+    }
+
+    fn collect_parameters_and_carried_truths(
+        &mut self,
+        function: &'module Function,
+        entry: BlockId,
+    ) -> Result<(), ResourceError> {
+        self.collect_parameters_and_truths_impl::<true>(function, entry)
+    }
+
+    fn collect_parameters_and_truths_impl<const CARRIED: bool>(
+        &mut self,
+        function: &'module Function,
+        entry: BlockId,
+    ) -> Result<(), ResourceError> {
+        let result = self;
         let body = function.body.as_ref().ok_or(ResourceError::Accounting)?;
         result
             .ledger
@@ -425,10 +503,12 @@ impl<'module> GuardedAnalysisV1<'module> {
             let Some((predicate, edge)) = candidate else {
                 continue;
             };
-            let Some(predicate_op) = result.definition(predicate)? else {
-                continue;
+            let supported = match result.definition(predicate)? {
+                Some(operation) => single_type(operation, &Type::BOOL),
+                None if CARRIED => result.boolean_carrier_definition(predicate)?.is_some(),
+                None => false,
             };
-            if !single_type(predicate_op, &Type::BOOL) || edge.target == entry {
+            if !supported || edge.target == entry {
                 continue;
             }
             let Some(target) = result.control_row(edge.target)? else {
@@ -457,22 +537,39 @@ impl<'module> GuardedAnalysisV1<'module> {
                 result.truths[i].ambiguous = true;
             }
         }
-        result.collect_runtime_reads(definitions, function)?;
+        Ok(())
+    }
+
+    fn collect_recipes(&mut self) -> Result<(), ResourceError> {
+        let result = self;
         result
             .ledger
             .reserve(&mut result.recipes, result.definitions.len())?;
         for index in 0..result.definitions.len() {
             result.ledger.charge(2)?;
             let row = result.definitions[index];
-            if !matches!(row.operation.kind, OperationKind::GetElementPointer { .. }) {
-                continue;
-            }
-            if let Some(recipe) = result.recipe(row.value, row.operation)? {
+            let operation = match row.operation.kind {
+                OperationKind::GetElementPointer { .. } => row.operation,
+                OperationKind::Cast {
+                    kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
+                    ..
+                } => {
+                    let Some(origin) = result.peel_pointer_casts(row.value)? else {
+                        continue;
+                    };
+                    let Some(operation) = result.definition(origin)? else {
+                        continue;
+                    };
+                    operation
+                }
+                _ => continue,
+            };
+            if let Some(recipe) = result.recipe(row.value, operation)? {
                 result.recipes.push(recipe);
             }
         }
         // Definition order is ValueId order; filtering preserves the recipe index order.
-        Ok(result)
+        Ok(())
     }
 
     fn definition(&mut self, value: ValueId) -> Result<Option<&'module Operation>, ResourceError> {
@@ -486,6 +583,186 @@ impl<'module> GuardedAnalysisV1<'module> {
             .ledger
             .find(&self.control, |row| row.block.cmp(&block))?
             .map(|i| self.control[i]))
+    }
+
+    pub(super) fn peel_pointer_casts(
+        &mut self,
+        mut value: ValueId,
+    ) -> Result<Option<ValueId>, ResourceError> {
+        let bound = self.definitions.len().checked_mul(2).and_then(|v| v.checked_add(1))
+            .ok_or(ResourceError::Arithmetic)?;
+        for _ in 0..=bound {
+            self.ledger.charge(4)?;
+            let Some(origin) = self.runtime_origin(value)? else {
+                return Ok(None);
+            };
+            if origin != value {
+                let (Some(actual), Some(source)) =
+                    (self.runtime_type(value)?, self.runtime_type(origin)?)
+                else {
+                    return Ok(None);
+                };
+                // Only leaf-pointee guards use this bounded alias query.
+                if !guard_pointer_leaf(actual) || !guard_pointer_leaf(source) || actual != source {
+                    return Ok(None);
+                }
+                value = origin;
+                continue;
+            }
+            let Some(operation) = self.definition(value)? else {
+                return Ok(Some(value));
+            };
+            let OperationKind::Cast {
+                kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
+                value: source,
+                to,
+            } = &operation.kind else {
+                return Ok(Some(value));
+            };
+            let Some(from) = self.runtime_type(*source)? else {
+                return Ok(None);
+            };
+            if !guard_pointer_leaf(from)
+                || !guard_pointer_leaf(to)
+                || !matches!(operation.results.as_slice(), [r] if guard_pointer_leaf(&r.ty))
+            {
+                return Ok(None);
+            }
+            let Some(source) = checked_pointer_cast_source_v18(operation, from) else {
+                return Ok(None);
+            };
+            value = source;
+        }
+        Ok(None)
+    }
+
+    pub(super) fn peel_slice_casts(
+        &mut self,
+        mut value: ValueId,
+    ) -> Result<Option<ValueId>, ResourceError> {
+        let bound = self.definitions.len().checked_mul(2)
+            .and_then(|n| n.checked_add(1)).ok_or(ResourceError::Arithmetic)?;
+        for _ in 0..=bound {
+            self.ledger.charge(4)?;
+            let Some(actual) = self.runtime_type(value)? else { return Ok(None); };
+            if !guard_slice_leaf(actual) { return Ok(None); }
+            let Some(origin) = self.runtime_origin(value)? else { return Ok(None); };
+            if origin != value {
+                let Some(source) = self.runtime_type(origin)? else { return Ok(None); };
+                if !guard_slice_leaf(source) || actual != source { return Ok(None); }
+                value = origin;
+                continue;
+            }
+            let Some(operation) = self.definition(value)? else { return Ok(Some(value)); };
+            let OperationKind::Cast { kind: CastKind::SliceToGeneric, value: source, to }
+                = &operation.kind else { return Ok(Some(value)); };
+            let Some(from) = self.runtime_type(*source)? else { return Ok(None); };
+            if !guard_slice_leaf(from) || !guard_slice_leaf(to)
+                || !matches!(operation.results.as_slice(), [r] if guard_slice_leaf(&r.ty))
+            { return Ok(None); }
+            let Some(source) = checked_slice_cast_source_v18(operation, from) else { return Ok(None); };
+            value = source;
+        }
+        Ok(None)
+    }
+
+    pub(super) fn proven_pointer_space_v18(
+        &mut self,
+        mut value: ValueId,
+    ) -> Result<Option<AddressSpace>, ResourceError> {
+        // Thread the pending path through the existing paid definition rows.
+        // Each definition is resolved once, without per-query scratch allocation.
+        let mut pending = None;
+        let result = loop {
+            self.ledger.charge(4)?;
+            let Some(ty) = self.runtime_type(value)? else {
+                break None;
+            };
+            let space = match ty {
+                Type::Pointer(p) => p.address_space,
+                Type::Slice(s) if guard_slice_leaf(ty) => s.address_space,
+                _ => break None,
+            };
+            if space != AddressSpace::Generic {
+                break Some(space);
+            }
+            let Some(origin) = self.runtime_origin(value)? else {
+                break None;
+            };
+            if origin != value {
+                let Some(source) = self.runtime_type(origin)? else {
+                    break None;
+                };
+                if !(guard_pointer_leaf(source) || guard_slice_leaf(source))
+                    || source != ty
+                {
+                    break None;
+                }
+                value = origin;
+                continue;
+            }
+            let Some(index) = self.ledger.find(&self.definitions, |row| row.value.cmp(&value))?
+            else {
+                break None;
+            };
+            let row = self.definitions[index];
+            match row.plane {
+                PointerPlane::Resolved(space) => break space,
+                PointerPlane::Pending(_) => break None,
+                PointerPlane::Unvisited => {}
+            }
+            self.definitions[index].plane = PointerPlane::Pending(pending);
+            pending = Some(index);
+            let operation = row.operation;
+            value = match operation.kind {
+                OperationKind::SliceData { slice } => {
+                    let Some(Type::Slice(source)) = self.runtime_type(slice)? else { break None; };
+                    if !matches!(ty, Type::Pointer(p) if p.pointee == source.element
+                        && p.access == source.access && p.address_space == source.address_space)
+                        || !single_type(operation, ty) { break None; }
+                    slice
+                }
+                OperationKind::Cast { kind: CastKind::SliceToGeneric, value: source, ref to } => {
+                    let Some(from) = self.runtime_type(source)? else { break None; };
+                    if !guard_slice_leaf(from) || !guard_slice_leaf(to)
+                        || !matches!(operation.results.as_slice(), [r] if guard_slice_leaf(&r.ty))
+                    { break None; }
+                    let Some(source) = checked_slice_cast_source_v18(operation, from) else { break None; };
+                    source
+                }
+                OperationKind::GetElementPointer { base, .. }
+                | OperationKind::Storage(crate::StorageOperationV1::Project { base, .. }) => base,
+                OperationKind::Cast {
+                    kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
+                    value: source,
+                    ref to,
+                } => {
+                    let Some(from) = self.runtime_type(source)? else {
+                        break None;
+                    };
+                    if !guard_pointer_leaf(from)
+                        || !guard_pointer_leaf(to)
+                        || !matches!(operation.results.as_slice(), [r] if guard_pointer_leaf(&r.ty))
+                    {
+                        break None;
+                    }
+                    let Some(source) = checked_pointer_cast_source_v18(operation, from) else {
+                        break None;
+                    };
+                    source
+                }
+                _ => break None,
+            };
+        };
+        while let Some(index) = pending {
+            self.ledger.charge(2)?;
+            let PointerPlane::Pending(previous) = self.definitions[index].plane else {
+                return Err(ResourceError::Accounting);
+            };
+            self.definitions[index].plane = PointerPlane::Resolved(result);
+            pending = previous;
+        }
+        Ok(result)
     }
 
     fn recipe(
@@ -503,7 +780,9 @@ impl<'module> GuardedAnalysisV1<'module> {
         let [pointer_result] = gep.results.as_slice() else {
             return Ok(None);
         };
-        if pointer_result.id != pointer {
+        if pointer_result.id != pointer
+            && self.peel_pointer_casts(pointer)? != Some(pointer_result.id)
+        {
             return Ok(None);
         }
         let Type::Pointer(pointer_type) = &pointer_result.ty else {
@@ -570,27 +849,66 @@ impl<'module> GuardedAnalysisV1<'module> {
         let OperationKind::SliceLength { slice } = length_op.kind else {
             return Ok(None);
         };
-        let Some(data) = self.definition(base)? else {
+        let Some(base_operation) = self.definition(base)? else {
             return Ok(None);
         };
-        if !matches!(data.kind, OperationKind::SliceData { slice: actual } if actual == slice)
-            || !single_type(data, &pointer_result.ty)
+        let data = if matches!(
+            base_operation.kind,
+            OperationKind::Cast {
+                kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
+                ..
+            }
+        ) {
+            if !single_type(base_operation, &pointer_result.ty) {
+                return Ok(None);
+            }
+            let Some(source) = self.peel_pointer_casts(base)? else {
+                return Ok(None);
+            };
+            let Some(operation) = self.definition(source)? else {
+                return Ok(None);
+            };
+            operation
+        } else {
+            base_operation
+        };
+        let [data_result] = data.results.as_slice() else {
+            return Ok(None);
+        };
+        let Type::Pointer(data_type) = &data_result.ty else {
+            return Ok(None);
+        };
+        let OperationKind::SliceData { slice: data_slice } = data.kind else { return Ok(None); };
+        if data_slice != slice {
+            let Some(data_origin) = self.peel_slice_casts(data_slice)? else { return Ok(None); };
+            if self.peel_slice_casts(slice)? != Some(data_origin) { return Ok(None); }
+        }
+        if data_type.pointee != pointer_type.pointee
+            || (std::ptr::eq(data, base_operation) && data_result.ty != pointer_result.ty)
         {
             return Ok(None);
         }
-        let Some(parameter) = self
+        let direct_parameter = self
             .ledger
             .find(&self.parameters, |row| row.value.cmp(&slice))?
-            .map(|i| self.parameters[i])
-        else {
-            return Ok(None);
+            .map(|i| self.parameters[i]);
+        let parameter = match direct_parameter {
+            Some(parameter) => parameter,
+            None => {
+                let Some(origin) = self.peel_slice_casts(slice)? else { return Ok(None); };
+                let Some(index) = self.ledger.find(&self.parameters, |row| row.value.cmp(&origin))?
+                    else { return Ok(None); };
+                self.parameters[index]
+            }
         };
         let Type::Slice(slice_type) = parameter.ty else {
             return Ok(None);
         };
+        let space_matches = slice_type.address_space == data_type.address_space
+            || (data_type.address_space == AddressSpace::Generic
+                && self.peel_slice_casts(data_slice)? == Some(parameter.value));
         if slice_type.element != pointer_type.pointee
-            || slice_type.address_space != pointer_type.address_space
-            || slice_type.access != pointer_type.access
+            || !space_matches || slice_type.access != data_type.access
         {
             return Ok(None);
         }
@@ -599,7 +917,7 @@ impl<'module> GuardedAnalysisV1<'module> {
                 allocation: FormalAllocationIdentity {
                     parameter_index: parameter.ordinal,
                 },
-                slice,
+                slice: parameter.value,
                 index,
                 length,
                 predicate: condition,
@@ -608,7 +926,14 @@ impl<'module> GuardedAnalysisV1<'module> {
                 element_bytes,
                 path: FormalGuardedPathV1::ExplicitPredicate,
             },
-            address_space: pointer_type.address_space,
+            address_space: if pointer_result.id == pointer {
+                pointer_type.address_space
+            } else {
+                let Some(Type::Pointer(actual)) = self.runtime_type(pointer)? else {
+                    return Ok(None);
+                };
+                actual.address_space
+            },
         }))
     }
 
@@ -667,7 +992,14 @@ impl<'module> GuardedAnalysisV1<'module> {
             location,
             allocation: domain.allocation,
             kind,
-            address_space: access.address_space,
+            address_space: if access.address_space == AddressSpace::Generic {
+                let Some(Type::Slice(source)) = self.runtime_type(domain.slice)? else {
+                    return Err(path_error().into());
+                };
+                source.address_space
+            } else {
+                access.address_space
+            },
             byte_offset: ByteExpression::Affine {
                 constant: 0,
                 invocation_coefficient: domain.element_bytes,
@@ -681,6 +1013,14 @@ impl<'module> GuardedAnalysisV1<'module> {
     pub(super) fn bounds_work(&mut self) -> Result<(), ResourceError> {
         self.ledger.charge(BOUNDS_WORK)
     }
+}
+
+fn guard_pointer_leaf(ty: &Type) -> bool {
+    matches!(ty, Type::Pointer(p) if matches!(p.pointee.as_ref(), Type::Scalar(_) | Type::StorageObject(_)))
+}
+
+fn guard_slice_leaf(ty: &Type) -> bool {
+    matches!(ty, Type::Slice(s) if matches!(s.element.as_ref(), Type::Scalar(_) | Type::StorageObject(_)))
 }
 
 fn single_type(operation: &Operation, ty: &Type) -> bool {
@@ -712,3 +1052,7 @@ pub(super) fn report_work(
 #[cfg(test)]
 #[path = "guarded_access_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "guarded_entry_edge_v1_tests.rs"]
+mod entry_edge_tests;

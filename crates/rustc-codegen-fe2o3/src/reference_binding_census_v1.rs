@@ -2,15 +2,53 @@
 
 use super::*;
 use crate::rustc_semantic_plan_v1::SourceClosureWorkV1;
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1 as CanonicalBudgetV18,
+    CanonicalKernelIrVerificationResourceErrorV1 as CanonicalResourceV18,
+};
 use std::mem::size_of;
 
 const EXPRESSION_STACK_V1: usize = fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1;
 type ExpressionFrameV1<'a> = Option<(&'a ReferenceEffectExpressionV1, usize)>;
-type CensusResultV1<T> = Result<T, ReferenceBindingErrorV1>;
+type CensusResultV1<T> = Result<T, BindingCloneEnvelopeErrorV18>;
 
-fn charge(work: &mut SourceClosureWorkV1, amount: usize) -> CensusResultV1<()> {
-    work.charge(amount)
-        .map_err(|error| ReferenceBindingErrorV1::new(error.to_string()))
+#[derive(Debug)]
+pub(crate) enum BindingCloneEnvelopeErrorV18 {
+    Structure(ReferenceBindingErrorV1),
+    Resource(CanonicalResourceV18),
+}
+
+impl From<ReferenceBindingErrorV1> for BindingCloneEnvelopeErrorV18 {
+    fn from(error: ReferenceBindingErrorV1) -> Self {
+        Self::Structure(error)
+    }
+}
+
+enum BindingCensusWorkV18<'scope, 'ledger> {
+    Legacy(&'scope mut SourceClosureWorkV1),
+    Canonical {
+        budget: &'scope mut CanonicalBudgetV18<'ledger>,
+        first: Option<CanonicalResourceV18>,
+    },
+}
+
+impl BindingCensusWorkV18<'_, '_> {
+    fn charge(&mut self, amount: usize) -> CensusResultV1<()> {
+        match self {
+            Self::Legacy(work) => work.charge(amount).map_err(|error| {
+                ReferenceBindingErrorV1::new(error.to_string()).into()
+            }),
+            Self::Canonical { budget, first } => {
+                if let Some(error) = *first {
+                    return Err(BindingCloneEnvelopeErrorV18::Resource(error));
+                }
+                budget.charge_work(amount).map_err(|error| {
+                    *first = Some(error);
+                    BindingCloneEnvelopeErrorV18::Resource(error)
+                })
+            }
+        }
+    }
 }
 
 /// Censuses both complete operands before admitting the existing derived `Eq`.
@@ -33,31 +71,59 @@ pub(crate) fn equivalent_bindings_v1(
     fresh: &AuthenticatedReferenceEffectBindingV1,
     work: &mut SourceClosureWorkV1,
 ) -> Result<bool, ReferenceBindingErrorV1> {
-    charge(
-        work,
-        size_of::<[ExpressionFrameV1<'_>; EXPRESSION_STACK_V1]>(),
-    )?;
+    let result = (|| {
+        let mut work = BindingCensusWorkV18::Legacy(work);
+        work.charge(size_of::<[ExpressionFrameV1<'_>; EXPRESSION_STACK_V1]>())?;
+        let mut census = BindingCensusV1 {
+            work,
+            comparison_work: 0,
+            expressions: [None; EXPRESSION_STACK_V1],
+        };
+        census.binding(old)?;
+        census.binding(fresh)?;
+        census.work.charge(census.comparison_work)?;
+        Ok(old == fresh)
+    })();
+    result.map_err(|error| match error {
+        BindingCloneEnvelopeErrorV18::Structure(error) => error,
+        BindingCloneEnvelopeErrorV18::Resource(_) => {
+            unreachable!("the legacy binding census does not borrow a canonical meter")
+        }
+    })
+}
+
+/// Conservative complete clone payload, not a source or equality certificate.
+///
+/// The containing source scope owns all reservation cleanup. Scratch remains
+/// charged after this call, including errors; no enclosing lost-floor denial
+/// can be bypassed by a local rollback. Payload credit is reserved by the caller
+/// before cloning and actual container capacity is checked after allocation.
+pub(crate) fn binding_clone_envelope_v18(
+    original: &AuthenticatedReferenceEffectBindingV1,
+    budget: &mut CanonicalBudgetV18<'_>,
+) -> Result<usize, BindingCloneEnvelopeErrorV18> {
+    let header = size_of::<BindingCensusV1<'_, '_, '_>>();
+    budget.charge_work(header).map_err(BindingCloneEnvelopeErrorV18::Resource)?;
+    budget.reserve_storage(header).map_err(BindingCloneEnvelopeErrorV18::Resource)?;
     let mut census = BindingCensusV1 {
-        work,
+        work: BindingCensusWorkV18::Canonical { budget, first: None },
         comparison_work: 0,
         expressions: [None; EXPRESSION_STACK_V1],
     };
-    census.binding(old)?;
-    census.binding(fresh)?;
-    charge(census.work, census.comparison_work)?;
-    Ok(old == fresh)
+    census.binding(original)?;
+    Ok(census.comparison_work)
 }
 
-struct BindingCensusV1<'binding, 'work> {
-    work: &'work mut SourceClosureWorkV1,
+struct BindingCensusV1<'binding, 'scope, 'ledger> {
+    work: BindingCensusWorkV18<'scope, 'ledger>,
     comparison_work: usize,
     expressions: [ExpressionFrameV1<'binding>; EXPRESSION_STACK_V1],
 }
 
-impl<'binding> BindingCensusV1<'binding, '_> {
+impl<'binding> BindingCensusV1<'binding, '_, '_> {
     fn bytes(&mut self, bytes: usize) -> CensusResultV1<()> {
         let amount = bytes.max(1);
-        charge(self.work, amount)?;
+        self.work.charge(amount)?;
         self.comparison_work = self.comparison_work.checked_add(amount).ok_or_else(|| {
             ReferenceBindingErrorV1::new("reference binding comparison work overflow")
         })?;
@@ -314,7 +380,7 @@ impl<'binding> BindingCensusV1<'binding, '_> {
             if nodes > MAX_REFERENCE_EXPRESSION_NODES_V1 {
                 return Err(ReferenceBindingErrorV1::new(format!(
                     "reference effect expression exceeds {MAX_REFERENCE_EXPRESSION_NODES_V1} nodes",
-                )));
+                )).into());
             }
             match expression {
                 ReferenceEffectExpressionV1::Binary {

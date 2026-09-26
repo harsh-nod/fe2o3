@@ -1,4 +1,4 @@
-//! Complete constructor-output preservation for context-bearing requests.
+//! Complete constructor-output preservation for actual source requests.
 //!
 //! These records do not identify trusted workgroup providers or authorize
 //! execution. The separate source receipts and scope checks retain those roles.
@@ -7,8 +7,7 @@ use super::*;
 #[cfg(test)]
 mod tests;
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticFunctionCanonicalCommitmentV1, SemanticMirWireVersionV1,
-    canonical_function_commitment_v1,
+    SemanticFunctionCanonicalCommitmentV1, canonical_function_commitment_v1,
 };
 
 pub(crate) struct ExpectedFunctionCommitmentV29<'tcx> {
@@ -58,6 +57,7 @@ struct FunctionCommitmentRowV29<'tcx> {
 pub(super) struct PendingFunctionCommitmentsV29<'tcx> {
     rows: Vec<FunctionCommitmentRowV29<'tcx>>,
     completed: usize,
+    encoding: ProductionSourceCensusEncodingV1,
 }
 
 pub(super) struct PreparedFunctionCommitmentV29<'a> {
@@ -74,10 +74,37 @@ impl PreparedFunctionCommitmentV29<'_> {
 }
 
 impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
+    pub(crate) fn enable_source_function_commitments_v1(
+        &mut self,
+        types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+        callables: &[fe2o3_mir_model::semantic_mir_v1::SemanticCallableDeclV1],
+        expected_count: usize,
+        sources: impl Iterator<Item = ExpectedFunctionCommitmentV29<'tcx>>,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        let encoding = ProductionSourceCensusEncodingV1::select(types, callables, |amount| {
+            self.charge(SemanticMirResourceV1::ValidationWork, amount)
+        })?;
+        self.enable_function_commitments_with_encoding(expected_count, sources, encoding)
+    }
+
+    #[cfg(test)]
     pub(crate) fn enable_function_commitments_v29(
         &mut self,
         expected_count: usize,
         sources: impl Iterator<Item = ExpectedFunctionCommitmentV29<'tcx>>,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        self.enable_function_commitments_with_encoding(
+            expected_count,
+            sources,
+            ProductionSourceCensusEncodingV1::execution_for_test(),
+        )
+    }
+
+    fn enable_function_commitments_with_encoding(
+        &mut self,
+        expected_count: usize,
+        sources: impl Iterator<Item = ExpectedFunctionCommitmentV29<'tcx>>,
+        encoding: ProductionSourceCensusEncodingV1,
     ) -> Result<(), ProductionSemanticBodyErrorV1> {
         if self.function_commitments.is_some()
             || self.totals.functions != 0
@@ -115,7 +142,11 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
         if rows.len() != expected_count {
             return Err(table("function commitment preflight completeness"));
         }
-        self.function_commitments = Some(PendingFunctionCommitmentsV29 { rows, completed: 0 });
+        self.function_commitments = Some(PendingFunctionCommitmentsV29 {
+            rows,
+            completed: 0,
+            encoding,
+        });
         Ok(())
     }
 
@@ -165,12 +196,16 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             return Err(table("function commitment constructor output"));
         }
         self.totals
-            .function_commitment_v29(output, self.limits)
+            .function_commitment_v29(output, pending.encoding, self.limits)
             .map(Some)
     }
 }
 
 impl PendingFunctionCommitmentsV29<'_> {
+    pub(super) const fn encoding(&self) -> ProductionSourceCensusEncodingV1 {
+        self.encoding
+    }
+
     pub(super) fn source_identity(
         &self,
         callable: SemanticCallableIdV1,
@@ -209,11 +244,10 @@ impl PendingFunctionCommitmentsV29<'_> {
         totals: &mut ConstructionTotalsV1,
         limits: SemanticMirLimitsV1,
     ) -> Result<(), ProductionSemanticBodyErrorV1> {
-        totals.charge(SemanticMirResourceV1::ValidationWork, 1, limits)?;
-        if semantic.wire_version() != SemanticMirWireVersionV1::V29
-            || self.completed != self.rows.len()
-            || semantic.functions().len() != self.rows.len()
-        {
+        self.encoding.check_source_profile(semantic, |amount| {
+            totals.charge(SemanticMirResourceV1::ValidationWork, amount, limits)
+        })?;
+        if self.completed != self.rows.len() || semantic.functions().len() != self.rows.len() {
             return Err(table("function commitment seal completeness"));
         }
         // This bounded roster walk precedes the existing issuance census.
@@ -223,7 +257,7 @@ impl PendingFunctionCommitmentsV29<'_> {
             let captured = row
                 .captured
                 .ok_or_else(|| table("function commitment missing body"))?;
-            if totals.function_commitment_v29(function, limits)? != captured {
+            if totals.function_commitment_v29(function, self.encoding, limits)? != captured {
                 return Err(table("function commitment changed body"));
             }
         }
@@ -236,6 +270,7 @@ impl ConstructionTotalsV1 {
         &mut self,
         types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
         callables: &[fe2o3_mir_model::semantic_mir_v1::SemanticCallableDeclV1],
+        encoding: ProductionSourceCensusEncodingV1,
         limits: SemanticMirLimitsV1,
     ) -> Result<
         fe2o3_mir_model::semantic_mir_v1::SemanticDeclarationTablesCommitmentV1,
@@ -244,7 +279,7 @@ impl ConstructionTotalsV1 {
         fe2o3_mir_model::semantic_mir_v1::canonical_declaration_tables_commitment_v1(
             types,
             callables,
-            SemanticMirWireVersionV1::V29,
+            encoding.wire_version(),
             limits,
             &mut |amount| {
                 charge_construction_total_v1(
@@ -261,21 +296,17 @@ impl ConstructionTotalsV1 {
     fn function_commitment_v29(
         &mut self,
         function: &SemanticFunctionDeclV1,
+        encoding: ProductionSourceCensusEncodingV1,
         limits: SemanticMirLimitsV1,
     ) -> Result<SemanticFunctionCanonicalCommitmentV1, ProductionSemanticBodyErrorV1> {
-        canonical_function_commitment_v1(
-            function,
-            SemanticMirWireVersionV1::V29,
-            limits,
-            &mut |amount| {
-                charge_construction_total_v1(
-                    &mut self.validation_work,
-                    SemanticMirResourceV1::ValidationWork,
-                    amount,
-                    limits.limit(SemanticMirResourceV1::ValidationWork),
-                )
-            },
-        )
+        canonical_function_commitment_v1(function, encoding.wire_version(), limits, &mut |amount| {
+            charge_construction_total_v1(
+                &mut self.validation_work,
+                SemanticMirResourceV1::ValidationWork,
+                amount,
+                limits.limit(SemanticMirResourceV1::ValidationWork),
+            )
+        })
         .map_err(construction_resource_error_v1)
     }
 }

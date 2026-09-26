@@ -89,7 +89,7 @@ fn construct<'a>(
     signatures: impl Into<EmissionReadOnlyV1<'a, Signatures>>,
     results: impl Into<EmissionReadOnlyV1<'a, Vec<Type>>>,
     budget: &'a mut ArgumentBudgetV1<'_>,
-) -> Result<SemanticFunctionLoweringV1<'a>, ProductionSemanticKirErrorV1> {
+) -> Result<SemanticFunctionLoweringV1<'a, 'a>, ProductionSemanticKirErrorV1> {
     let semantic = ssa.source_semantic();
     let function = &semantic.functions()[selected.index() as usize];
     let signatures = signatures.into();
@@ -169,16 +169,17 @@ fn actual_constructor_borrows_empty_single_and_multiple_typed_tables() {
         )
         .unwrap();
         assert!(matches!(&lowering.defined_function_ids, EmissionReadOnlyV1::Borrowed(_)));
-        assert!(matches!(&lowering.defined_function_signatures, EmissionReadOnlyV1::Borrowed(_)));
+        let ExecutionSignatureSourceV29::Legacy(EmissionReadOnlyV1::Borrowed(actual_signatures)) =
+            &lowering.defined_function_signatures else { panic!("expected borrowed legacy table") };
         assert!(matches!(&lowering.result_types, EmissionReadOnlyV1::Borrowed(_)));
         assert!(std::ptr::eq(&*lowering.defined_function_ids, &ids));
-        assert!(std::ptr::eq(&*lowering.defined_function_signatures, &signatures));
+        assert!(std::ptr::eq(*actual_signatures, &signatures));
         assert!(std::ptr::eq(&*lowering.result_types, &results));
         assert_eq!(lowering.defined_function_ids.len(), count);
-        assert_eq!(lowering.defined_function_signatures.len(), count);
+        assert_eq!(actual_signatures.len(), count);
         assert_eq!(lowering.result_types.as_slice(), results.as_slice());
         for (id, signature) in &signatures {
-            let actual = lowering.defined_function_signatures.get(id).unwrap();
+            let actual = actual_signatures.get(id).unwrap();
             assert!(std::ptr::eq(actual, signature));
             assert_eq!(lowering.defined_function_ids[id], ids[id]);
             assert_eq!(actual.parameter_types, signature.parameter_types);
@@ -222,12 +223,13 @@ fn actual_constructor_keeps_owned_temporaries_and_boxed_results_alive() {
     };
     let key = SemanticFunctionIdV1::from_index(1);
     assert!(matches!(&lowering.defined_function_ids, EmissionReadOnlyV1::Owned(_)));
-    assert!(matches!(&lowering.defined_function_signatures, EmissionReadOnlyV1::Owned(_)));
+    let ExecutionSignatureSourceV29::Legacy(EmissionReadOnlyV1::Owned(actual_signatures)) =
+        &lowering.defined_function_signatures else { panic!("expected owned legacy table") };
     assert!(matches!(&lowering.result_types, EmissionReadOnlyV1::Owned(_)));
     assert_eq!(lowering.defined_function_ids.len(), 3);
     assert_eq!(lowering.defined_function_ids[&key].as_str(), "read_only_0");
     assert_eq!(lowering.defined_function_ids[&key].as_str().as_ptr(), name_pointer);
-    assert_eq!(lowering.defined_function_signatures[&key].parameter_types.as_ptr(), type_pointer);
+    assert_eq!(actual_signatures[&key].parameter_types.as_ptr(), type_pointer);
     assert_eq!(lowering.result_types.as_ptr(), result_pointer);
     assert_eq!(lowering.result_types[0], boxed_type());
     drop(lowering);
@@ -255,7 +257,9 @@ fn repeated_instances_share_tables_and_preserve_cumulative_constructor_work() {
             &mut budget,
         )
         .unwrap();
-        assert!(std::ptr::eq(&*lowering.defined_function_signatures, &signatures));
+        let ExecutionSignatureSourceV29::Legacy(EmissionReadOnlyV1::Borrowed(actual_signatures)) =
+            &lowering.defined_function_signatures else { panic!("expected borrowed legacy table") };
+        assert!(std::ptr::eq(*actual_signatures, &signatures));
         assert!(std::ptr::eq(&*lowering.result_types, &results));
         drop(lowering);
         let delta = (budget.work() - before_work, budget.storage() - FLOOR);

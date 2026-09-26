@@ -836,3 +836,47 @@ fn traversal_and_representatives_do_not_depend_on_randomized_hashmap_state() {
 mod adversarial {
     include!("dominance_cse_v1_adversarial_tests.rs");
 }
+
+#[test]
+fn private_call_whole_entry_pinned_cse_layout_equivalence_premises() {
+    use std::mem::{align_of, size_of};
+
+    // Required companion gate for the lowerer's whole-entry resource oracle.
+    // These are tested equivalences for the pinned 64-bit host/nightly only,
+    // NOT Rust ABI theorems. No measured transform work/peak/receipt is used.
+    // A failure invalidates this oracle profile; do not retune successful totals.
+    assert_eq!(size_of::<usize>(), 8);
+    assert_eq!(align_of::<usize>(), 8);
+    type AccessibleKey = (Ptr<Operation>, u8);
+    type AccessibleAvailable = (AccessibleKey, u64, Option<usize>);
+    type AccessibleVisit = Result<Ptr<BasicBlock>, usize>;
+    for (name, actual_size, expected_size, actual_align, expected_align) in [
+        (
+            "BorrowedPureCseKeyV1",
+            size_of::<BorrowedPureCseKeyV1>(),
+            size_of::<AccessibleKey>(),
+            align_of::<BorrowedPureCseKeyV1>(),
+            align_of::<AccessibleKey>(),
+        ),
+        (
+            "Available",
+            size_of::<Available>(),
+            size_of::<AccessibleAvailable>(),
+            align_of::<Available>(),
+            align_of::<AccessibleAvailable>(),
+        ),
+        (
+            "Visit",
+            size_of::<Visit>(),
+            size_of::<AccessibleVisit>(),
+            align_of::<Visit>(),
+            align_of::<AccessibleVisit>(),
+        ),
+    ] {
+        assert_eq!(actual_size, expected_size, "{name} pinned size premise");
+        assert_eq!(
+            actual_align, expected_align,
+            "{name} pinned alignment premise"
+        );
+    }
+}

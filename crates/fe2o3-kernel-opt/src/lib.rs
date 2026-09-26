@@ -67,6 +67,7 @@ mod checked_optimization_policy8_semantic_v1;
 mod checked_optimization_policy8_transport_v1;
 mod checked_optimization_receipt_v1;
 mod checked_optimization_v1;
+mod checked_optimization_v18;
 mod checked_redundant_store_v1;
 mod checked_refined_forwarding_history_v1;
 mod checked_scalar_fixed_point_v1;
@@ -101,6 +102,7 @@ pub use checked_optimization_policy8_semantic_v1::*;
 pub use checked_optimization_policy8_transport_v1::*;
 pub use checked_optimization_receipt_v1::*;
 pub use checked_optimization_v1::*;
+pub use checked_optimization_v18::*;
 pub use checked_redundant_store_v1::*;
 pub use checked_refined_forwarding_history_v1::*;
 pub use checked_scalar_fixed_point_v1::{

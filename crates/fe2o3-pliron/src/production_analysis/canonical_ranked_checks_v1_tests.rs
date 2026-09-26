@@ -583,3 +583,7 @@ fn ignored_invalid_and_foreign_budget_queries_poison_the_callback() {
 mod native_loop_tests {
     include!("canonical_ranked_native_loops_v1_tests.rs");
 }
+
+mod native_switch_tests {
+    include!("canonical_ranked_native_switch_v1_tests.rs");
+}

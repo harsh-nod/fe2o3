@@ -144,8 +144,7 @@ fn actual_backend_private_initializer_plus_slice_read_is_not_a_closed_private_ou
             PrivateSliceCompositionV1::InitializerRead,
         )],
     );
-    let source =
-        materialize_ranked_fixture_v1(ssa, &[ranked_root_input_1d(A_NAME, 247, 64)]).unwrap();
+    let source = private_slice_profile_materialize_v18(ssa);
     let program = assertion_project(source).unwrap();
     assert_eq!(program.roots[0].access_sources.len(), 10);
     assert!(program.roots[0].executable_effect_sources.is_empty());

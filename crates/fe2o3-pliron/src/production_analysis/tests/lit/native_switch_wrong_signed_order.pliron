@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: native switch keys violate exact selector semantics
+builtin.func @native_switch_wrong_signed_order: builtin.function <(builtin.integer si8) -> ()>
+{
+  ^entry(selector: builtin.integer si8):
+    gpu.switch_v3 (selector) [^exit, ^exit, ^exit] [gpu_switch_kind: gpu.switch_key_kind_v3 I8, gpu_switch_cases: gpu.switch_case_bits_v3 [0, 255], gpu_switch_offsets: gpu.switch_successor_offsets_v3 [0, 0, 0, 0], operand_segment_sizes: builtin.operand_segment_sizes [1, 0]]: <(builtin.integer si8) -> ()>
+  ^exit():
+    gpu.return () [] []: <() -> ()>
+}

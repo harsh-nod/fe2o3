@@ -5,6 +5,7 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     VerifiedCanonicalKernelIrModuleV12 as Owner,
+    VerifiedCanonicalKernelIrModuleV18 as StorageOwner,
 };
 use std::{fmt, mem::size_of};
 
@@ -16,13 +17,20 @@ mod check;
 mod control;
 #[path = "canonical_ranked_view_effects_v1.rs"]
 mod effects;
+#[path = "canonical_ranked_view_v18.rs"]
+mod storage;
 pub use build::build_canonical_ranked_candidate_v1;
 pub use check::with_checked_canonical_ranked_view_v1;
+pub use storage::{build_canonical_ranked_candidate_v18, with_checked_canonical_ranked_view_v18};
+
+type Classifier =
+    fn(usize, &fe2o3_kernel_ir::OperationKind) -> Result<(OperationClass, Obligations)>;
 
 /// Dense inventory positions, never sparse ValueId/BlockId allocation sizes.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CanonicalRankedSubjectV1 {
     Module,
+    StorageLayout(usize),
     Kernel(usize),
     Function(usize),
     Block(usize),
@@ -86,6 +94,20 @@ pub enum CanonicalRankedOperationClassV1 {
     VectorLoad,
     VectorStore,
     VectorLayoutConvert,
+    StorageProject,
+    StorageRead,
+    StorageWrite,
+    StorageCopy,
+    StorageSetDiscriminant,
+    StorageReadDiscriminant,
+    ExecutionContext,
+    ExecutionWorkgroup,
+    ExecutionScopeEnd,
+    ExecutionTileLoad,
+    ExecutionTileIntoFragment,
+    ExecutionFragmentIntoParts,
+    OrderedRegion,
+    OrderedProgram,
 }
 use CanonicalRankedOperationClassV1 as OperationClass;
 
@@ -183,6 +205,7 @@ impl Obligations {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CanonicalRankedRoleV1 {
     Module,
+    StorageLayout,
     Kernel,
     Definition,
     Use,
@@ -241,13 +264,13 @@ pub struct CanonicalRankedMetadataRowV1<'m> {
 
 /// Graph-bound claims; construction does not authenticate or prove their values.
 #[derive(Debug)]
-pub struct CanonicalRankedMetadataV1<'g, 'm> {
-    owner: &'g Owner,
+pub struct CanonicalRankedMetadataV1<'g, 'm, O = Owner> {
+    owner: &'g O,
     rows: &'m [CanonicalRankedMetadataRowV1<'m>],
 }
 use CanonicalRankedMetadataV1 as Metadata;
-impl<'g, 'm> Metadata<'g, 'm> {
-    pub const fn new(owner: &'g Owner, rows: &'m [CanonicalRankedMetadataRowV1<'m>]) -> Self {
+impl<'g, 'm, O> Metadata<'g, 'm, O> {
+    pub const fn new(owner: &'g O, rows: &'m [CanonicalRankedMetadataRowV1<'m>]) -> Self {
         Self { owner, rows }
     }
     pub const fn rows(&self) -> &'m [CanonicalRankedMetadataRowV1<'m>] {
@@ -270,17 +293,17 @@ impl<'g, 'm> Metadata<'g, 'm> {
 /// Candidate bound to exact inventory and metadata objects, not claimed hashes.
 /// Borrows prevent moves/mutation; admission additionally checks object identity.
 #[derive(Debug)]
-pub struct CanonicalRankedCandidateV1<'i, 'g, 'm> {
-    inventory: &'i Inventory<'g>,
-    metadata: &'i Metadata<'g, 'm>,
+pub struct CanonicalRankedCandidateV1<'i, 'g, 'm, O = Owner> {
+    inventory: &'i Inventory<'g, O>,
+    metadata: &'i Metadata<'g, 'm, O>,
     rows: Vec<Row>,
 }
 use CanonicalRankedCandidateV1 as Candidate;
-impl<'i, 'g, 'm> Candidate<'i, 'g, 'm> {
+impl<'i, 'g, 'm, O> Candidate<'i, 'g, 'm, O> {
     /// Adopts caller-owned inert rows without checking them or allocating.
     pub fn from_rows(
-        inventory: &'i Inventory<'g>,
-        metadata: &'i Metadata<'g, 'm>,
+        inventory: &'i Inventory<'g, O>,
+        metadata: &'i Metadata<'g, 'm, O>,
         rows: Vec<Row>,
     ) -> Self {
         Self {
@@ -345,6 +368,9 @@ pub enum CanonicalRankedViewErrorV1 {
         ordinal: usize,
     },
     InvalidCoordinate(Subject),
+    UnsupportedStorageOperation {
+        ordinal: usize,
+    },
     UnsupportedOperation {
         ordinal: usize,
         wire_version: u8,
@@ -380,14 +406,14 @@ impl std::error::Error for Error {
 /// use fe2o3_kernel_analysis::CheckedCanonicalRankedViewV1;
 /// fn forge() { let _ = CheckedCanonicalRankedViewV1 {}; }
 /// ```
-pub struct CheckedCanonicalRankedViewV1<'scope, 'i, 'g, 'm> {
-    candidate: &'i Candidate<'i, 'g, 'm>,
+pub struct CheckedCanonicalRankedViewV1<'scope, 'i, 'g, 'm, O = Owner> {
+    candidate: &'i Candidate<'i, 'g, 'm, O>,
     accounting: &'scope mut control::Accounting,
 }
-impl<'g> CheckedCanonicalRankedViewV1<'_, '_, 'g, '_> {
+impl<'g, O> CheckedCanonicalRankedViewV1<'_, '_, 'g, '_, O> {
     /// Reuses the exact input inventory. Traversal beyond this O(1) query remains
     /// the consumer's metered work; it is not a free complete graph analysis.
-    pub fn inventory(&mut self, budget: &mut Budget<'_>) -> Result<&Inventory<'g>> {
+    pub fn inventory(&mut self, budget: &mut Budget<'_>) -> Result<&Inventory<'g, O>> {
         self.accounting.charge(budget, 1)?;
         Ok(self.candidate.inventory)
     }
@@ -457,6 +483,14 @@ impl<'g> CheckedCanonicalRankedViewV1<'_, '_, 'g, '_> {
         }
     }
 }
+
+/// Inert metadata bound to the actual V18 owner, including its storage table.
+pub type CanonicalRankedMetadataV18<'g, 'm> = Metadata<'g, 'm, StorageOwner>;
+/// Candidate coverage of the actual V18 graph, not a downgraded legacy graph.
+pub type CanonicalRankedCandidateV18<'i, 'g, 'm> = Candidate<'i, 'g, 'm, StorageOwner>;
+/// Scoped structural coverage; all semantic and source obligations remain pending.
+pub type CheckedCanonicalRankedViewV18<'scope, 'i, 'g, 'm> =
+    CheckedCanonicalRankedViewV1<'scope, 'i, 'g, 'm, StorageOwner>;
 
 fn add(left: usize, right: usize) -> Result<usize> {
     left.checked_add(right).ok_or(Resource::Arithmetic.into())

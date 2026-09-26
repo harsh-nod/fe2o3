@@ -107,6 +107,90 @@ struct SourceLocalCursorV1<'a, 'r> {
 }
 
 impl<'a, 'r> SourceLocalCursorV1<'a, 'r> {
+    fn resolve_assert_diagnostics(
+        &mut self,
+        site: ExecutionSiteV29,
+        message: &SemanticAssertMessageV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<[usize; 2], ProductionSemanticKirErrorV1> {
+        type Saved = [Option<(usize, UnitLocalLocalStateV1, u64)>; 2];
+        budget.charge_work(8)?;
+        let ExecutionSiteV29::Terminator { block } = site else {
+            return Err(unit_local_mismatch_v1());
+        };
+        if self
+            .input
+            .occurrences
+            .terminal_failure_start(block)
+            .is_none()
+            || !matches!(self.input.source.blocks().get(block.get() as usize)
+                .map(|block| block.terminator().kind()),
+                Some(SemanticTerminatorKindV1::Assert { message: original, unwind, .. })
+                    if std::ptr::eq(original, message)
+                        && !matches!(unwind, SemanticUnwindActionV1::Cleanup(_)))
+        {
+            return Err(unit_local_mismatch_v1());
+        }
+        let SemanticAssertMessageV1::BoundsCheck { length, index } = message else {
+            return Err(unit_local_mismatch_v1());
+        };
+        let storage = argument_sum_v1(&[
+            std::mem::size_of::<Saved>(),
+            std::mem::size_of::<Result<[usize; 2], ProductionSemanticKirErrorV1>>(),
+            std::mem::size_of::<[usize; 2]>(),
+        ])?;
+        budget.reserve_storage(storage)?;
+        let mut saved: Saved = [None, None];
+        let result = (|| {
+            for (ordinal, operand) in [length, index].iter().enumerate() {
+                budget.charge_work(4)?;
+                if let SemanticOperandV1::Move(place) = operand {
+                    let local = place.local().index() as usize;
+                    if saved.iter().flatten().any(|(prior, _, _)| *prior == local) {
+                        continue;
+                    }
+                    let state = *self.locals.get(local).ok_or_else(unit_local_mismatch_v1)?;
+                    let epoch = self
+                        .memory
+                        .locals
+                        .get(local)
+                        .ok_or_else(unit_local_mismatch_v1)?
+                        .epoch;
+                    // Restore work is paid before either ordered diagnostic runs.
+                    budget.charge_work(2)?;
+                    saved[ordinal] = Some((local, state, epoch));
+                }
+            }
+            let length = self.resolve_operand(
+                site,
+                ExecutionOperandV29::AssertMessage(0),
+                length,
+                UnitLocalOperandUseV1::Diagnostic,
+                budget,
+            )?;
+            let index = self.resolve_operand(
+                site,
+                ExecutionOperandV29::AssertMessage(1),
+                index,
+                UnitLocalOperandUseV1::Diagnostic,
+                budget,
+            )?;
+            Ok([length, index])
+        })();
+        for (local, state, epoch) in saved.into_iter().flatten() {
+            self.locals[local] = state;
+            self.memory.locals[local].epoch = epoch;
+        }
+        let release = budget.release_storage(storage);
+        match result {
+            Ok(values) => {
+                release?;
+                Ok(values)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     fn value(&self, row: usize) -> Option<&UnitLocalValueRowV1> {
         self.rows.values.get(row)
     }

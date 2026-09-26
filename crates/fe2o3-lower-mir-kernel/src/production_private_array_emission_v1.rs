@@ -26,8 +26,8 @@ struct PrivateArrayRecorderCheckpointV1 {
     expected: usize,
 }
 
-struct PrivateArrayFunctionRecorderV1<'a> {
-    work: PrivateArrayRecorderWorkV1<'a>,
+struct PrivateArrayFunctionRecorderV1<'a, 'service> {
+    work: PrivateArrayRecorderWorkV1<'service>,
     enabled: bool,
     limit: usize,
     block: Option<(usize, BlockId)>,
@@ -219,9 +219,51 @@ fn private_array_visit_rvalue_operands_v1<'s, E>(
     }
 }
 
-impl<'a> PrivateArrayFunctionRecorderV1<'a> {
+impl<'a, 'service> PrivateArrayFunctionRecorderV1<'a, 'service> {
+    fn replace_work<'next>(
+        self,
+        replacement: PrivateArrayRecorderWorkV1<'next>,
+    ) -> (
+        PrivateArrayFunctionRecorderV1<'a, 'next>,
+        PrivateArrayRecorderWorkV1<'service>,
+    ) {
+        let Self {
+            work,
+            enabled,
+            limit,
+            block,
+            frame,
+            slots,
+            effects,
+            definitions,
+            expected,
+            cursor,
+            pending,
+            outer_payload,
+            placement,
+        } = self;
+        (
+            PrivateArrayFunctionRecorderV1 {
+                work: replacement,
+                enabled,
+                limit,
+                block,
+                frame,
+                slots,
+                effects,
+                definitions,
+                expected,
+                cursor,
+                pending,
+                outer_payload,
+                placement,
+            },
+            work,
+        )
+    }
+
     fn new(
-        work: PrivateArrayRecorderWorkV1<'a>,
+        work: PrivateArrayRecorderWorkV1<'service>,
         enabled: bool,
         limit: usize,
         outer_payload: PrivateArrayPayloadV1,
@@ -305,6 +347,27 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
         Ok(())
     }
 
+    fn begin_invocation_v1(
+        &mut self,
+        plan: &InvocationEntryPlanV1<'_>,
+        actual: BlockId,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if !self.enabled {
+            return Ok(());
+        }
+        self.work.charge_private_array_work(4)?;
+        if self.block.is_some()
+            || plan.layout.preheader != Some(actual)
+            || self.placement.block(plan.source.entry().index())? != plan.layout.source_entry
+        {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        self.block = Some((0, actual));
+        self.frame = None;
+        self.pending = None;
+        Ok(())
+    }
+
     fn prepare_slot(
         &mut self,
         types: &[SemanticTypeDeclV1],
@@ -316,19 +379,19 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
             private_retained_array_facts_v1(types, slot.semantic_type, self.limit, &mut self.work)?
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         self.work.charge_private_array_work(3)?;
-        let actual = slot
-            .array
+        let (kernel_type, alignment, array) = slot.storage.scalar_array()?;
+        let actual = array
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         if actual.length != facts.length
             || actual.element != facts.element_type
-            || slot.alignment != facts.element.alignment
+            || alignment != facts.element.alignment
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
         if !facts
             .element
             .element
-            .matches_borrowed(&slot.kernel_type, &mut self.work)?
+            .matches_borrowed(kernel_type, &mut self.work)?
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
@@ -430,6 +493,23 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
         extra_definitions: usize,
         extra_expected: usize,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.live_payload_v1(extra_slots, extra_effects, extra_definitions, extra_expected)?;
+        Ok(())
+    }
+
+    fn live_payload_v1(
+        &mut self,
+        extra_slots: usize,
+        extra_effects: usize,
+        extra_definitions: usize,
+        extra_expected: usize,
+    ) -> Result<PrivateArrayPayloadV1, ProductionSemanticKirErrorV1> {
+        if !self.enabled {
+            if extra_slots != 0 || extra_effects != 0 || extra_definitions != 0 || extra_expected != 0 {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
+            return Ok(self.outer_payload);
+        }
         let mut payload = self.outer_payload;
         payload = payload.add(
             private_array_buffer_payload_v1(&self.slots, extra_slots, &mut self.work)?,
@@ -443,11 +523,10 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
             private_array_buffer_payload_v1(&self.definitions, extra_definitions, &mut self.work)?,
             &mut self.work,
         )?;
-        let _payload = payload.add(
+        payload.add(
             private_array_buffer_payload_v1(&self.expected, extra_expected, &mut self.work)?,
             &mut self.work,
-        )?;
-        Ok(())
+        )
     }
 
     fn expected_place(

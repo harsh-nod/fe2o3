@@ -48,12 +48,50 @@ impl SourceOwnedScopedModuleV29 {
             .storage()
             .checked_sub(source.input.retained_storage)
             .ok_or(ArgumentResourceV1::Accounting)?;
+        if source
+            .owner
+            .occurrence_storage()
+            .is_some_and(|receipt| floor < receipt.retained_storage())
+        {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        let inherited = source.input.retained_storage;
+        let boundary = match ScopedSourceCleanupBoundaryV29::new::<Self, ScopedModuleErrorV29>(
+            floor, budget,
+        ) {
+            Ok(boundary) => boundary,
+            Err(error) => {
+                // This is after the original adoption checks, not a donor-preserving rejection.
+                drop(donor.take());
+                let _ = budget.release_storage(inherited);
+                return Err(error.into());
+            }
+        };
+        boundary.run(budget, |cleanup, budget| {
+            Self::try_new_with_cleanup(donor, limits, cleanup, budget)
+        })
+    }
+
+    fn try_new_with_cleanup(
+        donor: &mut Option<ScopedSourceInputsV29>,
+        limits: ProductionSemanticKirLimitsV1,
+        cleanup: &ScopedSourceCleanupV29,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ScopedModuleErrorV29> {
+        let source = donor.as_ref().ok_or_else(scoped_module_error_v29)?;
+        if source.input.ledger != budget.work_ledger_identity_v1() {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        let floor = budget
+            .storage()
+            .checked_sub(source.input.retained_storage)
+            .ok_or(ArgumentResourceV1::Accounting)?;
         let preexisting = source.owner.occurrence_storage();
         if preexisting.is_some_and(|receipt| floor < receipt.retained_storage()) {
             return Err(ArgumentResourceV1::Accounting.into());
         }
         let mut source = donor.take().ok_or_else(scoped_module_error_v29)?;
-        scoped_module_attempt_v29(budget, floor, move |budget| {
+        scoped_source_attempt_v29(cleanup, budget, floor, move |budget| {
             budget.reserve_storage(size_of::<Self>())?;
             source
                 .owner
@@ -70,17 +108,23 @@ impl SourceOwnedScopedModuleV29 {
                     HelperOccurrenceCaptureV1::Transferred(receipt)
                 }
             };
-            let pending = source.input.with_source(
+            let pending = source.input.with_source_with_cleanup(
                 &source.owner,
                 &source.launch,
+                cleanup,
                 budget,
-                |view, budget| admit_pending_scoped_module_v29(view, limits, budget),
+                |view, budget| {
+                    admit_pending_scoped_module_with_cleanup_v29(view, limits, cleanup, budget)
+                },
             )?;
-            let assertions = source.input.with_source(
+            let assertions = source.input.with_source_with_cleanup(
                 &source.owner,
                 &source.launch,
+                cleanup,
                 budget,
-                |view, budget| reconstruct_scoped_source_v29(&pending, view, limits, budget),
+                |view, budget| {
+                    reconstruct_scoped_source_v29(&pending, view, limits, cleanup, budget)
+                },
             )?;
             let retained_storage = budget
                 .storage()
@@ -106,17 +150,36 @@ impl SourceOwnedScopedModuleV29 {
             return Err(ArgumentResourceV1::Accounting.into());
         }
         let floor = budget.storage();
-        scoped_module_attempt_v29(budget, floor, |budget| {
+        with_scoped_source_cleanup_v29(budget, floor, |cleanup, budget| {
+            self.replay_with_cleanup(cleanup, budget)
+        })
+    }
+
+    fn replay_with_cleanup(
+        &self,
+        cleanup: &ScopedSourceCleanupV29,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ScopedModuleErrorV29> {
+        if self.source.input.ledger != budget.work_ledger_identity_v1()
+            || self.pending.ledger != budget.work_ledger_identity_v1()
+            || budget.storage()
+                < argument_sum_v1(&[self.retained_storage, self.capture.preexisting_storage()])?
+        {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        let floor = budget.storage();
+        scoped_source_attempt_v29(cleanup, budget, floor, |budget| {
             self.source
                 .owner
                 .verify_replay()
                 .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
-            let rows = self.source.input.with_source(
+            let rows = self.source.input.with_source_with_cleanup(
                 &self.source.owner,
                 &self.source.launch,
+                cleanup,
                 budget,
                 |view, budget| {
-                    reconstruct_scoped_source_v29(&self.pending, view, self.limits, budget)
+                    reconstruct_scoped_source_v29(&self.pending, view, self.limits, cleanup, budget)
                 },
             )?;
             budget.charge_work(argument_sum_v1(&[
@@ -137,6 +200,7 @@ fn reconstruct_scoped_source_v29(
     pending: &PendingScopedModuleV29,
     source: &ExecutionLifecycleSourceV29<'_>,
     limits: ProductionSemanticKirLimitsV1,
+    cleanup: &ScopedSourceCleanupV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<Vec<ReplayedInstanceAssertV1>, ScopedModuleErrorV29> {
     if source.ledger != budget.work_ledger_identity_v1()
@@ -146,16 +210,15 @@ fn reconstruct_scoped_source_v29(
         return Err(ArgumentResourceV1::Accounting.into());
     }
     let floor = budget.storage();
-    scoped_module_attempt_v29(budget, floor, |budget| {
-        let emitted = scoped_module_roots_v29(source, limits, budget)?;
-        let (candidate, roots) = scoped_module_candidate_v29(source, emitted, limits, budget)?;
+    scoped_source_attempt_v29(cleanup, budget, floor, |budget| {
+        let (candidate, roots, _) = scoped_source_candidate_v29(source, limits, cleanup, budget)?;
         let scratch = budget
             .storage()
             .checked_sub(floor)
             .ok_or(ArgumentResourceV1::Accounting)?;
         if !pending
             .graph
-            .matches_module_with_budget_v15(&candidate, budget)
+            .matches_module_with_budget_v18(&candidate, budget)
             .map_err(ScopedModuleErrorV29::Canonical)?
             || !scoped_replay_metadata_v29::matches_roots(&pending.roots, &roots, budget)?
         {
@@ -209,9 +272,11 @@ fn collect_scoped_module_assertions_v29(
                             functions: &module.functions,
                             function_ordinal: root.function_ordinal,
                             sidecars: &root.sidecars,
+                            active_instances: &root.active_instances,
                             coordinates: &root.coordinates,
                             slot_relocation: root.slot_relocation.as_ref(),
                             insertions: &root.insertions,
+                            terminal_failures: root.terminal_failures.as_ref(),
                         },
                         instances,
                         &graph,

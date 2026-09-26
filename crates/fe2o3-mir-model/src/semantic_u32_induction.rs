@@ -307,6 +307,17 @@ pub struct SemanticU32InductionNoOverflowReportV1 {
 }
 
 impl SemanticU32InductionNoOverflowReportV1 {
+    /// Actual retained report header, certificate backing and optional original
+    /// reachability backing. This is a storage size, not compiler authority.
+    pub fn retained_storage_v18(&self) -> Result<usize, SemanticU32InductionAnalysisErrorV1> {
+        let certificate_bytes = self.certificates.len()
+            .checked_mul(std::mem::size_of::<SemanticU32InductionNoOverflowCertificateV1>())
+            .ok_or(SemanticU32InductionAnalysisErrorV1::Storage)?;
+        let reachable_bytes = self.reachable_blocks.as_ref().map_or(0, |scope| scope.blocks.capacity());
+        std::mem::size_of::<Self>().checked_add(certificate_bytes)
+            .and_then(|bytes| bytes.checked_add(reachable_bytes))
+            .ok_or(SemanticU32InductionAnalysisErrorV1::Storage)
+    }
     pub const fn semantic_mir_sha256(&self) -> InertSemanticMirSha256V1 {
         self.semantic_mir_sha256
     }
@@ -423,6 +434,68 @@ pub fn analyze_semantic_u32_induction_no_overflow_with_limits_v1(
     )
 }
 
+/// Derives the historical complete-CFG facts with live caller work and storage
+/// admission. The same solver, certificate contents and logical work count are
+/// retained; additional allocation/copy work is charged only to the caller.
+/// Accepted scratch credits remain with the caller until this call has returned
+/// and its scratch has dropped. Keep `retained_storage_v18()` reserved while the
+/// returned report is live. The report remains inert and grants no authority.
+pub fn analyze_semantic_u32_induction_no_overflow_with_meter_v18<
+    M: SemanticU32InductionBoundSnapshotMeterV1,
+>(
+    semantic_mir: &AdmittedInertSemanticMirV1,
+    function: SemanticFunctionIdV1,
+    limits: SemanticU32InductionAnalysisLimitsV1,
+    meter: &mut M,
+) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionBoundSnapshotErrorV1<M::Error>> {
+    let header = std::mem::size_of::<HistoricalInductionMeterV18<'_, M>>()
+        .checked_add(std::mem::size_of::<Result<
+            SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1,
+        >>())
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Result<
+            SemanticU32InductionNoOverflowReportV1, SemanticU32InductionBoundSnapshotErrorV1<M::Error>,
+        >>()))
+        .ok_or(SemanticU32InductionBoundSnapshotErrorV1::Analysis(SemanticU32InductionAnalysisErrorV1::Storage))?;
+    meter.reserve_storage(header).map_err(SemanticU32InductionBoundSnapshotErrorV1::Meter)?;
+    let mut adapter = HistoricalInductionMeterV18 { meter, error: None };
+    let result = semantic_mir.functions().get(function.index() as usize)
+        .ok_or(SemanticU32InductionAnalysisErrorV1::InvalidModel(
+            "the requested semantic function is outside the admitted function table"))
+        .and_then(|declaration| analyze_function_in_scope_core_v18(
+            semantic_mir.types(), declaration, semantic_mir.semantic_sha256(), function,
+            None, false, limits, Some(&mut adapter),
+        ));
+    match adapter.error {
+        Some(error) => Err(SemanticU32InductionBoundSnapshotErrorV1::Meter(error)),
+        None => result.map_err(SemanticU32InductionBoundSnapshotErrorV1::Analysis),
+    }
+}
+
+struct HistoricalInductionMeterV18<'a, M: SemanticU32InductionBoundSnapshotMeterV1> {
+    meter: &'a mut M,
+    error: Option<M::Error>,
+}
+
+impl<M: SemanticU32InductionBoundSnapshotMeterV1> bound_snapshot::InternalMeter
+    for HistoricalInductionMeterV18<'_, M>
+{
+    fn allocation_work_in_report(&self) -> bool { false }
+
+    fn charge_work(&mut self, amount: usize) -> Result<(), SemanticU32InductionAnalysisErrorV1> {
+        self.meter.charge_work(amount).map_err(|error| {
+            self.error.get_or_insert(error);
+            SemanticU32InductionAnalysisErrorV1::Storage
+        })
+    }
+
+    fn reserve_storage(&mut self, amount: usize) -> Result<(), SemanticU32InductionAnalysisErrorV1> {
+        self.meter.reserve_storage(amount).map_err(|error| {
+            self.error.get_or_insert(error);
+            SemanticU32InductionAnalysisErrorV1::Storage
+        })
+    }
+}
+
 fn analyze_function_with_limits_v1(
     types: &[SemanticTypeDeclV1],
     declaration: &SemanticFunctionDeclV1,
@@ -500,6 +573,21 @@ fn analyze_function_in_scope_v2(
     reachable_scope: bool,
     limits: SemanticU32InductionAnalysisLimitsV1,
 ) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
+    analyze_function_in_scope_core_v18(types, declaration, semantic_mir_sha256, function,
+        plan, reachable_scope, limits, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn analyze_function_in_scope_core_v18(
+    types: &[SemanticTypeDeclV1],
+    declaration: &SemanticFunctionDeclV1,
+    semantic_mir_sha256: InertSemanticMirSha256V1,
+    function: SemanticFunctionIdV1,
+    plan: Option<&crate::ssa::SsaConstructionPlanV1>,
+    reachable_scope: bool,
+    limits: SemanticU32InductionAnalysisLimitsV1,
+    mut meter: Option<&mut dyn bound_snapshot::InternalMeter>,
+) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
     if limits.work_units > MAX_SEMANTIC_U32_INDUCTION_WORK_V1
         || limits.certificates > MAX_SEMANTIC_U32_INDUCTION_CERTIFICATES_V1
     {
@@ -511,7 +599,22 @@ fn analyze_function_in_scope_v2(
         });
     }
 
+    if let Some(meter) = meter.as_deref_mut() {
+        let headers = std::mem::size_of::<SemanticU32InductionNoOverflowReportV1>()
+            .checked_add(std::mem::size_of::<SemanticCfgV1>())
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<SemanticInventoryV1>()))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<CandidateProofContextV1<'_>>()))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<WorkBudgetV1<'_>>()))
+            .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<Vec<SemanticU32InductionNoOverflowCertificateV1>>()))
+            // Reachability returns its visited backing while its pending
+            // stack is live. These two scratch headers are not graph fields.
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Vec<bool>>()))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Vec<usize>>()))
+            .ok_or(SemanticU32InductionAnalysisErrorV1::Storage)?;
+        meter.reserve_storage(headers)?;
+    }
     let mut budget = WorkBudgetV1::new(limits.work_units);
+    budget.meter = meter;
     let mut ssa_scope_work_units = 0;
     let graph = SemanticCfgV1::analyze(
         declaration,
@@ -522,9 +625,8 @@ fn analyze_function_in_scope_v2(
     )?;
     let inventory = SemanticInventoryV1::analyze(declaration, &graph, &mut budget)?;
     let mut certificates = Vec::new();
-    certificates
-        .try_reserve(inventory.checked_additions.len().min(limits.certificates))
-        .map_err(|_| SemanticU32InductionAnalysisErrorV1::Storage)?;
+    budget.reserve_vec(&mut certificates,
+        inventory.checked_additions.len().min(limits.certificates), false)?;
     let context = CandidateProofContextV1 {
         types,
         function: declaration,
@@ -546,12 +648,13 @@ fn analyze_function_in_scope_v2(
             certificates.push(certificate);
         }
     }
+    let certificates = budget.boxed_certificates_v18(certificates)?;
     Ok(SemanticU32InductionNoOverflowReportV1 {
         semantic_mir_sha256,
         function,
         function_identity: declaration.identity(),
         checked_additions_examined: inventory.checked_additions.len(),
-        certificates: certificates.into_boxed_slice(),
+        certificates,
         work_units: budget.used - ssa_scope_work_units,
         reachable_scope,
         ssa_scope_work_units,
@@ -1443,10 +1546,15 @@ impl SemanticCfgV1 {
                 block_count: reachable_block_count,
                 statement_count: reachable_statement_count,
             });
-        } else if reachable.iter().any(|reachable| !reachable) {
-            return Err(SemanticU32InductionAnalysisErrorV1::InvalidControlFlow(
-                "the semantic CFG contains an unreachable block",
-            ));
+        } else {
+            if budget.meter.as_ref().is_some_and(|meter| !meter.allocation_work_in_report()) {
+                budget.charge_allocation_work_v18(reachable.len())?;
+            }
+            if reachable.iter().any(|reachable| !reachable) {
+                return Err(SemanticU32InductionAnalysisErrorV1::InvalidControlFlow(
+                    "the semantic CFG contains an unreachable block",
+                ));
+            }
         }
         Ok(graph)
     }
@@ -1564,7 +1672,7 @@ impl WorkBudgetV1<'_> {
             let bytes = requested
                 .checked_mul(std::mem::size_of::<T>())
                 .ok_or(Storage)?;
-            self.charge(
+            self.charge_allocation_work_v18(
                 values
                     .capacity()
                     .checked_mul(std::mem::size_of::<T>())
@@ -1597,11 +1705,41 @@ impl WorkBudgetV1<'_> {
         if self.meter.is_none() {
             return fallible_filled_vec(length, value);
         }
-        self.charge(length)?;
+        self.charge_allocation_work_v18(length)?;
         let mut result = Vec::new();
         self.reserve_vec(&mut result, length, true)?;
         result.resize(length, value);
         Ok(result)
+    }
+
+    fn charge_allocation_work_v18(&mut self, amount: usize)
+        -> Result<(), SemanticU32InductionAnalysisErrorV1>
+    {
+        if self.meter.as_ref().is_some_and(|meter| !meter.allocation_work_in_report()) {
+            self.meter.as_mut().unwrap().charge_work(amount)
+        } else {
+            self.charge(amount)
+        }
+    }
+
+    fn boxed_certificates_v18(
+        &mut self,
+        values: Vec<SemanticU32InductionNoOverflowCertificateV1>,
+    ) -> Result<Box<[SemanticU32InductionNoOverflowCertificateV1]>, SemanticU32InductionAnalysisErrorV1> {
+        if self.meter.is_none() || values.capacity() == values.len() {
+            return Ok(values.into_boxed_slice());
+        }
+        // A shrinking Vec-to-Box conversion can allocate. Move through one
+        // fallibly allocated exact backing while the old backing stays paid.
+        let count = values.len();
+        let mut exact = Vec::new();
+        self.reserve_vec(&mut exact, count, true)?;
+        if exact.capacity() != count {
+            return Err(SemanticU32InductionAnalysisErrorV1::Storage);
+        }
+        self.charge_allocation_work_v18(count)?;
+        exact.extend(values);
+        Ok(exact.into_boxed_slice())
     }
 
     fn nested<T>(
@@ -1611,7 +1749,7 @@ impl WorkBudgetV1<'_> {
         if self.meter.is_none() {
             return fallible_nested_vec(length);
         }
-        self.charge(length)?;
+        self.charge_allocation_work_v18(length)?;
         let mut result = Vec::new();
         self.reserve_vec(&mut result, length, true)?;
         result.resize_with(length, Vec::new);
@@ -2523,6 +2661,119 @@ mod tests {
     }
 
     include!("semantic_u32_induction/reachable_scope_tests.rs");
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum LiveMeterRefusalV18 { Work { actual: usize, limit: usize }, Storage { actual: usize, limit: usize } }
+
+    struct LiveMeterV18 {
+        work: usize,
+        storage: usize,
+        work_limit: usize,
+        storage_limit: usize,
+        first: Option<LiveMeterRefusalV18>,
+    }
+
+    impl LiveMeterV18 {
+        fn new(work_limit: usize, storage_limit: usize) -> Self {
+            Self { work: 0, storage: 0, work_limit, storage_limit, first: None }
+        }
+    }
+
+    impl SemanticU32InductionBoundSnapshotMeterV1 for LiveMeterV18 {
+        type Error = LiveMeterRefusalV18;
+        fn charge_work(&mut self, amount: usize) -> Result<(), Self::Error> {
+            let actual = self.work.checked_add(amount).unwrap();
+            if actual > self.work_limit {
+                let error = LiveMeterRefusalV18::Work { actual, limit: self.work_limit };
+                self.first.get_or_insert(error);
+                return Err(error);
+            }
+            self.work = actual;
+            Ok(())
+        }
+        fn reserve_storage(&mut self, amount: usize) -> Result<(), Self::Error> {
+            let actual = self.storage.checked_add(amount).unwrap();
+            if actual > self.storage_limit {
+                let error = LiveMeterRefusalV18::Storage { actual, limit: self.storage_limit };
+                self.first.get_or_insert(error);
+                return Err(error);
+            }
+            self.storage = actual;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn live_meter_preserves_historical_certificates_and_logical_work_exactly() {
+        for shape in [Shape::default(), Shape { guard_snapshot: true, ..Shape::default() },
+            Shape { step: 2, ..Shape::default() }]
+        {
+            let source = admitted(shape);
+            let expected = report(&source);
+            let mut meter = LiveMeterV18::new(usize::MAX, usize::MAX);
+            let actual = analyze_semantic_u32_induction_no_overflow_with_meter_v18(
+                &source, SemanticFunctionIdV1::from_index(0),
+                SemanticU32InductionAnalysisLimitsV1::default(), &mut meter).unwrap();
+            assert_eq!(actual, expected);
+            assert!(meter.work > actual.work_units());
+            let retained = std::mem::size_of::<SemanticU32InductionNoOverflowReportV1>()
+                + actual.certificates().len() * std::mem::size_of::<SemanticU32InductionNoOverflowCertificateV1>();
+            assert_eq!(actual.retained_storage_v18().unwrap(), retained);
+            assert!(meter.storage >= retained);
+            assert_eq!(meter.first, None);
+            assert!(!actual.grants_authority() && !actual.authorizes_compiler_transform());
+        }
+    }
+
+    #[test]
+    fn historical_allocation_meter_has_independent_exact_and_short_oracles() {
+        for (work_limit, storage_limit) in [(3, 3 * std::mem::size_of::<u64>()),
+            (2, 3 * std::mem::size_of::<u64>()), (3, 3 * std::mem::size_of::<u64>() - 1)]
+        {
+            let mut meter = LiveMeterV18::new(work_limit, storage_limit);
+            let mut adapter = HistoricalInductionMeterV18 { meter: &mut meter, error: None };
+            let mut budget = WorkBudgetV1 { used: 0, limit: 0, meter: Some(&mut adapter) };
+            let result = budget.filled(3, 7_u64);
+            assert_eq!(budget.used, 0);
+            drop(budget);
+            if work_limit == 2 {
+                assert!(result.is_err());
+                assert_eq!(adapter.error, Some(LiveMeterRefusalV18::Work { actual: 3, limit: 2 }));
+            } else if storage_limit < 24 {
+                assert!(result.is_err());
+                assert_eq!(adapter.error, Some(LiveMeterRefusalV18::Storage { actual: 24, limit: 23 }));
+            } else {
+                let values = result.unwrap();
+                assert_eq!(values, [7, 7, 7]);
+                assert_eq!(values.capacity(), 3);
+                assert_eq!(adapter.error, None);
+            }
+            let first = adapter.error;
+            drop(adapter);
+            assert_eq!(meter.first, first);
+        }
+    }
+
+    #[test]
+    fn live_meter_propagates_the_original_refusal_without_inert_error_replacement() {
+        let source = admitted(Shape::default());
+        let mut measured = LiveMeterV18::new(usize::MAX, usize::MAX);
+        analyze_semantic_u32_induction_no_overflow_with_meter_v18(&source,
+            SemanticFunctionIdV1::from_index(0), SemanticU32InductionAnalysisLimitsV1::default(),
+            &mut measured).unwrap();
+        for (work, storage) in [(0, measured.storage), (measured.work, 0),
+            (measured.work - 1, measured.storage), (measured.work, measured.storage - 1)]
+        {
+            let mut meter = LiveMeterV18::new(work, storage);
+            let result = analyze_semantic_u32_induction_no_overflow_with_meter_v18(&source,
+                SemanticFunctionIdV1::from_index(0), SemanticU32InductionAnalysisLimitsV1::default(),
+                &mut meter);
+            let Err(SemanticU32InductionBoundSnapshotErrorV1::Meter(error)) = result else {
+                panic!("live resource failure was replaced by an inert analysis error");
+            };
+            assert_eq!(meter.first, Some(error));
+        }
+    }
 
     #[test]
     fn exact_guarded_checked_u32_induction_produces_one_bound_certificate() {

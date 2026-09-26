@@ -387,13 +387,24 @@ fn live_guarded_formal_v4_preserves_exact_owner_and_policy_pairing() {
         ProductionFormalMemoryEvidenceErrorV4, ProductionFormalMemoryOwnerV1,
     };
     use fe2o3_kernel_ir::{FormalMemoryReceiptEncodingV3, InertFormalMemoryReceiptFormatV3};
-    let semantic = ProductionSemanticKirOwnerV1::try_lower(
-        guarded_read_source_v360(false, false),
-        ProductionSemanticKirLimitsV1::default(),
-    )
-    .unwrap();
+    let semantic = profiled_guarded_owner_v360(false, false);
     semantic.verify_equivalence().unwrap();
-    assert!(!semantic.retains_mandatory_generic_checks());
+    assert!(semantic.retains_mandatory_generic_checks());
+    let kernel = &semantic.module().kernels[0];
+    let analysis = fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+        semantic.module(), &kernel.id,
+        fe2o3_kernel_ir::ExplicitLaunchExtent::Exact { rank: 1, extents: [64, 1, 1] },
+        FormalIndexWidth::Bits64,
+    ).unwrap();
+    let fe2o3_kernel_ir::FormalMemoryObligationAnalysis::Complete(report) = analysis else {
+        panic!("both source-indexed guarded reads require complete fresh obligations")
+    };
+    assert_eq!(report.accesses().len(), 2);
+    assert!(report.accesses().iter().all(|access|
+        matches!(access.domain(), FormalAccessDomainV1::SliceBounded(_))));
+    assert_eq!(report.bounds_requirements().len(), 2);
+    assert!(report.bounds_requirements().iter().all(|bound| matches!(bound.kind(),
+        fe2o3_kernel_ir::FormalBoundsKindV1::SliceElementAtGuardedIndex(_))));
     let identity = semantic.canonical_kernel_ir_identity();
     let formal = ProductionFormalMemoryOwnerV1::try_admit(semantic).unwrap();
     formal.verify_equivalence().unwrap();
@@ -485,11 +496,7 @@ fn guarded_v4_rejects_inert_bits32_even_after_exact_nested_identity_rebinding() 
         ProductionFormalMemoryOwnerV1,
     };
     use fe2o3_kernel_ir::{FormalIndexWidth, InertFormalMemoryReceiptFormatV3};
-    let semantic = ProductionSemanticKirOwnerV1::try_lower(
-        guarded_read_source_v360(false, false),
-        ProductionSemanticKirLimitsV1::default(),
-    )
-    .unwrap();
+    let semantic = profiled_guarded_owner_v360(false, false);
     let formal = ProductionFormalMemoryOwnerV1::try_admit(semantic).unwrap();
     let evidence = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(&formal).unwrap();
     let mut nested = evidence.formal_obligation_receipt_bytes().to_vec();
@@ -524,7 +531,18 @@ fn guarded_v4_rejects_inert_bits32_even_after_exact_nested_identity_rebinding() 
 }
 
 fn mixed_guarded_owner_v360(pending_first: bool) -> ProductionSemanticKirOwnerV1 {
-    let semantic = guarded_read_source_v360(pending_first, true);
+    profiled_guarded_owner_v360(pending_first, true)
+}
+
+fn profiled_guarded_owner_v360(pending_first: bool, mixed: bool) -> ProductionSemanticKirOwnerV1 {
+    use kernel_argument_abi_v18::tests::FixtureKernelAbiV18;
+    let ssa = ProductionSemanticSsaOwnerV1::try_new(
+        guarded_read_source_v360(pending_first, mixed),
+        ProductionSemanticSsaLimitsV1::default(),
+    ).unwrap();
+    let proposal = FixtureKernelAbiV18::new(&ssa);
+    let roots = proposal.roots();
+    let semantic = ssa.into_source_owner().unwrap();
     let lowering =
         ranked_correlation_input_for_accesses(&[AccessKindAttr::Read, AccessKindAttr::Read], 1);
     let receipt = ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_projection_roster_candidate(
@@ -537,11 +555,34 @@ fn mixed_guarded_owner_v360(pending_first: bool) -> ProductionSemanticKirOwnerV1
             vec![],
         )],
     ).expect("actual compiled ranked reads and admitted source roster");
-    ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks(
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+    const FLOOR: usize = 37;
+    budget.reserve_storage(FLOOR).unwrap();
+    let owner = ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks_with_kernel_abi_budget_v18(
         receipt,
+        ProductionKernelArgumentAbiInputV18 { roots: &roots },
         ProductionSemanticKirLimitsV1::default(),
+        &mut budget,
     )
-    .expect("fresh source lowering and independent MIR/ranked translation validation")
+    .expect("fresh source lowering and independent MIR/ranked translation validation");
+    assert_eq!(budget.storage(), FLOOR);
+    assert!(owner.legacy_kernel_abi_storage_v18().unwrap() > 0);
+    owner
+}
+
+#[test]
+fn guarded_volatile_source_without_original_abi_profile_cannot_infer_global_memory() {
+    for (pending_first, mixed) in [(false, false), (false, true), (true, true)] {
+        let error = ProductionSemanticKirOwnerV1::try_lower(
+            guarded_read_source_v360(pending_first, mixed),
+            ProductionSemanticKirLimitsV1::default(),
+        ).unwrap_err();
+        assert!(matches!(error, ProductionSemanticKirErrorV1::Unsupported {
+            function: 0, block: Some(1), statement: None,
+            detail: "volatile load source does not retain immutable global-slice access",
+        }), "{error:?}");
+    }
 }
 
 #[test]

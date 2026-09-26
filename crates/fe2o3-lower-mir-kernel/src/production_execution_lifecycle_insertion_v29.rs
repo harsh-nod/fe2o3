@@ -16,6 +16,7 @@ struct LifecycleInsertionV29 {
 struct OwnedLifecycleInsertedRootV29 {
     root: OwnedPendingScopedRootV29,
     insertions: Vec<LifecycleInsertionV29>,
+    terminal_failures: Option<TerminalFailureRelationV18>,
 }
 
 struct PreparedLifecycleEventV29 {
@@ -28,6 +29,7 @@ struct PreparedLifecycleBlockV29 {
     index: usize,
     events: std::ops::Range<usize>,
     operations: Vec<Operation>,
+    terminal: Option<usize>,
 }
 
 fn lifecycle_source_row_v29<'a>(
@@ -136,6 +138,7 @@ fn lifecycle_operation_v29(
 ) -> Result<Operation, ProductionSemanticKirErrorV1> {
     use fe2o3_kernel_ir::{ExecutionOperationV15 as Op, ExecutionRoleV15 as Role};
     let (result, kind) = match event.kind {
+        DeferredLifecycleKindV29::Tile(tile) => return tile.operation(budget),
         DeferredLifecycleKindV29::Issue { result } => {
             (Some((result.value, Role::Context)), Op::ContextIssue)
         }
@@ -165,6 +168,66 @@ fn prepare_lifecycle_events_v29(
     limits: ProductionSemanticKirLimitsV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<Vec<PreparedLifecycleEventV29>, ProductionSemanticKirErrorV1> {
+    prepare_lifecycle_events_with_failures_v18(root, limits, None, budget)
+}
+
+// Join the existing compact locator to the original roster and expansion seeds.
+// Reachability is still established by the independent original source plan.
+fn check_lifecycle_instance_roster_v29(
+    pending: &PendingScopedRootEmissionV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let coordinates = &pending.coordinates;
+    let sidecars = &pending.sidecars.rows;
+    let count = coordinates.sources.rows.len();
+    budget.charge_work(7)?;
+    if count == 0
+        || pending.active_instances.rows.len() != count
+        || coordinates.seeds.rows.len() != sidecars.len()
+        || sidecars.is_empty()
+        || pending.active_instances.rows[0] != Some(0)
+    {
+        return Err(execution_lifecycle_error_v29());
+    }
+    let root = coordinates.sources.rows[0].instance;
+    let mut active = 0;
+    for (original, source) in coordinates.sources.rows.iter().enumerate() {
+        budget.charge_work(3)?;
+        if source.instance.index() != original {
+            return Err(execution_lifecycle_error_v29());
+        }
+        let ordinal = pending
+            .active_instances
+            .sidecar_ordinal(original, count, sidecars, budget)?;
+        let Some(ordinal) = ordinal else { continue };
+        budget.charge_work(5)?;
+        let seed = coordinates
+            .seeds
+            .rows
+            .get(ordinal)
+            .ok_or_else(execution_lifecycle_error_v29)?;
+        if ordinal != active
+            || sidecars[ordinal].source_call_instance != Some(source.instance)
+            || seed.instance != source.instance
+            || seed.container != root
+        {
+            return Err(execution_lifecycle_error_v29());
+        }
+        active = argument_sum_v1(&[active, 1])?;
+    }
+    budget.charge_work(1)?;
+    if active != sidecars.len() {
+        return Err(execution_lifecycle_error_v29());
+    }
+    Ok(())
+}
+
+fn prepare_lifecycle_events_with_failures_v18(
+    root: &OwnedPendingScopedRootV29,
+    limits: ProductionSemanticKirLimitsV1,
+    failures: Option<&mut PreparedTerminalFailuresV18>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<Vec<PreparedLifecycleEventV29>, ProductionSemanticKirErrorV1> {
     let pending = &root.pending;
     let coordinates = &pending.coordinates;
     let body = pending
@@ -179,11 +242,10 @@ fn prepare_lifecycle_events_v29(
         pending.function.id.as_str().len(),
         3,
     ])?)?;
-    if pending.sidecars.rows.len() != coordinates.sources.rows.len()
-        || root.kernel.entry != pending.function.id
-    {
+    if root.kernel.entry != pending.function.id {
         return Err(execution_lifecycle_error_v29());
     }
+    check_lifecycle_instance_roster_v29(pending, budget)?;
     let mut count = 0;
     let mut ordinary = 0;
     for sidecar in &pending.sidecars.rows {
@@ -215,14 +277,14 @@ fn prepare_lifecycle_events_v29(
     )?;
     let mut prepared = emission_vec_v1::<PreparedLifecycleEventV29>(count, budget)?;
     let mut issued = None;
-    for (index, sidecar) in pending.sidecars.rows.iter().enumerate() {
+    let mut has_tiles = false;
+    for sidecar in &pending.sidecars.rows {
         let events = sidecar
             .lifecycle_events
             .as_ref()
             .ok_or_else(execution_lifecycle_error_v29)?;
         let source = lifecycle_source_row_v29(coordinates, events, budget)?;
-        if sidecar.source_call_instance != Some(source.instance) || source.instance.index() != index
-        {
+        if sidecar.source_call_instance != Some(source.instance) {
             return Err(execution_lifecycle_error_v29());
         }
         budget.charge_work(events.rows.len())?;
@@ -326,6 +388,25 @@ fn prepare_lifecycle_events_v29(
             }
             let result = match (event.source, event.kind) {
                 (
+                    DeferredLifecycleSourceV29::Intrinsic { .. },
+                    DeferredLifecycleKindV29::Tile(tile),
+                ) => {
+                    let range = tile.result_range()?;
+                    if tile.producer
+                        != (ProductionCallOccurrenceV1 {
+                            caller: source.instance,
+                            block: event.block,
+                        })
+                        || range.start < events.placement.first_value
+                        || range.end > sidecar.next_value
+                    {
+                        return Err(execution_lifecycle_error_v29());
+                    }
+                    check_lifecycle_result_range_v29(range, body, &prepared, budget)?;
+                    has_tiles = true;
+                    None
+                }
+                (
                     DeferredLifecycleSourceV29::Issuance { .. },
                     DeferredLifecycleKindV29::Issue { result },
                 ) => {
@@ -377,33 +458,17 @@ fn prepare_lifecycle_events_v29(
                 {
                     return Err(execution_lifecycle_error_v29());
                 }
-                budget.charge_work(argument_sum_v1(&[body.parameters.len(), prepared.len()])?)?;
-                if body.parameters.contains(&result.value)
-                    || prepared.iter().any(|prior| {
-                        prior
-                            .operation
-                            .as_ref()
-                            .is_some_and(|op| op.results.iter().any(|def| def.id == result.value))
-                    })
-                {
-                    return Err(execution_lifecycle_error_v29());
-                }
-                budget.charge_work(body.blocks.len())?;
-                for block in &body.blocks {
-                    budget.charge_work(argument_sum_v1(&[
-                        block.parameters.len(),
-                        block.operations.len(),
-                    ])?)?;
-                    if block.parameters.iter().any(|def| def.id == result.value) {
-                        return Err(execution_lifecycle_error_v29());
-                    }
-                    for op in &block.operations {
-                        budget.charge_work(op.results.len())?;
-                        if op.results.iter().any(|def| def.id == result.value) {
-                            return Err(execution_lifecycle_error_v29());
-                        }
-                    }
-                }
+                check_lifecycle_result_range_v29(
+                    result.value.0
+                        ..result
+                            .value
+                            .0
+                            .checked_add(1)
+                            .ok_or(ArgumentResourceV1::Arithmetic)?,
+                    body,
+                    &prepared,
+                    budget,
+                )?;
             }
             prepared.push(PreparedLifecycleEventV29 {
                 block: block_index,
@@ -439,6 +504,11 @@ fn prepare_lifecycle_events_v29(
             row.witness.event,
         )
     });
+    if let Some(failures) = failures {
+        prepare_lifecycle_ownership_v18(body, &mut prepared, Some(failures), budget)?;
+    } else if has_tiles {
+        prepare_tile_discards_v29(body, &mut prepared, budget)?;
+    }
     Ok(prepared)
 }
 
@@ -449,6 +519,23 @@ fn prepare_lifecycle_events_v29(
 fn insert_pending_lifecycle_v29(
     donor: &mut Option<OwnedPendingScopedRootV29>,
     limits: ProductionSemanticKirLimitsV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<OwnedLifecycleInsertedRootV29, ProductionSemanticKirErrorV1> {
+    insert_pending_lifecycle_inner_v18(donor, limits, false, budget)
+}
+
+fn insert_pending_lifecycle_with_failures_v18(
+    donor: &mut Option<OwnedPendingScopedRootV29>,
+    limits: ProductionSemanticKirLimitsV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<OwnedLifecycleInsertedRootV29, ProductionSemanticKirErrorV1> {
+    insert_pending_lifecycle_inner_v18(donor, limits, true, budget)
+}
+
+fn insert_pending_lifecycle_inner_v18(
+    donor: &mut Option<OwnedPendingScopedRootV29>,
+    limits: ProductionSemanticKirLimitsV1,
+    terminal: bool,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<OwnedLifecycleInsertedRootV29, ProductionSemanticKirErrorV1> {
     let owner = donor.as_ref().ok_or_else(execution_lifecycle_error_v29)?;
@@ -462,7 +549,15 @@ fn insert_pending_lifecycle_v29(
         .ok_or(ArgumentResourceV1::Accounting)?;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let owner = donor.as_ref().ok_or_else(execution_lifecycle_error_v29)?;
-        let mut events = prepare_lifecycle_events_v29(owner, limits, budget)?;
+        let terminal_headers = if terminal {
+            argument_sum_v1(&[size_of::<Option<PreparedTerminalFailuresV18>>(),
+                size_of::<Vec<TerminalFailureClosureV18>>(), 2 * size_of::<Vec<BasicBlock>>()])?
+        } else { 0 };
+        budget.reserve_storage(terminal_headers)?;
+        let mut failures = if terminal {
+            Some(PreparedTerminalFailuresV18::prepare(owner, limits, budget)?)
+        } else { None };
+        let mut events = prepare_lifecycle_events_with_failures_v18(owner, limits, failures.as_mut(), budget)?;
         let body = owner
             .pending
             .function
@@ -471,7 +566,8 @@ fn insert_pending_lifecycle_v29(
             .ok_or_else(execution_lifecycle_error_v29)?;
         let mut blocks = emission_vec_v1::<PreparedLifecycleBlockV29>(body.blocks.len(), budget)?;
         let mut insertions = emission_vec_v1(events.len(), budget)?;
-        let scratch = argument_sum_v1(&[
+        let mut scratch = argument_sum_v1(&[
+            terminal_headers,
             argument_product_v1(events.capacity(), size_of::<PreparedLifecycleEventV29>())?,
             argument_product_v1(blocks.capacity(), size_of::<PreparedLifecycleBlockV29>())?,
         ])?;
@@ -502,9 +598,23 @@ fn insert_pending_lifecycle_v29(
                 index,
                 events: first..end,
                 operations: emission_vec_v1(count, budget)?,
+                terminal: None,
             });
             budget.charge_work(argument_sum_v1(&[count, end - first, 4])?)?;
             first = end;
+        }
+        let mut terminal_closures = Vec::new();
+        let mut generated_blocks = Vec::new();
+        let mut joined_blocks = Vec::new();
+        if let Some(failures) = &mut failures {
+            terminal_closures = emission_vec_v1(failures.rows.len(), budget)?;
+            generated_blocks = emission_vec_v1(failures.generated.len(), budget)?;
+            joined_blocks = emission_vec_v1(failures.block_count(body.blocks.len())?, budget)?;
+            prepare_terminal_replacements_v18(owner, &events, failures, &mut blocks,
+                &mut generated_blocks, &mut terminal_closures, limits, budget)?;
+            scratch = argument_sum_v1(&[scratch, failures.scratch_storage()?,
+                terminal_failure_operation_storage_v18(&failures.rows)?,
+                argument_product_v1(generated_blocks.capacity(), size_of::<BasicBlock>())?])?;
         }
         let retained = argument_sum_v1(&[
             inherited,
@@ -530,6 +640,14 @@ fn insert_pending_lifecycle_v29(
             let old = std::mem::take(&mut block.operations);
             let mut originals = old.into_iter();
             let mut copied = 0;
+            if let Some(row) = replacement.terminal {
+                let failure = &mut failures.as_mut().expect("validated terminal plan").rows[row];
+                while copied < failure.witness.original_gap as usize {
+                    replacement.operations.push(originals.next().expect("validated terminal gap"));
+                    copied += 1;
+                }
+                replacement.operations.append(&mut failure.operations);
+            }
             for event in &mut events[replacement.events] {
                 while copied < event.witness.before.first as usize {
                     replacement
@@ -544,11 +662,22 @@ fn insert_pending_lifecycle_v29(
             replacement.operations.extend(originals);
             block.operations = replacement.operations;
         }
+        let terminal_failures = if let Some(failures) = &mut failures {
+            install_terminal_edges_v18(body, &root.terminal_failures, failures);
+            joined_blocks.append(&mut body.blocks);
+            joined_blocks.append(&mut generated_blocks);
+            body.blocks = joined_blocks;
+            let source = root.terminal_failures.source;
+            let ledger = root.terminal_failures.ledger;
+            let origins = std::mem::replace(&mut root.terminal_failures,
+                TerminalFailureOriginsV18 { source, ledger, rows: Vec::new() });
+            Some(TerminalFailureRelationV18 { origins, closures: terminal_closures })
+        } else { None };
         insertions.extend(events.iter().map(|event| event.witness));
-        drop((events, blocks));
+        drop((events, blocks, failures, generated_blocks));
         budget.release_storage(scratch)?;
         root.retained_emission_storage = retained;
-        Ok(OwnedLifecycleInsertedRootV29 { root, insertions })
+        Ok(OwnedLifecycleInsertedRootV29 { root, insertions, terminal_failures })
     }));
     match result {
         Ok(Ok(inserted)) => Ok(inserted),

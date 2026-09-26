@@ -4,6 +4,9 @@ use crate::production_semantic_kir_v1::scoped_slot_uses_v29;
 #[path = "production_scoped_defined_calls_v29_tests.rs"]
 mod defined_call_phases;
 
+#[path = "production_scoped_typed_call_result_v29_tests.rs"]
+pub(super) mod typed_call_results;
+
 const LIMIT: usize = 10_000_000;
 
 fn check_anchors(
@@ -35,6 +38,12 @@ fn observe(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     OBSERVED.set(OBSERVED.get() + 1);
+    if slots.slots.iter().any(|slot| matches!(slot.origin.identity,
+        ScopedAllocationIdentityV29::OriginalObject { .. }))
+    {
+        typed_call_results::inspect(instances, emitted, slots, budget)?;
+        return Err(unsupported(0, None, None, STOP));
+    }
     let callbacks: Vec<_> = slots
         .instances
         .iter()
@@ -46,12 +55,12 @@ fn observe(
     let pointer = |local| {
         local_slots
             .iter()
-            .find(|row| row.origin.local == local)
+            .find(|row| row.legacy_local().unwrap() == local)
             .unwrap()
             .origin
             .pointer
     };
-    let indexed = local_slots.iter().any(|row| row.origin.local == 5);
+    let indexed = local_slots.iter().any(|row| row.legacy_local().unwrap() == 5);
     let lowered = emitted[item.instance.index()].as_ref().unwrap();
     let rows = &lowered.scoped_memory_anchors.as_ref().unwrap().rows;
     let results: Vec<_> = rows
@@ -85,10 +94,7 @@ fn observe(
             row.source.unwrap().site,
             execution_site_v29(SemanticBlockIdV1::from_index(index as u32), None)
         );
-        assert_eq!(
-            row.kind,
-            ScopedMemoryAnchorKindV29::Access { pointer: expected }
-        );
+        assert!(matches!(row.kind, ScopedMemoryAnchorKindV29::Access { pointer, .. } if pointer == expected));
         assert!(matches!(block.operations[row.position].kind,
             OperationKind::Store { pointer, .. } if pointer == expected));
         if index < 2 {
@@ -119,12 +125,7 @@ fn observe(
         .collect();
     assert_eq!(addresses.len(), usize::from(indexed));
     if let Some(row) = addresses.first() {
-        assert_eq!(
-            row.kind,
-            ScopedMemoryAnchorKindV29::Access {
-                pointer: pointer(5)
-            }
-        );
+        assert!(matches!(row.kind, ScopedMemoryAnchorKindV29::Access { pointer: actual, .. } if actual == pointer(5)));
         assert_eq!(
             row.source.unwrap().site,
             execution_site_v29(SemanticBlockIdV1::from_index(0), None)
@@ -179,7 +180,7 @@ fn observe(
             matches!(
                 result,
                 Err(ProductionSemanticKirErrorV1::Unsupported {
-                    detail: "scoped slot cell requires an exact unsigned constant offset",
+                    detail: "original raw source requires consuming expanded physical admission",
                     ..
                 })
             ),
@@ -282,24 +283,17 @@ fn result_and_address_phases_cannot_be_swapped_on_actual_memory_operations() {
 }
 
 #[test]
-fn retaining_a_private_address_still_requires_representation_refinement() {
+fn retaining_a_private_call_address_uses_typed_read_from_and_final_refinement() {
     let fixture = ScopedFixture::CallDestinations {
         projected: true,
         retained_address: true,
         indexed: false,
     };
-    let (result, _, _) = run(false, fixture, observe, LIMIT, LIMIT);
-    assert_eq!(OBSERVED.get(), 0);
-    assert!(
-        matches!(
-            result,
-            Err(ProductionSemanticKirErrorV1::Unsupported {
-                function: 2,
-                block: Some(0),
-                statement: Some(2),
-                detail: "retained-local value type differs from its private slot",
-            })
-        ),
-        "{result:?}"
-    );
+    let (result, _, _) = run(false, fixture, typed_call_results::inspect_and_continue, LIMIT, LIMIT);
+    assert_eq!(OBSERVED.get(), 1, "{result:?}");
+    result.unwrap();
+}
+
+mod scoped_storage_transport {
+    include!("production_scoped_storage_transport_v29_tests.rs");
 }

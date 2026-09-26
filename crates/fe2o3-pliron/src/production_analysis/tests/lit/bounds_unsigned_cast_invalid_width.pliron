@@ -1,0 +1,10 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+builtin.func @bounds_unsigned_cast_invalid_width: builtin.function <(kernel.index ) -> ()>
+{
+  ^entry_block1v1(input_v0: kernel.index ):
+    narrowed_v1 = kernel.index_unsigned_cast (input_v0) [] [kernel_unsigned_bit_width: kernel.index_value 128]: <(kernel.index ) -> (kernel.index )>;
+    kernel.return () [] []: <() -> ()>
+}

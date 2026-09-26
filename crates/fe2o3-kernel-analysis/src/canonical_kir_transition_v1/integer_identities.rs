@@ -9,7 +9,7 @@ struct Identity {
     checked: bool,
 }
 
-impl State<'_, '_, '_, '_> {
+impl<O> State<'_, '_, '_, '_, O> {
     fn integer_identity(
         &self,
         operation: usize,
