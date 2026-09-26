@@ -72,6 +72,32 @@ pub(crate) enum Family {
     V3,
 }
 
+#[test]
+fn session_and_stage_routes_do_not_alias_helpers_roles_or_opt_ins() {
+    let routes = [
+        (Mode::Stages, Family::V2),
+        (Mode::Stages, Family::V3),
+        (Mode::Session, Family::V2),
+        (Mode::Session, Family::V3),
+    ];
+    for (index, (mode, family)) in routes.iter().copied().enumerate() {
+        for (other, version) in routes.iter().copied().skip(index + 1) {
+            assert_ne!(mode.opt_in(family), other.opt_in(version));
+            assert_ne!(mode.case_tag(family), other.case_tag(version));
+            assert_ne!(
+                mode.supervisor_helper(family),
+                other.supervisor_helper(version)
+            );
+            assert_ne!(
+                mode.submitter_helper(family),
+                other.submitter_helper(version)
+            );
+            assert_ne!(mode.supervisor_role(family), other.supervisor_role(version));
+            assert_ne!(mode.submitter_role(family), other.submitter_role(version));
+        }
+    }
+}
+
 impl Family {
     pub(crate) fn opt_in(self) -> &'static str {
         match self {

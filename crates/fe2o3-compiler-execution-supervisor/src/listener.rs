@@ -1,5 +1,14 @@
 //! Fixed inherited listener admission and one-session service dispatch.
 
+#[path = "listener_native_accept.rs"]
+mod native_accept;
+#[path = "listener_v2.rs"]
+mod native_v2;
+#[path = "listener_v3.rs"]
+mod native_v3;
+pub use native_v2::*;
+pub use native_v3::*;
+
 use std::cell::Cell;
 use std::error::Error;
 use std::fmt;
@@ -31,6 +40,27 @@ const SERVICE_ACCEPT_OBSERVATION_V1: Duration = Duration::from_secs(1);
 const LISTENER_BACKLOG_V1: i32 = crate::MAX_PROTECTED_ISSUER_PROCESSES_V1 as i32;
 const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
 const ROOT_ID_V1: u32 = 0;
+
+// Shared socket facts contain no admitted compiler-policy or process authority.
+#[derive(Debug)]
+enum SocketError {
+    InvalidListener(&'static str),
+    Io {
+        operation: &'static str,
+        source: io::Error,
+    },
+}
+fn socket_io_error(operation: &'static str, source: io::Error) -> SocketError {
+    SocketError::Io { operation, source }
+}
+impl From<SocketError> for ProtectedIssuerServiceErrorV1 {
+    fn from(error: SocketError) -> Self {
+        match error {
+            SocketError::InvalidListener(reason) => Self::InvalidListener(reason),
+            SocketError::Io { operation, source } => Self::Io { operation, source },
+        }
+    }
+}
 
 /// Failure admitting or using the sole protected issuer service listener.
 #[derive(Debug)]
@@ -540,13 +570,22 @@ struct ProtectedIssuerSocketCustodyV1 {
 }
 
 impl ProtectedIssuerSocketCustodyV1 {
+    fn activate(self) -> Result<Self, SocketError> {
+        require_socket_state(self.revalidate()?, ProtectedIssuerSocketStateV1::Bound)?;
+        listen(&self.descriptor, LISTENER_BACKLOG_V1).map_err(|source| {
+            socket_io_error("activate protected issuer listener", source.into())
+        })?;
+        require_socket_state(self.revalidate()?, ProtectedIssuerSocketStateV1::Listening)?;
+        Ok(self)
+    }
+
     fn admit(
         descriptor: OwnedFd,
         expected_path: &Path,
         filesystem_policy: ListenerFilesystemPolicyV1,
-    ) -> Result<Self, ProtectedIssuerServiceErrorV1> {
+    ) -> Result<Self, SocketError> {
         if !expected_path.is_absolute() {
-            return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+            return Err(SocketError::InvalidListener(
                 "expected pathname is not absolute",
             ));
         }
@@ -565,13 +604,13 @@ impl ProtectedIssuerSocketCustodyV1 {
         Ok(socket)
     }
 
-    fn revalidate(&self) -> Result<ProtectedIssuerSocketStateV1, ProtectedIssuerServiceErrorV1> {
+    fn revalidate(&self) -> Result<ProtectedIssuerSocketStateV1, SocketError> {
         let state = validate_socket_shape(&self.descriptor, &self.expected_path)?;
         if snapshot_descriptor(&self.descriptor)? != self.descriptor_snapshot
             || snapshot_path(&self.expected_path, self.filesystem_policy)? != self.path_snapshot
             || snapshot_parent(&self.expected_path, self.filesystem_policy)? != self.parent_snapshot
         {
-            return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+            return Err(SocketError::InvalidListener(
                 "descriptor or pathname identity changed",
             ));
         }
@@ -581,13 +620,13 @@ impl ProtectedIssuerSocketCustodyV1 {
     fn revalidate_clone(
         &self,
         descriptor: &OwnedFd,
-    ) -> Result<ProtectedIssuerSocketStateV1, ProtectedIssuerServiceErrorV1> {
+    ) -> Result<ProtectedIssuerSocketStateV1, SocketError> {
         let state = validate_socket_shape(descriptor, &self.expected_path)?;
         if snapshot_descriptor(&descriptor)? != self.descriptor_snapshot
             || snapshot_path(&self.expected_path, self.filesystem_policy)? != self.path_snapshot
             || snapshot_parent(&self.expected_path, self.filesystem_policy)? != self.parent_snapshot
         {
-            return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+            return Err(SocketError::InvalidListener(
                 "deployment clone changed descriptor or pathname identity",
             ));
         }
@@ -672,16 +711,9 @@ impl BoundProtectedIssuerSocketV1 {
     }
 
     fn activate(self) -> Result<ProtectedIssuerListenerV1, ProtectedIssuerServiceErrorV1> {
-        require_socket_state(
-            self.socket.revalidate()?,
-            ProtectedIssuerSocketStateV1::Bound,
-        )?;
-        listen(&self.socket.descriptor, LISTENER_BACKLOG_V1)
-            .map_err(|source| io_error("activate protected issuer listener", source.into()))?;
         let listener = ProtectedIssuerListenerV1 {
-            socket: self.socket,
+            socket: self.socket.activate()?,
         };
-        listener.revalidate()?;
         Ok(listener)
     }
 }
@@ -696,6 +728,7 @@ impl ProtectedIssuerListenerV1 {
             self.socket.revalidate()?,
             ProtectedIssuerSocketStateV1::Listening,
         )
+        .map_err(Into::into)
     }
 
     fn accept(&self, timeout: Duration) -> Result<OwnedFd, ProtectedIssuerServiceErrorV1> {
@@ -727,57 +760,57 @@ impl ProtectedIssuerListenerV1 {
 fn validate_socket_shape(
     descriptor: &OwnedFd,
     expected_path: &Path,
-) -> Result<ProtectedIssuerSocketStateV1, ProtectedIssuerServiceErrorV1> {
-    let descriptor_flags = rustix::io::fcntl_getfd(descriptor)
-        .map_err(|source| io_error("inspect issuer listener descriptor flags", source.into()))?;
+) -> Result<ProtectedIssuerSocketStateV1, SocketError> {
+    let descriptor_flags = rustix::io::fcntl_getfd(descriptor).map_err(|source| {
+        socket_io_error("inspect issuer listener descriptor flags", source.into())
+    })?;
     let status = rustix::fs::fcntl_getfl(descriptor)
-        .map_err(|source| io_error("inspect issuer listener status flags", source.into()))?;
+        .map_err(|source| socket_io_error("inspect issuer listener status flags", source.into()))?;
     let forbidden = OFlags::APPEND | OFlags::ASYNC | OFlags::DIRECT;
     if descriptor_flags != rustix::io::FdFlags::CLOEXEC
         || status & OFlags::ACCMODE != OFlags::RDWR
         || !status.contains(OFlags::NONBLOCK)
         || status.intersects(forbidden)
     {
-        return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+        return Err(SocketError::InvalidListener(
             "descriptor flags are not exact nonblocking close-on-exec custody",
         ));
     }
     if rustix::net::sockopt::socket_domain(descriptor)
-        .map_err(|source| io_error("inspect issuer listener domain", source.into()))?
+        .map_err(|source| socket_io_error("inspect issuer listener domain", source.into()))?
         != AddressFamily::UNIX
         || rustix::net::sockopt::socket_type(descriptor)
-            .map_err(|source| io_error("inspect issuer listener type", source.into()))?
+            .map_err(|source| socket_io_error("inspect issuer listener type", source.into()))?
             != SocketType::SEQPACKET
     {
-        return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+        return Err(SocketError::InvalidListener(
             "endpoint is not a Unix SOCK_SEQPACKET socket",
         ));
     }
     let state = if rustix::net::sockopt::socket_acceptconn(descriptor)
-        .map_err(|source| io_error("inspect issuer listener state", source.into()))?
+        .map_err(|source| socket_io_error("inspect issuer listener state", source.into()))?
     {
         ProtectedIssuerSocketStateV1::Listening
     } else {
         ProtectedIssuerSocketStateV1::Bound
     };
-    let expected = SocketAddrAny::from(
-        SocketAddrUnix::new(expected_path)
-            .map_err(|source| io_error("encode fixed issuer listener pathname", source.into()))?,
-    );
+    let expected = SocketAddrAny::from(SocketAddrUnix::new(expected_path).map_err(|source| {
+        socket_io_error("encode fixed issuer listener pathname", source.into())
+    })?);
     if rustix::net::getsockname(descriptor)
-        .map_err(|source| io_error("inspect issuer listener pathname", source.into()))?
+        .map_err(|source| socket_io_error("inspect issuer listener pathname", source.into()))?
         != expected
         || listener_has_peer(descriptor)?
     {
-        return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+        return Err(SocketError::InvalidListener(
             "listener is not unconnected at the fixed pathname",
         ));
     }
     match rustix::net::sockopt::socket_error(descriptor)
-        .map_err(|source| io_error("inspect issuer listener socket error", source.into()))?
+        .map_err(|source| socket_io_error("inspect issuer listener socket error", source.into()))?
     {
         Ok(()) => Ok(state),
-        Err(_) => Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+        Err(_) => Err(SocketError::InvalidListener(
             "listener has a pending socket error",
         )),
     }
@@ -786,7 +819,7 @@ fn validate_socket_shape(
 fn require_socket_state(
     observed: ProtectedIssuerSocketStateV1,
     expected: ProtectedIssuerSocketStateV1,
-) -> Result<(), ProtectedIssuerServiceErrorV1> {
+) -> Result<(), SocketError> {
     if observed == expected {
         return Ok(());
     }
@@ -798,24 +831,25 @@ fn require_socket_state(
             "endpoint is not a listening Unix SOCK_SEQPACKET socket"
         }
     };
-    Err(ProtectedIssuerServiceErrorV1::InvalidListener(reason))
+    Err(SocketError::InvalidListener(reason))
 }
 
-fn listener_has_peer(descriptor: &OwnedFd) -> Result<bool, ProtectedIssuerServiceErrorV1> {
+fn listener_has_peer(descriptor: &OwnedFd) -> Result<bool, SocketError> {
     match rustix::net::getpeername(descriptor) {
         Ok(peer) => Ok(peer.is_some()),
         Err(rustix::io::Errno::NOTCONN) => Ok(false),
-        Err(source) => Err(io_error("inspect issuer listener peer", source.into())),
+        Err(source) => Err(socket_io_error(
+            "inspect issuer listener peer",
+            source.into(),
+        )),
     }
 }
 
-fn snapshot_descriptor(
-    descriptor: &impl AsFd,
-) -> Result<SocketSnapshotV1, ProtectedIssuerServiceErrorV1> {
-    let snapshot = SocketSnapshotV1::from_stat(
-        rustix::fs::fstat(descriptor)
-            .map_err(|source| io_error("inspect issuer listener descriptor", source.into()))?,
-    );
+fn snapshot_descriptor(descriptor: &impl AsFd) -> Result<SocketSnapshotV1, SocketError> {
+    let snapshot =
+        SocketSnapshotV1::from_stat(rustix::fs::fstat(descriptor).map_err(|source| {
+            socket_io_error("inspect issuer listener descriptor", source.into())
+        })?);
     require_socket_snapshot(snapshot)?;
     Ok(snapshot)
 }
@@ -823,11 +857,11 @@ fn snapshot_descriptor(
 fn snapshot_path(
     path: &Path,
     policy: ListenerFilesystemPolicyV1,
-) -> Result<SocketSnapshotV1, ProtectedIssuerServiceErrorV1> {
-    let snapshot = SocketSnapshotV1::from_stat(
-        rustix::fs::lstat(path)
-            .map_err(|source| io_error("inspect issuer listener pathname", source.into()))?,
-    );
+) -> Result<SocketSnapshotV1, SocketError> {
+    let snapshot =
+        SocketSnapshotV1::from_stat(rustix::fs::lstat(path).map_err(|source| {
+            socket_io_error("inspect issuer listener pathname", source.into())
+        })?);
     require_socket_path_snapshot(snapshot, policy)?;
     require_absent_path_attributes(path, "inspect issuer listener pathname attributes")?;
     Ok(snapshot)
@@ -836,23 +870,20 @@ fn snapshot_path(
 fn snapshot_parent(
     path: &Path,
     policy: ListenerFilesystemPolicyV1,
-) -> Result<SocketSnapshotV1, ProtectedIssuerServiceErrorV1> {
-    let parent = path
-        .parent()
-        .ok_or(ProtectedIssuerServiceErrorV1::InvalidListener(
-            "listener pathname has no parent directory",
-        ))?;
-    let snapshot =
-        SocketSnapshotV1::from_stat(rustix::fs::lstat(parent).map_err(|source| {
-            io_error("inspect issuer listener parent directory", source.into())
-        })?);
+) -> Result<SocketSnapshotV1, SocketError> {
+    let parent = path.parent().ok_or(SocketError::InvalidListener(
+        "listener pathname has no parent directory",
+    ))?;
+    let snapshot = SocketSnapshotV1::from_stat(rustix::fs::lstat(parent).map_err(|source| {
+        socket_io_error("inspect issuer listener parent directory", source.into())
+    })?);
     if snapshot.mode & libc::S_IFMT != libc::S_IFDIR
         || snapshot.mode & PERMISSION_AND_SPECIAL_BITS != policy.parent_mode
         || snapshot.owner != policy.parent_owner
         || snapshot.group != policy.parent_group
         || snapshot.links == 0
     {
-        return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+        return Err(SocketError::InvalidListener(
             "listener parent directory has the wrong type, owner, group, mode, or link count",
         ));
     }
@@ -860,11 +891,9 @@ fn snapshot_parent(
     Ok(snapshot)
 }
 
-fn require_socket_snapshot(
-    snapshot: SocketSnapshotV1,
-) -> Result<(), ProtectedIssuerServiceErrorV1> {
+fn require_socket_snapshot(snapshot: SocketSnapshotV1) -> Result<(), SocketError> {
     if snapshot.mode & libc::S_IFMT != libc::S_IFSOCK || snapshot.links == 0 {
-        return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+        return Err(SocketError::InvalidListener(
             "listener descriptor is not a linked Unix socket",
         ));
     }
@@ -874,24 +903,21 @@ fn require_socket_snapshot(
 fn require_socket_path_snapshot(
     snapshot: SocketSnapshotV1,
     policy: ListenerFilesystemPolicyV1,
-) -> Result<(), ProtectedIssuerServiceErrorV1> {
+) -> Result<(), SocketError> {
     if snapshot.mode & libc::S_IFMT != libc::S_IFSOCK
         || snapshot.mode & PERMISSION_AND_SPECIAL_BITS != policy.socket_mode
         || snapshot.owner != policy.socket_owner
         || snapshot.group != policy.socket_group
         || snapshot.links == 0
     {
-        return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+        return Err(SocketError::InvalidListener(
             "listener pathname has the wrong type, owner, group, mode, or link count",
         ));
     }
     Ok(())
 }
 
-fn require_absent_path_attributes(
-    path: &Path,
-    operation: &'static str,
-) -> Result<(), ProtectedIssuerServiceErrorV1> {
+fn require_absent_path_attributes(path: &Path, operation: &'static str) -> Result<(), SocketError> {
     for attribute in [
         "security.capability",
         "system.posix_acl_access",
@@ -901,12 +927,12 @@ fn require_absent_path_attributes(
         match rustix::fs::lgetxattr(path, attribute, std::slice::from_mut(&mut byte)) {
             Err(rustix::io::Errno::NODATA | rustix::io::Errno::OPNOTSUPP) => {}
             Ok(_) | Err(rustix::io::Errno::RANGE) => {
-                return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+                return Err(SocketError::InvalidListener(
                     "listener path has a forbidden capability or POSIX ACL",
                 ));
             }
             Err(source) => {
-                return Err(io_error(operation, source.into()));
+                return Err(socket_io_error(operation, source.into()));
             }
         }
     }

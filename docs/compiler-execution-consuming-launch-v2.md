@@ -188,6 +188,38 @@ expired at the exec boundary. Successful gated launch took 5.8-5.9 seconds on th
 one-CPU run. Production limits, exact profile checks and finite attempt budgets
 were unchanged. The missing-EOF case retains its separate 200ms refusal bound.
 
+## Public Session Validation
+
+Separate public-session coordinators call `run_session` itself, with no production
+stage hooks. In the same disposable root environment, with the corresponding
+measured fixtures and launcher supplied, select the three cases for each family:
+
+```sh
+FE2O3_RUN_NATIVE_SESSION_SUPERVISOR_V2_TEST=1 "$SUPERVISOR_TEST_BIN" \
+  native_consuming_test_process::session::v2::native_session_ \
+  --ignored --nocapture --test-threads=1
+FE2O3_RUN_NATIVE_SESSION_SUPERVISOR_V3_TEST=1 "$SUPERVISOR_TEST_BIN" \
+  native_consuming_test_process::session::v3::native_session_ \
+  --ignored --nocapture --test-threads=1
+```
+
+The submitter receives and verifies the actual public readiness packet, then
+signals the original client to stop. The supervisor compares those exact bytes
+with its terminal owner's record. Negative cases require readiness-stage refusal
+and public EOF without unread publication after independently funded cleanup.
+Work/storage denial history and descriptor inventories must survive the complete
+session. Because this entry point has no private readiness hook, its missing-EOF
+case uses a three-second readiness bound and establishes bounded readiness
+refusal, not an independent observation that the child wrote the full frame.
+All six public-session cases remain unexecuted in the isolated profile.
+
+Native service `bind` and `serve_one` now compose the fixed listener with the
+corresponding native session. Acceptance charges every finite poll/accept turn
+before observation. Session owners are retired before post-session continuity
+checks; continuity errors override session outcomes as on the existing path.
+Only inert terminal facts are returned. Native worker dispatch, provisioning,
+recovery and listener-to-issuer validation remain outstanding.
+
 ## Remaining Production Work
 
 The deployed issuer and service still use the previous family. Native inherited

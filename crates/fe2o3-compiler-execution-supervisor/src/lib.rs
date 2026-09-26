@@ -102,9 +102,12 @@ pub use launch_v3::{
     ProtectedIssuerLaunchStorageV3,
 };
 pub use listener::{
-    ProtectedIssuerServiceErrorV1, ProtectedIssuerServiceReportV1,
-    ProtectedIssuerServiceShutdownV1, ProtectedIssuerServiceV1,
-    ProtectedIssuerServiceWorkerCountV1, ProtectedIssuerSessionOutcomeV1,
+    ProtectedIssuerServiceErrorV1, ProtectedIssuerServiceErrorV2, ProtectedIssuerServiceErrorV3,
+    ProtectedIssuerServiceReportV1, ProtectedIssuerServiceShutdownV1,
+    ProtectedIssuerServiceStorageV2, ProtectedIssuerServiceStorageV3, ProtectedIssuerServiceV1,
+    ProtectedIssuerServiceV2, ProtectedIssuerServiceV3, ProtectedIssuerServiceWorkerCountV1,
+    ProtectedIssuerSessionOutcomeV1, ProtectedIssuerSessionReportV2,
+    ProtectedIssuerSessionReportV3,
 };
 pub use process::{
     ExitedProtectedIssuerV1, LaunchedProtectedIssuerV1, MAX_PROTECTED_ISSUER_PROCESSES_V1,

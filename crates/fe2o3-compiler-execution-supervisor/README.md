@@ -104,6 +104,20 @@ APIs and a separately built synthetic static issuer. The fixture covers
 publication/exit, missing EOF, trailing data and drop-before-readiness cleanup;
 negative cases require the public readiness peer to close without publication.
 No isolated V3 child-launch or protected-runtime execution is credited yet.
+Separate opt-in V2/V3 fixtures now call the public `run_session` entry point for
+success, missing EOF and trailing data. They do not inject production stage hooks:
+the submitter verifies actual publication and asks the original client to stop.
+These new session fixtures are compiled but not yet credited as isolated runs.
+
+`ProtectedIssuerServiceV2` and `ProtectedIssuerServiceV3` now consume the actual
+native supervisor plus the fixed-path bound listener. Shared descriptor/path
+predicates and activation preserve V1 behavior without admitted V1 policy owners.
+Native `serve_one` prepays finite accept turns, calls the same family's
+`run_session`, retires session custody, then revalidates service continuity on the
+original ledger. Only inert terminal observations escape. This is single-dispatch
+support, not an installed native worker pool, provisioning or recovery path.
+Named-socket validation remains required; local `bind` is refused with EPERM in
+the current restricted environment. No listener-to-issuer execution is credited.
 Every nested check uses the caller's ledger. Logical
 work/retained/scratch charges are not wall-time, RSS, kernel-memory or
 generated-stack bounds. See the
