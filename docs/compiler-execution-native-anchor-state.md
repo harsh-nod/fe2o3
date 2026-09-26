@@ -303,13 +303,46 @@ envelopes are size-derived. Scopes preserve the original ledger's accepted work,
 peak and first denials and restore entry storage on all exits. These are logical
 quotas, not generated-stack, RSS, instruction-count or time bounds.
 
-Native launch still needs bounded staging, atomic pidfd adoption, readiness/exec
-and endpoint admission, and managed lifetime. The existing funded cleanup pool
-has moved to `fe2o3-protected-service-spawn` without a second pool or fresh ledger;
-issuer APIs retain their old names as aliases. Native issuer launch uses it;
-root-service launch does not yet. Root child setup now rearms and checks the
-parent-death guard after the credential transition, and uses shared bounded gate
-and capability-ceiling readers. The legacy root child still synchronously reaps
-on Drop and is not a native bounded owner. See the
+The existing funded cleanup pool has moved to `fe2o3-protected-service-spawn`
+without a second pool or fresh ledger; issuer APIs retain their old names as
+aliases. Root child setup rearms and checks the parent-death guard after the
+credential transition, and uses shared bounded gate and capability-ceiling
+readers. The legacy root child still synchronously reaps on Drop. See the
 [root preparation checkpoint](evidence/conditional-native-root-preparation-20260926.md)
-for validation and the remaining integration sequence.
+for preparation evidence; the next section describes the newer spawn primitives.
+
+## Native Root Spawn Mechanics
+
+The shared spawn crate now provides `StagedProtectedServiceExecV2` and
+`RootOwnedProtectedServiceChildV2` through an explicitly unsafe mechanical bridge.
+It does not turn raw inputs, V1 owners or storage numbers into native deployment
+authority. The trusted caller must derive full source charges, retain originals,
+and validate every final staged File against the actual native owners and context.
+Staging charges the full duplicate owner, including overlapping image bytes;
+returned storage is a full unreserved charge, not growth over borrowed sources.
+
+The original parent ledger prepays bounded child work before clone. Cleanup
+capacity and the artifact lease are reserved first; the atomic pidfd, reservation
+and lease enter a guard before any fallible parent check. Cancellation and Drop
+take one prepaid cleanup step and transfer unresolved custody to the same global
+pool. There is no native blocking wait, raw-PID kill fallback or new budget.
+Missing pidfds and lost wait ownership quarantine custody, not successful reaping.
+Verified exec releases only the spawn lease; it does not retire child ownership.
+Deferred or quarantined leases can indefinitely delay artifact-lock descriptor
+release. Cleanup must not wait for that release while retaining its own lease;
+finite funding does not guarantee eventual reaping.
+
+For `n` descriptors and capability ceiling `c`, child setup costs
+`(166 + n + 3 * (c + 1)) * 1088 + 256` logical units, for `1 <= n <= 32`
+and `0 <= c <= 63`. Its maximum is 424576. The maximum full spawn work is
+529400, including parent work and cleanup reservation; staging costs 139672.
+These bounds exclude the executed program and coordinator readiness. They are
+not instruction-count, syscall/mutex latency, generated-stack or RSS bounds.
+
+`PreparedExternalAnchorOccurrenceV2/V3` still have no launch method. The root
+coordinator must integrate final staged-file validation, independently observed
+profile/namespaces, bounded readiness and exec EOF, exact endpoint admission and
+managed native lifetime. Rootless atomic-clone/cleanup probes do not establish a
+successful protected credential transition or helper startup. See the
+[spawn checkpoint](evidence/conditional-native-root-spawn-20260926.md) for exact
+test results and the remaining compiler/GPU gates.

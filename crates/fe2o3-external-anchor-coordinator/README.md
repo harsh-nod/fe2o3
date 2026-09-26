@@ -52,6 +52,9 @@ closes owned descriptors; the caller then retires full `retained_storage`.
 Quota queries include nested native checks and overlapping image storage; they
 are logical bounds, not RSS or syscall-time guarantees.
 
-Native staging/spawn, readiness/exec admission, managed lifetime and compiler
-coordinator integration remain outstanding. Rootless tests do not qualify a
-protected deployment or a GPU kernel.
+The shared spawn crate now supplies unsafe native staging, prepaid child setup,
+atomic pidfd adoption and finite cleanup custody. This coordinator does not yet
+call those primitives. Final staged-file validation, readiness/exec admission,
+managed lifetime and compiler coordinator integration remain outstanding.
+Rootless tests do not qualify a protected deployment or a GPU kernel. See the
+[spawn checkpoint](../../docs/evidence/conditional-native-root-spawn-20260926.md).
