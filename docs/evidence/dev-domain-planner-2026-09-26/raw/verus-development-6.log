@@ -1,0 +1,38 @@
+note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+   --> crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:67:13
+    |
+ 67 |               while $level < $depth
+    |               ^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:169:5
+    |
+169 | /     resource_domain_path_body_v1!(verus_exec_expr, facts, depth, profile, charges, owner, plan, total, level, [
+170 | |         invariant
+171 | |             profile == 3 || profile == 4, 0 < depth <= profile, owner > 0,
+172 | |             0 <= level <= depth,
+...   |
+199 | |     ], [])
+    | |__________- in this macro invocation
+    |
+    = note: this note originates in the macro `resource_domain_path_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: postcondition not satisfied
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:156:9
+    |
+156 |         Err(error) => first_error(facts@, depth, profile, charges@, owner) == Some(error),
+    |         ^^^^^^^^^^ failed this postcondition
+    |
+   ::: crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:84:41
+    |
+ 84 | ...                   None => return Err(R75ResourceDomainErrorV1::Invariant),
+    |                               ----------------------------------------------- at this exit
+
+error: assertion failed
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:190:52
+    |
+190 |                     if charges.len() == 1 { assert(sum(charges@, 1, d) == charges@[0].counts@[d]); }
+    |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 2 previous errors
+

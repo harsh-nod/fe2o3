@@ -14,7 +14,7 @@ struct NodeSnapshot {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct Snapshot {
+pub(super) struct Snapshot {
     nodes: Vec<Option<NodeSnapshot>>,
     records: Vec<Option<(Key, u64, ResourceVectorV1, Phase)>>,
     free_nodes: Vec<usize>,
@@ -27,7 +27,7 @@ struct Snapshot {
     occupied: Vec<u64>,
 }
 
-fn snapshot(root: &Arc<Root>) -> Snapshot {
+pub(super) fn snapshot(root: &Arc<Root>) -> Snapshot {
     let state = root.lock();
     Snapshot {
         nodes: state
@@ -86,18 +86,18 @@ fn corrupt_reap(root: &Arc<Root>, parent: Key, mode: usize, residual: u64) {
     }
 }
 
-fn domain(account: &ResourceCreditAccountV1) -> &DomainAccount {
+pub(super) fn domain(account: &ResourceCreditAccountV1) -> &DomainAccount {
     let AccountHandle::Domain(domain) = &account.0 else {
         panic!("domain")
     };
     domain
 }
 
-fn bytes(value: u64) -> ResourceVectorV1 {
+pub(super) fn bytes(value: u64) -> ResourceVectorV1 {
     ResourceVectorV1::ZERO.with(K::RequestedAllocationBytes, value)
 }
 
-fn chain(depth: usize) -> Vec<ResourceCreditAccountV1> {
+pub(super) fn chain(depth: usize) -> Vec<ResourceCreditAccountV1> {
     let capacity = bytes(100).with(K::ControlResidentBytes, 1 << 20);
     let root = if depth == 4 {
         ResourceCreditAccountV1::new_root_with_class_domains_v1(capacity, 8, 8)

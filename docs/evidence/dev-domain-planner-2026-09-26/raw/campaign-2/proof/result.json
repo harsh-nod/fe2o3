@@ -1,0 +1,8 @@
+{
+  "status": "passed",
+  "obligations_per_positive": 19,
+  "positive_runs": 2,
+  "logical_mutations": 15,
+  "source_manifest_sha256": "b8a02242c33aef316f6c0af54490a7cd26e84657e60f294a806c269990d47250",
+  "scope": "shared pure planner and vector bodies; adapter source identity, not arena/lock/native refinement"
+}

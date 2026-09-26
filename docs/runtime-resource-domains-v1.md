@@ -35,7 +35,14 @@ Scalar and whole-roster admission check every ancestor's complete resource
 vector and record limit before one commit under the root mutex. Rejection for
 capacity, records or generation exhaustion changes no usage, owner generation
 or occupied/free roster. Validation scratch is temporary state, not a debit.
-The existing R67 arithmetic/phase decisions and R70 batch planner are reused.
+The R75 pure planner shares the production R67 arithmetic bodies and preserves
+the prior R70 leaf-first error order. It scans charges once at the leaf, then
+checks the accepted aggregate at each parent. Fixed four-entry facts and plans
+require no heap allocation or charge-roster conversion; the work is
+`O((members + depth) * 19)` instead of rescanning members for every ancestor.
+The adapter still validates the actual path and global record-total consistency,
+extracts facts under the mutex, validates selected free slots and commits the
+staged usage/counts.
 Every member remains independently retainable and disposable; release updates
 its entire ancestor path. Child and ancestor readings are inclusive projections
 of the same global records, not additional physical allocations to sum together.
@@ -126,3 +133,17 @@ atomicity, quarantine lifetime, bootstrap correspondence and lock/arena
 refinement. Mutations must omit an ancestor or final coordinate, refund
 quarantine, reuse a retained node, accept a foreign root or duplicate a debit.
 Native cost extraction/disposal and matched HIP/HSA measurements remain separate.
+
+The subsequent [planner evidence](evidence/dev-domain-planner-2026-09-26/README.md)
+adds a production-shared Verus proof of the pure reservation planner and scalar
+vector arithmetic. The exact bodies prove all active ancestor usage and record
+counts, checked owner advancement, capacity bounds, zero unused plan entries
+and first-error precedence. A pinned campaign verifies 19 obligations twice and
+rejects 15 semantic body mutations; nine controller calibrations also pass.
+The Rust adapter's source identity is bound, but its fact extraction, path/key
+validity, lock, arena/token commit and retirement are not formally refined by
+this proof. Differential model tests and actual adapter snapshots cover those
+selected execution boundaries without promoting them to universal theorems.
+The paired CPU microbenchmark measures only the pure planner, not account
+admission, native execution or HIP/HSA performance. Full MEM-DOM qualification
+and the other hierarchy obligations above remain open.

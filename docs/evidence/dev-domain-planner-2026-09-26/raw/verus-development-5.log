@@ -1,0 +1,15 @@
+error: cannot call function `vstd::array::array_fill_for_copy_types` with mode exec
+  --> crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:3:28
+   |
+ 3 |     () => { Self { counts: [0; R67_RESOURCE_DIMENSIONS_V1] } };
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+  ::: crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:12:24
+   |
+12 |     const ZERO: Self = resource_vector_zero_body_v1!();
+   |                        ------------------------------- in this macro invocation
+   |
+   = note: this error originates in the macro `resource_vector_zero_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: aborting due to 1 previous error
+

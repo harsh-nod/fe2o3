@@ -1,0 +1,9 @@
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-wrong-summary/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:199:59
+    |
+199 |                 assert forall|d: int| 0 <= d < 19 implies total.counts@[d] == sum(charges@, charges.len() as int, d) by {
+    |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 1 previous error
+

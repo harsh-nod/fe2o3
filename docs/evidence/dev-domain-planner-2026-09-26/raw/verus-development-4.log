@@ -1,0 +1,32 @@
+error: function is marked `open` but not marked `pub`; for the body of a function to be visible, the function symbol must also be visible
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:15:11
+   |
+15 | open spec fn sum(charges: Seq<R67ResourceVectorV1>, end: int, d: int) -> int
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function is marked `open` but not marked `pub`; for the body of a function to be visible, the function symbol must also be visible
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:30:11
+   |
+30 | open spec fn fits(used: R67ResourceVectorV1, charges: Seq<R67ResourceVectorV1>, cap: R67ResourceVectorV1) -> bool {
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function is marked `open` but not marked `pub`; for the body of a function to be visible, the function symbol must also be visible
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:66:11
+   |
+66 | open spec fn record_error(fact: R75ResourceDomainFactsV1, count: int, owner: u64) -> Option<R75ResourceDomainErrorV1> {
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function is marked `open` but not marked `pub`; for the body of a function to be visible, the function symbol must also be visible
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:124:11
+    |
+124 | ...ec fn level_error(fact: R75ResourceDomainFactsV1, charges: Seq<R67ResourceVectorV1>, owner: u64) -> Option<R75ResourceDomainErrorV1> {
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function is marked `open` but not marked `pub`; for the body of a function to be visible, the function symbol must also be visible
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:131:11
+    |
+131 | ...ec fn first_error(facts: Seq<R75ResourceDomainFactsV1>, depth: usize, profile: usize, charges: Seq<R67ResourceVectorV1>, owner: u64) -> Option<R75ResourceDomainErrorV1> {
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 5 previous errors
+

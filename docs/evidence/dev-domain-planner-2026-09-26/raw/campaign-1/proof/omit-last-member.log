@@ -1,0 +1,48 @@
+note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-1/proof/sources-omit-last-member/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:91:1
+   |
+91 | / fn resource_domain_leaf_v1(used: R67ResourceVectorV1, charges: &[R67ResourceVectorV1], capacity: R67ResourceVectorV1)
+92 | |     -> (result: Result<R67ResourceVectorV1, R75ResourceDomainErrorV1>)
+   | |_____________________________________________________________________^
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-1/proof/sources-omit-last-member/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:95:9
+   |
+95 |           Ok(next) => {
+   |           ^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-1/proof/sources-omit-last-member/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:32:18
+   |
+32 |           $syntax!({
+   |  __________________-
+33 | |             let mut $next = $used;
+34 | |             let mut $member = 0usize;
+35 | |             while $member + 1 < $charges.len()
+...  |
+45 | |             Ok($next)
+46 | |         })
+   | |_________- at the end of the function body
+
+error: possible arithmetic underflow/overflow
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-1/proof/sources-omit-last-member/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:34:21
+    |
+ 34 |               let mut $member = 0usize;
+    |  _____________________^
+ 35 | |             while $member + 1 < $charges.len()
+    | |_____________________________^
+    |
+   ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-1/proof/sources-omit-last-member/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:103:5
+    |
+103 | /     resource_domain_leaf_body_v1!(verus_exec_expr, used, charges, capacity, next, member, [
+104 | |         invariant
+105 | |             charges.len() > 0,
+106 | |             0 <= member <= charges.len(),
+...   |
+122 | |     ])
+    | |______- in this macro invocation
+    |
+    = note: this error originates in the macro `resource_domain_leaf_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+verification results:: 17 verified, 2 errors
+error: aborting due to 2 previous errors
+

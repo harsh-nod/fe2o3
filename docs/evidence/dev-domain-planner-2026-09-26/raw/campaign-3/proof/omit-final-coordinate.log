@@ -1,0 +1,89 @@
+note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-final-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:34:1
+   |
+34 | / fn r67_resource_reserve_v1(used: R67ResourceVectorV1, charge: R67ResourceVectorV1, capacity: R67ResourceVectorV1)
+35 | |     -> (result: Option<R67ResourceVectorV1>)
+   | |___________________________________________^
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-final-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:37:9
+   |
+37 |           result.is_some() == (forall|d: int| 0 <= d < 19 ==> used.counts@[d] + charge.counts@[d] <= capacity.counts@[d]),
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-final-coordinate/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:9:18
+   |
+ 9 |           $syntax!({
+   |  __________________-
+10 | |             let mut $next = R67ResourceVectorV1::ZERO;
+11 | |             let mut $index = 0usize;
+12 | |             while $index + 1 < R67_RESOURCE_DIMENSIONS_V1
+...  |
+23 | |             Some($next)
+24 | |         })
+   | |_________- at the end of the function body
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-final-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:38:24
+   |
+38 |           match result { Some(next) => forall|d: int| 0 <= d < 19 ==>
+   |                          ^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-final-coordinate/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:9:18
+   |
+ 9 |           $syntax!({
+   |  __________________-
+10 | |             let mut $next = R67ResourceVectorV1::ZERO;
+11 | |             let mut $index = 0usize;
+12 | |             while $index + 1 < R67_RESOURCE_DIMENSIONS_V1
+...  |
+23 | |             Some($next)
+24 | |         })
+   | |_________- at the end of the function body
+
+note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-final-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:50:1
+   |
+50 | / fn r67_resource_release_v1(used: R67ResourceVectorV1, charge: R67ResourceVectorV1)
+51 | |     -> (result: Option<R67ResourceVectorV1>)
+   | |___________________________________________^
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-final-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:53:9
+   |
+53 |           result.is_some() == (forall|d: int| 0 <= d < 19 ==> charge.counts@[d] <= used.counts@[d]),
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-final-coordinate/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:31:18
+   |
+31 |           $syntax!({
+   |  __________________-
+32 | |             let mut $next = R67ResourceVectorV1::ZERO;
+33 | |             let mut $index = 0usize;
+34 | |             while $index + 1 < R67_RESOURCE_DIMENSIONS_V1
+...  |
+43 | |             Some($next)
+44 | |         })
+   | |_________- at the end of the function body
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-final-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:54:24
+   |
+54 |           match result { Some(next) => forall|d: int| 0 <= d < 19 ==>
+   |                          ^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-final-coordinate/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:31:18
+   |
+31 |           $syntax!({
+   |  __________________-
+32 | |             let mut $next = R67ResourceVectorV1::ZERO;
+33 | |             let mut $index = 0usize;
+34 | |             while $index + 1 < R67_RESOURCE_DIMENSIONS_V1
+...  |
+43 | |             Some($next)
+44 | |         })
+   | |_________- at the end of the function body
+
+verification results:: 17 verified, 2 errors
+error: aborting due to 4 previous errors
+

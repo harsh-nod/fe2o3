@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest domain-planner development (2026-09-26): production all-ancestor
+reservation now scans the charge roster once and reuses its accepted total for
+parent checks. Rust and Verus compile the same planner/vector bodies. The
+[development packet](evidence/dev-domain-planner-2026-09-26/README.md) records
+two 19-obligation proof passes, 15 rejected semantic mutations and nine passing
+controller calibrations. Broad libraries report 1,034 model, 59 accounting,
+1,321 KFD and 1,476 runtime passes, with the same four socket-related failures;
+69 selected construction tests, 104 doctests and static checks pass. Coverage
+groups overlap, and this is not full CPU qualification. The local paired
+microbenchmark reports a 7.154x median old/new planner ratio at depth four and
+65,536 members, excluding mutex, arena, token and native work; it is not a
+HIP/HSA comparison. The proof covers pure planning, not actual path/key
+extraction, lock/arena/token commit, retirement or native correspondence.
+MI300X hostname resolution still fails. Full memory closure, A1/A2 and matched
+performance remain open; accepted checkpoints are unchanged.
+
 Latest domain-retirement development (2026-09-26): fault injection reproduced
 partial credit refund/node recycling when late node cleanup rejected corrupted
 state. Disposal and account Drop now preflight the complete selected ancestry

@@ -1,0 +1,39 @@
+note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-wrong-release-coordinate/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:34:13
+   |
+34 |               while $index < R67_RESOURCE_DIMENSIONS_V1
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-wrong-release-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:57:5
+   |
+57 | /     resource_vector_release_body_v1!(verus_exec_expr, used, charge, next, d, [
+58 | |         invariant
+59 | |             0 <= d <= 19,
+60 | |             forall|i: int| 0 <= i < d ==> next.counts@[i] == used.counts@[i] - charge.counts@[i],
+61 | |             forall|i: int| 0 <= i < d ==> charge.counts@[i] <= used.counts@[i],
+62 | |         decreases 19 - d,
+63 | |     ])
+   | |______- in this macro invocation
+   |
+   = note: this note originates in the macro `resource_vector_release_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-wrong-release-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:53:9
+   |
+53 |         result.is_some() == (forall|d: int| 0 <= d < 19 ==> charge.counts@[d] <= used.counts@[d]),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-wrong-release-coordinate/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:39:29
+   |
+39 |                     None => return None,
+   |                             ----------- at this exit
+
+error: invariant not satisfied at end of loop body
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-wrong-release-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:60:13
+   |
+60 |             forall|i: int| 0 <= i < d ==> next.counts@[i] == used.counts@[i] - charge.counts@[i],
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 2 previous errors
+

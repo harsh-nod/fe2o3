@@ -1,0 +1,6 @@
+[31mverus: rustup not found, or not executable[0m
+[33mverus needs a rustup installation[0m
+[34mrun the following command (in a bash-compatible shell) to install rustup:[0m
+  [37mcurl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.97.1-x86_64-unknown-linux-gnu[0m
+[34mor visit https://rustup.rs/ for more information[0m
+error: failed to execute rust_verify Os { code: 2, kind: NotFound, message: "No such file or directory" }

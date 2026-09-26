@@ -1,0 +1,20 @@
+error: postcondition not satisfied
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-1/proof/sources-omit-last-ancestor/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:157:9
+    |
+157 |           Err(error) => first_error(facts@, depth, profile, charges@, owner) == Some(error),
+    |           ^^^^^^^^^^ failed this postcondition
+    |
+   ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-1/proof/sources-omit-last-ancestor/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:55:18
+    |
+ 55 |           $syntax!({
+    |  __________________-
+ 56 | |             if ($profile != 3 && $profile != 4) || $depth == 0 || $depth > $profile {
+ 57 | |                 return Err(R75ResourceDomainErrorV1::Invariant);
+...   |
+104 | |             Ok($plan)
+105 | |         })
+    | |_________- at the end of the function body
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 1 previous error
+

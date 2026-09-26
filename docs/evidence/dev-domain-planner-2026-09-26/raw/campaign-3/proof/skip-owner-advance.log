@@ -1,0 +1,9 @@
+error: invariant not satisfied at end of loop body
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-skip-owner-advance/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:177:13
+    |
+177 |             level > 0 ==> charges.len() > 0 && plan.next_owner == owner + charges.len(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 1 previous error
+

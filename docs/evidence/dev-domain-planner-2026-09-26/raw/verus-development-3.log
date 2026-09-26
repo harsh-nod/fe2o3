@@ -1,0 +1,108 @@
+error: disallowed: constructor for an opaque datatype
+  --> crates/fe2o3-runtime-model/verus/../src/resource_vector_declarations.rs:10:28
+   |
+ 5 | / pub struct R67ResourceVectorV1 {
+ 6 | |     counts: [u64; R67_RESOURCE_DIMENSIONS_V1],
+ 7 | | }
+   | |_- Verus treats this datatype as 'opaque' outside `r75_resource_domain_v1` (note that Verus always considers the most restrictive field for determining this)
+...
+10 |       pub const ZERO: Self = Self {
+   |  ____________________________^
+11 | |         counts: [0; R67_RESOURCE_DIMENSIONS_V1],
+12 | |     };
+   | |_____^ this constructor is disallowed because of datatype opaqueness
+   |
+   = help: note that because this is a pub open spec function, this constructor must be well-formed everywhere, which is wider than `r75_resource_domain_v1`
+
+error: disallowed: field expression for an opaque datatype
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:14:57
+   |
+14 |       if end <= 0 { 0 } else { sum(charges, end - 1, d) + charges[end - 1].counts@[d] }
+   |                                                           ^^^^^^^^^^^^^^^^^^^^^^^ this field expression is disallowed because of datatype opaqueness
+   |
+  ::: crates/fe2o3-runtime-model/verus/../src/resource_vector_declarations.rs:5:1
+   |
+ 5 | / pub struct R67ResourceVectorV1 {
+ 6 | |     counts: [u64; R67_RESOURCE_DIMENSIONS_V1],
+ 7 | | }
+   | |_- Verus treats this datatype as 'opaque' outside `r75_resource_domain_v1` (note that Verus always considers the most restrictive field for determining this)
+   |
+   = help: note that because this is a pub open spec function, this field expression must be well-formed everywhere, which is wider than `r75_resource_domain_v1`
+
+error: disallowed: field expression for an opaque datatype
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:27:36
+   |
+27 |       forall|d: int| 0 <= d < 19 ==> used.counts@[d] + sum(charges, charges.len() as int, d) <= cap.counts@[d]
+   |                                      ^^^^^^^^^^^ this field expression is disallowed because of datatype opaqueness
+   |
+  ::: crates/fe2o3-runtime-model/verus/../src/resource_vector_declarations.rs:5:1
+   |
+ 5 | / pub struct R67ResourceVectorV1 {
+ 6 | |     counts: [u64; R67_RESOURCE_DIMENSIONS_V1],
+ 7 | | }
+   | |_- Verus treats this datatype as 'opaque' outside `r75_resource_domain_v1` (note that Verus always considers the most restrictive field for determining this)
+   |
+   = help: note that because this is a pub open spec function, this field expression must be well-formed everywhere, which is wider than `r75_resource_domain_v1`
+
+error: disallowed: field expression for an opaque datatype
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:33:61
+   |
+33 |           result.is_some() == (forall|d: int| 0 <= d < 19 ==> used.counts@[d] + charge.counts@[d] <= capacity.counts@[d]),
+   |                                                               ^^^^^^^^^^^ this field expression is disallowed because of datatype opaqueness
+   |
+  ::: crates/fe2o3-runtime-model/verus/../src/resource_vector_declarations.rs:5:1
+   |
+ 5 | / pub struct R67ResourceVectorV1 {
+ 6 | |     counts: [u64; R67_RESOURCE_DIMENSIONS_V1],
+ 7 | | }
+   | |_- Verus treats this datatype as 'opaque' outside `r75_resource_domain_v1` (note that Verus always considers the most restrictive field for determining this)
+   |
+   = help: note that because this is a 'ensures' clause of public function, this field expression must be well-formed everywhere, which is wider than `r75_resource_domain_v1`
+
+error: disallowed: field expression for an opaque datatype
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:49:61
+   |
+49 |           result.is_some() == (forall|d: int| 0 <= d < 19 ==> charge.counts@[d] <= used.counts@[d]),
+   |                                                               ^^^^^^^^^^^^^ this field expression is disallowed because of datatype opaqueness
+   |
+  ::: crates/fe2o3-runtime-model/verus/../src/resource_vector_declarations.rs:5:1
+   |
+ 5 | / pub struct R67ResourceVectorV1 {
+ 6 | |     counts: [u64; R67_RESOURCE_DIMENSIONS_V1],
+ 7 | | }
+   | |_- Verus treats this datatype as 'opaque' outside `r75_resource_domain_v1` (note that Verus always considers the most restrictive field for determining this)
+   |
+   = help: note that because this is a 'ensures' clause of public function, this field expression must be well-formed everywhere, which is wider than `r75_resource_domain_v1`
+
+error: disallowed: field expression for an opaque datatype
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:93:48
+   |
+93 |               &&& forall|d: int| 0 <= d < 19 ==> next.counts@[d] == used.counts@[d] + sum(charges@, charges.len() as int, d)
+   |                                                  ^^^^^^^^^^^ this field expression is disallowed because of datatype opaqueness
+   |
+  ::: crates/fe2o3-runtime-model/verus/../src/resource_vector_declarations.rs:5:1
+   |
+ 5 | / pub struct R67ResourceVectorV1 {
+ 6 | |     counts: [u64; R67_RESOURCE_DIMENSIONS_V1],
+ 7 | | }
+   | |_- Verus treats this datatype as 'opaque' outside `r75_resource_domain_v1` (note that Verus always considers the most restrictive field for determining this)
+   |
+   = help: note that because this is a 'ensures' clause of public function, this field expression must be well-formed everywhere, which is wider than `r75_resource_domain_v1`
+
+error: disallowed: field expression for an opaque datatype
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:159:17
+    |
+159 |                   plan.next_used@[i].counts@[d] == facts@[i].used.counts@[d] + sum(charges@, charges.len() as int, d)
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^ this field expression is disallowed because of datatype opaqueness
+    |
+   ::: crates/fe2o3-runtime-model/verus/../src/resource_vector_declarations.rs:5:1
+    |
+  5 | / pub struct R67ResourceVectorV1 {
+  6 | |     counts: [u64; R67_RESOURCE_DIMENSIONS_V1],
+  7 | | }
+    | |_- Verus treats this datatype as 'opaque' outside `r75_resource_domain_v1` (note that Verus always considers the most restrictive field for determining this)
+    |
+    = help: note that because this is a 'ensures' clause of public function, this field expression must be well-formed everywhere, which is wider than `r75_resource_domain_v1`
+
+error: aborting due to 7 previous errors
+

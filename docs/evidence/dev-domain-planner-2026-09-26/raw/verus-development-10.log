@@ -1,0 +1,34 @@
+note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+   --> crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:67:13
+    |
+ 67 |               while $level < $depth
+    |               ^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:170:5
+    |
+170 | /     resource_domain_path_body_v1!(verus_exec_expr, facts, depth, profile, charges, owner, plan, total, level, next, [
+171 | |         invariant
+172 | |             profile == 3 || profile == 4, 0 < depth <= profile, owner > 0,
+173 | |             0 <= level <= depth,
+...   |
+225 | |     ])
+    | |______- in this macro invocation
+    |
+    = note: this note originates in the macro `resource_domain_path_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: invariant not satisfied at end of loop body
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:177:13
+    |
+177 | /             forall|i: int, d: int| 0 <= i < level && 0 <= d < 19 ==>
+178 | |                 plan.next_used@[i].counts@[d] == facts@[i].used.counts@[d] + sum(charges@, charges.len() as int, d),
+    | |___________________________________________________________________________________________________________________^
+
+error: assertion failed
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:222:24
+    |
+222 |                 assert(plan.next_used@[i].counts@[d] == facts@[i].used.counts@[d] + sum(charges@, charges.len() as int, d));
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 2 previous errors
+

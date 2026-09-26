@@ -1,0 +1,9 @@
+error: assertion failed
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:215:24
+    |
+215 |                 assert(plan.next_used@[i].counts@[d] == facts@[i].used.counts@[d] + sum(charges@, charges.len() as int, d));
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 1 previous error
+

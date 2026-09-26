@@ -1,0 +1,39 @@
+note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-quarantine-count/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:75:1
+   |
+75 | / fn resource_domain_records_v1(facts: R75ResourceDomainFactsV1, count: usize, owner: u64)
+76 | |     -> (result: Result<(usize, u64), R75ResourceDomainErrorV1>)
+   | |______________________________________________________________^
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-quarantine-count/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:78:9
+   |
+78 |           Ok((reserved, next_owner)) => {
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-quarantine-count/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:3:52
+   |
+ 3 |       ($facts:ident, $count:ident, $owner:ident) => {{
+   |  ____________________________________________________-
+ 4 | |         let occupied = match $facts.counts[0].checked_add($facts.counts[1]) {
+ 5 | |             Some(value) => value,
+ 6 | |             None => return Err(R75ResourceDomainErrorV1::Invariant),
+...  |
+25 | |         Ok(($facts.counts[0] + $count, next_owner))
+26 | |     }};
+   | |_____- at the end of the function body
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-quarantine-count/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:78:9
+   |
+78 |         Ok((reserved, next_owner)) => {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-planner-2026-09-26/raw/campaign-3/proof/sources-omit-quarantine-count/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:17:13
+   |
+17 |             return Err(R75ResourceDomainErrorV1::InvalidMemberCount);
+   |             -------------------------------------------------------- at this exit
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 2 previous errors
+

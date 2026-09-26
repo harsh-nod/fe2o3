@@ -1,0 +1,21 @@
+error[E0425]: cannot find value `plan` in this scope
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:111:33
+    |
+111 |         let ghost before_plan = plan;
+    |                                 ^^^^ not found in this scope
+
+error[E0425]: cannot find value `before_plan` in this scope
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:218:39
+    |
+218 |             assert(plan.next_used@ == before_plan.next_used@.update(level as int - 1, next));
+    |                                       ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `before_plan` in this scope
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:226:50
+    |
+226 |                     assert(plan.next_used@[i] == before_plan.next_used@[i]);
+    |                                                  ^^^^^^^^^^^ not found in this scope
+
+error: aborting due to 3 previous errors
+
+For more information about this error, try `rustc --explain E0425`.
