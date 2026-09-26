@@ -72,9 +72,18 @@ constructor witnesses, not constructor-origin real-Context theorems. In
 particular, real empty-dependency leaf input queries yield None; this model's
 Some(Success)/Some(Unknown) leaves are not established real constructor cases.
 
-The successor development runner checks signed-source positives, four logical
-mutants and an exact relocated source replay. These checks do not substitute for
-the broader authenticated mutation/admission campaign or production refinement.
+The broader development campaign now checks signed-source opening/closing
+positives, exact relocated replay and 25 logical mutations: 23 of the shared
+production body and two of projection adapters. All 35 phases pass in the
+[2026-09-26 packet](evidence/dev-planner-quiescence-2026-09-26/README.md).
+The three positives each report the same 53/0 result. The runner keeps default
+SMT limits and requests one counterexample per function uniformly; it rejects
+resource failures even alongside logical failures. The packet preserves failed
+attempts and the still-unqualified guard-form early-yield candidate, whose
+equivalent early-return encoding is qualified separately. Validation/cache
+mutation rejection can express invariant sensitivity, not a reachable native
+bug. This named campaign does not close protected admission or complete
+production refinement.
 
 The adapters deliberately omit actual HashMap allocation, full event/device/
 allocation custody metadata, journal ownership, callbacks, dependency-release

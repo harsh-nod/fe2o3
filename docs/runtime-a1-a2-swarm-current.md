@@ -24,7 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest Context construction-custody development (2026-09-26): Context now retains
+Latest completion-planner and teardown development (2026-09-26): the signed
+shared-body campaign completes 35 phases, with three 53/0 full positives and
+25 clean logical mutation rejections. It preserves source/tool continuity and
+all failed attempts; the early-yield guard form remains unqualified, while its
+equivalent explicit-return encoding qualifies. Separately, stream quiescence
+now settles collected IDs in ascending order, fixing randomized callback order
+and failure prefixes during destruction/cleanup. Two new CPU regression groups
+fail against the unsorted baseline and pass after the fix. The
+[development packet](evidence/dev-planner-quiescence-2026-09-26/README.md)
+records 1,525 broad runtime passes, three unchanged socket-permission failures,
+28 ignores, and passing strict Clippy, minimal checking and formatting.
+The teardown sort is not formally covered by the finite-graph planner, and
+neither result proves complete Context/journal adapters, native behavior or
+performance. Accepted milestones and A1/A2/parity status remain unchanged.
+
+Earlier Context construction-custody development (2026-09-26): Context now retains
 its accepted backend until process exit if initialization unwinds, preserving the
 original panic instead of first running a potentially destructive native Drop.
 Ordinary retaining-API errors return the backend, successful construction moves
