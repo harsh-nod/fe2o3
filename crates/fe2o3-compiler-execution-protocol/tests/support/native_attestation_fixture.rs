@@ -24,10 +24,11 @@ pub fn policy_wire(version: u16) -> [u8; 216] {
     let mut bytes = [0; 216];
     header(
         &mut bytes,
-        if version == 1 {
-            b"F2O3CEP1"
-        } else {
-            b"F2O3CEP2"
+        match version {
+            1 => b"F2O3CEP1",
+            2 => b"F2O3CEP2",
+            3 => b"F2O3CEP3",
+            _ => panic!("unsupported fixture family"),
         },
         version,
     );
@@ -55,10 +56,11 @@ pub fn subject_wire(version: u16) -> [u8; SUBJECT_BYTES] {
     let mut bytes = [0; SUBJECT_BYTES];
     header(
         &mut bytes,
-        if version == 1 {
-            b"F2O3CES1"
-        } else {
-            b"F2O3CES2"
+        match version {
+            1 => b"F2O3CES1",
+            2 => b"F2O3CES2",
+            3 => b"F2O3CES3",
+            _ => panic!("unsupported fixture family"),
         },
         version,
     );
@@ -89,10 +91,11 @@ pub fn challenge_wire(version: u16) -> [u8; CHALLENGE_BYTES] {
     let mut bytes = [0; CHALLENGE_BYTES];
     header(
         &mut bytes,
-        if version == 1 {
-            b"F2O3CEC1"
-        } else {
-            b"F2O3CEC2"
+        match version {
+            1 => b"F2O3CEC1",
+            2 => b"F2O3CEC2",
+            3 => b"F2O3CEC3",
+            _ => panic!("unsupported fixture family"),
         },
         version,
     );
@@ -108,10 +111,11 @@ pub fn request_wire(version: u16) -> [u8; REQUEST_BYTES] {
     let mut bytes = [0; REQUEST_BYTES];
     header(
         &mut bytes,
-        if version == 1 {
-            b"F2O3CEQ1"
-        } else {
-            b"F2O3CEQ2"
+        match version {
+            1 => b"F2O3CEQ1",
+            2 => b"F2O3CEQ2",
+            3 => b"F2O3CEQ3",
+            _ => panic!("unsupported fixture family"),
         },
         version,
     );

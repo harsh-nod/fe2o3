@@ -1,4 +1,14 @@
 //! Native signed receipts. Signature validity is not protected execution authority.
+//!
+//! Even an equivalent-key V2 policy cannot authenticate this family:
+//! ```compile_fail
+//! use fe2o3_compiler_execution_protocol::{CompilerExecutionAttestationReceiptV3 as R,
+//!     CompilerExecutionAttestationRequestV3 as Q, CompilerExecutionIssuerPolicyV2 as P};
+//! use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1;
+//! fn mix(r: R, p: &P, q: &Q, b: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>) {
+//!     let _ = r.verify(p, q, [0; 32], b);
+//! }
+//! ```
 use crate::{
     CompilerExecutionAttestationChallengeIdentityV3 as ChallengeIdentity,
     CompilerExecutionAttestationErrorV1 as Framing, CompilerExecutionAttestationErrorV3 as Error,

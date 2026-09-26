@@ -43,10 +43,11 @@ pub fn receipt_wire(version: u16) -> [u8; 400] {
     let mut bytes = [0; 400];
     header(
         &mut bytes,
-        if version == 1 {
-            b"F2O3CER1"
-        } else {
-            b"F2O3CER2"
+        match version {
+            1 => b"F2O3CER1",
+            2 => b"F2O3CER2",
+            3 => b"F2O3CER3",
+            _ => panic!("unsupported fixture family"),
         },
         version,
     );
