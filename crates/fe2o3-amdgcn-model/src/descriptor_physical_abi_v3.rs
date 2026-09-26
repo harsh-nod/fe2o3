@@ -106,7 +106,7 @@ fn align(value: u32, alignment: u32) -> R<u32> {
         / alignment
         * alignment)
 }
-fn arguments<'wire, 'view, D: TableQuery<'wire> + 'view>(
+fn arguments<'wire: 'view, 'view, D: TableQuery<'wire> + 'view>(
     table: &'view D,
     row: &D::Kernel<'view>,
     function: &Function,
