@@ -22,7 +22,7 @@ type Result<T> = std::result::Result<T, Error>;
 mod initial_graph_v1;
 #[allow(unused_imports)]
 pub(in crate::production_ranked_projection_v1) use initial_graph_v1::{
-    NominalInitialGraphV1, PendingNominalInitialGraphV1,
+    NominalCompleteForProfileGraphV1, NominalInitialGraphV1, PendingNominalInitialGraphV1,
 };
 
 #[derive(Clone, Copy)]
@@ -111,7 +111,8 @@ fn frame<R, F>() -> Result<usize> {
 }
 
 /// A source-bound *borrower*, not a storage owner, readiness token, or strict
-/// checked-origin constructor. Complete authenticated edge graphs remain absent.
+/// checked-origin constructor. A closed-profile graph loan is available, but
+/// actual guarded access construction and its joined origins remain absent.
 /// The only mutable Budget borrow is already inside these real canonical facts.
 pub(in crate::production_ranked_projection_v1) struct NominalRecipeResourcesV1<
     'f,

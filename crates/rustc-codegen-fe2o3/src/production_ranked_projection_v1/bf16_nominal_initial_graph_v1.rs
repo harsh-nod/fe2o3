@@ -1,5 +1,6 @@
 //! Closed original-source initial graph preparation. Not a checked-reference
-//! constructor, final graph, root recipe, effect projection or admission.
+//! constructor, general final graph, root recipe, effect projection or admission.
+//! The separate sealed completion loan is complete ONLY for the current profile.
 use super::*;
 use crate::production_ranked_projection_v1::{
     SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1, SemanticDirectCallV1,
@@ -27,6 +28,7 @@ impl PendingNominalInitialGraphV1 {
 pub(in crate::production_ranked_projection_v1) struct NominalInitialGraphV1<'a> {
     function: &'a SemanticFunctionDeclV1,
     graph: &'a InitialGraphStorageV1,
+    profile: ClosedInitialGraphProfileV1<'a>,
 }
 impl NominalInitialGraphV1<'_> {
     pub(in crate::production_ranked_projection_v1) fn function(&self) -> &SemanticFunctionDeclV1 {
@@ -40,6 +42,108 @@ impl NominalInitialGraphV1<'_> {
     pub(in crate::production_ranked_projection_v1) fn edge_count(&self) -> usize {
         self.graph.edge_count
     }
+}
+
+// This private proof is returned only by the same metered, fail-closed scan
+// used before initial extraction. All referenced source objects remain borrowed;
+// no caller boolean/count, clone, or durable completion certificate is accepted.
+struct ClosedInitialGraphProfileV1<'a> {
+    function: &'a SemanticFunctionDeclV1,
+    callables: &'a [SemanticCallableDeclV1],
+    source_call: &'a SemanticDirectCallV1,
+}
+impl ClosedInitialGraphProfileV1<'_> {
+    fn same_source(
+        &self,
+        function: &SemanticFunctionDeclV1,
+        callables: &[SemanticCallableDeclV1],
+        source_call: &SemanticDirectCallV1,
+    ) -> bool {
+        std::ptr::eq(self.function, function)
+            && std::ptr::eq(self.callables, callables)
+            && std::ptr::eq(self.source_call, source_call)
+    }
+}
+
+/// Complete only for the EXACT current closed source profile. The ordinary
+/// later writer recovers erased GridLeader payload edges; its producer table
+/// starts empty and only GridLeaderCurrent seeds it before that recovery scan.
+/// The private profile proof excludes that seed, so the freshly built initial
+/// graph is already complete here. Propagation later consumes, not adds, edges.
+/// This does NOT prepare invocation values, actual GuardedAccess rows, checked
+/// origins, semantic access sites, a ranked recipe, or admission.
+///
+/// The constructor is private to the checked context path. The immutable loan
+/// is HRTB-scoped, retains exact rows/order, and cannot escape its outer owner.
+pub(in crate::production_ranked_projection_v1) struct NominalCompleteForProfileGraphV1<'a> {
+    initial: NominalInitialGraphV1<'a>,
+}
+impl NominalCompleteForProfileGraphV1<'_> {
+    pub(in crate::production_ranked_projection_v1) fn function(&self) -> &SemanticFunctionDeclV1 {
+        self.initial.function()
+    }
+    pub(in crate::production_ranked_projection_v1) fn edges(
+        &self,
+    ) -> &[Vec<crate::production_ranked_projection_v1::CapabilityEdgeV1>] {
+        self.initial.edges()
+    }
+    pub(in crate::production_ranked_projection_v1) fn edge_count(&self) -> usize {
+        self.initial.edge_count()
+    }
+}
+
+// Both lexical view frames and every closure/result transfer are admitted
+// before real-facts queries. This never allocates or releases a graph payload.
+fn initial_graph_frame<R, F>() -> Result<usize> {
+    let mut frame = 8192usize;
+    for amount in [
+        size_of::<InitialGraphStorageV1>(),
+        size_of::<PendingNominalInitialGraphV1>(),
+        size_of::<NominalInitialGraphV1<'static>>(),
+        size_of::<NominalCompleteForProfileGraphV1<'static>>(),
+        size_of::<F>()
+            .checked_mul(2)
+            .ok_or_else(|| resource(Resource::Arithmetic))?,
+        size_of::<Result<R>>()
+            .checked_mul(2)
+            .ok_or_else(|| resource(Resource::Arithmetic))?,
+    ] {
+        frame = frame
+            .checked_add(amount)
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
+    }
+    Ok(frame)
+}
+fn admit_initial_graph_frame<R, F>(resources: &mut PreparationResourcesV1<'_, '_>) -> Result<()> {
+    let frame = initial_graph_frame::<R, F>()?;
+    resources.work(frame)?;
+    resources.reserve_storage(frame)
+}
+
+// Pay the wrapper/consumer transfer before constructing the inner closure.
+// This credit remains in the outer counter through every enclosing postflight;
+// conservative overlap with the initial factory frame is intentional.
+fn complete_graph_frame<R, F>() -> Result<usize> {
+    let mut frame = 1024usize;
+    for amount in [
+        size_of::<NominalCompleteForProfileGraphV1<'static>>(),
+        size_of::<F>()
+            .checked_mul(2)
+            .ok_or_else(|| resource(Resource::Arithmetic))?,
+        size_of::<Result<R>>()
+            .checked_mul(2)
+            .ok_or_else(|| resource(Resource::Arithmetic))?,
+    ] {
+        frame = frame
+            .checked_add(amount)
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
+    }
+    Ok(frame)
+}
+fn admit_complete_graph_frame<R, F>(resources: &mut PreparationResourcesV1<'_, '_>) -> Result<()> {
+    let frame = complete_graph_frame::<R, F>()?;
+    resources.work(frame)?;
+    resources.reserve_storage(frame)
 }
 
 // Deliberately narrower than ordinary projection. GridLeader recovery is a
@@ -61,12 +165,12 @@ fn allowed_intrinsic(operation: &SemanticCompilerIntrinsicOperationV1) -> bool {
     )
 }
 
-fn closed_profile(
-    function: &SemanticFunctionDeclV1,
-    callables: &[SemanticCallableDeclV1],
-    source_call: &SemanticDirectCallV1,
+fn closed_profile<'a>(
+    function: &'a SemanticFunctionDeclV1,
+    callables: &'a [SemanticCallableDeclV1],
+    source_call: &'a SemanticDirectCallV1,
     resources: &mut PreparationResourcesV1<'_, '_>,
-) -> Result<()> {
+) -> Result<ClosedInitialGraphProfileV1<'a>> {
     resources.work(64)?;
     if function.blocks().is_empty()
         || function.blocks().len() > 32
@@ -102,10 +206,51 @@ fn closed_profile(
             "nominal initial graph requires the exact sole source call",
         ));
     }
-    Ok(())
+    Ok(ClosedInitialGraphProfileV1 {
+        function,
+        callables,
+        source_call,
+    })
 }
 
 impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
+    /// Loan a graph complete ONLY for the unchanged strict initial profile.
+    /// All owner/inventory/source/call/materialization and pending-owner checks
+    /// execute in with_initial_graph_v1. Its immutable profile proof and graph
+    /// move directly into this inner loan; there is no mutable gap or detached
+    /// conversion. The same initial/context/rich/facts postflights still apply.
+    pub(in crate::production_ranked_projection_v1) fn with_complete_for_profile_graph_v1<R, F>(
+        &mut self,
+        checked: &CheckedBf16NominalCallV1<'_>,
+        rich: &RichNominalSourceTablesV1<'_>,
+        pending: &mut PendingNominalInitialGraphV1,
+        inspect: F,
+    ) -> Result<R>
+    where
+        F: for<'a> FnOnce(NominalCompleteForProfileGraphV1<'a>, &mut Self) -> Result<R>,
+    {
+        self.with_resources(admit_complete_graph_frame::<R, F>)?;
+        self.with_initial_graph_v1(checked, rich, pending, |initial, context| {
+            context.with_resources(|resources| resources.work(64))?;
+            if !initial.profile.same_source(
+                context.function,
+                context
+                    .facts
+                    .owner
+                    .semantic_ssa()
+                    .source_semantic()
+                    .callables(),
+                checked.source_call(),
+            ) {
+                return Err(Error::Incomplete(
+                    "nominal complete graph closed-profile source differs",
+                ));
+            }
+            // The outer generic frame already accounts for this wrapper,
+            // its captured consumer, both view values and their result slots.
+            inspect(NominalCompleteForProfileGraphV1 { initial }, context)
+        })
+    }
     /// The pending physical owner and its accepted credits stay OUTSIDE rich and
     /// facts factories. This scope borrows them; it performs NO refund or cleanup.
     /// Failed preparation is never loaned; an occupied partial owner cannot be
@@ -168,28 +313,9 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
                 "nominal initial graph source call or tables differ",
             ));
         }
-        let mut frame = 8192usize;
-        for amount in [
-            size_of::<InitialGraphStorageV1>(),
-            size_of::<PendingNominalInitialGraphV1>(),
-            size_of::<NominalInitialGraphV1<'static>>(),
-            size_of::<F>()
-                .checked_mul(2)
-                .ok_or_else(|| resource(Resource::Arithmetic))?,
-            size_of::<Result<R>>()
-                .checked_mul(2)
-                .ok_or_else(|| resource(Resource::Arithmetic))?,
-        ] {
-            frame = frame
-                .checked_add(amount)
-                .ok_or_else(|| resource(Resource::Arithmetic))?;
-        }
-        // Admit the generic callback/result frame before any real-facts query.
-        // Callers separately admit capture initialization at its construction site.
-        self.with_resources(|resources| {
-            resources.work(frame)?;
-            resources.reserve_storage(frame)
-        })?;
+        // Admit both view frames and the generic callback/result transfers
+        // before any real-facts query; captures are separately paid at creation.
+        self.with_resources(admit_initial_graph_frame::<R, F>)?;
         if !self
             .with_facts(|facts| facts.is_materialized_block(function.entry().index() as usize))?
             || !self.with_facts(|facts| facts.is_materialized_block(block_index))?
@@ -198,8 +324,8 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
                 "nominal initial graph source boundary is not materialized",
             ));
         }
-        self.with_resources(|resources| {
-            closed_profile(function, source.callables(), call, resources)?;
+        let profile = self.with_resources(|resources| {
+            let profile = closed_profile(function, source.callables(), call, resources)?;
             pending.graph = Some(InitialGraphStorageV1::empty());
             let graph = pending
                 .graph
@@ -222,13 +348,21 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
                 &mut graph.loads,
                 &mut graph.borrowed,
                 resources,
-            )
+            )?;
+            Ok(profile)
         })?;
         let graph = pending
             .graph
             .as_ref()
             .expect("successful pending graph exists");
-        let result = inspect(NominalInitialGraphV1 { function, graph }, self);
+        let result = inspect(
+            NominalInitialGraphV1 {
+                function,
+                graph,
+                profile,
+            },
+            self,
+        );
         self.state.check(self.facts.budget, *self.owned)?;
         result
     }

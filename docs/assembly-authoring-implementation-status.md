@@ -5,6 +5,21 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Supported-profile graph completion and debugger rebuild — 2026-09-26
+
+The [compiler checkpoint](bf16-complete-profile-graph-qualification-20260926.md)
+qualifies a private immutable graph loan complete only for the unchanged closed
+source profile. All 331 model and 2,605 backend tests, build, five fresh Rust
+sessions, exact lossless comparison and 38 normal sessions passed. All 38 normal
+observation bodies and 52 artifacts are unchanged. Actual index/value namespace,
+guarded-access binding and complete nominal root recipe remain open.
+
+The [private debugger rebuild](physical-debugger-maintenance-rebuild-qualification-20260926.md)
+passed full GDB build, 87 static controls, 55 decoder/derivation controls, six
+startup-draft controls and two-pass static artifact measurement. No startup,
+loaded closure, GPU dispatch or physical capture is claimed; public gates remain
+disabled. Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Initial source graph, shared origins and disabled debugger maintenance — 2026-09-26
 
 The [compiler checkpoint](bf16-initial-graph-reference-origin-qualification-20260926.md)

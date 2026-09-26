@@ -1,4 +1,5 @@
-//! Genuine initial-graph preparation hook; actual owners only, never admission.
+//! Genuine complete-for-profile graph loan; actual owners only, never admission.
+//! Existing telemetry remains an initial-row observation, not access readiness.
 //! Source-rescan oracle is independent of populate_initial_graph_v1.
 use super::*;
 use crate::production_ranked_projection_v1::{
@@ -188,8 +189,37 @@ fn store_at(
         statement: ordinal,
     })
 }
+
+// The oracle's equality primitive is independently exercised on inert rows.
+// It does not call the graph builder or turn these rows into a graph authority.
+fn require_expected_edge_at(
+    rows: &[Vec<CapabilityEdgeV1>],
+    source: usize,
+    ordinal: usize,
+    expected: CapabilityEdgeV1,
+) -> Result<()> {
+    let edge = rows
+        .get(source)
+        .and_then(|row| row.get(ordinal))
+        .ok_or(Error::Incomplete(
+            "genuine graph expected source edge absent",
+        ))?;
+    if *edge != expected {
+        return Err(Error::Incomplete("genuine graph source edge differs"));
+    }
+    Ok(())
+}
+fn require_exhausted_row(row: &[CapabilityEdgeV1], consumed: usize) -> Result<()> {
+    if row.len() != consumed {
+        return Err(Error::Incomplete(
+            "genuine graph unconsumed or missing source edge",
+        ));
+    }
+    Ok(())
+}
+
 fn expect_edge(
-    view: &NominalInitialGraphV1<'_>,
+    view: &NominalCompleteForProfileGraphV1<'_>,
     cursors: &mut [usize],
     source: usize,
     expected: CapabilityEdgeV1,
@@ -199,16 +229,7 @@ fn expect_edge(
     let ordinal = *cursors
         .get(source)
         .ok_or(Error::Incomplete("genuine graph source row absent"))?;
-    let edge = view
-        .edges()
-        .get(source)
-        .and_then(|row| row.get(ordinal))
-        .ok_or(Error::Incomplete(
-            "genuine graph expected source edge absent",
-        ))?;
-    if *edge != expected {
-        return Err(Error::Incomplete("genuine graph source edge differs"));
-    }
+    require_expected_edge_at(view.edges(), source, ordinal, expected)?;
     cursors[source] = ordinal
         .checked_add(1)
         .ok_or_else(|| resource(Resource::Arithmetic))?;
@@ -241,7 +262,7 @@ fn family(operation: &SemanticCompilerIntrinsicOperationV1) -> Option<&'static s
 // Independent source rescan: no graph builder, stored pending-store table or
 // sort is reused. Exact row order and every source association are checked.
 fn observe_view(
-    view: &NominalInitialGraphV1<'_>,
+    view: &NominalCompleteForProfileGraphV1<'_>,
     rich: &RichNominalSourceTablesV1<'_>,
     checked: &CheckedBf16NominalCallV1<'_>,
     context: &mut NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_>,
@@ -278,7 +299,7 @@ fn observe_view(
             pay_statement(statement, context)?;
             if let Some(store) = store_at(statement, block_index, ordinal) {
                 let mut matches = 0usize;
-                for retained in &view.graph.stores {
+                for retained in &view.initial.graph.stores {
                     context.with_resources(|resources| resources.work(64))?;
                     matches += usize::from(*retained == store);
                 }
@@ -300,7 +321,7 @@ fn observe_view(
                     {
                         context.with_resources(|resources| resources.work(64))?;
                         assert_eq!(
-                            view.graph.loads.get(observation.loads),
+                            view.initial.graph.loads.get(observation.loads),
                             Some(&PendingEnumPayloadLoadV1 {
                                 carrier,
                                 variant,
@@ -319,7 +340,7 @@ fn observe_view(
                 {
                     context.with_resources(|resources| resources.work(64))?;
                     assert_eq!(
-                        view.graph.borrowed.get(observation.borrowed),
+                        view.initial.graph.borrowed.get(observation.borrowed),
                         Some(&(place.local().index() as usize, block_index))
                     );
                     observation.borrowed += 1;
@@ -448,11 +469,7 @@ fn observe_view(
     let mut logged = 0usize;
     for (source, row) in view.edges().iter().enumerate() {
         context.with_resources(|resources| resources.work(64))?;
-        assert_eq!(
-            cursors[source],
-            row.len(),
-            "no missing or surplus initial source edge"
-        );
+        require_exhausted_row(row, cursors[source])?;
         for (ordinal, edge) in row.iter().enumerate() {
             context.with_resources(|resources| resources.work(64))?;
             if telemetry && logged < 32 {
@@ -474,13 +491,13 @@ fn observe_view(
         }
     }
     assert_eq!(observation.edges, view.edge_count());
-    assert_eq!(observation.stores, view.graph.stores.len());
-    for pair in view.graph.stores.windows(2) {
+    assert_eq!(observation.stores, view.initial.graph.stores.len());
+    for pair in view.initial.graph.stores.windows(2) {
         context.with_resources(|resources| resources.work(64))?;
         assert!((pair[0].carrier, pair[0].variant) <= (pair[1].carrier, pair[1].variant));
     }
-    assert_eq!(observation.loads, view.graph.loads.len());
-    assert_eq!(observation.borrowed, view.graph.borrowed.len());
+    assert_eq!(observation.loads, view.initial.graph.loads.len());
+    assert_eq!(observation.borrowed, view.initial.graph.borrowed.len());
     Ok(observation)
 }
 
@@ -523,49 +540,54 @@ fn enter_context<'w>(
             cursor_values.resize(count, 0usize);
             Ok(())
         })?;
-        let observed = context.with_initial_graph_v1(checked, rich, pending, |view, context| {
-            events.loan.set(events.loan.get() + 1);
-            let observation = observe_view(
-                &view,
-                rich,
-                checked,
-                context,
-                cursors.as_mut().expect("paid outer cursors"),
-                mode == Mode::Observe,
-            )?;
-            // Work, storage floor and identity are checked at the actual loan.
-            protected.set(context.facts.budget.storage());
-            if matches!(mode, Mode::Surplus | Mode::Error | Mode::Panic) {
-                context.with_facts(|facts| {
-                    facts.reserve_scalar_private_storage_v1(23)?;
-                    facts.charge_private_array_work(17)
-                })?;
-            }
-            match mode {
-                Mode::Error => return Err(Error::Incomplete(REFUSAL)),
-                Mode::Panic => panic!("genuine initial graph callback panic"),
-                Mode::DenyWork => {
-                    context.with_resources(|resources| resources.work(PROBE_WORK + 1))?
+        let observed = context.with_complete_for_profile_graph_v1(
+            checked,
+            rich,
+            pending,
+            |view, context| {
+                events.loan.set(events.loan.get() + 1);
+                let observation = observe_view(
+                    &view,
+                    rich,
+                    checked,
+                    context,
+                    cursors.as_mut().expect("paid outer cursors"),
+                    mode == Mode::Observe,
+                )?;
+                // Work, storage floor and identity are checked at the actual loan.
+                protected.set(context.facts.budget.storage());
+                if matches!(mode, Mode::Surplus | Mode::Error | Mode::Panic) {
+                    context.with_facts(|facts| {
+                        facts.reserve_scalar_private_storage_v1(23)?;
+                        facts.charge_private_array_work(17)
+                    })?;
                 }
-                Mode::DenyStorage => context.with_resources(|resources| {
-                    resources.reserve_storage(
-                        storage_limit
-                            .checked_add(1)
-                            .ok_or_else(|| resource(Resource::Arithmetic))?,
-                    )
-                })?,
-                Mode::Undercut => context.facts.budget.release_storage(1).map_err(resource)?,
-                Mode::ReplaceLedger => {
-                    *context.facts.budget =
-                        replacement.take().expect("negative-only foreign ledger");
+                match mode {
+                    Mode::Error => return Err(Error::Incomplete(REFUSAL)),
+                    Mode::Panic => panic!("genuine initial graph callback panic"),
+                    Mode::DenyWork => {
+                        context.with_resources(|resources| resources.work(PROBE_WORK + 1))?
+                    }
+                    Mode::DenyStorage => context.with_resources(|resources| {
+                        resources.reserve_storage(
+                            storage_limit
+                                .checked_add(1)
+                                .ok_or_else(|| resource(Resource::Arithmetic))?,
+                        )
+                    })?,
+                    Mode::Undercut => context.facts.budget.release_storage(1).map_err(resource)?,
+                    Mode::ReplaceLedger => {
+                        *context.facts.budget =
+                            replacement.take().expect("negative-only foreign ledger");
+                    }
+                    _ => {}
                 }
-                _ => {}
-            }
-            Ok(observation)
-        })?;
+                Ok(observation)
+            },
+        )?;
         if mode == Mode::Occupied {
             // No graph replacement or second loan, even on the same source/ledger.
-            return context.with_initial_graph_v1(checked, rich, pending, |_, _| {
+            return context.with_complete_for_profile_graph_v1(checked, rich, pending, |_, _| {
                 panic!("occupied pending graph was loaned twice");
             });
         }
@@ -1159,4 +1181,36 @@ fn genuine_initial_graph_header_covers_fixed_owners_and_probe_accounts() {
             + 4096
             <= HEADERS
     );
+}
+
+#[test]
+fn complete_profile_oracle_rejects_missing_extra_reordered_and_late_payload_edges() {
+    let first = CapabilityEdgeV1 {
+        destination: 1,
+        use_block: 0,
+        kind: CapabilityEdgeKindV1::Alias,
+    };
+    let second = CapabilityEdgeV1 {
+        destination: 2,
+        use_block: 1,
+        kind: CapabilityEdgeKindV1::Alias,
+    };
+    let rows = vec![vec![first, second], vec![], vec![]];
+    assert!(require_expected_edge_at(&rows, 0, 0, first).is_ok());
+    assert!(require_expected_edge_at(&rows, 0, 1, second).is_ok());
+    assert!(require_exhausted_row(&rows[0], 2).is_ok());
+    assert!(require_expected_edge_at(&rows, 1, 0, first).is_err());
+    assert!(require_expected_edge_at(&rows, 0, 2, first).is_err());
+    assert!(require_exhausted_row(&rows[0], 1).is_err());
+    assert!(require_exhausted_row(&rows[0], 3).is_err());
+    let reordered = vec![vec![second, first], vec![], vec![]];
+    assert!(require_expected_edge_at(&reordered, 0, 0, first).is_err());
+    let missing = vec![vec![first], vec![], vec![]];
+    assert!(require_expected_edge_at(&missing, 0, 1, second).is_err());
+    let mut late = first;
+    late.kind = CapabilityEdgeKindV1::AuthenticatedOptionPayload;
+    let replaced = vec![vec![late, second], vec![], vec![]];
+    assert!(require_expected_edge_at(&replaced, 0, 0, first).is_err());
+    let extra = vec![vec![first, second, late], vec![], vec![]];
+    assert!(require_exhausted_row(&extra[0], 2).is_err());
 }
