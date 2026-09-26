@@ -12,14 +12,17 @@ impl Drop for Dropped {
 }
 
 #[test]
-fn conditional_packet_selected_consumer_preserves_source_only_account_sequence() {
-    // Compare the original typed scope and the generic selected-consumer scope,
-    // without constructing any sealed source or successful proof receipt.
+fn conditional_packet_selected_consumer_has_exact_account_oracle() {
+    // Both wrappers use one implementation. This independent component oracle
+    // is not historical P1 byte/debit parity or a successful source proof.
+    let retained = size_of::<Vec<u64>>() + 3 * size_of::<u64>();
     let mut observations = Vec::new();
     for generic in [false, true] {
         let mut work = Work::new(100);
         let mut budget = Budget::new(&mut work, 1000);
         budget.reserve_storage(FLOOR).unwrap();
+        assert!(budget.charge_work(101).is_err());
+        assert!(budget.reserve_storage(1000).is_err());
         let account = budget.work_ledger_identity_v1();
         let run = |budget: &mut Budget<'_>| -> Result<(_, usize), E> {
             let mut values = vector::<u64>(3, budget)?;
@@ -36,6 +39,20 @@ fn conditional_packet_selected_consumer_preserves_source_only_account_sequence()
         }
         .unwrap();
         assert!(budget.work_ledger_identity_v1() == account);
+        assert_eq!(result, [1, 2, 3]);
+        assert_eq!(result.capacity(), 3);
+        // vector() costs three work units; the callback costs seven. Only its
+        // 23-byte scratch is refunded, after retaining the full vector extent.
+        assert_eq!(budget.work(), 10);
+        assert_eq!(budget.storage(), FLOOR + retained);
+        assert_eq!(budget.peak_storage(), FLOOR + retained + 23);
+        assert_eq!(budget.failed_work(), Some(101));
+        assert_eq!(budget.failed_storage(), Some(FLOOR + 1000));
+        // Later, different denials must not replace either original history.
+        assert!(budget.charge_work(100).is_err());
+        assert!(budget.reserve_storage(1000).is_err());
+        assert_eq!(budget.failed_work(), Some(101));
+        assert_eq!(budget.failed_storage(), Some(FLOOR + 1000));
         observations.push((
             result,
             budget.work(),
