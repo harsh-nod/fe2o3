@@ -1,5 +1,69 @@
 use super::Case;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Mode {
+    Stages,
+    Session,
+}
+
+impl Mode {
+    pub(crate) fn opt_in(self, family: Family) -> &'static str {
+        match (self, family) {
+            (Self::Stages, family) => family.opt_in(),
+            (Self::Session, Family::V2) => "FE2O3_RUN_NATIVE_SESSION_SUPERVISOR_V2_TEST",
+            (Self::Session, Family::V3) => "FE2O3_RUN_NATIVE_SESSION_SUPERVISOR_V3_TEST",
+        }
+    }
+
+    pub(crate) fn case_tag(self, family: Family) -> &'static [u8; 4] {
+        match (self, family) {
+            (Self::Stages, family) => family.case_tag(),
+            (Self::Session, Family::V2) => b"NSF2",
+            (Self::Session, Family::V3) => b"NSF3",
+        }
+    }
+
+    pub(crate) fn submitter_helper(self, family: Family) -> &'static str {
+        match (self, family) {
+            (Self::Stages, family) => family.submitter_helper(),
+            (Self::Session, Family::V2) => {
+                "handoff_v2_test_process::native_session_submitter_process_helper"
+            }
+            (Self::Session, Family::V3) => {
+                "native_consuming_test_process::v3::submitter::native_session_submitter_process_helper"
+            }
+        }
+    }
+
+    pub(crate) fn supervisor_helper(self, family: Family) -> &'static str {
+        match (self, family) {
+            (Self::Stages, family) => family.supervisor_helper(),
+            (Self::Session, Family::V2) => {
+                "native_consuming_test_process::session::v2::locked_supervisor_process_helper"
+            }
+            (Self::Session, Family::V3) => {
+                "native_consuming_test_process::session::v3::locked_supervisor_process_helper"
+            }
+        }
+    }
+
+    pub(crate) fn submitter_role(self, family: Family) -> &'static str {
+        match (self, family) {
+            (Self::Stages, family) => family.submitter_role(),
+            (Self::Session, Family::V2) => "native-session-submitter",
+            (Self::Session, Family::V3) => "native-session-submitter-v3",
+        }
+    }
+
+    pub(crate) fn supervisor_role(self, family: Family) -> &'static str {
+        match (self, family) {
+            (Self::Stages, family) => family.supervisor_role(),
+            (Self::Session, Family::V2) => "native-session-supervisor",
+            (Self::Session, Family::V3) => "native-session-supervisor-v3",
+        }
+    }
+}
+
 // Private fixture routing only. Each selected role constructs its own typed
 // policy owners; these command tags do not supply production authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

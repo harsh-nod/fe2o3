@@ -40,7 +40,9 @@ mod native_issuer;
 
 #[path = "native_consuming_family_tests.rs"]
 mod family;
-pub(crate) use family::Family;
+pub(crate) use family::{Family, Mode};
+#[path = "native_session_process_tests.rs"]
+mod session;
 #[path = "native_consuming_v3_process_tests.rs"]
 mod v3;
 
@@ -166,7 +168,11 @@ fn native_consuming_drop_before_ready() {
 }
 
 fn coordinate(case: Case, family: Family) {
-    assert_eq!(std::env::var(family.opt_in()).as_deref(), Ok("1"));
+    coordinate_mode(case, family, Mode::Stages);
+}
+
+fn coordinate_mode(case: Case, family: Family, mode: Mode) {
+    assert_eq!(std::env::var(mode.opt_in(family)).as_deref(), Ok("1"));
     assert_eq!(rustix::process::getuid().as_raw(), 0);
     assert_eq!(rustix::process::geteuid().as_raw(), 0);
     assert_eq!(rustix::process::getegid().as_raw(), 0);
@@ -214,19 +220,19 @@ fn coordinate(case: Case, family: Family) {
 
     let (submitter_control, child_control) = pair();
     let mut submitter = spawn_role(
-        family.submitter_helper(),
-        family.submitter_role(),
+        mode.submitter_helper(family),
+        mode.submitter_role(family),
         65_532,
         child_control,
     );
     send_packet(
         &submitter_control,
-        &frame(family.case_tag(), case.id()),
+        &frame(mode.case_tag(family), case.id()),
         &[],
     )
     .unwrap();
     let (supervisor_control, child_control) = pair();
-    let mut supervisor = spawn_locked_supervisor(case, family, cap_last, child_control);
+    let mut supervisor = spawn_locked_supervisor(case, family, mode, cap_last, child_control);
     assert_eq!(
         rustix::thread::capabilities_secure_bits().unwrap(),
         parent_securebits
@@ -255,14 +261,13 @@ fn coordinate(case: Case, family: Family) {
             .unwrap()
             .success()
     );
-    eprintln!(
-        "native consuming {family:?} {case:?}: verified completion packet and all role exits"
-    );
+    eprintln!("native {mode:?} {family:?} {case:?}: verified completion packet and all role exits");
 }
 
 fn spawn_locked_supervisor(
     case: Case,
     family: Family,
+    mode: Mode,
     cap_last: u32,
     control: OwnedFd,
 ) -> ChildGuard {
@@ -270,15 +275,17 @@ fn spawn_locked_supervisor(
     command
         .args([
             "--exact",
-            family.supervisor_helper(),
+            mode.supervisor_helper(family),
             "--ignored",
             "--nocapture",
             "--test-threads=1",
         ])
-        .env(ROLE, family.supervisor_role())
+        .env(ROLE, mode.supervisor_role(family))
         .env(CASE, case.id().to_string())
         .env_remove(Family::V2.opt_in())
         .env_remove(Family::V3.opt_in())
+        .env_remove(Mode::Session.opt_in(Family::V2))
+        .env_remove(Mode::Session.opt_in(Family::V3))
         .env_remove("FE2O3_RUN_PRIVILEGED_SUPERVISOR_V2_TEST");
     spawn_locked_role(command, cap_last, control)
 }
@@ -363,10 +370,18 @@ fn locked_supervisor_process_helper() {
 }
 
 fn locked_supervisor(family: Family, exercise: fn(Case, &OwnedFd, &OwnedFd, &OwnedFd)) {
+    locked_supervisor_mode(family, Mode::Stages, exercise);
+}
+
+fn locked_supervisor_mode(
+    family: Family,
+    mode: Mode,
+    exercise: fn(Case, &OwnedFd, &OwnedFd, &OwnedFd),
+) {
     // Dynamic libtest exec resets dumpability. This is test bootstrap, not
     // evidence of the static issuer's secure entry or a native profile bypass.
     rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable).unwrap();
-    require_child_credentials(family.supervisor_role(), SUPERVISOR_UID);
+    require_child_credentials(mode.supervisor_role(family), SUPERVISOR_UID);
     let case = Case::from_id(std::env::var(CASE).unwrap().parse().unwrap());
     let control = inherited_control();
     let (payload, [peer, pidfd, submitter]) =

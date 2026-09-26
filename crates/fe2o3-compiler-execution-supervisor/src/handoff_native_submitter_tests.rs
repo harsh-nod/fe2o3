@@ -1,4 +1,30 @@
 fn run_submitter(control: std::os::fd::OwnedFd, consuming: Option<ConsumingCase>) {
+    run_submitter_mode(
+        control,
+        consuming,
+        crate::native_consuming_test_process::Mode::Stages,
+    );
+}
+
+#[test]
+#[ignore = "private submitter for the isolated public native run_session fixture"]
+fn native_session_submitter_process_helper() {
+    use crate::native_consuming_test_process::Mode;
+    require_child_credentials(Mode::Session.submitter_role(FAMILY), UID);
+    let control = inherited_control();
+    let (request, []) = receive_packet::<0>(&control, Instant::now() + IO_TIMEOUT).unwrap();
+    assert_eq!(&request[..4], Mode::Session.case_tag(FAMILY));
+    let case = ConsumingCase::from_id(u32::from_le_bytes(request[4..].try_into().unwrap()));
+    assert_ne!(case, ConsumingCase::DropBeforeReady);
+    run_submitter_mode(control, Some(case), Mode::Session);
+}
+
+fn run_submitter_mode(
+    control: std::os::fd::OwnedFd,
+    consuming: Option<ConsumingCase>,
+    mode: crate::native_consuming_test_process::Mode,
+) {
+    use crate::native_consuming_test_process::Mode;
     let (client_control, child_input) = pair();
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
@@ -33,7 +59,7 @@ fn run_submitter(control: std::os::fd::OwnedFd, consuming: Option<ConsumingCase>
         let (request, []) =
             receive_packet::<0>(&control, Instant::now() + Duration::from_secs(40)).unwrap();
         if request == frame(b"STOP", 0) {
-            if consuming.is_some_and(|case| case != ConsumingCase::Ready) {
+            if mode == Mode::Session || consuming.is_some_and(|case| case != ConsumingCase::Ready) {
                 // STOP follows supervisor cleanup and release of all control witnesses.
                 assert_no_publication_after_cleanup(
                     held_control.as_ref().expect("consuming handoff was sent"),
@@ -147,19 +173,36 @@ fn run_submitter(control: std::os::fd::OwnedFd, consuming: Option<ConsumingCase>
         }
         held_control = Some(held);
         send_packet(&control, &frame(FAMILY.handoff_tag(), pid), &[sent.as_fd()]).unwrap();
+        drop(sent);
         if consuming == Some(ConsumingCase::Ready) {
-            let (request, []) =
-                receive_packet::<0>(&control, Instant::now() + LIFECYCLE_TIMEOUT).unwrap();
-            assert_eq!(&request[..4], b"PUB2");
-            let issuer_pid = u32::from_le_bytes(request[4..].try_into().unwrap());
+            let expected_pid = if mode == Mode::Stages {
+                let (request, []) =
+                    receive_packet::<0>(&control, Instant::now() + LIFECYCLE_TIMEOUT).unwrap();
+                assert_eq!(&request[..4], b"PUB2");
+                Some(u32::from_le_bytes(request[4..].try_into().unwrap()))
+            } else {
+                None
+            };
+            // run_session has no stage hooks. In session mode, wait directly on
+            // the public endpoint and derive the PID from the actual publication.
+            let publication_timeout = if mode == Mode::Session {
+                LIFECYCLE_TIMEOUT
+            } else {
+                IO_TIMEOUT
+            };
             let (published, []) = receive_sized_packet::<READY_BYTES, 0>(
                 held_control.as_ref().unwrap(),
-                Instant::now() + IO_TIMEOUT,
+                Instant::now() + publication_timeout,
             )
             .unwrap();
             budget.reserve_storage(published.len()).unwrap();
             let (ready, delta) = Ready::decode(&published, &mut budget).unwrap();
             budget.reserve_storage(delta.additional_storage()).unwrap();
+            let issuer_pid = ready.issuer_pid();
+            assert!(![0, pid, std::process::id(), anchor_pid].contains(&issuer_pid));
+            if let Some(expected) = expected_pid {
+                assert_eq!(issuer_pid, expected);
+            }
             assert!(
                 ready
                     .matches_launch(issuer_pid, handoff.launch_manifest(), &policy, &mut budget)
@@ -168,8 +211,11 @@ fn run_submitter(control: std::os::fd::OwnedFd, consuming: Option<ConsumingCase>
             // Return the packet actually received from the public publication
             // path; the supervisor compares these bytes with its native owner.
             send_packet(&control, &published, &[]).unwrap();
-            let (request, []) = receive_packet::<0>(&control, Instant::now() + IO_TIMEOUT).unwrap();
-            assert_eq!(request, frame(b"FIN2", issuer_pid));
+            if mode == Mode::Stages {
+                let (request, []) =
+                    receive_packet::<0>(&control, Instant::now() + IO_TIMEOUT).unwrap();
+                assert_eq!(request, frame(b"FIN2", issuer_pid));
+            }
             send_packet(&client_control, &frame(b"FIN2", pid), &[]).unwrap();
             let (completed, []) =
                 receive_packet::<0>(&client_control, Instant::now() + IO_TIMEOUT).unwrap();
@@ -193,7 +239,7 @@ fn assert_no_publication_after_cleanup(control: &std::os::fd::OwnedFd) {
     assert_eq!(
         rustix::net::recv(control, &mut byte, rustix::net::RecvFlags::DONTWAIT),
         Ok((0, 0)),
-        "negative consuming readiness must close without publication"
+        "public readiness peer must close without unread publication"
     );
 }
 
