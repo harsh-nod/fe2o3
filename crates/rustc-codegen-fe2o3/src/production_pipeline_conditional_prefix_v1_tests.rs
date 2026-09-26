@@ -68,6 +68,11 @@ pub(super) fn installed(value: &ConditionalPrefixForFV1) {
         assert_eq!(AGREEMENTS.load(Ordering::SeqCst), 1);
         assert_eq!(REPLAY_COMPLETED.load(Ordering::SeqCst), 1);
         assert!(value.preparation.ranked.has_conditional_roots_v1());
+        assert_eq!(
+            value.packet.proof().root_count(),
+            value.preparation.ranked.root_count()
+        );
+        assert!(!value.packet.source_packet().is_empty());
         assert!(
             !value
                 .preparation
@@ -79,6 +84,85 @@ pub(super) fn installed(value: &ConditionalPrefixForFV1) {
             Some(identity(value.chain.output()))
         );
         INSTALLED.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn conditional_packet_terminal_error_and_unwind_are_not_refunded_by_f_entry() {
+    use crate::production_native_source_lineage_v1::ConditionalPacketErrorV2 as PacketError;
+    for unwind in [false, true] {
+        let mut work = Work::new(100);
+        let mut budget = Budget::new(&mut work, 100);
+        budget.reserve_storage(19).unwrap();
+        let account = budget.work_ledger_identity_v1();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            conditional_refusal(&mut budget, |budget| {
+                budget.reserve_storage(23).map_err(resource)?;
+                budget.charge_work(7).map_err(resource)?;
+                if unwind {
+                    panic!("component terminal failure");
+                }
+                Err(ProductionPipelineError::conditional_packet_v2(
+                    PacketError::Resource(Resource::Accounting),
+                ))
+            })
+        }));
+        assert_eq!(result.is_err(), unwind);
+        assert_eq!(budget.storage(), 42);
+        assert_eq!(budget.work(), 7);
+        assert!(budget.work_ledger_identity_v1() == account);
+    }
+}
+
+#[test]
+fn conditional_packet_refusal_scope_releases_only_completed_gate_and_checks_account() {
+    // A gate-shaped error is inert. This exercises cleanup, never installs a
+    // Request, formula proof, packet or conditional prefix.
+    for mode in 0..4 {
+        let mut work = Work::new(100);
+        let mut foreign = Work::new(100);
+        let mut budget = Budget::new(&mut work, 100);
+        budget.reserve_storage(19).unwrap();
+        let error = conditional_refusal(&mut budget, |budget| {
+            budget.reserve_storage(23).map_err(resource)?;
+            let gate = ProductionPipelineError::RankedVerification(
+                RankedError::ConditionalFinalizerRequired { root: 0 },
+            );
+            if mode == 1 {
+                return Err(gate);
+            }
+            if mode == 2 {
+                budget.release_storage(24).map_err(resource)?;
+            }
+            if mode == 3 {
+                *budget = Budget::new(&mut foreign, 100);
+                budget.reserve_storage(42).map_err(resource)?;
+            }
+            Ok(gate)
+        });
+        if mode < 2 {
+            assert!(matches!(
+                error,
+                ProductionPipelineError::RankedVerification(
+                    RankedError::ConditionalFinalizerRequired { .. }
+                )
+            ));
+        } else {
+            assert!(!matches!(
+                error,
+                ProductionPipelineError::RankedVerification(
+                    RankedError::ConditionalFinalizerRequired { .. }
+                )
+            ));
+        }
+        assert_eq!(
+            budget.storage(),
+            match mode {
+                0 => 19,
+                2 => 18,
+                _ => 42,
+            }
+        );
     }
 }
 

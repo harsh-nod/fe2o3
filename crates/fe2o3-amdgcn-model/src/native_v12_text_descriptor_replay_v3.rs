@@ -12,8 +12,7 @@ use fe2o3_kernel_analysis::{
     KernelIrContractCatalogBindingErrorV1, check_kernel_ir_contract_catalog_v1,
 };
 use fe2o3_kernel_descriptor::{
-    CodeObjectVersion, DESCRIPTOR_QUERY_STORAGE_V3, DescriptorWireErrorV3,
-    DeviceDescriptorTableV3 as Table,
+    CodeObjectVersion, DescriptorWireErrorV3, DeviceDescriptorTableV3 as Table,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -33,6 +32,9 @@ use std::{
 const PREFIX: &[u8] =
     b"\nmodule asm \".section .fe2o3.kd.v3,\\22\\22,@progbits\"\nmodule asm \".balign 8\"\n";
 const HEX: &[u8; 16] = b"0123456789abcdef";
+#[path = "native_v12_text_descriptor_queries.rs"]
+pub(super) mod queries;
+use queries::{KernelQuery, TableQuery};
 type Payload = Box<dyn Any + Send>;
 pub(super) const SCOPE_STORAGE: usize = 2 * size_of::<usize>()
     + size_of::<CanonicalKernelIrWorkLedgerIdentityV1>()
@@ -309,9 +311,9 @@ struct DescriptorName<'a> {
     entry: &'a str,
     symbol: &'a str,
 }
-pub(super) fn roots(
+pub(super) fn roots<'wire, D: TableQuery<'wire>>(
     inventory: &Inventory<'_>,
-    table: &Table<'_>,
+    table: &D,
     budget: &mut Budget<'_>,
 ) -> R<Vec<Root>> {
     budget.charge_work(2)?;
@@ -322,13 +324,11 @@ pub(super) fn roots(
     let mut rows = vector::<Root>(kernels.len(), budget)?;
     let scratch_floor = budget.storage();
     {
-        budget.reserve_storage(DESCRIPTOR_QUERY_STORAGE_V3)?;
+        budget.reserve_storage(D::QUERY_STORAGE)?;
         let mut names = vector::<DescriptorName<'_>>(kernels.len(), budget)?;
         let mut indices = vector::<usize>(kernels.len(), budget)?;
         for index in 0..kernels.len() {
-            let row = table
-                .kernel(index, &mut |w| budget.charge_work(w))
-                .map_err(E::Descriptor)?;
+            let row = table.kernel(index, budget)?;
             push(
                 &mut names,
                 DescriptorName {
@@ -401,7 +401,11 @@ pub(super) fn roots(
     Ok(rows)
 }
 
-pub(super) fn profile(table: &Table<'_>, profile: Profile, budget: &mut Budget<'_>) -> R<()> {
+pub(super) fn profile<'wire, D: TableQuery<'wire>>(
+    table: &D,
+    profile: Profile,
+    budget: &mut Budget<'_>,
+) -> R<()> {
     budget.charge_work(36 + profile.device_target().len())?;
     let target =
         AmdTargetId::parse(profile.device_target()).map_err(|_| E::Invalid("closed profile"))?;
@@ -451,12 +455,16 @@ fn engine_text(
     }
     Ok((text, actual))
 }
+#[cfg(test)]
 fn suffix_length(bytes: usize) -> Result<usize, Resource> {
+    suffix_length_for(bytes, PREFIX)
+}
+fn suffix_length_for(bytes: usize, section: &[u8]) -> Result<usize, Resource> {
     let chunks = bytes.checked_add(15).ok_or(Resource::Arithmetic)? / 16;
     bytes
         .checked_mul(6)
         .and_then(|n| chunks.checked_mul(18).and_then(|m| n.checked_add(m)))
-        .and_then(|n| n.checked_add(PREFIX.len()))
+        .and_then(|n| n.checked_add(section.len()))
         .ok_or(Resource::Arithmetic)
 }
 struct Exact<'a> {
@@ -476,11 +484,21 @@ impl Exact<'_> {
         Ok(())
     }
 }
+#[cfg(test)]
 fn compare_text(prefix: &[u8], descriptor: &[u8], text: &[u8], budget: &mut Budget<'_>) -> R<()> {
+    compare_text_for(prefix, descriptor, text, PREFIX, budget)
+}
+pub(super) fn compare_text_for(
+    prefix: &[u8],
+    descriptor: &[u8],
+    text: &[u8],
+    section: &[u8],
+    budget: &mut Budget<'_>,
+) -> R<()> {
     budget.charge_work(2)?;
     let expected = prefix
         .len()
-        .checked_add(suffix_length(descriptor.len())?)
+        .checked_add(suffix_length_for(descriptor.len(), section)?)
         .ok_or(Resource::Arithmetic)?;
     budget.charge_work(
         expected
@@ -496,7 +514,7 @@ fn compare_text(prefix: &[u8], descriptor: &[u8], text: &[u8], budget: &mut Budg
         cursor: 0,
     };
     exact.take(prefix)?;
-    exact.take(PREFIX)?;
+    exact.take(section)?;
     for chunk in descriptor.chunks(16) {
         exact.take(b"module asm \".byte ")?;
         for (index, byte) in chunk.iter().copied().enumerate() {
@@ -537,59 +555,15 @@ pub fn check_native_v12_text_descriptor_relation_v3<'o, 'c, 'd, 'w, 'l>(
     budget: &mut Budget<'_>,
 ) -> R<ReplayedNativeV12TextDescriptorRelationV3<'o, 'c, 'd, 'w, 'l>> {
     scoped(budget, |budget| {
-        exact_output_bytes(
-            output.canonical().canonical_bytes(),
+        let prefix_bytes = check_relation(
+            output,
+            catalog,
             published_output_bytes,
-            budget,
-        )?;
-        budget.charge_work(2)?;
-        if final_llvm.is_empty() || final_llvm.len() > MAX_COMPILER_MODULE_TEXT_BYTES {
-            return Err(E::Invalid("final native bound"));
-        }
-        profile(descriptors, selected, budget)?;
-        let (inventory, receipt) = Inventory::derive(output, budget).map_err(E::Inventory)?;
-        budget.reserve_storage(receipt.retained_storage())?;
-        {
-            let (checked, receipt) =
-                check_kernel_ir_contract_catalog_v1(&inventory, catalog, budget)
-                    .map_err(E::Catalog)?;
-            budget.reserve_storage(receipt.retained_storage())?;
-            drop(checked);
-            budget.release_storage(receipt.retained_storage())?;
-        }
-        let roster = roots(&inventory, descriptors, budget)?;
-        crate::descriptor_physical_abi_v3::check(&inventory, descriptors, &roster, budget)?;
-        crate::descriptor_capability_projection_v3::check(
-            &inventory,
-            descriptors,
             selected,
-            &roster,
+            descriptors,
+            final_llvm,
             budget,
         )?;
-        let (dialect, dialect_storage) =
-            engine_text(MAX_COMPILER_MODULE_TEXT_BYTES, budget, || {
-                match selected {
-                    Profile::Gfx942 => lower_942(output),
-                    Profile::Gfx950 => lower_950(output),
-                }
-                .map_err(E::Lowering)
-            })?;
-        let (prefix, prefix_storage) = engine_text(
-            MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1,
-            budget,
-            || bind_production_llvm22_worker_layout_v1(&dialect).map_err(E::Layout),
-        )?;
-        drop(dialect);
-        budget.release_storage(dialect_storage)?;
-        compare_text(
-            prefix.as_bytes(),
-            descriptors.canonical_bytes(),
-            final_llvm.as_bytes(),
-            budget,
-        )?;
-        let prefix_bytes = prefix.len();
-        drop(prefix);
-        budget.release_storage(prefix_storage)?;
         let bytes = size_of::<ReplayedNativeV12TextDescriptorRelationV3<'_, '_, '_, '_, '_>>();
         budget.charge_work(1)?;
         budget.reserve_storage(bytes)?;
@@ -603,6 +577,72 @@ pub fn check_native_v12_text_descriptor_relation_v3<'o, 'c, 'd, 'w, 'l>(
             storage: NativeV12TextDescriptorReplayStorageV3(bytes),
         })
     })
+}
+
+// The same engine and operation order serve both typed public boundaries.
+// Only the private query types/scratch and exact section prefix vary.
+pub(super) fn check_relation<'wire, D: TableQuery<'wire>>(
+    output: &Owner,
+    catalog: &Catalog,
+    published_output_bytes: &[u8],
+    selected: Profile,
+    descriptors: &D,
+    final_llvm: &str,
+    budget: &mut Budget<'_>,
+) -> R<usize> {
+    exact_output_bytes(
+        output.canonical().canonical_bytes(),
+        published_output_bytes,
+        budget,
+    )?;
+    budget.charge_work(2)?;
+    if final_llvm.is_empty() || final_llvm.len() > MAX_COMPILER_MODULE_TEXT_BYTES {
+        return Err(E::Invalid("final native bound"));
+    }
+    profile(descriptors, selected, budget)?;
+    let (inventory, receipt) = Inventory::derive(output, budget).map_err(E::Inventory)?;
+    budget.reserve_storage(receipt.retained_storage())?;
+    {
+        let (checked, receipt) =
+            check_kernel_ir_contract_catalog_v1(&inventory, catalog, budget).map_err(E::Catalog)?;
+        budget.reserve_storage(receipt.retained_storage())?;
+        drop(checked);
+        budget.release_storage(receipt.retained_storage())?;
+    }
+    let roster = roots(&inventory, descriptors, budget)?;
+    crate::descriptor_physical_abi_v3::check(&inventory, descriptors, &roster, budget)?;
+    crate::descriptor_capability_projection_v3::check(
+        &inventory,
+        descriptors,
+        selected,
+        &roster,
+        budget,
+    )?;
+    let (dialect, dialect_storage) = engine_text(MAX_COMPILER_MODULE_TEXT_BYTES, budget, || {
+        match selected {
+            Profile::Gfx942 => lower_942(output),
+            Profile::Gfx950 => lower_950(output),
+        }
+        .map_err(E::Lowering)
+    })?;
+    let (prefix, prefix_storage) = engine_text(
+        MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1,
+        budget,
+        || bind_production_llvm22_worker_layout_v1(&dialect).map_err(E::Layout),
+    )?;
+    drop(dialect);
+    budget.release_storage(dialect_storage)?;
+    compare_text_for(
+        prefix.as_bytes(),
+        descriptors.canonical_bytes(),
+        final_llvm.as_bytes(),
+        D::SUFFIX,
+        budget,
+    )?;
+    let prefix_bytes = prefix.len();
+    drop(prefix);
+    budget.release_storage(prefix_storage)?;
+    Ok(prefix_bytes)
 }
 
 #[cfg(test)]

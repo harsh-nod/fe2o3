@@ -3,9 +3,8 @@ use crate::native_v12_text_descriptor_replay_v3::{self as shared, E, R, Root};
 use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
 use fe2o3_kernel_analysis::CanonicalKirInventoryV1 as Inventory;
 use fe2o3_kernel_descriptor::{
-    AccessMode as Access, AliasSemantics as Alias, DESCRIPTOR_QUERY_STORAGE_V3,
-    DeviceDescriptorTableV3 as Table, DeviceLayoutDescriptorV1 as Layout,
-    KernelDescriptorRefV3 as Kernel, OwnershipSemantics as Ownership,
+    AccessMode as Access, AliasSemantics as Alias, DeviceDescriptorTableV3 as Table,
+    DeviceLayoutDescriptorV1 as Layout, OwnershipSemantics as Ownership,
     PhysicalAbiComponentKind as Component, ScalarTypeV1 as Scalar,
     SourceTypeDescriptorV3 as Source, SourceTypeRecordV3, device_layout_record_v3,
 };
@@ -14,6 +13,7 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource, Function, FunctionRole,
     ScalarType as KirScalar, Type, VerifiedCanonicalKernelIrModuleV12 as Owner,
 };
+use shared::queries::{KernelQuery, TableQuery};
 use std::mem::size_of;
 
 /// This is only physical compatibility. KIR lacks unique-borrow/disjoint source
@@ -106,9 +106,9 @@ fn align(value: u32, alignment: u32) -> R<u32> {
         / alignment
         * alignment)
 }
-fn arguments(
-    table: &Table<'_>,
-    row: &Kernel<'_, '_>,
+fn arguments<'wire: 'view, 'view, D: TableQuery<'wire> + 'view>(
+    table: &'view D,
+    row: &D::Kernel<'view>,
     function: &Function,
     root: usize,
     budget: &mut Budget<'_>,
@@ -141,12 +141,8 @@ fn arguments(
             .next(&mut |w| budget.charge_work(w))
             .map_err(E::Descriptor)?
             .ok_or_else(|| error("argument count"))?;
-        let source = table
-            .source_type(argument.source_type(), &mut |w| budget.charge_work(w))
-            .map_err(E::Descriptor)?;
-        let layout = table
-            .device_layout(argument.device_layout(), &mut |w| budget.charge_work(w))
-            .map_err(E::Descriptor)?;
+        let source = table.source_type(argument.source_type(), budget)?;
+        let layout = table.device_layout(argument.device_layout(), budget)?;
         let kind = source.descriptor();
         let element = kind.physical_scalar();
         let expected = match kind {
@@ -264,13 +260,13 @@ fn arguments(
     }
     Ok(())
 }
-pub(super) fn check(
+pub(super) fn check<'wire, D: TableQuery<'wire>>(
     inventory: &Inventory<'_>,
-    table: &Table<'_>,
+    table: &D,
     roster: &[Root],
     budget: &mut Budget<'_>,
 ) -> R<()> {
-    let scratch = DESCRIPTOR_QUERY_STORAGE_V3
+    let scratch = D::QUERY_STORAGE
         .checked_mul(4)
         .ok_or(Resource::Arithmetic)?;
     budget.reserve_storage(scratch)?;
@@ -282,9 +278,7 @@ pub(super) fn check(
             .get(kernel.entry.0 as usize)
             .ok_or(E::Invalid("inventory entry"))?
             .function;
-        let row = table
-            .kernel(root.descriptor, &mut |w| budget.charge_work(w))
-            .map_err(E::Descriptor)?;
+        let row = table.kernel(root.descriptor, budget)?;
         arguments(table, &row, function, root.kernel, budget)?;
     }
     budget.release_storage(scratch)?;

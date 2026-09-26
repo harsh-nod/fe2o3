@@ -11,6 +11,13 @@ pub(crate) use owned_packet::{
     prepare_borrowed_native_source_packet_v1,
 };
 
+#[path = "production_native_conditional_source_packet_v2.rs"]
+mod conditional_packet;
+pub(crate) use conditional_packet::{
+    ConditionalPacketErrorV2, PreparedConditionalSourcePacketV2,
+    prepare_retained_native_conditional_source_packet_v2,
+};
+
 #[path = "production_native_erased_source_lineage_v1.rs"]
 mod erased;
 pub(crate) use erased::{

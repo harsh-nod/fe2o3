@@ -20,7 +20,8 @@ account; the other fifty are explicitly component-only. This suite compiled but
 has not run in the protected runtime. Its separate runner passed a static scope
 audit and 144 offline tests, which do not establish compiler or proof execution.
 
-The next packet layer is integrated but not yet typechecked or executed:
+The packet layer is integrated and typechecked, but its new component and
+protected integration tests have not yet executed:
 
 - The bounded V2 codec transports complete source, original native-neutral IR,
   ordered roots, CPU inputs and inert receipt signatures. It grants no authority.
@@ -39,7 +40,20 @@ Producer hooks add 15 unexecuted component tests. Conditional roots now retain
 an inline policy header, and their existing type-sized scratch charge grows;
 conditional/fixed6 storage thresholds are therefore not claimed unchanged.
 Non-capturing replay performs no new CPU encoding or proof work. Ordinary routes
-and all resource caps are unchanged. Packet assembly and attachment are pending.
+and all resource caps are unchanged. The conditional F entry now assembles and
+attaches the complete independently replayed packet after both original account
+postchecks. Opaque failures retain terminal charges through the outer wire and
+capsule entries; only the unchanged finalizer refusal follows successful custody.
+
+Two additional checked boundaries are integrated and typechecked, not yet composed
+into native finalization. The lowerer accepts a genuine source request and sealed
+independently checked optimization history, checks exact source/target subjects
+and external limits, and follows every conditional memory occurrence through F.
+The typed V5 adapter shares the existing V3 physical ABI, capability and native
+text engine, comparing the complete descriptor section without a V3 downgrade.
+It establishes content agreement only; a coherently changed contract must still
+be rejected by the separate source/CPU/formula contract join. Their new tests
+remain unexecuted at this checkpoint.
 
 The consumer supports a complete conditional root roster, not mixed ordinary or
 UnitLocal roots. Existing per-root single-output and CPU-control-flow limits
@@ -61,6 +75,13 @@ job/test thread, hidden GPUs and the unchanged resource limits.
 | `fd7f41eb2` | finalizer documentation | 53 compile-fail and 1 V3 positive control passed |
 | `fd7f41eb2` | focused backend regressions | 170 passed, 3 protected tests ignored |
 | `fd7f41eb2` | backend and verifier capture | both compiled successfully |
+| `41b641ca7` | packet-integrated backend library | bounded offline Cargo check passed |
+| `50a696f75` | backend, verifier, lowerer and AMD model test targets | bounded offline Cargo check passed; no test functions executed |
+
+The `50a696f75` check fixes a missing descriptor backing/view lifetime bound
+found in the preceding `3f8a6dcff` attempt. Those terminal checks used the normal
+terminal path, not the protected-capture guard. The guard's Node/Git subprocess
+failure remains recorded; these checks cannot supply protected capture artifacts.
 
 The failed finalizer run remains failed. Two fixtures used invalid crate names;
 another expected rejection after substituting identical bytes. Corrections retain
@@ -82,11 +103,12 @@ Fresh matching compiler/verifier/preparation artifacts are required. No new
 protected run or GPU job was started. The two newly created, empty remote scratch
 directories await cleanup when SSH is available; the shared runtime is unchanged.
 
-Packet integration has passed static review and formatting checks, not Cargo
-tests. Review fixed test-module paths and an opaque-token assertion; hygiene
+Packet integration has passed static review, formatting and Cargo typechecks,
+not its component or protected tests. Review fixed test-module paths and an
+opaque-token assertion; hygiene
 required the established test filename convention, not a policy exemption.
-Genuine multi-root success, full-chain resource negatives and production packet
-attachment remain required, followed by actual-F/native-machine custody,
+Genuine multi-root packet success, full-chain resource negatives and the complete
+source/CPU/contract/final-history composition remain required, followed by native-machine custody,
 publication, generated host admission and the complete tutorial hardware matrix.
 Shared-IEEE source proof is not LLVM/ISA arithmetic or a transcendental error-bound
 proof. Neither clean analysis nor V5 bytes bypass the existing authority gate.

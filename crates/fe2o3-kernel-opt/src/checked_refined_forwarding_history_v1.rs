@@ -153,6 +153,12 @@ pub struct CheckedCanonicalRefinedForwardingHistoryV1<'a> {
 }
 type History<'a> = CheckedCanonicalRefinedForwardingHistoryV1<'a>;
 impl<'a> History<'a> {
+    /// The exact immutable subjects already checked by this receipt. Copying
+    /// this borrowed view neither copies graph owners nor authenticates execution.
+    pub const fn inputs(&self) -> Inputs<'a> {
+        self.inputs
+    }
+
     /// Independently replayed existing P8 prefix, still about K.
     pub const fn prefix(&self) -> &ReplayedPolicy8SemanticRelationV1<'a> {
         &self.prefix

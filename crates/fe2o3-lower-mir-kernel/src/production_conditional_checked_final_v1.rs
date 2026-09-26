@@ -167,6 +167,189 @@ impl ProductionSourceBoundConditionalAggregateRequestV1<'_> {
             })
         })
     }
+
+    /// Joins this genuine source request to an independently checked B-through-F
+    /// history on ONE existing consumer ledger. The coordinate receipt must
+    /// borrow this exact N and the history's exact B; expected limits come from
+    /// outside the history. No execution owner is reconstructed and no semantic
+    /// pair or optimizer is rerun. Only conditional coverage, memory lineage,
+    /// original premises and current source agreement are checked here.
+    ///
+    /// The caller must keep source/arena, decoded graph and row capacities,
+    /// coordinate receipt and checked-history storage reserved on its original
+    /// consumer ledger. The visible floor here cannot authenticate that ledger
+    /// or discover hidden capacities. Added scratch drops before same-ledger
+    /// cleanup on return/unwind; work and first denial are never refunded.
+    /// Proof reimport, CPU agreement and exact contract checks remain separate.
+    /// Unit success is NOT a source/native owner, machine proof, finalizer,
+    /// publication or launch authority. The conditional-finalizer refusal stays.
+    ///
+    /// ```compile_fail,E0308
+    /// use fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1 as Request;
+    /// use fe2o3_kernel_analysis::CheckedCanonicalKirCoordinatePreservationV1 as Coordinates;
+    /// use fe2o3_kernel_opt::{CanonicalRefinedForwardingHistoryInputsV1 as Inputs,
+    ///     CanonicalRefinedForwardingHistoryLimitsV1 as Limits};
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn unchecked(r: &Request<'_>, c: &Coordinates<'_, '_>, h: Inputs<'_>,
+    ///     limits: Limits, b: &mut Budget<'_>) {
+    ///     r.check_replayed_refined_forwarding_output_v1(c, &h, limits, b).unwrap();
+    /// }
+    /// ```
+    /// ```compile_fail,E0308
+    /// use fe2o3_lower_mir_kernel::{ProductionSourceBoundConditionalAggregateRequestV1 as Request,
+    ///     ProductionFormalMemoryOwnerV1};
+    /// use fe2o3_kernel_analysis::CheckedCanonicalKirCoordinatePreservationV1 as Coordinates;
+    /// use fe2o3_kernel_opt::{CheckedCanonicalRefinedForwardingHistoryV1 as History,
+    ///     CanonicalRefinedForwardingHistoryLimitsV1 as Limits};
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn promote(r: &Request<'_>, c: &Coordinates<'_, '_>, h: &History<'_>,
+    ///     limits: Limits, b: &mut Budget<'_>) -> ProductionFormalMemoryOwnerV1 {
+    ///     r.check_replayed_refined_forwarding_output_v1(c, h, limits, b).unwrap()
+    /// }
+    /// ```
+    #[allow(clippy::result_large_err)]
+    pub fn check_replayed_refined_forwarding_output_v1(
+        &self,
+        coordinates: &Coordinates<'_, '_>,
+        history: &History<'_>,
+        expected_limits: Limits,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        scoped(budget, |budget| {
+            require_replayed_subjects(
+                self.source().executable(),
+                coordinates,
+                history,
+                expected_limits,
+                budget,
+            )?;
+            let required = replayed_backing_floor(history, budget)?
+                .checked_add(self.source().retained_analysis_storage_v1())
+                .ok_or(Resource::Arithmetic)?;
+            if budget.storage() < required {
+                return Err(Resource::Accounting.into());
+            }
+            budget.reserve_storage(SCRATCH)?;
+            self.pliron_input()
+                .require_current_graph_v1(budget)
+                .map_err(super::Error::Graph)?;
+            let kernel = source_kernel(self, budget)?;
+            let prefix = history.prefix().policy7_relation().policy6_relation();
+            {
+                let original = facts(coordinates.input(), kernel, budget)?;
+                let binding = self
+                    .source()
+                    .bind_conditional_output_v1(original, budget)
+                    .map_err(|e| {
+                        super::Error::Source(
+                            super::ProductionConditionalContinuationErrorV1::Binding(e),
+                        )
+                    })?;
+                let output = facts(prefix.continuation().output(), kernel, budget)?;
+                super::super::require_conditional_argument_rows_v1(
+                    self.arguments(),
+                    self.pliron_input(),
+                    budget,
+                )
+                .map_err(super::Error::Source)?;
+                occurrences::check(self, binding.coverage(), &output, prefix, budget)?;
+            }
+            check_replayed_final(history, kernel, self.pliron_input().premises(), budget)?;
+            self.pliron_input()
+                .require_current_graph_v1(budget)
+                .map_err(super::Error::Graph)?;
+            Ok(())
+        })
+    }
+}
+
+fn require_replayed_subjects(
+    source: &Graph,
+    coordinates: &Coordinates<'_, '_>,
+    history: &History<'_>,
+    expected_limits: Limits,
+    budget: &mut Budget<'_>,
+) -> Result<()> {
+    budget.charge_work(size_of::<Limits>() + 4)?;
+    if history.limits() != expected_limits {
+        return Err(Error::LimitsMismatch);
+    }
+    let p4 = history
+        .prefix()
+        .policy7_relation()
+        .policy6_relation()
+        .policy5_relation()
+        .policy4_relation();
+    if !std::ptr::eq(source, coordinates.input()) || !std::ptr::eq(coordinates.output(), p4.input())
+    {
+        return Err(Error::Mismatch("exact source N and checked history B"));
+    }
+    Ok(())
+}
+
+// A visible minimum, not a substitute for the decoder's complete owned-capacity
+// receipt or original-account guard. No capacity is inferred from slice length.
+fn replayed_backing_floor(history: &History<'_>, budget: &mut Budget<'_>) -> Result<usize> {
+    budget.charge_work(48)?;
+    let h = history.inputs();
+    let p7 = h.prefix.prefix;
+    let p6 = p7.prefix;
+    let p5 = p6.prefix;
+    let mut total = history
+        .storage()
+        .retained_storage()
+        .checked_add(size_of::<Coordinates<'_, '_>>())
+        .ok_or(Resource::Arithmetic)?;
+    for graph in [
+        p5.input,
+        p5.intermediate,
+        p5.stored,
+        p5.output,
+        p6.output,
+        p7.output,
+        h.prefix.output,
+        h.promoted,
+        h.preheaders,
+        h.licm,
+        h.refined,
+        h.output,
+    ] {
+        total = total
+            .checked_add(graph.canonical().canonical_bytes().len())
+            .ok_or(Resource::Arithmetic)?;
+    }
+    for bytes in [
+        p5.policy5_record.len(),
+        size_of_val(p5.load_rows),
+        p6.continuation.composition_record.len(),
+        p6.continuation.integer_record.len(),
+    ] {
+        total = total.checked_add(bytes).ok_or(Resource::Arithmetic)?;
+    }
+    tail_backing_floor(h, total)
+}
+
+fn check_replayed_final(
+    history: &History<'_>,
+    kernel: &KernelId,
+    premises: &[Premise],
+    budget: &mut Budget<'_>,
+) -> Result<()> {
+    let prefix = history.prefix().policy7_relation().policy6_relation();
+    let before = facts(prefix.continuation().output(), kernel, budget)?;
+    let after = facts(history.output(), kernel, budget)?;
+    let mut ordered = occurrences::reads(&before, budget)?;
+    let output = occurrences::reads(&after, budget)?;
+    occurrences::premises(&before, &ordered, premises, budget)?;
+    coverage(
+        prefix,
+        history,
+        &before,
+        &after,
+        &mut ordered,
+        &output,
+        budget,
+    )
 }
 
 fn require_subjects(
@@ -231,8 +414,6 @@ fn backing_floor(
 ) -> Result<usize> {
     budget.charge_work(40)?;
     let p7 = h.prefix.prefix;
-    let p6 = p7.prefix;
-    let c = h.prefix.continuation.occurrences;
     let mut total = checked.retained_storage();
     for graph in [
         bound,
@@ -248,6 +429,13 @@ fn backing_floor(
             .checked_add(graph.canonical().canonical_bytes().len())
             .ok_or(Resource::Arithmetic)?;
     }
+    tail_backing_floor(h, total)
+}
+
+fn tail_backing_floor(h: Inputs<'_>, mut total: usize) -> Result<usize> {
+    let p7 = h.prefix.prefix;
+    let p6 = p7.prefix;
+    let c = h.prefix.continuation.occurrences;
     for bytes in [
         p6.prefix.policy4_wire.len(),
         p6.continuation.transition_wire.len(),
@@ -315,167 +503,11 @@ fn check_final(
     Ok(())
 }
 
-fn coordinate(
-    facts: &Facts<'_>,
-    location: fe2o3_kernel_ir::FunctionOperationLocation,
-    budget: &mut Budget<'_>,
-) -> Result<Site> {
-    tail::site(occurrences::coordinate(facts, location, budget)?).map_err(Error::Coordinate)
-}
-
-fn coverage(
-    checked: &Prefix,
-    history: &History<'_>,
-    before: &Facts<'_>,
-    after: &Facts<'_>,
-    ordered: &mut [Read],
-    output: &[Read],
-    budget: &mut Budget<'_>,
-) -> Result<()> {
-    budget.charge_work(
-        checked
-            .owner()
-            .canonical()
-            .canonical_bytes()
-            .len()
-            .checked_add(history.output().canonical().canonical_bytes().len())
-            .ok_or(Resource::Arithmetic)?,
-    )?;
-    if !std::ptr::eq(before.module(), checked.owner().module())
-        || !std::ptr::eq(after.module(), history.output().module())
-        || before.function_ordinal() != after.function_ordinal()
-    {
-        return Err(Error::Mismatch("actual I/F conditional subjects"));
-    }
-    // The admitted global readonly loads cannot be deleted by these fixed
-    // engines (K deletes only scalar bitwise definitions; P/F copy only private
-    // loads). Check complete cardinality AND lineage, not raw read SSA equality.
-    occurrences::coverage_subjects(before, after, ordered, output)?;
-    if follow(
-        history,
-        coordinate(before, before.store_location(), budget)?,
-        budget,
-    )? != coordinate(after, after.store_location(), budget)?
-    {
-        return Err(Error::Mismatch("final conditional store occurrence"));
-    }
-    for index in 0..ordered.len() {
-        let original = ordered[index];
-        let site = follow(
-            history,
-            coordinate(before, original.location(), budget)?,
-            budget,
-        )?;
-        let mut found = None;
-        for read in output {
-            budget.charge_work(2)?;
-            if coordinate(after, read.location(), budget)? == site && found.replace(*read).is_some()
-            {
-                return Err(Error::Mismatch("unique final read occurrence"));
-            }
-        }
-        let read = found.ok_or(Error::Mismatch("missing final read occurrence"))?;
-        for previous in &ordered[..index] {
-            budget.charge_work(2)?;
-            if previous.location() == read.location() {
-                return Err(Error::Mismatch("complete one-to-one final reads"));
-            }
-        }
-        occurrences::read_premises(original, read, budget)?;
-        ordered[index] = read;
-    }
-    Ok(())
-}
-
-fn mapped<T>(
-    input: Site,
-    rows: &[T],
-    project: impl Fn(&T) -> (Option<Site>, Option<Site>),
-    budget: &mut Budget<'_>,
-) -> Result<Site> {
-    let mut found = None;
-    for row in rows {
-        budget.charge_work(4)?;
-        let (from, to) = project(row);
-        if from != Some(input) {
-            continue;
-        }
-        let output = to.ok_or(Error::Mismatch("conditional memory operation rewritten"))?;
-        if found.replace(output).is_some() {
-            return Err(Error::Mismatch("unique surviving memory occurrence"));
-        }
-    }
-    found.ok_or(Error::Mismatch("missing surviving memory occurrence"))
-}
-
-// Only a sealed complete-history receipt reaches this function. The independent
-// engines establish operation semantics, including K's operand substitutions.
-fn follow(history: &History<'_>, input: Site, budget: &mut Budget<'_>) -> Result<Site> {
-    let p8 = history.prefix();
-    let j = mapped(
-        input,
-        p8.policy7_relation()
-            .continuation()
-            .relation()
-            .retained_operations(),
-        |r| (Some(r.input), Some(r.output)),
-        budget,
-    )?;
-    let k = mapped(
-        j,
-        p8.continuation().claims().occurrences.operations,
-        |r| {
-            (
-                match r.origin {
-                    Origin::Retained(input) => Some(input),
-                    _ => None,
-                },
-                Some(r.output),
-            )
-        },
-        budget,
-    )?;
-    let p = mapped(
-        k,
-        history.promotion().origins(),
-        |r| {
-            (
-                Some(r.input),
-                (r.kind == Promotion::Retained).then_some(r.output),
-            )
-        },
-        budget,
-    )?;
-    // Checked P/H subdivision appends empty blocks and preserves every original
-    // block's operations and roster coordinate; no synthetic memory is possible.
-    budget.charge_work(1)?;
-    let l = mapped(
-        p,
-        history.licm().origins(),
-        |r| (Some(r.input), r.hoist.is_none().then_some(r.output)),
-        budget,
-    )?;
-    let r = mapped(
-        l,
-        history.refinement().origins(),
-        |r| {
-            (
-                Some(r.input()),
-                match *r {
-                    Refinement::Unchanged { output, .. } => Some(output),
-                    _ => None,
-                },
-            )
-        },
-        budget,
-    )?;
-    mapped(
-        r,
-        history.forwarding().origins(),
-        |r| (Some(r.input), r.store.is_none().then_some(r.output)),
-        budget,
-    )
-}
+#[path = "production_conditional_checked_final_core_v1.rs"]
+mod core;
+use self::core::coverage;
+#[cfg(test)]
+use self::core::{coordinate, follow};
 
 #[cfg(test)]
 #[path = "production_conditional_checked_final_v1_tests.rs"]

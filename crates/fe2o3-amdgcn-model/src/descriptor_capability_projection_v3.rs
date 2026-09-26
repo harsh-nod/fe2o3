@@ -3,9 +3,8 @@ use crate::native_v12_text_descriptor_replay_v3::{self as shared, E, R, Root};
 use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
 use fe2o3_kernel_analysis::CanonicalKirInventoryV1 as Inventory;
 use fe2o3_kernel_descriptor::{
-    BlockSizeV1, CapabilityCursorV3, CapabilityV1, DESCRIPTOR_QUERY_STORAGE_V3,
-    DeviceDescriptorTableV3 as Table, KernelDescriptorRefV3, KernelTargetRequirementsV2,
-    RequiredWavefrontWidthV2,
+    BlockSizeV1, CapabilityCursorV3, CapabilityV1, DeviceDescriptorTableV3 as Table,
+    KernelTargetRequirementsV2, RequiredWavefrontWidthV2,
 };
 use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME,
@@ -14,6 +13,7 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource, OperationKind, TargetCapability,
     TargetCapabilityRefV1, VerifiedCanonicalKernelIrModuleV12 as Owner, WaveWidth,
 };
+use shared::queries::{KernelQuery, TableQuery};
 use std::{collections::BTreeSet, mem::size_of};
 
 /// Exact current closed-profile requirement agreement, not formal, runtime,
@@ -135,9 +135,9 @@ fn require_bound(bits: (bool, bool), function: Option<usize>) -> R<()> {
     Ok(())
 }
 
-pub(super) fn check(
+pub(super) fn check<'wire, D: TableQuery<'wire>>(
     inventory: &Inventory<'_>,
-    table: &Table<'_>,
+    table: &D,
     profile: Profile,
     roots: &[Root],
     budget: &mut Budget<'_>,
@@ -190,9 +190,9 @@ pub(super) fn check(
             }
         }
     }
-    let scratch = DESCRIPTOR_QUERY_STORAGE_V3
+    let scratch = D::QUERY_STORAGE
         .checked_add(size_of::<KernelTargetRequirementsV2>())
-        .and_then(|n| n.checked_add(size_of::<KernelDescriptorRefV3<'_, '_>>()))
+        .and_then(|n| n.checked_add(size_of::<D::Kernel<'_>>()))
         .and_then(|n| n.checked_add(size_of::<CapabilityCursorV3<'_, '_>>()))
         .ok_or(Resource::Arithmetic)?;
     budget.reserve_storage(scratch)?;
@@ -204,12 +204,8 @@ pub(super) fn check(
             *bindings.get(entry).ok_or(E::Invalid("bound entry index"))?,
             Some(entry),
         )?;
-        let row = table
-            .kernel(root.descriptor, &mut |w| budget.charge_work(w))
-            .map_err(E::Descriptor)?;
-        let requirement = table
-            .requirement(root.descriptor, &mut |w| budget.charge_work(w))
-            .map_err(E::Descriptor)?;
+        let row = table.kernel(root.descriptor, budget)?;
+        let requirement = table.requirement(root.descriptor, budget)?;
         let error = |field| E::Requirement {
             function: Some(inventory.kernels()[root.kernel].entry.0 as usize),
             field,

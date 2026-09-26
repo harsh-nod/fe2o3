@@ -198,6 +198,42 @@ pub(super) struct NativeSourcePacketPartsV1<T> {
     pub(super) retained: usize,
 }
 
+pub(super) fn encode_original_native_envelope_v1(
+    semantic_identity: [u8; 32],
+    native: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    budget: &mut Budget<'_>,
+) -> Result<(Vec<u8>, InertNativeNeutralSubjectV1), E> {
+    let (catalog, catalog_storage) =
+        Catalog::from_rows_with_budget(semantic_identity, &[], &[], budget).map_err(E::Catalog)?;
+    budget.reserve_storage(catalog_storage.retained_storage())?;
+    let graph_bytes = native.canonical().canonical_bytes();
+    let catalog_bytes = catalog.canonical_bytes();
+    let subject = InertNativeNeutralSubjectV1::new(
+        *native.canonical().identity().digest(),
+        u64::try_from(graph_bytes.len()).map_err(|_| Resource::Arithmetic)?,
+        *catalog.digest(),
+        u64::try_from(catalog_bytes.len()).map_err(|_| Resource::Arithmetic)?,
+    )
+    .map_err(E::Subject)?;
+    let native_len = 112usize
+        .checked_add(graph_bytes.len())
+        .and_then(|n| n.checked_add(catalog_bytes.len()))
+        .ok_or(Resource::Arithmetic)?;
+    budget.reserve_storage(native_len)?;
+    budget.charge_work(native_len)?;
+    let native_module =
+        encode_native_neutral_module_v1(&subject, graph_bytes, catalog_bytes).map_err(E::Native)?;
+    budget.reserve_storage(
+        native_module
+            .capacity()
+            .checked_sub(native_len)
+            .ok_or(Resource::Accounting)?,
+    )?;
+    // The enclosing caller owns the unchanged reservation, including catalog
+    // scratch. This helper does not introduce a transfer/refund scope.
+    Ok((native_module, subject))
+}
+
 pub(super) fn prepare_native_source_packet_v1<'w, T>(
     source: NativeSourceRefV1<'_>,
     ranked: &AuthenticatedRankedVerificationRosterV1,
@@ -297,32 +333,8 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
         ));
     }
     let semantic_identity = *semantic.semantic_sha256().as_bytes();
-    let (catalog, catalog_storage) =
-        Catalog::from_rows_with_budget(semantic_identity, &[], &[], budget).map_err(E::Catalog)?;
-    budget.reserve_storage(catalog_storage.retained_storage())?;
-    let graph_bytes = native.canonical().canonical_bytes();
-    let catalog_bytes = catalog.canonical_bytes();
-    let subject = InertNativeNeutralSubjectV1::new(
-        *native.canonical().identity().digest(),
-        u64::try_from(graph_bytes.len()).map_err(|_| Resource::Arithmetic)?,
-        *catalog.digest(),
-        u64::try_from(catalog_bytes.len()).map_err(|_| Resource::Arithmetic)?,
-    )
-    .map_err(E::Subject)?;
-    let native_len = 112usize
-        .checked_add(graph_bytes.len())
-        .and_then(|n| n.checked_add(catalog_bytes.len()))
-        .ok_or(Resource::Arithmetic)?;
-    budget.reserve_storage(native_len)?;
-    budget.charge_work(native_len)?;
-    let native_module =
-        encode_native_neutral_module_v1(&subject, graph_bytes, catalog_bytes).map_err(E::Native)?;
-    budget.reserve_storage(
-        native_module
-            .capacity()
-            .checked_sub(native_len)
-            .ok_or(Resource::Accounting)?,
-    )?;
+    let (native_module, subject) =
+        encode_original_native_envelope_v1(semantic_identity, native, budget)?;
     let mut rows = reserved_vec(count, budget)?;
     for (ordinal, root) in ranked.roots().iter().enumerate() {
         budget.charge_work(4)?;

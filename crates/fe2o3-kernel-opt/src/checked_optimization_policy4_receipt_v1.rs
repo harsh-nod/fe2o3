@@ -105,9 +105,16 @@ pub struct ReplayedPolicy4SemanticRelationV1<'input, 'intermediate, 'output, 'wi
     rows: Vec<Row>,
     storage: CanonicalPolicy4ExecutionReceiptStorageV1,
 }
-impl<'input, 'intermediate, 'output>
-    ReplayedPolicy4SemanticRelationV1<'input, 'intermediate, 'output, '_>
+impl<'input, 'intermediate, 'output, 'wire>
+    ReplayedPolicy4SemanticRelationV1<'input, 'intermediate, 'output, 'wire>
 {
+    /// Borrow the independently checked B/C relation, not execution authority.
+    pub const fn policy3_relation(
+        &self,
+    ) -> &ReplayedPolicy3SemanticRelationV1<'input, 'intermediate, 'wire> {
+        &self.policy3
+    }
+
     pub const fn input(&self) -> &'input Owner {
         self.policy3.semantic_receipt().input()
     }
