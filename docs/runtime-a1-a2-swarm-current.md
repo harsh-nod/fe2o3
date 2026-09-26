@@ -24,6 +24,19 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest directed router development (2026-09-26): the multi-device cooperative
+backend implements the explicit directed peer-copy SPI with immutable ordered
+provenance, completed-ancestor depth, bounded shared-source custody and
+success-gated iterative progress. Targeted progress advances one exact private
+DMA or reconciliation blocker, including cross-allocation read/write lane pins,
+without fabricating a dependency or reporting another copy's terminal result.
+The [router contract](runtime-directed-cooperative-peer-v1.md) and
+[development packet](evidence/dev-directed-router-2026-09-26/README.md) distinguish
+CPU/scripted qualification from native XGMI and hardware evidence. Pending
+peer-to-compute, positive composed/native execution, mixed-kind formal refinement
+and matched performance remain open. Accepted milestones, A1/A2 and parity
+statuses are unchanged.
+
 Latest native reconciliation development (2026-09-26): cooperative materialized
 HostVisible writebacks now retain exact generation, descriptor and lane authority
 across scratch-sized reconciliation steps. Cancellation preserves incomplete
@@ -33,7 +46,7 @@ conflicting compute remains Pending. Review corrected the earlier assumption:
 writable DeviceLocal materialization is rejected, and the recycled reader accepts
 HostVisible authority only. DeviceLocal still uses the existing async SDMA path.
 The [development packet](evidence/dev-native-reconcile-2026-09-26/README.md)
-records CPU qualification. Directed router support, pending peer-to-compute,
+records CPU qualification. At that checkpoint, directed router support, pending peer-to-compute,
 positive composed/native execution, formal refinement and matched performance
 remain open. No accepted milestone, A1/A2 or HIP/HSA parity status changed.
 
