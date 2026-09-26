@@ -2,7 +2,7 @@
 
 ## Milestone Snapshot
 
-As of 2026-09-25, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
+As of 2026-09-26, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
 remains open. These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -24,6 +24,19 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest native reconciliation development (2026-09-26): cooperative materialized
+HostVisible writebacks now retain exact generation, descriptor and lane authority
+across scratch-sized reconciliation steps. Cancellation preserves incomplete
+extents for retry; mapped-write faults retain terminal custody. Host destination
+writes update exact ranges without whole-shadow refresh or cache detachment;
+conflicting compute remains Pending. Review corrected the earlier assumption:
+writable DeviceLocal materialization is rejected, and the recycled reader accepts
+HostVisible authority only. DeviceLocal still uses the existing async SDMA path.
+The [development packet](evidence/dev-native-reconcile-2026-09-26/README.md)
+records CPU qualification. Directed router support, pending peer-to-compute,
+positive composed/native execution, formal refinement and matched performance
+remain open. No accepted milestone, A1/A2 or HIP/HSA parity status changed.
+
 Latest cooperative SDMA development (2026-09-26): authoritative DeviceLocal
 peer-copy leaves now use resumable child async submissions and one accounted
 64-KiB scratch window per phase. Ordering and cancellation preserve exact native
@@ -32,7 +45,7 @@ retaining retryable private disposal. The
 [development packet](evidence/dev-cooperative-sdma-2026-09-26/README.md)
 records 12 focused passes, 1,555 broad passes, three unchanged socket-permission
 failures, 28 ignores, 52 doctests and passing strict static checks. Native-dirty
-reconciliation still blocks, and positive composed/native execution, directed
+reconciliation was still blocking at that checkpoint. Positive composed/native execution, directed
 router support, pending peer-to-compute, formal refinement and matched performance
 remain open. No accepted milestone, A1/A2 or HIP/HSA parity status changed.
 
