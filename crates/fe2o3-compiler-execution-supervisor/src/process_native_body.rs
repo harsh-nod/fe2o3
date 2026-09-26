@@ -56,11 +56,11 @@ impl Core<'_> {
 
 // Field order is the lifetime invariant: retire or defer child custody and close
 // endpoints before releasing their original request-account reservation.
-struct Funded<'a, 'work, T> {
+struct Funded<T, F> {
     owner: T,
-    funding: RequestFunding<'a, 'work>,
+    funding: F,
 }
-type Session<'a, 'work> = Funded<'a, 'work, Core<'a>>;
+type Session<'a, 'work> = Funded<Core<'a>, RequestFunding<'a, 'work>>;
 struct RequestFunding<'a, 'work> {
     budget: &'a mut Budget<'work>,
     retained: usize,

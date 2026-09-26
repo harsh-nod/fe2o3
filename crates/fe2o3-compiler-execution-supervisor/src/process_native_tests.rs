@@ -1,9 +1,11 @@
 //! Deterministic wait/accounting tests with fake owners, not native-child evidence.
 
 use super::*;
-use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrWorkBudgetV1 as Work, CanonicalKernelIrWorkLedgerIdentityV1 as Ledger,
+};
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     error::Error as StdError,
     panic::{AssertUnwindSafe, catch_unwind, panic_any, resume_unwind},
     time::{Duration, Instant},
@@ -40,7 +42,7 @@ impl Drop for FakeOwner<'_> {
 fn funded_owner<'a, 'work, 'probe>(
     budget: &'a mut Budget<'work>,
     drops: &'probe Cell<usize>,
-) -> Funded<'a, 'work, FakeOwner<'probe>> {
+) -> Funded<FakeOwner<'probe>, RequestFunding<'a, 'work>> {
     Funded {
         owner: FakeOwner {
             drops,
@@ -50,6 +52,138 @@ fn funded_owner<'a, 'work, 'probe>(
             budget,
             retained: RETAINED,
         },
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum RetirementEvent {
+    Owner {
+        unwinding: bool,
+    },
+    Funding {
+        unwinding: bool,
+        original_account: bool,
+        storage: usize,
+        work: usize,
+    },
+}
+
+struct OrderedOwner<'events> {
+    events: &'events RefCell<Vec<RetirementEvent>>,
+    panic_on_drop: bool,
+}
+
+impl Drop for OrderedOwner<'_> {
+    fn drop(&mut self) {
+        self.events.borrow_mut().push(RetirementEvent::Owner {
+            unwinding: std::thread::panicking(),
+        });
+        if self.panic_on_drop {
+            panic_any("fake owner retirement");
+        }
+    }
+}
+
+struct FundingProbe<'a, 'work, 'events> {
+    inner: RequestFunding<'a, 'work>,
+    events: &'events RefCell<Vec<RetirementEvent>>,
+    account: Ledger,
+}
+
+impl Drop for FundingProbe<'_, '_, '_> {
+    fn drop(&mut self) {
+        // Observe immediately before the real RequestFunding field retires itself.
+        self.events.borrow_mut().push(RetirementEvent::Funding {
+            unwinding: std::thread::panicking(),
+            original_account: self.inner.budget.work_ledger_identity_v1() == self.account,
+            storage: self.inner.budget.storage(),
+            work: self.inner.budget.work(),
+        });
+    }
+}
+
+#[test]
+fn funded_drops_owner_before_funding_on_success_owner_panic_and_unwind() {
+    for (panic, owner_panics, scope_panics) in [
+        (None, false, false),
+        (Some("fake owner retirement"), true, false),
+        (Some("fake nested observation"), false, true),
+    ] {
+        let events = RefCell::new(Vec::new());
+        let mut work = Work::new(100);
+        let mut budget = Budget::new(&mut work, 100);
+        budget.charge_work(5).unwrap();
+        budget.reserve_storage(FLOOR).unwrap();
+        assert!(budget.charge_work(101).is_err());
+        assert!(budget.reserve_storage(101).is_err());
+        let account = budget.work_ledger_identity_v1();
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let guard = Funded {
+                owner: OrderedOwner {
+                    events: &events,
+                    panic_on_drop: owner_panics,
+                },
+                funding: FundingProbe {
+                    inner: RequestFunding {
+                        budget: &mut budget,
+                        retained: RETAINED,
+                    },
+                    events: &events,
+                    account,
+                },
+            };
+            guard
+                .funding
+                .inner
+                .budget
+                .with_prepaid_scope::<(), Error>(FLOOR, 1, 7, OUTER_SCRATCH, |b| {
+                    b.with_prepaid_scope::<(), Error>(
+                        FLOOR + OUTER_SCRATCH,
+                        2,
+                        13,
+                        INNER_SCRATCH,
+                        |b| {
+                            b.reserve_storage(TEMPORARY)?;
+                            if scope_panics {
+                                panic_any("fake nested observation");
+                            }
+                            Ok(())
+                        },
+                    )
+                })
+                .unwrap();
+            drop(guard);
+        }));
+        match panic {
+            None => assert!(outcome.is_ok()),
+            Some(expected) => {
+                let payload = outcome.unwrap_err();
+                assert_eq!(payload.downcast_ref::<&str>(), Some(&expected));
+            }
+        }
+        assert_eq!(
+            events.into_inner(),
+            vec![
+                RetirementEvent::Owner {
+                    unwinding: scope_panics
+                },
+                RetirementEvent::Funding {
+                    unwinding: panic.is_some(),
+                    original_account: true,
+                    storage: FLOOR,
+                    work: 25,
+                },
+            ]
+        );
+        assert!(budget.work_ledger_identity_v1() == account);
+        assert_eq!(budget.storage(), UNRELATED);
+        assert_eq!(budget.work(), 25);
+        assert_eq!(
+            budget.peak_storage(),
+            FLOOR + OUTER_SCRATCH + INNER_SCRATCH + TEMPORARY
+        );
+        assert_eq!(budget.failed_work(), Some(106));
+        assert_eq!(budget.failed_storage(), Some(FLOOR + 101));
     }
 }
 
