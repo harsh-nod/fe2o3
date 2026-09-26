@@ -4,6 +4,7 @@ macro_rules! profile_capability {
         type Capability = NativeCapability<Profile, BYTES>;
         const PROFILE_NAME: &str = $profile_name;
         impl Record<BYTES> for Profile {
+            type Context<'a> = ();
             const ROLE: CapabilityRole = CapabilityRole {
                 name: "native compiler-execution client-profile capability",
                 memfd_name: $memfd,
@@ -14,7 +15,8 @@ macro_rules! profile_capability {
             fn retained_storage(&self) -> usize {
                 self.retained_storage()
             }
-            fn decode_retained(bytes: &[u8; BYTES], budget: &mut Budget<'_>) -> Result<Self> {
+            fn context_storage((): ()) -> Result<usize> { Ok(0) }
+            fn decode_retained(bytes: &[u8; BYTES], (): (), budget: &mut Budget<'_>) -> Result<Self> {
                 let (profile, storage) = Self::decode(bytes, budget)?;
                 budget.reserve_storage(storage.additional_storage())?;
                 Ok(profile)
@@ -40,7 +42,7 @@ macro_rules! profile_capability {
             }
             /// Consumes a File prepaid at FILE_STORAGE and returns only owner growth.
             pub fn from_file(image: File, budget: &mut Budget<'_>) -> Result<(Self, Storage)> {
-                Capability::from_file(image, budget).map(|(value, storage)| (Self(value), storage))
+                Capability::from_file(image, (), budget).map(|(value, storage)| (Self(value), storage))
             }
             pub const fn profile(&self) -> &Profile {
                 &self.0.record
@@ -102,7 +104,7 @@ macro_rules! profile_capability {
                 .map(File::from)
                 .map_err(|e| Error::io("open trusted native profile", e))?;
             let bytes = read_profile(&file, uid, gid, |_| {})?;
-            let profile = Profile::decode_retained(&bytes, budget)?;
+            let profile = Profile::decode_retained(&bytes, (), budget)?;
             Capability::create_inner(profile)
         }
 

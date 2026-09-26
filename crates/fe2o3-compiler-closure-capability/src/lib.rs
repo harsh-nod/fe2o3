@@ -36,6 +36,9 @@ mod compiler_execution_signing_key_native;
 mod compiler_execution_signing_key_v2;
 mod compiler_execution_signing_key_v3;
 mod compiler_execution_supervisor_deployment;
+mod compiler_execution_supervisor_deployment_native;
+mod compiler_execution_supervisor_deployment_v2;
+mod compiler_execution_supervisor_deployment_v3;
 mod native_capability;
 mod rustc_invocation;
 mod sealed_image;
@@ -76,6 +79,8 @@ pub use compiler_execution_supervisor_deployment::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1,
     CompilerExecutionSupervisorDeploymentCapabilityV1,
 };
+pub use compiler_execution_supervisor_deployment_v2::CompilerExecutionSupervisorDeploymentCapabilityV2;
+pub use compiler_execution_supervisor_deployment_v3::CompilerExecutionSupervisorDeploymentCapabilityV3;
 pub use native_capability::{
     CompilerExecutionCapabilityErrorV2, CompilerExecutionCapabilityStorageV2,
 };

@@ -153,11 +153,18 @@ impl Error for CompilerExecutionCapabilityErrorV2 {
 }
 
 pub(crate) trait Record<const N: usize>: Sized {
+    type Context<'a>: Copy;
     const ROLE: CapabilityRole;
     fn bytes(&self) -> &[u8; N];
     fn retained_storage(&self) -> usize;
+    // Context owners are borrowed, never consumed or included in returned growth.
+    fn context_storage(context: Self::Context<'_>) -> Result<usize>;
     // Reserve the decoded owner's returned charge immediately on this ledger.
-    fn decode_retained(bytes: &[u8; N], budget: &mut Budget<'_>) -> Result<Self>;
+    fn decode_retained(
+        bytes: &[u8; N],
+        context: Self::Context<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<Self>;
 }
 
 pub(crate) struct NativeCapability<T, const N: usize> {
@@ -192,6 +199,7 @@ impl<T: Record<N>, const N: usize> NativeCapability<T, N> {
             8 * size_of::<CompilerExecutionCapabilityErrorV2>()
                 + 64 * size_of::<usize>()
                 + size_of::<LedgerIdentity>()
+                + 4 * size_of::<T::Context<'static>>()
                 + size_of::<std::result::Result<(), Resource>>()
                 + 2 * size_of::<bool>()
                 + 512
@@ -240,11 +248,18 @@ impl<T: Record<N>, const N: usize> NativeCapability<T, N> {
     }
 
     /// Consumes the prepaid File reservation, returning only capability growth.
-    pub(crate) fn from_file(image: File, budget: &mut Budget<'_>) -> Result<(Self, Storage)> {
-        Self::scope(budget, Self::FILE_STORAGE, |budget| {
+    pub(crate) fn from_file(
+        image: File,
+        context: T::Context<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, Storage)> {
+        let floor = Self::FILE_STORAGE
+            .checked_add(T::context_storage(context)?)
+            .ok_or(Resource::Arithmetic)?;
+        Self::scope(budget, floor, |budget| {
             let image = SealedCapabilityImage::from_file_fixed::<N>(image, T::ROLE)?;
             Ok((
-                Self::decode_image(image, budget)?,
+                Self::decode_image(image, context, budget)?,
                 Storage(Self::RETAINED - Self::FILE_STORAGE),
             ))
         })
@@ -252,21 +267,35 @@ impl<T: Record<N>, const N: usize> NativeCapability<T, N> {
 
     /// Borrows an inherited source descriptor. Its reservation stays live;
     /// the distinct retained descriptor/capability returns the FULL charge.
-    pub(crate) fn from_inherited_at(fd: RawFd, budget: &mut Budget<'_>) -> Result<(Self, Storage)> {
-        Self::scope(budget, Self::FILE_STORAGE, |budget| {
+    pub(crate) fn from_inherited_at(
+        fd: RawFd,
+        context: T::Context<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, Storage)> {
+        let floor = Self::FILE_STORAGE
+            .checked_add(T::context_storage(context)?)
+            .ok_or(Resource::Arithmetic)?;
+        Self::scope(budget, floor, |budget| {
             let image = SealedCapabilityImage::from_inherited_fixed::<N>(fd, T::ROLE)?;
-            Ok((Self::decode_image(image, budget)?, Storage(Self::RETAINED)))
+            Ok((
+                Self::decode_image(image, context, budget)?,
+                Storage(Self::RETAINED),
+            ))
         })
     }
 
-    fn decode_image(image: SealedCapabilityImage, budget: &mut Budget<'_>) -> Result<Self> {
+    fn decode_image(
+        image: SealedCapabilityImage,
+        context: T::Context<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<Self> {
         let bytes = image.read_fixed::<N>()?;
-        let record = T::decode_retained(&bytes, budget)?;
+        let record = T::decode_retained(&bytes, context, budget)?;
         Ok(Self { record, image })
     }
 
     fn check(&self) -> Result<()> {
-        // The immutable in-memory record was admitted by its nominal V2
+        // The immutable in-memory record was admitted by its nominal native
         // constructor/decoder. Byte equality therefore needs no second decode.
         if &self.image.read_fixed::<N>()? != self.record.bytes() {
             return Err(CompilerExecutionCapabilityErrorV2::Rejected(
@@ -313,3 +342,7 @@ pub(crate) const fn envelope_overhead<T, E>() -> usize {
 #[cfg(test)]
 #[path = "native_capability_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "native_capability_context_tests.rs"]
+mod context_tests;

@@ -228,7 +228,7 @@ fn policy_ownership_chain_preserves_inode_bytes_offsets_and_exact_charges() {
     assert_eq!(transfer.stream_position().unwrap(), 77);
     drop(cap);
     budget.release_storage(Cap::RETAINED).unwrap();
-    let (recovered, growth) = Cap::from_file(transfer, &mut budget).unwrap();
+    let (recovered, growth) = Cap::from_file(transfer, (), &mut budget).unwrap();
     budget.reserve_storage(growth.additional_storage()).unwrap();
     assert_eq!(budget.storage(), 13 + Cap::RETAINED);
     assert_eq!(budget.work(), 4 * Cap::IO_WORK + POLICY_WORK);
@@ -306,8 +306,9 @@ fn nested_decode_charges_the_real_shared_ledger_at_exact_boundaries() {
     for which in 0..4 {
         let work = Cap::IO_WORK + POLICY_WORK - usize::from(which == 0);
         let storage = peak - usize::from(which == 1);
-        let (result, accepted, live, observed_peak) =
-            run(floor, work, storage, |b| Cap::from_file(sealed(&bytes), b));
+        let (result, accepted, live, observed_peak) = run(floor, work, storage, |b| {
+            Cap::from_file(sealed(&bytes), (), b)
+        });
         assert_eq!(live, floor);
         match which {
             0 => {
@@ -349,7 +350,7 @@ fn both_same_length_legacy_families_are_rejected_in_both_directions() {
     assert_eq!(p1.canonical_bytes().len(), p2.canonical_bytes().len());
     assert_eq!(c1.canonical_bytes().len(), c2.canonical_bytes().len());
     let (result, _, live, _) = run(Cap::FILE_STORAGE, 1_000_000, 1_000_000, |b| {
-        Cap::from_file(sealed(p1.canonical_bytes()), b)
+        Cap::from_file(sealed(p1.canonical_bytes()), (), b)
     });
     assert!(matches!(
         failure(result),
@@ -358,7 +359,7 @@ fn both_same_length_legacy_families_are_rejected_in_both_directions() {
     assert_eq!(live, Cap::FILE_STORAGE);
     assert!(CompilerExecutionPolicyCapabilityV1::from_file(sealed(p2.canonical_bytes())).is_err());
     let (result, _, _, _) = run(ProfileCap::FILE_STORAGE, 1_000_000, 1_000_000, |b| {
-        ProfileCap::from_file(sealed(c1.canonical_bytes()), b)
+        ProfileCap::from_file(sealed(c1.canonical_bytes()), (), b)
     });
     assert!(matches!(
         failure(result),
@@ -432,7 +433,7 @@ fn seal_mode_length_and_descriptor_precedence_matches_legacy_validation() {
             assert!(legacy_error.ends_with(expected));
         }
         let (result, _, _, _) = run(Cap::FILE_STORAGE, 1_000_000, 1_000_000, |b| {
-            Cap::from_file(file, b)
+            Cap::from_file(file, (), b)
         });
         assert!(
             matches!(failure(result), CompilerExecutionCapabilityErrorV2::Rejected(reason) if reason == expected)
@@ -452,7 +453,7 @@ fn inherited_policy_owns_only_its_private_duplicate() {
     let fd = source.as_raw_fd();
     let floor = 13 + Cap::FILE_STORAGE;
     let (result, _, _, _) = run(floor, 1_000_000, 1_000_000, |b| {
-        Cap::from_inherited_at(fd, b)
+        Cap::from_inherited_at(fd, (), b)
     });
     assert!(matches!(
         failure(result),
@@ -460,7 +461,7 @@ fn inherited_policy_owns_only_its_private_duplicate() {
     ));
     rustix::io::fcntl_setfd(&source, rustix::io::FdFlags::empty()).unwrap();
     let (result, work, live, _) = run(floor, 1_000_000, 1_000_000, |b| {
-        Cap::from_inherited_at(fd, b)
+        Cap::from_inherited_at(fd, (), b)
     });
     let (cap, charge) = result.unwrap();
     assert_eq!(charge.additional_storage(), Cap::RETAINED);
@@ -485,7 +486,7 @@ fn inherited_policy_owns_only_its_private_duplicate() {
     );
     for invalid in [-1, 0, 1, 2, i32::MAX] {
         let (result, _, _, _) = run(floor, 1_000_000, 1_000_000, |b| {
-            Cap::from_inherited_at(invalid, b)
+            Cap::from_inherited_at(invalid, (), b)
         });
         assert!(result.is_err());
     }
@@ -531,7 +532,7 @@ fn nonregular_and_unreadable_descriptors_fail_without_blocking_content_reads() {
         ordinary,
     ] {
         let (result, _, live, _) = run(Cap::FILE_STORAGE, 1_000_000, 1_000_000, |b| {
-            Cap::from_file(file, b)
+            Cap::from_file(file, (), b)
         });
         assert!(matches!(
             failure(result),
@@ -633,7 +634,9 @@ fn every_required_seal_is_mandatory_and_unreadable_aliases_are_rejected() {
         assert!(matches!(
             failure(
                 run(Cap::FILE_STORAGE, 1_000_000, 1_000_000, |b| Cap::from_file(
-                    file, b
+                    file,
+                    (),
+                    b
                 ))
                 .0
             ),
@@ -656,7 +659,9 @@ fn every_required_seal_is_mandatory_and_unreadable_aliases_are_rejected() {
         assert!(matches!(
             failure(
                 run(Cap::FILE_STORAGE, 1_000_000, 1_000_000, |b| Cap::from_file(
-                    alias, b
+                    alias,
+                    (),
+                    b
                 ))
                 .0
             ),
@@ -687,7 +692,9 @@ fn consuming_refusals_close_inputs_and_inherited_refusals_drop_only_duplicates()
         assert_eq!(aliases(&witness), 2);
         assert!(
             run(Cap::FILE_STORAGE, work, 1_000_000, |b| Cap::from_file(
-                file, b
+                file,
+                (),
+                b
             ))
             .0
             .is_err()
@@ -699,7 +706,7 @@ fn consuming_refusals_close_inputs_and_inherited_refusals_drop_only_duplicates()
     assert_eq!(aliases(&source), 1);
     assert!(
         run(Cap::FILE_STORAGE, 1_000_000, 1_000_000, |b| {
-            Cap::from_inherited_at(source.as_raw_fd(), b)
+            Cap::from_inherited_at(source.as_raw_fd(), (), b)
         })
         .0
         .is_err()

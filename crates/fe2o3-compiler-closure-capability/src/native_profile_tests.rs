@@ -99,7 +99,7 @@ fn native_profile_roundtrip_and_fixed_tree_match_the_strict_decoder() {
     assert_eq!(charge.additional_storage(), Capability::FILE_STORAGE);
     drop(cap);
     let (recovered, delta) = run(Capability::FILE_STORAGE, 1_000_000, 1_000_000, |b| {
-        Capability::from_file(transfer, b)
+        Capability::from_file(transfer, (), b)
     })
     .0
     .unwrap();
@@ -199,7 +199,7 @@ fn native_profile_rejects_a_legacy_nested_policy_even_with_correct_outer_hash() 
     hash.update(&bytes[..248]);
     bytes[248..].copy_from_slice(&hash.finalize());
     let result = run(Capability::FILE_STORAGE, 1_000_000, 1_000_000, |b| {
-        Capability::from_file(sealed(&bytes), b)
+        Capability::from_file(sealed(&bytes), (), b)
     })
     .0;
     assert!(matches!(profile_failure(result), ProfileError::Policy(_)));

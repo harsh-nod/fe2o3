@@ -3,6 +3,7 @@ macro_rules! launch_capability {
     ($Cap:ident, $version:literal) => {
         type Capability = NativeCapability<Manifest, BYTES>;
         impl Record<BYTES> for Manifest {
+            type Context<'a> = ();
             const ROLE: CapabilityRole = CapabilityRole {
                 name: "native compiler-execution service launch capability",
                 memfd_name: concat!("fe2o3-compiler-execution-service-launch-v", $version),
@@ -13,7 +14,8 @@ macro_rules! launch_capability {
             fn retained_storage(&self) -> usize {
                 self.retained_storage()
             }
-            fn decode_retained(bytes: &[u8; BYTES], budget: &mut Budget<'_>) -> Result<Self> {
+            fn context_storage((): ()) -> Result<usize> { Ok(0) }
+            fn decode_retained(bytes: &[u8; BYTES], (): (), budget: &mut Budget<'_>) -> Result<Self> {
                 let (manifest, storage) = Self::decode(bytes, budget)?;
                 budget.reserve_storage(storage.additional_storage())?;
                 Ok(manifest)
@@ -42,12 +44,12 @@ macro_rules! launch_capability {
                 Capability::create(manifest, budget).map(|(value, storage)| (Self(value), storage))
             }
             pub fn from_file(image: File, budget: &mut Budget<'_>) -> Result<(Self, Storage)> {
-                Capability::from_file(image, budget).map(|(value, storage)| (Self(value), storage))
+                Capability::from_file(image, (), budget).map(|(value, storage)| (Self(value), storage))
             }
             /// Borrows a non-CLOEXEC fd >= 3, prepaid at FILE_STORAGE. Does not own or
             /// close that source slot; its caller must retain it unchanged during admission.
             pub fn from_inherited_at(fd: RawFd, budget: &mut Budget<'_>) -> Result<(Self, Storage)> {
-                Capability::from_inherited_at(fd, budget).map(|(value, storage)| (Self(value), storage))
+                Capability::from_inherited_at(fd, (), budget).map(|(value, storage)| (Self(value), storage))
             }
             pub const fn manifest(&self) -> &Manifest {
                 &self.0.record

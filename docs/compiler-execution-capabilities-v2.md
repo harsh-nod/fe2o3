@@ -57,6 +57,43 @@ The caller must keep that original slot live and unchanged during admission.
 Transfer produces another CLOEXEC File referring to the same sealed object.
 Raw File interoperability does not meter subsequent arbitrary File operations.
 
+## Native Deployment Transport
+
+`CompilerExecutionSupervisorDeploymentCapabilityV2` and its V3 counterpart use
+the same sealed-record transport, with distinct 184-byte native deployment wires.
+Creation consumes an already constructed native deployment. File and inherited
+admission require the actual same-family policy and reject another complete
+policy identity, including correctly rehashed records from another family.
+No identity-only, context-free, V1-upgrade or fallback admission is provided.
+
+The private transport decoder has an explicit borrowed context. Existing policy,
+profile and launch adapters use an empty context, preserving their public APIs
+and quotas. Deployment decoding borrows the policy on the original ledger; it
+does not clone that owner, reconstruct it from a digest, or create a child budget.
+The contextual decoder's returned record is reserved through outer cleanup.
+
+Using the charge notation below, deployment operations have these obligations:
+
+| Operation | Prepaid Input | Additional Returned Charge |
+|---|---|---|
+| create | consumed Drecord | Dcap - Drecord |
+| from_file | consumed Dfile + borrowed policy | Dcap - Dfile |
+| from_inherited_at | borrowed Dfile + policy | full Dcap |
+| revalidate / try_clone_for_transfer | borrowed Dcap | none / full Dfile |
+| validate_transfer | borrowed Dcap + Dfile | none |
+
+Create, revalidate and transfer charge `IO_WORK = 38664`. File and inherited
+admission charge `ADMISSION_WORK = 44560`, including the native deployment
+decoder. `ADMISSION_STORAGE` is outer `IO_STORAGE` plus native decoder scratch;
+all input reservations stay separately live. Inherited admission borrows an
+fd >= 3 with CLOEXEC clear and returns private CLOEXEC custody without closing
+or changing the source slot. No slot is installed by these APIs.
+
+These owners establish immutable, exact-object transport of inert configuration,
+not trusted provisioning origin, measured process custody or launch authority.
+The protected parent must independently pin the deployment and policy. Production
+coordinator/startup integration remains incomplete.
+
 ## Production Profile
 
 The only production native profile is

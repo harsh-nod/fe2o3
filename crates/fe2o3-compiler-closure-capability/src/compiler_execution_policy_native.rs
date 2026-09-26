@@ -3,6 +3,7 @@ macro_rules! policy_capability {
     ($Cap:ident, $memfd:literal) => {
         type Capability = NativeCapability<Policy, BYTES>;
         impl Record<BYTES> for Policy {
+            type Context<'a> = ();
             const ROLE: CapabilityRole = CapabilityRole {
                 name: "native compiler-execution policy capability",
                 memfd_name: $memfd,
@@ -13,7 +14,14 @@ macro_rules! policy_capability {
             fn retained_storage(&self) -> usize {
                 self.retained_storage()
             }
-            fn decode_retained(bytes: &[u8; BYTES], budget: &mut Budget<'_>) -> Result<Self> {
+            fn context_storage((): ()) -> Result<usize> {
+                Ok(0)
+            }
+            fn decode_retained(
+                bytes: &[u8; BYTES],
+                (): (),
+                budget: &mut Budget<'_>,
+            ) -> Result<Self> {
                 let (policy, storage) = Self::decode(bytes, budget)?;
                 budget.reserve_storage(storage.additional_storage())?;
                 Ok(policy)
@@ -35,7 +43,8 @@ macro_rules! policy_capability {
             }
             /// Consumes a prepaid File and returns only the retained-storage delta.
             pub fn from_file(image: File, budget: &mut Budget<'_>) -> Result<(Self, Storage)> {
-                Capability::from_file(image, budget).map(|(value, storage)| (Self(value), storage))
+                Capability::from_file(image, (), budget)
+                    .map(|(value, storage)| (Self(value), storage))
             }
             /// Borrows a non-CLOEXEC inherited fd >= 3; never owns/closes it. The
             /// caller must keep that source live and prepaid at FILE_STORAGE throughout
@@ -45,7 +54,7 @@ macro_rules! policy_capability {
                 fd: RawFd,
                 budget: &mut Budget<'_>,
             ) -> Result<(Self, Storage)> {
-                Capability::from_inherited_at(fd, budget)
+                Capability::from_inherited_at(fd, (), budget)
                     .map(|(value, storage)| (Self(value), storage))
             }
             pub const fn policy(&self) -> &Policy {
