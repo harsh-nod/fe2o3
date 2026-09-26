@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-completion-leaf-outcomes-2026-09-25/test-run.py"
+  ],
+  "started_ns": 1790381696274510868,
+  "process_group": 1288265,
+  "group_absent": true,
+  "finished_ns": 1790381696361262161,
+  "status": 0
+}

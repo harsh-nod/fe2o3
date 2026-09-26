@@ -1,0 +1,15 @@
+{
+  "inputs": {
+    "crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": "7e540c273805e914b78131ba240c4d1b3db20ce3eb81da81f10f9b9592edcdbd",
+    "crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": "38cbcd1b00de69f7687a6ddf8cac2eab2799a65ebd3d3383abed605d119f8bfc",
+    "crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": "0a7194241a21fdad03339052565c25fd4f2d859eee818f675ba4daef28161bff",
+    "crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": "aa02e750e36180adf0586f2ebf2f1f086d2eca4bcf21b539f53375440877acdd",
+    "crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": "9cfcb1e66f56a3d20e83a0bfbec65142f3f5a5a642a72f1ef216f3fc6040b149",
+    "crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": "eed487a499910b33a7d1b4768ab5baa960352647d796f575dd369d1136049250",
+    "crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": "d934d9194664afd9c32752b88e6e1e83275e6be94f6aee82e296d3a24113f7fe",
+    "crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": "5fac23dff220f57827c4ab919ee0bd92aa52ec88f72877af03730fd2e0b48048"
+  },
+  "new": "if node.settlement_failure != 0 {",
+  "old": "if node.settlement_failure != 0 {\n            self.quarantined = true;",
+  "path": "crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs"
+}

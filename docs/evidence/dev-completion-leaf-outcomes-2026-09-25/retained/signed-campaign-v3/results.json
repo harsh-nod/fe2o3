@@ -1,0 +1,58 @@
+{
+  "closure-after": {
+    "passed": true,
+    "status": 0
+  },
+  "closure-before": {
+    "passed": true,
+    "status": 0
+  },
+  "format": {
+    "passed": true,
+    "status": 0
+  },
+  "omit-failure-quarantine": {
+    "passed": true,
+    "status": 1
+  },
+  "promote-unknown-input": {
+    "passed": true,
+    "status": 1
+  },
+  "proof-after": {
+    "passed": true,
+    "status": 0
+  },
+  "proof-before": {
+    "passed": true,
+    "status": 0
+  },
+  "reject-valid-custody": {
+    "passed": true,
+    "status": 1
+  },
+  "relocated-proof": {
+    "passed": true,
+    "status": 0
+  },
+  "runner-tests": {
+    "passed": true,
+    "status": 0
+  },
+  "skip-success-settlement": {
+    "passed": true,
+    "status": 1
+  },
+  "source-body": {
+    "passed": true,
+    "status": 0
+  },
+  "source-signature": {
+    "passed": true,
+    "status": 0
+  },
+  "source-tests": {
+    "passed": true,
+    "status": 0
+  }
+}

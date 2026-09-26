@@ -1,0 +1,23 @@
+{
+  "baseline": "53aba0d658f0d874f3c4f7ef18ff35f971504375",
+  "executable_sha256": {
+    "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustfmt": "a9137d0c198ceb6c72193d517d3c9007b3ec7a90d3d10ec6889773eca48261b4",
+    "/usr/bin/git": "2a8c18fbf43da9f692d75474c72bea9dfd796c260b0f3dfe456376abc3bbd668"
+  },
+  "normalized_equal": true,
+  "sha256": {
+    "baseline-macro.rs": "cf368c97bc902b533f86eea327286521788055253e7a26607ed4210fa78ddd9f",
+    "candidate-macro.rs": "5fac23dff220f57827c4ab919ee0bd92aa52ec88f72877af03730fd2e0b48048",
+    "normalized-after.rs": "2ab03218154f5eebe11f6caf2e82c18c5df6fc03c686095c922b0307cbc9d3c4",
+    "normalized-before.rs": "2ab03218154f5eebe11f6caf2e82c18c5df6fc03c686095c922b0307cbc9d3c4"
+  },
+  "statement": "Allowlisted syntactic correspondence, not a semantic-equivalence proof.",
+  "transformations": [
+    "closed annotations/identifiers",
+    "usize literal",
+    "explicit bounded fuel",
+    "immediate dependency dereference",
+    "three Result bindings",
+    "two explicit identity fields"
+  ]
+}

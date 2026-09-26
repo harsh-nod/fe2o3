@@ -1,0 +1,20 @@
+{
+  "command": [
+    "/usr/bin/git",
+    "--no-replace-objects",
+    "--no-pager",
+    "-c",
+    "gpg.format=ssh",
+    "-c",
+    "gpg.ssh.program=/usr/bin/ssh-keygen",
+    "-c",
+    "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign/allowed-signers",
+    "verify-commit",
+    "587af7ac3111bb10c20707aa8a3f3812e0d591f6"
+  ],
+  "started_ns": 1790381695567193688,
+  "process_group": 1288251,
+  "group_absent": true,
+  "finished_ns": 1790381695591691958,
+  "status": 0
+}

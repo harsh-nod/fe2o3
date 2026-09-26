@@ -1,0 +1,13 @@
+{
+  "command": [
+    "cargo",
+    "fmt",
+    "--all",
+    "--check"
+  ],
+  "started_ns": 1790382297847734543,
+  "process_group": 1408198,
+  "group_absent": true,
+  "finished_ns": 1790382329947262031,
+  "status": 0
+}

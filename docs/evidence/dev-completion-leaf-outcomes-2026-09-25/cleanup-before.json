@@ -1,0 +1,6063 @@
+{
+  "allocated_bytes": 10309632,
+  "inventory": {
+    ".": [
+      2096,
+      8934400,
+      1000,
+      16832,
+      4096,
+      1790382087232093642,
+      4096
+    ],
+    "01-exact-adapters": [
+      2096,
+      8934410,
+      1000,
+      16877,
+      4096,
+      1790380967444641384,
+      4096
+    ],
+    "01-exact-adapters/inputs.json": [
+      2096,
+      8934427,
+      1000,
+      33188,
+      1057,
+      1790380932730561874,
+      4096
+    ],
+    "01-exact-adapters/proof": [
+      2096,
+      8934428,
+      1000,
+      16877,
+      4096,
+      1790380967444641384,
+      4096
+    ],
+    "01-exact-adapters/proof/record.json": [
+      2096,
+      41468,
+      1000,
+      33188,
+      667,
+      1790380967444641384,
+      4096
+    ],
+    "01-exact-adapters/proof/stderr.log": [
+      2096,
+      2789491,
+      1000,
+      33188,
+      9812,
+      1790380967444641384,
+      12288
+    ],
+    "01-exact-adapters/proof/stdout.log": [
+      2096,
+      41493,
+      1000,
+      33188,
+      35168,
+      1790380967444641384,
+      36864
+    ],
+    "01-exact-adapters/result.json": [
+      2096,
+      8934393,
+      1000,
+      33188,
+      39,
+      1790380967444641384,
+      4096
+    ],
+    "01-exact-adapters/source": [
+      2096,
+      8934411,
+      1000,
+      16877,
+      4096,
+      1790380932726598397,
+      4096
+    ],
+    "01-exact-adapters/source/crates": [
+      2096,
+      8934412,
+      1000,
+      16877,
+      4096,
+      1790380932730561874,
+      4096
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime": [
+      2096,
+      8934423,
+      1000,
+      16877,
+      4096,
+      1790380932730561874,
+      4096
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime-model": [
+      2096,
+      8934415,
+      1000,
+      16877,
+      4096,
+      1790380932726598397,
+      4096
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8934416,
+      1000,
+      16877,
+      4096,
+      1790380932730561874,
+      4096
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8934417,
+      1000,
+      33188,
+      19835,
+      1790380932726598397,
+      20480
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8934418,
+      1000,
+      33188,
+      7809,
+      1790380932726598397,
+      8192
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8934419,
+      1000,
+      33188,
+      6607,
+      1790380932726598397,
+      8192
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8934420,
+      1000,
+      33188,
+      10698,
+      1790380932730561874,
+      12288
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8934421,
+      1000,
+      33188,
+      447,
+      1790380932730561874,
+      4096
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8934422,
+      1000,
+      33188,
+      15852,
+      1790380932730561874,
+      16384
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime/src": [
+      2096,
+      8934424,
+      1000,
+      16877,
+      4096,
+      1790380932730561874,
+      4096
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8934425,
+      1000,
+      16877,
+      4096,
+      1790380932730561874,
+      4096
+    ],
+    "01-exact-adapters/source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8934426,
+      1000,
+      33188,
+      6393,
+      1790380932730561874,
+      8192
+    ],
+    "02-exact-adapters": [
+      2096,
+      8934780,
+      1000,
+      16877,
+      4096,
+      1790381021890901487,
+      4096
+    ],
+    "02-exact-adapters/inputs.json": [
+      2096,
+      8934808,
+      1000,
+      33188,
+      1057,
+      1790380982835178529,
+      4096
+    ],
+    "02-exact-adapters/proof": [
+      2096,
+      8934809,
+      1000,
+      16877,
+      4096,
+      1790381021890901487,
+      4096
+    ],
+    "02-exact-adapters/proof/record.json": [
+      2096,
+      8934999,
+      1000,
+      33188,
+      701,
+      1790381021890901487,
+      4096
+    ],
+    "02-exact-adapters/proof/stderr.log": [
+      2096,
+      8935001,
+      1000,
+      33188,
+      9317,
+      1790381021890901487,
+      12288
+    ],
+    "02-exact-adapters/proof/stdout.log": [
+      2096,
+      8935000,
+      1000,
+      33188,
+      35168,
+      1790381021890901487,
+      36864
+    ],
+    "02-exact-adapters/result.json": [
+      2096,
+      8935002,
+      1000,
+      33188,
+      39,
+      1790381021890901487,
+      4096
+    ],
+    "02-exact-adapters/source": [
+      2096,
+      8934785,
+      1000,
+      16877,
+      4096,
+      1790380982831198791,
+      4096
+    ],
+    "02-exact-adapters/source/crates": [
+      2096,
+      8934786,
+      1000,
+      16877,
+      4096,
+      1790380982835178529,
+      4096
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime": [
+      2096,
+      8934804,
+      1000,
+      16877,
+      4096,
+      1790380982835178529,
+      4096
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime-model": [
+      2096,
+      8934787,
+      1000,
+      16877,
+      4096,
+      1790380982831198791,
+      4096
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8934797,
+      1000,
+      16877,
+      4096,
+      1790380982835178529,
+      4096
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8934798,
+      1000,
+      33188,
+      19835,
+      1790380982831198791,
+      20480
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8934799,
+      1000,
+      33188,
+      7809,
+      1790380982831198791,
+      8192
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8934800,
+      1000,
+      33188,
+      6607,
+      1790380982831198791,
+      8192
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8934801,
+      1000,
+      33188,
+      10698,
+      1790380982831198791,
+      12288
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8934802,
+      1000,
+      33188,
+      447,
+      1790380982835178529,
+      4096
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8934803,
+      1000,
+      33188,
+      16323,
+      1790380982835178529,
+      16384
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime/src": [
+      2096,
+      8934805,
+      1000,
+      16877,
+      4096,
+      1790380982835178529,
+      4096
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8934806,
+      1000,
+      16877,
+      4096,
+      1790380982835178529,
+      4096
+    ],
+    "02-exact-adapters/source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8934807,
+      1000,
+      33188,
+      6393,
+      1790380982835178529,
+      8192
+    ],
+    "03-custody-focused": [
+      2096,
+      8940492,
+      1000,
+      16877,
+      4096,
+      1790381051819816281,
+      4096
+    ],
+    "03-custody-focused/inputs.json": [
+      2096,
+      8940526,
+      1000,
+      33188,
+      1057,
+      1790381045101412063,
+      4096
+    ],
+    "03-custody-focused/proof": [
+      2096,
+      8940537,
+      1000,
+      16877,
+      4096,
+      1790381051815844632,
+      4096
+    ],
+    "03-custody-focused/proof/record.json": [
+      2096,
+      8940460,
+      1000,
+      33188,
+      739,
+      1790381051815844632,
+      4096
+    ],
+    "03-custody-focused/proof/stderr.log": [
+      2096,
+      8940462,
+      1000,
+      33188,
+      204,
+      1790381051815844632,
+      4096
+    ],
+    "03-custody-focused/proof/stdout.log": [
+      2096,
+      8940461,
+      1000,
+      33188,
+      35147,
+      1790381051815844632,
+      36864
+    ],
+    "03-custody-focused/result.json": [
+      2096,
+      8940463,
+      1000,
+      33188,
+      207,
+      1790381051819816281,
+      4096
+    ],
+    "03-custody-focused/source": [
+      2096,
+      8940493,
+      1000,
+      16877,
+      4096,
+      1790381045089456395,
+      4096
+    ],
+    "03-custody-focused/source/crates": [
+      2096,
+      8940494,
+      1000,
+      16877,
+      4096,
+      1790381045097426840,
+      4096
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime": [
+      2096,
+      8940522,
+      1000,
+      16877,
+      4096,
+      1790381045097426840,
+      4096
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime-model": [
+      2096,
+      8940501,
+      1000,
+      16877,
+      4096,
+      1790381045093441618,
+      4096
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8940508,
+      1000,
+      16877,
+      4096,
+      1790381045097426840,
+      4096
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8940516,
+      1000,
+      33188,
+      19835,
+      1790381045093441618,
+      20480
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8940517,
+      1000,
+      33188,
+      7809,
+      1790381045093441618,
+      8192
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8940518,
+      1000,
+      33188,
+      6607,
+      1790381045093441618,
+      8192
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8940519,
+      1000,
+      33188,
+      10698,
+      1790381045097426840,
+      12288
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8940520,
+      1000,
+      33188,
+      447,
+      1790381045097426840,
+      4096
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8940521,
+      1000,
+      33188,
+      16403,
+      1790381045097426840,
+      20480
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime/src": [
+      2096,
+      8940523,
+      1000,
+      16877,
+      4096,
+      1790381045101412063,
+      4096
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8940524,
+      1000,
+      16877,
+      4096,
+      1790381045101412063,
+      4096
+    ],
+    "03-custody-focused/source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8940525,
+      1000,
+      33188,
+      6393,
+      1790381045101412063,
+      8192
+    ],
+    "04-leaf-outcomes": [
+      2096,
+      8934737,
+      1000,
+      16877,
+      4096,
+      1790381092960647360,
+      4096
+    ],
+    "04-leaf-outcomes/inputs.json": [
+      2096,
+      8942455,
+      1000,
+      33188,
+      1208,
+      1790381092496825311,
+      4096
+    ],
+    "04-leaf-outcomes/proof": [
+      2096,
+      8942456,
+      1000,
+      16877,
+      4096,
+      1790381092960647360,
+      4096
+    ],
+    "04-leaf-outcomes/proof/record.json": [
+      2096,
+      8942462,
+      1000,
+      33188,
+      701,
+      1790381092960647360,
+      4096
+    ],
+    "04-leaf-outcomes/proof/stderr.log": [
+      2096,
+      8942464,
+      1000,
+      33188,
+      1354,
+      1790381092960647360,
+      4096
+    ],
+    "04-leaf-outcomes/proof/stdout.log": [
+      2096,
+      8942463,
+      1000,
+      33188,
+      482,
+      1790381092960647360,
+      4096
+    ],
+    "04-leaf-outcomes/result.json": [
+      2096,
+      8942465,
+      1000,
+      33188,
+      39,
+      1790381092960647360,
+      4096
+    ],
+    "04-leaf-outcomes/source": [
+      2096,
+      8942440,
+      1000,
+      16877,
+      4096,
+      1790381092492861019,
+      4096
+    ],
+    "04-leaf-outcomes/source/crates": [
+      2096,
+      8942441,
+      1000,
+      16877,
+      4096,
+      1790381092496825311,
+      4096
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime": [
+      2096,
+      8942451,
+      1000,
+      16877,
+      4096,
+      1790381092496825311,
+      4096
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime-model": [
+      2096,
+      8942442,
+      1000,
+      16877,
+      4096,
+      1790381092492861019,
+      4096
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8942443,
+      1000,
+      16877,
+      4096,
+      1790381092496825311,
+      4096
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8942444,
+      1000,
+      33188,
+      19835,
+      1790381092492861019,
+      20480
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8942445,
+      1000,
+      33188,
+      7809,
+      1790381092492861019,
+      8192
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8942446,
+      1000,
+      33188,
+      5352,
+      1790381092492861019,
+      8192
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8942447,
+      1000,
+      33188,
+      6607,
+      1790381092496825311,
+      8192
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8942448,
+      1000,
+      33188,
+      11276,
+      1790381092496825311,
+      12288
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8942449,
+      1000,
+      33188,
+      505,
+      1790381092496825311,
+      4096
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8942450,
+      1000,
+      33188,
+      16403,
+      1790381092496825311,
+      20480
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime/src": [
+      2096,
+      8942452,
+      1000,
+      16877,
+      4096,
+      1790381092496825311,
+      4096
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8942453,
+      1000,
+      16877,
+      4096,
+      1790381092496825311,
+      4096
+    ],
+    "04-leaf-outcomes/source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8942454,
+      1000,
+      33188,
+      6393,
+      1790381092496825311,
+      8192
+    ],
+    "05-leaf-outcomes": [
+      2096,
+      8940483,
+      1000,
+      16877,
+      4096,
+      1790381100392179547,
+      4096
+    ],
+    "05-leaf-outcomes/inputs.json": [
+      2096,
+      8942483,
+      1000,
+      33188,
+      1208,
+      1790381098950205777,
+      4096
+    ],
+    "05-leaf-outcomes/proof": [
+      2096,
+      8942484,
+      1000,
+      16877,
+      4096,
+      1790381100392179547,
+      4096
+    ],
+    "05-leaf-outcomes/proof/record.json": [
+      2096,
+      8942460,
+      1000,
+      33188,
+      701,
+      1790381100392179547,
+      4096
+    ],
+    "05-leaf-outcomes/proof/stderr.log": [
+      2096,
+      8942469,
+      1000,
+      33188,
+      6708,
+      1790381100392179547,
+      8192
+    ],
+    "05-leaf-outcomes/proof/stdout.log": [
+      2096,
+      8942467,
+      1000,
+      33188,
+      482,
+      1790381100392179547,
+      4096
+    ],
+    "05-leaf-outcomes/result.json": [
+      2096,
+      8942470,
+      1000,
+      33188,
+      39,
+      1790381100392179547,
+      4096
+    ],
+    "05-leaf-outcomes/source": [
+      2096,
+      8940485,
+      1000,
+      16877,
+      4096,
+      1790381098942072886,
+      4096
+    ],
+    "05-leaf-outcomes/source/crates": [
+      2096,
+      8940588,
+      1000,
+      16877,
+      4096,
+      1790381098950205777,
+      4096
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime": [
+      2096,
+      8942479,
+      1000,
+      16877,
+      4096,
+      1790381098950205777,
+      4096
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime-model": [
+      2096,
+      8940589,
+      1000,
+      16877,
+      4096,
+      1790381098942072886,
+      4096
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8940590,
+      1000,
+      16877,
+      4096,
+      1790381098946139331,
+      4096
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8942457,
+      1000,
+      33188,
+      19835,
+      1790381098946139331,
+      20480
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8942458,
+      1000,
+      33188,
+      7809,
+      1790381098946139331,
+      8192
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8942459,
+      1000,
+      33188,
+      5354,
+      1790381098946139331,
+      8192
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8942461,
+      1000,
+      33188,
+      6607,
+      1790381098946139331,
+      8192
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8942468,
+      1000,
+      33188,
+      11276,
+      1790381098946139331,
+      12288
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8942472,
+      1000,
+      33188,
+      505,
+      1790381098946139331,
+      4096
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8942475,
+      1000,
+      33188,
+      16403,
+      1790381098946139331,
+      20480
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime/src": [
+      2096,
+      8942480,
+      1000,
+      16877,
+      4096,
+      1790381098950205777,
+      4096
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8942481,
+      1000,
+      16877,
+      4096,
+      1790381098950205777,
+      4096
+    ],
+    "05-leaf-outcomes/source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8942482,
+      1000,
+      33188,
+      6393,
+      1790381098950205777,
+      8192
+    ],
+    "06-leaf-outcomes": [
+      2096,
+      8940606,
+      1000,
+      16877,
+      4096,
+      1790381166878499049,
+      4096
+    ],
+    "06-leaf-outcomes/inputs.json": [
+      2096,
+      8942576,
+      1000,
+      33188,
+      1208,
+      1790381125602689407,
+      4096
+    ],
+    "06-leaf-outcomes/proof": [
+      2096,
+      8942577,
+      1000,
+      16877,
+      4096,
+      1790381166874465751,
+      4096
+    ],
+    "06-leaf-outcomes/proof/record.json": [
+      2096,
+      8942646,
+      1000,
+      33188,
+      701,
+      1790381166870432452,
+      4096
+    ],
+    "06-leaf-outcomes/proof/stderr.log": [
+      2096,
+      8942661,
+      1000,
+      33188,
+      20806,
+      1790381166874465751,
+      24576
+    ],
+    "06-leaf-outcomes/proof/stdout.log": [
+      2096,
+      8942655,
+      1000,
+      33188,
+      37012,
+      1790381166874465751,
+      40960
+    ],
+    "06-leaf-outcomes/result.json": [
+      2096,
+      8942650,
+      1000,
+      33188,
+      39,
+      1790381166878499049,
+      4096
+    ],
+    "06-leaf-outcomes/source": [
+      2096,
+      8942437,
+      1000,
+      16877,
+      4096,
+      1790381125598725799,
+      4096
+    ],
+    "06-leaf-outcomes/source/crates": [
+      2096,
+      8942500,
+      1000,
+      16877,
+      4096,
+      1790381125602689407,
+      4096
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime": [
+      2096,
+      8942572,
+      1000,
+      16877,
+      4096,
+      1790381125602689407,
+      4096
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime-model": [
+      2096,
+      8942517,
+      1000,
+      16877,
+      4096,
+      1790381125598725799,
+      4096
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8942532,
+      1000,
+      16877,
+      4096,
+      1790381125602689407,
+      4096
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8942565,
+      1000,
+      33188,
+      19835,
+      1790381125598725799,
+      20480
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8942566,
+      1000,
+      33188,
+      7809,
+      1790381125598725799,
+      8192
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8942567,
+      1000,
+      33188,
+      5369,
+      1790381125598725799,
+      8192
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8942568,
+      1000,
+      33188,
+      6607,
+      1790381125598725799,
+      8192
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8942569,
+      1000,
+      33188,
+      11276,
+      1790381125602689407,
+      12288
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8942570,
+      1000,
+      33188,
+      505,
+      1790381125602689407,
+      4096
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8942571,
+      1000,
+      33188,
+      16403,
+      1790381125602689407,
+      20480
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime/src": [
+      2096,
+      8942573,
+      1000,
+      16877,
+      4096,
+      1790381125602689407,
+      4096
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8942574,
+      1000,
+      16877,
+      4096,
+      1790381125602689407,
+      4096
+    ],
+    "06-leaf-outcomes/source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8942575,
+      1000,
+      33188,
+      6393,
+      1790381125602689407,
+      8192
+    ],
+    "07-isolated-planner": [
+      2096,
+      8942514,
+      1000,
+      16877,
+      4096,
+      1790381212057765104,
+      4096
+    ],
+    "07-isolated-planner/inputs.json": [
+      2096,
+      8942676,
+      1000,
+      33188,
+      1208,
+      1790381210984932193,
+      4096
+    ],
+    "07-isolated-planner/proof": [
+      2096,
+      8942677,
+      1000,
+      16877,
+      4096,
+      1790381212057765104,
+      4096
+    ],
+    "07-isolated-planner/proof/record.json": [
+      2096,
+      8942678,
+      1000,
+      33188,
+      746,
+      1790381212057765104,
+      4096
+    ],
+    "07-isolated-planner/proof/stderr.log": [
+      2096,
+      8942680,
+      1000,
+      33188,
+      1036,
+      1790381212057765104,
+      4096
+    ],
+    "07-isolated-planner/proof/stdout.log": [
+      2096,
+      8942679,
+      1000,
+      33188,
+      384,
+      1790381212057765104,
+      4096
+    ],
+    "07-isolated-planner/result.json": [
+      2096,
+      8942681,
+      1000,
+      33188,
+      39,
+      1790381212057765104,
+      4096
+    ],
+    "07-isolated-planner/source": [
+      2096,
+      8942656,
+      1000,
+      16877,
+      4096,
+      1790381210980956872,
+      4096
+    ],
+    "07-isolated-planner/source/crates": [
+      2096,
+      8942657,
+      1000,
+      16877,
+      4096,
+      1790381210984932193,
+      4096
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime": [
+      2096,
+      8942672,
+      1000,
+      16877,
+      4096,
+      1790381210984932193,
+      4096
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime-model": [
+      2096,
+      8942658,
+      1000,
+      16877,
+      4096,
+      1790381210980956872,
+      4096
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8942659,
+      1000,
+      16877,
+      4096,
+      1790381210984932193,
+      4096
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8942660,
+      1000,
+      33188,
+      19835,
+      1790381210980956872,
+      20480
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8942663,
+      1000,
+      33188,
+      7809,
+      1790381210984932193,
+      8192
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8942665,
+      1000,
+      33188,
+      5369,
+      1790381210984932193,
+      8192
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8942666,
+      1000,
+      33188,
+      6607,
+      1790381210984932193,
+      8192
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8942668,
+      1000,
+      33188,
+      11312,
+      1790381210984932193,
+      12288
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8942669,
+      1000,
+      33188,
+      505,
+      1790381210984932193,
+      4096
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8942671,
+      1000,
+      33188,
+      16403,
+      1790381210984932193,
+      20480
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime/src": [
+      2096,
+      8942673,
+      1000,
+      16877,
+      4096,
+      1790381210984932193,
+      4096
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8942674,
+      1000,
+      16877,
+      4096,
+      1790381210984932193,
+      4096
+    ],
+    "07-isolated-planner/source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8942675,
+      1000,
+      33188,
+      6393,
+      1790381210984932193,
+      8192
+    ],
+    "08-leaf-lemmas": [
+      2096,
+      8874677,
+      1000,
+      16877,
+      4096,
+      1790381302017346801,
+      4096
+    ],
+    "08-leaf-lemmas/inputs.json": [
+      2096,
+      8942774,
+      1000,
+      33188,
+      1208,
+      1790381255619838898,
+      4096
+    ],
+    "08-leaf-lemmas/proof": [
+      2096,
+      8942775,
+      1000,
+      16877,
+      4096,
+      1790381302017346801,
+      4096
+    ],
+    "08-leaf-lemmas/proof/record.json": [
+      2096,
+      8942867,
+      1000,
+      33188,
+      701,
+      1790381302017346801,
+      4096
+    ],
+    "08-leaf-lemmas/proof/stderr.log": [
+      2096,
+      8942871,
+      1000,
+      33188,
+      21438,
+      1790381302017346801,
+      24576
+    ],
+    "08-leaf-lemmas/proof/stdout.log": [
+      2096,
+      8942870,
+      1000,
+      33188,
+      37430,
+      1790381302017346801,
+      40960
+    ],
+    "08-leaf-lemmas/result.json": [
+      2096,
+      8942872,
+      1000,
+      33188,
+      39,
+      1790381302017346801,
+      4096
+    ],
+    "08-leaf-lemmas/source": [
+      2096,
+      8883038,
+      1000,
+      16877,
+      4096,
+      1790381255619838898,
+      4096
+    ],
+    "08-leaf-lemmas/source/crates": [
+      2096,
+      8942682,
+      1000,
+      16877,
+      4096,
+      1790381255619838898,
+      4096
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime": [
+      2096,
+      8942770,
+      1000,
+      16877,
+      4096,
+      1790381255619838898,
+      4096
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime-model": [
+      2096,
+      8942684,
+      1000,
+      16877,
+      4096,
+      1790381255619838898,
+      4096
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8942686,
+      1000,
+      16877,
+      4096,
+      1790381255619838898,
+      4096
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8942688,
+      1000,
+      33188,
+      19835,
+      1790381255619838898,
+      20480
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8942690,
+      1000,
+      33188,
+      7809,
+      1790381255619838898,
+      8192
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8942694,
+      1000,
+      33188,
+      7637,
+      1790381255619838898,
+      8192
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8942695,
+      1000,
+      33188,
+      6607,
+      1790381255619838898,
+      8192
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8942696,
+      1000,
+      33188,
+      11608,
+      1790381255619838898,
+      12288
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8942698,
+      1000,
+      33188,
+      505,
+      1790381255619838898,
+      4096
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8942769,
+      1000,
+      33188,
+      16403,
+      1790381255619838898,
+      20480
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime/src": [
+      2096,
+      8942771,
+      1000,
+      16877,
+      4096,
+      1790381255619838898,
+      4096
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8942772,
+      1000,
+      16877,
+      4096,
+      1790381255619838898,
+      4096
+    ],
+    "08-leaf-lemmas/source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8942773,
+      1000,
+      33188,
+      6393,
+      1790381255619838898,
+      8192
+    ],
+    "09-opaque-leaf": [
+      2096,
+      8942828,
+      1000,
+      16877,
+      4096,
+      1790381362157543709,
+      4096
+    ],
+    "09-opaque-leaf/inputs.json": [
+      2096,
+      8942922,
+      1000,
+      33188,
+      1208,
+      1790381314769444657,
+      4096
+    ],
+    "09-opaque-leaf/proof": [
+      2096,
+      8942829,
+      1000,
+      16877,
+      4096,
+      1790381362157543709,
+      4096
+    ],
+    "09-opaque-leaf/proof/record.json": [
+      2096,
+      8942745,
+      1000,
+      33188,
+      701,
+      1790381362157543709,
+      4096
+    ],
+    "09-opaque-leaf/proof/stderr.log": [
+      2096,
+      8942971,
+      1000,
+      33188,
+      21438,
+      1790381362157543709,
+      24576
+    ],
+    "09-opaque-leaf/proof/stdout.log": [
+      2096,
+      8942969,
+      1000,
+      33188,
+      37430,
+      1790381362157543709,
+      40960
+    ],
+    "09-opaque-leaf/result.json": [
+      2096,
+      8942972,
+      1000,
+      33188,
+      39,
+      1790381362157543709,
+      4096
+    ],
+    "09-opaque-leaf/source": [
+      2096,
+      8942905,
+      1000,
+      16877,
+      4096,
+      1790381314765478326,
+      4096
+    ],
+    "09-opaque-leaf/source/crates": [
+      2096,
+      8942906,
+      1000,
+      16877,
+      4096,
+      1790381314769444657,
+      4096
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime": [
+      2096,
+      8942918,
+      1000,
+      16877,
+      4096,
+      1790381314769444657,
+      4096
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime-model": [
+      2096,
+      8942909,
+      1000,
+      16877,
+      4096,
+      1790381314765478326,
+      4096
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8942910,
+      1000,
+      16877,
+      4096,
+      1790381314769444657,
+      4096
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8942911,
+      1000,
+      33188,
+      19835,
+      1790381314765478326,
+      20480
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8942912,
+      1000,
+      33188,
+      7809,
+      1790381314765478326,
+      8192
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8942913,
+      1000,
+      33188,
+      7673,
+      1790381314765478326,
+      8192
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8942914,
+      1000,
+      33188,
+      6607,
+      1790381314765478326,
+      8192
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8942915,
+      1000,
+      33188,
+      11608,
+      1790381314765478326,
+      12288
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8942916,
+      1000,
+      33188,
+      505,
+      1790381314769444657,
+      4096
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8942917,
+      1000,
+      33188,
+      16403,
+      1790381314769444657,
+      20480
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime/src": [
+      2096,
+      8942919,
+      1000,
+      16877,
+      4096,
+      1790381314769444657,
+      4096
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8942920,
+      1000,
+      16877,
+      4096,
+      1790381314769444657,
+      4096
+    ],
+    "09-opaque-leaf/source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8942921,
+      1000,
+      33188,
+      6393,
+      1790381314769444657,
+      8192
+    ],
+    "10-scalar-leaf": [
+      2096,
+      8922805,
+      1000,
+      16877,
+      4096,
+      1790381442707947823,
+      4096
+    ],
+    "10-scalar-leaf/inputs.json": [
+      2096,
+      8943077,
+      1000,
+      33188,
+      1208,
+      1790381392486316576,
+      4096
+    ],
+    "10-scalar-leaf/proof": [
+      2096,
+      8943078,
+      1000,
+      16877,
+      4096,
+      1790381442700013356,
+      4096
+    ],
+    "10-scalar-leaf/proof/record.json": [
+      2096,
+      8943824,
+      1000,
+      33188,
+      701,
+      1790381442700013356,
+      4096
+    ],
+    "10-scalar-leaf/proof/stderr.log": [
+      2096,
+      8943826,
+      1000,
+      33188,
+      0,
+      1790381442700013356,
+      0
+    ],
+    "10-scalar-leaf/proof/stdout.log": [
+      2096,
+      8943825,
+      1000,
+      33188,
+      37430,
+      1790381442700013356,
+      40960
+    ],
+    "10-scalar-leaf/result.json": [
+      2096,
+      8943827,
+      1000,
+      33188,
+      228,
+      1790381442707947823,
+      4096
+    ],
+    "10-scalar-leaf/runner.py": [
+      2096,
+      8942976,
+      1000,
+      33188,
+      2651,
+      1790381392482284141,
+      4096
+    ],
+    "10-scalar-leaf/source": [
+      2096,
+      8942978,
+      1000,
+      16877,
+      4096,
+      1790381392486316576,
+      4096
+    ],
+    "10-scalar-leaf/source/crates": [
+      2096,
+      8942988,
+      1000,
+      16877,
+      4096,
+      1790381392486316576,
+      4096
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime": [
+      2096,
+      8943073,
+      1000,
+      16877,
+      4096,
+      1790381392486316576,
+      4096
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime-model": [
+      2096,
+      8942989,
+      1000,
+      16877,
+      4096,
+      1790381392486316576,
+      4096
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8942990,
+      1000,
+      16877,
+      4096,
+      1790381392486316576,
+      4096
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8942991,
+      1000,
+      33188,
+      19835,
+      1790381392486316576,
+      20480
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8942997,
+      1000,
+      33188,
+      7809,
+      1790381392486316576,
+      8192
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8942998,
+      1000,
+      33188,
+      8110,
+      1790381392486316576,
+      8192
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8943017,
+      1000,
+      33188,
+      6607,
+      1790381392486316576,
+      8192
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8943018,
+      1000,
+      33188,
+      11876,
+      1790381392486316576,
+      12288
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8943071,
+      1000,
+      33188,
+      505,
+      1790381392486316576,
+      4096
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8943072,
+      1000,
+      33188,
+      16403,
+      1790381392486316576,
+      20480
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime/src": [
+      2096,
+      8943074,
+      1000,
+      16877,
+      4096,
+      1790381392486316576,
+      4096
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8943075,
+      1000,
+      16877,
+      4096,
+      1790381392486316576,
+      4096
+    ],
+    "10-scalar-leaf/source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8943076,
+      1000,
+      33188,
+      6393,
+      1790381392486316576,
+      8192
+    ],
+    "11-default-whole-root": [
+      2096,
+      8943809,
+      1000,
+      16877,
+      4096,
+      1790381508851641956,
+      4096
+    ],
+    "11-default-whole-root/inputs.json": [
+      2096,
+      8943849,
+      1000,
+      33188,
+      1208,
+      1790381466663028307,
+      4096
+    ],
+    "11-default-whole-root/proof": [
+      2096,
+      8943850,
+      1000,
+      16877,
+      4096,
+      1790381508847675193,
+      4096
+    ],
+    "11-default-whole-root/proof/record.json": [
+      2096,
+      8943910,
+      1000,
+      33188,
+      667,
+      1790381508847675193,
+      4096
+    ],
+    "11-default-whole-root/proof/stderr.log": [
+      2096,
+      8943913,
+      1000,
+      33188,
+      0,
+      1790381508847675193,
+      0
+    ],
+    "11-default-whole-root/proof/stdout.log": [
+      2096,
+      8943912,
+      1000,
+      33188,
+      37430,
+      1790381508847675193,
+      40960
+    ],
+    "11-default-whole-root/result.json": [
+      2096,
+      8943914,
+      1000,
+      33188,
+      228,
+      1790381508851641956,
+      4096
+    ],
+    "11-default-whole-root/runner.py": [
+      2096,
+      8943811,
+      1000,
+      33188,
+      2651,
+      1790381466659048418,
+      4096
+    ],
+    "11-default-whole-root/source": [
+      2096,
+      8943813,
+      1000,
+      16877,
+      4096,
+      1790381466659048418,
+      4096
+    ],
+    "11-default-whole-root/source/crates": [
+      2096,
+      8943815,
+      1000,
+      16877,
+      4096,
+      1790381466663028307,
+      4096
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime": [
+      2096,
+      8943845,
+      1000,
+      16877,
+      4096,
+      1790381466663028307,
+      4096
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime-model": [
+      2096,
+      8943817,
+      1000,
+      16877,
+      4096,
+      1790381466659048418,
+      4096
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8943819,
+      1000,
+      16877,
+      4096,
+      1790381466663028307,
+      4096
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8943820,
+      1000,
+      33188,
+      19835,
+      1790381466659048418,
+      20480
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8943821,
+      1000,
+      33188,
+      7809,
+      1790381466659048418,
+      8192
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8943822,
+      1000,
+      33188,
+      8110,
+      1790381466659048418,
+      8192
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8943823,
+      1000,
+      33188,
+      6607,
+      1790381466659048418,
+      8192
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8943841,
+      1000,
+      33188,
+      11876,
+      1790381466663028307,
+      12288
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8943842,
+      1000,
+      33188,
+      505,
+      1790381466663028307,
+      4096
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8943844,
+      1000,
+      33188,
+      16403,
+      1790381466663028307,
+      20480
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime/src": [
+      2096,
+      8943846,
+      1000,
+      16877,
+      4096,
+      1790381466663028307,
+      4096
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8943847,
+      1000,
+      16877,
+      4096,
+      1790381466663028307,
+      4096
+    ],
+    "11-default-whole-root/source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8943848,
+      1000,
+      33188,
+      6393,
+      1790381466663028307,
+      8192
+    ],
+    "prove-original.py": [
+      2096,
+      8942973,
+      1000,
+      33188,
+      2465,
+      1790381362726908179,
+      4096
+    ],
+    "prove.py": [
+      2096,
+      8934407,
+      1000,
+      33188,
+      2651,
+      1790381362843186838,
+      4096
+    ],
+    "signed-campaign": [
+      2096,
+      8942970,
+      1000,
+      16877,
+      4096,
+      1790381803225364903,
+      4096
+    ],
+    "signed-campaign-v2": [
+      2096,
+      8946365,
+      1000,
+      16877,
+      4096,
+      1790382025472055244,
+      4096
+    ],
+    "signed-campaign-v2/allowed-signers": [
+      2096,
+      8947148,
+      1000,
+      33188,
+      98,
+      1790381885762617862,
+      4096
+    ],
+    "signed-campaign-v2/body-comparison": [
+      2096,
+      8947201,
+      1000,
+      16877,
+      4096,
+      1790381892262656697,
+      4096
+    ],
+    "signed-campaign-v2/body-comparison/baseline-macro.rs": [
+      2096,
+      8947204,
+      1000,
+      33188,
+      4935,
+      1790381892262656697,
+      8192
+    ],
+    "signed-campaign-v2/body-comparison/candidate-macro.rs": [
+      2096,
+      8947205,
+      1000,
+      33188,
+      6393,
+      1790381892262656697,
+      8192
+    ],
+    "signed-campaign-v2/body-comparison/comparison.json": [
+      2096,
+      8947213,
+      1000,
+      33188,
+      1074,
+      1790381892262656697,
+      4096
+    ],
+    "signed-campaign-v2/body-comparison/normalized-after.rs": [
+      2096,
+      8947207,
+      1000,
+      33188,
+      4349,
+      1790381892262656697,
+      8192
+    ],
+    "signed-campaign-v2/body-comparison/normalized-before.rs": [
+      2096,
+      8947206,
+      1000,
+      33188,
+      4349,
+      1790381892262656697,
+      8192
+    ],
+    "signed-campaign-v2/closure-before": [
+      2096,
+      8947330,
+      1000,
+      16877,
+      4096,
+      1790381894885191015,
+      4096
+    ],
+    "signed-campaign-v2/closure-before.json": [
+      2096,
+      8947179,
+      1000,
+      33188,
+      36,
+      1790381894885191015,
+      4096
+    ],
+    "signed-campaign-v2/closure-before/record.json": [
+      2096,
+      8943855,
+      1000,
+      33188,
+      465,
+      1790381894885191015,
+      4096
+    ],
+    "signed-campaign-v2/closure-before/stderr.log": [
+      2096,
+      8947178,
+      1000,
+      33188,
+      0,
+      1790381894885191015,
+      0
+    ],
+    "signed-campaign-v2/closure-before/stdout.log": [
+      2096,
+      8947177,
+      1000,
+      33188,
+      92,
+      1790381894885191015,
+      4096
+    ],
+    "signed-campaign-v2/environment.json": [
+      2096,
+      8947149,
+      1000,
+      33188,
+      1989,
+      1790381885762617862,
+      4096
+    ],
+    "signed-campaign-v2/proof-before": [
+      2096,
+      8946992,
+      1000,
+      16877,
+      4096,
+      1790381938308107489,
+      4096
+    ],
+    "signed-campaign-v2/proof-before.json": [
+      2096,
+      8947970,
+      1000,
+      33188,
+      36,
+      1790381938308107489,
+      4096
+    ],
+    "signed-campaign-v2/proof-before/record.json": [
+      2096,
+      8943104,
+      1000,
+      33188,
+      667,
+      1790381938308107489,
+      4096
+    ],
+    "signed-campaign-v2/proof-before/stderr.log": [
+      2096,
+      8947547,
+      1000,
+      33188,
+      0,
+      1790381938308107489,
+      0
+    ],
+    "signed-campaign-v2/proof-before/stdout.log": [
+      2096,
+      8947143,
+      1000,
+      33188,
+      37430,
+      1790381938308107489,
+      40960
+    ],
+    "signed-campaign-v2/relocated-inputs.json": [
+      2096,
+      8947986,
+      1000,
+      33188,
+      1208,
+      1790381938636674571,
+      4096
+    ],
+    "signed-campaign-v2/relocated-proof": [
+      2096,
+      8947987,
+      1000,
+      16877,
+      4096,
+      1790381983727772484,
+      4096
+    ],
+    "signed-campaign-v2/relocated-proof.json": [
+      2096,
+      8948062,
+      1000,
+      33188,
+      36,
+      1790381983727772484,
+      4096
+    ],
+    "signed-campaign-v2/relocated-proof/record.json": [
+      2096,
+      8948021,
+      1000,
+      33188,
+      721,
+      1790381983727772484,
+      4096
+    ],
+    "signed-campaign-v2/relocated-proof/stderr.log": [
+      2096,
+      8948061,
+      1000,
+      33188,
+      0,
+      1790381983727772484,
+      0
+    ],
+    "signed-campaign-v2/relocated-proof/stdout.log": [
+      2096,
+      8948060,
+      1000,
+      33188,
+      37430,
+      1790381983727772484,
+      40960
+    ],
+    "signed-campaign-v2/relocated-source": [
+      2096,
+      8947971,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/relocated-source/crates": [
+      2096,
+      8947972,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime": [
+      2096,
+      8947982,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime-model": [
+      2096,
+      8947973,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8947974,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8947975,
+      1000,
+      33188,
+      19835,
+      1790381938632618189,
+      20480
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8947976,
+      1000,
+      33188,
+      7809,
+      1790381938632618189,
+      8192
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8947977,
+      1000,
+      33188,
+      8110,
+      1790381938632618189,
+      8192
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8947978,
+      1000,
+      33188,
+      6607,
+      1790381938632618189,
+      8192
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8947979,
+      1000,
+      33188,
+      11876,
+      1790381938632618189,
+      12288
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8947980,
+      1000,
+      33188,
+      505,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8947981,
+      1000,
+      33188,
+      16403,
+      1790381938632618189,
+      20480
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime/src": [
+      2096,
+      8947983,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8947984,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/relocated-source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8947985,
+      1000,
+      33188,
+      6393,
+      1790381938632618189,
+      8192
+    ],
+    "signed-campaign-v2/runner-tests": [
+      2096,
+      8947155,
+      1000,
+      16877,
+      4096,
+      1790381887969740518,
+      4096
+    ],
+    "signed-campaign-v2/runner-tests.json": [
+      2096,
+      8947162,
+      1000,
+      33188,
+      36,
+      1790381887969740518,
+      4096
+    ],
+    "signed-campaign-v2/runner-tests/record.json": [
+      2096,
+      8947158,
+      1000,
+      33188,
+      324,
+      1790381887969740518,
+      4096
+    ],
+    "signed-campaign-v2/runner-tests/stderr.log": [
+      2096,
+      8947161,
+      1000,
+      33188,
+      0,
+      1790381887969740518,
+      0
+    ],
+    "signed-campaign-v2/runner-tests/stdout.log": [
+      2096,
+      8947160,
+      1000,
+      33188,
+      51,
+      1790381887969740518,
+      4096
+    ],
+    "signed-campaign-v2/signed-inputs.json": [
+      2096,
+      8947144,
+      1000,
+      33188,
+      1321655,
+      1790381887242246048,
+      1327104
+    ],
+    "signed-campaign-v2/skip-success-settlement": [
+      2096,
+      8948079,
+      1000,
+      16877,
+      4096,
+      1790382025472055244,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement-mutation.json": [
+      2096,
+      8948078,
+      1000,
+      33188,
+      1549,
+      1790381984030022829,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement-source": [
+      2096,
+      8948063,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates": [
+      2096,
+      8948064,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime": [
+      2096,
+      8948074,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime-model": [
+      2096,
+      8948065,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8948066,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8948069,
+      1000,
+      33188,
+      19835,
+      1790381938632618189,
+      20480
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8948072,
+      1000,
+      33188,
+      7809,
+      1790381938632618189,
+      8192
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8948073,
+      1000,
+      33188,
+      8110,
+      1790381938632618189,
+      8192
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8948067,
+      1000,
+      33188,
+      6607,
+      1790381938632618189,
+      8192
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8948070,
+      1000,
+      33188,
+      11876,
+      1790381938632618189,
+      12288
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8948071,
+      1000,
+      33188,
+      505,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8948068,
+      1000,
+      33188,
+      16403,
+      1790381938632618189,
+      20480
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime/src": [
+      2096,
+      8948075,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8948076,
+      1000,
+      16877,
+      4096,
+      1790381938632618189,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8948077,
+      1000,
+      33188,
+      6406,
+      1790381984030022829,
+      8192
+    ],
+    "signed-campaign-v2/skip-success-settlement.json": [
+      2096,
+      8948118,
+      1000,
+      33188,
+      37,
+      1790382025472055244,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement/record.json": [
+      2096,
+      8934754,
+      1000,
+      33188,
+      814,
+      1790382025472055244,
+      4096
+    ],
+    "signed-campaign-v2/skip-success-settlement/stderr.log": [
+      2096,
+      8948111,
+      1000,
+      33188,
+      27521,
+      1790382025472055244,
+      28672
+    ],
+    "signed-campaign-v2/skip-success-settlement/stdout.log": [
+      2096,
+      8947046,
+      1000,
+      33188,
+      25467,
+      1790382025472055244,
+      28672
+    ],
+    "signed-campaign-v2/source-before.json": [
+      2096,
+      8677607,
+      1000,
+      33188,
+      856381,
+      1790381885762617862,
+      860160
+    ],
+    "signed-campaign-v2/source-body": [
+      2096,
+      8947258,
+      1000,
+      16877,
+      4096,
+      1790381892302340171,
+      4096
+    ],
+    "signed-campaign-v2/source-body.json": [
+      2096,
+      8947255,
+      1000,
+      33188,
+      36,
+      1790381892302340171,
+      4096
+    ],
+    "signed-campaign-v2/source-body/record.json": [
+      2096,
+      8947244,
+      1000,
+      33188,
+      452,
+      1790381892302340171,
+      4096
+    ],
+    "signed-campaign-v2/source-body/stderr.log": [
+      2096,
+      8947250,
+      1000,
+      33188,
+      0,
+      1790381892302340171,
+      0
+    ],
+    "signed-campaign-v2/source-body/stdout.log": [
+      2096,
+      8947247,
+      1000,
+      33188,
+      59,
+      1790381892302340171,
+      4096
+    ],
+    "signed-campaign-v2/source-signature": [
+      2096,
+      8947146,
+      1000,
+      16877,
+      4096,
+      1790381886251986427,
+      4096
+    ],
+    "signed-campaign-v2/source-signature.json": [
+      2096,
+      8947154,
+      1000,
+      33188,
+      36,
+      1790381886251986427,
+      4096
+    ],
+    "signed-campaign-v2/source-signature/record.json": [
+      2096,
+      8947151,
+      1000,
+      33188,
+      524,
+      1790381886251986427,
+      4096
+    ],
+    "signed-campaign-v2/source-signature/stderr.log": [
+      2096,
+      8947153,
+      1000,
+      33188,
+      110,
+      1790381886251986427,
+      4096
+    ],
+    "signed-campaign-v2/source-signature/stdout.log": [
+      2096,
+      8947152,
+      1000,
+      33188,
+      0,
+      1790381886251986427,
+      0
+    ],
+    "signed-campaign-v2/source-tests": [
+      2096,
+      8947163,
+      1000,
+      16877,
+      4096,
+      1790381891441058687,
+      4096
+    ],
+    "signed-campaign-v2/source-tests.json": [
+      2096,
+      8947306,
+      1000,
+      33188,
+      36,
+      1790381891441058687,
+      4096
+    ],
+    "signed-campaign-v2/source-tests/record.json": [
+      2096,
+      8947156,
+      1000,
+      33188,
+      332,
+      1790381891441058687,
+      4096
+    ],
+    "signed-campaign-v2/source-tests/stderr.log": [
+      2096,
+      8947305,
+      1000,
+      33188,
+      0,
+      1790381891441058687,
+      0
+    ],
+    "signed-campaign-v2/source-tests/stdout.log": [
+      2096,
+      8947157,
+      1000,
+      33188,
+      55,
+      1790381891441058687,
+      4096
+    ],
+    "signed-campaign-v3": [
+      2096,
+      8948197,
+      1000,
+      16877,
+      4096,
+      1790382330666729982,
+      4096
+    ],
+    "signed-campaign-v3/allowed-signers": [
+      2096,
+      8948198,
+      1000,
+      33188,
+      98,
+      1790382087597103923,
+      4096
+    ],
+    "signed-campaign-v3/body-comparison": [
+      2096,
+      8948248,
+      1000,
+      16877,
+      4096,
+      1790382092820004262,
+      4096
+    ],
+    "signed-campaign-v3/body-comparison/baseline-macro.rs": [
+      2096,
+      8948249,
+      1000,
+      33188,
+      4935,
+      1790382092816039721,
+      8192
+    ],
+    "signed-campaign-v3/body-comparison/candidate-macro.rs": [
+      2096,
+      8948250,
+      1000,
+      33188,
+      6393,
+      1790382092816039721,
+      8192
+    ],
+    "signed-campaign-v3/body-comparison/comparison.json": [
+      2096,
+      8948253,
+      1000,
+      33188,
+      1074,
+      1790382092820004262,
+      4096
+    ],
+    "signed-campaign-v3/body-comparison/normalized-after.rs": [
+      2096,
+      8948252,
+      1000,
+      33188,
+      4349,
+      1790382092816039721,
+      8192
+    ],
+    "signed-campaign-v3/body-comparison/normalized-before.rs": [
+      2096,
+      8948251,
+      1000,
+      33188,
+      4349,
+      1790382092816039721,
+      8192
+    ],
+    "signed-campaign-v3/closure-after": [
+      2096,
+      8948534,
+      1000,
+      16877,
+      4096,
+      1790382297084546329,
+      4096
+    ],
+    "signed-campaign-v3/closure-after.json": [
+      2096,
+      8948538,
+      1000,
+      33188,
+      36,
+      1790382297084546329,
+      4096
+    ],
+    "signed-campaign-v3/closure-after/record.json": [
+      2096,
+      8948535,
+      1000,
+      33188,
+      465,
+      1790382297084546329,
+      4096
+    ],
+    "signed-campaign-v3/closure-after/stderr.log": [
+      2096,
+      8948537,
+      1000,
+      33188,
+      0,
+      1790382297084546329,
+      0
+    ],
+    "signed-campaign-v3/closure-after/stdout.log": [
+      2096,
+      8948536,
+      1000,
+      33188,
+      92,
+      1790382297084546329,
+      4096
+    ],
+    "signed-campaign-v3/closure-before": [
+      2096,
+      8948258,
+      1000,
+      16877,
+      4096,
+      1790382095367155827,
+      4096
+    ],
+    "signed-campaign-v3/closure-before.json": [
+      2096,
+      8948261,
+      1000,
+      33188,
+      36,
+      1790382095367155827,
+      4096
+    ],
+    "signed-campaign-v3/closure-before/record.json": [
+      2096,
+      8948182,
+      1000,
+      33188,
+      465,
+      1790382095367155827,
+      4096
+    ],
+    "signed-campaign-v3/closure-before/stderr.log": [
+      2096,
+      8948260,
+      1000,
+      33188,
+      0,
+      1790382095367155827,
+      0
+    ],
+    "signed-campaign-v3/closure-before/stdout.log": [
+      2096,
+      8948259,
+      1000,
+      33188,
+      92,
+      1790382095367155827,
+      4096
+    ],
+    "signed-campaign-v3/environment.json": [
+      2096,
+      8948199,
+      1000,
+      33188,
+      1989,
+      1790382087597103923,
+      4096
+    ],
+    "signed-campaign-v3/format": [
+      2096,
+      8948539,
+      1000,
+      16877,
+      4096,
+      1790382329941037155,
+      4096
+    ],
+    "signed-campaign-v3/format.json": [
+      2096,
+      8948556,
+      1000,
+      33188,
+      36,
+      1790382329941037155,
+      4096
+    ],
+    "signed-campaign-v3/format/record.json": [
+      2096,
+      8948499,
+      1000,
+      33188,
+      216,
+      1790382329941037155,
+      4096
+    ],
+    "signed-campaign-v3/format/stderr.log": [
+      2096,
+      8948555,
+      1000,
+      33188,
+      0,
+      1790382329941037155,
+      0
+    ],
+    "signed-campaign-v3/format/stdout.log": [
+      2096,
+      8948554,
+      1000,
+      33188,
+      0,
+      1790382329941037155,
+      0
+    ],
+    "signed-campaign-v3/omit-failure-quarantine": [
+      2096,
+      8947089,
+      1000,
+      16877,
+      4096,
+      1790382253283833134,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-mutation.json": [
+      2096,
+      8948478,
+      1000,
+      33188,
+      1466,
+      1790382249598828545,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source": [
+      2096,
+      8948455,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates": [
+      2096,
+      8948459,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime": [
+      2096,
+      8948474,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime-model": [
+      2096,
+      8948465,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8948466,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8948469,
+      1000,
+      33188,
+      19798,
+      1790382249594860700,
+      20480
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8948472,
+      1000,
+      33188,
+      7809,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8948473,
+      1000,
+      33188,
+      8110,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8948467,
+      1000,
+      33188,
+      6607,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8948470,
+      1000,
+      33188,
+      11876,
+      1790382135958984671,
+      12288
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8948471,
+      1000,
+      33188,
+      505,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8948468,
+      1000,
+      33188,
+      16403,
+      1790382135958984671,
+      20480
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime/src": [
+      2096,
+      8948475,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8948476,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8948477,
+      1000,
+      33188,
+      6393,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/omit-failure-quarantine.json": [
+      2096,
+      8948440,
+      1000,
+      33188,
+      36,
+      1790382253287798689,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine/record.json": [
+      2096,
+      8943881,
+      1000,
+      33188,
+      819,
+      1790382253283833134,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine/stderr.log": [
+      2096,
+      8948432,
+      1000,
+      33188,
+      2183,
+      1790382253283833134,
+      4096
+    ],
+    "signed-campaign-v3/omit-failure-quarantine/stdout.log": [
+      2096,
+      8948388,
+      1000,
+      33188,
+      37408,
+      1790382253283833134,
+      40960
+    ],
+    "signed-campaign-v3/promote-unknown-input": [
+      2096,
+      8948376,
+      1000,
+      16877,
+      4096,
+      1790382249249658177,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input-mutation.json": [
+      2096,
+      8948375,
+      1000,
+      33188,
+      1811,
+      1790382207255259048,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input-source": [
+      2096,
+      8948360,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates": [
+      2096,
+      8948361,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime": [
+      2096,
+      8948371,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime-model": [
+      2096,
+      8948362,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8948363,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8948366,
+      1000,
+      33188,
+      19835,
+      1790382135958984671,
+      20480
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8948369,
+      1000,
+      33188,
+      7809,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8948370,
+      1000,
+      33188,
+      8110,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8948364,
+      1000,
+      33188,
+      6607,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8948367,
+      1000,
+      33188,
+      11876,
+      1790382135958984671,
+      12288
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8948368,
+      1000,
+      33188,
+      505,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8948365,
+      1000,
+      33188,
+      16403,
+      1790382135958984671,
+      20480
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime/src": [
+      2096,
+      8948372,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8948373,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8948374,
+      1000,
+      33188,
+      6380,
+      1790382207251276189,
+      8192
+    ],
+    "signed-campaign-v3/promote-unknown-input.json": [
+      2096,
+      8948463,
+      1000,
+      33188,
+      36,
+      1790382249249658177,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input/record.json": [
+      2096,
+      8948460,
+      1000,
+      33188,
+      812,
+      1790382249249658177,
+      4096
+    ],
+    "signed-campaign-v3/promote-unknown-input/stderr.log": [
+      2096,
+      8948462,
+      1000,
+      33188,
+      26107,
+      1790382249249658177,
+      28672
+    ],
+    "signed-campaign-v3/promote-unknown-input/stdout.log": [
+      2096,
+      8948461,
+      1000,
+      33188,
+      25467,
+      1790382249249658177,
+      28672
+    ],
+    "signed-campaign-v3/proof-after": [
+      2096,
+      8948501,
+      1000,
+      16877,
+      4096,
+      1790382294367566973,
+      4096
+    ],
+    "signed-campaign-v3/proof-after.json": [
+      2096,
+      8948533,
+      1000,
+      33188,
+      36,
+      1790382294367566973,
+      4096
+    ],
+    "signed-campaign-v3/proof-after/record.json": [
+      2096,
+      8948528,
+      1000,
+      33188,
+      667,
+      1790382294367566973,
+      4096
+    ],
+    "signed-campaign-v3/proof-after/stderr.log": [
+      2096,
+      8948532,
+      1000,
+      33188,
+      0,
+      1790382294367566973,
+      0
+    ],
+    "signed-campaign-v3/proof-after/stdout.log": [
+      2096,
+      8948530,
+      1000,
+      33188,
+      37430,
+      1790382294367566973,
+      40960
+    ],
+    "signed-campaign-v3/proof-before": [
+      2096,
+      8948262,
+      1000,
+      16877,
+      4096,
+      1790382135645804276,
+      4096
+    ],
+    "signed-campaign-v3/proof-before.json": [
+      2096,
+      8944005,
+      1000,
+      33188,
+      36,
+      1790382135645804276,
+      4096
+    ],
+    "signed-campaign-v3/proof-before/record.json": [
+      2096,
+      8944002,
+      1000,
+      33188,
+      667,
+      1790382135645804276,
+      4096
+    ],
+    "signed-campaign-v3/proof-before/stderr.log": [
+      2096,
+      8944004,
+      1000,
+      33188,
+      0,
+      1790382135645804276,
+      0
+    ],
+    "signed-campaign-v3/proof-before/stdout.log": [
+      2096,
+      8944003,
+      1000,
+      33188,
+      37430,
+      1790382135645804276,
+      40960
+    ],
+    "signed-campaign-v3/reject-valid-custody": [
+      2096,
+      8948482,
+      1000,
+      16877,
+      4096,
+      1790382256551385033,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody-mutation.json": [
+      2096,
+      8948480,
+      1000,
+      33188,
+      1549,
+      1790382253632801949,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody-source": [
+      2096,
+      8948442,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates": [
+      2096,
+      8948444,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime": [
+      2096,
+      8948454,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime-model": [
+      2096,
+      8948445,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8948446,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8948449,
+      1000,
+      33188,
+      19835,
+      1790382135958984671,
+      20480
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8948452,
+      1000,
+      33188,
+      7809,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8948453,
+      1000,
+      33188,
+      8110,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8948447,
+      1000,
+      33188,
+      6607,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8948450,
+      1000,
+      33188,
+      11876,
+      1790382135958984671,
+      12288
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8948451,
+      1000,
+      33188,
+      505,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8948448,
+      1000,
+      33188,
+      16454,
+      1790382253628836394,
+      20480
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime/src": [
+      2096,
+      8948456,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8948464,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8948479,
+      1000,
+      33188,
+      6393,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/reject-valid-custody.json": [
+      2096,
+      8948496,
+      1000,
+      33188,
+      36,
+      1790382256555501152,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody/record.json": [
+      2096,
+      8948493,
+      1000,
+      33188,
+      804,
+      1790382256551385033,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody/stderr.log": [
+      2096,
+      8948495,
+      1000,
+      33188,
+      2436,
+      1790382256551385033,
+      4096
+    ],
+    "signed-campaign-v3/reject-valid-custody/stdout.log": [
+      2096,
+      8948494,
+      1000,
+      33188,
+      37408,
+      1790382256551385033,
+      40960
+    ],
+    "signed-campaign-v3/relocated-inputs.json": [
+      2096,
+      8948304,
+      1000,
+      33188,
+      1208,
+      1790382135962999805,
+      4096
+    ],
+    "signed-campaign-v3/relocated-proof": [
+      2096,
+      8948306,
+      1000,
+      16877,
+      4096,
+      1790382169513279808,
+      4096
+    ],
+    "signed-campaign-v3/relocated-proof.json": [
+      2096,
+      8948326,
+      1000,
+      33188,
+      36,
+      1790382169513279808,
+      4096
+    ],
+    "signed-campaign-v3/relocated-proof/record.json": [
+      2096,
+      8948323,
+      1000,
+      33188,
+      721,
+      1790382169513279808,
+      4096
+    ],
+    "signed-campaign-v3/relocated-proof/stderr.log": [
+      2096,
+      8948325,
+      1000,
+      33188,
+      0,
+      1790382169513279808,
+      0
+    ],
+    "signed-campaign-v3/relocated-proof/stdout.log": [
+      2096,
+      8948324,
+      1000,
+      33188,
+      37430,
+      1790382169513279808,
+      40960
+    ],
+    "signed-campaign-v3/relocated-source": [
+      2096,
+      8948286,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/relocated-source/crates": [
+      2096,
+      8948287,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime": [
+      2096,
+      8948300,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime-model": [
+      2096,
+      8948288,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8948289,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8948290,
+      1000,
+      33188,
+      19835,
+      1790382135958984671,
+      20480
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8948294,
+      1000,
+      33188,
+      7809,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8948295,
+      1000,
+      33188,
+      8110,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8948296,
+      1000,
+      33188,
+      6607,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8948297,
+      1000,
+      33188,
+      11876,
+      1790382135958984671,
+      12288
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8948298,
+      1000,
+      33188,
+      505,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8948299,
+      1000,
+      33188,
+      16403,
+      1790382135958984671,
+      20480
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime/src": [
+      2096,
+      8948301,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8948302,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/relocated-source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8948303,
+      1000,
+      33188,
+      6393,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/results.json": [
+      2096,
+      8948558,
+      1000,
+      33188,
+      898,
+      1790382330666729982,
+      4096
+    ],
+    "signed-campaign-v3/runner-tests": [
+      2096,
+      8948237,
+      1000,
+      16877,
+      4096,
+      1790382089322661795,
+      4096
+    ],
+    "signed-campaign-v3/runner-tests.json": [
+      2096,
+      8948241,
+      1000,
+      33188,
+      36,
+      1790382089322661795,
+      4096
+    ],
+    "signed-campaign-v3/runner-tests/record.json": [
+      2096,
+      8948238,
+      1000,
+      33188,
+      324,
+      1790382089322661795,
+      4096
+    ],
+    "signed-campaign-v3/runner-tests/stderr.log": [
+      2096,
+      8948240,
+      1000,
+      33188,
+      0,
+      1790382089322661795,
+      0
+    ],
+    "signed-campaign-v3/runner-tests/stdout.log": [
+      2096,
+      8948239,
+      1000,
+      33188,
+      51,
+      1790382089322661795,
+      4096
+    ],
+    "signed-campaign-v3/signed-inputs.json": [
+      2096,
+      8899670,
+      1000,
+      33188,
+      1321655,
+      1790382088874473201,
+      1323008
+    ],
+    "signed-campaign-v3/skip-success-settlement": [
+      2096,
+      8948343,
+      1000,
+      16877,
+      4096,
+      1790382206900708716,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement-mutation.json": [
+      2096,
+      8948342,
+      1000,
+      33188,
+      1549,
+      1790382169830037020,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement-source": [
+      2096,
+      8948322,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates": [
+      2096,
+      8948328,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime": [
+      2096,
+      8948338,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime-model": [
+      2096,
+      8948329,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8948330,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8948333,
+      1000,
+      33188,
+      19835,
+      1790382135958984671,
+      20480
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8948336,
+      1000,
+      33188,
+      7809,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8948337,
+      1000,
+      33188,
+      8110,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8948331,
+      1000,
+      33188,
+      6607,
+      1790382135958984671,
+      8192
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8948334,
+      1000,
+      33188,
+      11876,
+      1790382135958984671,
+      12288
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8948335,
+      1000,
+      33188,
+      505,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8948332,
+      1000,
+      33188,
+      16403,
+      1790382135958984671,
+      20480
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime/src": [
+      2096,
+      8948339,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8948340,
+      1000,
+      16877,
+      4096,
+      1790382135958984671,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8948341,
+      1000,
+      33188,
+      6406,
+      1790382169830037020,
+      8192
+    ],
+    "signed-campaign-v3/skip-success-settlement.json": [
+      2096,
+      8948359,
+      1000,
+      33188,
+      36,
+      1790382206900708716,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement/record.json": [
+      2096,
+      8946591,
+      1000,
+      33188,
+      814,
+      1790382206900708716,
+      4096
+    ],
+    "signed-campaign-v3/skip-success-settlement/stderr.log": [
+      2096,
+      8948357,
+      1000,
+      33188,
+      27521,
+      1790382206900708716,
+      28672
+    ],
+    "signed-campaign-v3/skip-success-settlement/stdout.log": [
+      2096,
+      8946698,
+      1000,
+      33188,
+      25467,
+      1790382206900708716,
+      28672
+    ],
+    "signed-campaign-v3/source-after.json": [
+      2096,
+      8943967,
+      1000,
+      33188,
+      856381,
+      1790382330666729982,
+      860160
+    ],
+    "signed-campaign-v3/source-before.json": [
+      2096,
+      8948016,
+      1000,
+      33188,
+      856381,
+      1790382087597103923,
+      860160
+    ],
+    "signed-campaign-v3/source-body": [
+      2096,
+      8948247,
+      1000,
+      16877,
+      4096,
+      1790382092835862429,
+      4096
+    ],
+    "signed-campaign-v3/source-body.json": [
+      2096,
+      8948257,
+      1000,
+      33188,
+      36,
+      1790382092835862429,
+      4096
+    ],
+    "signed-campaign-v3/source-body/record.json": [
+      2096,
+      8948254,
+      1000,
+      33188,
+      452,
+      1790382092835862429,
+      4096
+    ],
+    "signed-campaign-v3/source-body/stderr.log": [
+      2096,
+      8948256,
+      1000,
+      33188,
+      0,
+      1790382092835862429,
+      0
+    ],
+    "signed-campaign-v3/source-body/stdout.log": [
+      2096,
+      8948255,
+      1000,
+      33188,
+      59,
+      1790382092835862429,
+      4096
+    ],
+    "signed-campaign-v3/source-signature": [
+      2096,
+      8199663,
+      1000,
+      16877,
+      4096,
+      1790382087974016714,
+      4096
+    ],
+    "signed-campaign-v3/source-signature.json": [
+      2096,
+      8948234,
+      1000,
+      33188,
+      36,
+      1790382087974016714,
+      4096
+    ],
+    "signed-campaign-v3/source-signature/record.json": [
+      2096,
+      8948231,
+      1000,
+      33188,
+      524,
+      1790382087974016714,
+      4096
+    ],
+    "signed-campaign-v3/source-signature/stderr.log": [
+      2096,
+      8948233,
+      1000,
+      33188,
+      110,
+      1790382087974016714,
+      4096
+    ],
+    "signed-campaign-v3/source-signature/stdout.log": [
+      2096,
+      8948232,
+      1000,
+      33188,
+      0,
+      1790382087974016714,
+      0
+    ],
+    "signed-campaign-v3/source-tests": [
+      2096,
+      8948242,
+      1000,
+      16877,
+      4096,
+      1790382091828849105,
+      4096
+    ],
+    "signed-campaign-v3/source-tests.json": [
+      2096,
+      8948246,
+      1000,
+      33188,
+      36,
+      1790382091828849105,
+      4096
+    ],
+    "signed-campaign-v3/source-tests/record.json": [
+      2096,
+      8948243,
+      1000,
+      33188,
+      332,
+      1790382091824884116,
+      4096
+    ],
+    "signed-campaign-v3/source-tests/stderr.log": [
+      2096,
+      8948245,
+      1000,
+      33188,
+      0,
+      1790382091828849105,
+      0
+    ],
+    "signed-campaign-v3/source-tests/stdout.log": [
+      2096,
+      8948244,
+      1000,
+      33188,
+      55,
+      1790382091828849105,
+      4096
+    ],
+    "signed-campaign/allowed-signers": [
+      2096,
+      8946599,
+      1000,
+      33188,
+      98,
+      1790381695195186928,
+      4096
+    ],
+    "signed-campaign/body-comparison": [
+      2096,
+      8946632,
+      1000,
+      16877,
+      4096,
+      1790381699662486381,
+      4096
+    ],
+    "signed-campaign/body-comparison/baseline-macro.rs": [
+      2096,
+      8946634,
+      1000,
+      33188,
+      4935,
+      1790381699662486381,
+      8192
+    ],
+    "signed-campaign/body-comparison/candidate-macro.rs": [
+      2096,
+      8946635,
+      1000,
+      33188,
+      6393,
+      1790381699662486381,
+      8192
+    ],
+    "signed-campaign/body-comparison/comparison.json": [
+      2096,
+      8943994,
+      1000,
+      33188,
+      1074,
+      1790381699662486381,
+      4096
+    ],
+    "signed-campaign/body-comparison/normalized-after.rs": [
+      2096,
+      8946637,
+      1000,
+      33188,
+      4349,
+      1790381699662486381,
+      8192
+    ],
+    "signed-campaign/body-comparison/normalized-before.rs": [
+      2096,
+      8946636,
+      1000,
+      33188,
+      4349,
+      1790381699662486381,
+      8192
+    ],
+    "signed-campaign/closure-before": [
+      2096,
+      8946647,
+      1000,
+      16877,
+      4096,
+      1790381706924066173,
+      4096
+    ],
+    "signed-campaign/closure-before.json": [
+      2096,
+      8946650,
+      1000,
+      33188,
+      36,
+      1790381706924066173,
+      4096
+    ],
+    "signed-campaign/closure-before/record.json": [
+      2096,
+      8944238,
+      1000,
+      33188,
+      465,
+      1790381706924066173,
+      4096
+    ],
+    "signed-campaign/closure-before/stderr.log": [
+      2096,
+      8946649,
+      1000,
+      33188,
+      0,
+      1790381706924066173,
+      0
+    ],
+    "signed-campaign/closure-before/stdout.log": [
+      2096,
+      8946648,
+      1000,
+      33188,
+      92,
+      1790381706924066173,
+      4096
+    ],
+    "signed-campaign/environment.json": [
+      2096,
+      8946600,
+      1000,
+      33188,
+      1986,
+      1790381695195186928,
+      4096
+    ],
+    "signed-campaign/proof-before": [
+      2096,
+      8946654,
+      1000,
+      16877,
+      4096,
+      1790381754512838218,
+      4096
+    ],
+    "signed-campaign/proof-before.json": [
+      2096,
+      8946947,
+      1000,
+      33188,
+      36,
+      1790381754512838218,
+      4096
+    ],
+    "signed-campaign/proof-before/record.json": [
+      2096,
+      8946943,
+      1000,
+      33188,
+      667,
+      1790381754512838218,
+      4096
+    ],
+    "signed-campaign/proof-before/stderr.log": [
+      2096,
+      8946946,
+      1000,
+      33188,
+      0,
+      1790381754512838218,
+      0
+    ],
+    "signed-campaign/proof-before/stdout.log": [
+      2096,
+      8946945,
+      1000,
+      33188,
+      37430,
+      1790381754512838218,
+      40960
+    ],
+    "signed-campaign/relocated-inputs.json": [
+      2096,
+      8946963,
+      1000,
+      33188,
+      1208,
+      1790381754883514052,
+      4096
+    ],
+    "signed-campaign/relocated-proof": [
+      2096,
+      8946964,
+      1000,
+      16877,
+      4096,
+      1790381802646566685,
+      4096
+    ],
+    "signed-campaign/relocated-proof.json": [
+      2096,
+      8947049,
+      1000,
+      33188,
+      36,
+      1790381802646566685,
+      4096
+    ],
+    "signed-campaign/relocated-proof/record.json": [
+      2096,
+      8946967,
+      1000,
+      33188,
+      718,
+      1790381802642602155,
+      4096
+    ],
+    "signed-campaign/relocated-proof/stderr.log": [
+      2096,
+      8947048,
+      1000,
+      33188,
+      0,
+      1790381802646566685,
+      0
+    ],
+    "signed-campaign/relocated-proof/stdout.log": [
+      2096,
+      8947045,
+      1000,
+      33188,
+      37430,
+      1790381802646566685,
+      40960
+    ],
+    "signed-campaign/relocated-source": [
+      2096,
+      8946948,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/relocated-source/crates": [
+      2096,
+      8946949,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime": [
+      2096,
+      8946959,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime-model": [
+      2096,
+      8946950,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8946951,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8946952,
+      1000,
+      33188,
+      19835,
+      1790381754879528291,
+      20480
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8946953,
+      1000,
+      33188,
+      7809,
+      1790381754879528291,
+      8192
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8946954,
+      1000,
+      33188,
+      8110,
+      1790381754879528291,
+      8192
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8946955,
+      1000,
+      33188,
+      6607,
+      1790381754879528291,
+      8192
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8946956,
+      1000,
+      33188,
+      11876,
+      1790381754879528291,
+      12288
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8946957,
+      1000,
+      33188,
+      505,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8946958,
+      1000,
+      33188,
+      16403,
+      1790381754879528291,
+      20480
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime/src": [
+      2096,
+      8946960,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8946961,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/relocated-source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8946962,
+      1000,
+      33188,
+      6393,
+      1790381754879528291,
+      8192
+    ],
+    "signed-campaign/runner-tests": [
+      2096,
+      8946613,
+      1000,
+      16877,
+      4096,
+      1790381696359317664,
+      4096
+    ],
+    "signed-campaign/runner-tests.json": [
+      2096,
+      8946617,
+      1000,
+      33188,
+      36,
+      1790381696359317664,
+      4096
+    ],
+    "signed-campaign/runner-tests/record.json": [
+      2096,
+      8946614,
+      1000,
+      33188,
+      324,
+      1790381696359317664,
+      4096
+    ],
+    "signed-campaign/runner-tests/stderr.log": [
+      2096,
+      8946616,
+      1000,
+      33188,
+      0,
+      1790381696359317664,
+      0
+    ],
+    "signed-campaign/runner-tests/stdout.log": [
+      2096,
+      8946615,
+      1000,
+      33188,
+      51,
+      1790381696359317664,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement": [
+      2096,
+      8947066,
+      1000,
+      16877,
+      4096,
+      1790381809281110333,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement-mutation.json": [
+      2096,
+      8947065,
+      1000,
+      33188,
+      1549,
+      1790381802924083761,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement-source": [
+      2096,
+      8947050,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement-source/crates": [
+      2096,
+      8947051,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime": [
+      2096,
+      8947061,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime-model": [
+      2096,
+      8947052,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime-model/verus": [
+      2096,
+      8947053,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_effects_v1.rs": [
+      2096,
+      8947056,
+      1000,
+      33188,
+      19835,
+      1790381754879528291,
+      20480
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_graph_v1.rs": [
+      2096,
+      8947059,
+      1000,
+      33188,
+      7809,
+      1790381754879528291,
+      8192
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_leaf_v1.rs": [
+      2096,
+      8947060,
+      1000,
+      33188,
+      8110,
+      1790381754879528291,
+      8192
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_path_v1.rs": [
+      2096,
+      8947054,
+      1000,
+      33188,
+      6607,
+      1790381754879528291,
+      8192
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_planner_v1.rs": [
+      2096,
+      8947057,
+      1000,
+      33188,
+      11876,
+      1790381754879528291,
+      12288
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs": [
+      2096,
+      8947058,
+      1000,
+      33188,
+      505,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_validation_v1.rs": [
+      2096,
+      8947055,
+      1000,
+      33188,
+      16403,
+      1790381754879528291,
+      20480
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime/src": [
+      2096,
+      8947062,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime/src/context": [
+      2096,
+      8947063,
+      1000,
+      16877,
+      4096,
+      1790381754879528291,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": [
+      2096,
+      8947064,
+      1000,
+      33188,
+      6406,
+      1790381802920119231,
+      8192
+    ],
+    "signed-campaign/skip-success-settlement/record.json": [
+      2096,
+      8947067,
+      1000,
+      33188,
+      850,
+      1790381809281110333,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement/stderr.log": [
+      2096,
+      8947069,
+      1000,
+      33188,
+      2477,
+      1790381809281110333,
+      4096
+    ],
+    "signed-campaign/skip-success-settlement/stdout.log": [
+      2096,
+      8947068,
+      1000,
+      33188,
+      0,
+      1790381809281110333,
+      0
+    ],
+    "signed-campaign/source-before.json": [
+      2096,
+      8923434,
+      1000,
+      33188,
+      856381,
+      1790381695195186928,
+      860160
+    ],
+    "signed-campaign/source-body": [
+      2096,
+      8946546,
+      1000,
+      16877,
+      4096,
+      1790381699678360216,
+      4096
+    ],
+    "signed-campaign/source-body.json": [
+      2096,
+      8946641,
+      1000,
+      33188,
+      36,
+      1790381699678360216,
+      4096
+    ],
+    "signed-campaign/source-body/record.json": [
+      2096,
+      8946638,
+      1000,
+      33188,
+      449,
+      1790381699678360216,
+      4096
+    ],
+    "signed-campaign/source-body/stderr.log": [
+      2096,
+      8946640,
+      1000,
+      33188,
+      0,
+      1790381699678360216,
+      0
+    ],
+    "signed-campaign/source-body/stdout.log": [
+      2096,
+      8946639,
+      1000,
+      33188,
+      59,
+      1790381699678360216,
+      4096
+    ],
+    "signed-campaign/source-signature": [
+      2096,
+      8946605,
+      1000,
+      16877,
+      4096,
+      1790381695588575095,
+      4096
+    ],
+    "signed-campaign/source-signature.json": [
+      2096,
+      8946612,
+      1000,
+      33188,
+      36,
+      1790381695588575095,
+      4096
+    ],
+    "signed-campaign/source-signature/record.json": [
+      2096,
+      8946606,
+      1000,
+      33188,
+      521,
+      1790381695584601477,
+      4096
+    ],
+    "signed-campaign/source-signature/stderr.log": [
+      2096,
+      8946611,
+      1000,
+      33188,
+      110,
+      1790381695588575095,
+      4096
+    ],
+    "signed-campaign/source-signature/stdout.log": [
+      2096,
+      8946608,
+      1000,
+      33188,
+      0,
+      1790381695584601477,
+      0
+    ],
+    "signed-campaign/source-tests": [
+      2096,
+      8946619,
+      1000,
+      16877,
+      4096,
+      1790381698789368948,
+      4096
+    ],
+    "signed-campaign/source-tests.json": [
+      2096,
+      8946623,
+      1000,
+      33188,
+      36,
+      1790381698789368948,
+      4096
+    ],
+    "signed-campaign/source-tests/record.json": [
+      2096,
+      8946620,
+      1000,
+      33188,
+      332,
+      1790381698789368948,
+      4096
+    ],
+    "signed-campaign/source-tests/stderr.log": [
+      2096,
+      8946622,
+      1000,
+      33188,
+      0,
+      1790381698789368948,
+      0
+    ],
+    "signed-campaign/source-tests/stdout.log": [
+      2096,
+      8946621,
+      1000,
+      33188,
+      55,
+      1790381698789368948,
+      4096
+    ]
+  },
+  "observed_at": "2026-09-26T00:25:41.587454+00:00",
+  "owned_root": "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd",
+  "retained_files": 372,
+  "scope": "Exact finite-projection leaf development; not production refinement, final admission or native/performance qualification",
+  "source_commit": "7185cc6fba1ac7b154469881b1e2df17aec25b6f",
+  "source_inputs": 5966,
+  "terminal_records": {
+    "01-exact-adapters/proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790380967449725568,
+      "group_absent": true,
+      "process_group": 1140746,
+      "started_ns": 1790380932774309997,
+      "status": 1
+    },
+    "02-exact-adapters/proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--multiple-errors",
+        "6",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381021892784087,
+      "group_absent": true,
+      "process_group": 1145147,
+      "started_ns": 1790380982950226978,
+      "status": 1
+    },
+    "03-custody-focused/proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--verify-function",
+        "*validate_custody*",
+        "--verify-root",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381051816421439,
+      "group_absent": true,
+      "process_group": 1160670,
+      "started_ns": 1790381045209645217,
+      "status": 0
+    },
+    "04-leaf-outcomes/proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--multiple-errors",
+        "6",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381092963904214,
+      "group_absent": true,
+      "process_group": 1167144,
+      "started_ns": 1790381092542352576,
+      "status": 1
+    },
+    "05-leaf-outcomes/proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--multiple-errors",
+        "6",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381100392887368,
+      "group_absent": true,
+      "process_group": 1167519,
+      "started_ns": 1790381098994381781,
+      "status": 1
+    },
+    "06-leaf-outcomes/proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--multiple-errors",
+        "6",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381166874122000,
+      "group_absent": true,
+      "process_group": 1178233,
+      "started_ns": 1790381125643254569,
+      "status": 1
+    },
+    "07-isolated-planner/proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--verify-function",
+        "*plan_completion_step_v1*",
+        "--verify-root",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381212061458924,
+      "group_absent": true,
+      "process_group": 1190534,
+      "started_ns": 1790381211022201014,
+      "status": 1
+    },
+    "08-leaf-lemmas/proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--multiple-errors",
+        "6",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381302020187142,
+      "group_absent": true,
+      "process_group": 1200813,
+      "started_ns": 1790381255656738101,
+      "status": 1
+    },
+    "09-opaque-leaf/proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--multiple-errors",
+        "6",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381362161418917,
+      "group_absent": true,
+      "process_group": 1212285,
+      "started_ns": 1790381314820177561,
+      "status": 1
+    },
+    "10-scalar-leaf/proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--multiple-errors",
+        "6",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381442703088918,
+      "group_absent": true,
+      "process_group": 1223691,
+      "started_ns": 1790381392521845962,
+      "status": 0
+    },
+    "11-default-whole-root/proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381508849667689,
+      "group_absent": true,
+      "process_group": 1245975,
+      "started_ns": 1790381466700875769,
+      "status": 0
+    },
+    "signed-campaign-v2/closure-before/record.json": {
+      "command": [
+        "/bin/sh",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/examples/row_softmax_v1/verify-verus-closure.sh",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/pins/VERUS_CLOSURE_MANIFEST"
+      ],
+      "finished_ns": 1790381894888903267,
+      "group_absent": true,
+      "process_group": 1333225,
+      "started_ns": 1790381893000881127,
+      "status": 0
+    },
+    "signed-campaign-v2/proof-before/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381938310526969,
+      "group_absent": true,
+      "process_group": 1334718,
+      "started_ns": 1790381895494095389,
+      "status": 0
+    },
+    "signed-campaign-v2/relocated-proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign-v2/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381983730697036,
+      "group_absent": true,
+      "process_group": 1341201,
+      "started_ns": 1790381938964286759,
+      "status": 0
+    },
+    "signed-campaign-v2/runner-tests/record.json": {
+      "command": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-completion-leaf-outcomes-2026-09-25/test-run.py"
+      ],
+      "finished_ns": 1790381887973111427,
+      "group_absent": true,
+      "process_group": 1332990,
+      "started_ns": 1790381887755693806,
+      "status": 0
+    },
+    "signed-campaign-v2/skip-success-settlement/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--verify-function",
+        "*plan_completion_step_v1*",
+        "--verify-root",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign-v2/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790382025473255277,
+      "group_absent": true,
+      "process_group": 1352323,
+      "started_ns": 1790381984311883917,
+      "status": 1
+    },
+    "signed-campaign-v2/source-body/record.json": {
+      "command": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-completion-reconciliation-source.py",
+        "--output",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign-v2/body-comparison"
+      ],
+      "finished_ns": 1790381892306005773,
+      "group_absent": true,
+      "process_group": 1333140,
+      "started_ns": 1790381892096946342,
+      "status": 0
+    },
+    "signed-campaign-v2/source-signature/record.json": {
+      "command": [
+        "/usr/bin/git",
+        "--no-replace-objects",
+        "--no-pager",
+        "-c",
+        "gpg.format=ssh",
+        "-c",
+        "gpg.ssh.program=/usr/bin/ssh-keygen",
+        "-c",
+        "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign-v2/allowed-signers",
+        "verify-commit",
+        "aa32e9b5e78920513e83a97ec057d5fff3233445"
+      ],
+      "finished_ns": 1790381886253717279,
+      "group_absent": true,
+      "process_group": 1332954,
+      "started_ns": 1790381886227069724,
+      "status": 0
+    },
+    "signed-campaign-v2/source-tests/record.json": {
+      "command": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/test-completion-reconciliation-source.py"
+      ],
+      "finished_ns": 1790381891445144343,
+      "group_absent": true,
+      "process_group": 1332995,
+      "started_ns": 1790381889082788079,
+      "status": 0
+    },
+    "signed-campaign-v3/closure-after/record.json": {
+      "command": [
+        "/bin/sh",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/examples/row_softmax_v1/verify-verus-closure.sh",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/pins/VERUS_CLOSURE_MANIFEST"
+      ],
+      "finished_ns": 1790382297091027433,
+      "group_absent": true,
+      "process_group": 1406657,
+      "started_ns": 1790382295065771612,
+      "status": 0
+    },
+    "signed-campaign-v3/closure-before/record.json": {
+      "command": [
+        "/bin/sh",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/examples/row_softmax_v1/verify-verus-closure.sh",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/pins/VERUS_CLOSURE_MANIFEST"
+      ],
+      "finished_ns": 1790382095368387095,
+      "group_absent": true,
+      "process_group": 1372737,
+      "started_ns": 1790382093584259085,
+      "status": 0
+    },
+    "signed-campaign-v3/format/record.json": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "finished_ns": 1790382329947262031,
+      "group_absent": true,
+      "process_group": 1408198,
+      "started_ns": 1790382297847734543,
+      "status": 0
+    },
+    "signed-campaign-v3/omit-failure-quarantine/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--verify-function",
+        "*transition_submission_status*",
+        "--verify-root",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign-v3/omit-failure-quarantine-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790382253286778983,
+      "group_absent": true,
+      "process_group": 1405567,
+      "started_ns": 1790382249918985368,
+      "status": 1
+    },
+    "signed-campaign-v3/promote-unknown-input/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--verify-function",
+        "*plan_completion_step_v1*",
+        "--verify-root",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign-v3/promote-unknown-input-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790382249253436903,
+      "group_absent": true,
+      "process_group": 1395769,
+      "started_ns": 1790382207562959669,
+      "status": 1
+    },
+    "signed-campaign-v3/proof-after/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790382294369680817,
+      "group_absent": true,
+      "process_group": 1405822,
+      "started_ns": 1790382257279982225,
+      "status": 0
+    },
+    "signed-campaign-v3/proof-before/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790382135649665270,
+      "group_absent": true,
+      "process_group": 1374238,
+      "started_ns": 1790382096015607307,
+      "status": 0
+    },
+    "signed-campaign-v3/reject-valid-custody/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--verify-function",
+        "*validate_custody*",
+        "--verify-root",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign-v3/reject-valid-custody-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790382256554750517,
+      "group_absent": true,
+      "process_group": 1405752,
+      "started_ns": 1790382253947182915,
+      "status": 1
+    },
+    "signed-campaign-v3/relocated-proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign-v3/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790382169517252094,
+      "group_absent": true,
+      "process_group": 1384752,
+      "started_ns": 1790382136231226960,
+      "status": 0
+    },
+    "signed-campaign-v3/runner-tests/record.json": {
+      "command": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-completion-leaf-outcomes-2026-09-25/test-run.py"
+      ],
+      "finished_ns": 1790382089326530693,
+      "group_absent": true,
+      "process_group": 1372611,
+      "started_ns": 1790382089238012321,
+      "status": 0
+    },
+    "signed-campaign-v3/skip-success-settlement/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--verify-function",
+        "*plan_completion_step_v1*",
+        "--verify-root",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign-v3/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790382206905942969,
+      "group_absent": true,
+      "process_group": 1385693,
+      "started_ns": 1790382170164834760,
+      "status": 1
+    },
+    "signed-campaign-v3/source-body/record.json": {
+      "command": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-completion-reconciliation-source.py",
+        "--output",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign-v3/body-comparison"
+      ],
+      "finished_ns": 1790382092835936403,
+      "group_absent": true,
+      "process_group": 1372720,
+      "started_ns": 1790382092629560046,
+      "status": 0
+    },
+    "signed-campaign-v3/source-signature/record.json": {
+      "command": [
+        "/usr/bin/git",
+        "--no-replace-objects",
+        "--no-pager",
+        "-c",
+        "gpg.format=ssh",
+        "-c",
+        "gpg.ssh.program=/usr/bin/ssh-keygen",
+        "-c",
+        "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign-v3/allowed-signers",
+        "verify-commit",
+        "7185cc6fba1ac7b154469881b1e2df17aec25b6f"
+      ],
+      "finished_ns": 1790382087978336455,
+      "group_absent": true,
+      "process_group": 1372569,
+      "started_ns": 1790382087951841863,
+      "status": 0
+    },
+    "signed-campaign-v3/source-tests/record.json": {
+      "command": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/test-completion-reconciliation-source.py"
+      ],
+      "finished_ns": 1790382091831711655,
+      "group_absent": true,
+      "process_group": 1372630,
+      "started_ns": 1790382090062765928,
+      "status": 0
+    },
+    "signed-campaign/closure-before/record.json": {
+      "command": [
+        "/bin/sh",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/examples/row_softmax_v1/verify-verus-closure.sh",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/pins/VERUS_CLOSURE_MANIFEST"
+      ],
+      "finished_ns": 1790381706924710467,
+      "group_absent": true,
+      "process_group": 1288596,
+      "started_ns": 1790381700642548537,
+      "status": 0
+    },
+    "signed-campaign/proof-before/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381754516498476,
+      "group_absent": true,
+      "process_group": 1299274,
+      "started_ns": 1790381707773915572,
+      "status": 0
+    },
+    "signed-campaign/relocated-proof/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign/relocated-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "finished_ns": 1790381802647880819,
+      "group_absent": true,
+      "process_group": 1300998,
+      "started_ns": 1790381755226467537,
+      "status": 0
+    },
+    "signed-campaign/runner-tests/record.json": {
+      "command": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-completion-leaf-outcomes-2026-09-25/test-run.py"
+      ],
+      "finished_ns": 1790381696361262161,
+      "group_absent": true,
+      "process_group": 1288265,
+      "started_ns": 1790381696274510868,
+      "status": 0
+    },
+    "signed-campaign/skip-success-settlement/record.json": {
+      "command": [
+        "/usr/bin/timeout",
+        "--foreground",
+        "--signal=TERM",
+        "--kill-after=5",
+        "120",
+        "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+        "--crate-type",
+        "lib",
+        "--triggers-mode",
+        "silent",
+        "--no-cheating",
+        "--output-json",
+        "--error-format=json",
+        "--no-report-long-running",
+        "--num-threads",
+        "4",
+        "--verify-function",
+        "*plan_completion_step_v1*",
+        "--verify-root",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign/skip-success-settlement-source/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+      ],
+      "exception": "CampaignInterrupted",
+      "finished_ns": 1790381809286480673,
+      "group_absent": true,
+      "process_group": 1311955,
+      "started_ns": 1790381803228829949,
+      "status": -9
+    },
+    "signed-campaign/source-body/record.json": {
+      "command": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-completion-reconciliation-source.py",
+        "--output",
+        "/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign/body-comparison"
+      ],
+      "finished_ns": 1790381699681112275,
+      "group_absent": true,
+      "process_group": 1288544,
+      "started_ns": 1790381699482138365,
+      "status": 0
+    },
+    "signed-campaign/source-signature/record.json": {
+      "command": [
+        "/usr/bin/git",
+        "--no-replace-objects",
+        "--no-pager",
+        "-c",
+        "gpg.format=ssh",
+        "-c",
+        "gpg.ssh.program=/usr/bin/ssh-keygen",
+        "-c",
+        "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-leaf-outcomes-20260925-4CVOfBNd/signed-campaign/allowed-signers",
+        "verify-commit",
+        "587af7ac3111bb10c20707aa8a3f3812e0d591f6"
+      ],
+      "finished_ns": 1790381695591691958,
+      "group_absent": true,
+      "process_group": 1288251,
+      "started_ns": 1790381695567193688,
+      "status": 0
+    },
+    "signed-campaign/source-tests/record.json": {
+      "command": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/test-completion-reconciliation-source.py"
+      ],
+      "finished_ns": 1790381698792172434,
+      "group_absent": true,
+      "process_group": 1288395,
+      "started_ns": 1790381697030215908,
+      "status": 0
+    }
+  }
+}

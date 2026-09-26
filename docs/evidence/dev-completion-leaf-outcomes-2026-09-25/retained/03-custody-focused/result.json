@@ -1,0 +1,11 @@
+{
+  "status": 0,
+  "unchanged": true,
+  "verification": {
+    "encountered-error": false,
+    "encountered-vir-error": false,
+    "errors": 0,
+    "is-verifying-entire-crate": false,
+    "verified": 2
+  }
+}

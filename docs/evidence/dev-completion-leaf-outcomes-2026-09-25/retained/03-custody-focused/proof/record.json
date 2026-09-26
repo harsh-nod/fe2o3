@@ -1,0 +1,29 @@
+{
+  "command": [
+    "/usr/bin/timeout",
+    "--foreground",
+    "--signal=TERM",
+    "--kill-after=5",
+    "120",
+    "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+    "--crate-type",
+    "lib",
+    "--triggers-mode",
+    "silent",
+    "--no-cheating",
+    "--output-json",
+    "--error-format=json",
+    "--no-report-long-running",
+    "--num-threads",
+    "4",
+    "--verify-function",
+    "*validate_custody*",
+    "--verify-root",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_completion_reconciliation_v1.rs"
+  ],
+  "started_ns": 1790381045209645217,
+  "process_group": 1160670,
+  "group_absent": true,
+  "finished_ns": 1790381051816421439,
+  "status": 0
+}

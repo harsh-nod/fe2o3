@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/test-completion-reconciliation-source.py"
+  ],
+  "started_ns": 1790381697030215908,
+  "process_group": 1288395,
+  "group_absent": true,
+  "finished_ns": 1790381698792172434,
+  "status": 0
+}

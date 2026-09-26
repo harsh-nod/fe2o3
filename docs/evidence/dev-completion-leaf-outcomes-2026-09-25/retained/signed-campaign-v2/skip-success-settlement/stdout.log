@@ -1,0 +1,805 @@
+{
+  "func-details": {
+    "context_completion_reconciliation_v1::BackendPollV1::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::len%returns_clause_autospec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::custody_valid": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::OptionAdditionalFns::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::axiom_array_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::spec_slice_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_ext_equal_deep": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::dependency_valid": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::impls::impl&%22::ne": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::result::impl&%28::from_residual": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%16::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::num::u64_specs_tmp::impl&%0::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::path_descend": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::cmp::PartialEqSpec::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::option::impl&%17::eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::table_fixed": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::impls::impl&%21::eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::array_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::spec_array_update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::ptrs_mut_eq_sized": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::axiom_spec_array_as_slice": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::leaf_target": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::leaf_effect": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_spec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::stack_path_valid": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::array_as_slice": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::impl&%2::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::leaf_settlement_effect": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::axiom_array_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::string::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::eligible_leaf": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::VecAdditionalSpecFns::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionProjectionV1::journal_result_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::cmp::impl&%3::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::impl&%0::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::impls::impl&%25::ne": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::selected_edge": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_slice_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionTableV1::get": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::string::axiom_str_literal_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_slice_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::spec_unwrap": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::slice::index::SliceIndex::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::cmp::impl&%2::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::PartialEq::eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::cmp::impl&%3::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::impls::impl&%9::eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::pending_roots_result": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::RuntimeCompletionStatusV1::is_terminal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::num::u8_specs_tmp::impl&%0::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::cmp::impl&%12::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::node_fixed": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::leaf_input": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::impls::impl&%9::ne": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::num::u64_specs_tmp::impl&%0::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::impl&%1::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_ensures": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%18::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::impls::impl&%21::ne": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::array_len_matches_n": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::core::IndexSpec::index_req": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%20::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::SliceAdditionalSpecFns::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::spec_array_as_slice": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_different": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::view_reverse_for_eq_sized": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_same": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::pending_roots_valid": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionTableV1::index_req": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::cmp::impl&%12::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::settlement_ready": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_index_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::view_reverse_for_eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_slice_get_usize": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::advanced_state": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::impl&%2::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::num::usize_specs_tmp::impl&%0::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionTableV1::contains": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionProjectionV1::invalid_directed_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::impl&%1::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::leaf_iteration_shape": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::spec_ok_or": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::slice::impl&%0::index_req": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::impls::impl&%19::ne": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::cursor_advance_preserves": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::result::impl&%27::branch": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::result::is_ok": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%8::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::cmp::PartialEqSpec::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::ops::index::Index::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%14::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::RuntimeSubmissionIdV1::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%26::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::checked_selected_edge": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::PartialEq::ne": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::impls::impl&%22::eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::success_ready": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::slice::impl&%0::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::ptrs_mut_eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::slice::index::impl&%2::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::axiom_spec_array_fill_for_copy_type": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%2::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_some": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::fixed_lookup": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::num::usize_specs_tmp::impl&%0::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::View::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionTableV1::slot": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_requires": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::spec_slice_get": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::new": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::MAX_RUNTIME_DEPENDENCIES_V1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::option::impl&%0::expect": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::leaf_outcome": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionProjectionV1::transition_submission_status": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::impl&%2::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionProjectionV1::require_ordinary_submission_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionProjectionV1::validate_pending_peer_copy_roots_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::result::is_err": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::path_pop": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::ptr::mut_ptr::impl&%7::eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::progress_reflexive": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::progressed": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::RuntimeCompletionStatusV1::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::partial_eq::impl&%0::eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::checked_pending_shape": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::node_metadata_same": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::checked": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionProjectionV1::plan_completion_step_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::control_flow::spec_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionProjectionV1::check_operation_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionTableV1::node": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%44::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::slice::impl&%2::index_req": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%30::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::selected_reachable": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::array_fill_for_copy_types": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%14::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::control_flow::spec_from_blanket_identity": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::settlement_commits": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::RuntimeCompletionStatusV1::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionTableV1::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::impl&%0::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_index_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::slice::index::impl&%0::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::exhausted_success_gate": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::slice::impl&%3::index_req": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::spec_array_fill_for_copy_type": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionProjectionV1::validate_pending_producer_launch_roots_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::cmp::impl&%2::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::array::impl&%15::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::progress_transitive": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::spec_expect": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_decreases_to_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::quiescent_ready": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%48::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::ptr::const_ptr::impl&%7::eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionTableV1::wf": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::path_empty": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::path_preserved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::string::axiom_str_literal_get_char": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionProjectionV1::producer_completion_parts_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::BackendPollV1::obeys_eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionProjectionV1::directed_input_status_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%4::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::ArrayAdditionalSpecFns::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::impl&%1::index_req": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::option::impl&%0::ok_or": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::RuntimeSubmissionIdV1::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::MAX_RUNTIME_SUBMISSIONS_V1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::impls::impl&%25::eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::lemma_array_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::slice::impl&%0::get": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::axiom_spec_array_update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::impl&%3::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_spec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%6::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::spec_vec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::num::u8_specs_tmp::impl&%0::eq_spec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_none": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_completion_reconciliation_v1::CompletionProjectionV1::producer_completion_state_mut_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::cmp::impls::impl&%19::eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::SliceIndexSpec::index_req": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    }
+  },
+  "verification-results": {
+    "encountered-error": true,
+    "encountered-vir-error": false,
+    "verified": 1,
+    "errors": 1,
+    "is-verifying-entire-crate": false
+  },
+  "verus": {
+    "profile": "release",
+    "version": "0.2026.08.09.92f466f",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+  }
+}

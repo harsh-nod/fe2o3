@@ -24,6 +24,19 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest leaf-outcome proof development (2026-09-25): the
+[exact leaf outcome packet](evidence/dev-completion-leaf-outcomes-2026-09-25/README.md)
+passes all fourteen phases from signed `7185cc6fb`. Opening, relocated and closing
+whole-root proofs each verify 53 obligations at unchanged limits. Constructed
+finite-projection leaves return exact Success/Quiescence in two iterations or
+the exact injected settlement error in one. Four logical mutants, twelve
+classifier groups, eight source-checker groups and formatting pass; 5966 source
+inputs bind directly to signed blobs. All 372 artifacts, including failed and
+interrupted attempts, are retained before exact-owned cleanup of 10309632
+allocated bytes. Production planner code is unchanged; CPU and hardware suites
+were not rerun for this proof-only slice. Real construction/journal refinement,
+native concurrency and matched performance remain open; A1/A2 do not close.
+
 Latest planner proof development (2026-09-25): the
 [shared planner safety packet](evidence/dev-completion-reconciliation-proof-2026-09-25/README.md)
 passes all fourteen signed-source phases from `7935918fc`. Both standalone whole
