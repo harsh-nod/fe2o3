@@ -3,8 +3,9 @@
 //! Exact native profile/layout extraction and successful disposal are the
 //! parent's obligations. This adapter binds their private identity and retains
 //! one backing charge across views, mapping and ownership loans. Other GTT
-//! profiles, virtual-address capacity, metadata and aggregate budgets are not
-//! included. Ordinary coherent bootstrap allocations use the same charge path.
+//! profiles, virtual-address capacity and complete metadata are not included.
+//! A root-issued dedicated leaf adds aggregate device/root backing ceilings.
+//! Ordinary coherent bootstrap allocations use the same charge path.
 
 use super::{
     DeviceKeyV1, HostVisibleCoherentGttV1, MAX_SHARED_GTT_ALLOCATIONS_V1,
@@ -87,6 +88,7 @@ struct DomainV1 {
     session_id: u64,
     device: DeviceKeyV1,
     vm: VmKeyV1,
+    root: Option<crate::Gfx942HostBackingRootV1>,
 }
 
 impl DomainV1 {
@@ -121,6 +123,16 @@ impl HostBackingAccountV1 {
         vm: VmKeyV1,
         budget: Gfx942HostVisibleBackingBudgetV1,
     ) -> Result<Self, HostBackingAccountingErrorV1> {
+        Self::new_with_admission(session_id, device, vm, budget, None)
+    }
+
+    pub(super) fn new_with_admission(
+        session_id: u64,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+        budget: Gfx942HostVisibleBackingBudgetV1,
+        admission: Option<crate::Gfx942HostBackingAdmissionV1>,
+    ) -> Result<Self, HostBackingAccountingErrorV1> {
         if Gfx942HostVisibleBackingBudgetV1::new(budget.max_backing_bytes, budget.max_allocations)
             != Some(budget)
         {
@@ -138,12 +150,25 @@ impl HostBackingAccountV1 {
                 ResourceKindV1::AllocationRecords,
                 budget.max_allocations as u64,
             );
-        let credits = ResourceCreditAccountV1::new(capacity, budget.max_allocations)?;
+        let (credits, root) = match admission {
+            Some(admission) => {
+                if admission.budget_v1() != budget {
+                    return Err(HostBackingAccountingErrorV1::InvalidBudget);
+                }
+                let (credits, root) = admission.into_account(device)?;
+                (credits, Some(root))
+            }
+            None => (
+                ResourceCreditAccountV1::new(capacity, budget.max_allocations)?,
+                None,
+            ),
+        };
         Ok(Self {
             domain: Arc::new(DomainV1 {
                 session_id,
                 device,
                 vm,
+                root,
             }),
             budget,
             credits,
@@ -228,7 +253,8 @@ impl HostBackingReservationV1 {
         HostBackingChargeV1 {
             domain: self.domain,
             allocation: self.allocation,
-            credits: self.credits.retain(),
+            credits: Some(self.credits.retain()),
+            disposed: false,
         }
     }
 }
@@ -238,12 +264,13 @@ impl HostBackingReservationV1 {
 pub(super) struct HostBackingChargeV1 {
     domain: Arc<DomainV1>,
     allocation: AllocationV1,
-    credits: RetainedResourceCreditsV1,
+    credits: Option<RetainedResourceCreditsV1>,
+    disposed: bool,
 }
 
 impl HostBackingChargeV1 {
     pub(super) fn quarantine(self) {
-        self.credits.quarantine();
+        drop(self);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -266,7 +293,7 @@ impl HostBackingChargeV1 {
     /// Exact identity is necessary but cannot itself establish a native outcome.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn release_after_disposal(
-        self,
+        mut self,
         account: &HostBackingAccountV1,
         session_id: u64,
         device: DeviceKeyV1,
@@ -283,7 +310,25 @@ impl HostBackingChargeV1 {
         if !self.allocation.matches(allocation_id, generation, layout) {
             return Err(HostBackingAccountingErrorV1::InvalidAllocation);
         }
-        self.credits.release_after_disposal().map_err(Into::into)
+        let result = self
+            .credits
+            .take()
+            .expect("retained native backing credit")
+            .release_after_disposal();
+        if result.is_ok() {
+            self.disposed = true;
+        }
+        result.map_err(Into::into)
+    }
+}
+
+impl Drop for HostBackingChargeV1 {
+    fn drop(&mut self) {
+        if !self.disposed
+            && let Some(root) = &self.domain.root
+        {
+            root.retain_quarantine();
+        }
     }
 }
 
@@ -291,6 +336,57 @@ impl HostBackingChargeV1 {
 mod tests {
     use super::*;
     use fe2o3_runtime_model::{DeviceGenerationV1, PhysicalDeviceIdV1, VmIdV1};
+
+    #[test]
+    fn rooted_n1_failed_identity_refund_anchors_registry_after_external_root_drop() {
+        use crate::resource_domains::tests::{admission, budget, observe_lifetime, root};
+        for wrong_allocation in [false, true] {
+            let root = root(4096, 1);
+            let observe = observe_lifetime(&root);
+            let (session, device, vm) = domain();
+            let budget = budget(4096, 1);
+            let admitted = admission(&root, device, budget, budget);
+            let account = HostBackingAccountV1::new_with_admission(
+                session,
+                device,
+                vm,
+                budget,
+                Some(admitted),
+            )
+            .unwrap();
+            let layout = profile_layout::<HostVisibleCoherentGttV1>(17).unwrap();
+            let charge = account
+                .reserve(session, device, vm, 1, 1, layout)
+                .unwrap()
+                .retain();
+            drop(root);
+            assert!(
+                charge
+                    .release_after_disposal(
+                        &account,
+                        if wrong_allocation {
+                            session
+                        } else {
+                            session + 1
+                        },
+                        device,
+                        vm,
+                        if wrong_allocation { 2 } else { 1 },
+                        1,
+                        layout
+                    )
+                    .is_err()
+            );
+            drop(account);
+            let usage = observe().unwrap();
+            assert_eq!(usage.quarantined_records, 1);
+            assert_eq!(usage.retained_records, 1);
+            assert_eq!(
+                usage.used.get(ResourceKindV1::ResidentHostAllocationBytes),
+                4096
+            );
+        }
+    }
 
     fn domain() -> (u64, DeviceKeyV1, VmKeyV1) {
         let device = DeviceKeyV1 {

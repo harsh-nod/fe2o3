@@ -24,7 +24,25 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest shared-domain development (2026-09-26): one fixed-arena coordinator now
+Latest rooted N1 development (2026-09-26): ordinary coherent host backing now
+has a typed root, canonical checked-device parents and dedicated session leaves.
+SDMA-first, ordinary compute-first and generated adoption all consume the same
+preissued account; uncertain native disposal preserves ancestor debit and the
+registry after external-root Drop. Review caught and fixed generated startup's
+local-account bypass. The
+[development packet](evidence/dev-native-root-admission-2026-09-26/README.md)
+records 18 focused passes, 45 accounting passes, 1,307 KFD passes with one
+socket-admission failure and 296 filtered construction tests, and 1,474 runtime
+passes with three socket-inspection EPERM failures and 28 ignores. All 67 selected
+construction/custody regressions, 77 doctests, strict Clippy, no-default-feature
+checking and formatting pass; coverage overlaps. Earlier worker startup and
+source-assertion failures are retained, not substituted for the final results.
+This is not full CPU qualification. SSH still fails at hostname resolution.
+N1/N2 and logical/native composition, combined session ceilings, complete
+bootstrap, hierarchy/native proofs, native replay and matched performance remain
+open. MEM-DOM/MEM-5, A1/A2 and accepted checkpoints are unchanged.
+
+Earlier shared-domain development (2026-09-26): one fixed-arena coordinator now
 admits credits atomically through all ancestors, retains quarantine across
 Context destruction, and charges its Rust arena payload before construction.
 Opt-in immutable Context attachment exercises actual request-admission paths;
@@ -35,9 +53,10 @@ socket-inspection EPERM failures and 28 ignores, and 1,293 KFD passes with the
 existing socket-admission failure and 296 construction cases excluded. Strict
 Clippy, no-default-feature checking, formatting and all 77 doctests pass. All
 67 selected construction/custody regressions also pass; these groups overlap.
-This is not full CPU qualification. Canonical physical-device parents, mandatory
-root construction, native account attachment, complete bootstrap/terminal
-payloads and new hierarchy proofs remain open. SSH still fails at hostname
+This is not full CPU qualification. The later N1-only profile above adds canonical
+physical-device parents and native account attachment; mandatory whole-profile
+root construction, complete bootstrap/terminal payloads and new hierarchy proofs
+remain open. SSH still fails at hostname
 resolution, so no native or performance result is added. Accepted checkpoints
 are unchanged; MEM-DOM/MEM-5 and A1/A2 remain incomplete.
 
@@ -2694,10 +2713,11 @@ replay and outer-future waker tests rather than reproducing them.
 4. **VER-2: input leases.** Enable only after complete mutation coverage. Reject
    outside-graph writes, overlaps, stale/foreign/replayed identities and unknown
    publication. Caller-declared kernel access is insufficient authority.
-5. **Memory closure.** MEM-DOM-1 now has a development shared-root ledger and
-   opt-in Context request-accounting attachment. Next bind canonical physical
-   devices, require persistent roots at construction, join native owners and
-   complete bootstrap/terminal headroom and hierarchy refinement. Test simultaneous
+5. **Memory closure.** MEM-DOM-1 now has a development shared-root ledger,
+   opt-in Context request-accounting attachment and a separate root-required N1
+   native profile with canonical checked-device parents. Next compose logical
+   and native profiles, join remaining native owners and complete whole-profile
+   bootstrap/terminal headroom and hierarchy refinement. Test simultaneous
    quarantine across the full bounded profile, not only request credit.
    N1B -> MEM-3 then cover remaining
    kernarg/executable backing, controls and occupied slots. MEM-4A's optional
@@ -2968,7 +2988,7 @@ misinterpreted as initialized contents.
 
 | Packet | Ready boundary and dependency | Exit gate |
 | --- | --- | --- |
-| MEM-DOM-1A -> 1B | Generic shared-root ledger and Context request attachment implemented in development; native/root-required construction remains | Fixed Rust arena payload and ancestor request credits are bounded. Canonical physical-device parents, native account attachment, complete bootstrap/terminal payloads, charged output metadata and hierarchy proofs remain open. Concurrent native-bootstrap reservation is still separate. |
+| MEM-DOM-1A -> 1B | Generic shared-root ledger, Context request attachment and separate root-required native N1 profile implemented in development | N1 now uses canonical checked-device parents and preserves its registry through native quarantine. Whole-profile construction, Context/N1 composition, other native classes, complete bootstrap/terminal payloads, output metadata and hierarchy/adapter proofs remain open. Concurrent native-bootstrap reservation is still separate. |
 | MEM-N1B-1 -> N1B-2 -> MEM-3 | Native backing, then AQL/USERPTR/control/occupied-slot integration with Native | Whole compound admission before effects; exact retained allocation/map/error/panic prefixes. Reuse R70 admission and existing ledgers. |
 | MEM-4A -> 4B | Optional KFD module-image payload ceiling implemented in development; native residency after backing/control integration | CPU alias-lifetime and failed-unload coverage; native ambiguous disposal and formal refinement remain open. Generated images, metadata and aggregate bounds are excluded. Executable GTT is not VRAM. |
 | PRF + MEM-5 | Incremental adapter correspondence and total resource inventory | Include commands, captures, results, journals, arenas, quarantined roots and callback/panic-payload exclusions; authenticate named properties separately from tests and hardware. |

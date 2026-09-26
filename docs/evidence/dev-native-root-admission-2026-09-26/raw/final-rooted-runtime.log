@@ -1,0 +1,9 @@
+
+running 4 tests
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_admission_distinguishes_capacity_from_invalid_binding ... ok
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission ... ok
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_consumed_policy_rejects_replacement_and_never_falls_back ... ok
+test kfd_backend::generated_adoption::tests::rooted_n1_generated_startup_rejects_consumed_policy_before_native_acquisition ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1501 filtered out; finished in 0.01s
+

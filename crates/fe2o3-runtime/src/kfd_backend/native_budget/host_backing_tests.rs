@@ -1,5 +1,103 @@
 use super::*;
 
+#[test]
+fn rooted_n1_consumed_policy_rejects_replacement_and_never_falls_back() {
+    let mut backend = KfdRuntimeBackendV1::mock();
+    backend.rooted_host_backing = Some(RootedHostBackingV1::consumed_for_test());
+    assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+    assert!(backend.host_visible_backing_budget.is_none());
+    assert!(matches!(
+        backend.take_rooted_host_backing_v1(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(backend.rooted_host_backing.is_some());
+    assert!(backend.terminal);
+    assert!(backend.queue.is_none());
+    assert!(backend.terminal_memory.is_none());
+    core::mem::forget(backend); // Resource-free mock; terminal native Drop aborts.
+}
+
+#[test]
+fn rooted_n1_admission_distinguishes_capacity_from_invalid_binding() {
+    use fe2o3_resource_accounting::ResourceCreditErrorV1 as CreditError;
+    for error in [
+        CreditError::AllocationFailed,
+        CreditError::Capacity,
+        CreditError::RecordCapacity,
+        CreditError::DomainCapacity,
+    ] {
+        assert_eq!(
+            rooted_host_backing_admission_error_v1(error).kind(),
+            KfdRuntimeBackendErrorKindV1::Capacity
+        );
+    }
+    for error in [
+        CreditError::InvalidRecordCapacity,
+        CreditError::GenerationExhausted,
+        CreditError::Invariant,
+        CreditError::InvalidDomainCapacity,
+        CreditError::DomainDepth,
+        CreditError::NotHierarchical,
+    ] {
+        assert_eq!(
+            rooted_host_backing_admission_error_v1(error).kind(),
+            KfdRuntimeBackendErrorKindV1::Terminal
+        );
+    }
+}
+
+#[test]
+fn rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission() {
+    let constructor = include_str!("../native_budget.rs")
+        .split_once("pub fn from_checked_device_with_host_backing_root_v1<A>(")
+        .unwrap()
+        .1
+        .split_once("pub(super) fn take_rooted_host_backing_v1(")
+        .unwrap()
+        .0;
+    assert!(
+        constructor.find(".admit_session_v1(&device,").unwrap()
+            < constructor
+                .find("Self::from_checked_device(device, authority)")
+                .unwrap()
+    );
+    for (source, marker, end, native) in [
+        (
+            include_str!("../../kfd_backend.rs"),
+            "    fn ensure_sdma_queue_v1(",
+            "    fn directional_sdma_ops_v1(",
+            ".create_compute_aql_queue_with_rooted_host_backing_v1(",
+        ),
+        (
+            include_str!("../compute_dispatch.rs"),
+            "    pub(super) fn publish(",
+            "    pub(super) fn observe_materialized_dispatch_published_v1(",
+            ".acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(",
+        ),
+        (
+            include_str!("../generated_adoption.rs"),
+            "    fn bind_generated_data_v1(",
+            "    fn observe_generated_queue_creation_v1(",
+            ".acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(",
+        ),
+    ] {
+        let body = source
+            .split_once(marker)
+            .unwrap()
+            .1
+            .split_once(end)
+            .unwrap()
+            .0
+            .split_whitespace()
+            .collect::<String>();
+        let admission = body.find("self.take_rooted_host_backing_v1()?").unwrap();
+        let take = body.find("self.admitted_device.take()").unwrap();
+        let native = body.find(native).unwrap();
+        assert!(admission < take && take < native);
+        assert!(body[take..native].contains("Some(admission)=>"));
+    }
+}
+
 fn host_budget() -> Gfx942HostVisibleBackingBudgetV1 {
     Gfx942HostVisibleBackingBudgetV1::new(64 * 1024, 4).unwrap()
 }

@@ -3,8 +3,11 @@
 This is development of MEM-DOM-1, not complete bounded-memory qualification.
 The [shared accounting engine](../crates/fe2o3-resource-accounting/src/domain.rs)
 now supports a fixed-arena, three-level hierarchy, and Context allocation
-admission can attach to it. Physical-device identity, mandatory root reuse,
-native adapters, complete bootstrap and formal refinement remain open.
+admission can attach to it. The subsequent
+[rooted N1 adapter](runtime-native-root-admission-v1.md) adds checked-device
+parents and root-required native host-backing construction. Whole-profile
+physical identity/root reuse, remaining native adapters, complete bootstrap and
+formal refinement remain open.
 
 ## Identity And Admission
 
@@ -86,8 +89,11 @@ disposal and Context destruction do not reset quarantined parent usage.
 The Context-local device brand is not a stable physical-GPU identity. Canonical
 root-issued physical-device parents, native session/VM association, root-required
 constructors and accounting for work before attachment are still required.
-KFD backing, module-image and scaled-table accounts are not automatically joined
-to this hierarchy. A request charge is not a native-residency measurement.
+The rooted N1 constructor now joins ordinary coherent backing to its typed
+root/device hierarchy. It does not share the Context request leaf or yet compose
+that logical-request profile into the same typed root. Other backing,
+module-image and scaled-table accounts remain separate. A request charge is not
+a native-residency measurement.
 
 ## Verification Gates
 

@@ -1,0 +1,56 @@
+   Compiling typenum v1.20.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+   Compiling spin v0.12.3
+   Compiling rustix v1.1.4
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling bitflags v2.13.1
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+   Compiling arrayvec v0.7.8
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+   Compiling libc v0.2.189
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+   Compiling hybrid-array v0.4.14
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0505]: cannot move out of `root` because it is borrowed
+   --> crates/fe2o3-kfd/src/shared_memory/tests/host_backing/rooted.rs:148:14
+    |
+144 |         let root = root(8192, 2);
+    |             ---- binding `root` declared here
+145 |         let observe = observe_lifetime(&root);
+    |                                        ----- borrow of `root` occurs here
+...
+148 |         drop(root);
+    |              ^^^^ move out of `root` occurs here
+149 |         assert_eq!(
+150 |             observe()
+    |             ------- borrow later used here
+    |
+note: this call may capture more lifetimes than intended, because Rust 2024 has adjusted the `impl Trait` lifetime capture rules
+   --> crates/fe2o3-kfd/src/shared_memory/tests/host_backing/rooted.rs:145:23
+    |
+145 |         let observe = observe_lifetime(&root);
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^
+help: use the precise capturing `use<...>` syntax to make the captures explicit
+   --> crates/fe2o3-kfd/src/resource_domains/tests.rs:19:48
+    |
+ 19 | ) -> impl Fn() -> Option<ResourceCreditUsageV1> + use<> {
+    |                                                 +++++++
+help: consider cloning the value if the performance cost is acceptable
+    |
+145 |         let observe = observe_lifetime(&root.clone());
+    |                                             ++++++++
+
+For more information about this error, try `rustc --explain E0505`.
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

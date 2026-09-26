@@ -321,6 +321,14 @@ identity, mandatory root construction or native/Context bootstrap. Batch output,
 external registries and allocator/Arc internals are still excluded. The complete
 bootstrap and terminal obligations below remain open.
 
+The subsequent [rooted N1 adapter](runtime-native-root-admission-v1.md) implements
+a typed canonical UID/PCI registry from retained checked devices, root-required
+ordinary coherent native backing intake and both runtime startup routes. Native
+owners retain that registry; uncertain disposal anchors it across owner Drop.
+This joins actual N1 padded backing, not the separate Context request leaf or
+all native resource classes. Complete process/root construction, wrappers,
+bootstrap, remaining adapters and new formal/native qualification remain open.
+
 The root itself consumes memory before it can issue accounts. Define one fixed,
 precharged bootstrap arena/layout and include it as baseline usage before child
 or native admission. Child-account arenas and free lists must reserve their

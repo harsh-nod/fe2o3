@@ -1,0 +1,11 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 4m 20s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-n1-root-target-20260926-iwYWe5E7/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 2 tests
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission ... ok
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_consumed_policy_rejects_replacement_and_never_falls_back ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1501 filtered out; finished in 0.02s
+

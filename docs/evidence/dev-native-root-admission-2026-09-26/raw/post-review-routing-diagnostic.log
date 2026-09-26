@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'kfd_backend::native_budget::host_backing_tests::rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission' (10) panicked at crates/fe2o3-runtime/src/kfd_backend/native_budget/host_backing_tests.rs:92:61:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission ... FAILED
+
+failures:
+
+failures:
+    kfd_backend::native_budget::host_backing_tests::rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.00s
+

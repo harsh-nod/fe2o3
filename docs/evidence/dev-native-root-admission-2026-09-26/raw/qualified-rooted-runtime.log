@@ -1,0 +1,7 @@
+
+running 2 tests
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_consumed_policy_rejects_replacement_and_never_falls_back ... ok
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_constructor_and_both_startup_paths_preserve_owned_admission ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1501 filtered out; finished in 0.00s
+

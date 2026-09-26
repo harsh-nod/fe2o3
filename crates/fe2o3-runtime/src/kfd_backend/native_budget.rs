@@ -1,10 +1,36 @@
-//! Immutable session-local backing and cache limits, not aggregate accounting.
+//! Immutable backing admission and cache limits, including rooted N1 admission.
 
 use super::*;
 use fe2o3_kfd::{
-    Gfx942DeviceBackingUsageV1, Gfx942DevicePoolUsageV1, Gfx942HostPoolLimitsV1,
-    Gfx942HostPoolUsageV1, Gfx942HostVisibleBackingUsageV1,
+    Gfx942DeviceBackingUsageV1, Gfx942DevicePoolUsageV1, Gfx942HostBackingAdmissionV1,
+    Gfx942HostBackingRootV1, Gfx942HostPoolLimitsV1, Gfx942HostPoolUsageV1,
+    Gfx942HostVisibleBackingUsageV1,
 };
+
+pub(super) struct RootedHostBackingV1 {
+    pending: Option<Gfx942HostBackingAdmissionV1>,
+}
+
+#[cfg(test)]
+impl RootedHostBackingV1 {
+    pub(super) fn consumed_for_test() -> Self {
+        Self { pending: None }
+    }
+}
+
+fn rooted_host_backing_admission_error_v1(
+    error: fe2o3_resource_accounting::ResourceCreditErrorV1,
+) -> KfdRuntimeBackendErrorV1 {
+    use fe2o3_resource_accounting::ResourceCreditErrorV1 as CreditError;
+    let kind = match error {
+        CreditError::AllocationFailed
+        | CreditError::Capacity
+        | CreditError::RecordCapacity
+        | CreditError::DomainCapacity => KfdRuntimeBackendErrorKindV1::Capacity,
+        _ => KfdRuntimeBackendErrorKindV1::Terminal,
+    };
+    KfdRuntimeBackendErrorV1::new(kind, format!("N1 root admission: {error}"))
+}
 
 #[cfg(test)]
 mod host_backing_tests;
@@ -12,6 +38,73 @@ mod host_backing_tests;
 mod host_pool_tests;
 
 impl KfdRuntimeBackendV1 {
+    /// Opens a backend requiring root-issued ordinary coherent GTT admission.
+    /// Native owners retain this same root; uncertain disposal anchors it with
+    /// its canonical registry. Reuse the root across participating backends.
+    /// Other native profiles, complete bootstrap and all process memory are not bounded.
+    pub fn open_default_with_host_backing_root_v1<A>(
+        device_unique_id: u64,
+        authority: A,
+        root: &Gfx942HostBackingRootV1,
+        device_budget: Gfx942HostVisibleBackingBudgetV1,
+        session_budget: Gfx942HostVisibleBackingBudgetV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1>
+    where
+        A: KfdRuntimeLaunchAuthorityV1 + 'static,
+    {
+        let device = Self::open_checked_device_v1(device_unique_id)?;
+        Self::from_checked_device_with_host_backing_root_v1(
+            device,
+            authority,
+            root,
+            device_budget,
+            session_budget,
+        )
+    }
+
+    /// Binds a dedicated N1 session leaf to the retained checked device before
+    /// constructing this backend. Rooted startup never creates a local account.
+    pub fn from_checked_device_with_host_backing_root_v1<A>(
+        device: CheckedGfx942XnackMinusDevice,
+        authority: A,
+        root: &Gfx942HostBackingRootV1,
+        device_budget: Gfx942HostVisibleBackingBudgetV1,
+        session_budget: Gfx942HostVisibleBackingBudgetV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1>
+    where
+        A: KfdRuntimeLaunchAuthorityV1 + 'static,
+    {
+        let admission = root
+            .admit_session_v1(&device, device_budget, session_budget)
+            .map_err(rooted_host_backing_admission_error_v1)?;
+        let mut backend = Self::from_checked_device(device, authority);
+        backend.host_visible_backing_budget = Some(session_budget);
+        backend.rooted_host_backing = Some(RootedHostBackingV1 {
+            pending: Some(admission),
+        });
+        Ok(backend)
+    }
+
+    pub(super) fn take_rooted_host_backing_v1(
+        &mut self,
+    ) -> Result<
+        Option<Gfx942HostBackingAdmissionV1>,
+        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+    > {
+        let Some(rooted) = &mut self.rooted_host_backing else {
+            return Ok(None);
+        };
+        if !rooted.pending.as_ref().is_some_and(|admission| {
+            self.admitted_device
+                .as_ref()
+                .is_some_and(|device| admission.matches_device_v1(device))
+                && Some(admission.budget_v1()) == self.host_visible_backing_budget
+        }) {
+            return Err(self.terminal_error("rooted N1 admission is consumed or mismatched"));
+        }
+        Ok(rooted.pending.take())
+    }
+
     /// Bounds cached-free ordinary coherent Host backing. Configure once before
     /// resource creation. Zero disables caching; pressure disposes the idle buffer.
     /// Existing N1 charges survive reuse and uncertain disposal. Unconfigured
@@ -78,7 +171,7 @@ impl KfdRuntimeBackendV1 {
         budget: Gfx942HostVisibleBackingBudgetV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_pristine_native_resource_configuration_v1()?;
-        if self.host_visible_backing_budget.is_some() {
+        if self.rooted_host_backing.is_some() || self.host_visible_backing_budget.is_some() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "host-visible backing limits must be configured once before resource creation",

@@ -1,6 +1,7 @@
 //! Actual native records and model ownership with a fake backend, not Linux/GPU evidence.
 mod borrowed_initialization;
 mod host_pool;
+mod rooted;
 
 use super::*;
 use crate::sdma::{Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1};
@@ -862,9 +863,29 @@ fn projected_dispose(fixture: &mut BackingConstructorFixture, token: HostMapped)
 
 #[test]
 fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders() {
-    for compute_first in [false, true] {
+    for (compute_first, rooted) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut fixture = BackingConstructorFixture::new(None);
-        configure_fixture(&mut fixture, true);
+        let root = rooted.then(|| crate::resource_domains::tests::root(16384, 4));
+        if let Some(root) = &root {
+            let admission = crate::resource_domains::tests::admission(
+                root,
+                fixture.device.model_key(),
+                budget(16384, 4),
+                budget(16384, 4),
+            );
+            fixture
+                .ownership
+                .configure_rooted_host_backing(
+                    &mut fixture.engine,
+                    fixture.device,
+                    fixture.vm,
+                    admission,
+                )
+                .unwrap();
+        } else {
+            configure_fixture(&mut fixture, true);
+        }
+        let baseline = root.as_ref().map(|root| root.usage_v1());
         let compute = compute_first.then(|| fixture.mapped_device());
         let host_before = (!compute_first).then(|| projected_host(&mut fixture));
         let authorities = compute.as_ref().into_iter().collect::<Vec<_>>();
@@ -885,6 +906,21 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
         let before = usage(&fixture.engine);
         assert_eq!(before.used_backing_bytes, 8192);
         assert_eq!(before.used_allocation_records, 1);
+        let root_before = root.as_ref().map(|root| root.usage_v1());
+        if let Some(usage) = root_before {
+            assert_eq!(
+                usage
+                    .used
+                    .get(fe2o3_resource_accounting::ResourceKindV1::ResidentHostAllocationBytes),
+                8192
+            );
+            assert_eq!(
+                usage
+                    .used
+                    .get(fe2o3_resource_accounting::ResourceKindV1::AllocationRecords),
+                1
+            );
+        }
         let owner = QueueKeyV1 {
             vm: fixture.vm,
             id: QueueInstanceIdV1(33),
@@ -981,8 +1017,10 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
             .overwrite_mapped_host_visible_subrange(&mut token, 0, &[7])
             .unwrap();
         assert_eq!(usage(&fixture.engine), before);
+        assert_eq!(root.as_ref().map(|root| root.usage_v1()), root_before);
         projected_dispose(&mut fixture, token);
         debit(&fixture.engine, 0, 0);
+        assert_eq!(root.as_ref().map(|root| root.usage_v1()), baseline);
         fixture
             .ownership
             .reclaim_foundation(

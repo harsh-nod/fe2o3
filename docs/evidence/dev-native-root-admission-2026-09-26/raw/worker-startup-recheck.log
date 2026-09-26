@@ -1,0 +1,6 @@
+
+running 1 test
+test worker::tests::expired_worker_wait_is_pending_without_publishing_a_request ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1502 filtered out; finished in 0.27s
+

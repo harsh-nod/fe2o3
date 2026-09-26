@@ -1,0 +1,72 @@
+    Blocking waiting for file lock on build directory
+    Checking fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+    Checking fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+    Checking fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+    Checking fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+    Checking pin-project-lite v0.2.17
+    Checking fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host-api)
+    Checking slab v0.4.12
+    Checking futures-task v0.3.34
+    Checking futures-core v0.3.34
+    Checking fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Checking rustix v1.1.4
+    Checking num-traits v0.2.19
+    Checking fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+    Checking fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+    Checking tokio v1.47.1
+    Checking futures-util v0.3.34
+    Checking fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+    Checking fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+    Checking rmp v0.8.15
+    Checking rmpv v1.3.1
+    Checking fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+    Checking futures-executor v0.3.34
+    Checking fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+    Checking fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: this `if` statement can be collapsed
+   --> crates/fe2o3-kfd/src/shared_memory/host_resource_accounting.rs:327:9
+    |
+327 | /         if !self.disposed {
+328 | |             if let Some(root) = &self.domain.root {
+329 | |                 root.retain_quarantine();
+330 | |             }
+331 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+327 ~         if !self.disposed
+328 ~             && let Some(root) = &self.domain.root {
+329 |                 root.retain_quarantine();
+330 ~             }
+    |
+
+error: this `if` statement can be collapsed
+    --> crates/fe2o3-kfd/src/shared_memory.rs:4947:9
+     |
+4947 | /         if let HostBackingAdmission::Rooted(admission) = &host {
+4948 | |             if !admission.matches_device_v1(&self) {
+4949 | |                 return Err(MemorySessionError::HostVisibleBackingBudgetConfiguration(
+4950 | |                     "foreign root-issued device admission",
+...    |
+4953 | |         }
+     | |_________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+help: collapse nested if block
+     |
+4947 ~         if let HostBackingAdmission::Rooted(admission) = &host
+4948 ~             && !admission.matches_device_v1(&self) {
+4949 |                 return Err(MemorySessionError::HostVisibleBackingBudgetConfiguration(
+4950 |                     "foreign root-issued device admission",
+4951 |                 ));
+4952 ~             }
+     |
+
+error: could not compile `fe2o3-kfd` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors

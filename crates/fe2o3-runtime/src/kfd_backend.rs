@@ -1277,6 +1277,7 @@ pub struct KfdRuntimeBackendV1 {
     staging_budgets: StagingBudgetsV1,
     device_backing_budget: Option<Gfx942DeviceBackingBudgetV1>,
     host_visible_backing_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
+    rooted_host_backing: Option<native_budget::RootedHostBackingV1>,
     host_pool_limits: Option<fe2o3_kfd::Gfx942HostPoolLimitsV1>,
     device_pool_limits: Option<Gfx942DevicePoolLimitsV1>,
     staged_context_bytes: u64,
@@ -1725,6 +1726,7 @@ impl KfdRuntimeBackendV1 {
             staging_budgets,
             device_backing_budget: None,
             host_visible_backing_budget: None,
+            rooted_host_backing: None,
             device_pool_limits: None,
             host_pool_limits: None,
             staged_context_bytes: 0,
@@ -3186,20 +3188,28 @@ impl KfdRuntimeBackendV1 {
             return Ok(());
         }
         if self.queue.is_none() {
+            let admission = self.take_rooted_host_backing_v1()?;
             let device = self.admitted_device.take().ok_or_else(|| {
                 Self::rejected(
                     KfdRuntimeBackendErrorKindV1::Unsupported,
                     "the admitted KFD queue lifecycle has already retired",
                 )
             })?;
-            let queue = device
-                .create_compute_aql_queue_with_backing_budgets_and_capacity_v1(
+            let queue = match admission {
+                Some(admission) => device.create_compute_aql_queue_with_rooted_host_backing_v1(
+                    KFD_RUNTIME_RING_BYTES_V1,
+                    self.device_backing_budget,
+                    admission,
+                    self.dispatch_capacity.native().clone(),
+                ),
+                None => device.create_compute_aql_queue_with_backing_budgets_and_capacity_v1(
                     KFD_RUNTIME_RING_BYTES_V1,
                     self.device_backing_budget,
                     self.host_visible_backing_budget,
                     self.dispatch_capacity.native().clone(),
-                )
-                .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
+                ),
+            }
+            .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
             self.queue = Some(queue);
             self.configure_native_device_pool_v1()?;
             self.configure_native_host_pool_v1()?;

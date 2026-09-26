@@ -1,0 +1,19 @@
+
+running 14 tests
+test resource_domains::tests::rooted_n1_admission_binds_exact_generation_and_identity ... ok
+test resource_domains::tests::rooted_n1_bootstrap_and_domain_exhaustion_fail_without_partial_registration ... ok
+test resource_domains::tests::rooted_n1_canonical_device_survives_generations_and_full_registry ... ok
+test resource_domains::tests::rooted_n1_conflicting_identity_or_limits_never_registers_an_alias ... ok
+test resource_domains::tests::rooted_n1_distinct_devices_share_root_without_mixing_session_counts ... ok
+test resource_domains::tests::rooted_n1_concurrent_registration_reuses_one_canonical_parent ... ok
+test resource_domains::tests::rooted_n1_new_parent_is_reaped_when_its_session_leaf_cannot_fit ... ok
+test resource_domains::tests::rooted_n1_quarantine_blocks_reopened_session_under_same_device_parent ... ok
+test resource_domains::tests::rooted_n1_unused_admission_retains_then_releases_typed_root ... ok
+test shared_memory::host_resource_accounting::tests::rooted_n1_failed_identity_refund_anchors_registry_after_external_root_drop ... ok
+test shared_memory::tests::host_backing::rooted::rooted_n1_native_allocation_obeys_all_ancestor_bytes_and_records_before_effects ... ok
+test shared_memory::tests::host_backing::rooted::rooted_n1_native_disposal_faults_preserve_ancestors_across_session_drop ... ok
+test shared_memory::tests::host_backing::rooted::rooted_n1_native_owner_retains_registry_and_quarantine_anchors_it ... ok
+test shared_memory::tests::host_backing::rooted::rooted_n1_native_wrong_generation_and_replacement_reject_without_effects ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1590 filtered out; finished in 0.01s
+

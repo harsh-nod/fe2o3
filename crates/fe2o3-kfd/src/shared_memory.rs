@@ -63,6 +63,7 @@ use crate::CheckedGfx942XnackMinusDevice;
 use crate::queue::{
     Gfx942DeviceContentDescriptorV1, Gfx942RepeatedByteContentV1, QueueModelFoundationV1,
 };
+use crate::resource_domains::HostBackingAdmission;
 
 pub const MAX_SHARED_GTT_ALLOCATIONS_V1: usize = 256;
 pub const MAX_SHARED_GTT_SINGLE_CPU_BYTES_V1: u64 = 1 << 31;
@@ -1406,6 +1407,16 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         vm: VmKeyV1,
         budget: Gfx942HostVisibleBackingBudgetV1,
     ) -> Result<(), MemorySessionError> {
+        self.configure_host_visible_backing_admission_v1(device, vm, budget, None)
+    }
+
+    fn configure_host_visible_backing_admission_v1(
+        &mut self,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+        budget: Gfx942HostVisibleBackingBudgetV1,
+        admission: Option<crate::Gfx942HostBackingAdmissionV1>,
+    ) -> Result<(), MemorySessionError> {
         self.require_active()?;
         if self.host_backing_account.is_some()
             || self.host_backing_activity_started
@@ -1419,8 +1430,17 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 "requires an unsealed session without prior ordinary coherent backing activity",
             ));
         }
-        let account = HostBackingAccountV1::new(self.session_id, device, vm, budget)
-            .map_err(host_backing_accounting_error)?;
+        let account = match admission {
+            Some(admission) => HostBackingAccountV1::new_with_admission(
+                self.session_id,
+                device,
+                vm,
+                budget,
+                Some(admission),
+            ),
+            None => HostBackingAccountV1::new(self.session_id, device, vm, budget),
+        }
+        .map_err(host_backing_accounting_error)?;
         self.check_currentness()?;
         self.host_backing_account = Some(account);
         Ok(())
@@ -4431,6 +4451,26 @@ impl QueueModelOwnershipV1 {
         engine.configure_host_visible_backing_budget_v1(device.model_key(), vm, budget)
     }
 
+    fn configure_rooted_host_backing<B: MemoryBackend>(
+        &self,
+        engine: &mut SharedMemoryEngine<B>,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+        admission: crate::Gfx942HostBackingAdmissionV1,
+    ) -> Result<(), MemorySessionError> {
+        if !self.is_session_owned() {
+            return Err(MemorySessionError::HostVisibleBackingBudgetConfiguration(
+                "queue-owned or loaned memory cannot configure a backing budget",
+            ));
+        }
+        engine.configure_host_visible_backing_admission_v1(
+            device.model_key(),
+            vm,
+            admission.budget_v1(),
+            Some(admission),
+        )
+    }
+
     fn take_foundation<B: MemoryBackend>(
         &mut self,
         engine: &mut SharedMemoryEngine<B>,
@@ -4879,6 +4919,38 @@ impl CheckedGfx942XnackMinusDevice {
         device_budget: Option<Gfx942DeviceBackingBudgetV1>,
         host_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
     ) -> Result<SharedGttMemorySessionV1, MemorySessionError> {
+        self.acquire_shared_gtt_memory_session_with_host_admission_v1(
+            device_budget,
+            host_budget.into(),
+        )
+    }
+
+    /// Acquires a session whose ordinary coherent backing consumes the supplied
+    /// root-issued N1 leaf. Wrong checked-device identity rejects before any VM
+    /// attempt. Other profiles and complete bootstrap remain separate.
+    pub fn acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(
+        self,
+        device_budget: Option<Gfx942DeviceBackingBudgetV1>,
+        admission: crate::Gfx942HostBackingAdmissionV1,
+    ) -> Result<SharedGttMemorySessionV1, MemorySessionError> {
+        self.acquire_shared_gtt_memory_session_with_host_admission_v1(
+            device_budget,
+            HostBackingAdmission::Rooted(admission),
+        )
+    }
+
+    pub(crate) fn acquire_shared_gtt_memory_session_with_host_admission_v1(
+        self,
+        device_budget: Option<Gfx942DeviceBackingBudgetV1>,
+        host: HostBackingAdmission,
+    ) -> Result<SharedGttMemorySessionV1, MemorySessionError> {
+        if let HostBackingAdmission::Rooted(admission) = &host
+            && !admission.matches_device_v1(&self)
+        {
+            return Err(MemorySessionError::HostVisibleBackingBudgetConfiguration(
+                "foreign root-issued device admission",
+            ));
+        }
         let pid = std::process::id();
         let gpu_id = self.observation().kfd_gpu_id();
         let vm_id = NEXT_MODEL_VM_ID
@@ -4925,14 +4997,24 @@ impl CheckedGfx942XnackMinusDevice {
                     session.vm,
                     device_budget,
                 )?;
-            session
-                .model_ownership
-                .configure_optional_host_visible_backing_budget(
-                    &mut session.engine,
-                    session.model_device,
-                    session.vm,
-                    host_budget,
-                )?;
+            match host {
+                HostBackingAdmission::Local(host_budget) => session
+                    .model_ownership
+                    .configure_optional_host_visible_backing_budget(
+                        &mut session.engine,
+                        session.model_device,
+                        session.vm,
+                        host_budget,
+                    )?,
+                HostBackingAdmission::Rooted(admission) => {
+                    session.model_ownership.configure_rooted_host_backing(
+                        &mut session.engine,
+                        session.model_device,
+                        session.vm,
+                        admission,
+                    )?
+                }
+            }
             Ok(session)
         })();
         finish_process_vm_attempt(result.is_ok(), pid, gpu_id);

@@ -4831,7 +4831,27 @@ impl CheckedGfx942XnackMinusDevice {
             |_| Ok(()),
             None,
             device_budget,
-            host_budget,
+            host_budget.into(),
+            capacity,
+        )
+        .map(|(session, ())| session)
+    }
+
+    /// Creates a queue using the root-issued ordinary coherent backing leaf.
+    /// Other native profiles and dispatch metadata retain their separate accounts.
+    pub fn create_compute_aql_queue_with_rooted_host_backing_v1(
+        self,
+        ring_bytes: u32,
+        device_budget: Option<Gfx942DeviceBackingBudgetV1>,
+        admission: crate::Gfx942HostBackingAdmissionV1,
+        capacity: Gfx942FixedDispatchCapacityV1,
+    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_compute_aql_queue_with_runtime(
+            ring_bytes,
+            |_| Ok(()),
+            None,
+            device_budget,
+            crate::resource_domains::HostBackingAdmission::Rooted(admission),
             capacity,
         )
         .map(|(session, ())| session)
@@ -4847,7 +4867,7 @@ impl CheckedGfx942XnackMinusDevice {
             prepare,
             None,
             None,
-            None,
+            None.into(),
             Gfx942FixedDispatchCapacityV1::default(),
         )
     }
@@ -4863,7 +4883,7 @@ impl CheckedGfx942XnackMinusDevice {
             |_| Ok(()),
             Some((runtime, runtime_control)),
             None,
-            None,
+            None.into(),
             Gfx942FixedDispatchCapacityV1::default(),
         )
         .map(|(session, ())| session)
@@ -4881,7 +4901,7 @@ impl CheckedGfx942XnackMinusDevice {
             prepare,
             Some((runtime, runtime_control)),
             None,
-            None,
+            None.into(),
             Gfx942FixedDispatchCapacityV1::default(),
         )
     }
@@ -4895,7 +4915,7 @@ impl CheckedGfx942XnackMinusDevice {
             &mut Option<KfdWithAdmittedUapi>,
         )>,
         device_backing_budget: Option<Gfx942DeviceBackingBudgetV1>,
-        host_visible_backing_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
+        host_visible_backing_budget: crate::resource_domains::HostBackingAdmission,
         capacity: Gfx942FixedDispatchCapacityV1,
     ) -> Result<(ComputeAqlQueueSessionV1, T), ComputeAqlQueueSessionErrorV1> {
         let geometry = plan_gfx942_aql_queue_resources(
@@ -4903,7 +4923,7 @@ impl CheckedGfx942XnackMinusDevice {
             self.observation().unique_id(),
             ring_bytes,
         )?;
-        let memory = self.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
+        let memory = self.acquire_shared_gtt_memory_session_with_host_admission_v1(
             device_backing_budget,
             host_visible_backing_budget,
         )?;
@@ -14002,7 +14022,7 @@ mod tests {
             .split("/// Runs one fresh-queue")
             .next()
             .unwrap();
-        let acquisition_call = ".acquire_shared_gtt_memory_session_with_backing_budgets_v1(";
+        let acquisition_call = ".acquire_shared_gtt_memory_session_with_host_admission_v1(";
         let acquire = constructor.find(acquisition_call).unwrap();
         let argument = constructor[acquire + acquisition_call.len()..]
             .split_once(')')
@@ -14056,6 +14076,11 @@ mod tests {
         let begin = acquisition
             .find("begin_process_vm_attempt(pid, gpu_id)?")
             .unwrap();
+        let validate_rooted = acquisition
+            .find("admission.matches_device_v1(&self)")
+            .unwrap();
+        let vm_identity = acquisition.find("NEXT_MODEL_VM_ID").unwrap();
+        assert!(validate_rooted < vm_identity && vm_identity < begin);
         let bind = acquisition
             .find("engine.backend.bind_model_vm(VmIdV1(vm_id))?")
             .unwrap();

@@ -257,16 +257,23 @@ impl KfdRuntimeBackendV1 {
         let created = native.native_lane.is_none();
         let Some(queue) = self.queue.as_mut() else {
             assert!(self.terminal_memory.is_none());
+            let admission = self.take_rooted_host_backing_v1()?;
             let device = self
                 .admitted_device
                 .take()
                 .expect("validated retained device");
-            let memory = device
-                .acquire_shared_gtt_memory_session_with_backing_budgets_v1(
+            let memory = match admission {
+                Some(admission) => device
+                    .acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(
+                        self.device_backing_budget,
+                        admission,
+                    ),
+                None => device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
                     self.device_backing_budget,
                     self.host_visible_backing_budget,
-                )
-                .map_err(|error| self.generated_native_error_v1("VM acquisition", error))?;
+                ),
+            }
+            .map_err(|error| self.generated_native_error_v1("VM acquisition", error))?;
             self.terminal_memory = Some(memory);
             let native = self
                 .generated_shells

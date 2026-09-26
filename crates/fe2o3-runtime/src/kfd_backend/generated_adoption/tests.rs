@@ -34,6 +34,30 @@ fn native_state(phase: PhaseV1, lane: usize) -> GeneratedNativeAdoptionV1 {
     }
 }
 
+#[test]
+fn rooted_n1_generated_startup_rejects_consumed_policy_before_native_acquisition() {
+    let (mut backend, plan) = shells();
+    backend.rooted_host_backing = Some(native_budget::RootedHostBackingV1::consumed_for_test());
+    backend.generated_shells.get_mut(&plan.key).unwrap().native =
+        Some(native_state(PhaseV1::Entering, 0));
+    assert!(backend.generated_shells[&plan.key].control.is_some());
+    assert!(matches!(
+        backend.bind_generated_data_v1(plan.key, Vec::new(), &[]),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(backend.terminal);
+    assert!(backend.rooted_host_backing.is_some());
+    assert!(backend.queue.is_none());
+    assert!(backend.terminal_memory.is_none());
+    let record = &backend.generated_shells[&plan.key];
+    assert!(record.control.is_some());
+    let native = record.native.as_ref().unwrap();
+    assert!(native.data.is_empty());
+    assert!(native.native_lane.is_none());
+    // Metadata-only fixture; production retains terminal backends instead of Drop.
+    core::mem::forget(backend);
+}
+
 struct Item(usize, Rc<RefCell<Vec<usize>>>);
 
 #[test]

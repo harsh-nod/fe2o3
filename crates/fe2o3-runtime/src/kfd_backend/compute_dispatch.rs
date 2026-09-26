@@ -3005,18 +3005,25 @@ impl KfdRuntimeBackendV1 {
                         self.terminal_error("KFD materialization session is already retained")
                     );
                 }
+                let admission = self.take_rooted_host_backing_v1()?;
                 let device = self.admitted_device.take().ok_or_else(|| {
                     Self::rejected(
                         KfdRuntimeBackendErrorKindV1::Unsupported,
                         "the admitted KFD queue lifecycle has already retired",
                     )
                 })?;
-                let memory = device
-                    .acquire_shared_gtt_memory_session_with_backing_budgets_v1(
+                let memory = match admission {
+                    Some(admission) => device
+                        .acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(
+                            self.device_backing_budget,
+                            admission,
+                        ),
+                    None => device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
                         self.device_backing_budget,
                         self.host_visible_backing_budget,
-                    )
-                    .map_err(|error| self.terminal_error(format!("KFD VM acquisition: {error}")))?;
+                    ),
+                }
+                .map_err(|error| self.terminal_error(format!("KFD VM acquisition: {error}")))?;
                 self.terminal_memory = Some(memory);
                 let (memory, native_data) =
                     materialize_in_retained_session_v1(&mut self.terminal_memory, |memory| {
