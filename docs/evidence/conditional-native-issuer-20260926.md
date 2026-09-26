@@ -1,5 +1,8 @@
 # Conditional Native Issuer Checkpoint
 
+For subsequent compiler-account and isolated V3 harness work, see the
+[early-account checkpoint](conditional-early-account-20260926.md).
+
 This continues the [service/profile checkpoint](conditional-service-profile-20260926.md).
 Source and test snapshot: `85b283668f7c4bf2335da393c87b53cd42ba072e`.
 All [#272](https://github.com/harsh-nod/fe2o3/issues/272) milestones M0-M7 remain

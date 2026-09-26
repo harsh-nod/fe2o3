@@ -270,9 +270,16 @@ recovery and Worker/anchor state machine, with actual locked V5 observation.
 Distinct record families share one singleton namespace and reject mixed state
 before mutation. Focused issuer/durable cases pass; local socket checks fail with
 permission denials, and protected live-service validation remains outstanding.
-Trusted production family selection, early original-account
-client lifetime, conditional publication and machine refinement still need
-integration. No new kernel receives production or GPU credit from these additions.
+The [early-account checkpoint](evidence/conditional-early-account-20260926.md)
+moves conditional TARGET-account creation before normal admission/collection and
+passes that same account through conditional preparation. Native clients now
+support consuming preparation with original-account postchecks, and the isolated
+V3 admission/readiness/Cancel harness shares the actual V2 case bodies.
+The normal backend still admits V1 execution custody. Trusted native family
+selection, protected inherited-peer admission, publication/acquisition on the
+original account, parent intake and machine refinement still need integration.
+The new socket cases also fail with local permission denials; isolated protected
+harness cases have not run. No new kernel receives production or GPU credit.
 
 The [native Worker adapter](../crates/fe2o3-hsaco-finalize/README.md#native-sourcef-worker-integration)
 now borrows the locked recovered token for preflight and consumes that exact
