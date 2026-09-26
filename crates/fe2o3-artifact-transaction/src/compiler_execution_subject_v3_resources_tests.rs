@@ -99,6 +99,13 @@ fn conditional_subject_v3_typed_entries_exact_and_one_short() {
 #[test]
 fn conditional_subject_v3_spare_and_unselected_backing_must_be_prepaid() {
     let source = outer();
+    let mut setup_work = Work::new(WORK);
+    let mut setup = Budget::new(&mut setup_work, LIMIT);
+    setup
+        .reserve_storage(handoff_floor(&source).unwrap())
+        .unwrap();
+    let (original, storage) = replay(&source, &mut setup).unwrap();
+    setup.reserve_storage(storage.retained_storage()).unwrap();
     let bytes = source.canonical_bytes();
     let mut backing = Vec::with_capacity(bytes.len() + 8192);
     backing.extend_from_slice(&[0x55; 31]);
@@ -122,7 +129,11 @@ fn conditional_subject_v3_spare_and_unselected_backing_must_be_prepaid() {
         assert_eq!(budget.peak_storage(), paid);
     }
     boundaries(floor, |budget| {
-        replay(&handoff, budget)?;
+        let (subject, storage) = replay(&handoff, budget)?;
+        budget.reserve_storage(storage.retained_storage())?;
+        assert_eq!(subject.canonical_bytes(), original.canonical_bytes());
+        drop(subject);
+        budget.release_storage(storage.retained_storage())?;
         Ok(())
     });
 }

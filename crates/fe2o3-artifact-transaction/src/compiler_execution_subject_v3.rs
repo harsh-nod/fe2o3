@@ -135,6 +135,15 @@ impl InertCompilerExecutionSubjectStorageV3 {
 /// }
 /// ```
 /// ```compile_fail
+/// use fe2o3_artifact_transaction::{ConsumedCompilerModuleHandoffV5, InertCompilerExecutionSubjectV3};
+/// use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1;
+/// fn mapped(c: &ConsumedCompilerModuleHandoffV5<Box<InertSemanticCompilerModuleHandoffV5>>,
+///           b: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>) {
+///     let _ = InertCompilerExecutionSubjectV3::from_consumed(c, b);
+/// }
+/// ```
+/// ```compile_fail
 /// use fe2o3_artifact_transaction::{InertCompilerExecutionSubjectV2, InertCompilerExecutionSubjectV3};
 /// fn downgrade(v: InertCompilerExecutionSubjectV3) -> InertCompilerExecutionSubjectV2 { v.into() }
 /// ```
