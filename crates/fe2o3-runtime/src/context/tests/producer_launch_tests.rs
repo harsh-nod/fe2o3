@@ -5,6 +5,7 @@ use fe2o3_runtime_model::{ContextProducerReadStatusV1, ContextWriterStateV1};
 use std::sync::{Arc, Mutex};
 
 mod completion_faults;
+mod peer_producers;
 
 #[test]
 fn retained_charge_producer_aware_stable_input_rejects_region_sized_credit() {
@@ -59,6 +60,7 @@ pub(super) struct MockProducerLaunchState {
     requests: HashMap<u64, CapturedLaunch>,
     events: HashMap<u64, u64>,
     completed: HashMap<u64, BackendPollV1>,
+    completed_copies: HashMap<u64, BackendPollV1>,
     observations: HashMap<u64, Observation>,
     calls: Vec<(&'static str, u64)>,
 }
@@ -68,6 +70,17 @@ fn output_byte(submission: u64) -> u8 {
 }
 
 impl MockBackend {
+    pub(super) fn record_copy_completion_test_v1(&mut self, id: u64, success: bool) {
+        self.producer_launch.completed_copies.insert(
+            id,
+            if success {
+                BackendPollV1::Succeeded
+            } else {
+                BackendPollV1::Failed { code: 7 }
+            },
+        );
+    }
+
     pub(super) fn is_producer_launch_test_v1(&self, id: u64) -> bool {
         self.producer_launch.requests.contains_key(&id)
     }
@@ -83,6 +96,7 @@ impl MockBackend {
     pub(super) fn release_producer_launch_test_v1(&mut self, id: u64) {
         self.producer_launch.requests.remove(&id);
         self.producer_launch.completed.remove(&id);
+        self.producer_launch.completed_copies.remove(&id);
         self.producer_launch.observations.remove(&id);
     }
 
@@ -103,7 +117,9 @@ impl MockBackend {
         // Execute the physical graph without manufacturing Context observations.
         let mut stack = vec![(id, false)];
         while let Some((current, visited)) = stack.pop() {
-            if self.producer_launch.completed.contains_key(&current) {
+            if self.producer_launch.completed.contains_key(&current)
+                || self.producer_launch.completed_copies.contains_key(&current)
+            {
                 continue;
             }
             let request = self.producer_launch.requests[&current].clone();
@@ -125,6 +141,11 @@ impl MockBackend {
                 self.producer_launch
                     .completed
                     .get(&dependency.producer_submission)
+                    .or_else(|| {
+                        self.producer_launch
+                            .completed_copies
+                            .get(&dependency.producer_submission)
+                    })
                     == Some(&BackendPollV1::Succeeded)
             });
             let pending = self.pending_kernel_reads.remove(&current).unwrap();
@@ -210,10 +231,15 @@ impl RuntimeProducerAwareLaunchBackendV1 for MockBackend {
         for (index, dependency) in request.dependencies.iter().enumerate() {
             if self.producer_launch.events.get(&dependency.event)
                 != Some(&dependency.producer_submission)
-                || !self
+                || (!self
                     .producer_launch
                     .requests
                     .contains_key(&dependency.producer_submission)
+                    && self
+                        .producer_launch
+                        .completed_copies
+                        .get(&dependency.producer_submission)
+                        != Some(&BackendPollV1::Succeeded))
                 || request.dependencies[..index]
                     .iter()
                     .any(|earlier| earlier.producer_submission == dependency.producer_submission)

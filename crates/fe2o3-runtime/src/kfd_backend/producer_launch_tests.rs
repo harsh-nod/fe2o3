@@ -289,6 +289,36 @@ fn accepted_routed_producer_launch_retains_and_refunds_only_its_child() {
         let allocation_route = backend.allocations[&allocation];
         let module_route = backend.modules[&module];
         let child = stream_route.child;
+        let source = backend
+            .allocate_v1(
+                if device == 7 { 8 } else { 7 },
+                RuntimeMemoryKindV1::HostVisible,
+                8,
+                8,
+            )
+            .unwrap();
+        backend.write_allocation_v1(source, 0, &[3; 8]).unwrap();
+        let copy = backend
+            .peer_copy_v1(
+                stream,
+                BackendMemoryRegionV1 {
+                    allocation: source,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 8,
+                },
+                BackendMemoryRegionV1 {
+                    allocation,
+                    access: RuntimeAccessV1::Write,
+                    byte_offset: 0,
+                    byte_len: 8,
+                },
+                &[],
+            )
+            .unwrap();
+        backend.flush_stream_v1(stream).unwrap();
+        assert_eq!(backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
+        let copy_event = backend.record_event_v1(stream, copy).unwrap();
         let producer = backend.next_id().unwrap();
         let local_producer = backend.children[child].next_id().unwrap();
         // A pending scripted producer keeps the consumer in its real ledger,
@@ -334,10 +364,16 @@ fn accepted_routed_producer_launch_retains_and_refunds_only_its_child() {
                     },
                     kernarg_byte_offset: 0,
                 }],
-                dependencies: &[BackendLaunchProducerV1 {
-                    event,
-                    producer_submission: producer,
-                }],
+                dependencies: &[
+                    BackendLaunchProducerV1 {
+                        event: copy_event,
+                        producer_submission: copy,
+                    },
+                    BackendLaunchProducerV1 {
+                        event,
+                        producer_submission: producer,
+                    },
+                ],
                 geometry: geometry(),
             })
             .unwrap();
@@ -369,6 +405,31 @@ fn accepted_routed_producer_launch_retains_and_refunds_only_its_child() {
         assert!(backend.children[1 - child].pending_compute.is_empty());
 
         backend.release_event_v1(event).unwrap();
+        backend.release_event_v1(copy_event).unwrap();
+        assert!(backend.peer_launch_retains.retains(copy));
+        assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
+        assert_eq!(
+            backend.wait_v1(submission, Instant::now()).unwrap(),
+            BackendPollV1::Pending
+        );
+        assert_eq!(
+            backend.drain_v1(submission, Instant::now()).unwrap(),
+            BackendPollV1::Pending
+        );
+        // Fault the observation boundary without inventing a physical GPU result.
+        let result: Result<BackendPollV1, _> = backend.observe_peer_launch_result_v1(
+            submission,
+            Err(KfdRuntimeBackendV1::quiescent_error(
+                KfdRuntimeBackendErrorKindV1::Native,
+                "other operation quiescent",
+            )),
+            |status| *status != BackendPollV1::Pending,
+        );
+        assert!(matches!(result, Err(RuntimeBackendFailureV1::Quiescent(_))));
+        assert!(backend.peer_launch_retains.retains(copy));
+        assert!(
+            matches!(backend.release_submission_v1(copy), Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Busy)
+        );
         assert!(
             !backend
                 .event_submission_retain_counts
@@ -391,6 +452,8 @@ fn accepted_routed_producer_launch_retains_and_refunds_only_its_child() {
         assert_eq!(native.compute_completion_reservations, 0);
         backend.release_submission_v1(submission).unwrap();
         backend.release_submission_v1(producer).unwrap();
+        assert!(backend.peer_launch_retains.is_empty());
+        backend.release_submission_v1(copy).unwrap();
         assert!(backend.native_stream_submission_counts.is_empty());
 
         backend.children[child].native_available = false;
@@ -400,6 +463,7 @@ fn accepted_routed_producer_launch_retains_and_refunds_only_its_child() {
             .unwrap()
             .sdma_backed = false;
         backend.release_allocation_v1(allocation).unwrap();
+        backend.release_allocation_v1(source).unwrap();
         backend.unload_module_v1(module).unwrap();
         backend.destroy_stream_v1(stream).unwrap();
         backend.shutdown_native_v1().unwrap();
@@ -457,10 +521,10 @@ fn routed_exact_dependency_requires_native_same_child_identity() {
                 0,
             )
             .unwrap(),
-        BackendLaunchProducerV1 {
+        Some(BackendLaunchProducerV1 {
             event: 51,
             producer_submission: 41,
-        },
+        }),
     );
 
     let before_handle = backend.next_handle;
@@ -617,7 +681,7 @@ fn routed_exact_dependency_requires_native_same_child_identity() {
             }],
         )),
         Err(RuntimeBackendFailureV1::Rejected(error))
-            if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
+            if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
     ));
     assert_eq!(backend.next_handle, before_handle);
 

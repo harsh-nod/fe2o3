@@ -100,7 +100,9 @@ impl ProducerLaunchRootV1 {
 impl<B: RuntimeProducerAwareLaunchBackendV1> RuntimeContextV1<B> {
     /// Queue a typed consumer of exact earlier producer outputs without a graph reservation.
     ///
-    /// Requires a version journal and producers admitted through this same profile.
+    /// Requires a version journal and producers admitted through this same profile,
+    /// or scalar peer copies already reconciled as successful and quiescent.
+    /// Pending peer-copy-to-compute execution is not admitted by this profile yet.
     /// Pure reads retain whole-allocation custody; every original pending read
     /// range must be covered by its named producer's writable ranges. Writable aliases
     /// with pending predecessors reject. Events must remain live until admission;
@@ -185,6 +187,42 @@ impl<B: RuntimeProducerAwareLaunchBackendV1> RuntimeContextV1<B> {
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    fn launch_parent_depth_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<usize, RuntimeValidationErrorV1> {
+        let record = self
+            .submissions
+            .get(&id)
+            .ok_or(RuntimeValidationErrorV1::UnknownSubmission)?;
+        if let Some(parent) = self.producer_launches.get(&id) {
+            if !record.producer_launch || record.scalar_peer_copy || record.directed_peer_copy {
+                return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+            }
+            return Ok(parent.state.depth);
+        }
+        let parent = self
+            .scalar_peer_copies
+            .get(&id)
+            .ok_or(RuntimeValidationErrorV1::Unsupported)?;
+        self.validate_scalar_peer_custody_v1(id)?;
+        if record.producer_launch {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+        }
+        if record.status != RuntimeCompletionStatusV1::Succeeded || !record.quiescent {
+            return Err(RuntimeValidationErrorV1::Unsupported);
+        }
+        if parent.directed.as_ref().is_some_and(|state| {
+            state.terminal != Some(BackendPollV1::Succeeded)
+                || state.cursor != parent.dependencies.len()
+        }) {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+        }
+        // A settled ordinary copy is a leaf. Directed roots retain their original
+        // depth after settlement, so admission and later custody checks agree.
+        Ok(parent.directed.as_ref().map_or(1, |state| state.depth))
+    }
+
     fn prepare_producer_launch_root_v1(
         &mut self,
         prepared: &mut PreparedContextLaunchV1,
@@ -201,10 +239,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return Err(RuntimeValidationErrorV1::WrongDevice);
             }
             self.check_operation_custody_v1(dependency.submission)?;
-            let producer = self
-                .producer_launches
-                .get(&dependency.submission)
-                .ok_or(RuntimeValidationErrorV1::Unsupported)?;
+            let parent_depth = self.launch_parent_depth_v1(dependency.submission)?;
             if !matches!(
                 self.submissions[&dependency.submission].status,
                 RuntimeCompletionStatusV1::Pending | RuntimeCompletionStatusV1::Succeeded
@@ -212,9 +247,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return Err(RuntimeValidationErrorV1::ContextReserved);
             }
             depth = depth.max(
-                producer
-                    .state
-                    .depth
+                parent_depth
                     .checked_add(1)
                     .ok_or(RuntimeValidationErrorV1::Capacity)?,
             );
@@ -436,10 +469,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .submissions
                 .get(&dependency.submission)
                 .ok_or(invalid)?;
-            let parent = self
-                .producer_launches
-                .get(&dependency.submission)
-                .ok_or(invalid)?;
+            let parent_depth = self
+                .launch_parent_depth_v1(dependency.submission)
+                .map_err(|_| invalid)?;
             if previous.is_some_and(|previous| previous >= dependency.submission)
                 || dependency.ordinal >= root.dependencies.len()
                 || ordinals[dependency.ordinal]
@@ -451,13 +483,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 || producer.device != dependency.device
                 || producer.stream != dependency.stream
                 || producer.backend_submission != dependency.backend_submission
-                || !producer.producer_launch
                 || producer.dependency_retains == 0
                 || !self
                     .backend_submissions
                     .contains(&dependency.backend_submission)
-                || parent.state.depth == 0
-                || parent.state.depth >= root.state.depth
+                || parent_depth == 0
+                || parent_depth >= root.state.depth
                 || index < root.state.cursor
                     && producer.status != RuntimeCompletionStatusV1::Succeeded
             {
@@ -465,7 +496,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             ordinals[dependency.ordinal] = true;
             previous = Some(dependency.submission);
-            depth = depth.max(parent.state.depth + 1);
+            depth = depth.max(parent_depth + 1);
         }
         if depth != root.state.depth {
             return Err(invalid);

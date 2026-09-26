@@ -4198,10 +4198,11 @@ mod tests {
                     );
                 }
             }
-            if let Some((_, source, destination)) = self.pending_copies.remove(&submission)
-                && success
-            {
-                self.apply_copy(source, destination);
+            if let Some((_, source, destination)) = self.pending_copies.remove(&submission) {
+                if success {
+                    self.apply_copy(source, destination);
+                }
+                self.record_copy_completion_test_v1(submission, success);
             }
             if let Some(pending) = self.pending_kernel_reads.remove(&submission)
                 && success
@@ -4246,6 +4247,7 @@ mod tests {
                 }
             } else {
                 self.apply_copy(source, destination);
+                self.record_copy_completion_test_v1(identity, true);
             }
             mock_memory_failure_v1(failure)?;
             Ok(identity)

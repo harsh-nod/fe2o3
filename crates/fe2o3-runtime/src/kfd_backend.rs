@@ -127,6 +127,8 @@ mod generated_preparation;
 mod generated_shells;
 pub(crate) use generated_shells::{GeneratedShellBindingV1, GeneratedShellPlanV1};
 mod native_budget;
+mod producer_peers;
+use producer_peers::PeerLaunchRetainsV1;
 mod residency;
 use residency::{ResidentKernelImageV1, ResidentModuleImageV1};
 #[cfg(test)]
@@ -7191,6 +7193,7 @@ pub struct KfdMultiDeviceRuntimeBackendV1 {
     events: HashMap<u64, RoutedEventV1>,
     cooperative_allocation_owners: HashMap<RoutedHandleV1, Vec<u64>>,
     cooperative_dependency_retain_counts: HashMap<u64, usize>,
+    peer_launch_retains: PeerLaunchRetainsV1,
     cooperative_stream_pending_counts: HashMap<u64, usize>,
     cooperative_stream_tails: HashMap<u64, u64>,
     native_stream_submission_counts: HashMap<u64, usize>,
@@ -7975,6 +7978,7 @@ impl fmt::Debug for KfdMultiDeviceRuntimeBackendV1 {
                 &self.event_submission_retain_counts.len(),
             )
             .field("cooperative_staging_bytes", &self.cooperative_staging_bytes)
+            .field("peer_launch_retains", &self.peer_launch_retains)
             .field(
                 "cooperative_staging_limit_bytes",
                 &self.cooperative_staging_limit_bytes,
@@ -8128,6 +8132,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             events: HashMap::new(),
             cooperative_allocation_owners: HashMap::new(),
             cooperative_dependency_retain_counts: HashMap::new(),
+            peer_launch_retains: PeerLaunchRetainsV1::default(),
             cooperative_stream_pending_counts: HashMap::new(),
             cooperative_stream_tails: HashMap::new(),
             native_stream_submission_counts: HashMap::new(),
@@ -8152,6 +8157,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || !self.events.is_empty()
             || !self.cooperative_allocation_owners.is_empty()
             || !self.cooperative_dependency_retain_counts.is_empty()
+            || !self.peer_launch_retains.is_empty()
             || !self.cooperative_stream_pending_counts.is_empty()
             || !self.cooperative_stream_tails.is_empty()
             || !self.native_stream_submission_counts.is_empty()
@@ -8357,7 +8363,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         &self,
         dependency: BackendLaunchProducerV1,
         child: usize,
-    ) -> Result<BackendLaunchProducerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+    ) -> Result<Option<BackendLaunchProducerV1>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    {
         let event = self.events.get(&dependency.event).copied().ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -8366,11 +8373,41 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         })?;
         let (event_route, event_submission) = match event {
             RoutedEventV1::Native { route, submission } => (route, submission),
-            RoutedEventV1::CooperativeCopy { .. } => {
-                return Err(KfdRuntimeBackendV1::rejected(
-                    KfdRuntimeBackendErrorKindV1::Unsupported,
-                    "producer-aware launch requires a native KFD event",
-                ));
+            RoutedEventV1::CooperativeCopy {
+                submission,
+                child: event_child,
+            } => {
+                if submission != dependency.producer_submission {
+                    return Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        "cooperative event does not name the expected launch producer",
+                    ));
+                }
+                let Some(RoutedSubmissionV1::CooperativeCopy(copy)) =
+                    self.submissions.get(&submission)
+                else {
+                    return Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        "cooperative event does not retain its copy producer",
+                    ));
+                };
+                if event_child != child || copy.destination.child != child {
+                    return Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::WrongDevice,
+                        "cooperative launch producer belongs to another destination device",
+                    ));
+                }
+                return match copy.status() {
+                    BackendPollV1::Succeeded => Ok(None),
+                    BackendPollV1::Pending => Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::Busy,
+                        "cooperative launch producer is pending",
+                    )),
+                    BackendPollV1::Failed { .. } => Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        "cooperative launch producer did not succeed",
+                    )),
+                };
             }
         };
         if event_submission != dependency.producer_submission {
@@ -8406,10 +8443,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "producer-aware launch producer belongs to another KFD device",
             ));
         }
-        Ok(BackendLaunchProducerV1 {
+        Ok(Some(BackendLaunchProducerV1 {
             event: event_route.local,
             producer_submission: producer_route.local,
-        })
+        }))
     }
 
     fn peer_dependency_submission(
@@ -8686,7 +8723,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         match native_route {
             Some(route) => {
                 let result = self.children[route.child].poll_v1(route.local);
-                self.latch(result)
+                self.observe_peer_launch_result_v1(submission, result, |status| {
+                    *status != BackendPollV1::Pending
+                })
             }
             None => Ok(match &self.submissions[&submission] {
                 RoutedSubmissionV1::CooperativeCopy(copy) => copy.status(),
@@ -11943,7 +11982,9 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         match native_route {
             Some(route) => {
                 let result = self.children[route.child].poll_v1(route.local);
-                self.latch(result)
+                self.observe_peer_launch_result_v1(submission, result, |status| {
+                    *status != BackendPollV1::Pending
+                })
             }
             None => {
                 let RoutedSubmissionV1::CooperativeCopy(copy) = &self.submissions[&submission]
@@ -11973,7 +12014,9 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         match native_route {
             Some(route) => {
                 let result = self.children[route.child].wait_v1(route.local, deadline);
-                self.latch(result)
+                self.observe_peer_launch_result_v1(submission, result, |status| {
+                    *status != BackendPollV1::Pending
+                })
             }
             None => {
                 let mut attempts = 0_u32;
@@ -12020,10 +12063,12 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 "submission is retained by a multi-device event",
             ));
         }
-        if self.submission_retained_as_dependency(submission) {
+        if self.submission_retained_as_dependency(submission)
+            || self.peer_launch_retains.retains(submission)
+        {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
-                "submission is retained by a pending cooperative copy",
+                "submission is retained by a dependent copy or launch",
             ));
         }
         if !cooperative_quiescent {
@@ -12035,6 +12080,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         if let Some(route) = native_route {
             let result = self.children[route.child].release_submission_v1(route.local);
             self.latch(result)?;
+            self.peer_launch_retains.release(submission);
         }
         if let Some(stream) = native_stream {
             self.release_native_stream_submission_v1(stream);
@@ -12249,17 +12295,34 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             .map_err(|_| {
                 KfdRuntimeBackendV1::capacity("multi-device dependency translation failed")
             })?;
-        for dependency in request.dependencies {
-            let dependency = self.exact_launch_dependency_for_child(*dependency, stream.child)?;
-            if dependencies.iter().any(|prior: &BackendLaunchProducerV1| {
-                prior.producer_submission == dependency.producer_submission
-            }) {
+        let mut peer_producers = Vec::new();
+        let peer_count = request
+            .dependencies
+            .iter()
+            .filter(|dependency| {
+                matches!(
+                    self.events.get(&dependency.event),
+                    Some(RoutedEventV1::CooperativeCopy { .. })
+                )
+            })
+            .count();
+        peer_producers.try_reserve_exact(peer_count).map_err(|_| {
+            KfdRuntimeBackendV1::capacity("peer launch dependency translation failed")
+        })?;
+        for (index, dependency) in request.dependencies.iter().enumerate() {
+            if request.dependencies[..index]
+                .iter()
+                .any(|prior| prior.producer_submission == dependency.producer_submission)
+            {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                     "KFD compute dependencies must name distinct submissions",
                 ));
             }
-            dependencies.push(dependency);
+            match self.exact_launch_dependency_for_child(*dependency, stream.child)? {
+                Some(local) => dependencies.push(local),
+                None => peer_producers.push(dependency.producer_submission),
+            }
         }
         let child_launch = BackendLaunchV1 {
             stream: stream.local,
@@ -12275,15 +12338,16 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             ComputeDependencyRosterV1::Exact(&dependencies),
         );
         let collected = self.latch(child_preflight)?;
+        self.peer_launch_retains.prepare(&peer_producers)?;
         self.reserve_native_stream_submission_v1(request.stream)?;
         Self::reserve_route(
             &mut self.submissions,
             "multi-device submission route allocation failed",
         )?;
         let id = self.next_id()?;
-        let result =
-            self.children[stream.child].submit_collected_compute_v1(child_launch, collected);
-        let local = self.latch(result)?;
+        let local = self.with_peer_launch_custody_v1(id, peer_producers, |backend| {
+            backend.children[stream.child].submit_collected_compute_v1(child_launch, collected)
+        })?;
         self.submissions.insert(
             id,
             RoutedSubmissionV1::Native {
@@ -13179,7 +13243,11 @@ impl RuntimeFlushBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             }
         }
         let result = self.children[route.child].flush_stream_v1(route.local);
-        self.latch(result)
+        let result = self.latch(result);
+        if !self.terminal {
+            self.retire_flushed_peer_launches_v1(stream);
+        }
+        result
     }
 }
 
@@ -13212,7 +13280,9 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         };
         if let Some(route) = native_route {
             let result = self.children[route.child].cancel_v1(route.local);
-            return self.latch(result);
+            return self.observe_peer_launch_result_v1(submission, result, |status| {
+                *status == crate::BackendCancellationV1::Cancelled
+            });
         }
 
         let (stream, prior) = match &self.submissions[&submission] {
@@ -13257,7 +13327,9 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         };
         if let Some(route) = native_route {
             let result = self.children[route.child].drain_v1(route.local, deadline);
-            return self.latch(result);
+            return self.observe_peer_launch_result_v1(submission, result, |status| {
+                *status != BackendPollV1::Pending
+            });
         }
 
         let mut attempts = 0_u32;
