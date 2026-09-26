@@ -795,6 +795,8 @@ run_auxiliary_tests() {
     bash scripts/tests/compiler-execution-deployment-bundle.sh
   run_step compiler-execution-qualification-base-contract \
     bash scripts/tests/compiler-execution-qualification-base.sh
+  run_step native-readiness-fixture-builder-contract \
+    bash scripts/tests/native-ready-fixture.sh
   run_step s09-debug-checker bash scripts/tests/s09-debug.sh
 }
 

@@ -88,6 +88,9 @@ jobs:
           bash scripts/tests/release-mirror.sh
           bash scripts/tests/check-dco-range.sh
 
+      - name: Test native readiness fixture builder
+        run: bash scripts/tests/native-ready-fixture.sh
+
       - name: Test KFD-first doctor
         run: |
           cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 doctor::tests
