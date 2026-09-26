@@ -18,6 +18,11 @@ mod rich_source_preparation_tests {
                 prepare_component(&function, &types, &mut PreparationResourcesV1::unmetered())
                     .unwrap();
             let dominance = SemanticEnumPayloadDominanceV1::analyze(&function, &types).unwrap();
+            let option_producers =
+                fe2o3_mir_model::semantic_option_producers_v1(&function, &[]).unwrap();
+            let option_dominance =
+                fe2o3_mir_model::SemanticOptionDominanceV1::analyze(&function, &option_producers)
+                    .unwrap();
             let mut work = Work::new(LIMIT);
             let mut budget = Budget::new(&mut work, LIMIT);
             budget.reserve_storage(FLOOR).unwrap();
@@ -40,6 +45,9 @@ mod rich_source_preparation_tests {
                 assert_eq!(rich.allocations(), allocations);
                 assert_eq!(rich.constants(), constants);
                 assert_eq!(rich.enum_payload_dominance(), &dominance);
+                assert_eq!(rich.option_producers(), option_producers);
+                assert_eq!(rich.option_dominance(), &option_dominance);
+                assert!(!rich.option_dominance().grants_authority());
                 // The existing four-input borrow remains available without any
                 // scalar/provenance clone or ownership escape.
                 let _inputs = rich.dense_inputs();

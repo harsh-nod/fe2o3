@@ -5,6 +5,17 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Original-meter Option preparation and exact debugger refusal — 2026-09-26
+
+The [Option preparation checkpoint](bf16-helper-option-preparation-qualification-20260926.md)
+adds actual source-derived Option producer/dominance facts on the original
+ledger. All 318 model tests, 2,446 backend tests and five fresh Rust sessions
+passed; numerical/refusal/storage results remain unchanged.
+The [fresh debugger diagnostic](physical-debugger-cmdline-refusal-20260926.md)
+narrows setup failure to an empty command-line read before any debugger command.
+Independent family cleanup passed; no physical capture succeeded. Full root
+projection and live-debugger qualification remain open; broad exits stay **6/18**.
+
 ## Postflight helper candidate and retained preparation — 2026-09-26
 
 The [postflight preparation checkpoint](bf16-helper-postflight-preparation-qualification-20260926.md)

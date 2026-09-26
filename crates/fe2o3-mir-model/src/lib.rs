@@ -77,6 +77,7 @@ pub use semantic_option_dominance::{
     SemanticEnumPayloadDominanceV1, SemanticEnumPayloadMeterV1, SemanticEnumPayloadMeteredErrorV1,
     SemanticOptionAvailabilityV1, SemanticOptionDominanceErrorV1, SemanticOptionDominanceV1,
     SemanticOptionProducerV1, semantic_option_producers_v1,
+    semantic_option_producers_with_meter_v1,
 };
 pub use semantic_type::{
     MirAddressSpace, MirAggregateLayout, MirEnumEncoding, MirEnumType, MirField, MirLayout,

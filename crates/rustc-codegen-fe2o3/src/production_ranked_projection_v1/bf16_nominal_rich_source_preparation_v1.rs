@@ -2,10 +2,13 @@
 //! preparation view, not final capability readiness or a ranked recipe.
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1;
+use fe2o3_mir_model::SemanticOptionProducerV1;
 
 struct RichPreparedSourceV1 {
     dense: PreparedSourceV1,
     retained: RetainedPreparationTablesV1,
+    option_producers: Vec<SemanticOptionProducerV1>,
+    option_dominance: SemanticOptionDominanceV1,
 }
 
 /// Immutable same-source preparation tables. No references or owned tables may
@@ -27,6 +30,16 @@ impl RichNominalSourceTablesV1<'_> {
             self.allocations(),
             self.constants(),
         )
+    }
+    pub(in crate::production_ranked_projection_v1) fn option_producers(
+        &self,
+    ) -> &[SemanticOptionProducerV1] {
+        &self.prepared.option_producers
+    }
+    pub(in crate::production_ranked_projection_v1) fn option_dominance(
+        &self,
+    ) -> &SemanticOptionDominanceV1 {
+        &self.prepared.option_dominance
     }
     pub(in crate::production_ranked_projection_v1) fn scalar_counts(&self) -> &[u8] {
         &self.prepared.retained.scalar.counts
@@ -143,22 +156,42 @@ where
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let prepared = {
             let mut retained = None;
-            let dense = {
+            let (dense, option_producers, option_dominance) = {
                 let mut resources = PreparationResourcesV1::new(budget, &mut owned);
                 resources.reserve_storage(frame).map_err(query_error)?;
-                prepare_with_retained(
+                let dense = prepare_with_retained(
                     callables,
                     types,
                     function,
                     &mut resources,
                     Some(&mut retained),
                 )
-                .map_err(query_error)?
+                .map_err(query_error)?;
+                let option_producers = fe2o3_mir_model::semantic_option_producers_with_meter_v1(
+                    function,
+                    callables,
+                    &mut ModelMeter(&mut resources),
+                )
+                .map_err(model_error)
+                .map_err(query_error)?;
+                let option_dominance = SemanticOptionDominanceV1::analyze_with_meter_v1(
+                    function,
+                    &option_producers,
+                    &mut ModelMeter(&mut resources),
+                )
+                .map_err(model_error)
+                .map_err(query_error)?;
+                (dense, option_producers, option_dominance)
             };
             let retained = retained.ok_or(QueryError::Unavailable(
                 "rich preparation core did not retain its source tables",
             ))?;
-            RichPreparedSourceV1 { dense, retained }
+            RichPreparedSourceV1 {
+                dense,
+                retained,
+                option_producers,
+                option_dominance,
+            }
         };
         let view = RichNominalSourceTablesV1 {
             function,
@@ -270,7 +303,7 @@ pub(in crate::production_ranked_projection_v1) fn rich_frame_for_test_v1<R>(
     rich_header::<R>(callback_bytes)
 }
 
-/// Unwired genuine-source seam for root qualification. Both routes execute the
+/// Genuine-source seam for root qualification. Both routes execute the
 /// same actual source on the original meter; this makes no numerical/ranked claim.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -293,6 +326,10 @@ pub(in crate::production_ranked_projection_v1) fn observe_rich_source_comparison
         budget,
         |rich, budget| {
             let source = owner.semantic_ssa().source_semantic();
+            // A nonempty fact table is required on the actual output get_mut
+            // call, not a manufactured empty Option analysis. This witness is
+            // only a preparation observation and grants no ranked authority.
+            observe_actual_get_mut_option_v1(rich, source.callables(), budget)?;
             let before = Custody::new(budget)?;
             let mut owned = 0usize;
             let result = catch_unwind(AssertUnwindSafe(|| {
@@ -398,4 +435,71 @@ pub(in crate::production_ranked_projection_v1) fn measure_preparation_core_for_t
     before.check(budget, owned)?;
     budget.release_storage(owned)?;
     result
+}
+
+/// Source-owned observational witness for the actual get_mut Option result.
+#[cfg(test)]
+fn observe_actual_get_mut_option_v1(
+    rich: &RichNominalSourceTablesV1<'_>,
+    callables: &[SemanticCallableDeclV1],
+    budget: &mut Budget<'_>,
+) -> Result<()> {
+    let producers = rich.option_producers();
+    let work = rich
+        .function()
+        .blocks()
+        .len()
+        .checked_mul(
+            producers
+                .len()
+                .checked_add(16)
+                .ok_or(Resource::Arithmetic)?,
+        )
+        .and_then(|n| n.checked_add(16))
+        .ok_or(Resource::Arithmetic)?;
+    // Charge the complete bounded scan/membership checks before visiting rows.
+    budget.charge_work(work)?;
+    if producers.is_empty() {
+        return Err(QueryError::Unavailable(
+            "actual source has no Option producers",
+        ));
+    }
+    let mut get_mut = 0usize;
+    for block in rich.function().blocks() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. },
+            ..
+        }) = callables.get(call.callee().index() as usize)
+        else {
+            continue;
+        };
+        let Some(destination) = call.destination() else {
+            return Err(QueryError::Unavailable(
+                "actual get_mut has no Option continuation",
+            ));
+        };
+        let producer =
+            SemanticOptionProducerV1::new(destination.place().local(), destination.edge().target());
+        if !destination.place().projections().is_empty()
+            || !producers.contains(&producer)
+            || rich
+                .option_dominance()
+                .availability(destination.place().local())
+                .is_none()
+        {
+            return Err(QueryError::Unavailable(
+                "actual get_mut has no exact Some region",
+            ));
+        }
+        get_mut = get_mut.checked_add(1).ok_or(Resource::Arithmetic)?;
+    }
+    if get_mut == 0 {
+        return Err(QueryError::Unavailable(
+            "actual source has no get_mut Option witness",
+        ));
+    }
+    Ok(())
 }

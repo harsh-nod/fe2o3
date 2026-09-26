@@ -1,9 +1,12 @@
 //! Original-caller resource admission for the shared enum-payload analyzer.
 //! Logical reservations are retained by the caller until all results/scratch drop.
+#[path = "semantic_option_resources_v1.rs"]
+mod option_resources;
 #[cfg(test)]
 #[path = "semantic_enum_payload_resources_v1_tests.rs"]
 mod tests;
 use super::*;
+pub use option_resources::semantic_option_producers_with_meter_v1;
 use std::mem::size_of;
 
 /// Live caller ledger, independent of any compiler-resource crate dependency.
@@ -82,7 +85,10 @@ impl<M: SemanticEnumPayloadMeterV1> InternalMeter for Adapter<'_, M> {
 // Explicitly account the generic error-bearing frames. M::Error has no size
 // bound; the fixed lexical envelope must never stand in for any of these.
 fn metered_frame_storage_v1<M: SemanticEnumPayloadMeterV1>() -> Option<usize> {
-    type Facts = SemanticEnumPayloadDominanceV1;
+    metered_fact_frame_storage_v1::<M, SemanticEnumPayloadDominanceV1>()
+}
+
+fn metered_fact_frame_storage_v1<M: SemanticEnumPayloadMeterV1, Facts>() -> Option<usize> {
     [
         size_of::<Facts>(),
         size_of::<DominatorIntervalsV1>(),

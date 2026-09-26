@@ -7,7 +7,10 @@ use std::{error::Error, fmt};
 
 #[path = "semantic_enum_payload_resources_v1.rs"]
 mod enum_payload_resources;
-pub use enum_payload_resources::{SemanticEnumPayloadMeterV1, SemanticEnumPayloadMeteredErrorV1};
+pub use enum_payload_resources::{
+    SemanticEnumPayloadMeterV1, SemanticEnumPayloadMeteredErrorV1,
+    semantic_option_producers_with_meter_v1,
+};
 
 use crate::semantic_mir_v1::{
     SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
@@ -144,11 +147,20 @@ pub fn semantic_option_producers_v1(
     function: &SemanticFunctionDeclV1,
     callables: &[SemanticCallableDeclV1],
 ) -> Result<Vec<SemanticOptionProducerV1>, SemanticOptionDominanceErrorV1> {
+    semantic_option_producers_with_budget_v1(function, callables, &mut WorkBudgetV1::default())
+}
+
+fn semantic_option_producers_with_budget_v1(
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    budget: &mut WorkBudgetV1<'_>,
+) -> Result<Vec<SemanticOptionProducerV1>, SemanticOptionDominanceErrorV1> {
     let mut producers = Vec::new();
-    producers
-        .try_reserve(function.blocks().len())
-        .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
+    budget.reserve(&mut producers, function.blocks().len())?;
     for block in function.blocks() {
+        // Classifier and exact destination checks have constant work. This is
+        // external-only admission: collection had no legacy diagnostic counter.
+        budget.extra(8)?;
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
@@ -159,7 +171,7 @@ pub fn semantic_option_producers_v1(
         };
         if let Some(producer) = SemanticOptionProducerV1::from_compiler_intrinsic(operation, call)?
         {
-            producers.push(producer);
+            budget.push(&mut producers, producer)?;
         }
     }
     Ok(producers)
@@ -185,11 +197,18 @@ impl SemanticOptionDominanceV1 {
         function: &SemanticFunctionDeclV1,
         producers: &[SemanticOptionProducerV1],
     ) -> Result<Self, SemanticOptionDominanceErrorV1> {
+        Self::analyze_with_budget(function, producers, &mut WorkBudgetV1::default())
+    }
+
+    fn analyze_with_budget(
+        function: &SemanticFunctionDeclV1,
+        producers: &[SemanticOptionProducerV1],
+        budget: &mut WorkBudgetV1<'_>,
+    ) -> Result<Self, SemanticOptionDominanceErrorV1> {
         let local_count = function.locals().len();
-        let mut budget = WorkBudgetV1::default();
-        let definitions = local_definition_counts(function, &mut budget)?;
-        let dominators = DominatorIntervalsV1::analyze(function, &mut budget)?;
-        let mut discriminants_by_option = vec![Vec::new(); local_count];
+        let definitions = local_definition_counts(function, budget)?;
+        let dominators = DominatorIntervalsV1::analyze(function, budget)?;
+        let mut discriminants_by_option = budget.nested(local_count)?;
         for (block_index, block) in function.blocks().iter().enumerate() {
             budget.charge(block.statements().len().saturating_add(1))?;
             for statement in block.statements() {
@@ -211,18 +230,13 @@ impl SemanticOptionDominanceV1 {
                         "an Option discriminator source is outside the local table",
                     ));
                 };
-                bindings
-                    .try_reserve(1)
-                    .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
-                bindings.push((block_index, assignment.destination().local()));
+                budget.push(bindings, (block_index, assignment.destination().local()))?;
             }
         }
 
-        let mut availability_by_local = vec![None; local_count];
+        let mut availability_by_local = budget.filled(local_count, None)?;
         let mut some_targets = Vec::new();
-        some_targets
-            .try_reserve(producers.len())
-            .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
+        budget.reserve(&mut some_targets, producers.len())?;
         for producer in producers {
             budget.charge(1)?;
             let destination_index = producer.option_local().index() as usize;
@@ -311,13 +325,13 @@ impl SemanticOptionDominanceV1 {
                     "one local has multiple Option capability producers",
                 ));
             }
-            some_targets.push(some_target);
+            budget.push(&mut some_targets, some_target)?;
         }
         Ok(Self {
-            availability_by_local: availability_by_local.into_boxed_slice(),
-            some_targets: some_targets.into_boxed_slice(),
-            dominator_preorder: dominators.preorder.into_boxed_slice(),
-            dominator_subtree_end: dominators.subtree_end.into_boxed_slice(),
+            availability_by_local: budget.boxed(availability_by_local)?,
+            some_targets: budget.boxed(some_targets)?,
+            dominator_preorder: budget.boxed(dominators.preorder)?,
+            dominator_subtree_end: budget.boxed(dominators.subtree_end)?,
             work_units: budget.used,
         })
     }
