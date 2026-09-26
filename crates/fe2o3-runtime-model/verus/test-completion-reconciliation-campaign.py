@@ -25,14 +25,14 @@ names = {
     "push-wrong-parent", "pop-wrong-parent", "cache-after-descent", "cache-after-pop",
     "cursor-skips-producer", "cursor-crosses-pending", "quiescent-predecessor-promoted",
     "pending-input-promoted", "no-effect-input-promoted", "failed-physical-observation-promoted",
-    "ignore-success-settlement-error", "wrong-local-yield", "short-fuel", "early-yield",
+    "ignore-success-settlement-error", "wrong-local-yield", "short-fuel", "early-yield-return",
 }
 need(set(cases) == names and len(set(cases.values())) == 21)
 hooks = lambda text: Counter(re.findall(r"\$\(\$[a-z_]+\)\*", text))
 need(all(hooks(text) == hooks(body) for text in cases.values()))
 need(all(text != body and not any(token in text for token in ("assume(", "admit(", "external_body"))
          for text in cases.values()))
-for changed in (body + body, body.replace(".cursor += 1;", ".cursor += 3;"), body.replace("while $remaining > 0", "loop")):
+for changed in (body + body, body.replace(".cursor += 1;", ".cursor += 3;"), body.replace("$remaining -= 1;", "$remaining -= 2;")):
     try:
         runner["mutations"](changed)
     except ValueError:

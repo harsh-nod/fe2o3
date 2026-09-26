@@ -180,7 +180,12 @@ def mutations(body):
     add("wrong-local-yield", "$context.submissions[&$requested].status", "$context.submissions[&$id].status")
     add("short-fuel", "let mut $remaining = 2 * MAX_RUNTIME_DEPENDENCIES_V1 + 1;",
         "let mut $remaining = 2 * MAX_RUNTIME_DEPENDENCIES_V1;")
-    add("early-yield", "while $remaining > 0", "while $remaining > 1")
+    # Same 512-iteration early yield as a `remaining > 1` guard, but keep the
+    # original loop guard so the wrong return is an isolated failing path.
+    add("early-yield-return", "                $remaining -= 1;",
+        "                if $remaining == 1 {\n"
+        "                    return Ok(CompletionStepV1::Local($context.submissions[&$requested].status));\n"
+        "                }\n                $remaining -= 1;")
     need(len(cases) == 21 and len(set(cases.values())) == 21 and body not in cases.values(),
          "distinct production mutation roster")
     return cases
