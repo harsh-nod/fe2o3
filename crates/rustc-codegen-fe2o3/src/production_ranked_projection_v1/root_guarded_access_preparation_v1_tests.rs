@@ -736,6 +736,60 @@ mod root_guarded_access_preparation_controls {
         }
     }
 
+    #[test]
+    fn paid_guard_stage_retains_exact_source_call_association_with_same_access_row() {
+        let mut rows = RootGuardedAccessStorageV1::empty();
+        let mut state = State::new();
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        budget.reserve_storage(FLOOR).unwrap();
+        let mut owned = 0;
+        stage(
+            &mut rows,
+            &mut state,
+            &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+        )
+        .unwrap();
+        assert_eq!(
+            rows.source_calls,
+            vec![RootGuardedSourceCallV1 {
+                source_call_ordinal: 0,
+                block: 0,
+                callee: SemanticCallableIdV1::from_index(0),
+                destination: SemanticLocalIdV1::from_index(3),
+                guarded_access: 0,
+            }]
+        );
+        assert_eq!(rows.accesses.len(), 1);
+        assert!(rows.accesses[0].semantic_site.is_none());
+        assert_eq!(budget.storage(), FLOOR + owned);
+        drop(rows);
+        drop(state);
+        budget.release_storage(owned).unwrap();
+        assert_eq!(budget.storage(), FLOOR);
+    }
+    #[test]
+    fn paid_guard_stage_refuses_unaccounted_association_capacity_without_replacing_it() {
+        let mut rows = RootGuardedAccessStorageV1::empty();
+        rows.source_calls.reserve_exact(1); // Preexisting inert hostile fixture, not production.
+        let before = rows.source_calls.capacity();
+        let mut state = State::new();
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        let mut owned = 0;
+        assert!(
+            stage(
+                &mut rows,
+                &mut state,
+                &mut PreparationResourcesV1::new(&mut budget, &mut owned)
+            )
+            .is_err()
+        );
+        assert_eq!(rows.source_calls.capacity(), before);
+        assert!(!rows.started && rows.ledger.is_none() && !rows.completed());
+        assert_eq!(owned, 0);
+    }
+
     // FROZEN_ORACLE_START
     #[allow(clippy::too_many_arguments, clippy::redundant_field_names)]
     fn frozen_common(

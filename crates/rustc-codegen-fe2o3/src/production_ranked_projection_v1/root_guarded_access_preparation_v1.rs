@@ -31,10 +31,23 @@ impl AccessScratchV1 {
             && self.predicate.is_none()
     }
 }
+
+/// Paid source-call identity retained alongside the exact appended guard vector.
+/// Provenance/payload equality and cardinality alone are not identities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct RootGuardedSourceCallV1 {
+    pub(super) source_call_ordinal: usize,
+    pub(super) block: usize,
+    pub(super) callee: SemanticCallableIdV1,
+    pub(super) destination: SemanticLocalIdV1,
+    pub(super) guarded_access: usize,
+}
+
 /// This extends the physical S3 assembly; it cannot construct an actual input loan.
 pub(super) struct RootGuardedAccessStorageV1 {
     pub(super) views: Vec<Option<ProjectedViewV1>>,
     pub(super) accesses: Vec<GuardedRankedAccessV1>,
+    pub(super) source_calls: Vec<RootGuardedSourceCallV1>,
     pub(super) scratch: AccessScratchV1,
     pub(super) ledger: Option<(usize, CanonicalKernelIrWorkLedgerIdentityV1)>,
     pub(super) started: bool,
@@ -46,6 +59,7 @@ impl RootGuardedAccessStorageV1 {
         Self {
             views: Vec::new(),
             accesses: Vec::new(),
+            source_calls: Vec::new(),
             scratch: AccessScratchV1::empty(),
             ledger: None,
             started: false,
@@ -484,6 +498,8 @@ pub(super) fn prepare_root_guarded_accesses_v1(
         || rows.views.capacity() != 0
         || !rows.accesses.is_empty()
         || rows.accesses.capacity() != 0
+        || !rows.source_calls.is_empty()
+        || rows.source_calls.capacity() != 0
         || !rows.scratch.clear()
     {
         return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -511,12 +527,18 @@ pub(super) fn prepare_root_guarded_accesses_v1(
     resources.work(locals)?;
     resources.reserve(&mut rows.views, locals)?;
     rows.views.resize_with(locals, || None);
+    let mut source_call_ordinal = 0usize;
     for (block_index, block) in function.blocks().iter().enumerate() {
         resources.work(32)?;
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
         resources.work(128)?;
+        resources.work(16)?;
+        let ordinal = source_call_ordinal;
+        source_call_ordinal = source_call_ordinal
+            .checked_add(1)
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
         let Some(SemanticCallableDeclV1::CompilerIntrinsic {
             operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { element, .. },
             ..
@@ -536,6 +558,12 @@ pub(super) fn prepare_root_guarded_accesses_v1(
             enum_payload_dominance,
             block_index,
         )?;
+        // Reserve OUTER association storage before the fallible append. The
+        // successful append is followed by a nonallocating Copy push; failed
+        // partial emissions retain both owners and never receive a completed loan.
+        resources.work(32)?;
+        resources.reserve(&mut rows.source_calls, 1)?;
+        let guarded_access = rows.accesses.len();
         append_mutable_access_v1(
             types,
             call,
@@ -558,6 +586,19 @@ pub(super) fn prepare_root_guarded_accesses_v1(
             &mut rows.scratch,
             resources,
         )?;
+        // Destination lookup stays after the append to preserve its existing
+        // semantic refusal order. Success already required a simple destination.
+        rows.source_calls.push(RootGuardedSourceCallV1 {
+            source_call_ordinal: ordinal,
+            block: block_index,
+            callee: call.callee(),
+            destination: call
+                .destination()
+                .expect("successful accessor destination")
+                .place()
+                .local(),
+            guarded_access,
+        });
     }
     if resources.has_denial() || resources.original_ledger_v1() != Some(ledger) {
         return Err(resource(Resource::Accounting));

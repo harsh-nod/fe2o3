@@ -474,6 +474,17 @@ fn run(
     budget: &mut Budget<'_>,
     mode: Mode,
 ) -> Q<Observation> {
+    let _accepted_run = super::accepted_frames::begin(match mode {
+        Mode::Observe => super::accepted_frames::Mode::Observe,
+        Mode::Occupied => super::accepted_frames::Mode::Occupied,
+        Mode::Error => super::accepted_frames::Mode::Error,
+        Mode::Panic => super::accepted_frames::Mode::Panic,
+        Mode::MissingInputs => super::accepted_frames::Mode::MissingInputs,
+        Mode::DuplicateInputs => super::accepted_frames::Mode::DuplicateInputs,
+        Mode::ChangedBinding => super::accepted_frames::Mode::ChangedBinding,
+        Mode::EqualInputClone => super::accepted_frames::Mode::EqualInputClone,
+        Mode::ForeignPendingLedger => super::accepted_frames::Mode::ForeignPendingLedger,
+    });
     let inputs = actual_inputs.inputs();
     let bindings = actual_inputs.bindings();
     assert!(actual_inputs.belongs_to(owner));
@@ -543,6 +554,7 @@ fn run(
                                             })?;
                                             if mode != Mode::EqualInputClone { unreachable!(); }
                                         }
+                                        let accepted_stage = super::accepted_frames::enter();
                                         let observed = context.with_actual_root_guarded_accesses_v1(
                                             checked, rich, actual_inputs, &mut pending,
                                             |view, context| {
@@ -557,6 +569,7 @@ fn run(
                                                 }
                                             },
                                         )?;
+                                        drop(accepted_stage);
                                         if mode == Mode::Occupied {
                                             let refused = context.with_actual_root_guarded_accesses_v1(
                                                 checked, rich, actual_inputs, &mut pending,
@@ -636,6 +649,7 @@ pub(crate) fn observe_actual_root_guarded_accesses_for_test_v1(
     actual_inputs: &crate::production_pipeline::ActualRetainedRankedInputsV1<'_>,
     budget: &mut Budget<'_>,
 ) -> Q<()> {
+    super::accepted_frames::start(super::accepted_frames::Scope::S4);
     let work_before = budget.work();
     let observed = run(
         owner,
@@ -745,6 +759,18 @@ pub(crate) fn observe_actual_root_guarded_accesses_for_test_v1(
     eprintln!(
         "fe2o3-root-guarded-access-controls-v1 occupied=pass error=pass panic=pass missing_inputs=pass duplicate_inputs=pass changed_binding=pass equal_clone_data_only=pass foreign_pending_ledger=pass"
     );
+    super::accepted_frames::flush(
+        super::accepted_frames::Scope::S4,
+        work,
+        observed.assembly_frame,
+    );
+    origins_s5a::observe_actual_root_reference_origins_for_test_v1(
+        owner,
+        source,
+        inventory,
+        actual_inputs,
+        budget,
+    )?;
     Ok(())
 }
 #[test]
@@ -966,3 +992,6 @@ fn actual_guarded_oracle_rejects_missing_extra_and_changed_predicate_rows() {
         .is_err()
     );
 }
+
+#[path = "bf16_nominal_root_reference_origins_genuine_v1_tests.rs"]
+mod origins_s5a;

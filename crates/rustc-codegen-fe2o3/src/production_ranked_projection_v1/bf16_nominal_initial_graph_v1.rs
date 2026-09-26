@@ -117,7 +117,13 @@ fn initial_graph_frame<R, F>() -> Result<usize> {
 fn admit_initial_graph_frame<R, F>(resources: &mut PreparationResourcesV1<'_, '_>) -> Result<()> {
     let frame = initial_graph_frame::<R, F>()?;
     resources.work(frame)?;
-    resources.reserve_storage(frame)
+    resources.reserve_storage(frame)?;
+    #[cfg(test)]
+    super::root_prefix_indices_v1::accepted_frames::record(
+        super::root_prefix_indices_v1::accepted_frames::Kind::InitialGraph,
+        frame,
+    );
+    Ok(())
 }
 
 // Pay the wrapper/consumer transfer before constructing the inner closure.
@@ -143,7 +149,13 @@ fn complete_graph_frame<R, F>() -> Result<usize> {
 fn admit_complete_graph_frame<R, F>(resources: &mut PreparationResourcesV1<'_, '_>) -> Result<()> {
     let frame = complete_graph_frame::<R, F>()?;
     resources.work(frame)?;
-    resources.reserve_storage(frame)
+    resources.reserve_storage(frame)?;
+    #[cfg(test)]
+    super::root_prefix_indices_v1::accepted_frames::record(
+        super::root_prefix_indices_v1::accepted_frames::Kind::CompleteGraph,
+        frame,
+    );
+    Ok(())
 }
 
 // Deliberately narrower than ordinary projection. GridLeader recovery is a

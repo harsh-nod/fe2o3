@@ -1,10 +1,15 @@
 //! Integrated actual retained-input/root-prefix/index preparation. This is one
 //! physical root-assembly prefix, not a separate index namespace or ready token.
 //! An integrated sibling extends this assembly through actual guarded access DATA.
-//! Origins/sites/Final/full CFG assembly and normal routing remain pending.
+//! S5A joins source-call/guard/reference-origin DATA in this same owner.
+//! Semantic sites/Final/full CFG assembly and normal routing remain pending.
 use super::*;
 use crate::production_ranked_projection_v1::root_guarded_access_preparation_v1::{
-    RootGuardedAccessStorageV1, prepare_root_guarded_accesses_v1,
+    RootGuardedAccessStorageV1, RootGuardedSourceCallV1, prepare_root_guarded_accesses_v1,
+};
+use crate::production_ranked_projection_v1::root_reference_origin_preparation_v1::{
+    ActualRootReferenceOriginsStorageV1, UnjoinedReferenceOriginPayloadV1,
+    prepare_actual_root_reference_origins_v1,
 };
 use crate::production_ranked_projection_v1::*;
 use crate::production_ranked_projection_v1::{
@@ -26,6 +31,7 @@ pub(in crate::production_ranked_projection_v1) struct PendingActualRootPrefixInd
     prefix: RootEntryPrefixV1,
     indices: RootInvocationIndexStorageV1,
     guarded: RootGuardedAccessStorageV1,
+    origins: ActualRootReferenceOriginsStorageV1,
     ledger: Option<(usize, CanonicalKernelIrWorkLedgerIdentityV1)>,
     started: bool,
     completed: bool,
@@ -38,6 +44,7 @@ impl PendingActualRootPrefixIndicesV1 {
             prefix: RootEntryPrefixV1::empty(),
             indices: RootInvocationIndexStorageV1::empty(),
             guarded: RootGuardedAccessStorageV1::empty(),
+            origins: ActualRootReferenceOriginsStorageV1::empty(),
             ledger: None,
             started: false,
             completed: false,
@@ -87,6 +94,7 @@ struct ActualRootAssemblyPartsV1<'a> {
     prefix: &'a mut RootEntryPrefixV1,
     indices: &'a mut RootInvocationIndexStorageV1,
     guarded: &'a mut RootGuardedAccessStorageV1,
+    origins: &'a mut ActualRootReferenceOriginsStorageV1,
 }
 impl ActualRootAssemblyPartsV1<'_> {
     fn prefix_view(&self) -> ActualRootPrefixIndicesV1<'_> {
@@ -107,6 +115,7 @@ pub(in crate::production_ranked_projection_v1) struct ActualRootGuardedAccessesV
     prefix: ActualRootPrefixIndicesV1<'a>,
     views: &'a [Option<ProjectedViewV1>],
     accesses: &'a [GuardedRankedAccessV1],
+    source_calls: &'a [RootGuardedSourceCallV1],
 }
 impl ActualRootGuardedAccessesV1<'_> {
     pub(in crate::production_ranked_projection_v1) fn prefix(
@@ -117,8 +126,32 @@ impl ActualRootGuardedAccessesV1<'_> {
     pub(in crate::production_ranked_projection_v1) fn accesses(&self) -> &[GuardedRankedAccessV1] {
         self.accesses
     }
+    pub(in crate::production_ranked_projection_v1) fn source_calls(
+        &self,
+    ) -> &[RootGuardedSourceCallV1] {
+        self.source_calls
+    }
     pub(in crate::production_ranked_projection_v1) fn views(&self) -> &[Option<ProjectedViewV1>] {
         self.views
+    }
+}
+
+/// Lexical S5A data: actual source-call associations and FIFO origins share the
+/// same pending guard owner. No public CheckedReferencesV1 or ready conversion.
+pub(in crate::production_ranked_projection_v1) struct ActualRootReferenceOriginsV1<'a> {
+    guarded: ActualRootGuardedAccessesV1<'a>,
+    origins: &'a UnjoinedReferenceOriginPayloadV1,
+}
+impl ActualRootReferenceOriginsV1<'_> {
+    pub(in crate::production_ranked_projection_v1) fn guarded(
+        &self,
+    ) -> &ActualRootGuardedAccessesV1<'_> {
+        &self.guarded
+    }
+    pub(in crate::production_ranked_projection_v1) fn origins(
+        &self,
+    ) -> &[Option<CheckedReferenceOriginV1>] {
+        &self.origins.origins
     }
 }
 
@@ -294,6 +327,7 @@ fn assembly_frame<R, F>() -> Result<usize> {
         size_of::<ActualSelectedInputsV1<'static>>(),
         size_of::<ActualRootAssemblyPartsV1<'static>>(),
         size_of::<ActualRootGuardedAccessesV1<'static>>(),
+        size_of::<ActualRootReferenceOriginsV1<'static>>(),
         // Public wrapper, private continuation and their result transfers.
         size_of::<F>()
             .checked_mul(2)
@@ -385,6 +419,74 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
                         prefix: parts.prefix_view(),
                         views: &parts.guarded.views,
                         accesses: &parts.guarded.accesses,
+                        source_calls: &parts.guarded.source_calls,
+                    },
+                    context,
+                )
+            },
+        )
+    }
+
+    /// S5A extends the same physical namespace/guard owner, under the exact S1
+    /// profile. Sites and later memory-use projection remain deliberately absent.
+    pub(in crate::production_ranked_projection_v1) fn with_actual_root_reference_origins_v1<R, F>(
+        &mut self,
+        checked: &CheckedBf16NominalCallV1<'_>,
+        rich: &RichNominalSourceTablesV1<'_>,
+        actual_inputs: &crate::production_pipeline::ActualRetainedRankedInputsV1<'_>,
+        pending: &mut PendingActualRootPrefixIndicesV1,
+        inspect: F,
+    ) -> Result<R>
+    where
+        F: for<'a> FnOnce(ActualRootReferenceOriginsV1<'a>, &mut Self) -> Result<R>,
+    {
+        self.with_actual_root_assembly_v1(
+            checked,
+            rich,
+            actual_inputs,
+            pending,
+            |parts, context| {
+                let owner = context.facts.owner;
+                let source = owner.semantic_ssa().source_semantic();
+                context.with_resources(|resources| {
+                    prepare_root_guarded_accesses_v1(
+                        source.types(),
+                        source.callables(),
+                        parts.function,
+                        &parts.indices.indices,
+                        rich.option_dominance(),
+                        rich.enum_payload_dominance(),
+                        rich.allocations(),
+                        rich.allocation_provenance(),
+                        &mut parts.indices.predicates,
+                        parts.guarded,
+                        &mut parts.prefix.entry_operations,
+                        &mut parts.prefix.next_value,
+                        resources,
+                    )?;
+                    prepare_actual_root_reference_origins_v1(
+                        parts.function,
+                        source.callables(),
+                        parts.guarded,
+                        parts.graph.edges(),
+                        rich.option_dominance(),
+                        rich.enum_payload_dominance(),
+                        parts.origins,
+                        resources,
+                    )
+                })?;
+                let origins = parts.origins.payload().ok_or(Error::Incomplete(
+                    "actual reference origins payload unfinished",
+                ))?;
+                inspect(
+                    ActualRootReferenceOriginsV1 {
+                        guarded: ActualRootGuardedAccessesV1 {
+                            prefix: parts.prefix_view(),
+                            views: &parts.guarded.views,
+                            accesses: &parts.guarded.accesses,
+                            source_calls: &parts.guarded.source_calls,
+                        },
+                        origins,
                     },
                     context,
                 )
@@ -433,6 +535,8 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
             let frame = assembly_frame::<R, F>()?;
             resources.work(frame)?;
             resources.reserve_storage(frame)?;
+            #[cfg(test)]
+            accepted_frames::record(accepted_frames::Kind::Assembly, frame);
             pending.frame_credits = frame; // Actual accepted original-ledger debit.
             pending.ledger = Some(ledger);
             pending.started = true;
@@ -443,6 +547,7 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
             prefix,
             indices,
             guarded,
+            origins,
             completed,
             ..
         } = pending;
@@ -505,12 +610,17 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
                     prefix,
                     indices,
                     guarded,
+                    origins,
                 },
                 context,
             )
         })
     }
 }
+
+#[cfg(test)]
+#[path = "bf16_root_accepted_frame_v1_tests.rs"]
+pub(in crate::production_ranked_projection_v1) mod accepted_frames;
 
 #[cfg(test)]
 #[path = "bf16_nominal_root_prefix_indices_v1_tests.rs"]

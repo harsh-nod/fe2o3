@@ -5,6 +5,21 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Actual source-call reference origins — 2026-09-26
+
+The [source-origin checkpoint](bf16-actual-root-reference-origins-qualification-20260926.md)
+joins actual source-call ordinals and identities to the same pending guard
+vector, then propagates exact reference origins on the original ledger.
+An independent actual-source oracle checks all associations, origins and FIFO
+order. Regression passed 331 model and 2,683 backend tests (189 ignored),
+plus build, five current Rust sessions and a separate historical scoped probe.
+All 181 comparison controls passed. Direct lossless comparison passed with 132 changes within its strict 138-path policy, plus historical zero-work calibration and all three complete dependency trees; numerical, storage, peak, refusal and admission results remain exact.
+All 38 ordinary observation bodies and 52 artifacts are byte-identical to S4.
+This is source-associated origin data, not later memory-use-site or complete
+recipe admission; normal nominal-helper routing remains refused.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**. No new GPU execution
+or debugger capture is claimed.
+
 ## Actual retained-input guarded accesses — 2026-09-26
 
 The [guarded-access qualification](bf16-actual-guarded-access-qualification-20260926.md)

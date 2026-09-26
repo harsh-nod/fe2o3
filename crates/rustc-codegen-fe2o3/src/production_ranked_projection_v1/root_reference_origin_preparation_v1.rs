@@ -1,5 +1,7 @@
 //! Shared checked-reference data preparation. Paid results remain UNJOINED:
 //! no owner/inventory join, actual GuardedAccess roster, readiness or admission.
+//! The separate S5A continuation below joins the same-owner guard roster only;
+//! it still provides no memory sites, CheckedReferencesV1 or normal admission.
 use super::bf16_nominal_preparation_resources_v1::{PreparationResourcesV1, resource};
 use super::*;
 use fe2o3_kernel_ir::{
@@ -423,5 +425,256 @@ fn populate_origins_v1(
             }
         }
     }
+    Ok(())
+}
+
+/// Same-assembly DATA storage, never CheckedReferencesV1 or an admission token.
+/// Both the unjoined FIFO and its later source/guard joins remain OUTER owned.
+pub(super) struct ActualRootReferenceOriginsStorageV1 {
+    pending: PendingUnjoinedReferenceOriginsV1,
+    ledger: Option<(usize, CanonicalKernelIrWorkLedgerIdentityV1)>,
+    started: bool,
+    completed: bool,
+    pub(super) frame_credits: usize,
+}
+impl ActualRootReferenceOriginsStorageV1 {
+    pub(super) const fn empty() -> Self {
+        Self {
+            pending: PendingUnjoinedReferenceOriginsV1::new(),
+            ledger: None,
+            started: false,
+            completed: false,
+            frame_credits: 0,
+        }
+    }
+    pub(super) fn payload(&self) -> Option<&UnjoinedReferenceOriginPayloadV1> {
+        if self.completed {
+            self.pending.payload.as_ref()
+        } else {
+            None
+        }
+    }
+    pub(super) fn completed(&self) -> bool {
+        self.completed
+    }
+}
+
+/// Content join only. Only the private same-owner factory lends the resulting
+/// data. Raw fixtures cannot turn this helper into source-custody authority.
+fn validate_actual_guarded_source_calls_v1(
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    guarded: &super::root_guarded_access_preparation_v1::RootGuardedAccessStorageV1,
+    resources: &mut PreparationResourcesV1<'_, '_>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    resources.work(64)?;
+    if guarded.source_calls.len() != guarded.accesses.len() {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "actual reference source-call/guard roster differs",
+        ));
+    }
+    let mut source_call_ordinal = 0usize;
+    let mut guarded_access = 0usize;
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        resources.work(32)?;
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        resources.work(128)?;
+        let ordinal = source_call_ordinal;
+        source_call_ordinal = source_call_ordinal
+            .checked_add(1)
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
+        let Some(callable) = callables.get(call.callee().index() as usize) else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "actual reference source callable absent",
+            ));
+        };
+        match callable {
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. },
+                ..
+            } => {}
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation:
+                    SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. }
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut { .. }
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut { .. }
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut { .. },
+                ..
+            } => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "actual reference source exceeds identity-access profile",
+                ));
+            }
+            _ => continue,
+        }
+        let destination = simple_call_destination(call)?;
+        let expected = super::root_guarded_access_preparation_v1::RootGuardedSourceCallV1 {
+            source_call_ordinal: ordinal,
+            block: block_index,
+            callee: call.callee(),
+            destination,
+            guarded_access,
+        };
+        if guarded.source_calls.get(guarded_access) != Some(&expected) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "actual reference source-call identity differs",
+            ));
+        }
+        let access = guarded.accesses.get(guarded_access).ok_or(
+            ProductionRankedProjectionErrorV1::Incomplete("actual reference guard absent"),
+        )?;
+        if access.source != block.terminator().source() || access.semantic_site.is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "actual reference guard provenance or pending site differs",
+            ));
+        }
+        guarded_access = guarded_access
+            .checked_add(1)
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
+    }
+    if guarded_access != guarded.source_calls.len() {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "actual reference unobserved source-call association",
+        ));
+    }
+    Ok(())
+}
+
+/// Strict S5A: source-call association -> actual guard -> original-ledger FIFO.
+/// No memory-use semantic site, operation cursor, CFG/Final or normal admission.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepare_actual_root_reference_origins_v1(
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    guarded: &super::root_guarded_access_preparation_v1::RootGuardedAccessStorageV1,
+    edges_by_source: &[Vec<CapabilityEdgeV1>],
+    option_dominance: &SemanticOptionDominanceV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+    rows: &mut ActualRootReferenceOriginsStorageV1,
+    resources: &mut PreparationResourcesV1<'_, '_>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if resources.has_denial() {
+        return Err(resource(Resource::Accounting));
+    }
+    let ledger = resources
+        .original_ledger_v1()
+        .ok_or_else(|| resource(Resource::Accounting))?;
+    resources.work(64)?;
+    if guarded.ledger != Some(ledger) || rows.ledger.is_some_and(|saved| saved != ledger) {
+        return Err(resource(Resource::Accounting));
+    }
+    if !guarded.completed() || guarded.frame_credits == 0 {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "actual reference guarded stage unfinished",
+        ));
+    }
+    if rows.started
+        || rows.completed
+        || rows.ledger.is_some()
+        || rows.frame_credits != 0
+        || rows.pending.payload.is_some()
+        || rows.pending.ledger.is_some()
+        || rows.pending.completed
+    {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "actual reference origins cannot be replaced or retried",
+        ));
+    }
+    let frame = 4096usize
+        .checked_add(size_of::<ActualRootReferenceOriginsStorageV1>())
+        .and_then(|n| {
+            n.checked_add(size_of::<
+                super::root_guarded_access_preparation_v1::RootGuardedSourceCallV1,
+            >())
+        })
+        .ok_or_else(|| resource(Resource::Arithmetic))?;
+    resources.work(frame)?;
+    resources.reserve_storage(frame)?;
+    rows.frame_credits = frame;
+    rows.ledger = Some(ledger);
+    rows.started = true;
+    if edges_by_source.len() != function.locals().len() {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "actual reference complete graph local roster differs",
+        ));
+    }
+    validate_actual_guarded_source_calls_v1(function, callables, guarded, resources)?;
+    prepare_unjoined_reference_origins_v1(
+        function,
+        callables,
+        guarded.accesses.len(),
+        edges_by_source,
+        option_dominance,
+        enum_payload_dominance,
+        &mut rows.pending,
+        resources,
+    )?;
+    let payload =
+        rows.pending
+            .payload
+            .as_ref()
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "actual reference FIFO payload absent",
+            ))?;
+    resources.work(64)?;
+    if !rows.pending.completed
+        || rows.pending.ledger != Some(ledger)
+        || payload.definitions.len() != function.locals().len()
+        || payload.origins.len() != function.locals().len()
+        || payload.cursor != payload.fifo.len()
+    {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "actual reference FIFO completion differs",
+        ));
+    }
+    for binding in &guarded.source_calls {
+        resources.work(128)?;
+        let availability = option_dominance.availability(binding.destination).ok_or(
+            ProductionRankedProjectionErrorV1::Incomplete(
+                "actual reference seed availability absent",
+            ),
+        )?;
+        let expected = CheckedReferenceOriginV1 {
+            source: CheckedReferenceSourceV1::GuardedAccess(binding.guarded_access),
+            availability: Some(CapabilityAvailabilityV1::Option(availability)),
+        };
+        if payload
+            .definitions
+            .get(binding.destination.index() as usize)
+            != Some(&1)
+            || payload.origins.get(binding.destination.index() as usize) != Some(&Some(expected))
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "actual reference seed/guard association differs",
+            ));
+        }
+    }
+    for origin in &payload.origins {
+        resources.work(32)?;
+        if let Some(CheckedReferenceOriginV1 {
+            source: CheckedReferenceSourceV1::GuardedAccess(index),
+            ..
+        }) = origin
+            && (guarded
+                .source_calls
+                .get(*index)
+                .is_none_or(|row| row.guarded_access != *index)
+                || guarded
+                    .accesses
+                    .get(*index)
+                    .is_none_or(|row| row.semantic_site.is_some()))
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "actual reference transported guard association differs",
+            ));
+        }
+    }
+    if resources.has_denial() || resources.original_ledger_v1() != Some(ledger) {
+        return Err(resource(Resource::Accounting));
+    }
+    rows.completed = true; // Joined S5A DATA only, never CheckedReferencesV1.
     Ok(())
 }
