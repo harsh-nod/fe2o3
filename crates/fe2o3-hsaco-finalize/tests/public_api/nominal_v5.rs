@@ -239,7 +239,7 @@ fn exact_scratch_work_every_callback_denial_and_unwind_never_mutate_caller_bytes
             finalize_unfinalized_nominal_hsaco_v5(&raw.bytes, &source, scratch, &mut |n| {
                 calls += 1;
                 remaining = remaining.checked_sub(n).ok_or("denied")?;
-                Ok(())
+                Ok::<_, &'static str>(())
             });
         assert_eq!(result.is_ok(), scratch == SCRATCH && allowance == total);
         if result.is_ok() {

@@ -66,8 +66,17 @@ impl PreparedNominalWorkerPublicationV5 {
 /// fn load(value: RecoveredNominalWorkerPublicationV5) { let _ = value.into_load_envelope_parts_v1(); }
 /// ```
 /// ```compile_fail
-/// use fe2o3_hsaco_finalize::RecoveredNominalWorkerPublicationV5;
-/// fn authority(value: RecoveredNominalWorkerPublicationV5) { let _ = value.publication_binding(); }
+/// use fe2o3_hsaco_finalize::{RecoveredNominalWorkerPublicationV5, CompilerClosureV2};
+/// fn authority(value: RecoveredNominalWorkerPublicationV5, closure: CompilerClosureV2) {
+///     let _ = value.publication_binding(closure);
+/// }
+/// ```
+/// The existing V3 bridge accepts this same call shape:
+/// ```
+/// use fe2o3_hsaco_finalize::{RecoveredNominalWorkerPublicationV3, CompilerClosureV2};
+/// fn authority(value: RecoveredNominalWorkerPublicationV3, closure: CompilerClosureV2) {
+///     let _ = value.publication_binding(closure);
+/// }
 /// ```
 #[derive(Debug)]
 pub struct RecoveredNominalWorkerPublicationV5 {
