@@ -148,7 +148,7 @@ disposable; Git source identities and retained evidence are preserved.
 
 ## Public Main Requalification
 
-Both public mains advanced during validation. Two signed-off merges preserved
+Both public mains advanced during validation. Signed-off merges preserved
 that work without overlapping the prerequisite edits. These are separate test
 identities; the earlier candidate's results are not relabeled as later tests.
 
@@ -223,3 +223,26 @@ Additional archives in the retained validation directory:
 | `pair-next-merged-qualification-20260925.tar.gz` (41 files) | `50fd8ea83b93d7ea9504a942def01d78f186bd33643d38d25904ada59c39c635` |
 | `pair-next-bf16-qualification-20260925.tar.gz` (27 files) | `5c47272c342280400ab58384d14563f5208d50dd2dcbea6c825017484fbb67c6` |
 | `pair-next-bf16-merge-20260925.tsv` | `eb04727f9541cf18c1a016c8b80aa61fa49950a38a7b3ddafb37f2f3aaeff98a` |
+
+### Separate Two-Frame CPU Observation Merge
+
+Upstream `7ed469eb15da8dfc7199b4a89ba7f50048e4646e` was preserved in tested
+merge `0113ce35d48190db156169158a707d9be7e9ae56`, tree
+`6474428e09d5d6de388d31e072a7ee34276b0f70`. Both new guards retained source
+fingerprint `1ad32d8b21c21200dd90204bdfe260b66d5707cb2eaa3f9db3cdfb0ec4d8d218`.
+
+Fresh tests passed: the complete simulator library (135), new two-frame
+observation integration (8), existing observation integration (9), and matrix
+compatibility integration (15), with zero failures or ignored tests. The
+separate API does not modify the ordinary executor, scheduler, replay or
+existing observation method. Independent static review confirmed that the row
+gate calls ordinary `simulate_scheduled` and `simulate`, not this observation
+API. Its earlier execution evidence remains pinned to `fd6f80f7`; it was not
+rerun or relabeled as a fresh `0113ce35` row observation. The prior native and
+formatting failures likewise retain their original test pins.
+
+`pair-next-cpu-qualification-20260926.tar.gz` retains five files (the two
+closed logs/exit records and unchanged wrapper), SHA-256
+`1f15f7ad279f1e545af113bc2595b415b8d6f9a78f3834bbbecc993f1b77d5d4`.
+No genuine Rust BF16 helper execution, GPU result or #275 milestone exit is
+claimed by this merge. Its later report-only commit is not a new test pin.
