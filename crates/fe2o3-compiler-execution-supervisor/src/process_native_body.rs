@@ -109,7 +109,7 @@ impl<'a, 'work> Launched<'a, 'work> {
     pub fn await_readiness(mut self, limits: Wait) -> Result<Ready<'a, 'work>> {
         let core = &mut self.session.owner;
         let floor = core.floor()?;
-        let readiness = self.session.funding.budget.with_prepaid_scope(
+        let readiness = self.session.funding.budget.with_prepaid_scope::<_, Error>(
             floor,
             ENTRY,
             limits.work(),

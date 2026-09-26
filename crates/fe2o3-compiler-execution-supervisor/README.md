@@ -6,7 +6,8 @@ static launcher and issuer before either can enter authority-bearing custody.
 
 ## Native Custody Status
 
-`AdmittedIssuerProgramV2` freshly consumes a native policy capability and the
+`AdmittedIssuerProgramV2` and `AdmittedIssuerProgramV3` each freshly consume their
+own native policy capability and the
 provisioned launcher/issuer sources. It uses bounded native executable admission,
 checks runtime then launcher then issuer, and retains independently sealed
 objects. Every nested operation uses the same caller ledger; exact clone checks
@@ -14,13 +15,15 @@ reject equal bytes in a different inode. Supplied sources may alias because the
 retained images are separate objects. Trusted provisioning must independently
 pin the policy and launcher measurement.
 
-`ProtectedIssuerSupervisorV2::bind` consumes that native program, its policy-bound
+`ProtectedIssuerSupervisorV2::bind` and `ProtectedIssuerSupervisorV3::bind`
+consume their respective native program, its policy-bound
 native signing key, the strict native anchor transport and a service-owned root.
 It checks current effective UID/GID, program, full-policy key binding, anchor,
 root admission and full revalidation in that order. Root admission requires
 CLOEXEC, read-only non-O_PATH directory custody, exact UID/GID, mode0700, nonzero
 links and no capability or POSIX access/default ACL. V1 and V2 share this root
-predicate; the native owner never converts an admitted V1 owner.
+predicate. V2 and V3 reuse the same admission mechanics but retain distinct
+authority types; neither converts an admitted owner from another family.
 
 Binding alone is pre-session custody. `accept_handoff` now consumes an actual
 control connection and authenticates its canonical native frame, submitter,
@@ -30,7 +33,8 @@ predicates preserve the V1 checks; native receive uses fixed buffers and finite
 attempts. Unsupported ancillary messages fail closed with descriptor cleanup.
 
 `prepare_launch` now consumes the native accepted handoff into move-only
-`PreparedProtectedIssuerLaunchV2`. It retains exact native descriptor transfers,
+`PreparedProtectedIssuerLaunchV2` or `PreparedProtectedIssuerLaunchV3`, matching
+the supervisor and accepted handoff family. It retains exact native descriptor transfers,
 a fresh native service-launch capability, seven pipe ends and a sealed 704-byte
 static manifest binding the current parent and twelve ordered source roles.
 Revalidation repeats native owner/transfer continuity, parent, pipe, metadata,
@@ -53,18 +57,25 @@ Native and legacy modes are mutually exclusive. Consuming native launch transfer
 the prepaid reservation into the shared child owner. See the
 [cleanup custody contract](../../docs/compiler-execution-cleanup-custody.md).
 
-`ProtectedIssuerSupervisorV2::launch` now consumes prepared custody into separate
+`ProtectedIssuerSupervisorV2::launch` and `ProtectedIssuerSupervisorV3::launch`
+consume their respective prepared custody into separate
 launched, ready, serving and exited states over the existing clone3/pidfd engine.
 It requires the protected process profile, gates exec on native revalidation,
 and prepays finite child and parent attempts. Exact native readiness and EOF
 precede spawn-lease release; publication and terminal reaping are distinct steps.
 The session exclusively borrows the original request ledger until its final Drop.
+Both families share one lifecycle implementation and the policy-neutral profile,
+cleanup, and static-launcher machinery. Each retains its own admitted owners and
+readiness type. Shared wire framing is not authorization: readiness must match
+the exact child PID, launch manifest, and policy of the same family.
 See the [consuming-launch contract](../../docs/compiler-execution-consuming-launch-v2.md).
 
 Production native issuer/service/recovery integration and producer activation
-remain open. Four isolated distinct-UID synthetic consuming cases passed on
+remain open. Four isolated distinct-UID **V2** synthetic consuming cases passed on
 MI350: ready/publication/natural exit, missing EOF, trailing bytes, and
 Drop-before-readiness cleanup through the actual static launcher.
+V3 consuming custody has local deterministic lifecycle and exact-readiness-join
+tests, but no isolated child-launch or protected-runtime execution is credited.
 Every nested check uses the caller's ledger. Logical
 work/retained/scratch charges are not wall-time, RSS, kernel-memory or
 generated-stack bounds. See the
