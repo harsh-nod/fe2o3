@@ -27,6 +27,10 @@ mod external_anchor_deployment_codec;
 mod external_anchor_deployment_v2;
 mod external_anchor_deployment_v3;
 mod external_anchor_provisioning;
+mod external_anchor_provisioning_adapter;
+mod external_anchor_provisioning_codec;
+mod external_anchor_provisioning_v2;
+mod external_anchor_provisioning_v3;
 mod external_anchor_service;
 mod external_anchor_transaction;
 mod external_anchor_transaction_adapter;
@@ -248,6 +252,24 @@ pub use external_anchor_provisioning::{
     CompilerExecutionExternalAnchorProvisioningErrorV1,
     CompilerExecutionExternalAnchorProvisioningIdentityV1,
     CompilerExecutionExternalAnchorProvisioningV1,
+};
+pub use external_anchor_provisioning_v2::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_BYTES_V2,
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_STORAGE_V2,
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_WORK_V2,
+    CompilerExecutionExternalAnchorProvisioningErrorV2,
+    CompilerExecutionExternalAnchorProvisioningIdentityV2,
+    CompilerExecutionExternalAnchorProvisioningV2,
+    MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_HELPER_BYTES_V2,
+};
+pub use external_anchor_provisioning_v3::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_BYTES_V3,
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_STORAGE_V3,
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_WORK_V3,
+    CompilerExecutionExternalAnchorProvisioningErrorV3,
+    CompilerExecutionExternalAnchorProvisioningIdentityV3,
+    CompilerExecutionExternalAnchorProvisioningV3,
+    MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_HELPER_BYTES_V3,
 };
 pub use external_anchor_service::{
     CompilerExecutionExternalAnchorServiceIdentityErrorV1,

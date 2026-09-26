@@ -108,6 +108,38 @@ are unmetered stored-value reads. These quotas do not bound allocator behavior,
 generated stack size or RSS. Shared integration cases cover both families and
 compile-fail API examples cover nominal isolation and missing context/budget.
 
+`CompilerExecutionExternalAnchorProvisioningV2` and `V3` add move-only native
+provisioning configuration and Copy nominal identities. The V1 layout remains
+128 bytes: header 0..24, full deployment identity 24..56, helper SHA-256 56..88,
+nonzero little-endian helper length 88..96, and terminal identity 96..128.
+Native magic is `F2O3CEP2`/`F2O3CEP3`, with version 2/3 and SHA-256 domains
+`FE2O3/COMPILER-EXECUTION-EXTERNAL-ANCHOR-PROVISIONING/V2\0` and `.../V3\0`.
+The terminal hash covers the domain, little-endian u64 preimage length (96),
+then those 96 preimage bytes. Reserved header bytes remain zero.
+
+Both `new` and `decode` require the actual same-family anchor deployment;
+identity `matches_canonical_bytes` also requires that complete owner. The actual
+deployment already binds its supervisor, policy, credentials, key and executable,
+so provisioning does not reconstruct or revalidate those inputs. The helper
+measurement must have a nonzero digest and length no greater than 128 MiB.
+`matches_deployment` checks the complete deployment identity, while
+`matches_deployment_and_helper` additionally compares exact helper digest and
+length. Validly resealing a helper change describes different inert configuration,
+not trusted provisioning origin or process/signing/launch authority. The caller
+must independently pin and measure the helper. There is no context-free decode,
+identity-only construction, V1 upgrade or foreign-family fallback; V1 is unchanged.
+
+Every working operation consumes the fixed `..._PROVISIONING_WORK_V2/V3` quota
+of 4,104 logical units on the original Budget. It charges 8 entry units, checks
+the full borrowed deployment plus wire/owner floor, then prepays remaining work
+and exported `..._PROVISIONING_STORAGE_V2/V3` scratch before inspection. Exact
+wire lengths require 128 input bytes; wrong-sized slices are not scanned and
+need no wire floor. Keep complete borrowed owners prepaid. Checked scopes restore
+entry storage while retaining accepted work, peak and first-denial history.
+Successful construction/decoding return the full unreserved
+`size_of::<(Provisioning, Storage)>()` charge, to reserve before retention and
+release after owner Drop. These are logical quotas, not stack or RSS limits.
+
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,
 current-record verification, and bounded service packet records. The sole
