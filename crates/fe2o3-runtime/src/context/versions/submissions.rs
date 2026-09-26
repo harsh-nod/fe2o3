@@ -171,9 +171,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 || !self
                     .backend_allocations
                     .contains(&allocation.record.backend_allocation)
-                || !self
-                    .allocation_admission
-                    .has_expected_credit(allocation.id, allocation.record.device)
+                || !self.allocation_admission.has_expected_credit(
+                    allocation.id,
+                    allocation.record.device,
+                    allocation.record.byte_len,
+                )
                 || versions.whole_allocation(allocation.id, &allocation.record)? != *member
                 || versions
                     .journal
@@ -249,9 +251,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || !self
                 .backend_allocations
                 .contains(&allocation.record.backend_allocation)
-            || !self
-                .allocation_admission
-                .has_expected_credit(allocation.id, allocation.record.device)
+            || !self.allocation_admission.has_expected_credit(
+                allocation.id,
+                allocation.record.device,
+                allocation.record.byte_len,
+            )
             || versions.whole_allocation(allocation.id, &allocation.record)? != member
             || versions
                 .journal

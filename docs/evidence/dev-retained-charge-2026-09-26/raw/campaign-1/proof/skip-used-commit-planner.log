@@ -1,0 +1,9 @@
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-retained-charge-2026-09-26/raw/campaign-1/proof/sources-skip-used-commit/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:221:20
+    |
+221 |             assert(plan.next_used@ == before_plan.next_used@.update(level as int - 1, next));
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 1 previous error
+

@@ -1,0 +1,17 @@
+   Compiling spin v0.12.3
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Finished `test` profile [unoptimized] target(s) in 10.77s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-retained-charge-target-20260926-9j53PMBz/debug/deps/fe2o3_resource_accounting-6ec1f52d27a69258)
+
+running 7 tests
+test domain::retained_tests::retained_charge_domain_mutex_poison_is_not_recovered_or_anchored ... ok
+test domain::retained_tests::retained_charge_domain_rejects_malformed_selected_ancestry_without_effects ... ok
+test domain::retained_tests::retained_charge_domain_rejects_record_and_token_corruption_without_effects ... ok
+test domain::retained_tests::retained_charge_domain_requires_exact_leaf_root_and_all_coordinates ... ok
+test retained_tests::retained_charge_independent_mutex_poison_is_not_recovered_or_anchored ... ok
+test retained_tests::retained_charge_exact_independent_account_vector_and_unchanged_queries ... ok
+test retained_tests::retained_charge_rejects_invalid_token_slot_owner_phase_and_empty_record ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 63 filtered out; finished in 0.00s
+

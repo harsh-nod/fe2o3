@@ -372,9 +372,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 || !self
                     .backend_allocations
                     .contains(&binding.record.backend_allocation)
-                || !self
-                    .allocation_admission
-                    .has_expected_credit(binding.region.allocation, binding.record.device)
+                || !self.allocation_admission.has_expected_credit(
+                    binding.region.allocation,
+                    binding.record.device,
+                    binding.record.byte_len,
+                )
             {
                 return Err(invalid);
             }

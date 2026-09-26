@@ -132,9 +132,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || !self
                 .backend_allocations
                 .contains(&source.record.backend_allocation)
-            || !self
-                .allocation_admission
-                .has_expected_credit(source.region.allocation, source.record.device)
+            || !self.allocation_admission.has_expected_credit(
+                source.region.allocation,
+                source.record.device,
+                source.record.byte_len,
+            )
         {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
         }
@@ -671,9 +673,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 || !self
                     .backend_allocations
                     .contains(&source.record.backend_allocation)
-                || !self
-                    .allocation_admission
-                    .has_expected_credit(source.region.allocation, source.record.device)
+                || !self.allocation_admission.has_expected_credit(
+                    source.region.allocation,
+                    source.record.device,
+                    source.record.byte_len,
+                )
                 || versions.validate_live(source.region.allocation, &source.record)?
                     != read.allocation
                 || read.device

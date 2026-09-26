@@ -1,0 +1,33 @@
+note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-retained-charge-2026-09-26/raw/campaign-1/proof/sources-zero-parent-charge/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:67:13
+    |
+ 67 |               while $level < $depth
+    |               ^^^^^^^^^^^^^^
+    |
+   ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-retained-charge-2026-09-26/raw/campaign-1/proof/sources-zero-parent-charge/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:173:5
+    |
+173 | /     resource_domain_path_body_v1!(verus_exec_expr, facts, depth, profile, charges, owner, plan, total, level, next, [
+174 | |         invariant
+175 | |             profile == 3 || profile == 4, 0 < depth <= profile, owner > 0,
+176 | |             0 <= level <= depth,
+...   |
+236 | |     ])
+    | |______- in this macro invocation
+    |
+    = note: this note originates in the macro `resource_domain_path_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: invariant not satisfied at end of loop body
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-retained-charge-2026-09-26/raw/campaign-1/proof/sources-zero-parent-charge/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:178:13
+    |
+178 |             forall|i: int| 0 <= i < level ==> level_error(facts@[i], charges@, owner).is_none(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-retained-charge-2026-09-26/raw/campaign-1/proof/sources-zero-parent-charge/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:209:20
+    |
+209 |             assert(!fits(facts@[level as int].used, charges@, facts@[level as int].capacity));
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 2 previous errors
+

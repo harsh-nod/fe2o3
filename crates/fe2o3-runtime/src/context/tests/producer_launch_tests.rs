@@ -6,6 +6,41 @@ use std::sync::{Arc, Mutex};
 
 mod completion_faults;
 
+#[test]
+fn retained_charge_producer_aware_stable_input_rejects_region_sized_credit() {
+    let mut f = Fixture::new(4);
+    let (mut producers, events) = f.producers();
+    let small = f
+        .context
+        .allocate(
+            f.context.devices()[0].id(),
+            RuntimeMemoryKindV1::DeviceLocal,
+            8,
+            8,
+        )
+        .unwrap();
+    let before = f.snapshot();
+    let before_events = f.context.backend.producer_launch.events.clone();
+    f.context
+        .allocation_admission
+        .swap_retained_for_test_v1(f.allocations[2], small);
+    let result = f.launch(2, f.mixed(true), &events);
+    f.context
+        .allocation_admission
+        .swap_retained_for_test_v1(f.allocations[2], small);
+    validation(result, RuntimeValidationErrorV1::InvalidBackendDescription);
+    assert_eq!(f.snapshot(), before);
+    assert_eq!(f.context.backend.producer_launch.events, before_events);
+    assert!(!f.context.is_terminal());
+    for event in events {
+        f.context.release_event(event).unwrap();
+    }
+    for producer in &mut producers {
+        f.complete(producer);
+    }
+    assert!(f.context.cleanup().is_complete());
+}
+
 type Context = RuntimeContextV1<MockBackend>;
 type Submission = RuntimeSubmissionV1<MixedArguments>;
 

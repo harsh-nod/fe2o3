@@ -74,8 +74,12 @@ controller calibrations pass. The source manifest is
 `7d623ac3fac1aaa9addd901fcaac58494da034025f602e84a3f4d08c6ebeefc0`.
 `positive_runs: 2` in the result counts bracket cases, not individual unit runs.
 An independent post-run audit checks all 66 exit/summary pairs (35 positive
-unit runs including unaffected units, and 31 logical rejections), and confirms
-all 69 recorded proof/tool process groups are absent.
+unit runs including unaffected units, and 31 logical rejections). It also
+reports all 69 recorded PGIDs absent in the audit's process view. That numeric
+probe alone is not cross-executor lifetime evidence; owned-group reaping is
+checked by the controller within the campaign's own process view, and its exec
+handle returned terminal status. This clarifies the earlier cleanup claim
+without changing the retained raw audit or proof results.
 
 The outer shell runner is an independently reviewed trust boundary, not a
 self-authenticating root. Its before/after digest receipts and the signed source

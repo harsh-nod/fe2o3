@@ -1,0 +1,51 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 1m 01s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-retained-charge-target-20260926-9j53PMBz/debug/deps/fe2o3_kfd-60551c78c3ce1a5d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1618 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-retained-charge-target-20260926-9j53PMBz/debug/deps/fe2o3_resource_accounting-6ec1f52d27a69258)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 70 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-retained-charge-target-20260926-9j53PMBz/debug/deps/fe2o3_runtime-f40ec65f6abc2ea1)
+
+running 2 tests
+test context::tests::copy_source_lease_tests::retained_charge_copy_checks_allocation_extent_not_copied_region ... FAILED
+test context::tests::copy_source_lease_tests::retained_charge_copy_rejects_foreign_accounts_and_sibling_domains ... FAILED
+
+failures:
+
+---- context::tests::copy_source_lease_tests::retained_charge_copy_checks_allocation_extent_not_copied_region stdout ----
+
+thread 'context::tests::copy_source_lease_tests::retained_charge_copy_checks_allocation_extent_not_copied_region' (65) panicked at crates/fe2o3-runtime/src/context/tests/copy_source_lease_tests.rs:160:5:
+assertion failed: matches!(result,
+    Err(RuntimeErrorV1::Validation(RuntimeValidationErrorV1::InvalidBackendDescription)))
+
+---- context::tests::copy_source_lease_tests::retained_charge_copy_rejects_foreign_accounts_and_sibling_domains stdout ----
+
+thread 'context::tests::copy_source_lease_tests::retained_charge_copy_rejects_foreign_accounts_and_sibling_domains' (66) panicked at crates/fe2o3-runtime/src/context/tests/copy_source_lease_tests.rs:209:9:
+assertion failed: matches!(result,
+    Err(RuntimeErrorV1::Validation(RuntimeValidationErrorV1::InvalidBackendDescription)))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context::tests::copy_source_lease_tests::retained_charge_copy_checks_allocation_extent_not_copied_region
+    context::tests::copy_source_lease_tests::retained_charge_copy_rejects_foreign_accounts_and_sibling_domains
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1511 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-retained-charge-target-20260926-9j53PMBz/debug/deps/fe2o3_runtime_model-ecfbec6a415a8132)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1053 filtered out; finished in 0.00s
+
+error: 1 target failed:
+    `-p fe2o3-runtime --lib`

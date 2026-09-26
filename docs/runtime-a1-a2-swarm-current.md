@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest retained-charge development (2026-09-26): the accounting query now checks
+exact account/leaf identity, a live retained owner, complete charge and valid
+domain ancestry without changing ledger state. All twelve existing Context
+association guards check the full allocation extent and device brand. The
+[development packet](evidence/dev-retained-charge-2026-09-26/README.md) records
+13 focused test groups and two copy regressions that reject the old presence-only
+check. Broad libraries report 1,034 model, 70 accounting, 1,321 KFD and 1,482
+runtime passes with the same four socket-related failures; 69 selected
+construction tests, 104 doctests and static checks pass. Coverage groups overlap;
+this is not full CPU qualification. The unchanged planner/arena contracts
+requalify at 19/0 and 21/0 with 31 rejected mutations, but do not prove the new
+mutex/token association or Context composition. Third-leaf logical/native
+composition and mandatory native allocation witnesses remain next. MI300X
+resolution still fails; no new native/performance result or accepted milestone
+is claimed.
+
 Latest immutable-domain-arena development (2026-09-26): production lookup,
 ancestry traversal and planner-fact extraction now share exact bodies with
 Verus. The [development packet](evidence/dev-domain-arena-2026-09-26/README.md)

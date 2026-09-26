@@ -38,6 +38,15 @@ pub(crate) struct RuntimeResourceCreditAccountV1 {
 }
 
 impl RuntimeResourceCreditAccountV1 {
+    pub(crate) fn matches_retained_charge_v1(
+        &self,
+        device: RuntimeDeviceIdV1,
+        credits: &RuntimeRetainedResourceCreditsV1,
+        expected: RuntimeResourceVectorV1,
+    ) -> bool {
+        self.device == device && self.inner.matches_retained_charge_v1(credits, expected)
+    }
+
     pub(crate) fn in_domain(
         device: RuntimeDeviceIdV1,
         parent: &ResourceCreditAccountV1,
@@ -103,6 +112,23 @@ mod tests {
         RuntimeResourceVectorV1::ZERO
             .with(K::RequestedAllocationBytes, bytes)
             .with(K::AllocationRecords, 1)
+    }
+
+    #[test]
+    fn retained_charge_runtime_wrapper_preserves_device_and_exact_account() {
+        let device = crate::context::resource_credit_test_device_v1();
+        let first = RuntimeResourceCreditAccountV1::new(device, charge(8), 1).unwrap();
+        let second = RuntimeResourceCreditAccountV1::new(device, charge(8), 1).unwrap();
+        let credit = first.reserve(charge(8)).unwrap().retain();
+        assert!(first.matches_retained_charge_v1(device, &credit, charge(8)));
+        assert!(
+            first
+                .clone()
+                .matches_retained_charge_v1(device, &credit, charge(8))
+        );
+        assert!(!second.matches_retained_charge_v1(device, &credit, charge(8)));
+        assert!(!first.matches_retained_charge_v1(device, &credit, charge(7)));
+        credit.release_after_disposal().unwrap();
     }
 
     #[test]

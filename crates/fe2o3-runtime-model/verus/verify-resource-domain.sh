@@ -11,9 +11,9 @@ prefix=crates/fe2o3-runtime-model/verus
 checker=$prefix/check-resource-domain.py
 tests=$prefix/test-resource-domain.py
 manifest=$prefix/pins/R75_DOMAIN_SOURCES_SHA256
-checker_sha=a52face08c0c3080aa1711b19403a55a39ff1aef07171962b68407b556f9cadc
+checker_sha=a547e186c2aefd09e5ef6a260009f794db651da1cc92aa01cb694f5681011aab
 tests_sha=4b7219f0a5c8035252f076eac39513649547276b55d6bddaac253be3f7099594
-manifest_sha=7d623ac3fac1aaa9addd901fcaac58494da034025f602e84a3f4d08c6ebeefc0
+manifest_sha=0468ee4ff775fa0c9100de63299d028ecf0e43202c1230df7c87e8d367bd1276
 case "$output:$verus" in /*:/*) ;; *) exit 2 ;; esac
 [ "$(realpath -m -- "$output")" = "$output" ]
 [ ! -e "$output" ]

@@ -19,6 +19,15 @@ impl Fixture {
     }
 
     fn with_journal(peer: bool, writers: usize, journal: bool) -> Self {
+        Self::with_admission(peer, writers, journal, None)
+    }
+
+    fn with_admission(
+        peer: bool,
+        writers: usize,
+        journal: bool,
+        parent: Option<&fe2o3_resource_accounting::ResourceCreditAccountV1>,
+    ) -> Self {
         let backend = MockBackend {
             next: 100,
             deferred_copies: true,
@@ -31,9 +40,15 @@ impl Fixture {
         };
         let devices: Vec<_> = context.devices().iter().map(|device| device.id()).collect();
         for device in devices {
-            context
-                .configure_allocation_admission_v1(device, 1024, 16)
-                .unwrap();
+            if let Some(parent) = parent {
+                context
+                    .configure_allocation_admission_in_domain_v1(device, parent, 1024, 16)
+                    .unwrap();
+            } else {
+                context
+                    .configure_allocation_admission_v1(device, 1024, 16)
+                    .unwrap();
+            }
         }
         let source_device = context.devices()[0].id();
         let source_stream = context.create_stream(source_device).unwrap();
@@ -97,6 +112,135 @@ impl Fixture {
         assert_eq!(self.bytes(self.destination), expected);
         assert_eq!(self.bytes(self.source), [0x51; 64]);
     }
+
+    fn credit_snapshot(&self) -> String {
+        format!(
+            "{:?}",
+            (
+                self.context.next_identity,
+                self.context.backend.next,
+                self.context.backend.copy_call_count,
+                self.context.backend.submit_count,
+                state(&self.context, self.source),
+                state(&self.context, self.destination),
+                self.context.version_journal_read_records_v1(),
+                self.context.version_journal_writer_records_v1(),
+                self.context
+                    .devices()
+                    .iter()
+                    .map(|d| self.context.allocation_admission_usage_v1(d.id()).unwrap())
+                    .collect::<Vec<_>>(),
+                &self.context.backend.memory,
+                &self.context.backend.cleanup_log,
+            )
+        )
+    }
+}
+
+#[test]
+fn retained_charge_copy_checks_allocation_extent_not_copied_region() {
+    let mut f = Fixture::new(false, 4);
+    let small = f
+        .context
+        .allocate(
+            f.context.devices()[0].id(),
+            RuntimeMemoryKindV1::DeviceLocal,
+            8,
+            8,
+        )
+        .unwrap();
+    let before = f.credit_snapshot();
+    f.context
+        .allocation_admission
+        .swap_retained_for_test_v1(f.source, small);
+    let result = f.local();
+    f.context
+        .allocation_admission
+        .swap_retained_for_test_v1(f.source, small);
+    assert!(matches!(
+        result,
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::InvalidBackendDescription
+        ))
+    ));
+    assert_eq!(f.credit_snapshot(), before);
+    assert!(!f.context.is_terminal());
+    assert!(f.context.cleanup().is_complete());
+}
+
+#[test]
+fn retained_charge_copy_rejects_foreign_accounts_and_sibling_domains() {
+    use fe2o3_resource_accounting::{
+        ResourceCreditAccountV1, ResourceKindV1 as K, ResourceVectorV1,
+    };
+    for shared in [false, true] {
+        let capacity = ResourceVectorV1::ZERO
+            .with(K::RequestedAllocationBytes, 4096)
+            .with(K::AllocationRecords, 64)
+            .with(K::ControlResidentBytes, 1 << 20);
+        let root = ResourceCreditAccountV1::new_root(capacity, 8, 64).unwrap();
+        let parent = root.new_child(capacity, 64).unwrap();
+        let baseline = root.usage();
+        let mut a = Fixture::with_admission(false, 4, true, shared.then_some(&parent));
+        let mut b = Fixture::with_admission(false, 4, true, shared.then_some(&parent));
+        let before = (
+            a.credit_snapshot(),
+            b.credit_snapshot(),
+            root.usage(),
+            parent.usage(),
+        );
+        core::mem::swap(
+            a.context
+                .allocation_admission
+                .retained_for_test_v1(a.source),
+            b.context
+                .allocation_admission
+                .retained_for_test_v1(b.source),
+        );
+        let result = a.local();
+        core::mem::swap(
+            a.context
+                .allocation_admission
+                .retained_for_test_v1(a.source),
+            b.context
+                .allocation_admission
+                .retained_for_test_v1(b.source),
+        );
+        assert!(matches!(
+            result,
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidBackendDescription
+            ))
+        ));
+        assert_eq!(
+            (
+                a.credit_snapshot(),
+                b.credit_snapshot(),
+                root.usage(),
+                parent.usage()
+            ),
+            before
+        );
+        assert!(!a.context.is_terminal() && !b.context.is_terminal());
+        assert!(a.context.cleanup().is_complete() && b.context.cleanup().is_complete());
+        assert_eq!(root.usage(), baseline);
+    }
+}
+
+#[test]
+fn retained_charge_copy_accepts_equivalent_same_leaf_tokens() {
+    let mut f = Fixture::new(false, 4);
+    f.context
+        .allocation_admission
+        .swap_retained_for_test_v1(f.source, f.destination);
+    let result = f.local();
+    f.context
+        .allocation_admission
+        .swap_retained_for_test_v1(f.source, f.destination);
+    let mut submission = result.unwrap();
+    f.context.wait(&mut submission, Duration::ZERO).unwrap();
+    f.assert_copied();
+    assert!(f.context.cleanup().is_complete());
 }
 
 fn reserved<T>(result: Result<T, RuntimeErrorV1<MockError>>) {

@@ -66,9 +66,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if !self
             .backend_allocations
             .contains(&record.backend_allocation)
-            || !self
-                .allocation_admission
-                .has_expected_credit(allocation, record.device)
+            || !self.allocation_admission.has_expected_credit(
+                allocation,
+                record.device,
+                record.byte_len,
+            )
         {
             return Err(E::InvalidAllocationReference);
         }
@@ -88,9 +90,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         .backend_allocations
                         .contains(&entry.record.backend_allocation)
                     || versions.whole_allocation(entry.id, &entry.record)? != *member
-                    || !self
-                        .allocation_admission
-                        .has_expected_credit(entry.id, entry.record.device)
+                    || !self.allocation_admission.has_expected_credit(
+                        entry.id,
+                        entry.record.device,
+                        entry.record.byte_len,
+                    )
                 {
                     return Err(E::InvalidAllocationReference);
                 }
@@ -184,9 +188,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 || self.allocations.contains_key(&entry.id)
                 || versions.phases.get(member.allocation.slot)
                     != Some(&Some(AllocationPhaseV1::Disposed))
-                || !self
-                    .allocation_admission
-                    .has_expected_credit(entry.id, entry.record.device)
+                || !self.allocation_admission.has_expected_credit(
+                    entry.id,
+                    entry.record.device,
+                    entry.record.byte_len,
+                )
             {
                 return Err(E::InvalidState);
             }

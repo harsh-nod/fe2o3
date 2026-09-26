@@ -131,9 +131,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 || entry.record.backend_allocation != member.backend
                 || self.allocations.get(&entry.id) != Some(&entry.record)
                 || !self.backend_allocations.contains(&member.backend)
-                || !self
-                    .allocation_admission
-                    .has_expected_credit(entry.id, entry.record.device)
+                || !self.allocation_admission.has_expected_credit(
+                    entry.id,
+                    entry.record.device,
+                    entry.record.byte_len,
+                )
                 || versions.whole_allocation(entry.id, &entry.record)? != root.members[index]
                 || versions
                     .journal
@@ -351,9 +353,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 || record.kind != member.description.kind
                 || record.byte_len != member.description.byte_len
                 || !self.backend_allocations.contains(&member.backend)
-                || !self
-                    .allocation_admission
-                    .has_expected_credit(member.logical, record.device)
+                || !self.allocation_admission.has_expected_credit(
+                    member.logical,
+                    record.device,
+                    record.byte_len,
+                )
             {
                 return Err(E::InvalidAllocationReference);
             }

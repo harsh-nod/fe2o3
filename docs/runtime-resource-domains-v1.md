@@ -125,6 +125,24 @@ a native-residency measurement.
 
 ## Verification Gates
 
+The [exact retained-credit development](evidence/dev-retained-charge-2026-09-26/README.md)
+adds `matches_retained_charge_v1`, a borrowed accounting observation. It checks
+the precise account/root and leaf, valid selected ancestry, live slot/owner,
+Retained phase and complete nineteen-coordinate charge under one matching
+ledger lock. Standard-mutex or logical poison rejects without recovery, flag
+changes or retention anchors. It does not clone handles, scan the arena or
+allocate. Same-charge records within the same exact account remain fungible.
+
+Runtime request guards now join that observation with the expected Context
+device brand and full allocation extent, including exactly one allocation-record
+unit. Region length and shared-root membership are insufficient. Unconfigured
+admission remains unchanged. These are the existing guarded reader, producer,
+generated, submission and disposal paths, not universal backend interception.
+Focused CPU tests exercise the new query and guarded Context uses; the existing
+shared planner/arena proofs do not yet prove its mutex/record association or
+Context composition.
+Mandatory native request witnesses and the third session class remain open.
+
 The [development evidence](evidence/dev-resource-domains-2026-09-26/README.md)
 separates core tests, actual Context/MockBackend paths and broader regressions.
 It does not prove the new hierarchy by reusing R67/R70 proofs. New obligations

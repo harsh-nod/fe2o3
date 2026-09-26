@@ -106,3 +106,32 @@ R67/R70 reuse does not prove exact ancestor traversal, canonical registration,
 native layout/disposal correspondence or bootstrap refinement. Those proofs,
 signed native replay, broader multi-device execution, physical overlap and
 matched HIP/HSA performance remain open. Accepted milestones are unchanged.
+
+## Next Logical Composition
+
+The [exact retained-credit query](evidence/dev-retained-charge-2026-09-26/README.md)
+is an implemented prerequisite, not installation of a logical/native profile.
+The next explicit profile must use one session with sibling request, N1 and N2
+leaves. Context must adopt the already-minted request leaf; creating another
+child would exceed the four-level hierarchy.
+
+New composed device/session budgets must directly describe requested, host and
+device byte ceilings plus an explicit combined-record ceiling. Do not reinterpret
+existing native-only `max_allocations` as including logical requests. Registry
+metadata consumes a generic record but no AllocationRecords units; native cached
+and bootstrap backing remains charged independently of logical requests.
+
+All three leaves must be minted inside canonical device admission before its
+registry entry is published. The composed binding must retain the exact typed
+root/registry, session and request leaf, including cold request quarantine before
+any native backing exists. A generic accounting-root anchor alone does not retain
+that typed registry. Unused admission must remain cleanly reclaimable.
+
+Context installation after exact device enumeration and a borrowed allocation
+witness must be mandatory for this profile. Direct backend calls and backends
+returned by shutdown must not bypass it. Ordinary allocation and generated
+rosters both need coverage, followed by every startup order and ordered XGMI
+endpoint admission. Internal queue/bootstrap backing must not invent logical
+request charges. Capacity failures before effects remain distinct from binding,
+generation or accounting-invariant failures; ambiguity must not refund custody.
+These interfaces and native qualification are not implemented by the query alone.

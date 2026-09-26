@@ -22,9 +22,11 @@ fn assert_quarantine(f: &Fixture, mut expected: crate::RuntimeResourceCreditUsag
     );
     for (index, allocation) in f.allocations.iter().enumerate() {
         assert_eq!(
-            f.context
-                .allocation_admission
-                .has_expected_credit(*allocation, device),
+            f.context.allocation_admission.has_expected_credit(
+                *allocation,
+                device,
+                f.context.allocations[allocation].byte_len
+            ),
             index >= 4,
         );
     }

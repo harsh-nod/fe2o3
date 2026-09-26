@@ -1,0 +1,96 @@
+   Compiling typenum v1.20.1
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.1
+   Compiling serde_core v1.0.229
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+   Compiling rustix v1.1.4
+   Compiling autocfg v1.5.1
+   Compiling zmij v1.0.23
+   Compiling bitflags v2.13.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling libc v0.2.189
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+   Compiling memchr v2.8.3
+   Compiling pin-project-lite v0.2.17
+   Compiling itoa v1.0.18
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+   Compiling arrayvec v0.7.8
+   Compiling futures-task v0.3.34
+   Compiling slab v0.4.12
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+   Compiling futures-core v0.3.34
+   Compiling fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host-api)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+   Compiling tokio v1.47.1
+   Compiling futures-util v0.3.34
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+   Compiling num-traits v0.2.19
+   Compiling hybrid-array v0.4.14
+   Compiling syn v3.0.4
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling rmp v0.8.15
+   Compiling rmpv v1.3.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling futures-executor v0.3.34
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+   Compiling serde_derive v1.0.229
+   Compiling fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 2m 08s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-retained-charge-target-20260926-9j53PMBz/debug/deps/fe2o3_kfd-60551c78c3ce1a5d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1618 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-retained-charge-target-20260926-9j53PMBz/debug/deps/fe2o3_resource_accounting-6ec1f52d27a69258)
+
+running 7 tests
+test domain::retained_tests::retained_charge_domain_mutex_poison_is_not_recovered_or_anchored ... ok
+test domain::retained_tests::retained_charge_domain_rejects_malformed_selected_ancestry_without_effects ... ok
+test domain::retained_tests::retained_charge_domain_rejects_record_and_token_corruption_without_effects ... ok
+test domain::retained_tests::retained_charge_domain_requires_exact_leaf_root_and_all_coordinates ... ok
+test retained_tests::retained_charge_independent_mutex_poison_is_not_recovered_or_anchored ... ok
+test retained_tests::retained_charge_exact_independent_account_vector_and_unchanged_queries ... ok
+test retained_tests::retained_charge_rejects_invalid_token_slot_owner_phase_and_empty_record ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 63 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-retained-charge-target-20260926-9j53PMBz/debug/deps/fe2o3_runtime-f40ec65f6abc2ea1)
+
+running 6 tests
+test context::allocation_admission::tests::retained_charge_context_presence_exact_extent_and_device_brand ... ok
+test context::tests::copy_source_lease_tests::retained_charge_copy_checks_allocation_extent_not_copied_region ... ok
+test context::tests::copy_source_lease_tests::retained_charge_copy_accepts_equivalent_same_leaf_tokens ... ok
+test context::tests::copy_source_lease_tests::retained_charge_copy_rejects_foreign_accounts_and_sibling_domains ... ok
+test context::tests::producer_launch_tests::retained_charge_pending_producer_rejects_region_sized_credit_before_consumer ... FAILED
+test resource_credits::tests::retained_charge_runtime_wrapper_preserves_device_and_exact_account ... ok
+
+failures:
+
+---- context::tests::producer_launch_tests::retained_charge_pending_producer_rejects_region_sized_credit_before_consumer stdout ----
+
+thread 'context::tests::producer_launch_tests::retained_charge_pending_producer_rejects_region_sized_credit_before_consumer' (1058) panicked at crates/fe2o3-runtime/src/context/allocation_admission.rs:31:13:
+test retained credits
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context::tests::producer_launch_tests::retained_charge_pending_producer_rejects_region_sized_credit_before_consumer
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 1507 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`
