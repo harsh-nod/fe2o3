@@ -86,7 +86,7 @@ for mode in ready no-eof trailing silent; do
   report="${artifact}.readelf.txt"
   log="${artifact}.build.log"
   printf 'building native readiness fixture mode %s\n' "${mode}" >&2
-  if ! timeout --signal=TERM --kill-after=10s 900s \
+  if timeout --signal=TERM --kill-after=10s 900s \
     prlimit --cpu=900:900 --as=8589934592:8589934592 \
       --fsize=1073741824:1073741824 --nofile=512:512 --core=0:0 -- \
     /usr/bin/env -i \
@@ -111,7 +111,10 @@ for mode in ready no-eof trailing silent; do
         -C link-arg=-no-pie \
         -C link-arg=-Wl,-e,fe2o3_secure_start_v1 \
         >"${log}" 2>&1; then
-    fail "build failed or exceeded its bound; inspect ${log}"
+    :
+  else
+    status=$?
+    fail "build failed or exceeded its bound (status ${status}); inspect ${log}"
   fi
 
   readelf -hW -lW -dW -sW -- "${executable}" >"${report}"
