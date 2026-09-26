@@ -16,6 +16,10 @@ pub(super) struct ContextAllocationAdmissionV1 {
 }
 
 impl ContextAllocationAdmissionV1 {
+    pub(super) fn is_configured(&self) -> bool {
+        !self.accounts.is_empty()
+    }
+
     pub(super) fn is_required(&self) -> bool {
         !self.accounts.is_empty()
             && self
@@ -249,6 +253,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// allocation attempt retains quarantined credits even without a returned
     /// handle. Definite pre-mutation rejection or an explicit allocation-specific
     /// settled no-owner outcome refunds that attempt; generic quiescence does not.
+    /// Any terminal failure or guarded backend unwind seals the whole Context
+    /// and quarantines all its local retained requests, even when the failing
+    /// operation targets another device. This does not dispose native handles.
     ///
     /// This opt-in profile does not account padded native backing, cached pools,
     /// executable/control residency, allocator overhead or arbitrary engine
@@ -369,7 +376,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         id: RuntimeAllocationIdV1,
         backend_allocation: u64,
     ) -> Result<(), RuntimeBackendFailureV1<B::Error>> {
-        if !self.allocation_admission.retained.contains_key(&id) && self.versions.is_none() {
+        if !self.has_unwind_custody_v1() {
             return self.backend.release_allocation_v1(backend_allocation);
         }
         match catch_unwind(AssertUnwindSafe(|| {

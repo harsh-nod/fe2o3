@@ -609,7 +609,13 @@ fn sdma_host_read_context_preserves_credits_and_latches_caught_panic_on_retry() 
                 )
             };
             let original_host = observe_host(context.backend_mut_for_test_v1());
-            let original_usage = context.allocation_admission_usage_v1(device).unwrap();
+            let mut terminal_usage = context.allocation_admission_usage_v1(device).unwrap();
+            if let Some(usage) = &mut terminal_usage {
+                assert_eq!(usage.retained_records, 1);
+                assert_eq!(usage.quarantined_records, 0);
+                usage.retained_records = 0;
+                usage.quarantined_records = 1;
+            }
             let mut destination = [0xff; 8];
             let result = catch_unwind(AssertUnwindSafe(|| {
                 context.read_allocation(allocation, 0, &mut destination)
@@ -619,7 +625,7 @@ fn sdma_host_read_context_preserves_credits_and_latches_caught_panic_on_retry() 
                     result.unwrap_err().downcast_ref::<&str>(),
                     Some(&"scripted SDMA host read panic")
                 );
-                assert!(!context.is_terminal());
+                assert_eq!(context.is_terminal(), configured);
             } else {
                 assert!(matches!(
                     result.unwrap(),
@@ -645,7 +651,8 @@ fn sdma_host_read_context_preserves_credits_and_latches_caught_panic_on_retry() 
                         .get(crate::RuntimeResourceKindV1::AllocationRecords),
                     1
                 );
-                assert_eq!(usage.quarantined_records, 0);
+                assert_eq!(usage.quarantined_records, 1);
+                assert_eq!(usage.retained_records, 0);
             }
             assert!(
                 context
@@ -655,7 +662,7 @@ fn sdma_host_read_context_preserves_credits_and_latches_caught_panic_on_retry() 
             assert!(context.is_terminal());
             assert_eq!(
                 context.allocation_admission_usage_v1(device).unwrap(),
-                original_usage
+                terminal_usage
             );
             let backend = context.backend_mut_for_test_v1();
             assert_eq!(observe_host(backend), original_host);

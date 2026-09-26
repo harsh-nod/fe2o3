@@ -319,11 +319,14 @@ fn generated_completion_without_retained_device_preserves_all_pre_lending_custod
         context.unpublished_identity_for_test_v1(hold.stream()),
         Some(Some(hold.identity()))
     );
+    let mut sealed_usage = before.unwrap();
+    sealed_usage.retained_records = 0;
+    sealed_usage.quarantined_records = 3;
     assert_eq!(
         context
             .allocation_admission_usage_v1(plan.binding.device)
             .unwrap(),
-        before
+        Some(sealed_usage)
     );
     assert_eq!(snapshot(prepared.value()), destinations);
     assert!(
@@ -339,7 +342,7 @@ fn generated_completion_without_retained_device_preserves_all_pre_lending_custod
         context
             .allocation_admission_usage_v1(plan.binding.device)
             .unwrap(),
-        before
+        Some(sealed_usage)
     );
     assert_eq!(
         context.unpublished_identity_for_test_v1(hold.stream()),

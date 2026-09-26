@@ -262,10 +262,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         operation: impl FnOnce(&mut Self) -> T,
     ) -> T {
-        if self.versions.is_none()
-            && self.scalar_peer_copies.is_empty()
-            && self.producer_launches.is_empty()
-        {
+        if !self.has_unwind_custody_v1() {
             return operation(self);
         }
         match catch_unwind(AssertUnwindSafe(|| operation(self))) {

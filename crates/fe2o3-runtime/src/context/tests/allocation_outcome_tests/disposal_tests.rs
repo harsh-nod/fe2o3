@@ -362,7 +362,7 @@ fn unknown_roster_release_failure_preserves_partial_receipts_and_boxed_diagnosti
                 assert_eq!(fixture.context.is_terminal(), terminal);
                 assert_eq!(fixture.context.backend.inner.memory, memory);
                 fixture.assert_unknown(prefix);
-                fixture.assert_charge(4, if terminal { 3 } else { 0 });
+                fixture.assert_charge(4, if terminal { 4 } else { 0 });
                 if terminal {
                     let calls = fixture.context.backend.release_calls;
                     assert!(matches!(
@@ -429,7 +429,7 @@ fn cleanup_resumes_partial_rosters_without_releasing_successful_members_twice() 
                 assert_diagnostic(result, failure, pointer, &drops);
                 let terminal = matches!(failure, Failure::Terminal | Failure::Panic);
                 fixture.assert_unknown(if terminal { 1 + failed } else { 2 });
-                fixture.assert_charge(if terminal { 4 } else { 3 }, if terminal { 3 } else { 0 });
+                fixture.assert_charge(if terminal { 4 } else { 3 }, if terminal { 4 } else { 0 });
                 let calls = fixture.context.backend.release_calls;
                 if terminal {
                     assert!(!fixture.context.cleanup().is_complete());
@@ -576,7 +576,7 @@ fn final_unknown_disposal_bookkeeping_failure_retains_all_success_receipts() {
     assert!(result.is_err());
     assert!(fixture.context.is_terminal());
     fixture.assert_unknown(3);
-    fixture.assert_charge(4, 3);
+    fixture.assert_charge(4, 4);
     assert!(
         fixture
             .ids
@@ -633,7 +633,7 @@ fn post_model_credit_failure_keeps_finalizing_root_visible_and_terminal() {
                 .allocation_records,
             1
         );
-        fixture.assert_charge(4 - failed_index as u64, 3 - failed_index);
+        fixture.assert_charge(4 - failed_index as u64, 4 - failed_index);
         assert!(
             fixture.context.submissions[&fixture.submission_id]
                 .journal_writer

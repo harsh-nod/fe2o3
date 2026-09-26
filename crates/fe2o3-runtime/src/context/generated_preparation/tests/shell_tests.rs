@@ -238,7 +238,11 @@ fn generated_journal_bad_member_never_partially_disposes_a_roster() {
             .get_mut(&ids[index])
             .unwrap()
             .journal = None;
-        let before = fixture.snapshot();
+        let mut before = fixture.snapshot();
+        let usage = before.usage.as_mut().unwrap();
+        assert_eq!(usage.retained_records, 3);
+        usage.retained_records = 0;
+        usage.quarantined_records = 3;
         assert!(
             fixture
                 .context

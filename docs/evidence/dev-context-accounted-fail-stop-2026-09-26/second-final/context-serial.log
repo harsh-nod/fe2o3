@@ -1,0 +1,10 @@
+
+running 307 tests
+test context::allocation_admission::tests::required_empty_roster_does_not_mean_legacy ... ok
+test context::allocation_admission::tests::retained_charge_context_presence_exact_extent_and_device_brand ... ok
+test context::generated_issue::tests::a_different_live_token_cannot_authorize_generated_progress_or_retirement ... 
+thread 'context::generated_issue::tests::a_different_live_token_cannot_authorize_generated_progress_or_retirement' (11) panicked at crates/fe2o3-runtime/src/context/generated_issue/tests.rs:283:5:
+assertion `left == right` failed
+  left: Some(RuntimeResourceCreditUsageV1 { device: RuntimeDeviceIdV1 { context_generation: 2, local: 1 }, capacity: R67ResourceVectorV1 { counts: [0, 120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6] }, used: R67ResourceVectorV1 { counts: [0, 120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6] }, reserved_records: 0, retained_records: 0, quarantined_records: 6, record_capacity: 6, poisoned: false })
+ right: Some(RuntimeResourceCreditUsageV1 { device: RuntimeDeviceIdV1 { context_generation: 2, local: 1 }, capacity: R67ResourceVectorV1 { counts: [0, 120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6] }, used: R67ResourceVectorV1 { counts: [0, 120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6] }, reserved_records: 0, retained_records: 6, quarantined_records: 0, record_capacity: 6, poisoned: false })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

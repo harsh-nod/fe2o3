@@ -28,7 +28,10 @@ fn allocate(
     context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, bytes, 8)
 }
 
-fn shared_root(bytes: u64, records: usize) -> fe2o3_resource_accounting::ResourceCreditAccountV1 {
+pub(super) fn shared_root(
+    bytes: u64,
+    records: usize,
+) -> fe2o3_resource_accounting::ResourceCreditAccountV1 {
     use fe2o3_resource_accounting::{ResourceCreditAccountV1, resource_domain_bootstrap_bytes_v1};
     ResourceCreditAccountV1::new_root(
         RuntimeResourceVectorV1::ZERO
@@ -593,7 +596,8 @@ fn allocation_credit_invalid_backend_handles_retain_terminal_custody() {
         ));
         assert!(context.is_terminal());
         let expected = if duplicate { 2 } else { 1 };
-        assert_eq!(usage(&context, device).retained_records, expected);
+        assert_eq!(usage(&context, device).retained_records, 0);
+        assert_eq!(usage(&context, device).quarantined_records, expected);
         let report = context.cleanup();
         assert_eq!(report.allocation_credit_records_v1(), expected);
         assert!(!report.is_complete());

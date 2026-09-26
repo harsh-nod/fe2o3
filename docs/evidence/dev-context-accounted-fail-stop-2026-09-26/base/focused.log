@@ -1,0 +1,45 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 1m 05s
+     Running unittests src/lib.rs (/tmp/fe2o3-context-fail-stop-20260926-target/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 4 tests
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_empty_accounts_guard_metadata_unwind_and_future_entry ... FAILED
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_nonterminal_rejection_and_quiescent_disposal_remain_retryable ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_terminal_and_protocol_errors_quarantine_without_journal ... FAILED
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits ... FAILED
+
+failures:
+
+---- context::tests::accounted_fail_stop_tests::accounted_fail_stop_empty_accounts_guard_metadata_unwind_and_future_entry stdout ----
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_empty_accounts_guard_metadata_unwind_and_future_entry' (65) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:242:49:
+metadata
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_empty_accounts_guard_metadata_unwind_and_future_entry' (65) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:245:9:
+assertion failed: context.is_terminal()
+
+---- context::tests::accounted_fail_stop_tests::accounted_fail_stop_terminal_and_protocol_errors_quarantine_without_journal stdout ----
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_terminal_and_protocol_errors_quarantine_without_journal' (68) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:65:5:
+assertion `left == right` failed
+  left: 2
+ right: 0
+
+---- context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits stdout ----
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (67) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:16:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (67) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:54:5:
+assertion failed: context.is_terminal()
+
+
+failures:
+    context::tests::accounted_fail_stop_tests::accounted_fail_stop_empty_accounts_guard_metadata_unwind_and_future_entry
+    context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits
+    context::tests::accounted_fail_stop_tests::accounted_fail_stop_terminal_and_protocol_errors_quarantine_without_journal
+
+test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 1539 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

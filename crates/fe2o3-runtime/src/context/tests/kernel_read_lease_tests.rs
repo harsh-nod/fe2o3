@@ -392,7 +392,7 @@ fn initial_read_only_failures_keep_original_diagnostics_and_exact_source_custody
             .allocation_admission_usage_v1(f.context.devices()[0].id())
             .unwrap()
             .unwrap();
-        assert_eq!(usage.quarantined_records, if retained { 2 } else { 0 });
+        assert_eq!(usage.quarantined_records, if retained { 3 } else { 0 });
         assert_eq!(
             usage
                 .used
@@ -1018,7 +1018,7 @@ fn malformed_read_only_handles_retain_all_consumers_and_charge_each_source_once(
             .allocation_admission_usage_v1(f.context.devices()[0].id())
             .unwrap()
             .unwrap();
-        assert_eq!(usage.quarantined_records, 2);
+        assert_eq!(usage.quarantined_records, 3);
         assert_eq!(
             usage
                 .used
@@ -1093,7 +1093,7 @@ fn ambiguous_observation_keeps_pure_readers_with_or_without_admission_credits() 
                 .unwrap();
             if credits {
                 let usage = usage.unwrap();
-                assert_eq!(usage.quarantined_records, 2);
+                assert_eq!(usage.quarantined_records, 3);
                 assert_eq!(
                     usage
                         .used
@@ -1236,7 +1236,7 @@ fn stale_internal_preparation_retains_provisional_root_before_any_backend_submis
         .allocation_admission_usage_v1(f.context.devices()[0].id())
         .unwrap()
         .unwrap();
-    assert_eq!(usage.quarantined_records, 2);
+    assert_eq!(usage.quarantined_records, 3);
     assert_eq!(
         usage
             .used

@@ -380,8 +380,8 @@ fn generated_read_only_no_handle_failure_quarantines_inputs_without_writer() {
             .allocation_admission_usage_v1(plan.binding.device)
             .unwrap()
             .unwrap();
-        assert_eq!(usage.quarantined_records, 3);
-        assert_eq!(usage.retained_records, 3);
+        assert_eq!(usage.quarantined_records, 6);
+        assert_eq!(usage.retained_records, 0);
         assert_eq!(
             usage.used,
             crate::RuntimeResourceVectorV1::ZERO

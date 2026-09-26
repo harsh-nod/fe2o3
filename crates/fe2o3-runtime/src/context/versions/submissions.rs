@@ -520,6 +520,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
 
     pub(in crate::context) fn quarantine_submission_writers_v1(&mut self) {
         self.terminal = true;
+        // Terminal custody spans the entire Context, not only journal writers.
+        self.allocation_admission.quarantine_all();
         let Some(versions) = self.versions.as_mut() else {
             return;
         };
@@ -531,43 +533,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             })) {
                 core::mem::forget(payload);
             }
-            for allocation in &root.allocations {
-                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-                    self.allocation_admission.quarantine(allocation.id);
-                })) {
-                    core::mem::forget(payload);
-                }
-            }
-        }
-        for root in versions.submission_readers.values() {
-            for source in &root.sources {
-                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-                    self.allocation_admission
-                        .quarantine(source.region.allocation);
-                })) {
-                    core::mem::forget(payload);
-                }
-            }
-        }
-        for root in versions.producer_readers.values() {
-            for source in root.sources() {
-                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-                    self.allocation_admission
-                        .quarantine(source.region.allocation);
-                })) {
-                    core::mem::forget(payload);
-                }
-            }
-        }
-        for root in self.producer_launches.values() {
-            for binding in &root.bindings {
-                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-                    self.allocation_admission
-                        .quarantine(binding.region.allocation);
-                })) {
-                    core::mem::forget(payload);
-                }
-            }
         }
     }
 
@@ -575,10 +540,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         call: impl FnOnce(&mut B) -> Result<T, RuntimeBackendFailureV1<B::Error>>,
     ) -> Result<T, RuntimeBackendFailureV1<B::Error>> {
-        if self.versions.is_none()
-            && self.scalar_peer_copies.is_empty()
-            && self.producer_launches.is_empty()
-        {
+        if !self.has_unwind_custody_v1() {
             return call(&mut self.backend);
         }
         match catch_unwind(AssertUnwindSafe(|| call(&mut self.backend))) {

@@ -1,0 +1,8 @@
+
+running 1 test
+test context::generated_issue::tests::attempt_failure_before_backend_identity_is_sticky_unknown_with_credits_retained ... 
+thread 'context::generated_issue::tests::attempt_failure_before_backend_identity_is_sticky_unknown_with_credits_retained' (9) panicked at crates/fe2o3-runtime/src/context/generated_issue/tests.rs:184:9:
+assertion `left == right` failed
+  left: Some(RuntimeResourceCreditUsageV1 { device: RuntimeDeviceIdV1 { context_generation: 1, local: 1 }, capacity: R67ResourceVectorV1 { counts: [0, 120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6] }, used: R67ResourceVectorV1 { counts: [0, 60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3] }, reserved_records: 0, retained_records: 0, quarantined_records: 3, record_capacity: 6, poisoned: false })
+ right: Some(RuntimeResourceCreditUsageV1 { device: RuntimeDeviceIdV1 { context_generation: 1, local: 1 }, capacity: R67ResourceVectorV1 { counts: [0, 120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6] }, used: R67ResourceVectorV1 { counts: [0, 60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3] }, reserved_records: 0, retained_records: 3, quarantined_records: 0, record_capacity: 6, poisoned: false })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

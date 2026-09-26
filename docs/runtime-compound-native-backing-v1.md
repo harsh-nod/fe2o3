@@ -279,6 +279,24 @@ real native trait path, peer mapping, shutdown or kernel/copy engines. Source
 wiring checks do not replace those execution gates. No new formal refinement
 or matched performance result is claimed.
 
+### Accounted Context Fail-Stop
+
+Once any request account is installed, Context guards backend and metadata
+unwind independently of whether version tracking is enabled or a live allocation
+exists. This applies when an operation selects a different, unconfigured device
+as well. Terminal failure, protocol violation or guarded unwind seals the Context
+and quarantines all its attached retained requests while preserving native and
+logical handle records. Original panic payloads survive secondary sealing faults.
+
+Sealing does not dispose resources or drain externally held Reserved/Retained
+credits sharing the account. Confirmed disposal stays refunded; Rejected and
+nonterminal Quiescent results retain their operation-specific retry semantics.
+Nonjournal writes and owned native shutdown use the same guarded boundary.
+Fully unconfigured legacy Contexts retain their original fast path. Constructor
+panic is a separate owned-backend boundary, not a recoverable serving guarantee.
+See the [CPU development evidence](evidence/dev-context-accounted-fail-stop-2026-09-26/README.md).
+Native qualification and production refinement remain separate gates.
+
 ### Worker Server-Local Request Ownership
 
 The [Worker request-owner packet](evidence/dev-worker-request-owner-2026-09-26/README.md)

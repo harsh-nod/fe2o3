@@ -1,0 +1,19 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/context/tests/producer_launch_tests/completion_faults.rs:21:
+         Ok(Some(expected))
+     );
+     for allocation in &f.allocations {
+-        assert!(
+-            !f.context.allocation_admission.has_expected_credit(
+-                *allocation,
+-                device,
+-                f.context.allocations[allocation].byte_len
+-            ),
+-        );
++        assert!(!f.context.allocation_admission.has_expected_credit(
++            *allocation,
++            device,
++            f.context.allocations[allocation].byte_len
++        ),);
+     }
+ }
+ 

@@ -156,9 +156,13 @@ fn attempt_failure_before_backend_identity_is_sticky_unknown_with_credits_retain
     for panic in [false, true] {
         let mut context = context();
         let (hold, plan, roster) = install(&mut context);
-        let usage = context
+        let mut usage = context
             .allocation_admission_usage_v1(plan.binding.device)
+            .unwrap()
             .unwrap();
+        assert_eq!(usage.retained_records, 3);
+        usage.retained_records = 0;
+        usage.quarantined_records = 3;
         let result = catch_unwind(AssertUnwindSafe(|| {
             context.begin_generated_issue_v1(&hold, plan, &roster)?;
             if panic {
@@ -185,7 +189,7 @@ fn attempt_failure_before_backend_identity_is_sticky_unknown_with_credits_retain
             context
                 .allocation_admission_usage_v1(plan.binding.device)
                 .unwrap(),
-            usage
+            Some(usage)
         );
         assert!(!context.cleanup().is_complete());
         core::mem::forget(context);
@@ -270,17 +274,22 @@ fn a_different_live_token_cannot_authorize_generated_progress_or_retirement() {
             .generated_issue_token_v1(&first, &first_plan)
             .is_err()
     );
-    let before = context
+    let mut before = context
         .allocation_admission_usage_v1(first_plan.binding.device)
+        .unwrap()
         .unwrap();
+    assert_eq!(before.retained_records, 6);
+    before.retained_records = 0;
+    before.quarantined_records = 6;
     assert!(context.retire_gfx942_issued_v1(&first).is_err());
+    assert!(context.is_terminal());
     assert_eq!(context.submissions.len(), 2);
     assert_eq!(context.allocations.len(), 6);
     assert_eq!(
         context
             .allocation_admission_usage_v1(first_plan.binding.device)
             .unwrap(),
-        before
+        Some(before)
     );
     assert_eq!(
         context.generated_issues[&first.stream()].phase,

@@ -402,7 +402,8 @@ fn sdma_allocation_context_terminal_error_and_panic_keep_prior_owner_and_credits
                             .get(crate::RuntimeResourceKindV1::AllocationRecords),
                         2
                     );
-                    assert_eq!(usage.quarantined_records, 1);
+                    assert_eq!(usage.quarantined_records, 2);
+                    assert_eq!(usage.retained_records, 0);
                 } else {
                     assert!(usage.is_none());
                 }

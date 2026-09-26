@@ -24,7 +24,21 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest Worker request-owner development (2026-09-26): explicit V1/V4/V5 serving
+Latest accounted Context fail-stop development (2026-09-26): one constant-time
+predicate covers configured request accounts even without a version journal,
+with no live allocations, or when the selected device is unconfigured. Terminal
+sealing quarantines all Context-local retained credits while preserving handles,
+external credits and original diagnostics. Nonjournal writes and owned shutdown
+use the same guard; Worker sealing shares it. The
+[development packet](evidence/dev-context-accounted-fail-stop-2026-09-26/README.md)
+retains the failing baseline, intermediate fixture-phase failures and final CPU
+qualification: nine focused groups and 52 doctests pass; the unfiltered library
+reports 1,517 passes, three known socket-permission failures and 28 ignores.
+Strict Clippy, minimal-feature checking and formatting pass. Counts overlap.
+No new native, formal-refinement or performance result is claimed.
+Accepted milestones, A1/A2 and parity status are unchanged.
+
+Earlier Worker request-owner development (2026-09-26): explicit V1/V4/V5 serving
 APIs now retain a private Context with a complete Required request roster.
 Witnesses are minted in the worker; handles are indexed before response writing.
 All memory-reference families check ownership before backend entry, and terminal,

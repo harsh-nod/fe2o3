@@ -1,0 +1,17 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 1m 08s
+     Running unittests src/lib.rs (/tmp/fe2o3-context-fail-stop-20260926-target/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 9 tests
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_empty_accounts_guard_metadata_unwind_and_future_entry ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_cleanup_refunds_only_confirmed_disposal_before_panic ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_nonterminal_rejection_and_quiescent_disposal_remain_retryable ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_no_live_credits_still_guards_public_entry_but_legacy_is_unchanged ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_owned_shutdown_seals_only_uncertain_terminal_outcomes ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_quarantine_leaves_unattached_external_credits_unchanged ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_terminal_and_protocol_errors_quarantine_without_journal ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_uncertain_allocation_retains_attempt_and_previous_handles ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1539 filtered out; finished in 0.01s
+

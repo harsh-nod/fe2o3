@@ -1,0 +1,7 @@
+# Preserve captured diagnostics byte for byte.
+base/** -whitespace
+initial-final/** -whitespace
+second-final/** -whitespace
+third-final/** -whitespace
+pre-simplification/** -whitespace
+final/** -whitespace

@@ -259,8 +259,8 @@ fn ambiguous_partial_writes_preserve_payload_neighbors_and_unknown_ownership() {
                     .allocation_admission_usage_v1(context.devices()[0].id())
                     .unwrap()
                     .unwrap();
-                assert_eq!(usage.retained_records, if terminal { 1 } else { 2 });
-                assert_eq!(usage.quarantined_records, usize::from(terminal));
+                assert_eq!(usage.retained_records, if terminal { 0 } else { 2 });
+                assert_eq!(usage.quarantined_records, if terminal { 2 } else { 0 });
                 assert_eq!(
                     usage.used,
                     RuntimeResourceVectorV1::ZERO
@@ -436,7 +436,7 @@ fn terminal_or_panicking_unknown_disposal_retains_custody_and_blocks_retries() {
                     .allocation_admission_usage_v1(context.devices()[0].id())
                     .unwrap()
                     .unwrap();
-                assert_eq!((usage.retained_records, usage.quarantined_records), (1, 1));
+                assert_eq!((usage.retained_records, usage.quarantined_records), (0, 2));
             }
         }
     }

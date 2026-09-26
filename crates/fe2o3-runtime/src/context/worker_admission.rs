@@ -93,7 +93,6 @@ impl<B: RuntimeBackendV1> RuntimeWorkerRequestOwnerV1<B> {
 
     pub(crate) fn seal_v1(&mut self) {
         self.context.quarantine_after_async_command_panic_v1();
-        self.context.allocation_admission.quarantine_all();
     }
 
     pub(crate) fn enumerate_v1(

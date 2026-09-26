@@ -1364,6 +1364,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self.backend
     }
 
+    fn has_unwind_custody_v1(&self) -> bool {
+        self.versions.is_some()
+            || self.allocation_admission.is_configured()
+            || !self.scalar_peer_copies.is_empty()
+            || !self.producer_launches.is_empty()
+    }
+
     pub(crate) fn quarantine_after_async_command_panic_v1(&mut self) {
         self.quarantine_submission_writers_v1();
     }
@@ -1374,7 +1381,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     where
         B: RuntimeOwnedShutdownBackendV1,
     {
-        self.backend.shutdown_owned_v1()
+        let result = self.invoke_journal_backend_v1(|backend| backend.shutdown_owned_v1());
+        if matches!(&result, Err(RuntimeBackendFailureV1::Terminal(_))) {
+            self.quarantine_after_async_command_panic_v1();
+        }
+        result
     }
 
     #[cfg(test)]
@@ -2088,7 +2099,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 ),
             })
         };
-        let result = if credits.is_some() || self.versions.is_some() {
+        let result = if self.has_unwind_custody_v1() {
             match catch_unwind(AssertUnwindSafe(|| {
                 allocate(&mut self.backend, &self.allocation_admission)
             })) {
@@ -2175,7 +2186,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         // Root the returned handle before any credit or journal invariant can
         // unwind. A partial metadata commit must retain it in a sealed Context.
-        let guarded = credits.is_some() || self.versions.is_some();
+        let guarded = self.has_unwind_custody_v1();
         let commit = |context: &mut Self| {
             context.allocation_admission.attach(id, credits);
             context.commit_journal_allocation_v1(enrollment);
@@ -2230,9 +2241,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if let Some(ticket) = self.begin_journal_host_write_v1(allocation, &record)? {
             return self.write_with_journal_v1(ticket, &record, byte_offset, bytes);
         }
-        let result =
-            self.backend
-                .write_allocation_v1(record.backend_allocation, byte_offset, bytes);
+        let result = self.invoke_journal_backend_v1(|backend| {
+            backend.write_allocation_v1(record.backend_allocation, byte_offset, bytes)
+        });
         self.backend_result(result)
     }
 
@@ -3801,6 +3812,7 @@ pub enum RuntimePollV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod accounted_fail_stop_tests;
     mod allocation_admission_tests;
     mod allocation_outcome_tests;
     mod async_journal_tests;
@@ -3916,6 +3928,8 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct MockBackend {
+        accounted_fault: accounted_fail_stop_tests::Fault,
+        shutdown_failure: MockMemoryFailure,
         producer_launch: producer_launch_tests::MockProducerLaunchState,
         next: u64,
         enumeration_calls: usize,
@@ -4290,6 +4304,7 @@ mod tests {
             &mut self,
             _device: u64,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("create-stream");
             Ok(self.handle(MockHandleKind::Stream))
         }
 
@@ -4297,6 +4312,7 @@ mod tests {
             &mut self,
             stream: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("destroy-stream");
             self.cleanup_log.push((MockCleanupKind::Stream, stream));
             if self.cleanup_failure == MockCleanupFailure::RejectStreamOnce {
                 self.cleanup_failure = MockCleanupFailure::None;
@@ -4331,6 +4347,7 @@ mod tests {
             byte_len: u64,
             _alignment: u64,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("allocate");
             self.allocation_calls += 1;
             let failure = core::mem::take(&mut self.allocation_failure);
             if failure == MockMemoryFailure::Rejected {
@@ -4346,6 +4363,7 @@ mod tests {
             &mut self,
             allocation: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("release-allocation");
             self.cleanup_log
                 .push((MockCleanupKind::Allocation, allocation));
             let failure = core::mem::take(&mut self.release_allocation_failure);
@@ -4360,6 +4378,7 @@ mod tests {
             byte_offset: u64,
             bytes: &[u8],
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("write");
             self.write_call_count += 1;
             let memory = self.memory.get_mut(&allocation).unwrap();
             let start = byte_offset as usize;
@@ -4373,6 +4392,7 @@ mod tests {
             byte_offset: u64,
             destination: &mut [u8],
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("read");
             let memory = self.memory.get(&allocation).unwrap();
             let start = byte_offset as usize;
             destination.copy_from_slice(&memory[start..start + destination.len()]);
@@ -4384,6 +4404,7 @@ mod tests {
             _device: u64,
             _image: &[u8],
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("load-module");
             Ok(self.handle(MockHandleKind::Module))
         }
 
@@ -4391,6 +4412,7 @@ mod tests {
             &mut self,
             module: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("unload-module");
             self.cleanup_log.push((MockCleanupKind::Module, module));
             Ok(())
         }
@@ -4401,6 +4423,7 @@ mod tests {
             _name: &str,
             _signature: [u8; 32],
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("resolve-kernel");
             Ok(self.handle(MockHandleKind::Kernel))
         }
 
@@ -4408,6 +4431,7 @@ mod tests {
             &mut self,
             launch: BackendLaunchV1<'_>,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("submit");
             if self.terminal_on_submit {
                 return Err(RuntimeBackendFailureV1::Terminal(MockError("lost")));
             }
@@ -4440,6 +4464,7 @@ mod tests {
             &mut self,
             submission: u64,
         ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("poll");
             self.poll_call_count += 1;
             if self.is_producer_launch_test_v1(submission) {
                 return self.observe_producer_launch_test_v1("poll", submission);
@@ -4462,6 +4487,7 @@ mod tests {
             submission: u64,
             deadline: Instant,
         ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("wait");
             self.wait_call_count += 1;
             if self.directed_routes.contains_key(&submission) {
                 return self.observe_directed_test_v1("wait", submission);
@@ -4503,6 +4529,7 @@ mod tests {
             &mut self,
             submission: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("release-submission");
             assert!(!self.pending_copies.contains_key(&submission));
             assert!(!self.pending_peer_segments.contains_key(&submission));
             assert!(!self.pending_kernel_reads.contains_key(&submission));
@@ -4518,6 +4545,7 @@ mod tests {
             stream: u64,
             submission: u64,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("record-event");
             self.last_recorded_event = Some((stream, submission));
             let event = self.handle(MockHandleKind::Event);
             self.record_producer_launch_event_test_v1(event, submission);
@@ -4528,6 +4556,7 @@ mod tests {
             &mut self,
             event: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("release-event");
             self.cleanup_log.push((MockCleanupKind::Event, event));
             if self.cleanup_failure == MockCleanupFailure::RejectEventOnce {
                 self.cleanup_failure = MockCleanupFailure::None;
@@ -4547,6 +4576,7 @@ mod tests {
             destination: BackendMemoryRegionV1,
             dependencies: &[u64],
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("peer-copy");
             self.submit_copy(stream, source, destination, dependencies)
         }
     }
@@ -4559,6 +4589,7 @@ mod tests {
             destination: BackendMemoryRegionV1,
             dependencies: &[u64],
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("copy");
             self.submit_copy(stream, source, destination, dependencies)
         }
     }
@@ -4596,6 +4627,7 @@ mod tests {
             &mut self,
             submission: u64,
         ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("cancel");
             self.cancel_call_count += 1;
             self.last_cancelled_submission = Some(submission);
             let failure = core::mem::take(&mut self.cancel_failure);
@@ -4631,6 +4663,7 @@ mod tests {
             &mut self,
             stream: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.accounted_fault.enter("flush");
             self.flush_call_count += 1;
             self.last_flushed_stream = Some(stream);
             match self.flush_failure {

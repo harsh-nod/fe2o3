@@ -14,21 +14,18 @@ enum Completion {
 
 fn assert_quarantine(f: &Fixture, mut expected: crate::RuntimeResourceCreditUsageV1) {
     let device = f.context.devices()[0].id();
-    expected.retained_records = 2;
-    expected.quarantined_records = 4;
+    expected.retained_records = 0;
+    expected.quarantined_records = 6;
     assert_eq!(
         f.context.allocation_admission_usage_v1(device),
         Ok(Some(expected))
     );
-    for (index, allocation) in f.allocations.iter().enumerate() {
-        assert_eq!(
-            f.context.allocation_admission.has_expected_credit(
-                *allocation,
-                device,
-                f.context.allocations[allocation].byte_len
-            ),
-            index >= 4,
-        );
+    for allocation in &f.allocations {
+        assert!(!f.context.allocation_admission.has_expected_credit(
+            *allocation,
+            device,
+            f.context.allocations[allocation].byte_len
+        ),);
     }
 }
 

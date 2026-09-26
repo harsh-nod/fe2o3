@@ -282,7 +282,7 @@ fn effectful_neighbor_calls_quarantine_pending_writers_on_terminal_or_panic() {
                 .allocation_admission_usage_v1(device)
                 .unwrap()
                 .unwrap();
-            assert_eq!((usage.retained_records, usage.quarantined_records), (1, 1));
+            assert_eq!((usage.retained_records, usage.quarantined_records), (0, 2));
             assert!(!fixture.context.cleanup().is_complete());
         }
     }
@@ -320,7 +320,7 @@ fn cleanup_failure_preserves_boxed_error_and_retained_unknown_writers() {
                 .allocation_admission_usage_v1(fixture.context.devices()[0].id())
                 .unwrap()
                 .unwrap();
-            assert_eq!((usage.retained_records, usage.quarantined_records), (1, 1));
+            assert_eq!((usage.retained_records, usage.quarantined_records), (0, 2));
             assert_eq!(fixture.context.version_journal_writer_records_v1(), Some(1));
         }
     }
@@ -369,7 +369,8 @@ fn allocation_and_host_write_panics_quarantine_other_active_writers() {
             .allocation_admission_usage_v1(device)
             .unwrap()
             .unwrap();
-        assert_eq!(usage.quarantined_records, 2);
+        assert_eq!(usage.quarantined_records, 2 + usize::from(operation == 0));
+        assert_eq!(usage.retained_records, 0);
         assert!(!fixture.context.cleanup().is_complete());
     }
 }

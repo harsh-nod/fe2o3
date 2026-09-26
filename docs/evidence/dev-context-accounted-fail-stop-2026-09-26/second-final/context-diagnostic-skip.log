@@ -1,0 +1,631 @@
+
+running 306 tests
+test context::allocation_admission::tests::required_empty_roster_does_not_mean_legacy ... ok
+test context::allocation_admission::tests::retained_charge_context_presence_exact_extent_and_device_brand ... ok
+test context::generated_issue::tests::attempt_failure_before_backend_identity_is_sticky_unknown_with_credits_retained ... 
+thread 'context::generated_issue::tests::attempt_failure_before_backend_identity_is_sticky_unknown_with_credits_retained' (11) panicked at crates/fe2o3-runtime/src/context/generated_issue/tests.rs:169:17:
+backend preparation unwind before handle
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+test context::generated_issue::tests::attempt_roots_one_logical_identity_and_full_mutation_roster_before_backend_return ... ok
+test context::generated_issue::tests::completion_tests::generated_completion_context_tail_releases_only_exact_invocation ... ok
+test context::generated_issue::tests::completion_tests::generated_completion_missing_callback_rejects_without_consuming_original_owner ... ok
+test context::generated_issue::tests::completion_tests::generated_completion_without_retained_device_preserves_all_pre_lending_custody ... ok
+test context::generated_issue::tests::completion_tests::generated_graph_context_settlement_releases_all_exact_metadata_before_reservation ... ok
+test context::generated_issue::tests::completion_tests::generated_graph_invalid_access_precedes_native_and_carrier_callbacks ... ok
+test context::generated_issue::tests::completion_tests::generated_graph_release_rejects_unpaired_backend_indexes_and_callbacks ... ok
+test context::generated_issue::tests::completion_tests::generated_graph_shared_drain_snapshot_excludes_only_registry_owned_submission ... ok
+test context::generated_issue::tests::invalid_returned_backend_identity_is_rooted_before_protocol_terminalization ... ok
+test context::generated_issue::tests::issue_preflight_rejects_changed_roster_hold_and_exhausted_ids_without_attempt ... ok
+test context::generated_issue::tests::journal_tests::generated_journal_assumed_c4_settlement_is_exact_and_neighbor_preserving ... ok
+test context::generated_issue::tests::journal_tests::generated_journal_begin_binds_only_original_writable_members ... ok
+test context::generated_issue::tests::journal_tests::generated_journal_capacity_rejects_before_identity_or_begin ... ok
+test context::generated_issue::tests::journal_tests::generated_journal_changed_marker_or_missing_root_cannot_commit_completion ... ok
+test context::generated_issue::tests::journal_tests::generated_journal_generic_observation_and_no_effect_cannot_settle ... ok
+test context::generated_issue::tests::journal_tests::generated_journal_no_handle_failures_retain_unknown_writer_and_original_members ... 
+thread 'context::generated_issue::tests::journal_tests::generated_journal_no_handle_failures_retain_unknown_writer_and_original_members' (27) panicked at crates/fe2o3-runtime/src/context/generated_issue/tests/journal_tests.rs:466:17:
+Box<dyn Any>
+ok
+test context::generated_issue::tests::journal_tests::generated_journal_post_model_credit_fault_retains_finalizing_writer ... 
+thread 'context::generated_issue::tests::journal_tests::generated_journal_post_model_credit_fault_retains_finalizing_writer' (28) panicked at crates/fe2o3-runtime/src/context/allocation_admission.rs:370:13:
+allocation credit owner invariant failed after disposal: Invariant
+ok
+test context::generated_issue::tests::journal_tests::generated_journal_stop_batch_disposes_unknown_and_read_only_members ... ok
+test context::generated_issue::tests::journal_tests::generated_journal_stop_preflights_read_only_members_before_batch_disposal ... ok
+test context::generated_issue::tests::journal_tests::generated_journal_success_advances_lineage_once_before_shell_retirement ... ok
+test context::generated_issue::tests::journal_tests::generated_shell_readers_block_whole_batch_retirement_before_any_shell_disposal ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_assumed_completion_or_stop_releases_only_original_read_batch ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_busy_input_rejects_before_identity_and_any_reader_acquisition ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_foreign_reader_blocks_retirement_preflight_without_releasing_own_inputs ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_graph_readers_release_before_exact_reservation_retirement ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_inputs_bind_exact_domain_records_and_whole_extents ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_marker_root_reference_and_domain_corruption_cannot_release_batch ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_no_effect_rejects_before_releasing_any_input_custody ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_post_release_disposal_panic_does_not_resurrect_readers ... 
+thread 'context::generated_issue::tests::journal_tests::reader_tests::generated_post_release_disposal_panic_does_not_resurrect_readers' (40) panicked at crates/fe2o3-runtime/src/context/allocation_admission.rs:370:13:
+allocation credit owner invariant failed after disposal: Invariant
+ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_read_only_default_profile_keeps_no_journal_markers ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_read_only_domain_survives_missing_backend_handle_and_ordinary_release ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_read_only_no_handle_failure_quarantines_inputs_without_writer ... 
+thread 'context::generated_issue::tests::journal_tests::reader_tests::generated_read_only_no_handle_failure_quarantines_inputs_without_writer' (43) panicked at crates/fe2o3-runtime/src/context/generated_issue/tests/journal_tests/reader_tests.rs:350:17:
+Box<dyn Any>
+ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_reader_capacity_rejects_whole_batch_before_writer_begin ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_reader_release_validates_before_selected_root_effect ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_readers_survive_all_ordinary_observations ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_settlement_receipt_cannot_release_a_substituted_live_reader_batch ... ok
+test context::generated_preparation::tests::generated_reservation_checked_stage_error_disposes_destination_without_install ... ok
+test context::generated_preparation::tests::generated_reservation_context_rejections_do_not_call_source_or_install ... ok
+test context::generated_preparation::tests::generated_reservation_install_panic_retains_transferred_storage_in_original_carrier ... 
+thread 'context::generated_preparation::tests::generated_reservation_install_panic_retains_transferred_storage_in_original_carrier' (50) panicked at crates/fe2o3-runtime/src/context/generated_preparation/tests.rs:91:9:
+install panic after custody transfer
+ok
+test context::generated_preparation::tests::preparation_binding_rejects_each_identity_coordinate ... ok
+test context::generated_preparation::tests::preparation_binding_survives_model_vm_creation_without_readmitting_device ... ok
+test context::generated_preparation::tests::preparation_outliving_shutdown_is_inert_and_rejected ... ok
+test context::generated_preparation::tests::preparation_rejects_foreign_unknown_terminal_and_synthetic_before_callback ... ok
+test context::generated_preparation::tests::preparation_validation_rejects_foreign_context_and_binding_before_native_access ... ok
+test context::generated_preparation::tests::shell_tests::generated_empty_prefix_stop_requires_the_original_live_hold ... ok
+test context::generated_preparation::tests::shell_tests::generated_journal_bad_member_never_partially_disposes_a_roster ... ok
+test context::generated_preparation::tests::shell_tests::generated_journal_capacity_rejection_leaves_entire_roster_and_identity_unchanged ... ok
+test context::generated_preparation::tests::shell_tests::generated_journal_enrolls_and_retires_the_complete_roster_with_original_ids ... ok
+test context::generated_preparation::tests::shell_tests::generated_plan_rejects_swapped_request_credits_before_adoption ... ok
+test context::generated_preparation::tests::shell_tests::generated_readiness_requires_exact_empty_hold_without_changing_credits ... ok
+test context::generated_preparation::tests::shell_tests::generated_shell_only_stop_disposes_credits_before_releasing_hold ... ok
+test context::generated_preparation::tests::shell_tests::shell_batch_drop_returns_all_unissued_reservations ... ok
+test context::generated_preparation::tests::shell_tests::shell_context_identity_exhaustion_is_atomic_and_adjacent_range_succeeds ... ok
+test context::generated_preparation::tests::shell_tests::shell_credit_exhaustion_rejects_the_whole_roster_without_transfer ... ok
+test context::generated_preparation::tests::shell_tests::shell_foreign_and_stale_holds_cannot_change_current_ownership ... ok
+test context::generated_preparation::tests::shell_tests::shell_late_context_roster_mismatch_preserves_control_and_all_credits ... ok
+test context::generated_preparation::tests::shell_tests::shell_pure_ingress_rejects_before_mutable_carrier_callback ... ok
+test context::generated_preparation::tests::shell_tests::shell_registration_retains_exact_roster_and_refunds_only_after_retirement ... ok
+test context::generated_preparation::tests::shell_tests::shell_retirement_preserves_unrelated_ordinary_bytes_and_credits ... ok
+test context::generated_preparation::tests::shell_tests::shell_source_substitution_preserves_both_control_owners ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_cleanup_refunds_only_confirmed_disposal_before_panic ... 
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_cleanup_refunds_only_confirmed_disposal_before_panic' (72) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_cleanup_refunds_only_confirmed_disposal_before_panic' (72) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_empty_accounts_guard_metadata_unwind_and_future_entry ... 
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_empty_accounts_guard_metadata_unwind_and_future_entry' (73) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:248:49:
+metadata
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_empty_accounts_guard_metadata_unwind_and_future_entry' (73) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:248:49:
+metadata
+ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_no_live_credits_still_guards_public_entry_but_legacy_is_unchanged ... 
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_no_live_credits_still_guards_public_entry_but_legacy_is_unchanged' (74) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_no_live_credits_still_guards_public_entry_but_legacy_is_unchanged' (74) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_no_live_credits_still_guards_public_entry_but_legacy_is_unchanged' (74) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_no_live_credits_still_guards_public_entry_but_legacy_is_unchanged' (74) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_no_live_credits_still_guards_public_entry_but_legacy_is_unchanged' (74) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_nonterminal_rejection_and_quiescent_disposal_remain_retryable ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_owned_shutdown_seals_only_uncertain_terminal_outcomes ... 
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_owned_shutdown_seals_only_uncertain_terminal_outcomes' (76) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_owned_shutdown_seals_only_uncertain_terminal_outcomes' (76) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits ... 
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_public_effect_panics_preserve_payload_and_all_local_credits' (77) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_quarantine_leaves_unattached_external_credits_unchanged ... 
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_quarantine_leaves_unattached_external_credits_unchanged' (78) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_quarantine_leaves_unattached_external_credits_unchanged' (78) panicked at crates/fe2o3-runtime/src/context/tests/accounted_fail_stop_tests.rs:21:17:
+Box<dyn Any>
+ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_terminal_and_protocol_errors_quarantine_without_journal ... ok
+test context::tests::accounted_fail_stop_tests::accounted_fail_stop_uncertain_allocation_retains_attempt_and_previous_handles ... 
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_uncertain_allocation_retains_attempt_and_previous_handles' (80) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+
+thread 'context::tests::accounted_fail_stop_tests::accounted_fail_stop_uncertain_allocation_retains_attempt_and_previous_handles' (80) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::allocation_admission_tests::allocation_credit_adapter_panic_seals_context_and_never_refunds ... 
+thread 'context::tests::allocation_admission_tests::allocation_credit_adapter_panic_seals_context_and_never_refunds' (81) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+
+thread 'context::tests::allocation_admission_tests::allocation_credit_adapter_panic_seals_context_and_never_refunds' (81) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+
+thread 'context::tests::allocation_admission_tests::allocation_credit_adapter_panic_seals_context_and_never_refunds' (81) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::allocation_admission_tests::allocation_credit_configuration_cannot_forget_live_or_quarantined_custody ... ok
+test context::tests::allocation_admission_tests::allocation_credit_definite_rejection_refunds_but_other_failures_do_not ... ok
+test context::tests::allocation_admission_tests::allocation_credit_devices_and_contexts_are_isolated ... ok
+test context::tests::allocation_admission_tests::allocation_credit_invalid_backend_handles_retain_terminal_custody ... ok
+test context::tests::allocation_admission_tests::allocation_credit_preflight_errors_do_not_enter_backend_or_debit ... ok
+test context::tests::allocation_admission_tests::allocation_credit_profile_cannot_be_installed_over_unaccounted_handles ... ok
+test context::tests::allocation_admission_tests::allocation_credit_release_failures_preserve_exact_charge_and_success_refunds_once ... ok
+test context::tests::allocation_admission_tests::allocation_credit_vector_rejection_is_atomic_and_precedes_backend_entry ... ok
+test context::tests::allocation_admission_tests::allocation_domain_every_ancestor_byte_and_record_limit_precedes_backend_entry ... ok
+test context::tests::allocation_admission_tests::allocation_domain_failed_attachment_preserves_parent_and_allows_valid_retry ... ok
+test context::tests::allocation_admission_tests::allocation_domain_failed_disposal_retains_parent_credit_and_definite_rejection_refunds ... ok
+test context::tests::allocation_admission_tests::allocation_domain_immutable_attachment_cannot_switch_to_an_unrelated_or_local_budget ... ok
+test context::tests::allocation_admission_tests::allocation_domain_repeated_contexts_do_not_reset_quarantined_parent_usage ... 
+thread 'context::tests::allocation_admission_tests::allocation_domain_repeated_contexts_do_not_reset_quarantined_parent_usage' (94) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::allocation_admission_tests::allocation_domain_roster_preflight_is_atomic_and_tokens_share_parent_lifetime ... ok
+test context::tests::allocation_admission_tests::allocation_domain_terminal_or_panicking_disposal_keeps_replacement_context_blocked ... 
+thread 'context::tests::allocation_admission_tests::allocation_domain_terminal_or_panicking_disposal_keeps_replacement_context_blocked' (96) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::allocation_admission_tests::allocation_domain_two_contexts_contend_before_backend_entry_and_release_enables_retry ... ok
+test context::tests::allocation_admission_tests::allocation_record_limit_is_independent_of_byte_limit ... ok
+test context::tests::allocation_outcome_tests::allocation_panic_before_settled_outcome_keeps_credit_and_original_payload ... ok
+test context::tests::allocation_outcome_tests::allocation_settlement_preserves_diagnostic_identity_neighbors_and_exact_credit_vector ... ok
+test context::tests::allocation_outcome_tests::async_tests::actual_launch_preserves_boxed_submit_errors_and_unwind_identity_without_handles ... ok
+test context::tests::allocation_outcome_tests::async_tests::allocation_and_host_write_panics_quarantine_other_active_writers ... 
+thread 'context::tests::allocation_outcome_tests::async_tests::allocation_and_host_write_panics_quarantine_other_active_writers' (102) panicked at crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/async_tests.rs:372:9:
+assertion `left == right` failed
+  left: 3
+ right: 2
+FAILED
+test context::tests::allocation_outcome_tests::async_tests::cleanup_failure_preserves_boxed_error_and_retained_unknown_writers ... ok
+test context::tests::allocation_outcome_tests::async_tests::effectful_neighbor_calls_quarantine_pending_writers_on_terminal_or_panic ... ok
+test context::tests::allocation_outcome_tests::async_tests::observation_failure_matrix_preserves_diagnostics_and_exact_neighbor_credits ... ok
+test context::tests::allocation_outcome_tests::async_tests::secondary_settlement_failure_cannot_replace_quiescent_backend_diagnostic ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::cleanup_resumes_partial_rosters_without_releasing_successful_members_twice ... 
+thread 'context::tests::allocation_outcome_tests::disposal_tests::cleanup_resumes_partial_rosters_without_releasing_successful_members_twice' (107) panicked at crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/disposal_tests.rs:193:9:
+assertion `left == right` failed
+  left: 4
+ right: 3
+FAILED
+test context::tests::allocation_outcome_tests::disposal_tests::final_unknown_disposal_bookkeeping_failure_retains_all_success_receipts ... 
+thread 'context::tests::allocation_outcome_tests::disposal_tests::final_unknown_disposal_bookkeeping_failure_retains_all_success_receipts' (108) panicked at crates/fe2o3-runtime/src/context/versions.rs:416:26:
+submission allocation disposal invariant: InvalidBackendDescription
+ok
+test context::tests::allocation_outcome_tests::disposal_tests::final_unknown_disposal_preserves_reused_backend_handle_and_new_allocation_credits ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::post_model_credit_failure_keeps_finalizing_root_visible_and_terminal ... 
+thread 'context::tests::allocation_outcome_tests::disposal_tests::post_model_credit_failure_keeps_finalizing_root_visible_and_terminal' (110) panicked at crates/fe2o3-runtime/src/context/allocation_admission.rs:370:13:
+allocation credit owner invariant failed after disposal: Invariant
+
+thread 'context::tests::allocation_outcome_tests::disposal_tests::post_model_credit_failure_keeps_finalizing_root_visible_and_terminal' (110) panicked at crates/fe2o3-runtime/src/context/allocation_admission.rs:370:13:
+allocation credit owner invariant failed after disposal: Invariant
+
+thread 'context::tests::allocation_outcome_tests::disposal_tests::post_model_credit_failure_keeps_finalizing_root_visible_and_terminal' (110) panicked at crates/fe2o3-runtime/src/context/allocation_admission.rs:370:13:
+allocation credit owner invariant failed after disposal: Invariant
+ok
+test context::tests::allocation_outcome_tests::disposal_tests::unknown_disposal_keeps_independent_device_credit_accounts_separate ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::unknown_disposal_rejects_missing_or_substituted_custody_before_backend_entry ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::unknown_roster_disposal_joins_all_orders_outcomes_and_metadata_lifetimes ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::unknown_roster_release_failure_preserves_partial_receipts_and_boxed_diagnostics ... ok
+test context::tests::allocation_outcome_tests::journal_settled_no_owner_refunds_without_replacing_diagnostic_or_panic_payload ... ok
+test context::tests::allocation_outcome_tests::writer_tests::ambiguous_partial_writes_preserve_payload_neighbors_and_unknown_ownership ... ok
+test context::tests::allocation_outcome_tests::writer_tests::disabled_journal_preserves_write_ids_and_legacy_panic_behavior ... ok
+test context::tests::allocation_outcome_tests::writer_tests::disabled_journal_with_inconsistent_allocation_reference_seals_before_backend_write ... ok
+test context::tests::allocation_outcome_tests::writer_tests::empty_unknown_writer_prevents_false_complete_cleanup_or_backend_return ... ok
+test context::tests::allocation_outcome_tests::writer_tests::invalid_write_range_foreign_id_and_exhausted_id_reject_before_writer_or_backend ... ok
+test context::tests::allocation_outcome_tests::writer_tests::pending_host_write_blocks_its_disposal_but_cleanup_continues_unrelated_allocations ... ok
+test context::tests::allocation_outcome_tests::writer_tests::synchronous_writes_burn_genuine_ids_and_epochs_but_rejections_preserve_lineage ... ok
+test context::tests::allocation_outcome_tests::writer_tests::terminal_or_panicking_unknown_disposal_retains_custody_and_blocks_retries ... ok
+test context::tests::allocation_outcome_tests::writer_tests::unknown_disposal_retries_retain_exact_handles_and_credits_until_success ... ok
+test context::tests::allocation_outcome_tests::writer_tests::unknown_writer_capacity_returns_only_after_confirmed_disposal ... ok
+test context::tests::allocation_outcome_tests::writer_tests::unsupported_unknown_rosters_keep_all_members_while_cleanup_releases_unrelated_ids ... ok
+test context::tests::argument_encoder_outputs_are_bounded_before_binding_validation ... ok
+test context::tests::async_copy_is_typed_validated_and_same_device ... ok
+test context::tests::async_journal_tests::async_writer_canonicalizes_duplicate_writable_allocations_and_skips_read_only ... ok
+test context::tests::async_journal_tests::async_writer_uses_exact_submission_identity_and_settles_once_through_event ... ok
+test context::tests::async_journal_tests::callback_panic_cannot_undo_settlement_or_repeat_delivery ... 
+thread 'context::tests::async_journal_tests::callback_panic_cannot_undo_settlement_or_repeat_delivery' (131) panicked at crates/fe2o3-runtime/src/context/tests/async_journal_tests.rs:519:13:
+scripted callback panic after completion
+ok
+test context::tests::async_journal_tests::capacity_and_conflicting_writers_reject_before_identity_or_backend ... ok
+test context::tests::async_journal_tests::copy_and_peer_copy_journal_only_the_full_destination ... ok
+test context::tests::async_journal_tests::explicit_unpublished_cancellation_settles_no_effect_but_too_late_does_not ... ok
+test context::tests::async_journal_tests::failed_or_resultless_completion_retains_unknown_after_metadata_release ... ok
+test context::tests::async_journal_tests::initial_no_handle_failures_settle_only_definite_rejection ... 
+thread 'context::tests::async_journal_tests::initial_no_handle_failures_settle_only_definite_rejection' (136) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::async_journal_tests::invalid_submission_handles_preserve_attempted_and_existing_writers ... ok
+test context::tests::async_journal_tests::missing_expected_writer_cannot_publish_completion ... ok
+test context::tests::async_journal_tests::prepared_copy_revalidates_original_destination_before_begin_or_backend_entry ... ok
+test context::tests::async_journal_tests::read_only_submission_needs_no_writer_capacity ... ok
+test context::tests::async_journal_tests::rejected_completion_observation_is_not_no_effect ... ok
+test context::tests::async_journal_tests::writer_registry_reuses_capacity_across_dense_settlement_cycles ... ok
+test context::tests::atomic_and_collective_contracts_gate_ordinary_typed_submissions ... ok
+test context::tests::callback_panics_are_contained_and_stream_quiescence_has_typed_status ... 
+thread 'context::tests::callback_panics_are_contained_and_stream_quiescence_has_typed_status' (144) panicked at crates/fe2o3-runtime/src/context.rs:6435:45:
+Box<dyn Any>
+
+thread 'context::tests::callback_panics_are_contained_and_stream_quiescence_has_typed_status' (144) panicked at crates/fe2o3-runtime/src/context.rs:6449:45:
+Box<dyn Any>
+ok
+test context::tests::cancellation_distinguishes_prepublication_quiescence_from_too_late ... ok
+test context::tests::cancellation_is_typed_and_callbacks_are_not_repeated_by_drain_or_release ... ok
+test context::tests::compare_exchange_contract_requires_a_legal_failure_order_and_explicit_weakness ... ok
+test context::tests::completion_settlement_tests::settlement_body_does_not_continue_after_unwind ... 
+thread 'context::tests::completion_settlement_tests::settlement_body_does_not_continue_after_unwind' (148) panicked at crates/fe2o3-runtime/src/context/tests/completion_settlement_tests.rs:32:13:
+settlement stage 0
+
+thread 'context::tests::completion_settlement_tests::settlement_body_does_not_continue_after_unwind' (148) panicked at crates/fe2o3-runtime/src/context/tests/completion_settlement_tests.rs:32:13:
+settlement stage 1
+
+thread 'context::tests::completion_settlement_tests::settlement_body_does_not_continue_after_unwind' (148) panicked at crates/fe2o3-runtime/src/context/tests/completion_settlement_tests.rs:32:13:
+settlement stage 2
+
+thread 'context::tests::completion_settlement_tests::settlement_body_does_not_continue_after_unwind' (148) panicked at crates/fe2o3-runtime/src/context/tests/completion_settlement_tests.rs:32:13:
+settlement stage 3
+ok
+test context::tests::completion_settlement_tests::settlement_body_preserves_arguments_result_and_failed_prefixes ... ok
+test context::tests::copy_source_lease_tests::callback_panic_and_repeat_observation_cannot_repeat_reader_release ... 
+thread 'context::tests::copy_source_lease_tests::callback_panic_and_repeat_observation_cannot_repeat_reader_release' (150) panicked at crates/fe2o3-runtime/src/context/tests/copy_source_lease_tests.rs:758:41:
+after copy settlement
+ok
+test context::tests::copy_source_lease_tests::cancellation_no_effect_is_backed_by_unpublished_copy_bytes ... ok
+test context::tests::copy_source_lease_tests::every_terminal_observation_releases_the_exact_copy_source ... ok
+test context::tests::copy_source_lease_tests::failed_or_quiescent_copy_releases_source_but_preserves_unknown_destination ... ok
+test context::tests::copy_source_lease_tests::initial_copy_failure_retains_only_ambiguous_source_custody ... 
+thread 'context::tests::copy_source_lease_tests::initial_copy_failure_retains_only_ambiguous_source_custody' (154) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+
+thread 'context::tests::copy_source_lease_tests::initial_copy_failure_retains_only_ambiguous_source_custody' (154) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::copy_source_lease_tests::malformed_handles_quarantine_all_readers_including_shared_sources ... ok
+test context::tests::copy_source_lease_tests::missing_or_substituted_copy_marker_cannot_publish_completion ... ok
+test context::tests::copy_source_lease_tests::pending_local_and_peer_copies_exclude_source_mutation_before_backend_entry ... ok
+test context::tests::copy_source_lease_tests::pending_unknown_and_capacity_rejections_do_not_consume_identity_or_leases ... ok
+test context::tests::copy_source_lease_tests::prepared_copy_rejects_released_original_source_even_with_recycled_backend_handle ... ok
+test context::tests::copy_source_lease_tests::rejected_wait_retains_exact_reader_and_terminal_wait_quarantines_both_owners ... ok
+test context::tests::copy_source_lease_tests::retained_charge_copy_accepts_equivalent_same_leaf_tokens ... ok
+test context::tests::copy_source_lease_tests::retained_charge_copy_checks_allocation_extent_not_copied_region ... ok
+test context::tests::copy_source_lease_tests::retained_charge_copy_rejects_foreign_accounts_and_sibling_domains ... ok
+test context::tests::copy_source_lease_tests::shared_source_stays_pinned_until_last_out_of_order_completion ... ok
+test context::tests::copy_source_lease_tests::stream_quiescence_does_not_release_another_streams_shared_source_lease ... ok
+test context::tests::duplicate_backend_handles_terminally_seal_every_handle_producing_operation ... ok
+test context::tests::event_and_submission_observation_share_one_exact_once_completion ... ok
+test context::tests::execution_capability_detail_defaults_closed_and_reports_opt_in_bits ... ok
+test context::tests::exhausted_facade_identity_prevents_backend_resource_creation ... ok
+test context::tests::facade_rejects_oversized_backend_descriptions_and_kernel_symbols ... ok
+test context::tests::flush_stream_validates_before_backend_and_preserves_failure_class ... ok
+test context::tests::host_capture_registration_is_logical_and_range_checked ... ok
+test context::tests::host_capture_registration_rejects_foreign_device_local_released_and_terminal ... ok
+test context::tests::kernel_read_lease_tests::ambiguous_observation_keeps_pure_readers_with_or_without_admission_credits ... 
+thread 'context::tests::kernel_read_lease_tests::ambiguous_observation_keeps_pure_readers_with_or_without_admission_credits' (174) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+
+thread 'context::tests::kernel_read_lease_tests::ambiguous_observation_keeps_pure_readers_with_or_without_admission_credits' (174) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::kernel_read_lease_tests::busy_middle_or_last_reader_rejects_batch_without_partial_custody ... ok
+test context::tests::kernel_read_lease_tests::callback_panic_and_repeated_observation_cannot_release_a_later_read_batch ... 
+thread 'context::tests::kernel_read_lease_tests::callback_panic_and_repeated_observation_cannot_release_a_later_read_batch' (176) panicked at crates/fe2o3-runtime/src/context/tests/kernel_read_lease_tests.rs:1124:13:
+after kernel read completion
+ok
+test context::tests::kernel_read_lease_tests::corrupted_batch_member_or_marker_retains_all_leases_atomically ... ok
+test context::tests::kernel_read_lease_tests::dropped_reader_token_keeps_inputs_until_cleanup_quiesces_its_stream ... ok
+test context::tests::kernel_read_lease_tests::every_exact_completion_route_releases_read_only_batch ... ok
+test context::tests::kernel_read_lease_tests::failed_quiescent_and_cancelled_readers_release_without_observing_inputs ... ok
+test context::tests::kernel_read_lease_tests::graph_reads_capture_version_at_issue_after_predecessor_settlement ... ok
+test context::tests::kernel_read_lease_tests::initial_read_only_failures_keep_original_diagnostics_and_exact_source_custody ... 
+thread 'context::tests::kernel_read_lease_tests::initial_read_only_failures_keep_original_diagnostics_and_exact_source_custody' (182) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::kernel_read_lease_tests::malformed_read_only_handles_retain_all_consumers_and_charge_each_source_once ... ok
+test context::tests::kernel_read_lease_tests::mixed_aliases_use_one_writer_and_only_independent_readers ... ok
+test context::tests::kernel_read_lease_tests::out_of_order_shared_readers_survive_stream_destruction_and_old_observers ... ok
+test context::tests::kernel_read_lease_tests::partial_reader_headroom_rejects_entire_batch_before_issue ... ok
+test context::tests::kernel_read_lease_tests::pending_rejected_and_too_late_observations_keep_read_only_inputs ... ok
+test context::tests::kernel_read_lease_tests::prepared_reader_rejects_stale_identity_even_without_journal ... ok
+test context::tests::kernel_read_lease_tests::pure_read_batch_preserves_ordered_bindings_and_excludes_whole_allocation_writes ... ok
+test context::tests::kernel_read_lease_tests::reader_capacity_is_independent_and_batch_exhaustion_is_pre_issue ... ok
+test context::tests::kernel_read_lease_tests::snapshot_atomic_and_collective_routes_forward_input_custody ... ok
+test context::tests::kernel_read_lease_tests::stale_internal_preparation_retains_provisional_root_before_any_backend_submission ... ok
+test context::tests::kernel_read_lease_tests::unknown_writer_disposal_rejects_retained_reader_marker_without_root ... ok
+test context::tests::launch_rejects_invalid_or_nonzero_pointer_patches ... ok
+test context::tests::module_image_limit_matches_hsaco_and_accepts_its_exact_boundary ... ok
+test context::tests::one_context_multiplexes_streams_across_devices ... ok
+test context::tests::opaque_handles_with_equal_local_ids_never_cross_contexts ... ok
+test context::tests::peer_batch_tests::backend_unwind_quarantines_all_roots_and_preserves_the_payload ... 
+thread 'context::tests::peer_batch_tests::backend_unwind_quarantines_all_roots_and_preserves_the_payload' (198) panicked at crates/fe2o3-runtime/src/context/tests/peer_batch_tests.rs:37:41:
+scripted peer-copy batch panic
+ok
+test context::tests::peer_batch_tests::corruption_after_backend_entry_preserves_quiescent_diagnostic_without_partial_callbacks ... ok
+test context::tests::peer_batch_tests::every_corrupt_reader_or_writer_marker_blocks_the_whole_roster_before_backend_entry ... ok
+test context::tests::peer_batch_tests::exact_batches_pending_retry_and_complete_in_caller_order ... ok
+test context::tests::peer_batch_tests::invalid_rosters_never_enter_the_backend ... ok
+test context::tests::peer_batch_tests::mixed_destination_devices_are_rejected_before_backend_entry ... ok
+test context::tests::peer_batch_tests::rejected_quiescent_and_terminal_batches_preserve_exact_class_and_custody ... ok
+test context::tests::peer_copy_bounds_dependencies_and_admits_source_device_events ... ok
+test context::tests::peer_copy_identity_includes_the_private_context_brand ... ok
+test context::tests::peer_copy_moves_between_distinct_devices ... ok
+test context::tests::peer_custody_tests::cancellation_and_event_completion_discharge_each_roster_once ... ok
+test context::tests::peer_custody_tests::completion_failures_discharge_only_conclusive_consumer_quiescence ... 
+thread 'context::tests::peer_custody_tests::completion_failures_discharge_only_conclusive_consumer_quiescence' (209) panicked at crates/fe2o3-runtime/src/context/tests/peer_batch_tests.rs:37:41:
+scripted peer-copy batch panic
+
+thread 'context::tests::peer_custody_tests::completion_failures_discharge_only_conclusive_consumer_quiescence' (209) panicked at crates/fe2o3-runtime/src/context/tests/peer_batch_tests.rs:37:41:
+scripted peer-copy batch panic
+ok
+test context::tests::peer_custody_tests::fanout_retains_producer_after_public_event_release_until_last_consumer ... ok
+test context::tests::peer_custody_tests::first_nonjournaled_scalar_panic_activates_custody_guard ... 
+thread 'context::tests::peer_custody_tests::first_nonjournaled_scalar_panic_activates_custody_guard' (211) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::peer_custody_tests::full_event_roster_keeps_aliases_and_original_order_with_balanced_counts ... ok
+test context::tests::peer_custody_tests::initial_backend_failures_preserve_error_and_exact_dependency_custody ... 
+thread 'context::tests::peer_custody_tests::initial_backend_failures_preserve_error_and_exact_dependency_custody' (213) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+
+thread 'context::tests::peer_custody_tests::initial_backend_failures_preserve_error_and_exact_dependency_custody' (213) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::peer_custody_tests::invalid_returned_handles_keep_admitted_roots_and_producer_retains ... ok
+test context::tests::peer_custody_tests::missing_root_or_incomplete_alias_counts_seal_before_discharge ... ok
+test context::tests::peer_custody_tests::old_event_on_held_producer_stream_remains_a_legal_cross_stream_dependency ... ok
+test context::tests::peer_custody_tests::partial_stream_cleanup_rejection_preserves_consumer_holds_until_retry ... ok
+test context::tests::peer_custody_tests::pending_source_is_still_rejected_before_identity_or_backend_entry ... ok
+test context::tests::peer_custody_tests::producer_stream_destruction_does_not_invalidate_retained_dependency_identity ... ok
+test context::tests::peer_custody_tests::repeated_drain_and_callback_panic_do_not_repeat_discharge ... 
+thread 'context::tests::peer_custody_tests::repeated_drain_and_callback_panic_do_not_repeat_discharge' (220) panicked at crates/fe2o3-runtime/src/context/tests/peer_custody_tests.rs:533:17:
+scripted scalar completion callback panic
+
+thread 'context::tests::peer_custody_tests::repeated_drain_and_callback_panic_do_not_repeat_discharge' (220) panicked at crates/fe2o3-runtime/src/context/tests/peer_custody_tests.rs:533:17:
+scripted scalar completion callback panic
+ok
+test context::tests::peer_custody_tests::retain_overflow_and_late_duplicate_reject_before_identity_or_backend_entry ... ok
+test context::tests::peer_directed_tests::directed_aliases_and_legacy_dependencies_reject_before_backend ... ok
+test context::tests::peer_directed_tests::directed_all_observation_ingresses_reconcile_exact_cross_stream_producer ... ok
+test context::tests::peer_directed_tests::directed_cancel_releases_pending_input_but_retained_success_is_too_late ... ok
+test context::tests::peer_directed_tests::directed_context_success_cannot_replace_reservation_result ... ok
+test context::tests::peer_directed_tests::directed_corrupt_root_cursor_and_depth_reject_before_observation_or_cancel ... ok
+test context::tests::peer_directed_tests::directed_depth_limit_and_long_chain_make_bounded_progress ... ok
+test context::tests::peer_directed_tests::directed_diamond_settles_shared_producer_and_callbacks_once ... 
+thread 'context::tests::peer_directed_tests::directed_diamond_settles_shared_producer_and_callbacks_once' (228) panicked at crates/fe2o3-runtime/src/context/tests/peer_directed_tests.rs:872:43:
+callback payload
+ok
+test context::tests::peer_directed_tests::directed_discarded_producer_result_never_becomes_success ... ok
+test context::tests::peer_directed_tests::directed_initial_failure_releases_only_definitely_quiescent_inputs ... 
+thread 'context::tests::peer_directed_tests::directed_initial_failure_releases_only_definitely_quiescent_inputs' (230) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::peer_directed_tests::directed_marker_substitution_cannot_enter_legacy_batch ... ok
+test context::tests::peer_directed_tests::directed_missing_reservation_root_or_marker_preserves_retained_success ... ok
+test context::tests::peer_directed_tests::directed_non_success_does_not_wait_for_pending_producer ... ok
+test context::tests::peer_directed_tests::directed_parent_success_contradictions_seal_and_retain ... 
+thread 'context::tests::peer_directed_tests::directed_parent_success_contradictions_seal_and_retain' (234) panicked at crates/fe2o3-runtime/src/context/tests/peer_directed_tests.rs:48:41:
+directed observation panic
+ok
+test context::tests::peer_directed_tests::directed_pending_source_requires_exact_producer_event_and_covered_range ... ok
+test context::tests::peer_directed_tests::directed_reservation_survives_success_and_no_effect_writer_slot_reuse ... ok
+test context::tests::peer_directed_tests::directed_stable_and_producer_inputs_share_one_read_budget ... ok
+test context::tests::peer_directed_tests::directed_success_cannot_bypass_reconciliation_via_generic_transition ... ok
+test context::tests::peer_directed_tests::directed_three_link_chain_resolves_inputs_and_full_rosters_once ... ok
+test context::tests::peer_directed_tests::directed_unknown_source_rejects_without_poisoning_context ... ok
+test context::tests::peer_directed_tests::reconciliation_tests::directed_reconciliation_graph_can_exceed_the_dependency_and_stack_bound ... ok
+test context::tests::peer_directed_tests::reconciliation_tests::directed_reconciliation_retains_successful_cursor_prefix_before_later_failure ... ok
+test context::tests::peer_directed_tests::reconciliation_tests::directed_reconciliation_yields_at_exact_fuel_and_resumes_retained_prefix ... ok
+test context::tests::peer_segments_tests::cancellation_before_publication_restores_lineage_but_partial_failure_does_not ... ok
+test context::tests::peer_segments_tests::descriptor_limit_is_not_the_aggregate_ring_limit ... ok
+test context::tests::peer_segments_tests::identity_binds_order_count_envelopes_and_branded_stream ... ok
+test context::tests::peer_segments_tests::invalid_last_descriptor_is_rejected_before_backend_or_journal_effects ... ok
+test context::tests::peer_segments_tests::ordered_overlaps_duplicates_canaries_and_snapshot_settle_one_writer_once ... ok
+test context::tests::peer_segments_tests::pending_versioned_producer_refuses_reader_before_backend_then_completed_event_admits_it ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_after_effect_panics_preserve_commit_without_retiring_roots ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_before_effect_panics_preserve_exact_committed_prefix ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_boundary_errors_preserve_exact_committed_prefix ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_late_writer_identity_error_preserves_released_inputs ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_prevalidation_rejects_before_the_first_effect_boundary ... ok
+test context::tests::producer_launch_tests::producer_launch_acquire_error_retains_both_unmarked_original_input_roots ... ok
+test context::tests::producer_launch_tests::producer_launch_admission_requires_live_exact_nonaliased_profile_producers ... ok
+test context::tests::producer_launch_tests::producer_launch_all_completion_ingresses_share_bounded_producer_first_reconciliation ... ok
+test context::tests::producer_launch_tests::producer_launch_cancellation_keeps_or_releases_the_complete_mixed_roster ... ok
+test context::tests::producer_launch_tests::producer_launch_combined_capacity_and_late_request_rejection_are_pre_issue ... ok
+test context::tests::producer_launch_tests::producer_launch_completion_preserves_optional_roots_and_writer_outcomes ... ok
+test context::tests::producer_launch_tests::producer_launch_coverage_uses_every_original_alias_and_writable_interval_union ... ok
+test context::tests::producer_launch_tests::producer_launch_discarded_observer_keeps_inputs_until_consumer_stream_quiesces ... ok
+test context::tests::producer_launch_tests::producer_launch_discarded_producer_result_preserves_quiescence_without_success ... ok
+test context::tests::producer_launch_tests::producer_launch_finalization_panic_retains_all_leases_without_publishing_markers ... ok
+test context::tests::producer_launch_tests::producer_launch_initial_failures_preserve_diagnostics_and_uncertain_mixed_roots ... 
+thread 'context::tests::producer_launch_tests::producer_launch_initial_failures_preserve_diagnostics_and_uncertain_mixed_roots' (265) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::producer_launch_tests::producer_launch_invalid_handles_retain_new_roots_and_every_mixed_input ... ok
+test context::tests::producer_launch_tests::producer_launch_mixed_acquisition_handles_each_empty_side_and_no_inputs ... ok
+test context::tests::producer_launch_tests::producer_launch_mixed_inputs_preserve_native_ranges_and_whole_allocation_custody ... ok
+test context::tests::producer_launch_tests::producer_launch_mixed_release_prevalidates_both_complete_rosters ... ok
+test context::tests::producer_launch_tests::producer_launch_non_success_observations_release_only_quiescent_mixed_inputs ... 
+thread 'context::tests::producer_launch_tests::producer_launch_non_success_observations_release_only_quiescent_mixed_inputs' (270) panicked at crates/fe2o3-runtime/src/context/tests/producer_launch_tests.rs:197:41:
+producer launch observation panic
+ok
+test context::tests::producer_launch_tests::producer_launch_public_event_release_and_fanout_keep_exact_producer_custody ... ok
+test context::tests::producer_launch_tests::producer_launch_resolved_reservation_survives_writer_slot_reuse ... ok
+test context::tests::producer_launch_tests::producer_launch_retained_consumer_success_cannot_override_producer_results ... 
+thread 'context::tests::producer_launch_tests::producer_launch_retained_consumer_success_cannot_override_producer_results' (273) panicked at crates/fe2o3-runtime/src/context/tests/producer_launch_tests.rs:197:41:
+producer launch observation panic
+ok
+test context::tests::producer_launch_tests::producer_launch_root_flag_dependency_and_late_marker_loss_seal_before_observation ... ok
+test context::tests::producer_launch_tests::producer_launch_writerless_consumer_does_not_need_a_free_writer_slot ... ok
+test context::tests::producer_launch_tests::retained_charge_producer_aware_stable_input_rejects_region_sized_credit ... ok
+test context::tests::quiescent_stream_failure_allows_dependent_cleanup_and_retains_stream ... ok
+test context::tests::r63_closed_reservation_cannot_issue_prepared_copy ... ok
+test context::tests::r63_private_reservations_require_closed_issue_and_fresh_exact_generation ... ok
+test context::tests::rejected_event_cleanup_blocks_module_and_allocation_release ... ok
+test context::tests::rejected_stream_cleanup_retains_dependencies_and_can_retry ... ok
+test context::tests::retained_submission_cannot_reach_backend_after_its_stream_is_destroyed ... ok
+test context::tests::shutdown_quiesces_streams_before_releasing_dependent_resources ... ok
+test context::tests::stream_observation_retains_failure_while_other_work_completes ... ok
+test context::tests::stream_query_and_synchronize_preserve_aggregate_completion ... ok
+test context::tests::stream_synchronize_continues_after_quiescent_wait_but_stops_on_terminal_wait ... ok
+test context::tests::stream_synchronize_continues_after_rejected_wait_and_discharges_later_callbacks ... ok
+test context::tests::submission_identity_tests::actual_terminal_backend_failure_precedes_ingress_identity_except_pure_query ... ok
+test context::tests::submission_identity_tests::cached_success_never_bypasses_any_identity_coordinate ... ok
+test context::tests::submission_identity_tests::destroyed_stream_keeps_identity_validation_and_retained_query_semantics ... ok
+test context::tests::submission_identity_tests::every_ingress_rejects_each_coordinate_for_pending_and_event_completed_records ... ok
+test context::tests::submission_identity_tests::exact_tokens_reach_each_ingress_with_state_appropriate_results ... ok
+test context::tests::submission_identity_tests::genuine_graph_reservation_preserves_query_and_public_ingress_precedence ... ok
+test context::tests::submission_identity_tests::real_backend_id_reuse_does_not_revive_a_released_cached_token ... ok
+test context::tests::submission_identity_tests::released_cached_token_is_rejected_at_every_ingress ... ok
+test context::tests::submission_identity_tests::wait_validates_identity_before_deadline_but_drain_checks_expiration_first ... ok
+test context::tests::submission_release_is_consuming_retryable_and_requires_quiescence ... ok
+test context::tests::terminal_backend_failure_marks_the_context_lost ... ok
+test context::tests::terminal_cleanup_stops_calls_and_retains_unprocessed_resources ... ok
+test context::tests::terminal_flush_seals_context_without_a_second_backend_call ... ok
+test context::tests::typed_completion_distinguishes_backend_codes_from_cancellation ... ok
+test context::tests::typed_kernel_identity_commits_to_module_target_symbol_and_signature ... ok
+test context::tests::typed_launch_memory_event_and_dependency_flow_is_address_free ... ok
+test context::tests::version_journal_tests::journal_capacity_precedes_ids_and_backend_and_disposal_permits_only_fresh_ids ... ok
+test context::tests::version_journal_tests::journal_cleanup_retires_live_neighbor_but_preserves_unidentified_attempt ... ok
+test context::tests::version_journal_tests::journal_constructor_is_fresh_bounded_and_returns_backend_on_failure ... ok
+test context::tests::version_journal_tests::journal_failed_disposal_retains_exact_records_and_successful_retry_retires ... 
+thread 'context::tests::version_journal_tests::journal_failed_disposal_retains_exact_records_and_successful_retry_retires' (307) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+
+thread 'context::tests::version_journal_tests::journal_failed_disposal_retains_exact_records_and_successful_retry_retires' (307) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::version_journal_tests::journal_foreign_reference_is_rejected_before_backend_disposal ... ok
+test context::tests::version_journal_tests::journal_invalid_handle_retains_logical_and_backend_ownership ... ok
+test context::tests::version_journal_tests::journal_metadata_profile_does_not_restrict_writes_or_claim_content_versions ... ok
+test context::tests::version_journal_tests::journal_preflight_failure_and_credit_rejection_leave_no_provisional_owner ... ok
+test context::tests::version_journal_tests::journal_retains_no_handle_ambiguity_with_and_without_allocation_credits ... 
+thread 'context::tests::version_journal_tests::journal_retains_no_handle_ambiguity_with_and_without_allocation_credits' (312) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+
+thread 'context::tests::version_journal_tests::journal_retains_no_handle_ambiguity_with_and_without_allocation_credits' (312) panicked at crates/fe2o3-runtime/src/context.rs:3911:41:
+scripted allocation adapter panic
+ok
+test context::tests::wait_rejects_unrepresentable_deadline ... ok
+test context::tests::zero_backend_handles_terminally_seal_every_handle_producing_operation ... ok
+
+failures:
+
+failures:
+    context::tests::allocation_outcome_tests::async_tests::allocation_and_host_write_panics_quarantine_other_active_writers
+    context::tests::allocation_outcome_tests::disposal_tests::cleanup_resumes_partial_rosters_without_releasing_successful_members_twice
+
+test result: FAILED. 304 passed; 2 failed; 0 ignored; 0 measured; 1242 filtered out; finished in 9.56s
+
