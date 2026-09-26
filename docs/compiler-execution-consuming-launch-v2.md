@@ -2,12 +2,21 @@
 
 `ProtectedIssuerSupervisorV2::launch` consumes `PreparedProtectedIssuerLaunchV2`
 through the same clone3, descriptor-installation, pidfd and cleanup engine as V1.
+The corresponding V3 operation consumes `PreparedProtectedIssuerLaunchV3` into
+nominal V3 launched, ready, serving and exited owners. Both native families use
+the same lifecycle body in
+[`process_native_body.rs`](../crates/fe2o3-compiler-execution-supervisor/src/process_native_body.rs),
+with concrete family-specific supervisor, capability, readiness and error types.
 Native admission never constructs an admitted V1 owner or falls back to V1 on
 refusal. Shared V1-named static wire and termination records are inert data.
+Process-profile observations and persistent cleanup use the same policy-neutral
+native V2 machinery in both families; that reuse grants no policy authority.
 
 This is a library lifecycle, not activation of the native production issuer or
-service. All four isolated distinct-UID synthetic consuming fixtures passed on
+service. All four isolated distinct-UID **V2** synthetic consuming fixtures passed on
 MI350 under Ubuntu 24.04/Linux 6.8.0-124-generic through the actual static launcher.
+V3 has deterministic lifecycle/accounting tests and exact readiness-join tests,
+but no isolated consuming or protected-runtime execution is credited yet.
 Protected proof execution, GPU qualification, M0-M7 acceptance and 47/47 completion
 are not established by this implementation or its deterministic unit tests.
 
@@ -31,6 +40,13 @@ are not established by this implementation or its deterministic unit tests.
 5. **Exited:** consume exactly one terminal pidfd wait and disarm custody before
    fallible result handling. The returned PID, readiness and termination are
    inert, and retain their original funding until dropped.
+
+Readiness framing is shared across native families. Decoding a frame as V3 is
+not authorization: the join must also match the exact live child, V3 manifest
+and independently admitted V3 policy. Tests construct actual V2-bound wire with
+otherwise matching inputs, decode it as V3, and require rejection at that join.
+Compile-fail examples reject mixed-family prepared owners, wait policies,
+readiness types and premature access to the original borrowed account.
 
 Consuming failure or cancellation performs at most one prepaid emergency cleanup
 step. Pending or uncertain custody transfers into the existing persistently
@@ -64,7 +80,8 @@ are both charged during overlap. Readiness growth is reserved after its temporar
 scope restores the entry floor. Owners close or transfer before funding retires;
 no consumed reservation is released inside a protected temporary scope.
 
-Work is cumulative and never refunded. `ProtectedIssuerWaitV2` accepts 1-4096
+Work is cumulative and never refunded. `ProtectedIssuerWaitV2` and
+`ProtectedIssuerWaitV3` each accept 1-4096
 attempts and a positive timeout up to 120 seconds. EINTR, EAGAIN, partial reads
 and pending observations consume finite attempts. Four weighted syscall units
 per parent attempt cover I/O, liveness, failure probes and optional polling.
@@ -109,7 +126,7 @@ namespace APIs retain their existing permission checks and refusal behavior.
 ## Isolated Validation
 
 The four opt-in `native_consuming_test_process::native_consuming_` tests exercise
-the public native lifecycle with separately measured, sealed static test issuers:
+the public V2 lifecycle with separately measured, sealed static test issuers:
 
 - Exact child-produced readiness, publication to the real submitter, a client
   stop packet and natural exit with status zero.

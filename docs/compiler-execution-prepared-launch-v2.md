@@ -3,13 +3,20 @@
 `ProtectedIssuerSupervisorV2::prepare_launch` consumes a prepaid
 `AcceptedCompilerExecutionHandoffV2` and returns move-only
 `PreparedProtectedIssuerLaunchV2` plus an unreserved storage-growth receipt.
+`ProtectedIssuerSupervisorV3::prepare_launch` provides the corresponding V3
+operation over genuine `AcceptedCompilerExecutionHandoffV3`, policy, signing-key
+and launch-capability owners. The two nominal APIs share one preparation body;
+no admitted owner is converted between families.
 It materializes and revalidates inputs to the static launcher. It does **not**
 create a process, establish child confinement, execute the issuer, publish
 readiness, serve requests, run a protected proof, or qualify a GPU kernel.
 M0-M7 and 47/47 remain incomplete.
 
 The implementation is in
-[`launch_v2.rs`](../crates/fe2o3-compiler-execution-supervisor/src/launch_v2.rs),
+[`launch_v2.rs`](../crates/fe2o3-compiler-execution-supervisor/src/launch_v2.rs)
+and [`launch_v3.rs`](../crates/fe2o3-compiler-execution-supervisor/src/launch_v3.rs),
+with their common body in
+[`launch_native_adapter.rs`](../crates/fe2o3-compiler-execution-supervisor/src/launch_native_adapter.rs),
 with native supervisor transfers in
 [`authority_v2_launch.rs`](../crates/fe2o3-compiler-execution-supervisor/src/authority_v2_launch.rs),
 finite manifest I/O in
@@ -68,7 +75,7 @@ Before returning, the complete prepared chain checks, in order:
 `revalidate` repeats this chain under the same caller ledger. These are ordered
 observations, not an atomic global snapshot, perpetual liveness, or proof that
 no other process holds a descriptor. No public prepared API exposes a descriptor,
-signing operation, `Clone`, or conversion from an admitted V1 prepared owner.
+signing operation, `Clone`, or conversion from another admitted policy family.
 
 ## Bounded Transfers And Parent
 
