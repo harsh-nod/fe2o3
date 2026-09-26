@@ -10,11 +10,13 @@ V1 owners. The state-file format and observation wire remain unchanged.
 
 `serve_connected_peer_v2/v3` now drive those native owners through the same
 peer I/O and scheduling implementation as V1, using the original resource ledger.
-These are direct service operations, not activated protected startup. The helper
-and inherited daemon entrypoints still consume V1 owners. Trusted deployment
-provenance, executable measurement, lifecycle custody and process admission must
-be established separately. Neither these APIs nor their tests complete M0-M7,
-prove kernel semantics, or qualify any additional end-to-end GPU kernel.
+The dedicated native V2/V3 inherited daemon entrypoints now compose these APIs
+with native process/namespace admission, measured sealed executable admission and
+lifecycle custody. The protected helper and root coordinator still consume V1
+owners; they do not yet launch the native daemon. Successful protected startup
+and trusted parent provenance remain unvalidated. Neither these APIs nor their
+tests complete M0-M7, prove kernel semantics, or qualify another end-to-end GPU
+kernel.
 
 ## Invariants
 
@@ -139,3 +141,66 @@ protected peer-identity, lifecycle or process-profile admission; startup callers
 must establish those separately. No protected startup or compiler/GPU authority
 is granted by this API or its tests. See the
 [peer validation checkpoint](evidence/conditional-native-anchor-peer-20260926.md).
+
+## Native Inherited Startup
+
+`run_inherited_external_anchor_service_v2/v3` are unsafe, dedicated-process
+boundaries. Call once in an isolated single-threaded daemon, with exclusively
+transferred raw slots and no other live Rust descriptor owners or I/O threads.
+Unrelated descriptors, including standard streams, are closed. Exit on failure;
+never retry the entrypoint or return to an application that owns those descriptors.
+
+| Slot | Transferred Input |
+| --- | --- |
+| 3 | Connected peer |
+| 4 | Existing durable-state root |
+| 5 | Root-owned lifecycle lease |
+| 202 | Actual same-family policy |
+| 220 | Actual same-family supervisor deployment |
+| 221 | Actual same-family external-anchor deployment |
+| 222 | Service-owned native sealed signing key |
+
+Startup bounds argv0 inspection to 4096 bytes including its terminator, requires
+one nonempty argument and an empty environment, then captures the nonroot process
+and namespace profile. Descriptor cleanup happens before any descriptor-owning
+native admission. The full source table is checked before duplication, so a
+missing slot cannot be silently filled by an unrelated admitted capability.
+
+Policy, supervisor and deployment are admitted in that order under their actual
+contexts. Current credentials must match the deployment. The running sealed
+executable is measured against that deployment before inspecting the key. Root,
+peer and lifecycle inputs move to private CLOEXEC slots; context/key duplicates
+remain owned through serving. Startup opens existing state only: it never creates
+genesis or resets malformed state. Process, namespace, deployment and lifecycle
+checks surround serving; the report remains charged through final checks.
+
+`CompilerExecutionServiceLifecycleLeaseV2` shares the V1 filesystem/lock engine
+but admits fresh custody on the original ledger. It additionally retains exact
+parent device/inode identity. It rechecks the root-owned parent and canonical
+root-owned lock file, including their required metadata and the shared
+nonblocking lock. Drop only closes
+descriptors, never explicitly unlocks a shared open-file description. There is no
+public V1 upgrade, descriptor accessor or unmetered native operation.
+
+Prepay the family's exported `STARTUP_INPUT_STORAGE` before entry (768 bytes on
+the tested x86-64 layout). Every supplied slot is consumed/closed on return,
+failure or unwind; the caller then retires its original input reservation. The
+startup scope restores entry storage without refunding work or clearing prior
+peaks/denials. Success returns the full unreserved peer-report charge, not growth
+over any input. Reserve it before retention and retire it after drop.
+
+Outer startup work is 262184 and its logical frame is 65536 bytes. Native nested
+operations charge additionally on the same ledger. Lease admission/revalidation
+cost 65544/32776 work units; admission returns growth over its consumed File,
+whereas lease `open` and executable `admit_running` return full owner charges.
+Running-image open makes one direct syscall attempt; EINTR rejects. Quotas are
+logical accounting, not RSS, syscall latency or idle-service lifetime bounds.
+
+The dedicated `fe2o3-external-anchor-service-v2` and `-v3` binaries create one
+finite process ledger (work `1 << 40`, storage `1 << 30`). The static-image script
+accepts explicit `v1`, `v2` or `v3`; omission preserves the existing V1 build. There
+is no ambient family selector or native-to-V1 fallback. Existing helper and
+coordinator callers remain V1 until their actual authority and descriptor
+contracts are migrated together. See the
+[startup checkpoint](evidence/conditional-native-anchor-startup-20260926.md) for
+validation evidence and the remaining integration boundary.
