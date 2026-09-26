@@ -55,6 +55,7 @@ mod capability_state_access_v1;
 mod root_checked_references_v1;
 // Paid reference-origin data still lacks its actual guarded-access roster join.
 mod root_entry_prefix_preparation_v1;
+mod root_guarded_access_preparation_v1;
 mod root_initial_capability_graph_v1;
 mod root_invocation_index_preparation_v1;
 #[cfg(test)]
@@ -7986,19 +7987,13 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
         }
         let (element, index, precondition, checked_success, direct_write) = match operation {
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { element, .. } => {
-                let projected = projected_disjoint_operand_v1(
+                let projected = root_guarded_access_preparation_v1::identity_operand_v1(
                     call,
-                    1,
                     &index_values,
                     &option_dominance,
                     &enum_payload_dominance,
                     block_index,
                 )?;
-                if projected.mapping != SemanticDisjointIndexSpaceV1::Index1d {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "identity accessor received a non-identity mapping",
-                    ));
-                }
                 (
                     *element,
                     projected.value,
@@ -8573,143 +8568,26 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
             _ => continue,
         };
 
-        let receiver = call
-            .arguments()
-            .first()
-            .and_then(simple_operand_local)
-            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                "a checked disjoint receiver without one exact local",
-            ))?
-            .index() as usize;
-        let allocation_contract = local_allocations.get(receiver).copied().flatten().ok_or(
-            ProductionRankedProjectionErrorV1::Incomplete(
-                "a checked disjoint receiver without one authenticated kernel-argument origin",
-            ),
-        )?;
-        if !allocation_contract.writable {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "a checked mutable access is rooted in a read-only Rust allocation",
-            ));
-        }
-        let origin_index = allocation_contract.allocation_origin as usize;
-        let element_width = type_width(types, element)?;
-        let view = match views_by_origin
-            .get(origin_index)
-            .and_then(|view| view.as_ref())
-        {
-            Some(view)
-                if view.element_width == element_width
-                    && view.writable
-                    && view.shape == [DYNAMIC_EXTENT]
-                    && view.dynamic_extents == [ProductionRankedValueV1::Argument(0)]
-                    && view.memory_space == MemorySpaceAttr::Global
-                    && view.allocation_origin == allocation_contract.allocation_origin
-                    && view.noalias_class == allocation_contract.noalias_class =>
-            {
-                view.result
-            }
-            Some(_) => {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "one allocation origin was projected with conflicting element widths",
-                ));
-            }
-            None => {
-                reserve_operation(operations)?;
-                let view = next_value_id(next_value)?;
-                operations.push(ProductionRankedOperationV1::ViewInSpace {
-                    result: view,
-                    element_width,
-                    writable: true,
-                    shape: vec![DYNAMIC_EXTENT],
-                    dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
-                    memory_space: MemorySpaceAttr::Global,
-                    allocation_origin: allocation_contract.allocation_origin,
-                    noalias_class: allocation_contract.noalias_class,
-                });
-                push_ranked_ir(
-                    ranked_ir,
-                    &format!(
-                        "  %{} = kernel.ranked_view <{}, true, [dynamic], Global>(%arg0)\n",
-                        view.get(),
-                        element_width,
-                    ),
-                )?;
-                let slot = views_by_origin.get_mut(origin_index).ok_or(
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "a kernel argument origin outside the semantic local table",
-                    ),
-                )?;
-                *slot = Some(ProjectedViewV1 {
-                    result: view,
-                    element_width,
-                    writable: true,
-                    shape: vec![DYNAMIC_EXTENT],
-                    dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
-                    memory_space: MemorySpaceAttr::Global,
-                    allocation_origin: allocation_contract.allocation_origin,
-                    noalias_class: allocation_contract.noalias_class,
-                });
-                view
-            }
-        };
-        let mut comparisons = Vec::with_capacity(2);
-        if let Some(precondition) = precondition {
-            comparisons.push(precondition);
-        }
-        comparisons.push((index, ProductionRankedValueV1::Argument(0)));
-        // Allocation provenance excludes offset-only allocation contracts. It
-        // proposes a source identity, not whole-slice equality: the latter is
-        // independently rederived from the exact canonical store and guard.
-        let output_extent = match allocation_provenance.get(receiver).copied().flatten() {
-            Some(LocalAllocationProvenanceV1::Argument(argument))
-                if checked_success.is_none() && precondition.is_none() =>
-            {
-                Some(ProductionRankedOutputExtentSourceV1::new(
-                    argument,
-                    ProductionRankedValueV1::Local(view),
-                    ProductionRankedValueV1::Argument(0),
-                    index,
-                ))
-            }
-            _ => None,
-        };
-        let access = GuardedRankedAccessV1 {
-            view,
-            indices: vec![index],
+        root_guarded_access_preparation_v1::append_mutable_access_legacy_v1(
+            types,
+            call,
+            block_index,
+            block.terminator().source(),
+            element,
+            index,
+            precondition,
             checked_success,
-            comparisons,
-            access: AccessKindAttr::Write,
-            memory_space: MemorySpaceAttr::Global,
-            source: block.terminator().source(),
-            semantic_site: None,
-            output_extent,
-        };
-        if direct_write {
-            let slot = direct_write_effects.get_mut(block_index).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "a write-only access block outside the semantic CFG",
-                ),
-            )?;
-            if slot.replace(access).is_some() {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "multiple write-only effects occupy one semantic block",
-                ));
-            }
-            continue;
-        }
-        let destination = simple_call_destination(call)?.index() as usize;
-        let predicate = option_predicates.get_mut(destination).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "a checked disjoint destination outside the semantic local table",
-            ),
+            direct_write,
+            &local_allocations,
+            &allocation_provenance,
+            &mut views_by_origin,
+            &mut guarded_accesses,
+            &mut option_predicates,
+            &mut direct_write_effects,
+            operations,
+            next_value,
+            ranked_ir,
         )?;
-        if predicate.is_some() {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "multiple checked predicates for one semantic local",
-            ));
-        }
-        *predicate = Some(GuardPredicateV1::for_access(&access));
-        guarded_accesses.push(access);
     }
 
     let mut direct_switch_predicates = vec![None; local_count];
@@ -24638,6 +24516,7 @@ mod tests {
     include!("production_ranked_projection_v1/root_initial_capability_graph_v1_tests.rs");
     include!("production_ranked_projection_v1/root_reference_origin_preparation_v1_tests.rs");
     include!("production_ranked_projection_v1/root_invocation_index_preparation_v1_tests.rs");
+    include!("production_ranked_projection_v1/root_guarded_access_preparation_v1_tests.rs");
 
     mod implicit_capability_capture_v1_tests {
         include!("production_ranked_projection_v1/implicit_capability_capture_v1_tests.rs");
@@ -40652,5 +40531,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+pub(crate) use canonical_assertion_facts_v1::observe_actual_root_guarded_accesses_for_test_v1;
 #[cfg(test)]
 pub(crate) use canonical_assertion_facts_v1::observe_actual_root_prefix_indices_for_test_v1;

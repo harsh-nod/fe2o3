@@ -246,6 +246,14 @@ pub(super) fn inspect(
             budget,
         )
         .map_err(query_error)?;
+        crate::production_ranked_projection_v1::observe_actual_root_guarded_accesses_for_test_v1(
+            owner,
+            source,
+            &inventory,
+            actual_inputs,
+            budget,
+        )
+        .map_err(query_error)?;
         inspect_retained_floor_boundaries(
             owner,
             source,

@@ -28,7 +28,7 @@ pub(in crate::production_ranked_projection_v1) use initial_graph_v1::{
 };
 #[allow(unused_imports)]
 pub(in crate::production_ranked_projection_v1) use root_prefix_indices_v1::{
-    ActualRootPrefixIndicesV1, PendingActualRootPrefixIndicesV1,
+    ActualRootGuardedAccessesV1, ActualRootPrefixIndicesV1, PendingActualRootPrefixIndicesV1,
 };
 
 #[derive(Clone, Copy)]
@@ -224,5 +224,7 @@ pub(in crate::production_ranked_projection_v1) use initial_graph_v1::{
     nominal_initial_graph_controls_for_test_v1, observe_nominal_initial_graph_for_test_v1,
 };
 
+#[cfg(test)]
+pub(crate) use root_prefix_indices_v1::observe_actual_root_guarded_accesses_for_test_v1;
 #[cfg(test)]
 pub(crate) use root_prefix_indices_v1::observe_actual_root_prefix_indices_for_test_v1;

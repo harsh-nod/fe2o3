@@ -1,7 +1,11 @@
 //! Integrated actual retained-input/root-prefix/index preparation. This is one
 //! physical root-assembly prefix, not a separate index namespace or ready token.
-//! Actual access appends/origins/sites/Final/full CFG assembly remain pending.
+//! An integrated sibling extends this assembly through actual guarded access DATA.
+//! Origins/sites/Final/full CFG assembly and normal routing remain pending.
 use super::*;
+use crate::production_ranked_projection_v1::root_guarded_access_preparation_v1::{
+    RootGuardedAccessStorageV1, prepare_root_guarded_accesses_v1,
+};
 use crate::production_ranked_projection_v1::*;
 use crate::production_ranked_projection_v1::{
     root_entry_prefix_preparation_v1::{RootEntryPrefixV1, prepare_root_entry_prefix_paid_v1},
@@ -21,9 +25,11 @@ pub(in crate::production_ranked_projection_v1) struct PendingActualRootPrefixInd
     graph: PendingNominalInitialGraphV1,
     prefix: RootEntryPrefixV1,
     indices: RootInvocationIndexStorageV1,
+    guarded: RootGuardedAccessStorageV1,
     ledger: Option<(usize, CanonicalKernelIrWorkLedgerIdentityV1)>,
     started: bool,
     completed: bool,
+    frame_credits: usize,
 }
 impl PendingActualRootPrefixIndicesV1 {
     pub(in crate::production_ranked_projection_v1) const fn new() -> Self {
@@ -31,9 +37,11 @@ impl PendingActualRootPrefixIndicesV1 {
             graph: PendingNominalInitialGraphV1::new(),
             prefix: RootEntryPrefixV1::empty(),
             indices: RootInvocationIndexStorageV1::empty(),
+            guarded: RootGuardedAccessStorageV1::empty(),
             ledger: None,
             started: false,
             completed: false,
+            frame_credits: 0,
         }
     }
 }
@@ -65,6 +73,52 @@ impl ActualRootPrefixIndicesV1<'_> {
         &self,
     ) -> &[Option<ProjectedDisjointIndexV1>] {
         &self.indices.indices
+    }
+}
+
+/// Module-private mutable data seam. Only the original factory can construct it.
+/// No caller can replace the graph, actual inputs, namespace or predicate table.
+struct ActualRootAssemblyPartsV1<'a> {
+    graph: &'a NominalCompleteForProfileGraphV1<'a>,
+    source_root: ProductionSourceLaunchRootV1,
+    function: &'a SemanticFunctionDeclV1,
+    input: &'a ProductionRankedRootInputV1,
+    references: &'a [AuthenticatedReferenceEffectBindingV1],
+    prefix: &'a mut RootEntryPrefixV1,
+    indices: &'a mut RootInvocationIndexStorageV1,
+    guarded: &'a mut RootGuardedAccessStorageV1,
+}
+impl ActualRootAssemblyPartsV1<'_> {
+    fn prefix_view(&self) -> ActualRootPrefixIndicesV1<'_> {
+        ActualRootPrefixIndicesV1 {
+            graph: self.graph,
+            source_root: self.source_root,
+            function: self.function,
+            input: self.input,
+            references: self.references,
+            prefix: self.prefix,
+            indices: self.indices,
+        }
+    }
+}
+/// Lexically joined actual guarded payload DATA, not checked origins or a recipe.
+/// Construction remains in the same actual-input/context/complete-graph loan.
+pub(in crate::production_ranked_projection_v1) struct ActualRootGuardedAccessesV1<'a> {
+    prefix: ActualRootPrefixIndicesV1<'a>,
+    views: &'a [Option<ProjectedViewV1>],
+    accesses: &'a [GuardedRankedAccessV1],
+}
+impl ActualRootGuardedAccessesV1<'_> {
+    pub(in crate::production_ranked_projection_v1) fn prefix(
+        &self,
+    ) -> &ActualRootPrefixIndicesV1<'_> {
+        &self.prefix
+    }
+    pub(in crate::production_ranked_projection_v1) fn accesses(&self) -> &[GuardedRankedAccessV1] {
+        self.accesses
+    }
+    pub(in crate::production_ranked_projection_v1) fn views(&self) -> &[Option<ProjectedViewV1>] {
+        self.views
     }
 }
 
@@ -238,6 +292,15 @@ fn assembly_frame<R, F>() -> Result<usize> {
         size_of::<PendingActualRootPrefixIndicesV1>(),
         size_of::<ActualRootPrefixIndicesV1<'static>>(),
         size_of::<ActualSelectedInputsV1<'static>>(),
+        size_of::<ActualRootAssemblyPartsV1<'static>>(),
+        size_of::<ActualRootGuardedAccessesV1<'static>>(),
+        // Public wrapper, private continuation and their result transfers.
+        size_of::<F>()
+            .checked_mul(2)
+            .ok_or_else(|| resource(Resource::Arithmetic))?,
+        size_of::<Result<R>>()
+            .checked_mul(2)
+            .ok_or_else(|| resource(Resource::Arithmetic))?,
         size_of::<F>()
             .checked_mul(2)
             .ok_or_else(|| resource(Resource::Arithmetic))?,
@@ -253,12 +316,7 @@ fn assembly_frame<R, F>() -> Result<usize> {
 }
 
 impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
-    /// The non-Clone lexical input view is constructed only by the owning
-    /// pipeline after materialization. Equal raw slices cannot replace it.
-    /// No normal production route constructs this view at this checkpoint.
-    /// No root/access ready token is constructed: one source visit populates
-    /// the actual physical namespace, lends it, then performs original postflights.
-    #[allow(clippy::too_many_arguments)]
+    /// Preserve the existing prefix-only checkpoint and its immutable oracle view.
     pub(in crate::production_ranked_projection_v1) fn with_actual_root_prefix_indices_v1<R, F>(
         &mut self,
         checked: &CheckedBf16NominalCallV1<'_>,
@@ -269,6 +327,87 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
     ) -> Result<R>
     where
         F: for<'a> FnOnce(ActualRootPrefixIndicesV1<'a>, &mut Self) -> Result<R>,
+    {
+        self.with_actual_root_assembly_v1(
+            checked,
+            rich,
+            actual_inputs,
+            pending,
+            |parts, context| inspect(parts.prefix_view(), context),
+        )
+    }
+
+    /// Same retained assembly extended through actual identity access appends.
+    /// No normal production route constructs the actual input loan at this stage.
+    pub(in crate::production_ranked_projection_v1) fn with_actual_root_guarded_accesses_v1<R, F>(
+        &mut self,
+        checked: &CheckedBf16NominalCallV1<'_>,
+        rich: &RichNominalSourceTablesV1<'_>,
+        actual_inputs: &crate::production_pipeline::ActualRetainedRankedInputsV1<'_>,
+        pending: &mut PendingActualRootPrefixIndicesV1,
+        inspect: F,
+    ) -> Result<R>
+    where
+        F: for<'a> FnOnce(ActualRootGuardedAccessesV1<'a>, &mut Self) -> Result<R>,
+    {
+        self.with_actual_root_assembly_v1(
+            checked,
+            rich,
+            actual_inputs,
+            pending,
+            |parts, context| {
+                let owner = context.facts.owner;
+                let source = owner.semantic_ssa().source_semantic();
+                context.with_resources(|resources| {
+                    prepare_root_guarded_accesses_v1(
+                        source.types(),
+                        source.callables(),
+                        parts.function,
+                        &parts.indices.indices,
+                        rich.option_dominance(),
+                        rich.enum_payload_dominance(),
+                        rich.allocations(),
+                        rich.allocation_provenance(),
+                        &mut parts.indices.predicates,
+                        parts.guarded,
+                        &mut parts.prefix.entry_operations,
+                        &mut parts.prefix.next_value,
+                        resources,
+                    )
+                })?;
+                if !parts.guarded.completed() {
+                    return Err(Error::Incomplete(
+                        "actual guarded access payload unfinished",
+                    ));
+                }
+                inspect(
+                    ActualRootGuardedAccessesV1 {
+                        prefix: parts.prefix_view(),
+                        views: &parts.guarded.views,
+                        accesses: &parts.guarded.accesses,
+                    },
+                    context,
+                )
+            },
+        )
+    }
+
+    /// The non-Clone lexical input view is constructed only by the owning
+    /// pipeline after materialization. Equal raw slices cannot replace it.
+    /// No normal production route constructs this view at this checkpoint.
+    /// No root/access ready token is constructed: one source visit populates
+    /// the actual physical namespace, lends it, then performs original postflights.
+    #[allow(clippy::too_many_arguments)]
+    fn with_actual_root_assembly_v1<R, F>(
+        &mut self,
+        checked: &CheckedBf16NominalCallV1<'_>,
+        rich: &RichNominalSourceTablesV1<'_>,
+        actual_inputs: &crate::production_pipeline::ActualRetainedRankedInputsV1<'_>,
+        pending: &mut PendingActualRootPrefixIndicesV1,
+        inspect: F,
+    ) -> Result<R>
+    where
+        F: for<'a> FnOnce(ActualRootAssemblyPartsV1<'a>, &mut Self) -> Result<R>,
     {
         let facts_owner = self.facts.owner;
         self.with_resources(|resources| {
@@ -294,6 +433,7 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
             let frame = assembly_frame::<R, F>()?;
             resources.work(frame)?;
             resources.reserve_storage(frame)?;
+            pending.frame_credits = frame; // Actual accepted original-ledger debit.
             pending.ledger = Some(ledger);
             pending.started = true;
             Ok(())
@@ -302,6 +442,7 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
             graph,
             prefix,
             indices,
+            guarded,
             completed,
             ..
         } = pending;
@@ -355,7 +496,7 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
             })?;
             *completed = true; // Prefix/index DATA only; no actual access rows yet.
             inspect(
-                ActualRootPrefixIndicesV1 {
+                ActualRootAssemblyPartsV1 {
                     graph: &graph,
                     source_root: selected.source_root,
                     function,
@@ -363,6 +504,7 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
                     references: selected.references,
                     prefix,
                     indices,
+                    guarded,
                 },
                 context,
             )
@@ -379,3 +521,9 @@ mod tests;
 mod genuine;
 #[cfg(test)]
 pub(crate) use genuine::observe_actual_root_prefix_indices_for_test_v1;
+
+#[cfg(test)]
+#[path = "bf16_nominal_root_guarded_access_genuine_v1_tests.rs"]
+mod guarded_genuine_v1;
+#[cfg(test)]
+pub(crate) use guarded_genuine_v1::observe_actual_root_guarded_accesses_for_test_v1;

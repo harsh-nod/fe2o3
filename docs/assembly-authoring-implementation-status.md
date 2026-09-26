@@ -5,6 +5,22 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Actual retained-input guarded accesses — 2026-09-26
+
+The [guarded-access qualification](bf16-actual-guarded-access-qualification-20260926.md)
+continues the same actual retained-input owner and operation/value-ID namespace
+through identity mutable-access preparation. An independent actual-source
+oracle checks complete access/cache/predicate payloads; partial paid storage
+stays outer-owned through postflights. Regression passed 331 model and 2,654
+backend tests (189 ignored), plus build and five genuine Rust sessions.
+All 141 comparison controls and the cumulative R16/direct R20/direct R21
+lossless checks passed, including independently measured accepted-frame
+accounting. All 38 ordinary sessions and 52 artifacts are unchanged from S3.
+This is access data, not reference-origin or later memory-use-site admission.
+Complete nominal recipes and ordinary nominal-helper routing remain unfinished.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**; no new GPU execution
+or debugger capture is claimed.
+
 ## Actual retained-input root prefix and indices — 2026-09-26
 
 The [actual-prefix checkpoint](bf16-actual-root-prefix-indices-qualification-20260926.md)
