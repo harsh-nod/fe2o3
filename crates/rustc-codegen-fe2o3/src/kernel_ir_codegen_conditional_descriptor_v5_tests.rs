@@ -88,12 +88,6 @@ impl Fixture {
                 vec![block.clone()],
             ));
         }
-        module.functions.push(Function::device_ffi_export(
-            "device_export",
-            Signature::new(vec![], vec![]),
-            vec![],
-            vec![block],
-        ));
         module.functions.push(Function::external_import(
             "external",
             Signature::new(vec![], vec![]),
@@ -189,12 +183,9 @@ fn conditional_module_v5_both_targets_canonical_prefix_roles_tag_and_bytes() {
         );
         assert!(catch_unwind(AssertUnwindSafe(|| module.descriptor_source_identity())).is_err());
         assert_eq!(module.kernel_entries, ["kernel0", "kernel1"]);
-        assert_eq!(
-            module.device_definitions,
-            ["device_export", "helper", "second_helper"]
-        );
+        assert_eq!(module.device_definitions, ["helper", "second_helper"]);
         assert_eq!(module.internal_helpers, ["helper", "second_helper"]);
-        assert_eq!(module.device_ffi_exports, ["device_export"]);
+        assert!(module.device_ffi_exports.is_empty());
         assert_eq!(module.external_declarations, ["external"]);
         let recovered = module
             .llvm_ir
@@ -205,6 +196,41 @@ fn conditional_module_v5_both_targets_canonical_prefix_roles_tag_and_bytes() {
             .collect::<Vec<_>>();
         assert_eq!(recovered, f.source.canonical_bytes());
         assert!(!f.source.authenticates_compiler_origin() && !f.source.grants_launch_authority());
+    }
+}
+
+#[test]
+fn conditional_module_v5_export_role_is_rejected_by_v12_admission() {
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        let f = Fixture::new(profile);
+        let mut unsupported = f.owner.module().clone();
+        let helper = unsupported
+            .functions
+            .iter_mut()
+            .find(|function| function.id.as_str() == "helper")
+            .unwrap();
+        assert_eq!(helper.role, FunctionRole::InternalHelper);
+        helper.role = FunctionRole::DeviceFfiExport;
+        let mut work = Work::new(W);
+        let mut budget = Budget::new(&mut work, S);
+        budget.reserve_storage(SIBLING).unwrap();
+        budget.charge_work(PRIOR).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let result = Owner::from_module_ref_with_verification_budget_v12(&unsupported, &mut budget);
+        assert!(matches!(
+            result,
+            Err(
+                fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12::Encode(
+                    fe2o3_kernel_ir::KernelIrEncodeError::UnsupportedInVersion {
+                        version: 12,
+                        feature: "device-FFI export function roles",
+                    }
+                )
+            )
+        ));
+        assert_eq!(budget.storage(), SIBLING);
+        assert!(budget.work() >= PRIOR);
+        assert!(budget.work_ledger_identity_v1() == ledger);
     }
 }
 
@@ -221,9 +247,29 @@ fn conditional_module_v5_checks_all_stored_vectors_and_order() {
             3 => &mut module.device_ffi_exports,
             _ => &mut module.external_declarations,
         };
-        rows[0].clear();
-        assert!(matches!(f.check(&module), Err(E::Metadata(_))));
+        let expected = if slot == 3 {
+            // V12 has no device exports; an extra stored export must still be
+            // rejected rather than leaving this vector unchecked.
+            assert!(rows.is_empty());
+            rows.push("foreign_export".into());
+            "complete actual symbol closure"
+        } else {
+            assert!(!rows.is_empty());
+            rows[0].clear();
+            "missing actual symbol"
+        };
+        assert!(matches!(
+            f.check(&module), Err(E::Metadata(rule)) if rule == expected
+        ));
     }
+    let mut module = original.clone();
+    // Preserve the device-definition union while lying about helper/export roles.
+    std::mem::swap(&mut module.internal_helpers, &mut module.device_ffi_exports);
+    assert_eq!(module.device_definitions, original.device_definitions);
+    assert!(matches!(
+        f.check(&module),
+        Err(E::Metadata("missing actual symbol"))
+    ));
     for duplicate in [false, true] {
         let mut module = original.clone();
         if duplicate {
