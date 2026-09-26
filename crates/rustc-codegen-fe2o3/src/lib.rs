@@ -247,7 +247,6 @@ impl BuildAttemptSelection {
     }
 }
 struct RetainedProductionDeviceAdmission {
-    target_account: fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1,
     target: production_target_v1::RetainedProductionTargetV1,
     compiler_execution: protected_compiler_execution::AdmittedProtectedCompilerExecutionV1,
     build_attempt: artifact_transaction::BuildAttempt,
@@ -332,149 +331,152 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             };
             let production_root_count =
                 collector::count_production_roots_before_monomorphization_v1(tcx);
-            let mut production_device_admission = if production_root_count > 0 {
-                let build_attempt = build_attempt.unwrap_or_else(|| {
-                    tcx.dcx().fatal(format!(
-                        "[rustc-codegen-fe2o3] production compilation requires a managed {BUILD_ATTEMPT_ENV} before monomorphization"
-                    ))
-                });
-                Some(RetainedProductionDeviceAdmission {
-                    target_account: production_target_account::new().unwrap_or_else(|error| {
+            // The borrowed account spans admission, collection and publication.
+            // No budget borrow or live service session escapes into LLVM codegen.
+            production_target_account::with_device_phase(production_root_count > 0, |target_budget| {
+                let mut production_device_admission = if production_root_count > 0 {
+                    let build_attempt = build_attempt.unwrap_or_else(|| {
                         tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] target account admission failed: {error}"
+                            "[rustc-codegen-fe2o3] production compilation requires a managed {BUILD_ATTEMPT_ENV} before monomorphization"
                         ))
-                    }),
-                    target: production_target_v1::RetainedProductionTargetV1::authenticate_before_collection(
-                        tcx,
-                        &self.config.target,
-                    )
-                    .unwrap_or_else(|error| {
-                        tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] production target authentication failed before monomorphization without fallback: {error}"
-                            ))
-                        }),
-                    compiler_execution: protected_compiler_execution::admit_for_production_codegen()
+                    });
+                    Some(RetainedProductionDeviceAdmission {
+                        target: production_target_v1::RetainedProductionTargetV1::authenticate_before_collection(
+                            tcx,
+                            &self.config.target,
+                        )
                         .unwrap_or_else(|error| {
                             tcx.dcx().fatal(format!(
-                                "[rustc-codegen-fe2o3] protected compiler-execution admission failed without fallback: {error}"
-                            ))
-                        }),
-                    build_attempt,
-                })
-            } else {
-                None
-            };
-            let context_producers =
-                collector::capture_context_producers_v1(tcx).unwrap_or_else(|error| {
-                    tcx.dcx().fatal(format!(
-                        "[rustc-codegen-fe2o3] context producer capture failed: {error}"
-                    ))
-                });
-            let mono_partitions = tcx.collect_and_partition_mono_items(());
-            let kernel_count = collector::count_kernels_in_cgus(tcx, mono_partitions.codegen_units);
-            if production_device_admission.is_some() != (kernel_count > 0) {
-                let reason = if production_device_admission.is_some() {
-                    "authenticated device roots disappeared during monomorphization"
-                } else {
-                    "a device root appeared only after pre-monomorphization admission"
-                };
-                tcx.dcx().fatal(format!(
-                    "[rustc-codegen-fe2o3] production root custody changed across monomorphization: {reason}; compilation failed closed"
-                ));
-            }
-            let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE);
-            let output_dir = match managed_artifact_output(&self.config, kernel_count) {
-                Ok(output_dir) => output_dir,
-                Err(()) => tcx.dcx().fatal(format!(
-                    "[rustc-codegen-fe2o3] {HSACO_DIR_ENV} must name a managed artifact directory when compiling kernels"
-                )),
-            };
-            if self.config.verbose || kernel_count > 0 {
-                eprintln!(
-                    "[rustc-codegen-fe2o3] crate `{crate_name}`: {} CGU(s), {kernel_count} kernel candidate(s), target {}",
-                    mono_partitions.codegen_units.len(),
-                    self.config.target,
-                );
-            }
-
-            let mut production_device_transaction_complete = false;
-            match production_pipeline::disposition(kernel_count) {
-                production_pipeline::ProductionDisposition::HostOnly => {}
-                production_pipeline::ProductionDisposition::DeviceTransaction => {
-                    let RetainedProductionDeviceAdmission {
-                        mut target_account,
-                        target,
-                        compiler_execution,
+                                "[rustc-codegen-fe2o3] production target authentication failed before monomorphization without fallback: {error}"
+                                ))
+                            }),
+                        compiler_execution: protected_compiler_execution::admit_for_production_codegen()
+                            .unwrap_or_else(|error| {
+                                tcx.dcx().fatal(format!(
+                                    "[rustc-codegen-fe2o3] protected compiler-execution admission failed without fallback: {error}"
+                                ))
+                            }),
                         build_attempt,
-                    } = production_device_admission
-                        .take()
-                        .expect("device admission presence was validated after monomorphization");
-                    let has_custom_llvm_configuration = has_custom_llvm_configuration(tcx.sess);
-                    if let Err(error) = production_pipeline::reject_custom_llvm_configuration(
-                        has_custom_llvm_configuration,
-                    ) {
-                        tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
-                    }
-                    let closure = match collector::collect_authenticated_kernel_closure_v1(
-                            tcx,
-                            mono_partitions.codegen_units,
-                            self.config.verbose,
+                    })
+                } else {
+                    None
+                };
+                let context_producers = collector::capture_context_producers_v1(tcx)
+                    .unwrap_or_else(|error| {
+                        tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] context producer capture failed: {error}"
+                        ))
+                    });
+                let mono_partitions = tcx.collect_and_partition_mono_items(());
+                let kernel_count =
+                    collector::count_kernels_in_cgus(tcx, mono_partitions.codegen_units);
+                if production_device_admission.is_some() != (kernel_count > 0) {
+                    let reason = if production_device_admission.is_some() {
+                        "authenticated device roots disappeared during monomorphization"
+                    } else {
+                        "a device root appeared only after pre-monomorphization admission"
+                    };
+                    tcx.dcx().fatal(format!(
+                        "[rustc-codegen-fe2o3] production root custody changed across monomorphization: {reason}; compilation failed closed"
+                    ));
+                }
+                let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE);
+                let output_dir = match managed_artifact_output(&self.config, kernel_count) {
+                    Ok(output_dir) => output_dir,
+                    Err(()) => tcx.dcx().fatal(format!(
+                        "[rustc-codegen-fe2o3] {HSACO_DIR_ENV} must name a managed artifact directory when compiling kernels"
+                    )),
+                };
+                if self.config.verbose || kernel_count > 0 {
+                    eprintln!(
+                        "[rustc-codegen-fe2o3] crate `{crate_name}`: {} CGU(s), {kernel_count} kernel candidate(s), target {}",
+                        mono_partitions.codegen_units.len(),
+                        self.config.target,
+                    );
+                }
+
+                let mut production_device_transaction_complete = false;
+                match production_pipeline::disposition(kernel_count) {
+                    production_pipeline::ProductionDisposition::HostOnly => {}
+                    production_pipeline::ProductionDisposition::DeviceTransaction => {
+                        let RetainedProductionDeviceAdmission {
                             target,
-                            context_producers,
+                            compiler_execution,
+                            build_attempt,
+                        } = production_device_admission.take().expect(
+                            "device admission presence was validated after monomorphization",
+                        );
+                        let target_budget = target_budget
+                            .expect("device roots retain their original target account");
+                        let has_custom_llvm_configuration = has_custom_llvm_configuration(tcx.sess);
+                        if let Err(error) = production_pipeline::reject_custom_llvm_configuration(
+                            has_custom_llvm_configuration,
                         ) {
-                            Ok(closure) => closure,
+                            tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
+                        }
+                        let closure = match collector::collect_authenticated_kernel_closure_v1(
+                                tcx,
+                                mono_partitions.codegen_units,
+                                self.config.verbose,
+                                target,
+                                context_producers,
+                            ) {
+                                Ok(closure) => closure,
+                                Err(error) => tcx.dcx().fatal(format!(
+                                    "[rustc-codegen-fe2o3] production collection failed without fallback: {error}"
+                                )),
+                            };
+                        let output_dir = output_dir
+                            .expect("device output was required above")
+                            .to_path_buf();
+                        let invocation = protected_rustc_invocation.take().unwrap_or_else(|| {
+                                tcx.dcx().fatal(
+                                    "[rustc-codegen-fe2o3] production compilation requires protected rustc invocation custody",
+                                )
+                            });
+                        let producer = match artifact_transaction::ProducerIdentity::from_rustc_invocation_descriptor_v3(
+                            invocation.descriptor(),
+                        ) {
+                            Ok(producer) => producer,
                             Err(error) => tcx.dcx().fatal(format!(
-                                "[rustc-codegen-fe2o3] production collection failed without fallback: {error}"
+                                "[rustc-codegen-fe2o3] protected rustc producer identity failed: {error}"
                             )),
                         };
-                    let output_dir = output_dir
-                        .expect("device output was required above")
-                        .to_path_buf();
-                    let invocation = protected_rustc_invocation.take().unwrap_or_else(|| {
-                            tcx.dcx().fatal(
-                                "[rustc-codegen-fe2o3] production compilation requires protected rustc invocation custody",
+                        let publication =
+                            production_pipeline::ProductionCompilation::from_collected_device_closure(
+                                tcx,
+                                closure,
+                                producer.clone(),
+                                output_dir,
+                                build_attempt,
+                                invocation,
                             )
-                        });
-                    let producer = match artifact_transaction::ProducerIdentity::from_rustc_invocation_descriptor_v3(
-                        invocation.descriptor(),
-                    ) {
-                        Ok(producer) => producer,
-                        Err(error) => tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] protected rustc producer identity failed: {error}"
-                        )),
-                    };
-                    let publication =
-                        production_pipeline::ProductionCompilation::from_collected_device_closure(
-                            tcx,
-                            closure,
-                            producer.clone(),
-                            output_dir,
-                            build_attempt,
-                            invocation,
-                            compiler_execution,
-                        )
-                        .and_then(|transaction| {
-                            target_account
-                                .with_budget(|budget| transaction.publish_worker_handoff(budget))
-                        })
-                        .map(|subject| subject.outer_handoff().byte_len());
-                    match publication {
-                        Ok(publication_length) => {
-                            production_device_transaction_complete = true;
-                            eprintln!(
-                                "[rustc-codegen-fe2o3] production compilation published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the preselected managed compiler-module transaction; link, artifact, load, and launch authority remain false",
-                                publication_length,
-                            );
+                            .and_then(|transaction| {
+                                transaction.publish_worker_handoff(target_budget, compiler_execution)
+                            })
+                            .map(|subject| subject.outer_handoff().byte_len());
+                        match publication {
+                            Ok(publication_length) => {
+                                production_device_transaction_complete = true;
+                                eprintln!(
+                                    "[rustc-codegen-fe2o3] production compilation published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the preselected managed compiler-module transaction; link, artifact, load, and launch authority remain false",
+                                    publication_length,
+                                );
+                            }
+                            Err(error) => tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")),
                         }
-                        Err(error) => tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")),
                     }
                 }
-            }
-            if kernel_count > 0 && !production_device_transaction_complete {
-                tcx.dcx().fatal(
-                    "[rustc-codegen-fe2o3] production compilation did not complete its device transaction; qualification fallback is forbidden",
-                );
-            }
+                if kernel_count > 0 && !production_device_transaction_complete {
+                    tcx.dcx().fatal(
+                        "[rustc-codegen-fe2o3] production compilation did not complete its device transaction; qualification fallback is forbidden",
+                    );
+                }
+            }).unwrap_or_else(|error| {
+                tcx.dcx().fatal(format!(
+                    "[rustc-codegen-fe2o3] target account admission failed: {error}"
+                ))
+            });
             self.llvm_backend.codegen_crate(tcx, crate_info)
         })
     }
@@ -575,7 +577,14 @@ mod tests {
     fn admitted_protected_modules_publish_only_through_strict_v3() {
         let backend = include_str!("lib.rs");
         let production_pipeline = include_str!("production_pipeline.rs");
-        let production = backend
+        let device_phase = backend
+            .split("production_target_account::with_device_phase(production_root_count > 0,")
+            .nth(1)
+            .expect("one synchronous device phase")
+            .split("self.llvm_backend.codegen_crate(tcx, crate_info)")
+            .next()
+            .expect("bounded device phase");
+        let production = device_phase
             .split("let mut production_device_transaction_complete")
             .nth(1)
             .expect("production transaction tracking exists")
@@ -592,11 +601,8 @@ mod tests {
         assert!(production.contains(".take()"));
         assert!(!production.contains("build_attempt.unwrap_or_else"));
         assert!(production.contains("from_collected_device_closure("));
-        assert!(production.contains("publish_worker_handoff(budget)"));
-        assert!(
-            production
-                .contains(".with_budget(|budget| transaction.publish_worker_handoff(budget))")
-        );
+        assert!(production.contains("publish_worker_handoff(target_budget, compiler_execution)"));
+        assert!(!device_phase.contains(".with_budget("));
         assert!(!production.contains("from_collected_device_closure_with_protected_invocation_v3"));
         assert!(!production.contains("publish_worker_handoff_v3"));
         assert!(!production.contains("None =>"));
@@ -613,14 +619,22 @@ mod tests {
             .expect("monomorphization boundary");
         assert!(admission < monomorphization);
         let account = backend
-            .find("target_account: production_target_account::new()")
+            .find("production_target_account::with_device_phase(")
             .unwrap();
         let execution = backend
             .find(
                 "compiler_execution: protected_compiler_execution::admit_for_production_codegen()",
             )
             .unwrap();
-        assert!(admission < account && account < execution && execution < monomorphization);
+        assert!(account < admission && admission < execution && execution < monomorphization);
+        let host_codegen = backend
+            .find("self.llvm_backend.codegen_crate(tcx, crate_info)")
+            .unwrap();
+        assert!(account < host_codegen);
+        assert!(!device_phase.contains("self.llvm_backend.codegen_crate"));
+        let account_scope = include_str!("production_target_account.rs");
+        assert!(account_scope.contains("run: impl FnOnce(Option<&mut Budget<'_>>) -> T"));
+        assert!(account_scope.contains("account.with_budget(|budget| run(Some(budget)))"));
     }
 
     #[test]
