@@ -20,6 +20,15 @@ const STORAGE: usize = 10_000_000;
 const PREFIX: &str = "handoff_v3::tests::fixture::";
 const OPT_IN: &str = "FE2O3_RUN_PRIVILEGED_HANDOFF_V3_TEST";
 
+// This private, single-test child has no concurrent descriptor-producing work.
+// The directory iterator contributes the same one descriptor to every census.
+fn open_descriptor_count() -> usize {
+    std::fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .count()
+}
+
 fn supervisor(
     peer: &OwnedFd,
     pidfd: &OwnedFd,
@@ -90,6 +99,7 @@ fn supervisor_process_helper() {
         + 2 * MANIFEST_WORK
         + LiveClient::ADMISSION_WORK
         + LiveClient::REVALIDATION_WORK;
+    let descriptors = open_descriptor_count();
     let input = request(&submitter, 0);
     let object = checks::snapshot(&input).unwrap();
     b.reserve_storage(Accepted::CONTROL_STORAGE).unwrap();
@@ -147,9 +157,11 @@ fn supervisor_process_helper() {
     drop(accepted);
     b.release_storage(retained).unwrap();
     assert_eq!(references(object), 0);
+    assert_eq!(open_descriptor_count(), descriptors);
     assert_eq!(b.storage(), 19 + supervisor_storage);
 
     for case in 1..=7 {
+        let descriptors = open_descriptor_count();
         let input = request(&submitter, case);
         let object = checks::snapshot(&input).unwrap();
         b.reserve_storage(Accepted::CONTROL_STORAGE).unwrap();
@@ -178,9 +190,11 @@ fn supervisor_process_helper() {
         }
         assert_eq!(b.storage(), floor);
         assert_eq!(references(object), 0);
+        assert_eq!(open_descriptor_count(), descriptors, "semantic case {case}");
         b.release_storage(Accepted::CONTROL_STORAGE).unwrap();
     }
     for case in 0..5 {
+        let descriptors = open_descriptor_count();
         let input = request(&submitter, 0);
         let object = checks::snapshot(&input).unwrap();
         b.reserve_storage(Accepted::CONTROL_STORAGE).unwrap();
@@ -210,6 +224,7 @@ fn supervisor_process_helper() {
             .unwrap_err();
         assert_eq!(b.storage(), floor);
         assert_eq!(references(object), 0);
+        assert_eq!(open_descriptor_count(), descriptors, "resource case {case}");
         match case {
             0 => {
                 assert!(matches!(
