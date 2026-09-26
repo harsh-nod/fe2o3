@@ -33,6 +33,7 @@ use std::{
 
 const OUTPUT_DOMAIN: &[u8] = b"FE2O3/CONDITIONAL-NATIVE-OUTPUT/V5\0";
 const PRODUCER: &str = "inert-conditional-native-output-v5";
+const ORIGINAL_LAYOUT_ARGUMENT_WORK: usize = 32;
 
 #[derive(Debug)]
 pub(crate) enum ConditionalNativeDescriptorErrorV5 {
@@ -227,6 +228,7 @@ fn encode_rows(
         ));
     }
     check_output(roots, output.module(), profile, budget)?;
+    check_original_layouts(roots, budget)?;
     nominal_v3::with_subject_rows(
         roots,
         semantic,
@@ -239,6 +241,19 @@ fn encode_rows(
         budget,
         |nominal, budget| encode_v5(nominal, semantic, contracts, budget),
     )?
+}
+
+fn check_original_layouts(roots: &[TypedDescriptorRootV1], budget: &mut Budget<'_>) -> R<()> {
+    for root in roots {
+        for argument in root.arguments.as_slice() {
+            // Prepay the fixed, allocation-free field checks even on all-slice
+            // roots. The shared V3 packing gate remains nominal-only.
+            budget.charge_work(ORIGINAL_LAYOUT_ARGUMENT_WORK)?;
+            super::laid_out_plan_v1::physical(argument)
+                .map_err(nominal_v3::NominalDescriptorErrorV3::Descriptor)?;
+        }
+    }
+    Ok(())
 }
 
 fn encode_v5(

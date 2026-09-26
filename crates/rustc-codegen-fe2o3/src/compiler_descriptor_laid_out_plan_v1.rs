@@ -36,7 +36,7 @@ fn scalar_matches(actual: Scalar, expected: ScalarTypeV1) -> bool {
     ) && super::descriptor_scalar(actual) == expected
 }
 
-fn physical(argument: &Argument) -> Result<(u64, u32), CompilerDescriptorError> {
+pub(super) fn physical(argument: &Argument) -> Result<(u64, u32), CompilerDescriptorError> {
     let (size, alignment, class, components, access_ok) = match argument.kind {
         Kind::CompilerLaidOutUsize | Kind::CompilerLaidOutIsize => {
             if argument.layout.is_some() {

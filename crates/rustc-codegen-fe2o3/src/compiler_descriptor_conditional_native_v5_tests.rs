@@ -189,6 +189,129 @@ fn conditional_descriptor_v5_component_missing_original_nominal_layout_is_requir
 }
 
 #[test]
+fn conditional_descriptor_v5_component_rejects_valid_but_wrong_layout_donors() {
+    use fe2o3_artifacts::{PointerWidth, RustScalarElementTypeV1 as Scalar};
+    for profile in PROFILES {
+        let mut model = Model::new(2, profile);
+        let _baseline = model.bytes();
+        for root in 0..model.roots.len() {
+            let original = model.roots[root].arguments.clone();
+            for argument in 0..original.len() {
+                let output = argument == 2;
+                for donor in [
+                    fixture::slice_layout(!output, Scalar::F32, PointerWidth::Bits64),
+                    fixture::slice_layout(output, Scalar::F64, PointerWidth::Bits64),
+                    fixture::slice_layout(output, Scalar::F32, PointerWidth::Bits32),
+                ] {
+                    // These are constructor-checked Some values, not malformed
+                    // evidence or a fabricated source/proof receipt.
+                    let mut arguments = original.as_slice().to_vec();
+                    assert_ne!(arguments[argument].layout.as_ref(), Some(&donor));
+                    arguments[argument].layout = Some(donor);
+                    model.roots[root].arguments =
+                        crate::collector::TypedArgumentListV1::new(arguments).unwrap();
+                    assert!(matches!(
+                        model.run(LIMIT, LIMIT).0,
+                        Err(E::Nominal(nominal_v3::NominalDescriptorErrorV3::Descriptor(
+                            crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                                "whole-root source and physical layout join"
+                            )
+                        )))
+                    ));
+                }
+            }
+            model.roots[root].arguments = original;
+        }
+    }
+}
+
+#[test]
+fn conditional_descriptor_v5_component_original_layout_checks_prepaid_work() {
+    let mut model = Model::new(1, Profile::Gfx942);
+    let mut arguments = model.roots[0].arguments.as_slice().to_vec();
+    arguments[0].layout = None;
+    model.roots[0].arguments = crate::collector::TypedArgumentListV1::new(arguments).unwrap();
+    for limit in [
+        ORIGINAL_LAYOUT_ARGUMENT_WORK - 1,
+        ORIGINAL_LAYOUT_ARGUMENT_WORK,
+    ] {
+        let mut work = Work::new(PRIOR + limit);
+        let mut budget = Budget::new(&mut work, FLOOR);
+        budget.reserve_storage(FLOOR).unwrap();
+        budget.charge_work(PRIOR).unwrap();
+        let account = budget.work_ledger_identity_v1();
+        let result = check_original_layouts(&model.roots, &mut budget);
+        if limit < ORIGINAL_LAYOUT_ARGUMENT_WORK {
+            assert!(matches!(result, Err(E::Resource(Resource::Work(_)))));
+            assert_eq!(
+                budget.failed_work(),
+                Some(PRIOR + ORIGINAL_LAYOUT_ARGUMENT_WORK)
+            );
+            assert_eq!(budget.work(), PRIOR);
+        } else {
+            assert!(matches!(
+                result,
+                Err(E::Nominal(nominal_v3::NominalDescriptorErrorV3::Descriptor(
+                    crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                        "whole-root Rust layout evidence"
+                    )
+                )))
+            ));
+            assert_eq!(budget.failed_work(), None);
+            assert_eq!(budget.work(), PRIOR + ORIGINAL_LAYOUT_ARGUMENT_WORK);
+        }
+        assert!(budget.work_ledger_identity_v1() == account);
+        assert_eq!(budget.storage(), FLOOR);
+        assert_eq!(budget.peak_storage(), FLOOR);
+    }
+}
+
+#[test]
+fn conditional_descriptor_v5_component_original_layout_keeps_nominal_none_exception() {
+    use crate::compiler_descriptor::AccessMode;
+    use fe2o3_artifacts::RustcAbiClassV1;
+    let semantic = fixture::source(1);
+    let mut roots = fixture::roots(&semantic);
+    for kind in [
+        DescriptorArgumentKindV1::CompilerLaidOutUsize,
+        DescriptorArgumentKindV1::CompilerLaidOutIsize,
+    ] {
+        let mut arguments = roots[0].arguments.as_slice().to_vec();
+        let donor = arguments[1].layout.clone();
+        arguments[0].kind = kind;
+        arguments[0].access = AccessMode::ByValue;
+        arguments[0].source_size = 8;
+        arguments[0].rustc_abi_class = RustcAbiClassV1::Scalar;
+        arguments[0].layout = None;
+        roots[0].arguments = crate::collector::TypedArgumentListV1::new(arguments.clone()).unwrap();
+        // Only the physical preflight is under test: the unchanged semantic
+        // fixture is not claimed to authenticate this changed nominal argument.
+        let mut work = Work::new(3 * ORIGINAL_LAYOUT_ARGUMENT_WORK);
+        let mut budget = Budget::new(&mut work, FLOOR);
+        budget.reserve_storage(FLOOR).unwrap();
+        let account = budget.work_ledger_identity_v1();
+        check_original_layouts(&roots, &mut budget).unwrap();
+        assert_eq!(budget.work(), 3 * ORIGINAL_LAYOUT_ARGUMENT_WORK);
+        assert_eq!(budget.storage(), FLOOR);
+        assert!(budget.work_ledger_identity_v1() == account);
+        arguments[0].layout = donor;
+        roots[0].arguments = crate::collector::TypedArgumentListV1::new(arguments).unwrap();
+        let mut work = Work::new(ORIGINAL_LAYOUT_ARGUMENT_WORK);
+        let mut budget = Budget::new(&mut work, FLOOR);
+        budget.reserve_storage(FLOOR).unwrap();
+        assert!(matches!(
+            check_original_layouts(&roots, &mut budget),
+            Err(E::Nominal(nominal_v3::NominalDescriptorErrorV3::Descriptor(
+                crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "nominal pointer-sized argument has no fixed source layout"
+                )
+            )))
+        ));
+        assert_eq!(budget.storage(), FLOOR);
+    }
+}
+
+#[test]
 fn conditional_descriptor_v5_component_original_nominal_layout_is_required() {
     use crate::{collector::TypedArgumentListV1, compiler_descriptor::AccessMode};
     use fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdentityV1;

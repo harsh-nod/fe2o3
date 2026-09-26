@@ -362,8 +362,12 @@ fn conditional_descriptor_v5_fixture_distinguishes_raw_and_reference_validity() 
     ));
 }
 
-fn layout(output: bool) -> RustLayoutEvidenceV1 {
-    let scalar = RustScalarElementTypeV1::F32;
+pub(super) fn slice_layout(
+    output: bool,
+    scalar: RustScalarElementTypeV1,
+    pointer_width: PointerWidth,
+) -> RustLayoutEvidenceV1 {
+    let width = pointer_width.bytes();
     RustLayoutEvidenceV1::new(
         RustTypeEvidenceV1::new(if output {
             RustSourceTypeShapeV1::disjoint_slice(scalar, RustDisjointIndexSpaceV1::Index1D)
@@ -371,14 +375,14 @@ fn layout(output: bool) -> RustLayoutEvidenceV1 {
             RustSourceTypeShapeV1::shared_slice(scalar)
         }),
         RustcAbiClassV1::ScalarPair,
-        PointerWidth::Bits64,
-        16,
-        8,
+        pointer_width,
+        2 * width,
+        width as u32,
         vec![
             RustPhysicalComponentV1::new(
                 0,
-                8,
-                8,
+                width,
+                width as u32,
                 RustPhysicalComponentKindV1::Pointer {
                     mutability: if output {
                         RustPointerMutabilityV1::Mut
@@ -389,7 +393,13 @@ fn layout(output: bool) -> RustLayoutEvidenceV1 {
                 },
             )
             .unwrap(),
-            RustPhysicalComponentV1::new(8, 8, 8, RustPhysicalComponentKindV1::Usize).unwrap(),
+            RustPhysicalComponentV1::new(
+                width,
+                width,
+                width as u32,
+                RustPhysicalComponentKindV1::Usize,
+            )
+            .unwrap(),
         ],
     )
     .unwrap()
@@ -430,7 +440,11 @@ pub(super) fn roots(semantic: &Semantic) -> Vec<TypedDescriptorRootV1> {
                                     AccessMode::ReadOnly
                                 },
                                 offset: (n * 16) as u32,
-                                layout: Some(layout(output)),
+                                layout: Some(slice_layout(
+                                    output,
+                                    RustScalarElementTypeV1::F32,
+                                    PointerWidth::Bits64,
+                                )),
                                 source_size: 16,
                                 source_alignment: 8,
                                 rustc_abi_class: RustcAbiClassV1::ScalarPair,
