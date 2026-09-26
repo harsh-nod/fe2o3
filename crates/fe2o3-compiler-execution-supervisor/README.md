@@ -6,6 +6,18 @@ static launcher and issuer before either can enter authority-bearing custody.
 
 ## Native Custody Status
 
+`ProvisionedProtectedIssuerServiceInputsV2` admits the fixed production listener
+and service-owned root on the original resource ledger. It shares the legacy
+filesystem/socket predicates, pins both objects, permits bound-to-listening
+continuity, and refuses further transfer after activation. It can validate the
+exact final staged listener/root Files without duplicating them. Returned owner
+growth or cloned-pair charges are unreserved; retain the original owner and its
+charge through final validation. This policy-neutral custody is usable by both
+native families but grants neither compiler authority nor provisioning provenance.
+It is a prerequisite for native compiler-coordinator integration, not that
+integration itself. See the
+[transfer checkpoint](../../docs/evidence/conditional-native-transfer-20260926.md).
+
 `AdmittedIssuerProgramV2` and `AdmittedIssuerProgramV3` each freshly consume their
 own native policy capability and the
 provisioned launcher/issuer sources. It uses bounded native executable admission,

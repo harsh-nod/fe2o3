@@ -379,9 +379,21 @@ quarantined custody is not successful termination. Callers retire full retained
 storage only after dropping the managed owner. Deferred artifact leases may
 delay lock release indefinitely.
 
-Native supervisor transfer and compiler coordinator integration remain pending.
+Native supervisor transfer now requires retained managed custody and actual
+same-family supervisor/policy capabilities. `try_clone_for_supervisor` charges
+the full new pair and nominal envelope; `into_ordered_descriptors` consumes that
+envelope without silently retiring reservations. Final staged Files must pass
+`validate_supervisor_transfer` against the retained managed owner and contexts.
+No independent pair constructor or V1 upgrade is exposed. Budget/context and
+descriptor-packaging tests do not prove a successful protected transfer.
+
+The supervisor's policy-neutral `ProvisionedProtectedIssuerServiceInputsV2`
+likewise admits, pins, clones and validates final listener/root objects under
+the original ledger using shared filesystem/socket checks. Only the fixed
+production pathname is public. Activation permits continuity but ends transfer.
+Compiler coordinator composition still uses V1 and remains to be migrated.
 Current tests cover actual staged Files and rootless transport/refusal mechanics,
 not a successful native root deployment. Adapter-level post-clone failures and
 unwinds, including child-storage refusal and failure after endpoint receipt,
 still need direct coverage. See the
-[launch checkpoint](evidence/conditional-native-root-launch-20260926.md).
+[transfer checkpoint](evidence/conditional-native-transfer-20260926.md).

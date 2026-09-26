@@ -1,5 +1,11 @@
 # fe2o3 compiler-execution coordinator
 
+The production composition below currently uses V1 owners. Native anchor launch,
+supervisor transfer, and budgeted listener/root admission are available in the
+owning crates, but this coordinator has not yet composed them into a native
+production deployment. These APIs do not establish 47/47 safe GPU launch. See the
+[native transfer checkpoint](../../docs/evidence/conditional-native-transfer-20260926.md).
+
 This package owns the sole root-to-protected-supervisor deployment transition.
 It admits and pins the exact supervisor, static pre-exec launcher, and issuer
 images against the canonical deployment and issuer policy; retains the exact

@@ -67,8 +67,16 @@ reservation and reserve the growth. Continuity requires actual contexts again.
 Cancellation/Drop take one prepaid cleanup step and may defer or quarantine;
 they do not guarantee eventual reaping or artifact-lock release.
 
-Native supervisor transfer and compiler coordinator integration remain pending.
+`try_clone_for_supervisor` returns nominal V2/V3 endpoint/pidfd custody only after
+rechecking the managed occurrence and actual same-family policy and supervisor
+capabilities. Its storage receipt is the full new transfer charge, not growth.
+Descriptor extraction is consuming and metered; retire only the envelope charge
+while keeping both descriptors charged. Before exec, validate the final staged
+Files with `validate_supervisor_transfer` on the retained managed owner and the
+same actual contexts. Transfer metadata alone does not authorize a receiver.
+
+Compiler coordinator integration remains pending.
 Adapter-level post-clone failure/unwind coverage and genuine protected startup
 are still validation gaps. Rootless tests do not qualify a protected deployment
 or a GPU kernel. See the
-[launch checkpoint](../../docs/evidence/conditional-native-root-launch-20260926.md).
+[transfer checkpoint](../../docs/evidence/conditional-native-transfer-20260926.md).
