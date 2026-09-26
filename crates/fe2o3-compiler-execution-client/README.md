@@ -15,6 +15,12 @@ charge, which is released when the terminal session closes. On admission
 failure the closed peer's original reservation remains caller-owned. Returned
 values include their full, unreserved logical output charge.
 
+Both native families can instead consume the fixed inherited child slot with
+`admit_inherited_child`. The original account prepays the peer, descriptor
+inspection and private duplication; resource denial still closes the input.
+Successful admission retains one private CLOEXEC duplicate and consumes FD 195.
+No policy-family discovery or decoder fallback occurs at this transport step.
+
 This API is diagnostic: it does **not** activate a protected native issuer.
 Signed fixture transcripts do not prove protected signing-key custody, live
 compiler observation, durable commit-before-publication, independently
@@ -28,6 +34,46 @@ charges, and never repair a replaced account. Preparation does not extend the
 session deadline. This permits preparation before the terminal exchange without
 a fresh admission budget; it does not select a protected V3 launch policy or
 activate the V3 path in the compiler.
+
+`prepare_and_acquire` connects preparation, subject publication, one receipt
+acquisition and transport completion on that same account. Publication cannot
+run until preparation's postchecks pass and the unchanged deadline is live.
+The publication callback prepays its subject and carries required prepared
+owners forward; the completion callback receives a fully reserved carriage
+after the peer closes. Callbacks cannot refund inherited floors. Inner failure
+or unwind stays charged and never triggers a retry. The caller still supplies
+the real compiler ownership and independently pinned policy; this API does not
+turn callback results or inert records into compiler authority.
+
+The following type example relays an already-published, prepaid inert subject;
+it does not construct compiler preparation or grant publication authority:
+
+```rust
+use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV3 as Subject;
+use fe2o3_compiler_execution_client::{CompilerExecutionClientV3 as Client,
+    CompilerExecutionClientErrorV3 as Error};
+use fe2o3_compiler_execution_protocol::{CompilerExecutionIssuerPolicyV3 as Policy,
+    CompilerExecutionReceiptCarriageV3 as Carriage};
+fn relay(client: Client<'_, '_>, policy: &Policy, subject: Subject) -> Result<Carriage, Error> {
+    client.prepare_and_acquire(policy, |_| Ok(subject),
+        |subject, _| Ok((subject, ())), |carriage, (), _| Ok(carriage))
+}
+```
+
+An original budget borrow cannot escape through the completion result:
+
+```compile_fail
+use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV3 as Subject;
+use fe2o3_compiler_execution_client::{CompilerExecutionClientV3 as Client,
+    CompilerExecutionClientErrorV3 as Error};
+use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerPolicyV3 as Policy;
+use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+fn escape<'b, 'w>(client: Client<'b, 'w>, policy: &Policy, subject: Subject)
+    -> &'b mut Budget<'w> {
+    client.prepare_and_acquire::<_, _, _, Error>(policy, |_| Ok(subject),
+        |subject, _| Ok((subject, ())), |_, (), budget| Ok(budget)).unwrap()
+}
+```
 
 ## Production V1 Client
 

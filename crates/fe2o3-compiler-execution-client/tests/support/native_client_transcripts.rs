@@ -159,6 +159,13 @@ macro_rules! native_client_transcripts {
             assert_eq!(budget.storage(), floor);
         }
         fn spawn_lifecycle(peer: OwnedFd, stage: Stage) -> thread::JoinHandle<usize> {
+            spawn_lifecycle_notifying(peer, stage, |_| {})
+        }
+        fn spawn_lifecycle_notifying(
+            peer: OwnedFd,
+            stage: Stage,
+            closed: impl FnOnce(usize) + Send + 'static,
+        ) -> thread::JoinHandle<usize> {
             thread::spawn(move || {
                 let mut work = Work::new(WORK);
                 let mut b = Budget::new(&mut work, STORAGE);
@@ -212,6 +219,7 @@ macro_rules! native_client_transcripts {
                     respond(&peer, &query, c.policy(), reply, &mut b);
                     if terminal {
                         assert_closed(&peer);
+                        closed(packets);
                         return packets;
                     }
                 }
@@ -311,6 +319,128 @@ macro_rules! native_client_transcripts {
                     assert!(matches!(result, Err(Error::Mismatch(_))));
                 }
                 assert_eq!(b.storage(), baseline);
+            }
+        }
+
+        #[test]
+        fn native_completion_retains_one_account_through_all_recovery_suffixes() {
+            for (stage, packets) in [(Stage::Ready, 5), (Stage::Prepared, 4),
+                (Stage::Issued, 3), (Stage::Published, 1)] {
+                completion_case(stage, packets, FinishFault::None);
+            }
+        }
+
+        #[test]
+        fn native_completion_finish_failures_preserve_charges_and_close_without_retry() {
+            for fault in [FinishFault::Error, FinishFault::Unwind,
+                FinishFault::Floor, FinishFault::Foreign] {
+                completion_case(Stage::Published, 1, fault);
+            }
+        }
+
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum FinishFault { None, Error, Unwind, Floor, Foreign }
+
+        fn completion_case(stage: Stage, packets: usize, fault: FinishFault) {
+            // These are signed fixture transcripts and drop-order markers, not
+            // compiler prepared ownership, protected publication or GPU evidence.
+            struct Retained(std::rc::Rc<std::cell::Cell<bool>>);
+            impl Drop for Retained {
+                fn drop(&mut self) { self.0.set(true); }
+            }
+            let mut work = Work::new(WORK);
+            let mut other_work = Work::new(WORK);
+            let mut other = Budget::new(&mut other_work, STORAGE);
+            other.reserve_storage(STORAGE / 2).unwrap();
+            let mut displaced = None;
+            let mut budget = Budget::new(&mut work, STORAGE);
+            budget.reserve_storage(FIXTURE_STORAGE).unwrap();
+            let policy = policy(&mut budget);
+            let expected = carriage(&mut budget);
+            let floor = budget.storage();
+            let output_floor = floor + Client::SUBJECT_STORAGE + expected.retained_storage();
+            let account = budget.work_ledger_identity_v1();
+            let phase = std::cell::Cell::new(0);
+            let finish_work = std::cell::Cell::new(0);
+            let dropped = std::rc::Rc::new(std::cell::Cell::new(false));
+            let retained = Retained(dropped.clone());
+            budget.reserve_storage(Client::PEER_STORAGE).unwrap();
+            let (peer, service) = pair();
+            let (closed_tx, closed_rx) = std::sync::mpsc::sync_channel(1);
+            let server = spawn_lifecycle_notifying(service, stage, move |count| {
+                closed_tx.send(count).unwrap();
+            });
+            let client = Client::admit(peer, TIMEOUT, &mut budget).unwrap();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client
+                .prepare_and_acquire::<_, _, _, Error>(
+                    &policy,
+                    |b| {
+                        assert_eq!(phase.replace(1), 0);
+                        assert!(b.work_ledger_identity_v1() == account);
+                        b.charge_work(19)?;
+                        Ok(retained)
+                    },
+                    |retained, b| {
+                        assert_eq!(phase.replace(2), 1);
+                        assert!(!dropped.get());
+                        assert!(b.work_ledger_identity_v1() == account);
+                        Ok((subject(b), retained))
+                    },
+                    |actual, retained, b| {
+                        assert_eq!(phase.replace(3), 2);
+                        assert!(!dropped.get());
+                        assert!(b.work_ledger_identity_v1() == account);
+                        assert_eq!(b.storage(), output_floor + size_of::<Client<'_, '_>>());
+                        assert_eq!(actual.canonical_bytes(), expected.canonical_bytes());
+                        // A final client drop is too late: EOF must be observed
+                        // by the service before this callback can proceed.
+                        assert_eq!(closed_rx.recv_timeout(TIMEOUT).unwrap(), packets);
+                        finish_work.set(b.work());
+                        b.charge_work(7)?;
+                        b.reserve_storage(11)?;
+                        let _retained = retained;
+                        match fault {
+                            FinishFault::None => Ok(actual),
+                            FinishFault::Error => Err(Error::Mismatch("finish refused")),
+                            FinishFault::Unwind => panic!("finish unwind"),
+                            FinishFault::Floor => {
+                                b.release_storage(12)?;
+                                Ok(actual)
+                            }
+                            FinishFault::Foreign => {
+                                displaced = Some(std::mem::replace(b, other));
+                                Ok(actual)
+                            }
+                        }
+                    },
+                )));
+            assert_eq!(server.join().unwrap(), packets);
+            match fault {
+                FinishFault::None => {
+                    let actual = result.unwrap().unwrap();
+                    assert!(!actual.grants_compiler_authority());
+                    assert!(!actual.grants_launch_authority());
+                }
+                FinishFault::Error => assert!(matches!(result, Ok(Err(Error::Mismatch("finish refused"))))),
+                FinishFault::Unwind => assert!(result.is_err()),
+                FinishFault::Floor | FinishFault::Foreign => {
+                    assert!(matches!(result, Ok(Err(Error::Resource(Resource::Accounting)))));
+                }
+            }
+            assert_eq!(phase.get(), 3);
+            assert!(dropped.get());
+            if fault == FinishFault::Foreign {
+                assert_eq!(budget.work(), 0);
+                assert_eq!(budget.storage(), STORAGE / 2);
+                let original = displaced.unwrap();
+                assert!(original.work_ledger_identity_v1() == account);
+                assert_eq!(original.work(), finish_work.get() + 7);
+                assert_eq!(original.storage(), output_floor + size_of::<Client<'_, '_>>() + 11);
+            } else {
+                assert!(budget.work_ledger_identity_v1() == account);
+                assert_eq!(budget.work(), finish_work.get() + 7);
+                let retained = if fault == FinishFault::Floor { size_of::<Client<'_, '_>>() - 1 } else { 11 };
+                assert_eq!(budget.storage(), output_floor + retained);
             }
         }
 

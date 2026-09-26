@@ -127,6 +127,65 @@ macro_rules! native_client_adapter {
             where
                 E: From<ClientError>,
             {
+                let value = self.checked(run)?;
+                Ok((self, value))
+            }
+
+            /// Consumes one original-account preparation/publication/receipt flow.
+            /// Publication runs only after preparation's account postcheck succeeds
+            /// and the original deadline is still live. It must return a prepaid
+            /// subject and retain all required preparation owners in `R`.
+            /// Acquisition uses the existing native state machine exactly once.
+            /// The peer then closes, and the full carriage is reserved before
+            /// `finish` can publish transport or return retained output. No callback
+            /// may lower its inherited storage floor; consumed input charges are
+            /// caller-owned and are not automatically retired. Errors and unwind
+            /// retain opaque inner charges, never restore a replaced account, and
+            /// never retry publication or acquisition.
+            ///
+            /// This orders client operations, not compiler authority: the caller
+            /// must supply genuine prepared ownership and independently pinned
+            /// policy. Callbacks, published bytes and fixture receipts are not proof.
+            pub fn prepare_and_acquire<P, R, T, E>(
+                self,
+                policy: &Policy,
+                prepare: impl FnOnce(&mut Budget<'work>) -> std::result::Result<P, E>,
+                publish: impl FnOnce(P, &mut Budget<'work>) -> std::result::Result<(Subject, R), E>,
+                finish: impl FnOnce(Carriage, R, &mut Budget<'work>) -> std::result::Result<T, E>,
+            ) -> std::result::Result<T, E>
+            where
+                E: From<ClientError>,
+            {
+                let floor = input_floor(self.retained, policy.retained_storage(), 0)?;
+                let (mut client, prepared) = self.prepare(|budget| {
+                    if budget.storage() < floor {
+                        return Err(ClientError::Resource(Resource::Accounting).into());
+                    }
+                    prepare(budget)
+                })?;
+                let deadline = client.deadline;
+                let (subject, retained) = client.checked(|budget| {
+                    if Instant::now() >= deadline {
+                        return Err(ClientError::Transport(TransportError::Timeout).into());
+                    }
+                    publish(prepared, budget)
+                })?;
+                let (carriage, storage) = client.acquire_borrowed(policy, subject)?;
+                drop(client.peer.take());
+                client.budget.reserve_storage(storage.additional_storage())
+                    .map_err(ClientError::from)?;
+                client.checked(|budget| finish(carriage, retained, budget))
+            }
+
+            // Only consuming public operations call this guard. An error therefore
+            // closes the session even when it leaves the original account charged.
+            fn checked<T, E>(
+                &mut self,
+                run: impl FnOnce(&mut Budget<'work>) -> std::result::Result<T, E>,
+            ) -> std::result::Result<T, E>
+            where
+                E: From<ClientError>,
+            {
                 self.budget.charge_work(8).map_err(ClientError::from)?;
                 let floor = self.budget.storage();
                 let account = self.budget.work_ledger_identity_v1();
@@ -146,7 +205,7 @@ macro_rules! native_client_adapter {
                         drop(result);
                         Err(ClientError::Resource(Resource::Accounting).into())
                     }
-                    Ok(result) => result.map(|value| (self, value)),
+                    Ok(result) => result,
                 }
             }
 
@@ -154,7 +213,15 @@ macro_rules! native_client_adapter {
             /// The subject is an expected input, never evidence that this process compiled it.
             /// Returns a full carriage charge; retire the consumed subject's charge separately.
             pub fn acquire(
-                self,
+                mut self,
+                policy: &Policy,
+                subject: Subject,
+            ) -> Result<(Carriage, $Storage)> {
+                self.acquire_borrowed(policy, subject)
+            }
+
+            fn acquire_borrowed(
+                &mut self,
                 policy: &Policy,
                 subject: Subject,
             ) -> Result<(Carriage, $Storage)> {

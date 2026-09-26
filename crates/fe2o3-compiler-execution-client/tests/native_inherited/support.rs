@@ -118,7 +118,7 @@ fn fixture(case: &str) -> (Option<OwnedFd>, OwnedFd) {
         }
         "unconnected" => (
             Some(
-                net::socket(
+                net::socket_with(
                     AddressFamily::UNIX,
                     SocketType::SEQPACKET,
                     SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
@@ -139,6 +139,7 @@ fn fixture(case: &str) -> (Option<OwnedFd>, OwnedFd) {
 #[test]
 fn native_inherited_public_admission_matrix() {
     let deadline = Instant::now() + MATRIX_TIMEOUT;
+    let mut failures = Vec::new();
     for case in CASES {
         assert!(
             Instant::now() < deadline,
@@ -182,12 +183,15 @@ fn native_inherited_public_admission_matrix() {
         // No parent alias of the admitted endpoint may keep the EOF witness alive.
         drop(command);
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let status = child.wait(CASE_TIMEOUT.min(remaining)).unwrap();
-        assert!(
-            status.success(),
-            "inherited admission case {case}: {status}"
-        );
+        match child.wait(CASE_TIMEOUT.min(remaining)) {
+            Ok(status) if status.success() => eprintln!("inherited admission {case}: passed"),
+            result => failures.push(format!("{case}: {result:?}")),
+        }
     }
+    assert!(
+        failures.is_empty(),
+        "inherited admission failures: {failures:?}"
+    );
 }
 
 fn canonical_vacancy(observer: &OwnedFd) -> OwnedFd {
@@ -314,13 +318,9 @@ fn native_inherited_case_child() {
         drop(client);
         assert_eq!(budget.storage(), EXTRA);
     } else {
-        let error = match result {
-            Ok(client) => {
-                drop(client);
-                panic!("unexpected inherited admission for {case}");
-            }
-            Err(error) => error,
-        };
+        let error = result
+            .err()
+            .unwrap_or_else(|| panic!("unexpected inherited admission for {case}"));
         match case.as_str() {
             "quota-entry" | "missing-quota" | "quota-work" => {
                 assert!(matches!(error, Error::Resource(Resource::Work(_))));
@@ -336,13 +336,17 @@ fn native_inherited_case_child() {
                 Error::Transport(Transport::InheritedPeerCloseOnExec)
             )),
             "pipe" => assert!(
-                matches!(error, Error::Transport(Transport::Descriptor(ref e)) if e.raw_os_error() == Some(libc::ENOTSOCK))
+                matches!(error, Error::Transport(Transport::Descriptor(ref e)) if e.raw_os_error() == Some(libc::ENOTSOCK)),
+                "pipe rejection: {error:?}"
             ),
-            "stream" => assert!(matches!(error, Error::Transport(Transport::NotSeqpacket))),
-            "unconnected" => assert!(matches!(
-                error,
-                Error::Transport(Transport::NamedOrNonUnixPeer)
-            )),
+            "stream" => assert!(
+                matches!(error, Error::Transport(Transport::NotSeqpacket)),
+                "stream rejection: {error:?}"
+            ),
+            "unconnected" => assert!(
+                matches!(error, Error::Transport(Transport::NamedOrNonUnixPeer)),
+                "unconnected rejection: {error:?}"
+            ),
             "timeout-zero" | "timeout-long" | "pipe-timeout" => {
                 assert!(matches!(error, Error::Transport(Transport::InvalidTimeout)))
             }

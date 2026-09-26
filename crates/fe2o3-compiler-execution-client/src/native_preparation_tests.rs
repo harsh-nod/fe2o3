@@ -11,6 +11,9 @@ use std::{
 const PREFIX: usize = 19;
 const FLOOR: usize = 23;
 
+#[path = "native_completion_tests.rs"]
+mod completion;
+
 fn accounting_client<'b, 'w>(budget: &'b mut Budget<'w>) -> (TestClient<'b, 'w>, OwnedFd) {
     let (reader, peer) = peer();
     budget
