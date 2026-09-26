@@ -43,8 +43,10 @@ mod issuer_policy_codec;
 mod issuer_policy_v2;
 mod issuer_policy_v3;
 mod launch_manifest;
+mod launch_manifest_adapter;
 mod launch_manifest_codec;
 mod launch_manifest_v2;
+mod launch_manifest_v3;
 mod receipt_carriage_adapter;
 mod receipt_carriage_v2;
 mod receipt_carriage_v3;
@@ -56,14 +58,18 @@ mod receipt_publication_v3;
 mod service;
 mod service_native_adapter;
 mod service_ready;
+mod service_ready_adapter;
 mod service_ready_codec;
 mod service_ready_v2;
+mod service_ready_v3;
 mod service_v2;
 mod service_v3;
 mod supervisor_deployment;
 mod supervisor_handoff;
+mod supervisor_handoff_adapter;
 mod supervisor_handoff_codec;
 mod supervisor_handoff_v2;
+mod supervisor_handoff_v3;
 mod supervisor_ready;
 mod worker_anchor_journal;
 mod worker_anchor_journal_codec;
@@ -239,6 +245,12 @@ pub use launch_manifest_v2::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_WORK_V2,
     CompilerExecutionServiceLaunchManifestErrorV2, CompilerExecutionServiceLaunchManifestV2,
 };
+pub use launch_manifest_v3::{
+    COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V3,
+    COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_STORAGE_V3,
+    COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_WORK_V3,
+    CompilerExecutionServiceLaunchManifestErrorV3, CompilerExecutionServiceLaunchManifestV3,
+};
 pub use receipt_carriage_v2::{
     COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V2,
     COMPILER_EXECUTION_RECEIPT_CARRIAGE_CONSTRUCT_STORAGE_V2,
@@ -320,6 +332,11 @@ pub use service_ready_v2::{
     COMPILER_EXECUTION_SERVICE_READY_WORK_V2, CompilerExecutionServiceReadyErrorV2,
     CompilerExecutionServiceReadyV2,
 };
+pub use service_ready_v3::{
+    COMPILER_EXECUTION_SERVICE_READY_BYTES_V3, COMPILER_EXECUTION_SERVICE_READY_STORAGE_V3,
+    COMPILER_EXECUTION_SERVICE_READY_WORK_V3, CompilerExecutionServiceReadyErrorV3,
+    CompilerExecutionServiceReadyV3,
+};
 pub use service_v2::{
     COMPILER_EXECUTION_SERVICE_CONTROL_REQUEST_BYTES_V2,
     COMPILER_EXECUTION_SERVICE_CONTROL_RESPONSE_BYTES_V2,
@@ -391,6 +408,12 @@ pub use supervisor_handoff_v2::{
     COMPILER_EXECUTION_SUPERVISOR_HANDOFF_STORAGE_V2,
     COMPILER_EXECUTION_SUPERVISOR_HANDOFF_WORK_V2, CompilerExecutionSupervisorHandoffErrorV2,
     CompilerExecutionSupervisorHandoffV2,
+};
+pub use supervisor_handoff_v3::{
+    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V3,
+    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_STORAGE_V3,
+    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_WORK_V3, CompilerExecutionSupervisorHandoffErrorV3,
+    CompilerExecutionSupervisorHandoffV3,
 };
 pub use supervisor_ready::{
     COMPILER_EXECUTION_SUPERVISOR_READY_BYTES_V1, CompilerExecutionSupervisorReadyErrorV1,

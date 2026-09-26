@@ -28,7 +28,9 @@ mod compiler_execution_policy_native;
 mod compiler_execution_policy_v2;
 mod compiler_execution_policy_v3;
 mod compiler_execution_service_launch;
+mod compiler_execution_service_launch_native;
 mod compiler_execution_service_launch_v2;
+mod compiler_execution_service_launch_v3;
 mod compiler_execution_signing_key;
 mod compiler_execution_signing_key_native;
 mod compiler_execution_signing_key_v2;
@@ -64,6 +66,7 @@ pub use compiler_execution_service_launch::{
     CompilerExecutionServiceLaunchCapabilityV1,
 };
 pub use compiler_execution_service_launch_v2::CompilerExecutionServiceLaunchCapabilityV2;
+pub use compiler_execution_service_launch_v3::CompilerExecutionServiceLaunchCapabilityV3;
 pub use compiler_execution_signing_key::{
     COMPILER_EXECUTION_SIGNING_KEY_ISSUER_FD_V1, CompilerExecutionSigningKeyCapabilityV1,
 };

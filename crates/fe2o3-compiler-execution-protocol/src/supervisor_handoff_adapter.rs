@@ -23,11 +23,16 @@ macro_rules! supervisor_handoff_adapter {
             assert!(codec::BYTES == 184 && launch_manifest_codec::BYTES == 112);
             assert!(RETAINED >= size_of::<(Launch, Storage)>());
             assert!(size_of::<Raw>() <= RETAINED);
-            assert!(size_of::<codec::Frame>() + size_of::<launch_manifest_codec::Record>() <= RETAINED);
+            assert!(
+                size_of::<codec::Frame>() + size_of::<launch_manifest_codec::Record>() <= RETAINED
+            );
             assert!(size_of::<Result<Output>>() >= RETAINED);
             assert!(size_of::<std::thread::Result<Result<Output>>>() >= RETAINED);
             assert!(size_of::<std::result::Result<Raw, Framing>>() >= size_of::<Raw>());
-            assert!(size_of::<std::result::Result<codec::Frame, Framing>>() >= size_of::<codec::Frame>());
+            assert!(
+                size_of::<std::result::Result<codec::Frame, Framing>>()
+                    >= size_of::<codec::Frame>()
+            );
             assert!(
                 8 * size_of::<$Failure>()
                     + 64 * size_of::<usize>()
@@ -36,7 +41,8 @@ macro_rules! supervisor_handoff_adapter {
                     + (size_of::<Result<Output>>() - RETAINED)
                     + (size_of::<std::thread::Result<Result<Output>>>() - RETAINED)
                     + (size_of::<std::result::Result<Raw, Framing>>() - size_of::<Raw>())
-                    + (size_of::<std::result::Result<codec::Frame, Framing>>() - size_of::<codec::Frame>())
+                    + (size_of::<std::result::Result<codec::Frame, Framing>>()
+                        - size_of::<codec::Frame>())
                     <= 4096
             );
         };
@@ -54,7 +60,8 @@ macro_rules! supervisor_handoff_adapter {
                     let growth = RETAINED
                         .checked_sub(inherited)
                         .ok_or(Resource::Accounting)?;
-                    let frame = codec::encode(submitter, launch.client(), launch.canonical_bytes())?;
+                    let frame =
+                        codec::encode(submitter, launch.client(), launch.canonical_bytes())?;
                     Ok((
                         Self {
                             frame,
@@ -152,13 +159,7 @@ macro_rules! supervisor_handoff_adapter {
             floor: usize,
             operation: impl FnOnce() -> Result<T>,
         ) -> Result<T> {
-            resources::fixed(
-                budget,
-                floor,
-                $work,
-                $storage,
-                operation,
-            )
+            resources::fixed(budget, floor, $work, $storage, operation)
         }
     };
 }

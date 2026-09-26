@@ -6,17 +6,14 @@ macro_rules! service_ready_adapter {
         const RETAINED: usize = size_of::<($Owner, Storage)>();
         /// Logical work for entry, fixed framing, hashing, reencoding and comparison.
         /// This is not an instruction or wall-time bound.
-        pub const $work: usize =
-            resources::ENTRY_WORK + 32 * codec::BYTES;
+        pub const $work: usize = resources::ENTRY_WORK + 32 * codec::BYTES;
         /// Additional logical scratch. Borrowed inputs remain separately prepaid.
         /// This is not an allocator, generated-stack or RSS bound.
         pub const $storage: usize =
             4 * RETAINED + 4 * codec::BYTES + 2 * size_of::<sha2::Sha256>() + 4096;
 
         const _: () = {
-            assert!(
-                8 * size_of::<$Failure>() + 64 * size_of::<usize>() <= 4096
-            );
+            assert!(8 * size_of::<$Failure>() + 64 * size_of::<usize>() <= 4096);
         };
 
         impl $Owner {
@@ -159,13 +156,7 @@ macro_rules! service_ready_adapter {
             floor: usize,
             operation: impl FnOnce() -> Result<T>,
         ) -> Result<T> {
-            resources::fixed(
-                budget,
-                floor,
-                $work,
-                $storage,
-                operation,
-            )
+            resources::fixed(budget, floor, $work, $storage, operation)
         }
     };
 }

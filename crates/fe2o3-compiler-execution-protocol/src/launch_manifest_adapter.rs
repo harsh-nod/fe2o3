@@ -5,18 +5,14 @@ macro_rules! launch_manifest_adapter {
         pub const $bytes: usize = codec::BYTES;
         const RETAINED: usize = size_of::<($Owner, Storage)>();
         /// Logical work for fixed framing, encoding, hashing and comparison, not instructions.
-        pub const $work: usize =
-            resources::ENTRY_WORK + 32 * codec::BYTES;
+        pub const $work: usize = resources::ENTRY_WORK + 32 * codec::BYTES;
         /// Additional logical scratch. Inputs remain separately prepaid. Not an RSS,
         /// allocator, generated-stack or wall-time bound.
         pub const $storage: usize =
             4 * RETAINED + 4 * codec::BYTES + 2 * size_of::<sha2::Sha256>() + 4096;
 
         const _: () = {
-            assert!(
-                8 * size_of::<$Failure>() + 64 * size_of::<usize>()
-                    <= 4096
-            );
+            assert!(8 * size_of::<$Failure>() + 64 * size_of::<usize>() <= 4096);
         };
 
         impl $Owner {
@@ -133,13 +129,7 @@ macro_rules! launch_manifest_adapter {
             floor: usize,
             operation: impl FnOnce() -> Result<T>,
         ) -> Result<T> {
-            resources::fixed(
-                budget,
-                floor,
-                $work,
-                $storage,
-                operation,
-            )
+            resources::fixed(budget, floor, $work, $storage, operation)
         }
     };
 }
