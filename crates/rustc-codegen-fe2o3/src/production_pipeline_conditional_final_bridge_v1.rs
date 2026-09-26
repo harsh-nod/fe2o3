@@ -102,8 +102,36 @@ pub(super) struct RetainedFinalContentV5 {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ObservedContentV5([(usize, [u8; 32]); 5]);
+
+#[cfg(test)]
+impl ObservedContentV5 {
+    // Fixed-size diagnostic stamps only, not proof or a new storage receipt.
+    pub(super) fn from_bytes(bytes: [&[u8]; 5]) -> Self {
+        use sha2::{Digest, Sha256};
+        Self(bytes.map(|bytes| (bytes.len(), Sha256::digest(bytes).into())))
+    }
+}
+
+#[cfg(test)]
 impl RetainedFinalContentV5 {
-    pub(super) fn assert_observed_v5(&self) {
+    fn observation(&self, packet: &[u8]) -> ObservedContentV5 {
+        ObservedContentV5::from_bytes([
+            packet,
+            self.history.canonical_bytes(),
+            self.catalog.canonical_bytes(),
+            self.descriptor.canonical_bytes(),
+            self.module.llvm_ir().as_bytes(),
+        ])
+    }
+
+    pub(super) fn assert_observed_v5(
+        &self,
+        value: &super::ConditionalPrefixForFV1,
+        called: ObservedContentV5,
+    ) {
+        assert_eq!(self.observation(value.packet.source_packet()), called);
         assert!(!self.history.canonical_bytes().is_empty());
         assert!(!self.catalog.canonical_bytes().is_empty());
         assert!(!self.descriptor.canonical_bytes().is_empty());
@@ -112,7 +140,140 @@ impl RetainedFinalContentV5 {
         assert!(self.module.llvm_ir().contains(".fe2o3.kd.v5"));
         assert!(!self.module.llvm_ir().contains(".fe2o3.kd.v3"));
         assert!(!self.module.llvm_ir().contains(".fe2o3.kd.v4"));
+        assert_eq!(
+            self.module.descriptor_binding_version_for_test_v3(),
+            Some(5)
+        );
+
+        let ranked = &value.preparation.ranked;
+        let original = ranked.materialized();
+        let proof = value.packet.proof();
+        let replayed = proof.source().source();
+        let semantic = original.semantic_ssa().source_semantic();
+        assert_eq!(
+            replayed
+                .semantic_ssa()
+                .source_semantic()
+                .canonical_encoding(),
+            semantic.canonical_encoding(),
+        );
+        assert_eq!(
+            replayed.executable().canonical().canonical_bytes(),
+            original.executable().canonical().canonical_bytes(),
+        );
+        assert_eq!(replayed.source_launch(), original.source_launch());
+        assert_eq!(
+            self.catalog.semantic_source(),
+            semantic.semantic_sha256().as_bytes()
+        );
+        assert!(self.catalog.definitions().is_empty());
+        assert!(self.catalog.bindings().is_empty());
+
+        // Passive bounded queries, outside the production resource measurement.
+        // No budget, importer, semantic replay or authenticated owner is created.
+        let mut charge = |_| Ok::<(), Resource>(());
+        let table = self
+            .descriptor
+            .table(
+                self.descriptor
+                    .storage()
+                    .retained_storage()
+                    .checked_add(COMPILER_DESCRIPTOR_SOURCE_TABLE_STORAGE_V5)
+                    .unwrap(),
+                &mut charge,
+            )
+            .unwrap();
+        let roots = &value.preparation.bindings.typed_descriptor_roots;
+        assert_eq!(table.kernel_count(), roots.len());
+        assert_eq!(proof.root_count(), roots.len());
+        assert_eq!(proof.canonical_kernel_order().len(), roots.len());
+        assert_eq!(self.module.kernel_entries().len(), roots.len());
+        for (position, &ordinal) in proof.canonical_kernel_order().iter().enumerate() {
+            let ordinal = ordinal as usize;
+            let root = &roots[ordinal];
+            let row = table.kernel(position, &mut charge).unwrap();
+            assert_eq!(*row.kernel_id().as_bytes(), root.kernel_binding_bytes());
+            assert_eq!(row.entry_name(), root.entry_symbol());
+            assert!(
+                self.module
+                    .kernel_entries()
+                    .iter()
+                    .any(|entry| entry == row.entry_name())
+            );
+            let contract = row.conditional_contract(&mut charge).unwrap();
+            let producer = ranked.roots()[ordinal]
+                .conditional_producer_inputs_v2()
+                .unwrap();
+            assert_eq!(
+                contract.canonical_bytes(),
+                producer.contract.canonical_bytes()
+            );
+            assert_eq!(contract.subjects().kernel_id, root.kernel_binding_bytes());
+            assert_eq!(
+                contract.subjects().source_semantic_identity,
+                *semantic.semantic_sha256().as_bytes()
+            );
+            let report = proof.formula_report(ordinal).unwrap();
+            let theorem = contract.theorem();
+            assert_eq!(
+                theorem.statement_identity,
+                report.statement_identity().as_bytes()
+            );
+            assert_eq!(
+                theorem.generated_source_identity,
+                report.generated_source_identity().as_bytes()
+            );
+            assert_eq!(
+                theorem.execution_identity,
+                report.execution_identity().as_bytes()
+            );
+            assert_eq!(
+                theorem.receipt_identity,
+                report.receipt_identity().as_bytes()
+            );
+            assert_eq!(
+                theorem.cpu_input_commitment,
+                report.cpu_input_commitment().as_bytes()
+            );
+        }
     }
+}
+
+#[cfg(test)]
+fn observe_history(
+    frame: &fe2o3_kernel_opt::InertRefinedForwardingHistoryRefV1<'_>,
+    chain: &FinalChain,
+    bound: &Owner,
+    checked: &Prefix,
+) {
+    use fe2o3_kernel_opt::RefinedForwardingHistoryRoleV1 as Role;
+    let inputs = chain.inputs(bound, checked);
+    let p8 = inputs.prefix;
+    let p7 = p8.prefix;
+    let p6 = p7.prefix;
+    let p5 = p6.prefix;
+    for (role, owner) in [
+        (Role::B, p5.input),
+        (Role::C, p5.intermediate),
+        (Role::S, p5.stored),
+        (Role::O, p5.output),
+        (Role::I, p6.output),
+        (Role::J, p7.output),
+        (Role::K, p8.output),
+        (Role::P, inputs.promoted),
+        (Role::H, inputs.preheaders),
+        (Role::L, inputs.licm),
+        (Role::R, inputs.refined),
+        (Role::F, inputs.output),
+    ] {
+        assert_eq!(
+            frame.graph_bytes(role),
+            owner.canonical().canonical_bytes(),
+            "{role:?}"
+        );
+    }
+    assert_eq!(frame.limits(), inputs.limits);
+    assert_eq!(frame.limits(), chain.expected_limits());
 }
 
 pub(super) fn prepare(
@@ -130,7 +291,7 @@ pub(super) fn prepare(
     ),
     Error,
 > {
-    prepare_retained_native_conditional_source_packet_using_v2(
+    let result = prepare_retained_native_conditional_source_packet_using_v2(
         ranked,
         &bindings.typed_descriptor_roots,
         budget,
@@ -226,6 +387,11 @@ pub(super) fn prepare(
                 .map_err(Error::Source)?;
             // Exactly one independent consumer visit. There is no preceding C1
             // source-only import and no second execution of the runtime formula.
+            #[cfg(test)]
+            if super::tests::observing_bridge() {
+                observe_history(&frame, chain, bound, checked);
+                super::tests::bridge_consumer_called(content.observation(packet));
+            }
             let (proof, storage) = validate_native_conditional_source_through_f_v2(
                 packet,
                 policies,
@@ -250,7 +416,13 @@ pub(super) fn prepare(
             let retained = content.retained;
             Ok((proof, storage, content, retained))
         },
-    )
+    );
+    #[cfg(test)]
+    if result.is_ok() {
+        // Includes the original source/target postchecks, before installation.
+        super::tests::bridge_completed();
+    }
+    result
 }
 
 fn header() -> Result<usize, Resource> {

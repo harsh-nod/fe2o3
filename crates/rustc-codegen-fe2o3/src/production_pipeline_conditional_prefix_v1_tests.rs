@@ -21,11 +21,68 @@ static LATE_MODE: AtomicUsize = AtomicUsize::new(0);
 static FAULT_OBSERVED: AtomicBool = AtomicBool::new(false);
 static FINAL_IDENTITY: Mutex<Option<results::Identity>> = Mutex::new(None);
 static TARGET: AtomicUsize = AtomicUsize::new(0);
+static BRIDGE: Mutex<BridgeVisit> = Mutex::new(BridgeVisit::Uncalled);
 const ARGS: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_ARGS";
 const ARGS_SHA256: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_ARGS_SHA256";
 const PROFILE: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_TARGET";
 const MODE: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_MODE";
 const RESULT: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_RESULT";
+
+// This records the outer call/return/install only, not internal import counts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BridgeVisit {
+    Uncalled,
+    Called(bridge::ObservedContentV5),
+    Completed(bridge::ObservedContentV5),
+    Installed(bridge::ObservedContentV5),
+}
+impl BridgeVisit {
+    fn call(&mut self, content: bridge::ObservedContentV5) -> Result<(), &'static str> {
+        if *self != Self::Uncalled {
+            return Err("duplicate bridge consumer call");
+        }
+        *self = Self::Called(content);
+        Ok(())
+    }
+
+    fn complete(&mut self) -> Result<(), &'static str> {
+        let Self::Called(content) = *self else {
+            return Err("bridge completion without exactly one pending call");
+        };
+        *self = Self::Completed(content);
+        Ok(())
+    }
+
+    fn install(&mut self) -> Result<bridge::ObservedContentV5, &'static str> {
+        let Self::Completed(content) = *self else {
+            return Err("installation without exactly one completed bridge");
+        };
+        *self = Self::Installed(content);
+        Ok(content)
+    }
+}
+
+pub(super) fn observing_bridge() -> bool {
+    OBSERVING.load(Ordering::SeqCst)
+}
+
+pub(super) fn bridge_consumer_called(content: bridge::ObservedContentV5) {
+    if observing_bridge() {
+        assert_eq!(AGREEMENTS.load(Ordering::SeqCst), 1);
+        assert_eq!(REPLAY_COMPLETED.load(Ordering::SeqCst), 1);
+        assert_eq!(INSTALLED.load(Ordering::SeqCst), 0);
+        let result = BRIDGE.lock().unwrap().call(content);
+        result.unwrap();
+    }
+}
+
+pub(super) fn bridge_completed() {
+    if observing_bridge() {
+        assert_eq!(INSTALLED.load(Ordering::SeqCst), 0);
+        let result = BRIDGE.lock().unwrap().complete();
+        result.unwrap();
+    }
+}
 
 fn identity(output: &Owner) -> results::Identity {
     let identity = output.canonical().identity();
@@ -65,8 +122,8 @@ pub(super) fn source_replayed() -> Result<(), ProductionPipelineError> {
 
 pub(super) fn installed(value: &ConditionalPrefixForFV1) {
     if OBSERVING.load(Ordering::SeqCst) {
-        // Passive retained-content observation, not a count of verifier imports.
-        value.content.assert_observed_v5();
+        let called = BRIDGE.lock().unwrap().install();
+        value.content.assert_observed_v5(value, called.unwrap());
         assert_eq!(AGREEMENTS.load(Ordering::SeqCst), 1);
         assert_eq!(REPLAY_COMPLETED.load(Ordering::SeqCst), 1);
         assert!(value.preparation.ranked.has_conditional_roots_v1());
@@ -87,6 +144,57 @@ pub(super) fn installed(value: &ConditionalPrefixForFV1) {
         );
         INSTALLED.fetch_add(1, Ordering::SeqCst);
     }
+}
+
+#[test]
+fn conditional_bridge_observer_requires_call_completion_install_order() {
+    // Local diagnostic state only; no source, Request, proof or owner fixture.
+    let content = bridge::ObservedContentV5::from_bytes([b"fixture"; 5]);
+    let mut visit = BridgeVisit::Uncalled;
+    for expected in [
+        BridgeVisit::Uncalled,
+        BridgeVisit::Called(content),
+        BridgeVisit::Completed(content),
+        BridgeVisit::Installed(content),
+    ] {
+        assert_eq!(visit, expected);
+        let before = visit;
+        if expected != BridgeVisit::Uncalled {
+            assert!(visit.call(content).is_err());
+            assert_eq!(visit, before);
+        }
+        if !matches!(expected, BridgeVisit::Called(_)) {
+            assert!(visit.complete().is_err());
+            assert_eq!(visit, before);
+        }
+        if !matches!(expected, BridgeVisit::Completed(_)) {
+            assert!(visit.install().is_err());
+            assert_eq!(visit, before);
+        }
+        match expected {
+            BridgeVisit::Uncalled => visit.call(content).unwrap(),
+            BridgeVisit::Called(_) => visit.complete().unwrap(),
+            BridgeVisit::Completed(_) => assert_eq!(visit.install().unwrap(), content),
+            BridgeVisit::Installed(_) => {}
+        }
+    }
+}
+
+#[test]
+fn conditional_bridge_observer_stamps_every_member_in_order() {
+    let bytes: [&[u8]; 5] = [b"packet", b"history", b"catalog", b"descriptor", b"text"];
+    let observed = bridge::ObservedContentV5::from_bytes(bytes);
+    assert_eq!(observed, bridge::ObservedContentV5::from_bytes(bytes));
+    for index in 0..bytes.len() {
+        for substitute in [b"changed".as_slice(), b"".as_slice()] {
+            let mut changed = bytes;
+            changed[index] = substitute;
+            assert_ne!(observed, bridge::ObservedContentV5::from_bytes(changed));
+        }
+    }
+    let mut swapped = bytes;
+    swapped.swap(0, 1);
+    assert_ne!(observed, bridge::ObservedContentV5::from_bytes(swapped));
 }
 
 #[test]
@@ -425,6 +533,12 @@ impl rustc_driver::Callbacks for Callbacks {
                 .expect("conditional F prefix must not produce native output")
         };
         OBSERVING.store(false, Ordering::SeqCst);
+        let visit = *BRIDGE.lock().unwrap();
+        if self.mode == "f" {
+            assert!(matches!(visit, BridgeVisit::Installed(_)));
+        } else {
+            assert_eq!(visit, BridgeVisit::Uncalled);
+        }
         assert_eq!(std::ptr::from_mut(&mut budget), address);
         assert!(budget.work_ledger_identity_v1() == account);
         assert_eq!(budget.storage(), 19);
