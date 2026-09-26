@@ -29,7 +29,10 @@ use std::{
 const ENTRY: usize = 8;
 #[path = "authority_v2_launch.rs"]
 pub(super) mod launch;
+use ProtectedIssuerSupervisorErrorV2 as LaunchError;
 use ProtectedIssuerSupervisorStorageV2 as Storage;
+use ProtectedIssuerSupervisorV2 as LaunchSupervisor;
+use fe2o3_compiler_closure_capability::CompilerExecutionPolicyCapabilityV2 as LaunchPolicyCapability;
 type Result<T> = std::result::Result<T, ProtectedIssuerSupervisorErrorV2>;
 
 /// Move-only native program, policy-bound key, anchor, root and credential custody.

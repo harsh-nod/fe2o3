@@ -91,4 +91,4 @@ fn shared_wire_decodes_as_v3_but_rejects_an_actual_v2_policy_identity() {
 }
 
 #[path = "handoff_native_v3_fixture_tests.rs"]
-mod fixture;
+pub(crate) mod fixture;

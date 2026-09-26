@@ -4,7 +4,6 @@ use crate::launch_checks::{
     EXTERNAL_ANCHOR_PEER_SOURCE_INDEX, EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX, POLICY_SOURCE_INDEX,
     ROOT_SOURCE_INDEX, SIGNING_KEY_SOURCE_INDEX, SOURCE_COUNT_V1,
 };
-use fe2o3_compiler_closure_capability::CompilerExecutionPolicyCapabilityV2 as PolicyCapability;
 use std::os::fd::AsFd;
 
 pub(crate) struct Inputs {
@@ -18,7 +17,7 @@ pub(crate) struct Inputs {
     pub retained: usize,
 }
 
-impl ProtectedIssuerSupervisorV2 {
+impl LaunchSupervisor {
     pub(crate) fn clone_launch_inputs(&self, budget: &mut Budget<'_>) -> Result<Inputs> {
         budget.with_prepaid_scope(self.retained, ENTRY, Self::WORK, Self::SCRATCH, |b| {
             self.check(b)?;
@@ -29,13 +28,13 @@ impl ProtectedIssuerSupervisorV2 {
             keep(delta.additional_storage(), &mut retained, b)?;
             let root = rustix::io::fcntl_dupfd_cloexec(&self.root, 0)
                 .map(File::from)
-                .map_err(|errno| ProtectedIssuerSupervisorErrorV2::Io {
+                .map_err(|errno| LaunchError::Io {
                     operation: "clone protected issuer root",
                     errno,
                 })?;
             keep(Self::ROOT_FILE_STORAGE, &mut retained, b)?;
             if root_checks::inspect(&root, self.credentials)? != self.root_snapshot {
-                return Err(ProtectedIssuerSupervisorErrorV2::RootChanged);
+                return Err(LaunchError::RootChanged);
             }
             let (policy, delta) = self.program.try_clone_policy_for_launch(b)?;
             keep(delta.additional_storage(), &mut retained, b)?;
@@ -70,7 +69,7 @@ impl ProtectedIssuerSupervisorV2 {
             .retained
             .checked_add(
                 Self::ROOT_FILE_STORAGE
-                    + PolicyCapability::FILE_STORAGE
+                    + LaunchPolicyCapability::FILE_STORAGE
                     + Key::FILE_STORAGE
                     + Anchor::PAIR_STORAGE,
             )
@@ -82,7 +81,7 @@ impl ProtectedIssuerSupervisorV2 {
             if root_checks::inspect(&sources[ROOT_SOURCE_INDEX], self.credentials)?
                 != self.root_snapshot
             {
-                return Err(ProtectedIssuerSupervisorErrorV2::RootChanged);
+                return Err(LaunchError::RootChanged);
             }
             self.program
                 .revalidate_policy_clone(&sources[POLICY_SOURCE_INDEX], b)?;

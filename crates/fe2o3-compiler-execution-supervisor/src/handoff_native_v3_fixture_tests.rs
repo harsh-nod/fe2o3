@@ -29,7 +29,7 @@ fn open_descriptor_count() -> usize {
         .count()
 }
 
-fn supervisor(
+pub(crate) fn supervisor(
     peer: &OwnedFd,
     pidfd: &OwnedFd,
     b: &mut Budget<'_>,
@@ -66,7 +66,7 @@ fn supervisor(
     (fixture, supervisor)
 }
 
-fn request(submitter: &OwnedFd, case: u32) -> OwnedFd {
+pub(crate) fn request(submitter: &OwnedFd, case: u32) -> OwnedFd {
     send_packet(submitter, &frame(b"HOF3", case), &[]).unwrap();
     let (payload, [control]) = receive_packet::<1>(submitter, Instant::now() + IO_TIMEOUT).unwrap();
     assert_eq!(payload, frame(b"HOF3", case));
@@ -390,7 +390,12 @@ fn submitter_process_helper() {
 #[test]
 #[ignore = "requires explicit disposable-container root opt-in; handoff custody only"]
 fn native_distinct_uid_handoff_v3_fixture() {
-    assert_eq!(std::env::var(OPT_IN).as_deref(), Ok("1"));
+    run_fixture(OPT_IN, &format!("{PREFIX}supervisor_process_helper"));
+}
+
+// Preparation reuses the same bounded submitter/client/anchor processes.
+pub(crate) fn run_fixture(opt_in: &str, supervisor_test: &str) {
+    assert_eq!(std::env::var(opt_in).as_deref(), Ok("1"));
     assert_eq!(
         (
             rustix::process::geteuid().as_raw(),
@@ -438,12 +443,7 @@ fn native_distinct_uid_handoff_v3_fixture() {
         child,
     );
     let (supervisor_control, child) = pair();
-    let mut supervisor = spawn_role(
-        &format!("{PREFIX}supervisor_process_helper"),
-        "handoff-supervisor-v3",
-        65_533,
-        child,
-    );
+    let mut supervisor = spawn_role(supervisor_test, "handoff-supervisor-v3", 65_533, child);
     let deadline = Instant::now() + Duration::from_secs(30);
     send_packet(
         &supervisor_control,

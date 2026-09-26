@@ -109,6 +109,9 @@ pub struct AcceptedCompilerExecutionHandoffV3 {
     retained: usize,
 }
 type Accepted = AcceptedCompilerExecutionHandoffV3;
+use ProtectedIssuerHandoffErrorV3 as LaunchError;
+#[path = "handoff_native_launch.rs"]
+mod launch;
 
 #[path = "handoff_native_adapter.rs"]
 mod adapter;
