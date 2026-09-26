@@ -83,17 +83,19 @@ fn invocation(custody: &ProductionCompilerCustody) -> R<&RustcInvocationDescript
 }
 
 pub(in crate::production_pipeline) fn prepare(
-    mut prefix: Prefix,
+    prefix: Prefix,
     budget: &mut Budget<'_>,
 ) -> R<Prepared> {
-    if budget.storage() < prefix.retained_floor {
+    if budget.storage_limit() > MAX_NATIVE_CONDITIONAL_STORAGE_V1
+        || budget.storage() < prefix.retained_floor
+    {
         return Err(Resource::Accounting.into());
     }
     invocation(&prefix.preparation.bindings.transaction.compiler_custody)?;
     prefix.chain.check_owned(budget)?;
     budget.reserve_storage(size_of::<Prepared>() - size_of::<Prefix>() - size_of::<Handoff>())?;
     let floor = budget.storage();
-    let module = module::prepare(&mut prefix, budget)?;
+    let module = module::prepare(&prefix, budget)?;
     let backing = pack::prepare(&prefix, &module, budget)?;
     drop(module);
     // Both original and newly serialized owners were paid while coexisting.

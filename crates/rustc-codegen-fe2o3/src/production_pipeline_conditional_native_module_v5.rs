@@ -7,8 +7,9 @@ use fe2o3_compiler_ffi::{
     INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V3 as METADATA,
     MAX_COMPILER_FFI_ENVELOPE_BYTES_V1, MAX_COMPILER_MODULE_BYTES_V1,
     MAX_COMPILER_MODULE_HANDOFF_BYTES_V2, MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1,
-    MAX_COMPILER_MODULE_SYMBOLS_V1, MAX_DEVICE_FFI_TARGET_BYTES_V1,
+    MAX_COMPILER_MODULE_SYMBOLS_V1,
 };
+use reserved_fe2o3_symbols::MAX_DEVICE_FFI_TARGET_BYTES_V1;
 
 const MODULE_FIXED: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES_V2
     - MAX_COMPILER_MODULE_BYTES_V1
@@ -16,6 +17,9 @@ const MODULE_FIXED: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES_V2
     - MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1
     - MAX_DEVICE_FFI_TARGET_BYTES_V1;
 const MANIFEST_FIXED: usize = 45;
+const HEADER: usize = size_of::<Result<Module, Error>>()
+    + size_of::<[(&'static [String], usize); 5]>()
+    + size_of::<[usize; 8]>();
 const _: () = {
     assert!(MODULE_FIXED == 123);
     assert!(MAX_COMPILER_MODULE_SYMBOLS_V1 == 16384);
@@ -23,7 +27,8 @@ const _: () = {
     assert!(size_of::<String>() <= 24);
 };
 
-pub(super) fn prepare(prefix: &mut Prefix, budget: &mut Budget<'_>) -> R<Module> {
+pub(super) fn prepare(prefix: &Prefix, budget: &mut Budget<'_>) -> R<Module> {
+    budget.reserve_storage(HEADER)?;
     let output = prefix.chain.output();
     let text = &prefix.content.module;
     let graph_len = output.canonical().canonical_bytes().len();
@@ -51,13 +56,13 @@ pub(super) fn prepare(prefix: &mut Prefix, budget: &mut Budget<'_>) -> R<Module>
         .canonical()
         .identity()
         .digest();
-    let bindings = &mut prefix.preparation.bindings;
+    let bindings = &prefix.preparation.bindings;
     let target = bindings.rustc_target.device_target();
     let envelope = derive_production_compiler_ffi_envelope(
         target,
         output.module(),
         text,
-        bindings.transaction.compiler_ffi_envelope.take(),
+        bindings.transaction.compiler_ffi_envelope.clone(),
         original,
     )
     .map_err(Error::Worker)?;
