@@ -11,7 +11,8 @@ use super::{
     SimulationScheduleIdentityV1, SimulationScheduleRecordV1, record_integrity,
     transcript_identity,
 };
-use crate::{IndexWidthV1, SimulationKernelIrIdentityV1, SimulationLimitsV1, SimulationTargetV1};
+use crate::model::TargetIdentityWireV2;
+use crate::{SimulationKernelIrIdentityV1, SimulationLimitsV1, SimulationTargetV1};
 
 /// Maximum canonical bytes accepted for one persisted semantic CPU schedule.
 pub const MAX_PERSISTED_SCHEDULE_BYTES_V1: usize = 256 * 1024 * 1024;
@@ -389,17 +390,9 @@ struct RequestWireV1 {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TargetWireV1 {
-    identity: TargetIdentityWireV1,
+    identity: TargetIdentityWireV2,
     index_bits: u16,
     max_workgroup_invocations: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-enum TargetIdentityWireV1 {
-    #[serde(rename = "little_endian_index32_v1")]
-    LittleEndianIndex32V1,
-    #[serde(rename = "amdgpu_64_little_endian_v1")]
-    Amdgpu64LittleEndianV1,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -873,13 +866,9 @@ fn validate_record_structure(
 }
 
 fn target_to_wire(target: SimulationTargetV1) -> TargetWireV1 {
-    let (identity, index_bits) = match target.index_width() {
-        IndexWidthV1::Bits32 => (TargetIdentityWireV1::LittleEndianIndex32V1, 32),
-        IndexWidthV1::Bits64 => (TargetIdentityWireV1::Amdgpu64LittleEndianV1, 64),
-    };
     TargetWireV1 {
-        identity,
-        index_bits,
+        identity: TargetIdentityWireV2::from_target(target),
+        index_bits: target.index_width().bits(),
         max_workgroup_invocations: target.max_workgroup_invocations(),
     }
 }
@@ -887,18 +876,14 @@ fn target_to_wire(target: SimulationTargetV1) -> TargetWireV1 {
 fn target_from_wire(
     target: &TargetWireV1,
 ) -> Result<SimulationTargetV1, PersistedSimulationScheduleCodecErrorV1> {
-    let expected_bits = match target.identity {
-        TargetIdentityWireV1::LittleEndianIndex32V1 => 32,
-        TargetIdentityWireV1::Amdgpu64LittleEndianV1 => 64,
-    };
-    if target.index_bits != expected_bits || target.max_workgroup_invocations != 1_024 {
+    let decoded = target
+        .identity
+        .target(target.index_bits)
+        .ok_or(PersistedSimulationScheduleCodecErrorV1::InvalidTarget)?;
+    if target.max_workgroup_invocations != decoded.max_workgroup_invocations() {
         return Err(PersistedSimulationScheduleCodecErrorV1::InvalidTarget);
     }
-    Ok(SimulationTargetV1::little_endian(if expected_bits == 32 {
-        IndexWidthV1::Bits32
-    } else {
-        IndexWidthV1::Bits64
-    }))
+    Ok(decoded)
 }
 
 fn limits_to_wire(
@@ -1106,5 +1091,52 @@ impl Write for ExactBytesWriterV1<'_> {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod target_profile_writer_tests {
+    use super::*;
+
+    #[test]
+    fn longer_profile_target_uses_exact_canonical_writer_extent() {
+        for (tag, target) in [
+            (
+                "little_endian_index32_v1",
+                SimulationTargetV1::little_endian(crate::IndexWidthV1::Bits32),
+            ),
+            (
+                "amdgpu_64_little_endian_v1",
+                SimulationTargetV1::little_endian(crate::IndexWidthV1::Bits64),
+            ),
+            (
+                "amdgpu_gfx942_little_endian_v2",
+                SimulationTargetV1::amdgpu_from_device_target("gfx942:xnack-").unwrap(),
+            ),
+            (
+                "amdgpu_gfx950_little_endian_v2",
+                SimulationTargetV1::amdgpu_from_device_target("gfx950:xnack-").unwrap(),
+            ),
+        ] {
+            let bits = if target.index_width() == crate::IndexWidthV1::Bits32 {
+                32
+            } else {
+                64
+            };
+            let expected = format!(
+                "{{\"identity\":\"{tag}\",\"index_bits\":{bits},\"max_workgroup_invocations\":1024}}"
+            );
+            for short in [false, true] {
+                let length = expected.len() - usize::from(short);
+                let mut writer = ExactBytesWriterV1 {
+                    expected: &expected.as_bytes()[..length],
+                    offset: 0,
+                    mismatch: false,
+                };
+                serde_json::to_writer(&mut writer, &target_to_wire(target)).unwrap();
+                assert_eq!(writer.offset, expected.len());
+                assert_eq!(writer.mismatch, short);
+            }
+        }
     }
 }

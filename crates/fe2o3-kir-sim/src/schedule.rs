@@ -810,6 +810,7 @@ fn schedule_context_identity_configured(
     limits: SimulationLimitsV1,
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
+    target.hash_profile_identity(&mut hash);
     let write_only = request.arguments.iter().any(|argument| match argument {
         SimulationArgumentV1::Scalar(_) => false,
         SimulationArgumentV1::Buffer(buffer) => buffer.access() == AccessMode::WriteOnly,

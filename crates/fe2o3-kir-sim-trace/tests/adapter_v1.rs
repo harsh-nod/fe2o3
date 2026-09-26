@@ -1361,3 +1361,116 @@ fn truncation_rolls_back_the_entire_active_workgroup() {
             .all(|(key, count)| { *count == 1 && arrivals.get(key).copied() == Some(2) })
     );
 }
+
+#[test]
+fn traced_owner_profiles_are_distinct_and_none_keeps_public_configuration_bytes() {
+    use sha2::{Digest, Sha256};
+    for write_only in [false, true] {
+        let access = if write_only {
+            AccessMode::WriteOnly
+        } else {
+            AccessMode::ReadWrite
+        };
+        let mut block = BasicBlock::new(BlockId(0));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut raw = Module::new("trace-profile-identity");
+        raw.functions.push(Function::kernel_entry(
+            "entry",
+            Signature::new(
+                vec![Type::pointer(
+                    Type::Scalar(ScalarType::U8),
+                    AddressSpace::Global,
+                    access,
+                )],
+                vec![],
+            ),
+            vec![ValueId(0)],
+            vec![block],
+        ));
+        raw.kernels.push(Kernel::new("kernel", "entry", domain(1)));
+        let module = AdmittedSimulationModuleV1::admit_v9(
+            VerifiedCanonicalKernelIrV9::from_module(raw).unwrap(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap();
+        let legacy = SimulationTargetV1::little_endian(IndexWidthV1::Bits64);
+        let request = SimulationRequestV1::new(
+            "kernel",
+            [1, 1, 1],
+            [1, 1, 1],
+            vec![SimulationArgumentV1::Buffer(
+                BufferArgumentV1::from_scalars(
+                    access,
+                    1,
+                    &[ScalarBitsV1::new(ScalarType::U8, 19, legacy).unwrap()],
+                    legacy,
+                )
+                .unwrap(),
+            )],
+        );
+        let mut identities = Vec::new();
+        for (target, tag) in [
+            (legacy, None),
+            (
+                SimulationTargetV1::amdgpu_from_device_target("gfx942:xnack-").unwrap(),
+                Some("amdgpu_gfx942_little_endian_v2"),
+            ),
+            (
+                SimulationTargetV1::amdgpu_from_device_target("gfx950:xnack-").unwrap(),
+                Some("amdgpu_gfx950_little_endian_v2"),
+            ),
+        ] {
+            assert!(matches!(
+                simulate_with_semantic_trace_v1(
+                    &module,
+                    &request,
+                    target,
+                    SimulationLimitsV1::default(),
+                    profile(WaveWidthV1::Wave64, 100),
+                ),
+                Err(TraceAdapterErrorV1::UnsupportedKernelIrWireVersion { version: 9 })
+            ));
+            let actual = simulate_with_semantic_trace_v2(
+                &module,
+                &request,
+                target,
+                SimulationLimitsV1::default(),
+                profile(WaveWidthV1::Wave64, 100),
+            )
+            .unwrap();
+            assert!(actual.execution.is_ok());
+            let mut expected = Sha256::new();
+            if let Some(tag) = tag {
+                expected.update(b"FE2O3/KIR-SIM-TRACE/TARGET-PROFILE/V2\0");
+                expected.update((tag.len() as u64).to_le_bytes());
+                expected.update(tag.as_bytes());
+            }
+            expected.update(if write_only {
+                b"fe2o3-kir-sim-trace/configuration/v2\0"
+            } else {
+                b"fe2o3-kir-sim-trace/configuration/v1\0"
+            });
+            expected.update(module.identity().digest());
+            expected.update(module.identity().canonical_length().to_le_bytes());
+            expected.update(6_u64.to_le_bytes());
+            expected.update(b"kernel");
+            for extent in [1_u64; 3] {
+                expected.update(extent.to_le_bytes());
+            }
+            for extent in [1_u32; 3] {
+                expected.update(extent.to_le_bytes());
+            }
+            expected.update([64]);
+            expected.update(1_u64.to_le_bytes());
+            expected.update([1, 6, if write_only { 2 } else { 1 }]);
+            expected.update(1_u32.to_le_bytes());
+            expected.update(1_u64.to_le_bytes());
+            expected.update([19, 1]);
+            expected.update(0_u64.to_le_bytes());
+            let expected: [u8; 32] = expected.finalize().into();
+            assert_eq!(actual.configuration_identity.as_bytes(), &expected);
+            assert!(!identities.contains(&expected));
+            identities.push(expected);
+        }
+    }
+}

@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
+include!("target_identity_v2.rs");
+
 use fe2o3_kernel_ir::{
     AccessMode, KernelId, KernelIrDecodeError, KernelIrEncodeError, Module, ScalarType,
     VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrIdentityV9,
@@ -172,17 +174,29 @@ impl IndexWidthV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SimulationTargetV1 {
     index_width: IndexWidthV1,
+    amd_profile: Option<fe2o3_amd_target::ProductionAmdTargetProfileV1>,
 }
 
 impl SimulationTargetV1 {
     /// Constructs a little-endian profile with the selected index width.
     pub const fn little_endian(index_width: IndexWidthV1) -> Self {
-        Self { index_width }
+        Self {
+            index_width,
+            amd_profile: None,
+        }
     }
 
-    /// The production AMDGPU-compatible 64-bit little-endian scalar profile.
+    /// The legacy AMDGPU-compatible 64-bit scalar layout, without an explicit profile.
     pub const fn amdgpu_64() -> Self {
         Self::little_endian(IndexWidthV1::Bits64)
+    }
+
+    /// Constructs the scalar layout for an explicitly selected production AMD profile.
+    pub const fn amdgpu_profile(profile: fe2o3_amd_target::ProductionAmdTargetProfileV1) -> Self {
+        Self {
+            index_width: IndexWidthV1::Bits64,
+            amd_profile: Some(profile),
+        }
     }
 
     /// Returns the target index width.

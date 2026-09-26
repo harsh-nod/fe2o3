@@ -739,3 +739,181 @@ fn configuration_hash_scans_are_bounded_before_variable_input_and_length_delimit
     second.bytes(b"c").unwrap();
     assert_ne!(first.hash.finalize(), second.hash.finalize());
 }
+
+#[test]
+fn target_profile_prefix_preserves_none_and_charges_exact_fixed_bytes() {
+    use fe2o3_kir_sim::SimulationTargetV1;
+    let legacy = SimulationTargetV1::little_endian(IndexWidthV1::Bits64);
+    let mut state = ConfigurationHash {
+        hash: Sha256::new(),
+        work: MAX_CONFIGURATION_WORK,
+    };
+    let unchanged = state.hash.clone().finalize();
+    state.target_profile(legacy).unwrap();
+    assert_eq!(state.work, MAX_CONFIGURATION_WORK);
+    assert_eq!(state.hash.finalize(), unchanged);
+
+    let domain = b"fe2o3-debug-sim-target-profile-v2\0";
+    for (device, tag) in [
+        ("gfx942:xnack-", "amdgpu_gfx942_little_endian_v2"),
+        ("gfx950:xnack-", "amdgpu_gfx950_little_endian_v2"),
+    ] {
+        let target = SimulationTargetV1::amdgpu_from_device_target(device).unwrap();
+        let fixed_work = 8 + domain.len() + 8 + tag.len();
+        let mut exact = ConfigurationHash {
+            hash: Sha256::new(),
+            work: MAX_CONFIGURATION_WORK - fixed_work,
+        };
+        exact.target_profile(target).unwrap();
+        assert_eq!(exact.work, MAX_CONFIGURATION_WORK);
+        let mut expected = Sha256::new();
+        expected.update((domain.len() as u64).to_le_bytes());
+        expected.update(domain);
+        expected.update((tag.len() as u64).to_le_bytes());
+        expected.update(tag.as_bytes());
+        assert_eq!(exact.hash.finalize(), expected.finalize());
+
+        let mut short = ConfigurationHash {
+            hash: Sha256::new(),
+            work: MAX_CONFIGURATION_WORK - fixed_work + 1,
+        };
+        assert!(
+            short
+                .target_profile(target)
+                .unwrap_err()
+                .contains("logical work bound")
+        );
+        assert_eq!(short.work, MAX_CONFIGURATION_WORK - (8 + tag.len()) + 1);
+        let mut prefix = Sha256::new();
+        prefix.update((domain.len() as u64).to_le_bytes());
+        prefix.update(domain);
+        assert_eq!(short.hash.finalize(), prefix.finalize());
+    }
+}
+
+#[test]
+fn actual_admitted_legacy_configuration_matches_independent_unprefixed_bytes() {
+    let mut admitted = input(true, [19, 23, 42]);
+    assert_eq!(
+        admitted.simulation_target().identity_tag(),
+        "amdgpu_64_little_endian_v1"
+    );
+    assert_eq!(admitted.simulation_target().amd_profile(), None);
+    for changed in [false, true] {
+        admitted.request.events = if changed {
+            EventPolicyV1::Enabled
+        } else {
+            EventPolicyV1::Disabled
+        };
+        let actual = identity(&admitted);
+        let expected = legacy_configuration_identity_oracle(
+            &admitted,
+            None,
+            DebugWaveWidthV1::Wave64,
+            capture_limits(),
+            debugger_limits(),
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+        for explicit_profile in [
+            Some("amdgpu_gfx942_little_endian_v2"),
+            Some("amdgpu_gfx950_little_endian_v2"),
+        ] {
+            assert_ne!(
+                actual,
+                legacy_configuration_identity_oracle(
+                    &admitted,
+                    explicit_profile,
+                    DebugWaveWidthV1::Wave64,
+                    capture_limits(),
+                    debugger_limits(),
+                )
+                .unwrap()
+            );
+        }
+    }
+}
+
+// Frozen pre-profile field order; the target prefix oracle above uses raw SHA bytes.
+fn legacy_configuration_identity_oracle(
+    input: &AdmittedSimulationInputV1,
+    profile_tag: Option<&str>,
+    wave: DebugWaveWidthV1,
+    capture: SimulationDebugCaptureLimitsV1,
+    debugger: DebuggerLimitsV1,
+) -> Result<OpaqueIdentityV1, String> {
+    if input.module.identity().wire_version() != 16 {
+        return Err("diagnostic configuration requires exact canonical V16".to_owned());
+    }
+    input
+        .simulation_limits
+        .validate()
+        .map_err(|error| error.to_string())?;
+    let mut state = ConfigurationHash {
+        hash: Sha256::new(),
+        work: 0,
+    };
+    // Cover the fixed domain, identities and all limit fields before hashing.
+    state.charge(512)?;
+    if let Some(tag) = profile_tag {
+        let domain = b"fe2o3-debug-sim-target-profile-v2\0";
+        state.hash.update((domain.len() as u64).to_le_bytes());
+        state.hash.update(domain);
+        state.hash.update((tag.len() as u64).to_le_bytes());
+        state.hash.update(tag.as_bytes());
+    }
+    state
+        .hash
+        .update(b"fe2o3-debug-sim-diagnostic-kir-v16-config-v1\0");
+    state
+        .hash
+        .update(input.module.identity().wire_version().to_le_bytes());
+    state.hash.update(input.module.identity().digest());
+    state
+        .hash
+        .update(input.module.identity().canonical_length().to_le_bytes());
+    state.hash.update(input.request_sha256);
+    state.hash.update(input.request_bytes().to_le_bytes());
+    state.hash.update(b"little-endian\0");
+    state
+        .hash
+        .update([match input.simulation_target().index_width() {
+            IndexWidthV1::Bits32 => 32,
+            IndexWidthV1::Bits64 => 64,
+        }]);
+    state.hash.update(wave.lanes().to_le_bytes());
+    let limits = input.simulation_limits;
+    for value in [
+        limits.max_canonical_bytes,
+        limits.max_reachable_functions,
+        limits.max_reachable_operations,
+        limits.max_call_depth,
+        limits.max_ssa_values,
+        limits.max_allocations,
+        limits.max_allocation_bytes,
+        limits.max_total_bytes,
+        limits.max_resident_bytes,
+        limits.max_memory_access_records,
+        capture.max_frames_per_checkpoint(),
+        capture.max_values_per_checkpoint(),
+        capture.max_allocations_per_checkpoint(),
+        capture.max_memory_bytes_per_checkpoint(),
+        debugger.max_records(),
+        debugger.max_retained_values(),
+        debugger.max_retained_memory_bytes(),
+    ] {
+        state.length(value)?;
+    }
+    for value in [
+        limits.max_invocations,
+        limits.max_workgroups,
+        limits.max_scheduled_slots,
+        limits.max_steps,
+        limits.max_events,
+        MAX_SESSION_COMMANDS_V1,
+    ] {
+        state.hash.update(value.to_le_bytes());
+    }
+    state.request(&input.request)?;
+    Ok(nonzero_identity(state.hash.finalize().into()))
+}
