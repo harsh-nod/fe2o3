@@ -451,9 +451,9 @@ fn validate_partial_move_rvalue_v1(
         | SemanticRvalueKindV1::Length(place) => {
             validate_partial_move_place_read_v1(function, types, place, location, state, budget)
         }
-        SemanticRvalueKindV1::Discriminant(place) => {
-            validate_partial_move_discriminant_read_v1(function, types, place, location, state, budget)
-        }
+        SemanticRvalueKindV1::Discriminant(place) => validate_partial_move_discriminant_read_v1(
+            function, types, place, location, state, budget,
+        ),
         SemanticRvalueKindV1::Load(load) => validate_partial_move_place_read_v1(
             function,
             types,
