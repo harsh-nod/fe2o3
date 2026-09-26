@@ -356,7 +356,9 @@ fn conditional_outer_v5_rejects_old_versions_ranges_truncation_and_unsealed_muta
     let cap = capsule(Profile::Gfx942, 3);
     let m = fixture::module_handoff(3, Profile::Gfx942.device_target());
     let (_, b) = wire(&cap, &m);
-    assert!(InertSemanticCompilerModuleHandoffV3::decode_owned(b.clone()).is_err());
+    assert!(
+        InertSemanticCompilerModuleHandoffV3::decode_owned(b.clone().into_boxed_slice()).is_err()
+    );
     assert!(native_v4::InertSemanticCompilerModuleHandoffV4::decode_owned(b.clone()).is_err());
     assert!(
         InertSemanticCompilerModuleHandoffV5::decode_owned(
