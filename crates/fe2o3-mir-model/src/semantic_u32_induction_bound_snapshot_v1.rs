@@ -209,6 +209,12 @@ impl SemanticU32InductionBoundSnapshotReportV1 {
 }
 
 pub(super) trait InternalMeter {
+    // Only the private strict V1 adapter opts in. External source/fact inputs
+    // cannot select this resource mode; existing snapshot behavior is default.
+    fn strict_resources(&self) -> bool {
+        false
+    }
+    fn strict_failure(&mut self, _arithmetic: bool) {}
     fn charge_work(&mut self, amount: usize) -> Result<(), SemanticU32InductionAnalysisErrorV1>;
     fn reserve_storage(&mut self, amount: usize)
     -> Result<(), SemanticU32InductionAnalysisErrorV1>;

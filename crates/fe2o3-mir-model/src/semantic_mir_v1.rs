@@ -5237,6 +5237,10 @@ pub enum SemanticAssertMessageV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keep semantic call payloads inline; boxing would add a per-call allocation and change existing ownership and resource-accounting contracts"
+)]
 pub enum SemanticTerminatorKindV1 {
     Goto(SemanticControlFlowEdgeV1),
     SwitchInt {

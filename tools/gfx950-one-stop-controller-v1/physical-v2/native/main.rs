@@ -6,6 +6,7 @@ compile_error!("fixed reviewed Linux x86_64 little-endian controller only");
 mod clock;
 mod config;
 mod custody;
+mod failure_diagnostic;
 mod parent;
 mod profile;
 mod publication;
@@ -37,8 +38,8 @@ fn main() -> ExitCode {
         Ok(v) => v,
         Err(e) => {
             eprintln!(
-                "one-stop debugger setup refused: {:?}; known cleanup={:?}; diagnostic={}; no whole-family claim",
-                e.refusal, e.cleanup, e.diagnostic
+                "one-stop debugger setup refused: {:?}; known cleanup={:?}; diagnostic={}; failure_observation={}; no whole-family claim",
+                e.refusal, e.cleanup, e.diagnostic, e.failure_observation
             );
             return ExitCode::FAILURE;
         }

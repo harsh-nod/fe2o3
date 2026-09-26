@@ -21,6 +21,12 @@ use crate::semantic_mir_v1::{
 mod bound_snapshot;
 pub use bound_snapshot::*;
 
+#[path = "semantic_u32_induction_resources_v1.rs"]
+mod strict_resources;
+pub use strict_resources::{
+    SemanticU32InductionMeteredErrorV1, analyze_semantic_u32_induction_no_overflow_with_meter_v1,
+};
+
 /// Maximum independently charged CFG, inventory, candidate, and reachability work.
 pub const MAX_SEMANTIC_U32_INDUCTION_WORK_V1: usize = 4_000_000;
 
@@ -500,6 +506,29 @@ fn analyze_function_in_scope_v2(
     reachable_scope: bool,
     limits: SemanticU32InductionAnalysisLimitsV1,
 ) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
+    analyze_function_in_scope_with_budget_v2(
+        types,
+        declaration,
+        semantic_mir_sha256,
+        function,
+        plan,
+        reachable_scope,
+        limits,
+        &mut WorkBudgetV1::new(limits.work_units),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn analyze_function_in_scope_with_budget_v2(
+    types: &[SemanticTypeDeclV1],
+    declaration: &SemanticFunctionDeclV1,
+    semantic_mir_sha256: InertSemanticMirSha256V1,
+    function: SemanticFunctionIdV1,
+    plan: Option<&crate::ssa::SsaConstructionPlanV1>,
+    reachable_scope: bool,
+    limits: SemanticU32InductionAnalysisLimitsV1,
+    budget: &mut WorkBudgetV1<'_>,
+) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
     if limits.work_units > MAX_SEMANTIC_U32_INDUCTION_WORK_V1
         || limits.certificates > MAX_SEMANTIC_U32_INDUCTION_CERTIFICATES_V1
     {
@@ -511,20 +540,21 @@ fn analyze_function_in_scope_v2(
         });
     }
 
-    let mut budget = WorkBudgetV1::new(limits.work_units);
     let mut ssa_scope_work_units = 0;
     let graph = SemanticCfgV1::analyze(
         declaration,
         reachable_scope,
         plan,
-        &mut budget,
+        budget,
         &mut ssa_scope_work_units,
     )?;
-    let inventory = SemanticInventoryV1::analyze(declaration, &graph, &mut budget)?;
+    let inventory = SemanticInventoryV1::analyze(declaration, &graph, budget)?;
     let mut certificates = Vec::new();
-    certificates
-        .try_reserve(inventory.checked_additions.len().min(limits.certificates))
-        .map_err(|_| SemanticU32InductionAnalysisErrorV1::Storage)?;
+    budget.reserve_vec(
+        &mut certificates,
+        inventory.checked_additions.len().min(limits.certificates),
+        false,
+    )?;
     let context = CandidateProofContextV1 {
         types,
         function: declaration,
@@ -535,7 +565,7 @@ fn analyze_function_in_scope_v2(
     };
     for candidate in &inventory.checked_additions {
         budget.charge(1)?;
-        if let Some(certificate) = prove_candidate_v1(&context, *candidate, &mut budget)? {
+        if let Some(certificate) = prove_candidate_v1(&context, *candidate, budget)? {
             let actual = certificates.len().saturating_add(1);
             if actual > limits.certificates {
                 return Err(SemanticU32InductionAnalysisErrorV1::CertificateLimit {
@@ -543,15 +573,19 @@ fn analyze_function_in_scope_v2(
                     limit: limits.certificates,
                 });
             }
+            budget.extra(std::mem::size_of::<
+                SemanticU32InductionNoOverflowCertificateV1,
+            >())?;
             certificates.push(certificate);
         }
     }
+    budget.extra(3 * std::mem::size_of::<SemanticU32InductionNoOverflowReportV1>())?;
     Ok(SemanticU32InductionNoOverflowReportV1 {
         semantic_mir_sha256,
         function,
         function_identity: declaration.identity(),
         checked_additions_examined: inventory.checked_additions.len(),
-        certificates: certificates.into_boxed_slice(),
+        certificates: budget.boxed(certificates)?,
         work_units: budget.used - ssa_scope_work_units,
         reachable_scope,
         ssa_scope_work_units,
@@ -665,6 +699,7 @@ impl SemanticInventoryV1 {
                             && checked.operation() == SemanticCheckedBinaryOpV1::Add
                         {
                             budget.reserve_vec(&mut checked_additions, 1, false)?;
+                            budget.extra(std::mem::size_of::<CandidateSiteV1>())?;
                             checked_additions.push(CandidateSiteV1 {
                                 block: block_index,
                                 statement: statement_index,
@@ -822,6 +857,9 @@ fn prove_candidate_with_bound_v1(
     resolver: BoundResolverV1<'_>,
     budget: &mut WorkBudgetV1<'_>,
 ) -> Result<Option<ProvedCandidateV1>, SemanticU32InductionAnalysisErrorV1> {
+    // Fixed candidate bindings/comparisons; dynamic scans retain their existing
+    // per-row charges. This extra charge is invisible to legacy paths/counters.
+    budget.extra(256)?;
     let CandidateProofContextV1 {
         types,
         function,
@@ -1233,6 +1271,7 @@ fn prove_candidate_with_bound_v1(
             }
         }
     }
+    budget.extra(3 * std::mem::size_of::<SemanticU32InductionNoOverflowCertificateV1>())?;
     let certificate = SemanticU32InductionNoOverflowCertificateV1 {
         semantic_mir_sha256,
         function: function_id,
@@ -1394,6 +1433,7 @@ impl SemanticCfgV1 {
                 }
                 budget.reserve_vec(&mut successors[source], 1, false)?;
                 budget.reserve_vec(&mut predecessors[target], 1, false)?;
+                budget.extra(2)?;
                 successors[source].push(target);
                 predecessors[target].push(source);
                 Ok(())
@@ -1443,10 +1483,13 @@ impl SemanticCfgV1 {
                 block_count: reachable_block_count,
                 statement_count: reachable_statement_count,
             });
-        } else if reachable.iter().any(|reachable| !reachable) {
-            return Err(SemanticU32InductionAnalysisErrorV1::InvalidControlFlow(
-                "the semantic CFG contains an unreachable block",
-            ));
+        } else {
+            budget.extra(reachable.len())?;
+            if reachable.iter().any(|reachable| !reachable) {
+                return Err(SemanticU32InductionAnalysisErrorV1::InvalidControlFlow(
+                    "the semantic CFG contains an unreachable block",
+                ));
+            }
         }
         Ok(graph)
     }
@@ -1500,6 +1543,7 @@ impl SemanticCfgV1 {
         }
         let mut pending = Vec::new();
         budget.reserve_vec(&mut pending, self.successors.len(), false)?;
+        budget.extra(1)?;
         visited[self.entry] = true;
         pending.push(self.entry);
         while let Some(block) = pending.pop() {
@@ -1507,6 +1551,7 @@ impl SemanticCfgV1 {
             for successor in &self.successors[block] {
                 budget.charge(1)?;
                 if !visited[*successor] && avoided != Some(*successor) {
+                    budget.extra(1)?;
                     visited[*successor] = true;
                     pending.push(*successor);
                 }
@@ -1557,6 +1602,9 @@ impl WorkBudgetV1<'_> {
         additional: usize,
         exact: bool,
     ) -> Result<(), SemanticU32InductionAnalysisErrorV1> {
+        if self.strict_resources() {
+            return self.strict_reserve(values, additional);
+        }
         use SemanticU32InductionAnalysisErrorV1::Storage;
         let requested = values.len().checked_add(additional).ok_or(Storage)?;
         let grows = requested > values.capacity();
@@ -1594,6 +1642,13 @@ impl WorkBudgetV1<'_> {
         length: usize,
         value: T,
     ) -> Result<Vec<T>, SemanticU32InductionAnalysisErrorV1> {
+        if self.strict_resources() {
+            self.extra(length)?;
+            let mut result = Vec::new();
+            self.strict_reserve(&mut result, length)?;
+            result.resize(length, value);
+            return Ok(result);
+        }
         if self.meter.is_none() {
             return fallible_filled_vec(length, value);
         }
@@ -1608,6 +1663,13 @@ impl WorkBudgetV1<'_> {
         &mut self,
         length: usize,
     ) -> Result<Vec<Vec<T>>, SemanticU32InductionAnalysisErrorV1> {
+        if self.strict_resources() {
+            self.extra(length)?;
+            let mut result = Vec::new();
+            self.strict_reserve(&mut result, length)?;
+            result.resize_with(length, Vec::new);
+            return Ok(result);
+        }
         if self.meter.is_none() {
             return fallible_nested_vec(length);
         }
@@ -2523,6 +2585,7 @@ mod tests {
     }
 
     include!("semantic_u32_induction/reachable_scope_tests.rs");
+    include!("semantic_u32_induction_resources_v1_tests.rs");
 
     #[test]
     fn exact_guarded_checked_u32_induction_produces_one_bound_certificate() {

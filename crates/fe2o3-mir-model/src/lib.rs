@@ -97,13 +97,14 @@ pub use semantic_u32_induction::{
     SemanticU32InductionAnalysisLimitsV1, SemanticU32InductionBlockSiteV1,
     SemanticU32InductionBoundSnapshotCertificateV1, SemanticU32InductionBoundSnapshotErrorV1,
     SemanticU32InductionBoundSnapshotMeterV1, SemanticU32InductionBoundSnapshotReportV1,
-    SemanticU32InductionNoOverflowCertificateV1, SemanticU32InductionNoOverflowReportV1,
-    SemanticU32InductionPlaceBindingV1, SemanticU32InductionStatementSiteV1,
-    analyze_semantic_u32_induction_bound_snapshots_v1,
+    SemanticU32InductionMeteredErrorV1, SemanticU32InductionNoOverflowCertificateV1,
+    SemanticU32InductionNoOverflowReportV1, SemanticU32InductionPlaceBindingV1,
+    SemanticU32InductionStatementSiteV1, analyze_semantic_u32_induction_bound_snapshots_v1,
     analyze_semantic_u32_induction_bound_snapshots_with_meter_v1,
     analyze_semantic_u32_induction_no_overflow_reachable_with_limits_v2,
     analyze_semantic_u32_induction_no_overflow_v1,
     analyze_semantic_u32_induction_no_overflow_with_limits_v1,
+    analyze_semantic_u32_induction_no_overflow_with_meter_v1,
     analyze_semantic_u32_induction_no_overflow_with_ssa_plan_v2,
 };
 pub use semantic_u32_induction_evidence_v1::{

@@ -3,6 +3,7 @@ use super::{
     clock::{self, Clock},
     config::{self, Options},
     custody::{self, DebuggerChild, LaunchedInferior},
+    failure_diagnostic::FailureDiagnostic,
     scope::Scope,
     setup_diagnostic::{SetupDiagnostic, SetupStage, SetupTrace},
     streams::{self, Item, ReadBudget, Stream},
@@ -83,6 +84,7 @@ pub(super) struct SpawnFailure {
     pub refusal: Refusal,
     pub cleanup: Option<Cleanup>,
     pub diagnostic: SetupDiagnostic,
+    pub failure_observation: FailureDiagnostic,
 }
 pub(super) struct NativePeer<'a> {
     options: &'a Options,
@@ -106,6 +108,11 @@ pub(super) struct NativePeer<'a> {
     cleanup: Option<Cleanup>,
 }
 impl<'a> NativePeer<'a> {
+    // Fixed inline failure samples avoid allocation after an owned child exists.
+    #[allow(
+        clippy::result_large_err,
+        reason = "bounded allocation-free failure diagnostics"
+    )]
     pub(super) fn spawn(options: &'a Options, clock: Clock) -> Result<Self, SpawnFailure> {
         let mut trace = SetupTrace::new();
         let pre = (|| {
@@ -133,6 +140,7 @@ impl<'a> NativePeer<'a> {
             refusal,
             cleanup: None,
             diagnostic: trace.freeze(0),
+            failure_observation: FailureDiagnostic::unobserved(),
         })?;
         let (scope, out, err, commands, argv) = pre;
         let (tx, rx) = mpsc::sync_channel(8);
@@ -152,6 +160,7 @@ impl<'a> NativePeer<'a> {
                 refusal,
                 cleanup: None,
                 diagnostic: trace.freeze(0),
+                failure_observation: FailureDiagnostic::unobserved(),
             })?;
         let child = trace
             .step(SetupStage::Spawn, || {
@@ -161,6 +170,7 @@ impl<'a> NativePeer<'a> {
                 refusal,
                 cleanup: None,
                 diagnostic: trace.freeze(0),
+                failure_observation: FailureDiagnostic::unobserved(),
             })?;
         trace.child(child.id());
         let mut result = Self {
@@ -231,11 +241,16 @@ impl<'a> NativePeer<'a> {
         if let Err(refusal) = setup {
             // Freeze the first failure before unchanged cleanup does any further work.
             let diagnostic = trace.freeze(result.sent);
+            let no_readers_or_commands =
+                result.readers.is_empty() && result.input.is_none() && result.sent == 0;
+            let failure_observation =
+                FailureDiagnostic::observe(&mut result.child, result.clock, no_readers_or_commands);
             let cleanup = result.teardown();
             return Err(SpawnFailure {
                 refusal,
                 cleanup: Some(cleanup),
                 diagnostic,
+                failure_observation,
             });
         }
         Ok(result)

@@ -5,6 +5,18 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Strict induction resources and bounded debugger failure observations — 2026-09-26
+
+The [induction model checkpoint](bf16-helper-induction-resources-qualification-20260926.md)
+adds strict original-meter complete-CFG analysis while preserving legacy
+semantics. Qualification passed 331 model, 1,861 lowerer and 2,446 backend
+tests, plus strict model Clippy.
+The [debugger failure-observation checkpoint](physical-debugger-failure-observations-20260926.md)
+passed 28 Node and 112 Rust tests, strict Clippy and build. It retains bounded
+pre-teardown status/pipe evidence without changing admission or cleanup rules.
+Public activation remains disabled; no new native capture or broad exit is
+claimed. Full root integration and live-debugger qualification remain open.
+
 ## Original-meter Option preparation and exact debugger refusal — 2026-09-26
 
 The [Option preparation checkpoint](bf16-helper-option-preparation-qualification-20260926.md)
