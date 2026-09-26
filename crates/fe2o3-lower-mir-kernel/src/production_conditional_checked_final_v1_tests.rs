@@ -6,6 +6,8 @@ use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 #[path = "production_conditional_checked_final_fixture_v1_tests.rs"]
 mod fixture;
 use fixture::{Complete, FLOOR, STORAGE, WORK, with_complete};
+#[path = "production_conditional_checked_replayed_v1_tests.rs"]
+mod replayed;
 #[path = "production_conditional_checked_final_resources_v1_tests.rs"]
 mod resources;
 
