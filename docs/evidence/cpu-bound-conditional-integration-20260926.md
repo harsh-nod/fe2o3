@@ -20,8 +20,8 @@ account; the other fifty are explicitly component-only. This suite compiled but
 has not run in the protected runtime. Its separate runner passed a static scope
 audit and 144 offline tests, which do not establish compiler or proof execution.
 
-The packet layer is integrated and typechecked, but its new component and
-protected integration tests have not yet executed:
+The packet layer is integrated and its local component tests pass. Genuine
+protected integration tests have not executed:
 
 - The bounded V2 codec transports complete source, original native-neutral IR,
   ordered roots, CPU inputs and inert receipt signatures. It grants no authority.
@@ -36,7 +36,7 @@ protected integration tests have not yet executed:
   replay. Replacement compares both charged owners before dropping the old one.
   Complete roster borrows finish the original source-phase postchecks first.
 
-Producer hooks add 15 unexecuted component tests. Conditional roots now retain
+Producer hooks add 15 passing component tests. Conditional roots now retain
 an inline policy header, and their existing type-sized scratch charge grows;
 conditional/fixed6 storage thresholds are therefore not claimed unchanged.
 Non-capturing replay performs no new CPU encoding or proof work. Ordinary routes
@@ -45,15 +45,30 @@ attaches the complete independently replayed packet after both original account
 postchecks. Opaque failures retain terminal charges through the outer wire and
 capsule entries; only the unchanged finalizer refusal follows successful custody.
 
-Two additional checked boundaries are integrated and typechecked, not yet composed
-into native finalization. The lowerer accepts a genuine source request and sealed
+Two additional checked boundaries passed local component tests. The lowerer
+accepts a genuine source request and sealed
 independently checked optimization history, checks exact source/target subjects
 and external limits, and follows every conditional memory occurrence through F.
 The typed V5 adapter shares the existing V3 physical ABI, capability and native
 text engine, comparing the complete descriptor section without a V3 downgrade.
 It establishes content agreement only; a coherently changed contract must still
-be rejected by the separate source/CPU/formula contract join. Their new tests
-remain unexecuted at this checkpoint.
+be rejected by the separate source/CPU/formula contract join.
+
+The strict importer now lends its actual V2 execution during the same visit,
+with graph and account postchecks before callback results escape. Its 13 component
+tests pass. The private contract checker compares theorem fields, CPU/staging
+commitments, ordered roots/read occurrences/premises, source arguments and physical
+descriptor layout against that request and execution. Its first 17 component
+tests pass; five additional full-field layout tests await execution.
+
+The private source-through-F composition checks the independently accepted history
+limits, source/target coordinates, complete root roster, each root's final-history
+and contract agreement in that same import, then the V5/native-text relation. It
+returns only existing source-content custody, not final artifact authority. Review
+found and fixed a missing fifth simultaneously live account-header charge, adding
+an exact/one-short regression. Composition and its new tests await compilation;
+the production caller is not wired to this entry. Original nominal/context custody
+and machine refinement are still separate required boundaries.
 
 The consumer supports a complete conditional root roster, not mixed ordinary or
 UnitLocal roots. Existing per-root single-output and CPU-control-flow limits
@@ -62,9 +77,9 @@ resource receipts do not constitute exact whole-process heap accounting.
 
 ## Completed Local Checks
 
-Results belong to the stated source snapshots, not subsequent packet changes.
-The guards used pinned nightly 2026-04-03, locked offline dependencies, one Cargo
-job/test thread, hidden GPUs and the unchanged resource limits.
+Results belong to the stated source snapshots, not subsequent changes. Cargo
+used pinned nightly 2026-04-03, locked offline dependencies, one job/test thread,
+hidden GPUs and the unchanged resource limits.
 
 | Snapshot | Check | Result |
 | --- | --- | --- |
@@ -77,6 +92,33 @@ job/test thread, hidden GPUs and the unchanged resource limits.
 | `fd7f41eb2` | backend and verifier capture | both compiled successfully |
 | `41b641ca7` | packet-integrated backend library | bounded offline Cargo check passed |
 | `50a696f75` | backend, verifier, lowerer and AMD model test targets | bounded offline Cargo check passed; no test functions executed |
+| `13e0da0f2` | conditional verifier/lowerer/AMD-model library tests | 260 passed, 1 development-Verus test ignored |
+| `13e0da0f2` | complete AMD-model library | 225 passed, 3 inert fixture exporters ignored |
+| `13e0da0f2` | backend conditional library tests | 156 passed, 29 capture/protected tests ignored |
+| `13e0da0f2` | kernel compile matrix shell harness | 79 manifest, 12 occurrence, 56 identity and 28 fixture-binding tests passed, plus shell controls |
+| `acda59d9f` | contract checker components | 17 passed; all four affected library test targets compiled |
+
+The shell harness uses fake Cargo/ROCm controls, not actual tutorial compilation
+or hardware. Filtered and ignored tests receive no execution credit. These local
+results do not include genuine imported proofs or compile-fail documentation for
+the newly added APIs. Log SHA256s, in the five-row order above:
+
+```text
+007e967ba1b1088725e0063bb4f4308472efba52c5c8bea6cdc7e61a57727dc5
+5b56a819cc62dcc4f633b179a93a94e90f61e583b3dab6ec2384fb4720a5d639
+cd62839f07d89dcc6c8f38083c08ed7fb7391a2b207be82f8fc9c4f0ea38a5db
+03f731635168d4bad37362119ea29f3f77ddaecfe41affb3e4afbfce056cc375
+d77ad3f653084653de66c1f0bc770580e22037a4ffab1d7eaf0404d670389d2b
+```
+
+Earlier failed runs are preserved. The merged lockfile required matching pending
+manifest contract digests and the dependent curriculum/inventory snapshots; no
+proof status or expected kernel output changed. One resource test wrongly expected
+`usize::MAX` to overflow a fresh `usize::MAX` meter; the corrected test charges a
+prefix first, matching the concurrent public-main correction. The corrected local
+runs above passed. Public-main CI `36220960215` still failed the old inventory
+snapshot; its five codegen shards and parity job passed, but that is not a green
+integrated workflow or protected-runtime evidence.
 
 The `50a696f75` check fixes a missing descriptor backing/view lifetime bound
 found in the preceding `3f8a6dcff` attempt. Those terminal checks used the normal
@@ -103,12 +145,12 @@ Fresh matching compiler/verifier/preparation artifacts are required. No new
 protected run or GPU job was started. The two newly created, empty remote scratch
 directories await cleanup when SSH is available; the shared runtime is unchanged.
 
-Packet integration has passed static review, formatting and Cargo typechecks,
-not its component or protected tests. Review fixed test-module paths and an
-opaque-token assertion; hygiene
+Packet integration has passed static review, formatting, typechecks and component
+tests, not protected tests. Review fixed test-module paths and an opaque-token
+assertion; hygiene
 required the established test filename convention, not a policy exemption.
-Genuine multi-root packet success, full-chain resource negatives and the complete
-source/CPU/contract/final-history composition remain required, followed by native-machine custody,
+Genuine multi-root packet and source/CPU/contract/final-history success, full-chain
+resource negatives and production wiring remain required, followed by native-machine custody,
 publication, generated host admission and the complete tutorial hardware matrix.
 Shared-IEEE source proof is not LLVM/ISA arithmetic or a transcendental error-bound
 proof. Neither clean analysis nor V5 bytes bypass the existing authority gate.
