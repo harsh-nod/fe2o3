@@ -16,6 +16,13 @@ pub const DEVICE_DESCRIPTOR_TABLE_DOMAIN_V5: &[u8] = b"FE2O3/DEVICE-DESCRIPTOR-T
 /// Reuses nominal records, ABI layout and per-entry target requirements. Every
 /// compiler-determined entry has exactly one contract in the same kernel order.
 /// The common input is caller data, not an admitted V3 table or downgrade route.
+///
+/// ```compile_fail,E0308
+/// use fe2o3_kernel_descriptor::{DeviceDescriptorTableInputV3, DeviceDescriptorTableInputV5, ConditionalInvocationContractV1};
+/// fn old_contract<'a>(nominal: DeviceDescriptorTableInputV3<'a>, contracts: &'a [ConditionalInvocationContractV1<'a>]) {
+///     let _ = DeviceDescriptorTableInputV5 { nominal, contracts };
+/// }
+/// ```
 pub struct DeviceDescriptorTableInputV5<'a> {
     /// Shared caller-authored nominal input, not a validated older table.
     pub nominal: DeviceDescriptorTableInputV3<'a>,
@@ -205,6 +212,13 @@ impl<'wire> DeviceDescriptorTableV5<'wire> {
 }
 
 /// Borrowed V5 kernel; common row queries cannot erase its mandatory contract.
+///
+/// ```compile_fail,E0308
+/// use fe2o3_kernel_descriptor::{KernelDescriptorRefV5, ConditionalInvocationContractV1};
+/// fn discard_cpu<'a>(kernel: &KernelDescriptorRefV5<'_, 'a>) -> ConditionalInvocationContractV1<'a> {
+///     kernel.conditional_contract(&mut |_| Ok::<(), ()>(())).unwrap()
+/// }
+/// ```
 pub struct KernelDescriptorRefV5<'view, 'wire> {
     pub(crate) nominal: KernelDescriptorRefV3<'view, 'wire>,
     pub(crate) table: &'view DeviceDescriptorTableV5<'wire>,
