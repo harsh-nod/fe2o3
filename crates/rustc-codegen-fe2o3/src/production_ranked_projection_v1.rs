@@ -55,6 +55,9 @@ mod capability_state_access_v1;
 mod root_checked_references_v1;
 // Paid reference-origin data still lacks its actual guarded-access roster join.
 mod root_initial_capability_graph_v1;
+mod root_invocation_index_preparation_v1;
+#[cfg(test)]
+use root_invocation_index_preparation_v1::assign_index_capability_legacy_v1 as assign_index_capability;
 #[allow(dead_code)]
 mod root_reference_origin_preparation_v1;
 mod tensor_capability_read_v1;
@@ -7669,98 +7672,22 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
 
     let mut index_worklist = VecDeque::new();
     let mut grid_worklist = VecDeque::new();
-    for block in function.blocks() {
-        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
-            continue;
-        };
-        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
-            callables.get(call.callee().index() as usize)
-        else {
-            continue;
-        };
-        if !matches!(
-            operation,
-            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. }
-                | SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. }
-        ) {
-            continue;
-        }
-        let destination = simple_call_destination(call)?;
-        let destination = destination.index() as usize;
-        if destination >= local_count {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "an invocation-capability destination outside the semantic local table",
-            ));
-        }
-        if index_values[destination].is_some() || grid_leaders[destination].is_some() {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "multiple invocation capabilities for one semantic local",
-            ));
-        }
-        reserve_operation(operations)?;
-        let result = next_value_id(next_value)?;
-        operations.push(ProductionRankedOperationV1::InvocationIndex {
-            result,
-            dimension: 0,
-            launch_extent,
-        });
-        push_ranked_ir(
-            ranked_ir,
-            &format!(
-                "  %{} = kernel.invocation_index <0, dynamic>\n",
-                result.get()
-            ),
-        )?;
-        match operation {
-            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. } => {
-                require_index_scalar_custody_v1(
-                    destination,
-                    &local_definitions,
-                    &scalar_inventory.address_escaped,
-                )?;
-                index_values[destination] = Some(ProjectedDisjointIndexV1 {
-                    value: ProductionRankedValueV1::Local(result),
-                    mapping: SemanticDisjointIndexSpaceV1::Index1d,
-                    precondition: None,
-                    availability: None,
-                });
-                index_worklist.push_back(destination);
-            }
-            SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader } => {
-                let availability = option_dominance
-                    .availability(SemanticLocalIdV1::from_index(destination as u32))
-                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a grid-leader capability lacks authenticated Option Some availability",
-                    ))?;
-                reserve_operation(operations)?;
-                let one = next_value_id(next_value)?;
-                operations.push(ProductionRankedOperationV1::IndexConstant {
-                    result: one,
-                    value: 1,
-                });
-                push_ranked_ir(
-                    ranked_ir,
-                    &format!("  %{} = kernel.index_constant 1\n", one.get()),
-                )?;
-                option_predicates[destination] = Some(GuardPredicateV1 {
-                    comparisons: vec![(
-                        ProductionRankedValueV1::Local(result),
-                        ProductionRankedValueV1::Local(one),
-                    )],
-                });
-                grid_leaders[destination] = Some(ProjectedGridLeaderV1 {
-                    grid_leader: *grid_leader,
-                    precondition: (
-                        ProductionRankedValueV1::Local(result),
-                        ProductionRankedValueV1::Local(one),
-                    ),
-                    availability: CapabilityAvailabilityV1::Option(availability),
-                });
-                grid_worklist.push_back(destination);
-            }
-            _ => unreachable!(),
-        }
-    }
+    root_invocation_index_preparation_v1::seed_invocation_values_legacy_v1(
+        callables,
+        function,
+        &local_definitions,
+        &scalar_inventory.address_escaped,
+        &option_dominance,
+        &mut index_values,
+        &mut grid_leaders,
+        &mut option_predicates,
+        &mut index_worklist,
+        &mut grid_worklist,
+        launch_extent,
+        operations,
+        next_value,
+        ranked_ir,
+    )?;
 
     // rustc may erase the move that binds an unforgeable zero-sized payload
     // from `Option::Some`. Recover that edge only when one exact authenticated
@@ -7807,192 +7734,21 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
     }
 
     let mut processed_edges = 0_usize;
-    while let Some(source) = index_worklist.pop_front() {
-        require_index_scalar_custody_v1(
-            source,
-            &local_definitions,
-            &scalar_inventory.address_escaped,
-        )?;
-        let input = index_values[source].ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "the capability worklist lost an index value",
-        ))?;
-        for edge in &edges_by_source[source] {
-            processed_edges = processed_edges.checked_add(1).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "capability work accounting overflowed",
-                ),
-            )?;
-            let authorization_block = match edge.kind {
-                CapabilityEdgeKindV1::AuthenticatedEnumPayload {
-                    construction_block, ..
-                } => construction_block,
-                _ => edge.use_block,
-            };
-            if !input.availability.is_none_or(|availability| {
-                capability_availability_allows(
-                    &option_dominance,
-                    &enum_payload_dominance,
-                    availability,
-                    SemanticBlockIdV1::from_index(authorization_block as u32),
-                )
-            }) {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "an index capability is used outside its authenticated Some edge",
-                ));
-            }
-            let projected = match edge.kind {
-                CapabilityEdgeKindV1::Alias | CapabilityEdgeKindV1::AuthenticatedOptionPayload => {
-                    input
-                }
-                CapabilityEdgeKindV1::AuthenticatedEnumPayload { availability, .. } => {
-                    ProjectedDisjointIndexV1 {
-                        availability: Some(CapabilityAvailabilityV1::EnumPayload(availability)),
-                        ..input
-                    }
-                }
-                CapabilityEdgeKindV1::IntoDisjoint { mapping } => {
-                    ProjectedDisjointIndexV1 { mapping, ..input }
-                }
-                CapabilityEdgeKindV1::CheckedShift {
-                    mapping,
-                    offset,
-                    availability,
-                } => {
-                    reserve_operation(operations)?;
-                    let offset_value = next_value_id(next_value)?;
-                    operations.push(ProductionRankedOperationV1::IndexConstant {
-                        result: offset_value,
-                        value: offset,
-                    });
-                    reserve_operation(operations)?;
-                    let shifted = next_value_id(next_value)?;
-                    operations.push(ProductionRankedOperationV1::IndexBinary {
-                        result: shifted,
-                        kind: IndexBinaryKindAttr::Add,
-                        lhs: input.value,
-                        rhs: ProductionRankedValueV1::Local(offset_value),
-                    });
-                    push_ranked_ir(
-                        ranked_ir,
-                        &format!(
-                            "  %{} = kernel.index_constant {}\n  %{} = kernel.index_binary Add {}, %{}\n",
-                            offset_value.get(),
-                            offset,
-                            shifted.get(),
-                            ranked_value_text_v1(input.value),
-                            offset_value.get(),
-                        ),
-                    )?;
-                    let precondition = if offset == 0 {
-                        input.precondition
-                    } else {
-                        reserve_operation(operations)?;
-                        let upper = next_value_id(next_value)?;
-                        operations.push(ProductionRankedOperationV1::IndexConstant {
-                            result: upper,
-                            value: u64::MAX - offset + 1,
-                        });
-                        push_ranked_ir(
-                            ranked_ir,
-                            &format!(
-                                "  %{} = kernel.index_constant {}\n",
-                                upper.get(),
-                                u64::MAX - offset + 1,
-                            ),
-                        )?;
-                        Some((input.value, ProductionRankedValueV1::Local(upper)))
-                    };
-                    ProjectedDisjointIndexV1 {
-                        value: ProductionRankedValueV1::Local(shifted),
-                        mapping,
-                        precondition,
-                        availability: Some(CapabilityAvailabilityV1::Option(availability)),
-                    }
-                }
-                CapabilityEdgeKindV1::CheckedBlock {
-                    mapping,
-                    lanes_per_block,
-                    elements_per_lane,
-                    availability,
-                } => {
-                    if lanes_per_block == 1 {
-                        let maximum_raw = (u64::MAX - (elements_per_lane - 1)) / elements_per_lane;
-                        reserve_operation(operations)?;
-                        let upper = next_value_id(next_value)?;
-                        operations.push(ProductionRankedOperationV1::IndexConstant {
-                            result: upper,
-                            value: maximum_raw + 1,
-                        });
-                        push_ranked_ir(
-                            ranked_ir,
-                            &format!(
-                                "  %{} = kernel.index_constant {}\n",
-                                upper.get(),
-                                maximum_raw + 1,
-                            ),
-                        )?;
-                        ProjectedDisjointIndexV1 {
-                            mapping,
-                            precondition: Some((
-                                input.value,
-                                ProductionRankedValueV1::Local(upper),
-                            )),
-                            availability: Some(CapabilityAvailabilityV1::Option(availability)),
-                            ..input
-                        }
-                    } else {
-                        ProjectedDisjointIndexV1 {
-                            mapping,
-                            availability: Some(CapabilityAvailabilityV1::Option(availability)),
-                            ..input
-                        }
-                    }
-                }
-                CapabilityEdgeKindV1::CheckedTiled2d {
-                    mapping,
-                    availability,
-                } => ProjectedDisjointIndexV1 {
-                    mapping,
-                    availability: Some(CapabilityAvailabilityV1::Option(availability)),
-                    ..input
-                },
-                CapabilityEdgeKindV1::CheckedRowStriped2d {
-                    mapping,
-                    availability,
-                } => ProjectedDisjointIndexV1 {
-                    mapping,
-                    availability: Some(CapabilityAvailabilityV1::Option(availability)),
-                    ..input
-                },
-            };
-            if matches!(
-                edge.kind,
-                CapabilityEdgeKindV1::CheckedShift { .. }
-                    | CapabilityEdgeKindV1::CheckedBlock { .. }
-                    | CapabilityEdgeKindV1::CheckedTiled2d { .. }
-                    | CapabilityEdgeKindV1::CheckedRowStriped2d { .. }
-            ) {
-                let predicate = option_predicates.get_mut(edge.destination).ok_or(
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "a checked capability destination outside the semantic local table",
-                    ),
-                )?;
-                if predicate.is_some() {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "multiple checked predicates for one semantic local",
-                    ));
-                }
-                *predicate = Some(GuardPredicateV1::from_precondition(projected.precondition));
-            }
-            assign_index_capability(
-                edge.destination,
-                projected,
-                &mut index_values,
-                &grid_leaders,
-                &mut index_worklist,
-            )?;
-        }
-    }
+    root_invocation_index_preparation_v1::propagate_index_values_legacy_v1(
+        &local_definitions,
+        &scalar_inventory.address_escaped,
+        &option_dominance,
+        &enum_payload_dominance,
+        &edges_by_source,
+        &mut index_values,
+        &grid_leaders,
+        &mut option_predicates,
+        &mut index_worklist,
+        &mut processed_edges,
+        operations,
+        next_value,
+        ranked_ir,
+    )?;
 
     while let Some(source) = grid_worklist.pop_front() {
         let input = grid_leaders[source].ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -19101,33 +18857,6 @@ fn push_capability_edge(
     Ok(())
 }
 
-fn assign_index_capability(
-    destination: usize,
-    projected: ProjectedDisjointIndexV1,
-    index_values: &mut [Option<ProjectedDisjointIndexV1>],
-    grid_leaders: &[Option<ProjectedGridLeaderV1>],
-    worklist: &mut VecDeque<usize>,
-) -> Result<(), ProductionRankedProjectionErrorV1> {
-    if destination >= index_values.len() || grid_leaders[destination].is_some() {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "an index capability escaped the semantic local table or changed capability kind",
-        ));
-    }
-    match index_values[destination] {
-        None => {
-            index_values[destination] = Some(projected);
-            worklist.push_back(destination);
-        }
-        Some(existing) if existing == projected => {}
-        Some(_) => {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "multiple index capabilities reach one semantic local",
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn require_index_scalar_custody_v1(
     local: usize,
     definitions: &[u8],
@@ -24907,6 +24636,7 @@ mod tests {
     include!("production_ranked_projection_v1/root_checked_references_v1_tests.rs");
     include!("production_ranked_projection_v1/root_initial_capability_graph_v1_tests.rs");
     include!("production_ranked_projection_v1/root_reference_origin_preparation_v1_tests.rs");
+    include!("production_ranked_projection_v1/root_invocation_index_preparation_v1_tests.rs");
 
     mod implicit_capability_capture_v1_tests {
         include!("production_ranked_projection_v1/implicit_capability_capture_v1_tests.rs");

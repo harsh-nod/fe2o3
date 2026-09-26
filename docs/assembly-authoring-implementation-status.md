@@ -5,6 +5,17 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Shared invocation-index preparation — 2026-09-26
+
+The [index-preparation checkpoint](bf16-shared-invocation-index-qualification-20260926.md)
+qualifies shared ordinary/component seed, propagation and assignment algorithms.
+All 331 model and 2,617 backend tests, build, five fresh Rust sessions, 67
+comparison controls, strict lossless R19/R20 parity and 38 ordinary sessions
+passed. The 38 observation bodies and 52 artifacts are unchanged. The bounded
+component remains unjoined data; actual root-prefix/value ownership, guarded
+accesses and a complete nominal recipe remain open. Accepted broad exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**. No new GPU or debugger capture is claimed.
+
 ## Supported-profile graph completion and debugger rebuild — 2026-09-26
 
 The [compiler checkpoint](bf16-complete-profile-graph-qualification-20260926.md)
