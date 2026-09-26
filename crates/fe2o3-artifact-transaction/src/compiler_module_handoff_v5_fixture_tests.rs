@@ -107,7 +107,7 @@ fn outer() -> Handoff {
     let invocation =
         fe2o3_rustc_invocation::encode_descriptor_v3(old.capsule().invocation()).unwrap();
     let target = old.module_handoff().target();
-    let llvm = old.module_handoff().module().bytes();
+    let llvm = old.module_handoff().module_bytes();
     let module = CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmTextIr,
         target,
