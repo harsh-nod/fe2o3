@@ -5,6 +5,9 @@ use fe2o3_kernel_descriptor::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use std::cell::Cell;
 
+#[path = "nominal_field_tests.rs"]
+mod nominal_field_tests;
+
 #[allow(dead_code)]
 #[path = "../../../fe2o3-kernel-descriptor/tests/support/conditional_invocation_v2.rs"]
 mod fixture;
