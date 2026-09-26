@@ -23,6 +23,7 @@ mod authority;
 mod authority_v2;
 #[cfg(test)]
 mod authority_v2_test_process;
+mod authority_v3;
 #[allow(unsafe_code)]
 mod deployment;
 mod handoff;
@@ -45,10 +46,15 @@ mod process_cleanup;
 mod process_reaper;
 mod process_staging;
 mod program_v2;
+mod program_v3;
 mod provisioning;
 mod root_checks;
+mod shared_adapter;
 pub use program_v2::{
     AdmittedIssuerProgramV2, IssuerProgramAdmissionErrorV2, IssuerProgramStorageV2,
+};
+pub use program_v3::{
+    AdmittedIssuerProgramV3, IssuerProgramAdmissionErrorV3, IssuerProgramStorageV3,
 };
 mod session;
 
@@ -60,6 +66,10 @@ pub use authority::{
 pub use authority_v2::{
     ProtectedIssuerSupervisorErrorV2, ProtectedIssuerSupervisorStorageV2,
     ProtectedIssuerSupervisorV2,
+};
+pub use authority_v3::{
+    ProtectedIssuerSupervisorErrorV3, ProtectedIssuerSupervisorStorageV3,
+    ProtectedIssuerSupervisorV3,
 };
 pub use deployment::{
     COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1,
