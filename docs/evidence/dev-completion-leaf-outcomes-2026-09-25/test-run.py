@@ -5,7 +5,8 @@ import json
 from pathlib import Path
 import runpy
 
-check = runpy.run_path(str(Path(__file__).with_name("run.py")))["logical_negative"]
+runner = runpy.run_path(str(Path(__file__).with_name("run.py")))
+check = runner["logical_negative"]
 verifier = {"version": "calibration-only"}
 source_paths = {"/snapshot/context_completion_reconciliation_leaf_v1.rs"}
 base = {"verus": verifier, "verification-results": {
@@ -45,4 +46,10 @@ changed = copy.deepcopy(base)
 changed["verus"] = {"version": "different"}
 require(not accepted(result=changed))
 require(not accepted(messages=[dict(diagnostic, spans=[{"is_primary": True, "file_name": "/other.rs"}])]))
-print("PASS: leaf outcome negative classifier (10 groups)")
+for note in runner["SELECTION_NOTES"]:
+    require(accepted(messages=[{"level": "note", "message": note}, diagnostic]))
+require(not accepted(messages=[{"level": "note", "message": "verifying unrelated function"}, diagnostic]))
+require(not accepted(messages=[dict(diagnostic, spans=[{
+    "is_primary": True, "file_name": "/wrong-snapshot/context_completion_reconciliation_leaf_v1.rs",
+}])]))
+print("PASS: leaf outcome negative classifier (12 groups)")

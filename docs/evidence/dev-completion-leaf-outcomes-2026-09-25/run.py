@@ -21,6 +21,11 @@ PROOF_RESULT = {"encountered-error": False, "encountered-vir-error": False,
                 "errors": 0, "is-verifying-entire-crate": True, "success": True, "verified": 53}
 LOGICAL_ERRORS = {"postcondition not satisfied", "precondition not satisfied", "assertion failed",
                   "invariant not satisfied at end of loop body", "invariant not satisfied before loop"}
+SELECTION_NOTES = {"verifying root module (selected functions)"} | {
+    "verifying root module, function context_completion_reconciliation_v1::" + name + " (selected functions)"
+    for name in ("CompletionProjectionV1::plan_completion_step_v1", "CompletionProjectionV1::transition_submission_status",
+                 "CompletionTableV1::validate_custody")
+}
 MUTANTS = [
     ("skip-success-settlement", BODY,
      "let result = $context.transition_submission_status($id, RuntimeCompletionStatusV1::Succeeded);",
@@ -85,7 +90,7 @@ def logical_negative(status, stdout, stderr, verifier, source_paths):
             identified = True
         elif diagnostic.get("level") == "error" and re.fullmatch(r"aborting due to \d+ previous errors?", message):
             pass
-        elif diagnostic.get("level") == "note" and message == "verifying root module (selected functions)":
+        elif diagnostic.get("level") == "note" and message in SELECTION_NOTES:
             pass
         elif diagnostic.get("level") == "note" and "not all errors may have been reported" in message:
             pass
@@ -184,7 +189,7 @@ def main():
     prior.signature_tool()
     prior.save(out / "signed-inputs.json", bind_signed_blobs(prior, before))
     phase("runner-tests", [sys.executable, "-I", "-B", str(Path(__file__).with_name("test-run.py"))],
-          lambda s, o, e: s == 0 and not e and o == "PASS: leaf outcome negative classifier (10 groups)\n")
+          lambda s, o, e: s == 0 and not e and o == "PASS: leaf outcome negative classifier (12 groups)\n")
     phase("source-tests", [sys.executable, "-I", "-B", str(ROOT / V / "test-completion-reconciliation-source.py")],
           lambda s, o, e: s == 0 and not e and o == "PASS: completion planner source calibration (8 groups)\n")
     phase("source-body", [sys.executable, "-I", "-B", str(ROOT / V / "check-completion-reconciliation-source.py"),
