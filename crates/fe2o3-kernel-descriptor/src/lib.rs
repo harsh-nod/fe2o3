@@ -17,6 +17,8 @@ mod conditional_invocation_v1;
 mod conditional_invocation_v2;
 mod conditional_invocation_validate_v1;
 mod conditional_v4;
+mod conditional_v5;
+mod conditional_wire_common;
 mod decode;
 mod digest;
 mod encode;
@@ -31,9 +33,11 @@ mod wire_v2;
 mod wire_v3;
 mod wire_v4;
 mod wire_v4_join;
+mod wire_v5;
 
 pub use conditional_invocation::*;
 pub use conditional_v4::*;
+pub use conditional_v5::*;
 pub use decode::decode_device_descriptor_table_v1;
 pub use digest::{
     CANONICAL_CODE_OBJECT_DOMAIN_V1, CanonicalCodeObjectDigest, DEVICE_DESCRIPTOR_TABLE_DOMAIN_V1,
@@ -84,6 +88,10 @@ pub use wire_v3::decode_device_descriptor_table_v3;
 pub use wire_v4::{
     decode_device_descriptor_table_v4, encode_device_descriptor_table_v4,
     encoded_device_descriptor_table_v4_len,
+};
+pub use wire_v5::{
+    decode_device_descriptor_table_v5, encode_device_descriptor_table_v5,
+    encoded_device_descriptor_table_v5_len,
 };
 
 #[cfg(test)]

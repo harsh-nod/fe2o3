@@ -1,8 +1,6 @@
 //! Structural joins only. Source/graph/receipt authentication is owner work.
-use crate::conditional_invocation::{
-    ConditionalArgumentRoleV1 as Role, ConditionalInvocationContractV1,
-};
-use crate::conditional_v4::*;
+use crate::conditional_invocation::ConditionalArgumentRoleV1 as Role;
+use crate::conditional_wire_common::{Contract, Error as JoinError, Result as JoinResult};
 use crate::*;
 
 pub(crate) struct ArgumentProjection {
@@ -19,12 +17,12 @@ pub(crate) fn input_argument<E>(
     kernel: &KernelDescriptorInputV3<'_>,
     field: usize,
     c: &mut impl FnMut(usize) -> Result<(), E>,
-) -> ResultV4<ArgumentProjection, E> {
+) -> JoinResult<ArgumentProjection, E> {
     crate::nominal_v3::pay(c, 1)?;
     let a = kernel
         .arguments
         .get(field)
-        .ok_or(DescriptorWireErrorV4::Invalid("generated field"))?;
+        .ok_or(JoinError::Invalid("generated field"))?;
     let mut found = None;
     for t in table.type_records {
         crate::nominal_v3::pay(c, 33)?;
@@ -37,7 +35,7 @@ pub(crate) fn input_argument<E>(
         source_index: a.source_index,
         source_type: a.source_type,
         device_layout: a.device_layout,
-        descriptor: found.ok_or(DescriptorWireErrorV4::Invalid("argument type"))?,
+        descriptor: found.ok_or(JoinError::Invalid("argument type"))?,
         ownership: a.ownership,
         access: a.access,
         alias: a.alias,
@@ -48,12 +46,12 @@ pub(crate) fn view_argument<E>(
     kernel: &KernelDescriptorRefV3<'_, '_>,
     field: usize,
     c: &mut impl FnMut(usize) -> Result<(), E>,
-) -> ResultV4<ArgumentProjection, E> {
+) -> JoinResult<ArgumentProjection, E> {
     let mut cursor = kernel.arguments();
     for i in 0..kernel.argument_count() {
         let a = cursor
             .next(c)?
-            .ok_or(DescriptorWireErrorV4::Invalid("generated field"))?;
+            .ok_or(JoinError::Invalid("generated field"))?;
         if i == field {
             return Ok(ArgumentProjection {
                 source_index: a.source_index(),
@@ -66,26 +64,24 @@ pub(crate) fn view_argument<E>(
             });
         }
     }
-    Err(DescriptorWireErrorV4::Invalid("generated field"))
+    Err(JoinError::Invalid("generated field"))
 }
-pub(crate) fn join<E, C: FnMut(usize) -> Result<(), E>>(
+pub(crate) fn join<'wire, E, C: FnMut(usize) -> Result<(), E>>(
     id: KernelId,
     rank: u8,
     argument_count: usize,
-    contract: &ConditionalInvocationContractV1<'_>,
-    mut argument: impl FnMut(usize, &mut C) -> ResultV4<ArgumentProjection, E>,
+    contract: &impl Contract<'wire>,
+    mut argument: impl FnMut(usize, &mut C) -> JoinResult<ArgumentProjection, E>,
     c: &mut C,
-) -> ResultV4<(), E> {
+) -> JoinResult<(), E> {
     crate::nominal_v3::pay(c, 33)?;
-    if id.as_bytes() != &contract.subjects().kernel_id || rank != 1 {
-        return Err(DescriptorWireErrorV4::Invalid(
-            "conditional kernel/D1 binding",
-        ));
+    if id.as_bytes() != contract.kernel_id() || rank != 1 {
+        return Err(JoinError::Invalid("conditional kernel/D1 binding"));
     }
     let mut cursor = contract.arguments();
     while let Some(a) = cursor.next(c)? {
         if usize::from(a.generated_field) >= argument_count {
-            return Err(DescriptorWireErrorV4::Invalid("generated field range"));
+            return Err(JoinError::Invalid("generated field range"));
         }
         let row = argument(usize::from(a.generated_field), c)?;
         crate::nominal_v3::pay(c, 80)?;
@@ -93,9 +89,7 @@ pub(crate) fn join<E, C: FnMut(usize) -> Result<(), E>>(
             || row.source_type.as_bytes() != &a.source_type_identity
             || row.device_layout.as_bytes() != &a.device_layout_identity
         {
-            return Err(DescriptorWireErrorV4::Invalid(
-                "source/generated/type/layout binding",
-            ));
+            return Err(JoinError::Invalid("source/generated/type/layout binding"));
         }
         let kind = match a.role {
             Role::Input => {
@@ -112,9 +106,7 @@ pub(crate) fn join<E, C: FnMut(usize) -> Result<(), E>>(
             }
         };
         if !kind {
-            return Err(DescriptorWireErrorV4::Invalid(
-                "conditional slice/access/ownership",
-            ));
+            return Err(JoinError::Invalid("conditional slice/access/ownership"));
         }
     }
     let out = contract.output();
@@ -130,10 +122,14 @@ pub(crate) fn join<E, C: FnMut(usize) -> Result<(), E>>(
     }
     Ok(())
 }
-fn element_layout<E>(kind: SourceTypeDescriptorV3, width: u64, alignment: u32) -> ResultV4<(), E> {
+fn element_layout<E>(
+    kind: SourceTypeDescriptorV3,
+    width: u64,
+    alignment: u32,
+) -> JoinResult<(), E> {
     let scalar = kind.physical_scalar();
     if width != u64::from(scalar.size_bytes()) || alignment > u32::from(scalar.alignment_bytes()) {
-        return Err(DescriptorWireErrorV4::Invalid("conditional element layout"));
+        return Err(JoinError::Invalid("conditional element layout"));
     }
     Ok(())
 }
