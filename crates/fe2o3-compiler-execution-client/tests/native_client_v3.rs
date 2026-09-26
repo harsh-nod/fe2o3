@@ -1,26 +1,26 @@
 //! Public native client transcripts. Fixture keys are diagnostic only: these
 //! tests do not establish protected service custody, journal durability or GPU authority.
 use ed25519_dalek::{Signer, SigningKey};
-use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV2 as Subject;
+use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV3 as Subject;
 use fe2o3_compiler_execution_client::{
-    CompilerExecutionClientErrorV2 as Error, CompilerExecutionClientV2 as Client,
+    CompilerExecutionClientErrorV3 as Error, CompilerExecutionClientV3 as Client,
 };
 use fe2o3_compiler_execution_protocol::{
-    CompilerExecutionAttestationReceiptV2 as Receipt,
-    CompilerExecutionAttestationRequestV2 as Request,
-    CompilerExecutionAttestationStorageV2 as Storage,
+    CompilerExecutionAttestationReceiptV3 as Receipt,
+    CompilerExecutionAttestationRequestV3 as Request,
+    CompilerExecutionAttestationStorageV3 as Storage,
     CompilerExecutionCurrentRecordAttestationV3 as Current,
     CompilerExecutionCurrentRecordVerificationV3 as Verification,
-    CompilerExecutionExternalAnchorTransactionV2 as Transaction,
-    CompilerExecutionIssuerPolicyV2 as Policy, CompilerExecutionReceiptCarriageV2 as Carriage,
-    CompilerExecutionReceiptPublicationAckV2 as Ack,
-    CompilerExecutionReceiptPublicationV2 as Publication,
+    CompilerExecutionExternalAnchorTransactionV3 as Transaction,
+    CompilerExecutionIssuerPolicyV3 as Policy, CompilerExecutionReceiptCarriageV3 as Carriage,
+    CompilerExecutionReceiptPublicationAckV3 as Ack,
+    CompilerExecutionReceiptPublicationV3 as Publication,
     CompilerExecutionServicePublishDispositionV1 as Disposition,
-    CompilerExecutionServiceRequestKindV2 as QueryKind,
-    CompilerExecutionServiceRequestPayloadV2 as QueryPayload,
-    CompilerExecutionServiceRequestV2 as Query, CompilerExecutionServiceResponsePayloadV2 as Reply,
-    CompilerExecutionServiceResponseV2 as Response,
-    MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V2 as MAX_REQUEST,
+    CompilerExecutionServiceRequestKindV3 as QueryKind,
+    CompilerExecutionServiceRequestPayloadV3 as QueryPayload,
+    CompilerExecutionServiceRequestV3 as Query, CompilerExecutionServiceResponsePayloadV3 as Reply,
+    CompilerExecutionServiceResponseV3 as Response,
+    MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V3 as MAX_REQUEST,
 };
 use fe2o3_external_anchor_protocol::{
     AnchorChallengeV1, AnchorPositionV1, AnchorTransitionReceiptV1, AnchoredStateV1, CallerNonceV1,
@@ -41,8 +41,8 @@ mod fixture;
 #[path = "support/native_client_transcripts.rs"]
 mod transcripts;
 transcripts::native_client_transcripts!(
-    2,
-    external_anchor_currentness_challenge_native,
-    new_native,
-    issue_native
+    3,
+    external_anchor_currentness_challenge_native_v3,
+    new_native_v3,
+    issue_native_v3
 );

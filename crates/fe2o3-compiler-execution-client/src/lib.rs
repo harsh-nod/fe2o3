@@ -23,6 +23,8 @@ use fe2o3_compiler_execution_protocol::{
 
 mod child_channel;
 mod native;
+mod native_adapter;
+mod native_v3;
 mod supervisor_handoff;
 
 pub use child_channel::{
@@ -32,6 +34,9 @@ pub use child_channel::{
 pub use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
 pub use native::{
     CompilerExecutionClientErrorV2, CompilerExecutionClientStorageV2, CompilerExecutionClientV2,
+};
+pub use native_v3::{
+    CompilerExecutionClientErrorV3, CompilerExecutionClientStorageV3, CompilerExecutionClientV3,
 };
 pub use supervisor_handoff::{
     CompilerExecutionHandoffErrorV1, CompilerExecutionSupervisorCredentialsV1,
