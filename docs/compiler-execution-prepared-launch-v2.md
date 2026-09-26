@@ -137,6 +137,10 @@ existing read/write helpers are not the native finite-I/O path.
 
 ## Resource Contract
 
+The equations below use V2 type names. V3 follows the same call graph with its
+own nominal types and exported quotas; derive sizes from those types rather than
+assuming byte-identical layouts or treating V2 quota numbers as a stable V3 ABI.
+
 Every nested native operation uses the original caller ledger. The borrowed
 supervisor and consumed accepted handoff must already be prepaid. Scopes restore
 entry storage on success, refusal and unwind; charged work, peak storage and
@@ -245,6 +249,22 @@ stable quota ABI. Constants may adjust during tests and review. Refusal charges
 only reached scopes according to entry/prepayment order, with no refund. Logical
 quotas do not bound generated instructions or stack, allocator behavior, RSS,
 kernel objects/pipe buffers, page cache, syscall scheduling or wall-clock time.
+
+## V3 Fixture
+
+The V3 preparation fixture exercises distinct-UID handoff, quota boundaries,
+transfer/manifest mutations, descriptor restoration and preparation consumption
+without spawning an issuer. In an explicitly disposable root container, run:
+
+```sh
+FE2O3_RUN_PRIVILEGED_PREPARE_V3_TEST=1 "$SUPERVISOR_TEST_BIN" \
+  --exact launch_v3::tests::native_distinct_uid_prepare_v3_fixture \
+  --ignored --nocapture --test-threads=1
+```
+
+This fixture is compiled but not runtime-validated at the
+[V3 launch checkpoint](evidence/conditional-native-launch-20260926.md). It is
+not a substitute for the full consuming-process fixture or deployment validation.
 
 ## Remaining Integration
 
