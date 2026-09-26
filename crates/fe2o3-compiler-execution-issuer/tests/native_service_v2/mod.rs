@@ -1,12 +1,7 @@
 //! Actual public native admission/service and client cancellation. This is not
 //! inherited-entrypoint, supervisor installation, observed-source or GPU proof.
 use super::*;
-use fe2o3_compiler_execution_client::CompilerExecutionClientV2 as WireClient;
-use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_SERVICE_READY_BYTES_V2 as READY_BYTES,
-    CompilerExecutionClientProcessIdentityV1 as ClientIdentity,
-    CompilerExecutionServiceLaunchManifestV2 as Manifest, CompilerExecutionServiceReadyV2 as Ready,
-};
+use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1 as ClientIdentity;
 use rustix::pipe::{PipeFlags, pipe_with};
 
 pub(super) const CASES: &[&str] = &[
@@ -146,5 +141,5 @@ pub(super) fn run(case: &str) {
         assert!(entry.file_type().unwrap().is_file());
         fs::remove_file(entry.path()).unwrap();
     }
-    println!("FE2O3_NATIVE_SERVICE_READINESS_CASE_OK case={case}");
+    println!("{SERVICE_CASE_OK} case={case}");
 }

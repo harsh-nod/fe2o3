@@ -12,22 +12,23 @@
 //! budget. The client role and deliberate foreign-ledger probes own separate ledgers.
 #![forbid(unsafe_code)]
 
+// Nominal conditional owners; no V2 fixture conversion or protected-source admission.
 use fe2o3_broker_authority_service::{
-    ProtectedCompilerExecutionIssuerAdmissionErrorV2 as Error,
-    ProtectedCompilerExecutionIssuerAdmissionV2 as Admission,
+    ProtectedCompilerExecutionIssuerAdmissionErrorV3 as Error,
+    ProtectedCompilerExecutionIssuerAdmissionV3 as Admission,
 };
-use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV2 as Key;
-use fe2o3_compiler_execution_client::CompilerExecutionClientV2 as WireClient;
+use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV3 as Key;
+use fe2o3_compiler_execution_client::CompilerExecutionClientV3 as WireClient;
 use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_SERVICE_READY_BYTES_V2 as READY_BYTES,
-    CompilerExecutionIssuerPolicyV2 as Policy,
-    CompilerExecutionServiceLaunchManifestV2 as Manifest, CompilerExecutionServiceReadyV2 as Ready,
+    COMPILER_EXECUTION_SERVICE_READY_BYTES_V3 as READY_BYTES,
+    CompilerExecutionIssuerPolicyV3 as Policy,
+    CompilerExecutionServiceLaunchManifestV3 as Manifest, CompilerExecutionServiceReadyV3 as Ready,
 };
 
-const PUBLIC_CASE_OK: &str = "FE2O3_NATIVE_ISSUER_PUBLIC_CASE_OK";
-const PUBLIC_MATRIX_OK: &str = "FE2O3_NATIVE_ISSUER_PUBLIC_MATRIX_OK";
-const SERVICE_CASE_OK: &str = "FE2O3_NATIVE_SERVICE_READINESS_CASE_OK";
-const SERVICE_MATRIX_OK: &str = "FE2O3_NATIVE_SERVICE_READINESS_MATRIX_OK";
+const PUBLIC_CASE_OK: &str = "FE2O3_NATIVE_ISSUER_V3_PUBLIC_CASE_OK";
+const PUBLIC_MATRIX_OK: &str = "FE2O3_NATIVE_ISSUER_V3_PUBLIC_MATRIX_OK";
+const SERVICE_CASE_OK: &str = "FE2O3_NATIVE_SERVICE_V3_READINESS_CASE_OK";
+const SERVICE_MATRIX_OK: &str = "FE2O3_NATIVE_SERVICE_V3_READINESS_MATRIX_OK";
 
 #[path = "native_service_v2/mod.rs"]
 mod native_service;

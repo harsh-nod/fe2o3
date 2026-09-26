@@ -61,6 +61,44 @@ protected compiler-source observation, proof execution, or GPU qualification.
 See the
 [native capability contract](../../docs/compiler-execution-capabilities-v2.md).
 
+## Isolated Native Harness
+
+The `native_admission_v2` and `native_admission_v3` integration-test targets share
+the same fixture and case bodies. Each binds its own nominal policy, signing key,
+issuer admission/error, launch manifest, readiness and wire-client types. The V3
+client exchanges actual V3 Cancel/Cancelled packets; no V2 fixture is converted.
+The V2 test names and success markers are unchanged. V3 markers use
+`FE2O3_NATIVE_ISSUER_V3_PUBLIC_*` and `FE2O3_NATIVE_SERVICE_V3_READINESS_*`.
+
+All four tests in each target are ignored by default. An ignored/default test
+result is not qualification. Run only `isolated_static_public_admission_matrix`
+or `isolated_static_public_native_service_matrix`, one exact test at a time with
+`--exact --ignored --nocapture --test-threads=1`, in a disposable root Docker
+container with `FE2O3_RUN_NATIVE_ISSUER_ADMISSION=1` and a separately built pinned
+musl-static test executable. The other two tests are private subprocess roles.
+A missing opt-in, wrong UID/GID, dynamic image or failed syscall is a failure,
+not a successful skip. The runner must enforce a read-only root/executable,
+private `/tmp` and namespaces, no network/GPU, default seccomp, no-new-privileges,
+drop-all capabilities plus CHOWN/KILL/SETUID/SETGID, CPU/memory/PID limits and a
+600-second outer timeout. The opt-in and Docker marker alone do not verify all
+of these runner constraints.
+
+Each family has 17 admission cases and six readiness/Cancel cases. Unchanged
+bounds include 60 seconds per case, a 570-second admission-matrix deadline,
+15-second IPC waits, 120-second peer waits, 24,000 polling attempts with 5-ms
+steps, and 5-second child cleanup waits. Each work ledger allows 10^12 units;
+admission storage is 512 MiB and service/client storage is 256 MiB. Fixture
+management remains outside logical accounting. Issuer operations retain the
+original ledger; the client role and deliberate foreign-ledger probes have
+separate ledgers. Cleanup kills/reaps owned children and removes only the owned
+empty root or its known journal file, never a recursive directory tree.
+
+This harness covers public admission, readiness after singleton recovery, and
+acknowledged Cancel only. It does not launch the fixed-FD issuer entrypoint,
+install a trusted supervisor, independently observe a V5 Prepare/Issue, perform
+an authenticated external-anchor exchange, or establish protected compiler/GPU
+authority. Permission refusals remain terminal; there is no fake admission.
+
 ## Conditional Native Issuer
 
 `run_inherited_compiler_execution_issuer_v3` uses the same fixed descriptor ABI,
