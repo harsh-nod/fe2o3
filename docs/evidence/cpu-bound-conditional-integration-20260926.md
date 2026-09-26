@@ -67,8 +67,18 @@ and contract agreement in that same import, then the V5/native-text relation. It
 returns only existing source-content custody, not final artifact authority. Review
 found and fixed a missing fifth simultaneously live account-header charge, adding
 an exact/one-short regression. The composition compiles and all 12 new component
-tests pass; the production caller is not wired to this entry. Original nominal/context custody
-and machine refinement are still separate required boundaries.
+tests pass at `7648f5e31`. The production caller now invokes this composition
+during the existing packet visit, retaining original nominal/context custody
+alongside actual F, its history, the V5 descriptor and native text. It does not
+rerun the optimizer or import the packet twice. Successful content checks still
+end at `ConditionalFinalizerRequired`; machine refinement and native authority
+remain separate required boundaries.
+
+Test-only observations compare retained packet/history/catalog/descriptor/text
+bytes and the actual history roles, source, contracts and formula reports. Their
+call/completion/installation state tracks the outer composition, not an internal
+strict-import count. Two observation component tests passed at `1a4a02120`; the
+genuine protected child has not executed.
 
 The consumer supports a complete conditional root roster, not mixed ordinary or
 UnitLocal roots. Existing per-root single-output and CPU-control-flow limits
@@ -99,6 +109,10 @@ hidden GPUs and the unchanged resource limits.
 | `acda59d9f` | contract checker components | 17 passed; all four affected library test targets compiled |
 | `7648f5e31` | integrated conditional library suite, all four packages | 450 passed, 30 capture/proof tests ignored |
 | `7648f5e31` | all four packages' documentation tests | 264 compile-fail and 5 positive tests passed; none ignored |
+| `2ddfdc4fc` | unfiltered library tests, all four packages | timed out at the unchanged 1,200-second limit; AMD model completed 225 passed/3 ignored, lowerer incomplete, verifier/backend not reached |
+| `1a4a02120` | production-bridge conditional library suite | 463 passed, 15 failed, 30 ignored; not a passing run |
+| `1a4a02120` | legacy nominal library regression filter | 121 passed, 5 protected-source tests ignored; new conditional-descriptor tests explicitly excluded |
+| `1a4a02120` | all four packages' documentation tests | 264 compile-fail and 5 positive tests passed; none ignored |
 
 The shell harness uses fake Cargo/ROCm controls, not actual tutorial compilation
 or hardware. Filtered and ignored tests receive no execution credit. These local
@@ -122,6 +136,18 @@ backend cases. Counts overlap earlier snapshots and must not be added together.
 The private same-import hook has a compiled caller-shape control and component
 tests, but no external borrow-escape compile-fail test; an external import of
 that private function would test privacy instead of the callback's lifetime.
+
+The production-bridge run exposed three shared fixture errors: raw pointers
+inherited reference-only non-null validity, a positive fixture used a device-export
+role rejected by V12, and the history fixture configured the generic 2 GiB ceiling
+instead of the native history ceiling of 256 MiB. Corrections preserve the
+negative cases, existing production limits and original resource account. The
+native ceiling is selected before source/optimizer work, never by replacing an
+account after work has begun. These corrections require a fresh test run; the
+failed run remains part of the evidence. Its log SHA256 is
+`b3f3d02e51b33e6146eadb2cf3acab548572d0f380275cb9a77b6465e1ddb294`.
+The later documentation log SHA256 is
+`8524c8d5da762702fe46f8b11d8595f10c7eeb993e92c1d7bebfc4b4f7002d34`.
 
 Earlier failed runs are preserved. The merged lockfile required matching pending
 manifest contract digests and the dependent curriculum/inventory snapshots; no
@@ -168,7 +194,8 @@ tests, not protected tests. Review fixed test-module paths and an opaque-token
 assertion; hygiene
 required the established test filename convention, not a policy exemption.
 Genuine multi-root packet and source/CPU/contract/final-history success, full-chain
-resource negatives and production wiring remain required, followed by native-machine custody,
+resource negatives and protected execution of the new production wiring remain
+required, followed by native-machine custody,
 publication, generated host admission and the complete tutorial hardware matrix.
 Shared-IEEE source proof is not LLVM/ISA arithmetic or a transcendental error-bound
 proof. Neither clean analysis nor V5 bytes bypass the existing authority gate.
