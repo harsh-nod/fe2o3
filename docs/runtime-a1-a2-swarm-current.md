@@ -24,6 +24,21 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest module-image development (2026-09-26): an optional immutable KFD budget
+now reserves image payload bytes and one record before copying or parsing.
+Module/kernel/prepared aliases share a debit through final byte disposal;
+duplicate loads charge separately and failed unload preserves ownership.
+The [development packet](evidence/dev-host-image-residency-2026-09-26/README.md)
+records all 14 focused tests passing. The full runtime run reports 1,462 passed,
+the same three socket-inspection EPERM failures and 28 ignored. Strict Clippy,
+no-default-feature checking, formatting and all 46 runtime doctests pass.
+Unconfigured defaults, generated
+images, metadata, transport copies, native backing and aggregate limits remain
+outside this ceiling. CPU metadata-only unload failures do not qualify native
+ambiguous disposal. SSH still fails during hostname resolution. MEM-4B,
+aggregate closure, formal refinement, signed native replay and matched
+performance remain open; no accepted checkpoint or A1/A2 status changes.
+
 Latest runtime preallocation development (2026-09-26): ordinary scaled publication
 now reserves the actual native epoch table before detach, admitted-device
 consumption or resident DATA movement, then transfers that same token through
@@ -2666,8 +2681,9 @@ replay and outer-future waker tests rather than reproducing them.
    contract and subsequent shared-accounting/Context integration. Test repeated
    Context creation, parent exhaustion, foreign children and simultaneous
    quarantine with reserved terminal headroom. N1B -> MEM-3 then cover remaining
-   kernarg/executable backing, controls and occupied slots. MEM-4A's isolated
-   host-image ceiling is independently ready; MEM-4B native residency follows
+   kernarg/executable backing, controls and occupied slots. MEM-4A's optional
+   KFD module-image payload ceiling is implemented in development; qualification
+   remains incomplete. MEM-4B native residency follows
    backing/control integration. MEM-5 must include commands, captures,
    replies/results, registries, arenas, journals and quarantine, without
    double-charging aliases. Concurrent-bootstrap pre-effect reservation is a
@@ -2935,7 +2951,7 @@ misinterpreted as initialized contents.
 | --- | --- | --- |
 | MEM-DOM-1A -> 1B | Domain/terminal-headroom contract now; shared accounting and Context/session integration afterward | One exact root/child hierarchy, charged bootstrap/arenas, parent exhaustion, repeated Contexts and simultaneous quarantine without premature refunds. Concurrent-bootstrap reservation remains a separate contract. |
 | MEM-N1B-1 -> N1B-2 -> MEM-3 | Native backing, then AQL/USERPTR/control/occupied-slot integration with Native | Whole compound admission before effects; exact retained allocation/map/error/panic prefixes. Reuse R70 admission and existing ledgers. |
-| MEM-4A -> 4B | Isolated host-image ceiling now; native residency after backing/control integration | Repeated loads, live leases, rejected eviction and ambiguous unload. Executable GTT is not VRAM. |
+| MEM-4A -> 4B | Optional KFD module-image payload ceiling implemented in development; native residency after backing/control integration | CPU alias-lifetime and failed-unload coverage; native ambiguous disposal and formal refinement remain open. Generated images, metadata and aggregate bounds are excluded. Executable GTT is not VRAM. |
 | PRF + MEM-5 | Incremental adapter correspondence and total resource inventory | Include commands, captures, results, journals, arenas, quarantined roots and callback/panic-payload exclusions; authenticate named properties separately from tests and hardware. |
 | CO-PROOF | After the frozen CO-1 interface; isolated model/proofs, Primary-owned runtime projection and registry wiring | One production-consumed normalized policy, Pending/rejection retention and terminal/panic precedence. Reuse R61/R62/R64; prove the named shared definitions and separately identify Rust enum/ownership/native correspondence gaps. |
 

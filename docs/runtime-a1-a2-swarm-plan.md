@@ -1084,8 +1084,9 @@ retain their charges. Prove a consistent progress-resource acquisition order.
 
 ### MEM-4: Executable Residency
 
-**Depends on MEM-1 and the approved native accounting interface.** Add proposed
-runtime `kfd_backend/residency.rs`, reusing
+**Depends on MEM-1 and the approved native accounting interface.** Runtime
+`kfd_backend/residency.rs` now implements the optional MEM-4A module-image
+payload ceiling in development, reusing
 existing module records, compute retain counts and recycled-dispatch release.
 Separate retained host images from materialized executable/control bytes. Bind
 cache entries to exact device/Context, image and materialization identity.
@@ -1093,6 +1094,16 @@ MEM-4A bounds retained host images; MEM-4B integrates materialization and cache
 leases. Classify native executable GTT backing truthfully rather than calling
 every device-accessible executable byte VRAM. Coordinate control-storage
 ownership with MEM-3 to avoid double charging.
+
+The [host-image development packet](evidence/dev-host-image-residency-2026-09-26/README.md)
+charges each copied KFD module image before allocation/parsing. Module, kernel
+and prepared-launch aliases share one debit until final image disposal; duplicate
+loads charge separately. Configuration is immutable and precedes resource history.
+Unconfigured backends remain unaccounted. Parser/cache metadata, transport copies,
+generated materialized images, native backing, account/allocator overhead and
+aggregate domains are excluded. CPU ownership/failure coverage does not establish
+native ambiguous-unload qualification or new formal refinement. MEM-4B and
+MEM-DOM/MEM-5 closure remain open.
 
 Acceptance: repeated loads/dispatches remain bounded; leased executables cannot
 be evicted; substitution rejects; failed unload retains its residency charge.

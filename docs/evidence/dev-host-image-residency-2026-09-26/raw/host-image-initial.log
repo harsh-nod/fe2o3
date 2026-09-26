@@ -1,0 +1,93 @@
+   Compiling typenum v1.20.1
+   Compiling cpufeatures v0.3.1
+   Compiling cfg-if v1.0.4
+   Compiling autocfg v1.5.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+   Compiling memchr v2.8.3
+   Compiling spin v0.12.3
+   Compiling linux-raw-sys v0.12.1
+   Compiling itoa v1.0.18
+   Compiling bitflags v2.13.1
+   Compiling pin-project-lite v0.2.17
+   Compiling futures-task v0.3.34
+   Compiling futures-core v0.3.34
+   Compiling slab v0.4.12
+   Compiling arrayvec v0.7.8
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+   Compiling fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host-api)
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling libc v0.2.189
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling tokio v1.47.1
+   Compiling futures-util v0.3.34
+   Compiling num-traits v0.2.19
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+   Compiling hybrid-array v0.4.14
+   Compiling rmp v0.8.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling rustix v1.1.4
+   Compiling rmpv v1.3.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling futures-executor v0.3.34
+   Compiling serde v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+   Compiling fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+warning: function `validate` is never used
+  --> crates/fe2o3-runtime/src/kfd_backend/residency/tests.rs:17:4
+   |
+17 | fn validate(bytes: Vec<u8>) -> Result<OwnedValidatedEnvelope, PlanError> {
+   |    ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fe2o3-runtime` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 1m 35s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-image-residency-target-20260926-XDKnC7cS/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 12 tests
+test kfd_backend::residency::tests::host_image_allocation_validation_and_precommit_unwind_refund_provisional_credit ... ok
+test kfd_backend::residency::tests::host_image_backend_load_rejects_without_changing_ids_or_registries ... ok
+test kfd_backend::residency::tests::host_image_configuration_is_atomic_immutable_and_precedes_resource_history ... ok
+test kfd_backend::residency::tests::host_image_credit_exhaustion_precedes_allocator_and_parser ... ok
+test kfd_backend::residency::tests::host_image_actual_prepared_launch_keeps_charge_after_unload_and_backend_drop ... ok
+test kfd_backend::residency::tests::host_image_exact_budget_and_kernel_clones_share_one_allocation_and_credit ... ok
+test kfd_backend::residency::tests::host_image_failed_recycled_detach_keeps_module_kernel_and_credit ... FAILED
+test kfd_backend::residency::tests::host_image_pending_dispatch_busy_unload_preserves_credit_until_cancellation ... FAILED
+test kfd_backend::residency::tests::host_image_rust_capacity_mismatch_rejects_before_copy_and_parsing ... ok
+test kfd_backend::residency::tests::host_image_successful_insertion_survives_caller_unwind_and_failed_loads_refund ... ok
+test kfd_backend::residency::tests::host_image_unconfigured_module_behavior_and_backend_drop_remain_valid ... ok
+test kfd_backend::residency::tests::host_image_repeated_load_resolve_unload_cycles_charge_duplicate_images_separately ... ok
+
+failures:
+
+---- kfd_backend::residency::tests::host_image_failed_recycled_detach_keeps_module_kernel_and_credit stdout ----
+
+thread 'kfd_backend::residency::tests::host_image_failed_recycled_detach_keeps_module_kernel_and_credit' (631) panicked at crates/fe2o3-runtime/src/kfd_backend/residency/tests.rs:404:5:
+assertion failed: backend.terminal
+
+---- kfd_backend::residency::tests::host_image_pending_dispatch_busy_unload_preserves_credit_until_cancellation stdout ----
+
+thread 'kfd_backend::residency::tests::host_image_pending_dispatch_busy_unload_preserves_credit_until_cancellation' (632) panicked at crates/fe2o3-runtime/src/kfd_backend/residency/tests.rs:373:52:
+no entry found for key
+
+
+failures:
+    kfd_backend::residency::tests::host_image_failed_recycled_detach_keeps_module_kernel_and_credit
+    kfd_backend::residency::tests::host_image_pending_dispatch_busy_unload_preserves_credit_until_cancellation
+
+test result: FAILED. 10 passed; 2 failed; 0 ignored; 0 measured; 1479 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

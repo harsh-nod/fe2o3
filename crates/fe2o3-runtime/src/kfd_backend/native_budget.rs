@@ -133,7 +133,7 @@ impl KfdRuntimeBackendV1 {
         Ok(())
     }
 
-    fn require_pristine_native_resource_configuration_v1(
+    pub(super) fn require_pristine_native_resource_configuration_v1(
         &self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;

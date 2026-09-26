@@ -1,0 +1,35 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 1m 40s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-image-residency-target-20260926-XDKnC7cS/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 14 tests
+test kfd_backend::residency::tests::host_image_allocation_validation_and_precommit_unwind_refund_provisional_credit ... ok
+test kfd_backend::residency::tests::host_image_backend_load_rejects_without_changing_ids_or_registries ... ok
+test kfd_backend::residency::tests::host_image_configuration_is_atomic_immutable_and_precedes_resource_history ... ok
+test kfd_backend::residency::tests::host_image_configuration_is_independent_of_native_budgets_and_preserves_capabilities ... FAILED
+test kfd_backend::residency::tests::host_image_credit_exhaustion_precedes_allocator_and_parser ... ok
+test kfd_backend::residency::tests::host_image_actual_prepared_launch_keeps_charge_after_unload_and_backend_drop ... ok
+test kfd_backend::residency::tests::host_image_exact_budget_and_kernel_clones_share_one_allocation_and_credit ... ok
+test kfd_backend::residency::tests::host_image_failed_recycled_detach_keeps_module_kernel_and_credit ... ok
+test kfd_backend::residency::tests::host_image_pending_dispatch_busy_unload_preserves_credit_until_cancellation ... ok
+test kfd_backend::residency::tests::host_image_rust_capacity_mismatch_rejects_before_copy_and_parsing ... ok
+test kfd_backend::residency::tests::host_image_successful_insertion_survives_caller_unwind_and_failed_loads_refund ... ok
+test kfd_backend::residency::tests::host_image_terminal_control_release_failure_preserves_owners_and_observable_usage ... ok
+test kfd_backend::residency::tests::host_image_unconfigured_module_behavior_and_backend_drop_remain_valid ... ok
+test kfd_backend::residency::tests::host_image_repeated_load_resolve_unload_cycles_charge_duplicate_images_separately ... ok
+
+failures:
+
+---- kfd_backend::residency::tests::host_image_configuration_is_independent_of_native_budgets_and_preserves_capabilities stdout ----
+
+thread 'kfd_backend::residency::tests::host_image_configuration_is_independent_of_native_budgets_and_preserves_capabilities' (67) panicked at crates/fe2o3-runtime/src/kfd_backend/residency/tests.rs:21:5:
+assertion failed: matches!(result, Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind()
+    == kind)
+
+
+failures:
+    kfd_backend::residency::tests::host_image_configuration_is_independent_of_native_budgets_and_preserves_capabilities
+
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 1479 filtered out; finished in 0.08s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

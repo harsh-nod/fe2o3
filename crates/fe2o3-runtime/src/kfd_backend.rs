@@ -15,10 +15,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use fe2o3_amdhsa_loader::{
-    AdmittedProfile, KernelGlobalBufferAbiV1, OwnedValidatedEnvelope, OwnedValidatedKernelEnvelope,
-    ValidatedKernelEnvelope, validate_owned,
-};
+use fe2o3_amdhsa_loader::{KernelGlobalBufferAbiV1, ValidatedKernelEnvelope};
 use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_hsaco::{ArgumentAccess, ExplicitValueKind};
 use fe2o3_kfd::topology::Gfx942XgmiRouteV1;
@@ -126,6 +123,8 @@ mod generated_preparation;
 mod generated_shells;
 pub(crate) use generated_shells::{GeneratedShellBindingV1, GeneratedShellPlanV1};
 mod native_budget;
+mod residency;
+use residency::{ResidentKernelImageV1, ResidentModuleImageV1};
 #[cfg(test)]
 mod producer_launch_tests;
 #[cfg(feature = "hardware-qualification")]
@@ -1241,6 +1240,7 @@ pub struct KfdRuntimeBackendV1 {
     generated_submissions: HashMap<u64, u64>,
     modules: HashMap<u64, ModuleRecordV1>,
     kernels: HashMap<u64, KernelRecordV1>,
+    host_image_account: Option<fe2o3_resource_accounting::ResourceCreditAccountV1>,
     submissions: HashMap<u64, SubmissionRecordV1>,
     compute_completion_reservations: usize,
     sdma_completion_reservations: usize,
@@ -1688,6 +1688,7 @@ impl KfdRuntimeBackendV1 {
             generated_submissions: HashMap::new(),
             modules: HashMap::new(),
             kernels: HashMap::new(),
+            host_image_account: None,
             submissions: HashMap::new(),
             compute_completion_reservations: 0,
             sdma_completion_reservations: 0,
@@ -6632,16 +6633,9 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
         self.require_device(device)?;
-        let owned_image = try_copy_vec_v1(image, "KFD module image allocation failed")?;
-        let profile_artifact = self.profile_content_v1(&owned_image);
-        let image_sha256 = Sha256::digest(&owned_image).into();
-        let validated =
-            validate_owned(owned_image, AdmittedProfile::Gfx942XnackOffCov6).map_err(|error| {
-                Self::rejected(
-                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                    format!("invalid AMDHSA module: {error:?}"),
-                )
-            })?;
+        let validated = ResidentModuleImageV1::load(image, self.host_image_account.as_ref())?;
+        let profile_artifact = self.profile_content_v1(validated.bytes());
+        let image_sha256 = Sha256::digest(validated.bytes()).into();
         self.modules
             .try_reserve(1)
             .map_err(|_| Self::capacity("KFD module-table growth failed"))?;
@@ -14979,7 +14973,14 @@ mod tests {
 
     pub(in crate::kfd_backend) fn host_visible_three_binding_launch_v1()
     -> (KfdRuntimeBackendV1, OwnedComputeLaunchV1) {
+        host_visible_three_binding_launch_with_configuration_v1(|_| {})
+    }
+
+    pub(in crate::kfd_backend) fn host_visible_three_binding_launch_with_configuration_v1(
+        configure: impl FnOnce(&mut KfdRuntimeBackendV1),
+    ) -> (KfdRuntimeBackendV1, OwnedComputeLaunchV1) {
         let mut backend = KfdRuntimeBackendV1::mock();
+        configure(&mut backend);
         let stream = backend.create_stream_v1(7).unwrap();
         let module = backend
             .load_module_v1(7, &synthetic_cov6::three_binding_module())

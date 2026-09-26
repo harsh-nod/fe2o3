@@ -19,13 +19,13 @@ pub(super) struct NativeDirtyExtentV1 {
 
 pub(super) struct ModuleRecordV1 {
     pub(super) device: u64,
-    pub(super) validated: OwnedValidatedEnvelope,
+    pub(super) validated: ResidentModuleImageV1,
     pub(super) image_sha256: [u8; 32],
 }
 
 pub(super) struct KernelRecordV1 {
     pub(super) module: u64,
-    pub(super) validated: OwnedValidatedKernelEnvelope,
+    pub(super) validated: ResidentKernelImageV1,
     pub(super) signature: [u8; 32],
 }
 
@@ -559,7 +559,7 @@ pub(super) struct NativeComputeLaneRuntimeV1 {
 pub(super) struct PreparedLaunchV1 {
     pub(super) stream: u64,
     pub(super) kernel: u64,
-    pub(super) program: OwnedValidatedKernelEnvelope,
+    pub(super) program: ResidentKernelImageV1,
     pub(super) signature: [u8; 32],
     pub(super) kernarg: Box<[u8]>,
     pub(super) geometry: AqlDispatchGeometryV1,

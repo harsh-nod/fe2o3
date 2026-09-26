@@ -5222,7 +5222,7 @@ pub(super) fn snapshot_bound_data_v1(
 }
 
 pub(super) fn build_program_v1<'a>(
-    program: &'a OwnedValidatedKernelEnvelope,
+    program: &'a ResidentKernelImageV1,
     signature: [u8; 32],
     owned_rows: &[OwnedAbiRowV1],
 ) -> Result<ValidatedKernelEnvelope<'a>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
