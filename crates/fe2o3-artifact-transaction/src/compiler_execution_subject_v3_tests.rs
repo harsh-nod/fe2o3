@@ -339,6 +339,12 @@ fn conditional_subject_v3_real_publication_consumption_and_donor_refusal() {
     let receipt = f.publish(&mut budget).unwrap();
     let (expected, storage) = Subject::from_publication(receipt, &f.handoff, &mut budget).unwrap();
     budget.reserve_storage(storage.0).unwrap();
+    assert_eq!(expected.attempt(), receipt.attempt());
+    assert_eq!(expected.slot(), receipt.slot());
+    assert_eq!(
+        expected.transaction_identity(),
+        receipt.transaction_identity()
+    );
     for alternative in [outer_variant(false, 19), outer_variant(true, 7)] {
         let paid = handoff_floor(&alternative).unwrap();
         budget.reserve_storage(paid).unwrap();
@@ -370,6 +376,12 @@ fn conditional_subject_v3_real_publication_consumption_and_donor_refusal() {
     assert!(budget.work_ledger_identity_v1() == ledger);
     budget.reserve_storage(storage.0).unwrap();
     assert_eq!(actual, expected);
+    assert_eq!(actual.attempt(), consumed.receipt().attempt());
+    assert_eq!(actual.slot(), consumed.receipt().slot());
+    assert_eq!(
+        actual.transaction_identity(),
+        consumed.receipt().transaction_identity()
+    );
     inert(&actual);
 }
 
@@ -442,3 +454,6 @@ fn conditional_subject_v3_replay_occurrence_and_carrier_are_not_omitted() {
 
 #[path = "compiler_execution_subject_v3_resources_tests.rs"]
 mod resources;
+
+#[path = "compiler_execution_subject_v3_occurrence_tests.rs"]
+mod occurrence;

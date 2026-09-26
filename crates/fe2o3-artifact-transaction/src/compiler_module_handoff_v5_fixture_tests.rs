@@ -105,6 +105,14 @@ pub(crate) fn outer() -> Handoff {
 }
 
 pub(crate) fn outer_variant(gfx950: bool, leaf: u8) -> Handoff {
+    outer_leaves(gfx950, leaf, 11)
+}
+
+pub(crate) fn outer_source_variant(gfx950: bool, source_leaf: u8) -> Handoff {
+    outer_leaves(gfx950, 7, source_leaf)
+}
+
+fn outer_leaves(gfx950: bool, leaf: u8, source_leaf: u8) -> Handoff {
     // Reuse only public inert invocation/receipt fixture content, not V3 authority
     // or an ordinary base inside V5. Construct the V5 tree independently.
     let old = super::super::super::semantic_v3::tests::outer(7);
@@ -171,6 +179,7 @@ pub(crate) fn outer_variant(gfx950: bool, leaf: u8) -> Handoff {
     let carrier_layout = NativeConditionalCarrierLayoutV1::new::<()>(output.len(), 31).unwrap();
     let mut carrier = vec![11; carrier_layout.encoded_len()];
     carrier[carrier_layout.output_range()].copy_from_slice(&output);
+    carrier[carrier_layout.source_range().start] = source_leaf;
     let carrier_id = seal_native_conditional_carrier_v1(
         carrier_layout,
         &mut carrier,
