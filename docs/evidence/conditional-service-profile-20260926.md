@@ -1,5 +1,9 @@
 # Conditional Service And Profile Checkpoint
 
+The later [issuer checkpoint](conditional-native-issuer-20260926.md) connects
+these owners to the shared durable service and actual locked V5 observation.
+Protected deployment and the full compiler-to-GPU path remain incomplete.
+
 This continues [execution custody](conditional-execution-custody-20260926.md).
 Implementation snapshot: `97f87c8de728c3ff26b76481bec1ac4d42c69bbf`.
 All [#272](https://github.com/harsh-nod/fe2o3/issues/272) milestones M0-M7 remain

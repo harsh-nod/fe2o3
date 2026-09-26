@@ -263,10 +263,15 @@ integration dependencies.
 
 The later [conditional service/profile checkpoint](evidence/conditional-service-profile-20260926.md)
 adds actual V3 profiles, terminal service/client packets, lifecycle records and
-sealed launch-object custody through shared native implementations. Production
-family selection, early original-account lifetime, real V5 issuer observation
-and conditional publication remain unwired. No new kernel receives production
-or GPU credit from these component additions.
+sealed launch-object custody through shared native implementations.
+The [conditional issuer checkpoint](evidence/conditional-native-issuer-20260926.md)
+connects those owners to the same fixed-FD entrypoint, packet loop, durable
+recovery and Worker/anchor state machine, with actual locked V5 observation.
+Distinct record families share one singleton namespace and reject mixed state
+before mutation. Component tests pass, while protected live-service validation
+remains outstanding. Trusted production family selection, early original-account
+client lifetime, conditional publication and machine refinement still need
+integration. No new kernel receives production or GPU credit from these additions.
 
 The [native Worker adapter](../crates/fe2o3-hsaco-finalize/README.md#native-sourcef-worker-integration)
 now borrows the locked recovered token for preflight and consumes that exact
