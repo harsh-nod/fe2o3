@@ -72,7 +72,7 @@ def counts(stdout):
 
 
 def accepted(status, stdout, expected):
-    return status == 0 and (expected is None or counts(stdout) == [expected])
+    return status == 0 and (expected is None or counts(stdout) == (expected if isinstance(expected, list) else [expected]))
 
 
 def select_executable(stdout, source_root, target):
@@ -102,7 +102,7 @@ def retain_executable(path, output):
         compressed.write(raw)
     save(output.with_suffix(".json"), dict(path=str(path), bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
          gzip_sha256=hashlib.sha256(output.read_bytes()).hexdigest()))
-    return path
+    return hashlib.sha256(raw).hexdigest()
 
 
 def check_roster(stdout):
@@ -184,7 +184,7 @@ def main():
         ("rustc", ["rustc", "-Vv"], None),
         ("gnu-build", [*cargo, "--all-features", "--lib", "--no-run", "--message-format=json"], None),
         ("musl-build", [*cargo, "--all-features", "--lib", "--target", "x86_64-unknown-linux-musl", "--no-run", "--message-format=json"], None),
-        ("doctests", [*cargo, "--all-features", "--doc"], (46, 0, 0, 0, 0)),
+        ("doctests", [*cargo, "--all-features", "--doc"], [(4, 0, 0, 0, 0), (42, 0, 0, 0, 0)]),
         ("default", ["cargo", "check", "--locked", "--offline", "-p", "fe2o3-runtime"], None),
         ("clippy", ["cargo", "clippy", "--locked", "--offline", "-p", "fe2o3-runtime", "--all-features", "--all-targets", "--", "-D", "warnings"], None),
         ("format", ["cargo", "fmt", "-p", "fe2o3-runtime", "--", "--check"], None),
@@ -205,11 +205,12 @@ def main():
                 if platform == "musl":
                     target /= "x86_64-unknown-linux-musl"
                 executable = select_executable(stdout, source_root, target)
-                retain_executable(executable, args.output / (platform + "-runtime-tests.gz"))
-                digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+                digest = retain_executable(executable, args.output / (platform + "-runtime-tests.gz"))
+                need(hashlib.sha256(executable.read_bytes()).hexdigest() == digest, "retained ELF before roster")
                 status, roster, _ = controller.run_owned([str(executable), "--list"], 60, args.output / (platform + "-roster"), environment)
                 need(status == 0, "test roster")
                 check_roster(roster)
+                need(hashlib.sha256(executable.read_bytes()).hexdigest() == digest, "retained ELF before execution")
                 status, stdout, _ = controller.run_owned([str(executable), "--test-threads=2"], 1200, args.output / platform, environment)
                 passed = accepted(status, stdout, (1423, 0, 24, 0, 0))
                 results[platform] = dict(passed=passed, status=status, counts=counts(stdout), sha256=digest)

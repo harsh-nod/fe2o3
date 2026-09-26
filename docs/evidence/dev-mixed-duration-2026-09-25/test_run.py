@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import hashlib
+import gzip
 import json
 from pathlib import Path
 import runpy
@@ -60,6 +61,10 @@ class RunTests(unittest.TestCase):
                        target=dict(name="fe2o3_runtime", kind=["lib"], src_path=str(root / "crates/fe2o3-runtime/src/lib.rs")),
                        profile=dict(test=True), executable=str(executable))
             self.assertEqual(RUN["select_executable"](json.dumps(row), root, target), executable)
+            retained = root / "test.gz"
+            digest = RUN["retain_executable"](executable, retained)
+            self.assertEqual(digest, hashlib.sha256(executable.read_bytes()).hexdigest())
+            self.assertEqual(gzip.decompress(retained.read_bytes()), executable.read_bytes())
             for key, value in (("package_id", "other#0.1.0"), ("executable", str(root / "outside"))):
                 with self.assertRaises(ValueError):
                     RUN["select_executable"](json.dumps(dict(row, **{key: value})), root, target)
@@ -81,6 +86,15 @@ class RunTests(unittest.TestCase):
                     roster.replace("1447 tests", "1446 tests"), roster.replace("0 benchmarks", "1 benchmarks")):
             with self.assertRaises(ValueError):
                 RUN["check_roster"](bad)
+
+    def test_split_doctest_summary(self):
+        expected = [(4, 0, 0, 0, 0), (42, 0, 0, 0, 0)]
+        rows = ["test result: ok. %d passed; %d failed; %d ignored; %d measured; %d filtered out;\n" % row for row in expected]
+        self.assertTrue(RUN["accepted"](0, "".join(rows), expected))
+        for bad in (rows[0], rows[1], "".join(rows * 2), "".join(rows).replace("42 passed", "41 passed"),
+                    "".join(rows).replace("0 failed", "1 failed")):
+            self.assertFalse(RUN["accepted"](0, bad, expected))
+        self.assertFalse(RUN["accepted"](1, "".join(rows), expected))
 
 
 if __name__ == "__main__":
