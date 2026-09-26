@@ -35,6 +35,35 @@ impl<'b, 'w> PreparationResourcesV1<'b, 'w> {
     pub(super) fn is_metered(&self) -> bool {
         matches!(self.ledger, Ledger::Original { .. })
     }
+    /// Read-only sticky-denial projection; never lends the original Budget.
+    pub(super) fn has_denial(&self) -> bool {
+        match &self.ledger {
+            Ledger::Legacy => false,
+            Ledger::Original { budget, .. } => {
+                budget.failed_work().is_some() || budget.failed_storage().is_some()
+            }
+        }
+    }
+    /// Lexical identity only, not source/owner authority or a globally unique
+    /// address token. The caller must retain the exclusive adapter-borrow
+    /// lifetime while using any container tagged with this pair.
+    pub(super) fn original_ledger_v1(
+        &self,
+    ) -> Option<(
+        usize,
+        fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    )> {
+        match &self.ledger {
+            Ledger::Legacy => None,
+            Ledger::Original { budget, .. } => {
+                let budget: &Budget<'_> = budget;
+                Some((
+                    budget as *const Budget<'_> as usize,
+                    budget.work_ledger_identity_v1(),
+                ))
+            }
+        }
+    }
     pub(super) fn work(&mut self, amount: usize) -> Result<(), Error> {
         if let Ledger::Original { budget, .. } = &mut self.ledger {
             budget.charge_work(amount).map_err(resource)?;

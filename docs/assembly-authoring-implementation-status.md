@@ -5,6 +5,15 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Original-meter assertion helper prerequisite — 2026-09-26
+
+The [assertion helper checkpoint](bf16-helper-assertion-resources-qualification-20260926.md)
+adds tested original-ledger containers, clone/comparison costs and typed-frame
+accounting without switching the existing evaluator. All 331 model tests,
+2,499 backend tests and backend/extractor build passed, including 18 new
+helper controls. Full evaluator integration and the source-bound retained mask
+remain pending; accepted broad exits stay **6/18**.
+
 ## Original-meter source CFG retention — 2026-09-26
 
 The [root CFG checkpoint](bf16-helper-root-cfg-qualification-20260926.md)

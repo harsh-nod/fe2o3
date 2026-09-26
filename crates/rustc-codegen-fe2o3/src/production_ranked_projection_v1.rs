@@ -13582,6 +13582,10 @@ fn project_loop_graph_charge_v1(
 #[path = "production_ranked_projection_v1/source_loop_cfg_resources_v1.rs"]
 mod source_loop_cfg_resources_v1;
 
+#[path = "production_ranked_projection_v1/assertion_resources_v1.rs"]
+#[allow(dead_code)]
+mod assertion_resources_v1;
+
 fn projected_loop_cfg_graph_v1(
     function: &SemanticFunctionDeclV1,
 ) -> Result<ProjectedLoopCfgV1, ProductionRankedProjectionErrorV1> {
