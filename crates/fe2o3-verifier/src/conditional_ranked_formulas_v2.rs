@@ -165,6 +165,138 @@ pub fn import_and_retain_conditional_ranked_formula_v2(
     accepted: &FunctionalRefinementImportPolicyV2,
     budget: &mut Budget<'_>,
 ) -> Result<RetainedProductionConditionalFormulaV2, Error> {
+    import_and_retain_using(
+        request,
+        input,
+        signature,
+        accepted,
+        budget,
+        |owner, _, _| Ok(owner),
+    )
+}
+
+/// An opaque refusal of the opt-in check route, not a refundable import error.
+/// Enclosing consumers must preserve terminal charges even when a later graph
+/// or account postcheck replaced the callback's original error.
+#[derive(Debug)]
+pub(crate) struct ConditionalFormulaImportCheckErrorV2(Error);
+
+impl fmt::Display for ConditionalFormulaImportCheckErrorV2 {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, out)
+    }
+}
+// Intentionally no Error::source: generic source-chain refund classifiers must
+// not turn this route's opaque callback refusal into a refundable formula error.
+impl std::error::Error for ConditionalFormulaImportCheckErrorV2 {}
+
+/// Lends the actual execution during the same strict import, never a reimport.
+/// Success cannot retain callback storage or a borrowed execution. Callback Err
+/// remains nested through graph/B2/importer checks, then destroys the provisional
+/// owner without refunding its reservation. All errors of this opt-in route are
+/// terminal for enclosing accounting; do not map them to a refundable Subject.
+/// Lower/B1/C0 postchecks still must finish before a caller installs the owner.
+#[allow(dead_code, reason = "private same-visit C1 continuation prerequisite")]
+pub(crate) fn import_and_check_conditional_ranked_formula_v2<E>(
+    request: &Request<'_>,
+    input: &DecodedNativeCpuInputV1,
+    signature: &InertFunctionalRefinementReceiptSignatureV2,
+    accepted: &FunctionalRefinementImportPolicyV2,
+    budget: &mut Budget<'_>,
+    check: impl for<'proof> FnOnce(
+        &'proof ProductionConditionalFormulaExecutionV2,
+        &mut Budget<'_>,
+    ) -> Result<(), E>,
+) -> Result<Result<RetainedProductionConditionalFormulaV2, E>, ConditionalFormulaImportCheckErrorV2>
+{
+    let result = with_scratch_using(budget, IMPORT_CHECK_STORAGE, |budget| {
+        import_and_retain_using(
+            request,
+            input,
+            signature,
+            accepted,
+            budget,
+            |owner, request, budget| {
+                check_imported_owner(
+                    owner,
+                    budget,
+                    |owner, budget| check(&owner.execution, budget),
+                    |budget| current(request.pliron_input(), budget).map_err(Error::from),
+                )
+            },
+        )
+    });
+    finish_import_check(result)
+}
+
+fn finish_import_check<T, E>(
+    result: Result<(T, Result<(), E>), Error>,
+) -> Result<Result<T, E>, ConditionalFormulaImportCheckErrorV2> {
+    let (owner, checked) = result.map_err(ConditionalFormulaImportCheckErrorV2)?;
+    Ok(match checked {
+        Ok(()) => Ok(owner),
+        Err(error) => {
+            drop(owner);
+            Err(error)
+        }
+    })
+}
+
+struct ImportCheckAccountV2 {
+    address: usize,
+    ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    floor: usize,
+}
+const IMPORT_CHECK_STORAGE: usize = std::mem::size_of::<ImportCheckAccountV2>();
+
+impl ImportCheckAccountV2 {
+    fn require(&self, budget: &Budget<'_>, exact: bool) -> Result<(), Error> {
+        if budget as *const Budget<'_> as usize != self.address
+            || budget.work_ledger_identity_v1() != self.ledger
+            || budget.storage() < self.floor
+            || (exact && budget.storage() != self.floor)
+        {
+            return Err(Resource::Accounting.into());
+        }
+        Ok(())
+    }
+}
+
+// Generic only for inert component witnesses; production supplies the actual
+// retained owner from the shared strict importer. This constructs no receipt.
+fn check_imported_owner<T, E>(
+    owner: T,
+    budget: &mut Budget<'_>,
+    check: impl for<'owner> FnOnce(&'owner T, &mut Budget<'_>) -> Result<(), E>,
+    postcheck: impl FnOnce(&mut Budget<'_>) -> Result<(), Error>,
+) -> Result<(T, Result<(), E>), Error> {
+    budget.charge_work(9)?;
+    let account = ImportCheckAccountV2 {
+        address: budget as *const Budget<'_> as usize,
+        ledger: budget.work_ledger_identity_v1(),
+        floor: budget.storage(),
+    };
+    let checked = check(&owner, budget);
+    account.require(budget, checked.is_ok())?;
+    let postchecked = postcheck(budget);
+    account.require(budget, false)?;
+    postchecked?;
+    account.require(budget, checked.is_ok())?;
+    Ok((owner, checked))
+}
+
+fn import_and_retain_using<R>(
+    request: &Request<'_>,
+    input: &DecodedNativeCpuInputV1,
+    signature: &InertFunctionalRefinementReceiptSignatureV2,
+    accepted: &FunctionalRefinementImportPolicyV2,
+    budget: &mut Budget<'_>,
+    finish: impl FnOnce(
+        RetainedProductionConditionalFormulaV2,
+        &Request<'_>,
+        &mut Budget<'_>,
+    ) -> Result<R, Error>,
+) -> Result<R, Error> {
     retention::retain_reservation_using(budget, RETAINED_STORAGE, |budget| {
         with_decoded_cpu(request, input, budget, |request, cpu_input, budget| {
             with_scratch_using(budget, retention::PREPARATION_STORAGE, |budget| {
@@ -181,13 +313,8 @@ pub fn import_and_retain_conditional_ranked_formula_v2(
                 let formula = report_for_proof(prepared.binding, prepared.generated_source, proof);
                 retention::require_imported_identity(formula, accepted, proof)?;
                 current(request.pliron_input(), budget)?;
-                Ok(retain(
-                    request,
-                    formula,
-                    cpu_input,
-                    retained,
-                    accepted.clone(),
-                ))
+                let owner = retain(request, formula, cpu_input, retained, accepted.clone());
+                finish(owner, request, budget)
             })
         })
     })
@@ -471,6 +598,9 @@ mod cpu_tests;
 #[cfg(test)]
 #[path = "conditional_ranked_formula_fixture_v2_tests.rs"]
 mod fixtures;
+#[cfg(test)]
+#[path = "conditional_ranked_formula_import_check_v2_tests.rs"]
+mod import_check_tests;
 #[cfg(test)]
 #[path = "conditional_ranked_formula_import_v2_tests.rs"]
 mod import_tests;
