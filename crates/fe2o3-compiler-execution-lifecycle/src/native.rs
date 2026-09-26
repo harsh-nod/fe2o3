@@ -1,8 +1,9 @@
-//! Metered, non-exportable custody over the same lifecycle validation and locks.
+//! Metered lifecycle custody with explicit, controlled descriptor transfers.
 
 use crate::{
     CompilerExecutionServiceLifecycleLeaseV1 as Lease, LifecycleLeaseErrorV1 as LeaseError,
-    ROOT_ID_V1, io_error, lifecycle_name, open_parent, retain_parent_at, validate_parent,
+    ROOT_ID_V1, acquire_shared, io_error, lifecycle_name, open_parent, retain_parent_at,
+    validate_file, validate_named_file, validate_parent,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -113,7 +114,10 @@ impl Owner {
 /// terminal and flock is nonblocking. These are logical quotas, not syscall latency,
 /// allocator, generated-stack or RSS bounds. Drop only closes retained descriptors;
 /// it never calls LOCK_UN, including when admission fails after acquiring a lock.
-/// There is no public legacy upgrade, descriptor exposure or extraction.
+/// There is no public legacy upgrade, borrowed descriptor exposure or extraction.
+/// Explicit metered File transfers are for trusted controlled staging only: an
+/// exported alias can change shared status flags or explicitly unlock the retained
+/// open file description. This type does not isolate custody from such a holder.
 ///
 /// ```
 /// use fe2o3_compiler_execution_lifecycle::{CompilerExecutionServiceLifecycleLeaseV2 as Lease,
@@ -152,6 +156,23 @@ impl Owner {
 /// use fe2o3_compiler_execution_lifecycle::CompilerExecutionServiceLifecycleLeaseV2 as Lease;
 /// fn unmetered(lease: &Lease) { let _ = lease.revalidate(); }
 /// ```
+/// ```
+/// use fe2o3_compiler_execution_lifecycle::{CompilerExecutionServiceLifecycleLeaseV2 as Lease,
+///     LifecycleLeaseErrorV2 as Error, LifecycleLeaseStorageV2 as Storage};
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+/// fn transfer(lease: &Lease, b: &mut Budget<'_>)
+///     -> Result<(std::fs::File, Storage), Error> { lease.try_clone_for_transfer(b) }
+/// fn validate(lease: &Lease, file: &std::fs::File, b: &mut Budget<'_>)
+///     -> Result<(), Error> { lease.validate_transfer(file, b) }
+/// ```
+/// ```compile_fail
+/// use fe2o3_compiler_execution_lifecycle::CompilerExecutionServiceLifecycleLeaseV2 as Lease;
+/// fn unmetered(lease: &Lease) { let _ = lease.try_clone_for_transfer(); }
+/// ```
+/// ```compile_fail
+/// use fe2o3_compiler_execution_lifecycle::CompilerExecutionServiceLifecycleLeaseV2 as Lease;
+/// fn unmetered(lease: &Lease, file: &std::fs::File) { let _ = lease.validate_transfer(file); }
+/// ```
 pub struct CompilerExecutionServiceLifecycleLeaseV2 {
     inner: Lease,
     parent_identity: (u64, u64),
@@ -169,6 +190,10 @@ impl CompilerExecutionServiceLifecycleLeaseV2 {
     pub const ADMISSION_WORK: usize = ENTRY_WORK + 64 * 1024;
     /// Complete work for retained-object revalidation, including entry and cleanup.
     pub const REVALIDATION_WORK: usize = ENTRY_WORK + 32 * 1024;
+    /// Complete clone or transfer-validation work, including entry and cleanup.
+    /// Two owner checks cost 46 fixed calls, the candidate check 15, and cloning
+    /// adds one duplication and at most one close on refusal. No syscall retries.
+    pub const TRANSFER_WORK: usize = ENTRY_WORK + 64 * 1024;
     /// Additional fixed peak scratch above the complete incoming reservation.
     pub const IO_STORAGE: usize = 4 * Self::RETAINED + 8 * size_of::<rustix::fs::Stat>() + 4096;
 
@@ -320,12 +345,97 @@ impl CompilerExecutionServiceLifecycleLeaseV2 {
             ENTRY_WORK,
             Self::REVALIDATION_WORK,
             Self::IO_STORAGE,
+            |_| self.check(),
+        )
+    }
+
+    /// Returns a distinct CLOEXEC File sharing this lease's open file description
+    /// by construction, using one F_DUPFD_CLOEXEC attempt after revalidation.
+    /// The owner remains prepaid; reserve the returned FULL FILE_STORAGE before
+    /// retaining the File. Failure/unwind closes only the new duplicate, never
+    /// explicitly unlocks, and leaves the owner's reservation untouched.
+    ///
+    /// Keep every staged duplicate charged and validate the final staged File
+    /// before controlled exec. Duplication, not reopening a pathname, preserves
+    /// the same open file description and its shared flock across exec.
+    pub fn try_clone_for_transfer(&self, budget: &mut Budget<'_>) -> Result<(File, Storage)> {
+        self.clone_for_transfer_with(budget, |_| Ok(()))
+    }
+
+    // Private observer exercises cleanup after a real duplicate; production is a no-op.
+    fn clone_for_transfer_with(
+        &self,
+        budget: &mut Budget<'_>,
+        after_duplicate: impl FnOnce(&File) -> Result<()>,
+    ) -> Result<(File, Storage)> {
+        budget.with_prepaid_scope(
+            Self::RETAINED,
+            ENTRY_WORK,
+            Self::TRANSFER_WORK,
+            Self::IO_STORAGE,
             |_| {
-                self.check_parent_identity()?;
-                self.inner.revalidate()?;
-                self.check_parent_identity()
+                self.check()?;
+                let file = File::from(
+                    rustix::io::fcntl_dupfd_cloexec(&self.inner.file, 3)
+                        .map_err(|e| io_error("duplicate lifecycle lease for transfer", e))?,
+                );
+                after_duplicate(&file)?;
+                self.check_transfer(&file)?;
+                self.check()?;
+                Ok((file, Storage(Self::FILE_STORAGE)))
             },
         )
+    }
+
+    /// Checks the exact canonical inode and metadata, retained parent/pathname,
+    /// and CLOEXEC/read-only descriptor policy, then acquires LOCK_SH|LOCK_NB on
+    /// the candidate and rechecks it. Both the owner and full File charge must
+    /// remain prepaid; this operation returns no new retained storage.
+    ///
+    /// This does NOT prove arbitrary open-file-description equality. An independent
+    /// reopen of the same canonical inode may pass, acquiring its own shared lock.
+    /// It neither proves past uninterrupted locking nor authenticates provenance.
+    /// Failure/unwind never closes or unlocks either borrowed input; a late failure
+    /// may leave the candidate shared-locked until its caller closes it. Never use
+    /// LOCK_UN on controlled aliases, including during error cleanup.
+    pub fn validate_transfer(&self, file: &File, budget: &mut Budget<'_>) -> Result<()> {
+        let floor = Self::RETAINED
+            .checked_add(Self::FILE_STORAGE)
+            .ok_or(Resource::Arithmetic)?;
+        budget.with_prepaid_scope(
+            floor,
+            ENTRY_WORK,
+            Self::TRANSFER_WORK,
+            Self::IO_STORAGE,
+            |_| {
+                self.check()?;
+                self.check_transfer(file)?;
+                self.check()
+            },
+        )
+    }
+
+    fn check(&self) -> Result<()> {
+        self.check_parent_identity()?;
+        self.inner.revalidate()?;
+        self.check_parent_identity()
+    }
+
+    fn check_transfer(&self, file: &File) -> Result<()> {
+        if validate_file(file, self.inner.expected_uid, self.inner.expected_gid)?
+            != self.inner.snapshot
+        {
+            return Err(LeaseError::FileChanged.into());
+        }
+        validate_named_file(&self.inner.parent, self.inner.snapshot)?;
+        acquire_shared(file)?;
+        if validate_file(file, self.inner.expected_uid, self.inner.expected_gid)?
+            != self.inner.snapshot
+        {
+            return Err(LeaseError::FileChanged.into());
+        }
+        validate_named_file(&self.inner.parent, self.inner.snapshot)?;
+        Ok(())
     }
 
     fn check_parent_identity(&self) -> Result<()> {
@@ -371,3 +481,7 @@ const _: () = {
 #[cfg(test)]
 #[path = "native_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "native_transfer_tests.rs"]
+mod transfer_tests;
