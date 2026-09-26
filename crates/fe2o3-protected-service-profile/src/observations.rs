@@ -72,6 +72,11 @@ const STATUS_SCRATCH: usize = MAX_PROC_STATUS_BYTES
     + 1024;
 const CEILING_SCRATCH: usize = MAX_CAP_LAST_CAP_BYTES + 1 + 1024;
 
+/// Work to observe the bounded kernel capability ceiling, including descriptor cleanup.
+pub const CAPABILITY_CEILING_WORK: usize = CEILING_WORK;
+/// Fixed staging allowance for `read_cap_last_cap`; not generated stack or RSS.
+pub const CAPABILITY_CEILING_SCRATCH: usize = CEILING_SCRATCH;
+
 /// Worst-case work for `validate_process` and `ProcessProfile::revalidate_process`.
 pub const PROCESS_VALIDATE_WORK: usize = STATUS_WORK;
 /// Scratch for `validate_process` and `ProcessProfile::revalidate_process`.
@@ -318,7 +323,10 @@ pub fn require_owned_sigchld() -> Result<(), Error> {
     Ok(())
 }
 
-fn read_cap_last_cap() -> Result<u32, Error> {
+/// Observes a capability ceiling in 0..=63 using a fixed buffer and finite reads.
+/// Prepay CAPABILITY_CEILING_WORK/SCRATCH before entry. EINTR fails closed.
+/// This inert configuration value grants no process or deployment authority.
+pub fn read_cap_last_cap() -> Result<u32, Error> {
     let file = bounded_io::open(
         c"/proc/sys/kernel/cap_last_cap",
         "read kernel capability ceiling",

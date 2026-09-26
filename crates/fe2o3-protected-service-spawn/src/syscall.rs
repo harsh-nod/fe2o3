@@ -398,21 +398,23 @@ unsafe fn child_exec(
         {
             child_fail(staged.exec_status_writer.as_raw_fd(), 4);
         }
-        let mut release = 0_u8;
-        loop {
+        let release = match crate::pre_exec::read_child_gate(|release| {
             let count = libc::read(
                 staged.gate_reader.as_raw_fd(),
-                (&raw mut release).cast::<c_void>(),
+                (release as *mut u8).cast::<c_void>(),
                 1,
             );
-            if count == 1 {
-                break;
+            if count < 0 {
+                Err(rustix::io::Errno::from_raw_os_error(
+                    *libc::__errno_location(),
+                ))
+            } else {
+                Ok(count as usize)
             }
-            if count < 0 && *libc::__errno_location() == libc::EINTR {
-                continue;
-            }
-            child_fail(staged.exec_status_writer.as_raw_fd(), 5);
-        }
+        }) {
+            Ok(release) => release,
+            Err(()) => child_fail(staged.exec_status_writer.as_raw_fd(), 5),
+        };
         if release != PROTECTED_SERVICE_GATE_RELEASE_V1 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 6);
         }

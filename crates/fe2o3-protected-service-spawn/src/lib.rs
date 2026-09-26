@@ -7,6 +7,8 @@ compile_error!("fe2o3-protected-service-spawn requires Linux x86-64");
 #[doc(hidden)]
 #[allow(unsafe_code)]
 pub mod cleanup_bridge;
+#[doc(hidden)]
+pub mod pre_exec;
 mod process_cleanup;
 mod process_reaper;
 #[allow(unsafe_code)]
@@ -245,16 +247,18 @@ impl RootOwnedProtectedServiceChildV1 {
 }
 
 fn read_cap_last_cap() -> Result<u32, ProtectedServiceSpawnErrorV1> {
-    let text = std::fs::read_to_string("/proc/sys/kernel/cap_last_cap")
-        .map_err(|source| io_error("read kernel capability ceiling", source))?;
-    let value = text
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| ProtectedServiceSpawnErrorV1::InvalidKernelProfile)?;
-    if value > 63 {
-        return Err(ProtectedServiceSpawnErrorV1::InvalidKernelProfile);
-    }
-    Ok(value)
+    use fe2o3_protected_service_profile::observations::{self, Error};
+    observations::read_cap_last_cap().map_err(|error| match error {
+        Error::Io { operation, source } if source == rustix::io::Errno::ILSEQ => io_error(
+            operation,
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            ),
+        ),
+        Error::Io { operation, source } => io_error(operation, source.into()),
+        _ => ProtectedServiceSpawnErrorV1::InvalidKernelProfile,
+    })
 }
 
 fn map_reap_error(error: syscall::ReapErrorV1) -> ProtectedServiceSpawnErrorV1 {

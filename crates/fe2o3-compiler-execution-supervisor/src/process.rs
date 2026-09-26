@@ -79,7 +79,9 @@ const PR_CAP_AMBIENT_IS_SET: c_int = 1;
 const RLIMIT_CORE: c_int = 4;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const GATE_RELEASE_V1: u8 = 0x5a;
-const MAX_CHILD_GATE_ATTEMPTS: usize = 64;
+use fe2o3_protected_service_spawn::pre_exec::{
+    MAX_CHILD_GATE_ATTEMPTS_V2 as MAX_CHILD_GATE_ATTEMPTS, read_child_gate,
+};
 const MAX_LAUNCH_WAIT_V1: Duration = Duration::from_secs(120);
 const POLL_INTERVAL_V1: Duration = Duration::from_millis(1);
 const MAX_CANCEL_POLLS_V1: usize = 1024;
@@ -1049,18 +1051,6 @@ unsafe fn child_exec(
         );
         child_fail(staged.exec_status_writer.as_raw_fd(), 10);
     }
-}
-
-fn read_child_gate(mut read: impl FnMut(&mut u8) -> rustix::io::Result<usize>) -> Result<u8, ()> {
-    let mut release = 0_u8;
-    for _ in 0..MAX_CHILD_GATE_ATTEMPTS {
-        match read(&mut release) {
-            Ok(1) => return Ok(release),
-            Err(rustix::io::Errno::INTR) => {}
-            Ok(_) | Err(_) => return Err(()),
-        }
-    }
-    Err(())
 }
 
 unsafe fn arm_parent_death(expected_parent_pid: i32) -> c_int {
