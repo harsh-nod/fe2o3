@@ -91,6 +91,8 @@ mod allocation_table;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_state;
+mod scale_capacity;
+use scale_capacity::{RuntimeDispatchCapacityV1, RuntimeDispatchStateV1};
 #[cfg(feature = "hardware-diagnostic")]
 mod directional_wait_diagnostic;
 mod drain_capture;
@@ -851,11 +853,11 @@ struct RuntimeAllocationCustodyOwnerV1 {
     kind: RuntimeAllocationCustodyKindV1,
 }
 
-#[derive(Debug)]
 struct RuntimeAllocationCustodyV1 {
     owners: VecDeque<RuntimeAllocationCustodyOwnerV1>,
     sole_stream: Option<u64>,
     owner_counts: [usize; 2],
+    metadata_credits: Option<fe2o3_resource_accounting::RetainedResourceCreditsV1>,
 }
 
 #[derive(Debug)]
@@ -1224,6 +1226,7 @@ struct StagingBudgetsV1 {
 #[must_use = "direct KFD backends must remain owned through quiescence"]
 pub struct KfdRuntimeBackendV1 {
     description: BackendDeviceDescriptionV1,
+    dispatch_capacity: RuntimeDispatchCapacityV1,
     admitted_device: Option<CheckedGfx942XnackMinusDevice>,
     queue: Option<ComputeAqlQueueSessionV1>,
     primary_teardown: Option<Box<PrimaryQueueReleaseCustodyV1>>,
@@ -1531,6 +1534,13 @@ impl KfdRuntimeBackendV1 {
         device_unique_id: u64,
         launch_gate: KfdRuntimeLaunchGateV1,
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let device = Self::open_checked_device_v1(device_unique_id)?;
+        Ok(Self::from_checked_device_with_gate(device, launch_gate))
+    }
+
+    fn open_checked_device_v1(
+        device_unique_id: u64,
+    ) -> Result<CheckedGfx942XnackMinusDevice, KfdRuntimeBackendErrorV1> {
         if device_unique_id == 0 {
             return Err(KfdRuntimeBackendErrorV1::new(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -1551,7 +1561,7 @@ impl KfdRuntimeBackendV1 {
                     error.to_string(),
                 )
             })?;
-        Ok(Self::from_checked_device_with_gate(device, launch_gate))
+        Ok(device)
     }
 
     /// Wraps an already checked gfx942/XNACK-disabled device.
@@ -1594,6 +1604,10 @@ impl KfdRuntimeBackendV1 {
         device: CheckedGfx942XnackMinusDevice,
         launch_gate: KfdRuntimeLaunchGateV1,
     ) -> Self {
+        Self::new(Self::describe_device_v1(&device), Some(device), launch_gate)
+    }
+
+    fn describe_device_v1(device: &CheckedGfx942XnackMinusDevice) -> BackendDeviceDescriptionV1 {
         let observation = device.observation();
         let unique_id = observation.unique_id();
         let name = device
@@ -1603,19 +1617,15 @@ impl KfdRuntimeBackendV1 {
             .iter()
             .find(|node| node.unique_id() == unique_id)
             .map_or_else(|| "AMD MI300X".to_owned(), |node| node.name().to_owned());
-        Self::new(
-            BackendDeviceDescriptionV1 {
-                backend_device: unique_id,
-                name,
-                target: "gfx942:xnack-".to_owned(),
-                // The admitted topology schema does not currently expose a
-                // trustworthy aggregate VRAM capacity.
-                global_memory_bytes: 0,
-                capabilities: kfd_capabilities_v1(),
-            },
-            Some(device),
-            launch_gate,
-        )
+        BackendDeviceDescriptionV1 {
+            backend_device: unique_id,
+            name,
+            target: "gfx942:xnack-".to_owned(),
+            // The admitted topology schema does not currently expose a
+            // trustworthy aggregate VRAM capacity.
+            global_memory_bytes: 0,
+            capabilities: kfd_capabilities_v1(),
+        }
     }
 
     fn new(
@@ -1635,10 +1645,27 @@ impl KfdRuntimeBackendV1 {
     }
 
     fn new_with_staging_budgets(
+        description: BackendDeviceDescriptionV1,
+        admitted_device: Option<CheckedGfx942XnackMinusDevice>,
+        launch_gate: KfdRuntimeLaunchGateV1,
+        staging_budgets: StagingBudgetsV1,
+    ) -> Self {
+        Self::new_with_dispatch_state_v1(
+            description,
+            admitted_device,
+            launch_gate,
+            staging_budgets,
+            RuntimeDispatchStateV1::try_new(RuntimeDispatchCapacityV1::default())
+                .expect("default runtime dispatch tables"),
+        )
+    }
+
+    fn new_with_dispatch_state_v1(
         mut description: BackendDeviceDescriptionV1,
         admitted_device: Option<CheckedGfx942XnackMinusDevice>,
         launch_gate: KfdRuntimeLaunchGateV1,
         staging_budgets: StagingBudgetsV1,
+        dispatch: RuntimeDispatchStateV1,
     ) -> Self {
         let native_available = admitted_device.is_some();
         description.capabilities.typed_async_launch &= launch_gate.advertises_generic_compute_v1();
@@ -1646,6 +1673,7 @@ impl KfdRuntimeBackendV1 {
         description.capabilities.collectives = launch_gate.advertises_collectives_v1();
         Self {
             description,
+            dispatch_capacity: dispatch.capacity,
             admitted_device,
             queue: None,
             primary_teardown: None,
@@ -1672,11 +1700,11 @@ impl KfdRuntimeBackendV1 {
             events: HashMap::new(),
             event_submission_retain_counts: HashMap::new(),
             active: None,
-            compute_pipeline: RuntimeComputePipelineV1::vacant(),
+            compute_pipeline: dispatch.primary,
             resident_data: None,
             recycled_dispatch: None,
             retained_persistent_dispatch: None,
-            auxiliary_compute_lanes: vec![NativeComputeLaneRuntimeV1::vacant()],
+            auxiliary_compute_lanes: dispatch.auxiliary,
             native_compute_lanes: vec![None; KFD_RUNTIME_MAX_COMPUTE_QUEUES_V1],
             stream_compute_lanes: HashMap::new(),
             selected_compute_lane: 0,
@@ -2210,27 +2238,21 @@ impl KfdRuntimeBackendV1 {
                 continue;
             }
             if let Some(custody) = self.allocation_custody.get_mut(&allocation) {
-                if custody.owners.len() == MAX_RUNTIME_ALLOCATION_CUSTODY_OWNERS_V1 {
+                if custody.owners.len() >= self.dispatch_capacity.custody_limit() {
                     return Err(Self::capacity(
                         "KFD per-allocation custody owner capacity exceeded",
                     ));
                 }
-                custody
-                    .owners
-                    .try_reserve(1)
-                    .map_err(|_| Self::capacity("KFD allocation-custody owner growth failed"))?;
+                if !self.dispatch_capacity.is_scaled() {
+                    custody.owners.try_reserve(1).map_err(|_| {
+                        Self::capacity("KFD allocation-custody owner growth failed")
+                    })?;
+                }
             } else {
-                let mut owners = VecDeque::new();
-                owners
-                    .try_reserve(1)
-                    .map_err(|_| Self::capacity("KFD allocation-custody owner growth failed"))?;
                 new_entries.push((
                     allocation,
-                    RuntimeAllocationCustodyV1 {
-                        owners,
-                        sole_stream: None,
-                        owner_counts: [0; 2],
-                    },
+                    RuntimeAllocationCustodyV1::try_new(&self.dispatch_capacity)
+                        .map_err(|error| Self::capacity(error.to_string()))?,
                 ));
             }
         }
@@ -3170,10 +3192,11 @@ impl KfdRuntimeBackendV1 {
                 )
             })?;
             let queue = device
-                .create_compute_aql_queue_with_backing_budgets_v1(
+                .create_compute_aql_queue_with_backing_budgets_and_capacity_v1(
                     KFD_RUNTIME_RING_BYTES_V1,
                     self.device_backing_budget,
                     self.host_visible_backing_budget,
+                    self.dispatch_capacity.native().clone(),
                 )
                 .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
             self.queue = Some(queue);
@@ -6186,6 +6209,9 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
     {
         self.require_live()?;
         self.require_device(device)?;
+        if kind == RuntimeMemoryKindV1::DeviceLocal {
+            self.require_default_dispatch_capacity_v1()?;
+        }
         if byte_len == 0 || alignment == 0 || !alignment.is_power_of_two() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -22926,6 +22952,7 @@ mod tests {
                     }]),
                     sole_stream: Some(allocation),
                     owner_counts: [0, 1],
+                    metadata_credits: None,
                 },
             );
         }
@@ -22939,6 +22966,7 @@ mod tests {
                 }]),
                 sole_stream: Some(5),
                 owner_counts: [0, 1],
+                metadata_credits: None,
             },
         );
         let disjoint = [BackendBindingV1 {

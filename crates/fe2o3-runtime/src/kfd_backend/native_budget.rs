@@ -352,7 +352,8 @@ mod tests {
             .split("    fn directional_sdma_ops_v1(")
             .next()
             .unwrap();
-        assert!(sdma.contains(".create_compute_aql_queue_with_backing_budgets_v1("));
+        assert!(sdma.contains(".create_compute_aql_queue_with_backing_budgets_and_capacity_v1("));
+        assert!(sdma.contains("self.dispatch_capacity.native().clone(),"));
         assert!(sdma.contains("self.device_backing_budget,"));
         assert!(!sdma.contains(".create_compute_aql_queue("));
 

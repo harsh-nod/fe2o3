@@ -105,6 +105,7 @@ impl KfdRuntimeBackendV1 {
         &self,
     ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
+        self.require_default_dispatch_capacity_v1()?;
         Ok(!self.persistent_compute_is_active_v1() && self.free_compute_lane_v1().is_some())
     }
 

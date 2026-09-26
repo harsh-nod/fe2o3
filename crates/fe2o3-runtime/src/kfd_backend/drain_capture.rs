@@ -479,6 +479,7 @@ pub(in crate::kfd_backend) mod tests {
                             owners: VecDeque::new(),
                             sole_stream: None,
                             owner_counts: [0; 2],
+                            metadata_credits: None,
                         },
                     );
                     Error::Pending

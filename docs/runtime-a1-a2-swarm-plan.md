@@ -921,8 +921,11 @@ the exact profile. Keep the R60 capacity-65 negative and 64-only proofs intact;
 add separate scaled arithmetic/refinement coverage and a capacity-1,025 negative.
 The [accounted capacity foundation](runtime-scale-capacity-v1.md) now implements
 the tables and native configuration propagation behind a qualification feature.
-Public runtime opt-in, the runtime's 256-owner allocation-custody limit, aggregate
-admission, scaled formal refinement and native qualification remain open.
+The separate exact-vecadd runtime opt-in now shares one account across both
+startup paths and both pipeline tables, and scaled custody reserves 1,024 owners
+per allocation. Generated, DeviceLocal and persistent scaled paths reject early;
+default capacity/dependency limits stay unchanged. Aggregate admission, scaled
+formal refinement and native qualification remain open.
 
 Acceptance: checked generation arithmetic, exact reservations/rollback,
 wraparound and stale-slot rejection, signal-reader retention and no reuse before

@@ -221,6 +221,7 @@ pub(super) struct RuntimeComputePipelineV1 {
 }
 
 impl RuntimeComputePipelineV1 {
+    #[cfg(test)]
     pub(super) fn vacant() -> Self {
         Self::try_vacant(Gfx942FixedDispatchCapacityProfileV1::Default64, None)
             .expect("fixed runtime compute pipeline allocation")
@@ -553,18 +554,6 @@ pub(super) struct NativeComputeLaneRuntimeV1 {
     pub(super) pipeline: RuntimeComputePipelineV1,
     pub(super) resident_data: Option<ResidentDataRosterV1>,
     pub(super) recycled_dispatch: Option<RecycledDispatchV1>,
-}
-
-impl NativeComputeLaneRuntimeV1 {
-    pub(super) fn vacant() -> Self {
-        Self {
-            owner_stream: None,
-            active: None,
-            pipeline: RuntimeComputePipelineV1::vacant(),
-            resident_data: None,
-            recycled_dispatch: None,
-        }
-    }
 }
 
 pub(super) struct PreparedLaunchV1 {

@@ -18,6 +18,8 @@ hardware-diagnostic = ["fe2o3-kfd/hardware-diagnostic"]
 # Repository-owned exact-artifact KFD/HSA qualification. This exposes no
 # general launch authority and is excluded from the default community API.
 hardware-qualification = []
+# Accounted 1024-epoch, exact-vecadd development profile only.
+scale-qualification = ["hardware-qualification", "fe2o3-kfd/scale-qualification"]
 
 [[example]]
 name = "gfx942-lds-diagnostic"

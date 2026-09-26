@@ -53,6 +53,7 @@ impl KfdRuntimeBackendV1 {
     ) -> Result<GeneratedShellPlanV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
         self.require_device(binding.backend_device)?;
+        self.require_default_dispatch_capacity_v1()?;
         if self.streams.get(&binding.backend_stream) != Some(&binding.backend_device)
             || self
                 .generated_shells

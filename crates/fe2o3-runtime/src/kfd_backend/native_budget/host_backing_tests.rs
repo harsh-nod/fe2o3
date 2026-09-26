@@ -238,7 +238,7 @@ fn host_backing_limits_reach_both_combined_native_startup_paths() {
         .next()
         .unwrap();
     let create = sdma
-        .find(".create_compute_aql_queue_with_backing_budgets_v1(")
+        .find(".create_compute_aql_queue_with_backing_budgets_and_capacity_v1(")
         .unwrap();
     let arguments = sdma[create..].split(')').next().unwrap();
     assert!(arguments.contains("self.device_backing_budget,"));

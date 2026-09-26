@@ -475,11 +475,14 @@ impl KfdRuntimeBackendV1 {
             ));
         }
         for binding in launch.bindings {
-            if !native_sdma_region_is_admitted_v1(
-                self.allocations.get(&binding.region.allocation),
-                stream_device,
-                binding.region,
-            ) || binding.region.byte_len == 0
+            let allocation = self.allocations.get(&binding.region.allocation);
+            if allocation
+                .is_some_and(|allocation| allocation.kind != RuntimeMemoryKindV1::HostVisible)
+            {
+                self.require_default_dispatch_capacity_v1()?;
+            }
+            if !native_sdma_region_is_admitted_v1(allocation, stream_device, binding.region)
+                || binding.region.byte_len == 0
             {
                 return Err(Self::rejected(
                     KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -2431,6 +2434,9 @@ impl KfdRuntimeBackendV1 {
         persistent_selected: bool,
         reuse_bound_recipe: bool,
     ) -> Result<PreparedLaunchV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if persistent_selected {
+            self.require_default_dispatch_capacity_v1()?;
+        }
         let preparation_started = Instant::now();
         let dispatch_shape_sha256 = dispatch_shape_sha256_v1(&launch, launch.semantic_launch);
         let profile_launch = KfdProfileLaunchV1 {
@@ -3017,11 +3023,12 @@ impl KfdRuntimeBackendV1 {
                     })
                     .map_err(|detail| self.terminal_error(detail))?;
                 let queue = memory
-                    .create_compute_aql_queue_with_fixed_dispatch(
+                    .create_compute_aql_queue_with_fixed_dispatch_and_capacity_v1(
                         KFD_RUNTIME_RING_BYTES_V1,
                         programs,
                         [packet],
                         native_data,
+                        self.dispatch_capacity.native().clone(),
                     )
                     .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
                 let primary_lane = queue.primary_compute_lane_v1();

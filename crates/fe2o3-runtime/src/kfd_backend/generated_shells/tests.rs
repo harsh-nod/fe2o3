@@ -78,6 +78,36 @@ fn is_busy<T>(result: Result<T, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1
     matches!(result, Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Busy)
 }
 
+#[cfg(feature = "scale-qualification")]
+#[test]
+fn scaled_shell_preparation_rejects_valid_fixture_without_consuming_control() {
+    use fe2o3_resource_accounting::{ResourceCreditAccountV1, ResourceKindV1, ResourceVectorV1};
+    let mut ordinary = Fixture::new();
+    assert!(ordinary.prepare().is_ok());
+    assert!(ordinary.storage.control_available());
+    let account = ResourceCreditAccountV1::new(
+        ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, u64::MAX),
+        8,
+    )
+    .unwrap();
+    let mut fixture = Fixture::new();
+    fixture.backend = scale_capacity::tests::backend(account.clone());
+    (fixture.binding, fixture.logical) =
+        crate::RuntimeContextV1::generated_shell_test_binding_v1(&mut fixture.backend);
+    let next = fixture.backend.next_handle;
+    let usage = account.usage();
+    assert!(
+        matches!(fixture.prepare(), Err(RuntimeBackendFailureV1::Rejected(error))
+        if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported)
+    );
+    assert!(fixture.storage.control_available());
+    assert_eq!(fixture.backend.next_handle, next);
+    assert!(fixture.backend.allocations.is_empty());
+    assert!(fixture.backend.generated_shells.is_empty());
+    assert_eq!(account.usage(), usage);
+    fixture.assert_no_native_effects();
+}
+
 #[test]
 fn shell_table_keeps_generated_slots_without_ordinary_bytes_or_native_effects() {
     let mut fixture = Fixture::new();

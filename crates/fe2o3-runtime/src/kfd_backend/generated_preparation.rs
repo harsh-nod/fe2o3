@@ -9,6 +9,7 @@ impl KfdRuntimeBackendV1 {
         prepare: impl FnOnce(&CheckedGfx942XnackMinusDevice) -> R,
     ) -> Result<R, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
+        self.require_default_dispatch_capacity_v1()?;
         if self.queue_retired {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Terminal,

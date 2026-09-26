@@ -24,7 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest capacity development (2026-09-25): the
+Latest runtime capacity integration (2026-09-25): the separate
+`scale-qualification` exact-vecadd constructor preallocates both runtime tables
+before KFD startup and shares its account/profile with both native construction
+routes. Scaled per-allocation custody preallocates 1,024 owners, refunds partial
+preflight failures and retains the full debit through final-owner retirement.
+Generated, DeviceLocal and persistent scaled routes reject early. Existing
+constructors, dependency limits and XGMI limits are unchanged. See the
+[runtime development packet](evidence/dev-scale-runtime-2026-09-25/README.md).
+All ten new CPU tests pass. The full runtime run reports 1,435 passed, the same
+three socket-inspection `EPERM` failures and 27 ignored; strict Clippy,
+default-feature checking, formatting and 46 runtime doctests pass. SSH remains
+unavailable at hostname resolution, so no native result is added.
+Aggregate memory admission, scaled refinement, native retained-depth measurement
+and matched performance remain open; accepted checkpoints and A1/A2 are unchanged.
+
+Earlier capacity foundation (2026-09-25): the
 [accounted capacity foundation](runtime-scale-capacity-v1.md) adds fixed,
 fallibly allocated metadata tables and feature-gated native 1024-slot profile
 propagation through construction and rebinding. Default native and public
@@ -36,10 +51,10 @@ passed, the same three telemetry `InspectSocket(EPERM)` failures, and 27 ignores
 [Development logs and limits](evidence/dev-scale-cap-storage-2026-09-25/README.md)
 do not establish full CPU qualification: the whole-KFD attempt hit its 900-second
 limit, and a separately scoped KFD subset had one socket-admission failure.
-Runtime opt-in, the 256-owner custody
-bottleneck, complete scaled joins, aggregate admission, new formal refinement,
-native depth and matched performance remain open. A1/A2 and the accepted lane
-checkpoints are unchanged.
+At that checkpoint the runtime opt-in and 256-owner custody bottleneck were
+still open; the integration above addresses those two items. Complete scaled
+joins, aggregate admission, new formal refinement, native depth and matched
+performance remain open. A1/A2 and the accepted lane checkpoints are unchanged.
 
 Latest observer/backpressure development (2026-09-25): signed `97b8d41fe` adds
 two CPU regressions for Pending timeout recovery/new-waker registration and
