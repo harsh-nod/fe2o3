@@ -65,8 +65,8 @@ macro_rules! native_client_adapter {
         }
 
         /// One terminal native session, exclusively borrowing the original ledger.
-        /// Policy, subject/carriage, and peer input storage must be prepaid before
-        /// admission. The peer charge transfers to this owner and is released on drop.
+        /// Each operation's input storage must be prepaid before that operation.
+        /// Admission transfers the peer charge to this owner, released on drop.
         /// Native packets are never retried as V1 and no decoded V1 issuer owner is used.
         /// This diagnostic API does not activate the production issuer or prove its
         /// protected key custody, live-rustc observation, durability, or GPU authority.

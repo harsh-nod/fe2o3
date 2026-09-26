@@ -6,6 +6,10 @@ This continues the [issuer checkpoint](conditional-native-issuer-20260926.md).
 All [#272](https://github.com/harsh-nod/fe2o3/issues/272) milestones M0-M7
 remain open; this supplies no protected, machine-proof, GPU, or 47/47 credit.
 
+The later [inherited-admission/completion checkpoint](conditional-inherited-completion-20260926.md)
+adds original-account fixed-slot admission and consuming client sequencing.
+It does not activate the protected V3 compiler path.
+
 ## Implemented
 
 The normal backend now creates its conditional TARGET account before target

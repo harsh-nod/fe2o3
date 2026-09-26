@@ -275,9 +275,13 @@ moves conditional TARGET-account creation before normal admission/collection and
 passes that same account through conditional preparation. Native clients now
 support consuming preparation with original-account postchecks, and the isolated
 V3 admission/readiness/Cancel harness shares the actual V2 case bodies.
+The [inherited-admission/completion checkpoint](evidence/conditional-inherited-completion-20260926.md)
+adds fixed-slot native peer admission and a consuming preparation/publication/
+receipt/completion client flow on the original account. Publication follows
+preparation postchecks; receipt storage and peer closure precede completion.
 The normal backend still admits V1 execution custody. Trusted native family
-selection, protected inherited-peer admission, publication/acquisition on the
-original account, parent intake and machine refinement still need integration.
+selection, genuine policy/Prepared ownership through this flow, parent intake
+and machine refinement still need production integration.
 The new socket cases also fail with local permission denials; isolated protected
 harness cases have not run. No new kernel receives production or GPU credit.
 
