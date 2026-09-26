@@ -1,0 +1,20 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--all-targets",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "started_ns": 1790399283731396099,
+  "process_group": 3235,
+  "group_absent": true,
+  "finished_ns": 1790399380896368595,
+  "status": 0
+}

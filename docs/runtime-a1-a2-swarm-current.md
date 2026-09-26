@@ -24,6 +24,27 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest observer/backpressure development (2026-09-25): signed `97b8d41fe` adds
+two CPU regressions for Pending timeout recovery/new-waker registration and
+frozen-launch QueueFull credit refunds, admission retry deadlines, and three
+compiled native observer/backpressure canaries. The
+[retained observer packet](evidence/dev-mixed-observers-2026-09-25/README.md)
+does **not** pass full CPU qualification: GNU and musl each report 1,422 passed,
+three existing telemetry admission failures and 27 hardware-only ignores.
+An independent socket probe reproduces `EPERM` at `SO_DOMAIN` and the remaining
+socket inspections; production validation stays fail-closed. The initial musl
+runner linker-flag failure is also retained, followed by a corrected build.
+Both new CPU regressions pass on both targets. Native timeout/Drop actions are
+bracketed inside one owner callback by the same Pending receipt to reject a
+completed-observer race. All 46 doctests, default-feature checking, strict Clippy
+and formatting pass. These native cells, full CPU qualification, formal
+refinement, physical overlap, performance and A1/A2 closure remain open. Default
+64-slot limits and ReadWrite early-publication restrictions are unchanged.
+Retained replay binds 5,981 signed inputs and all 16 qualification commands;
+the seven classifier groups pass. Exact-owned local cleanup removes
+1,946,607,616 allocated bytes with independent path absence and post-cleanup
+replay. No new remote resources were created.
+
 Latest mixed-duration development (2026-09-25): the
 [short/long CPU packet](evidence/dev-mixed-duration-2026-09-25/README.md)
 adds separately admitted fixed-work objects, independent full-byte oracles and

@@ -1,0 +1,12 @@
+{
+  "musl-build": {
+    "counts": [],
+    "passed": false,
+    "status": 101
+  },
+  "socket-probe": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "gnu": {
+    "counts": [],
+    "passed": false,
+    "sha256": "6050572695fcd0c17575b9862d8eb0e5b30baf8192dd5eafcf1d54fce9793c6c",
+    "status": 101
+  },
+  "gnu-build": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "gnu-roster": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "runner-tests": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "rustc": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "signature": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "source-archive": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  }
+}

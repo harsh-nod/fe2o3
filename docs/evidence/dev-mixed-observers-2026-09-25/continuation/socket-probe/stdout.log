@@ -1,0 +1,32 @@
+[
+  {
+    "errno": 1,
+    "error": "[Errno 1] Operation not permitted",
+    "operation": "SO_DOMAIN"
+  },
+  {
+    "errno": 1,
+    "error": "[Errno 1] Operation not permitted",
+    "operation": "SO_TYPE"
+  },
+  {
+    "errno": 1,
+    "error": "[Errno 1] Operation not permitted",
+    "operation": "getpeername"
+  },
+  {
+    "errno": 1,
+    "error": "[Errno 1] Operation not permitted",
+    "operation": "SO_PEERCRED"
+  },
+  {
+    "errno": 1,
+    "error": "[Errno 1] Operation not permitted",
+    "operation": "set_SO_PASSCRED"
+  },
+  {
+    "errno": 1,
+    "error": "[Errno 1] Operation not permitted",
+    "operation": "get_SO_PASSCRED"
+  }
+]

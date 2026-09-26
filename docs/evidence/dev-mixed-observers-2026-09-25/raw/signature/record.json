@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/git",
+    "--no-replace-objects",
+    "-c",
+    "gpg.format=ssh",
+    "-c",
+    "gpg.ssh.program=/usr/bin/ssh-keygen",
+    "-c",
+    "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-observers-2026-09-25/raw/allowed-signers",
+    "verify-commit",
+    "97b8d41fe2befd4d36fc6b9244009f35cfc33690"
+  ],
+  "started_ns": 1790398454063837633,
+  "process_group": 13,
+  "group_absent": true,
+  "finished_ns": 1790398454109207800,
+  "status": 0
+}

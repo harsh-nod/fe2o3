@@ -909,6 +909,19 @@ arena has 8,192 signals; ring headroom, exact slot identities, profile-specific
 occurrence encoding and aggregate backing still require admission. Frontier-only
 receipt inspection is insufficient: count every retained pipeline epoch too.
 
+Implementation review (2026-09-25): use a closed immutable default-64 versus
+qualification-1,024 profile, selected before native activity. Preserve it through
+primary/bootstrap construction, auxiliary lanes, replacement, persistent rebind,
+detached owners and pristine abort/resume. In particular, the current unpublished
+continuation retains only `next_generation`; recreating its default owner would
+silently lose the expanded profile. Both slot tables need fallible allocation
+and explicit byte accounting, and both private slot indices need `u16`. Preserve
+the default occurrence encoding; a scaled encoding needs a distinct domain and
+the exact profile. Keep the R60 capacity-65 negative and 64-only proofs intact;
+add separate scaled arithmetic/refinement coverage and a capacity-1,025 negative.
+This review is an implementation constraint, not a capacity implementation or
+new formal/native result.
+
 Acceptance: checked generation arithmetic, exact reservations/rollback,
 wraparound and stale-slot rejection, signal-reader retention and no reuse before
 retirement. The hardware gate requires at least 2,048 simultaneously
@@ -926,9 +939,13 @@ depths, memory ceiling, deadlines and resource-reuse count. Exercise later-short
 completion before earlier-long completion, exact operation/native identities,
 dropped and timed-out observers, backpressure and successful cleanup.
 
-The two-operation mixed-duration canary is implemented and CPU-compiled, but not
-yet native-qualified. Add distinct observer-timeout, dropped-observer and bounded
-command-saturation cells; command backpressure is not native-slot saturation.
+The two-operation mixed-duration canary and distinct observer-timeout,
+dropped-observer and bounded command-saturation cells are implemented and
+CPU-compiled, but not native-qualified. Timeout and Drop must occur inside one
+owner callback, bracketed by the same exact native Pending receipt, so a
+completed-observer race cannot qualify. The command cell checks both reply and
+snapshot refunds, exact non-submission of the rejected request, and successful
+retry; command backpressure is not native-slot saturation.
 Keep external process-group deadlines because owner shutdown/Drop may block
 beyond a per-future observer deadline. None of these small cells substitutes for
 the separately measured 2,048-native-epoch roster.

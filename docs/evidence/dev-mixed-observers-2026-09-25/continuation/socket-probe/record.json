@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-observers-2026-09-25/socket_probe.py"
+  ],
+  "started_ns": 1790398773021912705,
+  "process_group": 28,
+  "group_absent": true,
+  "finished_ns": 1790398773091334485,
+  "status": 0
+}

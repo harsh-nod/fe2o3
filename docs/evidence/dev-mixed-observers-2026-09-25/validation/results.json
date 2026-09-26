@@ -1,0 +1,53 @@
+{
+  "clippy": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "default": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "doctests": {
+    "counts": [
+      [
+        4,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        42,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "format": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "musl": {
+    "counts": [],
+    "passed": false,
+    "sha256": "f2658c83514787989c05677ba49adfe1260a781ef911b6866f7d86a6d0bc40b9",
+    "status": 101
+  },
+  "musl-build": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "musl-roster": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  }
+}

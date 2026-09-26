@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-observers-2026-09-25/test_run.py"
+  ],
+  "started_ns": 1790398463878422401,
+  "process_group": 22,
+  "group_absent": true,
+  "finished_ns": 1790398464176215084,
+  "status": 0
+}

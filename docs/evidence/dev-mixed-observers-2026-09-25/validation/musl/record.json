@@ -1,0 +1,11 @@
+{
+  "command": [
+    "/home/harsh/.codex-tmp/fe2o3-observer-cold-20260925-vwjyYj7e/build/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-afaad0775e07e3e7",
+    "--test-threads=2"
+  ],
+  "started_ns": 1790399171611623111,
+  "process_group": 646,
+  "group_absent": true,
+  "finished_ns": 1790399223338589910,
+  "status": 101
+}

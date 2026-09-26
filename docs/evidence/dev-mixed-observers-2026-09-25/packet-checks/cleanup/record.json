@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-observers-2026-09-25/cleanup.py"
+  ],
+  "started_ns": 1790399430040589009,
+  "process_group": 15,
+  "group_absent": true,
+  "finished_ns": 1790399446987033045,
+  "status": 0
+}
