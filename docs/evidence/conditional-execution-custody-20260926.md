@@ -1,5 +1,9 @@
 # Conditional Execution Custody Checkpoint
 
+The later [service/profile checkpoint](conditional-service-profile-20260926.md)
+records nominal V3 profile, lifecycle, service/client and sealed-launch additions.
+Remaining work below describes this earlier snapshot.
+
 This continues [conditional native handoff](conditional-native-handoff-20260926.md).
 All [#272](https://github.com/harsh-nod/fe2o3/issues/272) milestones M0-M7 remain
 open. No tutorial entry receives new protected-execution, machine-refinement or

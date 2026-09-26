@@ -1,12 +1,14 @@
 # fe2o3 compiler execution protocol
 
-Conditional SubjectV3 now has nominal policy, request, receipt, carriage and
-external-anchor transaction components. Typed V3 currentness joins reuse the
-unchanged identity-only current-record wire. The closure-capability crate adds
-sealed V3 policy/key custody and metered signing. These components do not activate
-a protected V3 service or the production conditional publisher. See the
-[custody checkpoint](../../docs/evidence/conditional-execution-custody-20260926.md)
-for verified scope and the remaining profile, client, issuer and Worker integration.
+Conditional SubjectV3 has nominal policy, profile, request, receipt, carriage,
+external-anchor transaction and service-packet components. Typed V3 launch,
+readiness, handoff and currentness joins reuse their existing identity-only
+wires. The closure-capability crate provides sealed V3 policy/key, profile and
+launch custody; the client crate adds terminal V3 exchanges on the original
+budget. These components do not activate a protected V3 service or the production
+conditional publisher. See the [service/profile checkpoint](../../docs/evidence/conditional-service-profile-20260926.md)
+for verified scope, unavailable socket validation, and remaining compiler,
+issuer, Worker and safe-launch integration.
 
 Native `CompilerExecutionIssuerPolicyV2` and `CompilerExecutionClientProfileV2`
 provide move-only, budgeted SubjectV2 trust inputs using shared private codecs.
