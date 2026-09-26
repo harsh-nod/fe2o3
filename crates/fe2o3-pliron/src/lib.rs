@@ -149,7 +149,9 @@ pub use production::{
 pub use production::{
     ProductionRefinementStagingPolicyV2,
     compile_ranked_kernel_with_policy_checked_refinement_staging_v2,
-    import_noncanonical_loop_proof_v1, stage_ranked_kernel_with_policy_checked_refinement_v2,
+    import_noncanonical_loop_proof_v1,
+    stage_ranked_kernel_with_borrowed_policy_checked_refinement_v2,
+    stage_ranked_kernel_with_policy_checked_refinement_v2,
 };
 
 use std::{

@@ -6916,13 +6916,32 @@ impl ProductionPlironSessionV1 {
 /// The returned construction still requires the complete production pipeline.
 #[cfg(feature = "internal-proof-staging")]
 pub fn stage_ranked_kernel_with_policy_checked_refinement_v2(
-    mut construction: ProductionConstructionV1,
+    construction: ProductionConstructionV1,
     imported: Vec<ImportedFunctionalRefinementProofV2>,
     policy: ProductionRefinementStagingPolicyV2,
 ) -> Result<ProductionConstructionV1, ProductionFunctionalRefinementAdmissionErrorV2> {
-    admit_functional_refinement_v2(&mut construction, imported, &policy)?;
+    stage_ranked_kernel_with_borrowed_policy_checked_refinement_v2(construction, imported, &policy)
+}
+
+/// Stages the same exact obligations while the caller retains its accepted policy.
+///
+/// This has the identical non-authoritative boundary and bounded legacy staging
+/// allocations of [`stage_ranked_kernel_with_policy_checked_refinement_v2`]. It
+/// does not clone or reconstruct the policy, expose its signer roster, or add a
+/// canonical-account allocation guarantee to the existing staging engine.
+#[cfg(feature = "internal-proof-staging")]
+pub fn stage_ranked_kernel_with_borrowed_policy_checked_refinement_v2(
+    mut construction: ProductionConstructionV1,
+    imported: Vec<ImportedFunctionalRefinementProofV2>,
+    policy: &ProductionRefinementStagingPolicyV2,
+) -> Result<ProductionConstructionV1, ProductionFunctionalRefinementAdmissionErrorV2> {
+    admit_functional_refinement_v2(&mut construction, imported, policy)?;
     Ok(construction)
 }
+
+#[cfg(all(test, feature = "internal-proof-staging"))]
+#[path = "ranked/borrowed_refinement_policy_v2_tests.rs"]
+mod borrowed_refinement_policy_v2_tests;
 
 /// Stages exact receipt obligations, then runs the complete ranked pipeline.
 ///
