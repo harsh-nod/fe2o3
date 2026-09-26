@@ -847,6 +847,73 @@ fn actual_prepared_conditional_reference_composition_both_targets() {
     );
 }
 
+#[test]
+#[ignore = "prepared genuine V2 retained/imported formula controls; protected runtime, no Cargo or GPU"]
+fn actual_prepared_conditional_formula_v2_both_targets() {
+    use crate::production_reference_effect_join_v2::conditional_source_v1::formula_v2_tests;
+    run_prepared_source(formula_v2_tests::CHILD, false);
+}
+
+// Cross-report content checks only; the caller also validates the full sidecar.
+fn check_formula_v2_report_join(
+    sidecar: &serde_json::Value,
+    detail: &serde_json::Value,
+) -> Check<()> {
+    let statement: [u8; 32] =
+        serde_json::from_value(detail["conditional_formula"]["statement"].clone())
+            .map_err(|e| e.to_string())?;
+    require(
+        statement != [0; 32] && sidecar["statement"] == json(&statement)?,
+        "FormulaV2 statement differs from consuming report",
+    )?;
+    let events = detail["retained_proof_events"]["events"]
+        .as_array()
+        .ok_or("missing retained proof events")?;
+    let retained = events
+        .first()
+        .and_then(|event| event.get("Retained"))
+        .ok_or("missing initial retained proof event")?;
+    let root: u32 = serde_json::from_value(retained["root"].clone()).map_err(|e| e.to_string())?;
+    require(
+        sidecar["semantic_root"] == json(&root)?,
+        "FormulaV2 root differs from retained proof",
+    )?;
+    let mut accepted = events
+        .iter()
+        .filter(|event| event.get("ReplayAccepted").is_some());
+    let event = accepted.next().ok_or("missing accepted V2 contract")?;
+    require(
+        accepted.next().is_none() && event.as_object().is_some_and(|event| event.len() == 1),
+        "ambiguous accepted V2 contract",
+    )?;
+    let accepted = &event["ReplayAccepted"];
+    require(
+        accepted["root"] == json(&root)?,
+        "accepted V2 contract root differs from retained proof",
+    )?;
+    let bytes = &accepted["contract"];
+    require(
+        bytes.as_array().is_some_and(|bytes| {
+            bytes.len() <= fe2o3_kernel_descriptor::MAX_CONDITIONAL_INVOCATION_BYTES_V2
+        }),
+        "missing or oversized accepted V2 contract",
+    )?;
+    let bytes: Vec<u8> = serde_json::from_value(bytes.clone()).map_err(|e| e.to_string())?;
+    let contract =
+        fe2o3_kernel_descriptor::decode_conditional_invocation_contract_v2(&bytes, &mut |_| {
+            Ok::<_, ()>(())
+        })
+        .map_err(|e| format!("invalid accepted V2 contract: {e:?}"))?;
+    require(
+        contract.theorem().statement_identity == statement,
+        "accepted V2 contract statement differs from consuming report",
+    )?;
+    require(
+        sidecar["cpu_input_commitment"] == json(&contract.theorem().cpu_input_commitment)?,
+        "FormulaV2 CPU commitment differs from accepted V2 contract",
+    )
+}
+
 fn run_prepared_source(child_selector: &str, composition: bool) {
     let root = PathBuf::from(env::var_os(INPUTS).expect("prepared Vecadd inputs"));
     let results = PathBuf::from(env::var_os(RESULTS).expect("fresh Vecadd results root"));
@@ -969,6 +1036,27 @@ fn run_prepared_source(child_selector: &str, composition: bool) {
                 1
             );
             row["composition"] = value;
+        }
+        // A separate opt-in sidecar; all existing reports and runner fields stay exact.
+        use crate::production_reference_effect_join_v2::conditional_source_v1::formula_v2_tests;
+        if child_selector == formula_v2_tests::CHILD {
+            let value = serde_json::from_slice(
+                &read_bounded(&output.join("FormulaV2.json"), TEXT_CAP).unwrap(),
+            )
+            .unwrap();
+            formula_v2_tests::check_report(&value);
+            check_formula_v2_report_join(&value, &row["report"]["detail"]).unwrap();
+            let text = std::str::from_utf8(&stdout).unwrap();
+            assert_eq!(
+                text.matches(&format!("test {child_selector} ... ok"))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                text.matches("test result: ok. 1 passed; 0 failed; 0 ignored;")
+                    .count(),
+                1
+            );
         }
         reports.push(row);
     }

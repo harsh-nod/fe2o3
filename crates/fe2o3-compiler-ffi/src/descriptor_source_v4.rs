@@ -1,7 +1,7 @@
 //! Owned nominal descriptor bytes. Structural validity is not compiler authority.
 use fe2o3_kernel_descriptor::{
     DESCRIPTOR_READER_SCRATCH_STORAGE_V4, DESCRIPTOR_TABLE_VIEW_STORAGE_V4, DescriptorWireErrorV4,
-    DeviceDescriptorTableV4, decode_device_descriptor_table_v4,
+    DeviceDescriptorTableV4,
 };
 use sha2::Sha256;
 use std::{error::Error, fmt, mem::size_of};
@@ -163,28 +163,20 @@ impl<E: Error + 'static> Error for CompilerDescriptorSourceErrorV4<E> {
     }
 }
 
-fn prepaid<E>(required: Option<usize>, actual: usize) -> ResultV4<(), E> {
-    let required = required.ok_or(CompilerDescriptorSourceErrorV4::Arithmetic)?;
-    if actual < required {
-        return Err(CompilerDescriptorSourceErrorV4::Storage {
-            required,
-            prepaid: actual,
-        });
+fn error<E>(
+    e: crate::descriptor_source_common::SourceError<DescriptorWireErrorV4<E>, E>,
+) -> CompilerDescriptorSourceErrorV4<E> {
+    use crate::descriptor_source_common::SourceError;
+    match e {
+        SourceError::Wire(e) => CompilerDescriptorSourceErrorV4::Wire(e),
+        SourceError::Work(e) => CompilerDescriptorSourceErrorV4::Work(e),
+        SourceError::Storage { required, prepaid } => {
+            CompilerDescriptorSourceErrorV4::Storage { required, prepaid }
+        }
+        SourceError::Arithmetic => CompilerDescriptorSourceErrorV4::Arithmetic,
+        SourceError::FinalizedDigest => CompilerDescriptorSourceErrorV4::FinalizedDigest,
+        SourceError::IdentityMismatch => CompilerDescriptorSourceErrorV4::IdentityMismatch,
     }
-    Ok(())
-}
-fn decode_zero<'a, E>(
-    bytes: &'a [u8],
-    charge: &mut impl FnMut(usize) -> Result<(), E>,
-) -> ResultV4<DeviceDescriptorTableV4<'a>, E> {
-    charge(1).map_err(CompilerDescriptorSourceErrorV4::Work)?;
-    let table = decode_device_descriptor_table_v4(bytes, charge)
-        .map_err(CompilerDescriptorSourceErrorV4::Wire)?;
-    charge(32).map_err(CompilerDescriptorSourceErrorV4::Work)?;
-    if table.canonical_code_object_digest().as_bytes() != &[0; 32] {
-        return Err(CompilerDescriptorSourceErrorV4::FinalizedDigest);
-    }
-    Ok(table)
 }
 fn validate<E>(
     bytes: &[u8],
@@ -192,26 +184,14 @@ fn validate<E>(
     prepaid_storage: usize,
     charge: &mut impl FnMut(usize) -> Result<(), E>,
 ) -> ResultV4<CompilerDescriptorSourceIdentityV4, E> {
-    prepaid(
-        compiler_descriptor_source_validation_storage_v4(capacity),
-        prepaid_storage,
-    )?;
-    {
-        let _table = decode_zero(bytes, charge)?;
-    }
-    let (sha256, byte_len) = crate::descriptor_source_common::identity(
-        COMPILER_DESCRIPTOR_SOURCE_DOMAIN_V4,
-        bytes,
-        charge,
-    )
-    .map_err(|e| match e {
-        crate::descriptor_source_common::HashError::Arithmetic => {
-            CompilerDescriptorSourceErrorV4::Arithmetic
-        }
-        crate::descriptor_source_common::HashError::Work(e) => {
-            CompilerDescriptorSourceErrorV4::Work(e)
-        }
-    })?;
+    let (sha256, byte_len) =
+        crate::descriptor_source_common::validate::<DeviceDescriptorTableV4<'_>, E>(
+            bytes,
+            compiler_descriptor_source_validation_storage_v4(capacity),
+            prepaid_storage,
+            charge,
+        )
+        .map_err(error)?;
     Ok(CompilerDescriptorSourceIdentityV4 { sha256, byte_len })
 }
 
@@ -249,11 +229,13 @@ impl CompilerDescriptorSourceV4 {
         prepaid_storage: usize,
         charge: &mut impl FnMut(usize) -> Result<(), E>,
     ) -> ResultV4<DeviceDescriptorTableV4<'_>, E> {
-        prepaid(
+        crate::descriptor_source_common::table::<DeviceDescriptorTableV4<'_>, E>(
+            &self.canonical_bytes,
             compiler_descriptor_source_table_storage_v4(self.canonical_bytes.capacity()),
             prepaid_storage,
-        )?;
-        decode_zero(&self.canonical_bytes, charge)
+            charge,
+        )
+        .map_err(error)
     }
     /// Fresh complete decode/hash, not cached semantic or compiler authority.
     /// Requires the same full prepaid extent as construction; allocates nothing.
@@ -262,18 +244,15 @@ impl CompilerDescriptorSourceV4 {
         prepaid_storage: usize,
         charge: &mut impl FnMut(usize) -> Result<(), E>,
     ) -> ResultV4<(), E> {
-        let identity = validate(
+        crate::descriptor_source_common::revalidate::<DeviceDescriptorTableV4<'_>, E>(
             &self.canonical_bytes,
-            self.canonical_bytes.capacity(),
+            compiler_descriptor_source_validation_storage_v4(self.canonical_bytes.capacity()),
             prepaid_storage,
+            (&self.identity.sha256, self.identity.byte_len),
+            size_of::<CompilerDescriptorSourceIdentityV4>() + 1,
             charge,
-        )?;
-        charge(size_of::<CompilerDescriptorSourceIdentityV4>() + 1)
-            .map_err(CompilerDescriptorSourceErrorV4::Work)?;
-        if identity != self.identity {
-            return Err(CompilerDescriptorSourceErrorV4::IdentityMismatch);
-        }
-        Ok(())
+        )
+        .map_err(error)
     }
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes

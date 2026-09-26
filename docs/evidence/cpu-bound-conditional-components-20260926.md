@@ -1,5 +1,9 @@
 # CPU-Bound Conditional Proof Components
 
+Later work is recorded separately in
+[CPU-bound conditional integration](cpu-bound-conditional-integration-20260926.md).
+The snapshot and results below remain historical.
+
 Compiler candidate: `f9ad51b2d0d84a93ca4186899c6ddccc7b9c6fda`.
 This follows [shared CPU replay](portable-cpu-replay-20260925.md).
 The bounded CPU codec, shared source correspondence checker, V2 formula API

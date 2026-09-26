@@ -21,7 +21,7 @@ fn free(_: usize) -> Result<(), &'static str> {
 
 // Reuse the inert contract transport fixture; no verifier receipt is constructed.
 // An output-only conditional contract fits the existing one-slice ELF fixture.
-fn wires(
+pub(super) fn wires(
     release: &str,
     customize: impl FnMut(&mut descriptor_fixture::Fixture),
 ) -> (Vec<u8>, Vec<u8>) {

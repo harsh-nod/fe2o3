@@ -57,6 +57,7 @@ pub(super) fn configuration_identity_for_profile(
     };
     // Cover the fixed domain, identities and all limit fields before hashing.
     state.charge(512)?;
+    state.target_profile(input.simulation_target())?;
     state.hash.update(domain);
     state
         .hash
@@ -116,6 +117,14 @@ struct ConfigurationHash {
     work: usize,
 }
 impl ConfigurationHash {
+    fn target_profile(&mut self, target: fe2o3_kir_sim::SimulationTargetV1) -> Result<(), String> {
+        if target.amd_profile().is_some() {
+            self.bytes(b"fe2o3-debug-sim-target-profile-v2\0")?;
+            self.bytes(target.identity_tag().as_bytes())?;
+        }
+        Ok(())
+    }
+
     fn charge(&mut self, amount: usize) -> Result<(), String> {
         let total = self
             .work

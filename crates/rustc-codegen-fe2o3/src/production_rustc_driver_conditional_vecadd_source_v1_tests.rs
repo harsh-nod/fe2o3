@@ -245,11 +245,15 @@ fn check_generated_fields(
     assert_eq!(fields.root, expected_root);
     assert_eq!(fields.kernel_binding, expected_kernel_binding);
     let contract =
-        fe2o3_kernel_descriptor::decode_conditional_invocation_contract_v1(contract, &mut |_| {
+        fe2o3_kernel_descriptor::decode_conditional_invocation_contract_v2(contract, &mut |_| {
             Ok::<_, ()>(())
         })
         .unwrap();
     assert_eq!(contract.subjects().kernel_id, fields.kernel_binding);
+    assert_eq!(
+        contract.theorem().cpu_input_commitment,
+        receipt.cpu_input_commitment
+    );
     assert_eq!(contract.argument_count(), fields.arguments.len());
     assert_eq!(contract.read_count(), fields.reads.len());
     assert_eq!(contract.output().argument, fields.output_argument);
@@ -675,6 +679,27 @@ fn conditional_reference_composition_source_child() {
         .write_all(&bytes)
         .unwrap();
     eprintln!("CONDITIONAL REFERENCE COMPOSITION: {report}");
+}
+
+#[test]
+#[ignore = "prepared genuine V2 reimport child; actual source, retained proof and admitted runtime only"]
+fn conditional_formula_v2_source_child() {
+    use crate::production_reference_effect_join_v2::conditional_source_v1::formula_v2_tests;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let report = formula_v2_tests::observe(conditional_vecadd_source_child);
+    let result = PathBuf::from(env::var_os(CHILD_RESULT).expect("existing child result path"));
+    let bytes = serde_json::to_vec(&report).unwrap();
+    assert!(bytes.len() <= 1024 * 1024);
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(result.parent().unwrap().join("FormulaV2.json"))
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
+    eprintln!("CONDITIONAL FORMULA V2: {report}");
 }
 
 fn run(cases: &[Case], target: &str, stages: &[Stage]) {

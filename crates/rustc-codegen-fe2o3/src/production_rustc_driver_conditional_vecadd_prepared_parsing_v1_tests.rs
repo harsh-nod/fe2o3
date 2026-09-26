@@ -1,5 +1,9 @@
 use super::*;
 
+#[allow(dead_code)]
+#[path = "../../fe2o3-kernel-descriptor/tests/support/conditional_invocation_v2.rs"]
+mod report_contract;
+
 // These tests use synthetic parser inputs only. They claim no actual compiler,
 // source proof, protected execution, qualification, or GPU observation.
 fn parser_args(target: &str) -> Vec<String> {
@@ -128,6 +132,167 @@ fn prepared_vecadd_support_schema_rejects_the_old_full_sysroot_inventory() {
         .unwrap();
     record["sysroot_files"] = old;
     assert!(parse_preparation(&serde_json::to_vec(&record).unwrap()).is_err());
+}
+
+// Minimal diagnostic JSON and an inert caller-authored contract, not retained
+// proof custody. Full 54-row validation remains in the opt-in parent.
+fn formula_v2_report_pair(cpu: [u8; 32]) -> (serde_json::Value, serde_json::Value) {
+    use fe2o3_kernel_descriptor::{
+        encode_conditional_invocation_contract_v2, encoded_conditional_invocation_contract_v2_len,
+    };
+    let fixture = report_contract::Fixture::new(2, 2);
+    let input = report_contract::input(&fixture, cpu);
+    let mut bytes =
+        vec![
+            0;
+            encoded_conditional_invocation_contract_v2_len(&input, &mut report_contract::free)
+                .unwrap()
+        ];
+    encode_conditional_invocation_contract_v2(&input, &mut bytes, &mut report_contract::free)
+        .unwrap();
+    let sidecar = serde_json::json!({
+        "statement": input.theorem.statement_identity,
+        "semantic_root": 7,
+        "cpu_input_commitment": cpu,
+    });
+    let detail = serde_json::json!({
+        "conditional_formula": {"statement": input.theorem.statement_identity},
+        "retained_proof_events": {"events": [
+            {"Retained": {"root": 7}},
+            {"ReplayAccepted": {"root": 7, "contract": bytes}},
+        ]},
+    });
+    (sidecar, detail)
+}
+
+#[test]
+fn prepared_vecadd_formula_v2_report_join_accepts_matching_content() {
+    for cpu in [[17; 32], [23; 32]] {
+        let (sidecar, detail) = formula_v2_report_pair(cpu);
+        check_formula_v2_report_join(&sidecar, &detail).unwrap();
+    }
+}
+
+#[test]
+fn prepared_vecadd_formula_v2_report_join_rejects_identity_substitution() {
+    let (sidecar, detail) = formula_v2_report_pair([17; 32]);
+    for field in ["cpu_input_commitment", "statement", "semantic_root"] {
+        let mut changed = sidecar.clone();
+        changed[field] = if field == "semantic_root" {
+            8.into()
+        } else {
+            json(&[23u8; 32]).unwrap()
+        };
+        assert!(
+            check_formula_v2_report_join(&changed, &detail).is_err(),
+            "{field}"
+        );
+        changed.as_object_mut().unwrap().remove(field);
+        assert!(
+            check_formula_v2_report_join(&changed, &detail).is_err(),
+            "missing {field}"
+        );
+    }
+    for pointer in [
+        "/conditional_formula/statement",
+        "/retained_proof_events/events/0/Retained/root",
+        "/retained_proof_events/events/1/ReplayAccepted/root",
+    ] {
+        let mut changed = detail.clone();
+        *changed.pointer_mut(pointer).unwrap() = if pointer.ends_with("root") {
+            8.into()
+        } else {
+            json(&[23u8; 32]).unwrap()
+        };
+        assert!(
+            check_formula_v2_report_join(&sidecar, &changed).is_err(),
+            "{pointer}"
+        );
+    }
+    let (foreign_sidecar, foreign_detail) = formula_v2_report_pair([23; 32]);
+    let mut changed = detail.clone();
+    changed["retained_proof_events"]["events"][1] =
+        foreign_detail["retained_proof_events"]["events"][1].clone();
+    assert!(check_formula_v2_report_join(&sidecar, &changed).is_err());
+    // Even a matching CPU field cannot hide a foreign contract's statement.
+    let mut changed_sidecar = sidecar;
+    changed_sidecar["cpu_input_commitment"] = foreign_sidecar["cpu_input_commitment"].clone();
+    assert!(check_formula_v2_report_join(&changed_sidecar, &changed).is_err());
+}
+
+#[test]
+fn prepared_vecadd_formula_v2_report_join_requires_one_accepted_contract() {
+    let (sidecar, detail) = formula_v2_report_pair([17; 32]);
+    for case in 0..6 {
+        let mut changed = detail.clone();
+        let events = changed["retained_proof_events"]["events"]
+            .as_array_mut()
+            .unwrap();
+        match case {
+            0 => {
+                events.pop();
+            }
+            1 => {
+                events.push(events[1].clone());
+            }
+            2 => {
+                events[1]["ReplayAccepted"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("contract");
+            }
+            3 => {
+                events[1]["ReplayAccepted"] = serde_json::Value::Null;
+            }
+            4 => {
+                events[1]["Retained"] = events[0]["Retained"].clone();
+            }
+            _ => {
+                events.clear();
+            }
+        }
+        assert!(
+            check_formula_v2_report_join(&sidecar, &changed).is_err(),
+            "case {case}"
+        );
+    }
+}
+
+#[test]
+fn prepared_vecadd_formula_v2_report_join_strictly_decodes_contract() {
+    let (sidecar, detail) = formula_v2_report_pair([17; 32]);
+    let valid = detail["retained_proof_events"]["events"][1]["ReplayAccepted"]["contract"].clone();
+    for case in 0..7 {
+        let mut bytes: Vec<u8> = serde_json::from_value(valid.clone()).unwrap();
+        match case {
+            0 => {
+                bytes[0] ^= 1;
+            }
+            1 => {
+                bytes.truncate(8);
+            }
+            2 => {
+                bytes.push(0);
+            }
+            3 => {
+                bytes = report_contract::Fixture::new(2, 2).wire();
+            }
+            4 => {
+                bytes = vec![0; fe2o3_kernel_descriptor::MAX_CONDITIONAL_INVOCATION_BYTES_V2 + 1];
+            }
+            _ => {}
+        }
+        let mut changed = detail.clone();
+        changed["retained_proof_events"]["events"][1]["ReplayAccepted"]["contract"] = match case {
+            5 => serde_json::json!([256]),
+            6 => serde_json::json!("not contract bytes"),
+            _ => serde_json::json!(bytes),
+        };
+        assert!(
+            check_formula_v2_report_join(&sidecar, &changed).is_err(),
+            "case {case}"
+        );
+    }
 }
 
 #[test]

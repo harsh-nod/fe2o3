@@ -304,6 +304,9 @@ fn finalize_artifact(
 ) -> Result<(Vec<u8>, Vec<u8>, CanonicalCodeObjectDigest)> {
     let floor = budget.storage();
     match schema {
+        DescriptorSchema::NominalV5 => {
+            Err(failure("descriptor schema", "native V5 is not admitted"))
+        }
         DescriptorSchema::V1 => {
             let core = finalize_worker_hsaco_preimage_v1(raw, raw_identity, policy, abi)
                 .map_err(|e| failure("canonical finalization", e))?;
@@ -364,6 +367,9 @@ fn derive_launch(
         Ok(())
     };
     match schema {
+        DescriptorSchema::NominalV5 => {
+            return Err(failure("descriptor schema", "native V5 is not admitted"));
+        }
         DescriptorSchema::NominalV4 => {
             let floor = budget.storage();
             budget.with_prepaid_scope(

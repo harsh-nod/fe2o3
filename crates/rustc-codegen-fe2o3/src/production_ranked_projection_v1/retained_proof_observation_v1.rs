@@ -7,9 +7,9 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1 as Request;
 use fe2o3_verifier::{
-    ProductionConditionalFormulaExecutionV1 as Execution,
-    ProductionConditionalFormulaReportV1 as Report,
-    RetainedProductionConditionalFormulaV1 as Retained,
+    ProductionConditionalFormulaExecutionV2 as Execution,
+    ProductionConditionalFormulaReportV2 as Report,
+    RetainedProductionConditionalFormulaV2 as Retained,
 };
 use serde::Serialize;
 use std::cell::RefCell;
@@ -48,6 +48,9 @@ pub(crate) struct Receipt {
     pub(crate) reference_mir: [u8; 32],
     pub(crate) kernel_identity: [u8; 32],
     pub(crate) kernel_mir: [u8; 32],
+    // In-process V2 crosscheck; preserve the frozen external observation schema.
+    #[serde(skip)]
+    pub(crate) cpu_input_commitment: [u8; 32],
 }
 impl Receipt {
     fn from_report(report: Report) -> Self {
@@ -61,6 +64,7 @@ impl Receipt {
             reference_mir: *binding.safe_reference_mir_hash().as_bytes(),
             kernel_identity: *binding.kernel_subject_identity().as_bytes(),
             kernel_mir: *binding.kernel_mir_hash().as_bytes(),
+            cpu_input_commitment: *report.cpu_input_commitment().as_bytes(),
         }
     }
 }
@@ -161,7 +165,7 @@ pub(crate) fn retained(root: u32, proof: &Retained, budget: &Budget<'_>) {
     record(|| Event::Retained {
         root,
         receipt: Receipt::from_report(proof.report()),
-        reserved_receipt_bytes: proof.retained_storage_v1(),
+        reserved_receipt_bytes: proof.retained_storage_v2(),
         work: budget.work(),
         storage: budget.storage(),
     });

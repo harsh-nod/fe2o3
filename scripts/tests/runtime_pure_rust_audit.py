@@ -216,6 +216,36 @@ def synthetic_elf(
 
 
 class MetadataAuditTests(unittest.TestCase):
+    def test_virtual_target_metadata_allowance_does_not_admit_native_code(self) -> None:
+        names = ("fe2o3-kir-sim", "fe2o3-amd-target", "fe2o3-target-spec")
+        identities = tuple(sorted(f"{name}@0.1.0|workspace" for name in names))
+        self.assertLessEqual(set(identities), set(VIRTUAL_POLICY["allowed_package_identities"]))
+        # Exercise this exact subtree; the full production closure is audited by CI.
+        policy = dict(VIRTUAL_POLICY, allowed_package_identities=identities)
+        mutations = (
+            ({}, None),
+            ({"links": "native-target"}, "Cargo links"),
+            ({"targets": [target(), target("custom-build")]}, "unapproved Cargo build script"),
+            ({"source": CHECKER.CRATES_IO_SOURCE}, "unapproved package identity"),
+        )
+        for changed in names[1:]:
+            for fields, refusal in mutations:
+                with self.subTest(package=changed, fields=fields):
+                    value = metadata(
+                        [package(name, **(fields if name == changed else {})) for name in names],
+                        [
+                            node(names[0], [dependency(names[1])]),
+                            node(names[1], [dependency(names[2])]),
+                            node(names[2]),
+                        ],
+                    )
+                    violations, stats = CHECKER.audit_metadata(value, (names[0],), policy)
+                    self.assertEqual(3, stats["packages"])
+                    if refusal is None:
+                        self.assertEqual([], violations)
+                    else:
+                        self.assertTrue(any(refusal in item for item in violations), violations)
+
     def test_accepts_closed_pure_rust_production_closure(self) -> None:
         value = metadata(
             [package("runtime"), package("model")],

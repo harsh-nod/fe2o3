@@ -722,6 +722,51 @@ pub(super) fn on_replay(
         assert_eq!(state.seen, 1);
         state.origin != Some(std::thread::current().id())
     };
+    // Exercise the live V2 assembler against the actual authenticated row. This
+    // borrows only; it adds no codec/JOIN replay or report-schema field.
+    let input = native_cpu_input_v1(request, binding, root);
+    assert_eq!(input.association.semantic_root, root);
+    assert_eq!(
+        input.association.semantic_mir_sha256,
+        *request
+            .source()
+            .semantic_ssa()
+            .source_semantic()
+            .semantic_sha256()
+            .as_bytes()
+    );
+    assert_eq!(
+        input.association.semantic_mir_sha256,
+        *request.pliron_input().source_semantic_identity().as_bytes()
+    );
+    assert_eq!(
+        input.association.registration_path,
+        binding.registration_path
+    );
+    assert_eq!(
+        input.association.logical_kernel_name,
+        binding.logical_kernel_name
+    );
+    assert!(std::ptr::eq(
+        input.association.registration_path,
+        binding.registration_path.as_str()
+    ));
+    assert!(std::ptr::eq(
+        input.association.logical_kernel_name,
+        binding.logical_kernel_name.as_str()
+    ));
+    assert!(std::ptr::eq(input.kernel, &binding.kernel));
+    assert!(std::ptr::eq(input.reference, &binding.reference));
+    assert!(std::ptr::eq(
+        input.replay.signature_preimage,
+        &binding.signature_preimage
+    ));
+    assert!(std::ptr::eq(input.replay.effect_ir, &binding.effect_ir));
+    assert_eq!(input.replay.effect_ir_sha256, binding.effect_ir_sha256);
+    assert!(std::ptr::eq(
+        input.replay.observable_output_writes,
+        binding.observable_output_writes.as_ref()
+    ));
     let (floor, work_before) = (budget.storage(), budget.work());
     let account = budget.work_ledger_identity_v1();
     let denials = (budget.failed_work(), budget.failed_storage());

@@ -852,7 +852,7 @@ impl ProductionRankedRootProgramV1 {
     #[cfg(test)]
     pub(crate) fn conditional_formula_report_v1(
         &self,
-    ) -> Option<fe2o3_verifier::ProductionConditionalFormulaReportV1> {
+    ) -> Option<fe2o3_verifier::ProductionConditionalFormulaReportV2> {
         match &self.verification {
             crate::production_reference_effect_join_v2::conditional::ReferenceRootV1::Conditional(root) => Some(root.report()),
             _ => None,

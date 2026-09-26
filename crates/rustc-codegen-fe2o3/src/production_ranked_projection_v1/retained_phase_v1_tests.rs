@@ -32,6 +32,46 @@ fn conditional_original_phase_survives_moves_and_callback_boundaries() {
 }
 
 #[test]
+fn conditional_original_phase_postchecks_keep_nested_callback_owned_storage() {
+    use guarded_source_progress_v1::resources;
+    let mut phase = phase(1000, 1000);
+    let retained = phase
+        .with_budget(|budget| {
+            let ledger = budget.work_ledger_identity_v1();
+            let floor = budget.storage();
+            let retained = resources::owned(
+                budget,
+                0,
+                Error::ConditionalResource,
+                || Error::ConditionalResource(Resource::Accounting),
+                |budget| {
+                    let mut retained =
+                        resources::table::<u8>(13, budget).map_err(Error::ConditionalResource)?;
+                    retained.extend_from_slice(&[0; 13]);
+                    let storage = retained.capacity();
+                    Ok((retained, storage))
+                },
+            )?;
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(budget.storage(), floor + retained.capacity());
+            Ok(retained)
+        })
+        .unwrap();
+    let storage = retained.capacity();
+    assert_eq!(phase.ledger.storage(), 7 + storage);
+    phase
+        .with_budget(|budget| {
+            assert_eq!(budget.storage(), 7 + storage);
+            drop(retained);
+            budget
+                .release_storage(storage)
+                .map_err(Error::ConditionalResource)
+        })
+        .unwrap();
+    assert_eq!(phase.ledger.storage(), 7);
+}
+
+#[test]
 fn conditional_original_phase_replay_denial_never_replenishes_work() {
     let mut phase = phase(5, 100);
     phase.with_budget(|_| Ok(())).unwrap();

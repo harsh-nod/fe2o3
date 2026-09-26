@@ -1,6 +1,31 @@
 //! Assertions over events emitted by the actual source transaction and consumer.
 use super::{Event, Observation, Outcome};
 
+#[test]
+fn v2_passive_cpu_crosscheck_does_not_change_frozen_receipt_json() {
+    let receipt = super::Receipt {
+        statement: [1; 32],
+        generated_source: [2; 32],
+        execution: [3; 32],
+        receipt: [4; 32],
+        reference_identity: [5; 32],
+        reference_mir: [6; 32],
+        kernel_identity: [7; 32],
+        kernel_mir: [8; 32],
+        cpu_input_commitment: [9; 32],
+    };
+    let value = serde_json::to_value(&receipt).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "statement": receipt.statement, "generated_source": receipt.generated_source,
+            "execution": receipt.execution, "receipt": receipt.receipt,
+            "reference_identity": receipt.reference_identity, "reference_mir": receipt.reference_mir,
+            "kernel_identity": receipt.kernel_identity, "kernel_mir": receipt.kernel_mir,
+        })
+    );
+}
+
 pub(crate) fn check(observation: &Observation, formula: &serde_json::Value) {
     let [
         Event::Retained {
@@ -66,6 +91,7 @@ pub(crate) fn check(observation: &Observation, formula: &serde_json::Value) {
         &receipt.reference_mir,
         &receipt.kernel_identity,
         &receipt.kernel_mir,
+        &receipt.cpu_input_commitment,
         aggregate,
         source,
         graph,
@@ -81,8 +107,14 @@ pub(crate) fn check(observation: &Observation, formula: &serde_json::Value) {
     assert!(*accepted_work <= after.work);
     assert!(*callback_storage >= initial.storage && *accepted_storage >= initial.storage);
     assert!(*reserved_contract_bytes > 0);
-    let contract =
+    assert!(
         fe2o3_kernel_descriptor::decode_conditional_invocation_contract_v1(contract, &mut |_| {
+            Ok::<_, ()>(())
+        })
+        .is_err()
+    );
+    let contract =
+        fe2o3_kernel_descriptor::decode_conditional_invocation_contract_v2(contract, &mut |_| {
             Ok::<_, ()>(())
         })
         .unwrap();
@@ -109,6 +141,10 @@ pub(crate) fn check(observation: &Observation, formula: &serde_json::Value) {
     );
     assert_eq!(contract.theorem().execution_identity, receipt.execution);
     assert_eq!(contract.theorem().receipt_identity, receipt.receipt);
+    assert_eq!(
+        contract.theorem().cpu_input_commitment,
+        receipt.cpu_input_commitment
+    );
     assert!(*reserved_contract_bytes >= contract.canonical_bytes().len());
     assert_eq!(initial.storage + reserved_contract_bytes, after.storage);
     assert!(initial.failed_work.is_none() && initial.failed_storage.is_none());

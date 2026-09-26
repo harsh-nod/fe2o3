@@ -33,7 +33,7 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_pliron::{
     ProductionConditionalAggregateErrorV1, ProductionConditionalRuntimePremiseV1,
-    ProductionRankedValueV1,
+    ProductionPolicyCheckedRefinementStagingV2, ProductionRankedValueV1,
 };
 use fe2o3_verifier::ProductionConditionalFormulaExecutionV1;
 use std::{
@@ -136,12 +136,71 @@ pub(crate) fn with_conditional_contract_projection_v1<'w, R>(
     budget: &mut Budget<'w>,
     consume: impl for<'wire> FnOnce(View<'wire>, &mut Budget<'w>) -> R,
 ) -> Result<R, Error> {
-    with_scratch(budget, PROJECTION_STORAGE, |budget| {
+    let report = execution.report();
+    with_projected_rows(
+        fields,
+        report.binding(),
+        report.statement_identity().as_bytes(),
+        PROJECTION_STORAGE,
+        budget,
+        |rows, staging, budget| {
+            let theorem = Theorem {
+                statement_identity: *report.statement_identity().as_bytes(),
+                generated_source_identity: *report.generated_source_identity().as_bytes(),
+                execution_identity: *report.execution_identity().as_bytes(),
+                receipt_identity: *report.receipt_identity().as_bytes(),
+                staging_receipt_identity: *staging.receipt_identity().digest().as_bytes(),
+                staging_obligation_identity: *staging
+                    .binding()
+                    .normalized_obligation_effect_ir_hash()
+                    .as_bytes(),
+                staging_signer_identity: *staging.signer_identity().as_bytes(),
+                staging_execution_identity: *staging.execution_identity().as_bytes(),
+            };
+            let projected = Input {
+                numerical_domain: ConditionalNumericalDomainV1::LittleEndianSharedIeeeV1,
+                subjects: rows.subjects,
+                theorem,
+                typed_roots: rows.typed_roots,
+                arguments: rows.arguments,
+                output: rows.output,
+                reads: rows.reads,
+                premises: rows.premises,
+            };
+            with_encoded(&projected, budget, consume)
+        },
+    )
+}
+
+struct ProjectedRows<'a> {
+    subjects: Subjects,
+    typed_roots: &'a [[u64; 4]],
+    arguments: &'a [Argument],
+    output: Output,
+    reads: &'a [Read],
+    premises: &'a [Premise],
+}
+
+// Both versioned entries derive the same rows from the live checked views.
+// The private binding/statement arguments do not construct proof custody.
+fn with_projected_rows<'w, R>(
+    fields: &ConditionalGeneratedFieldsV1<'_>,
+    binding: FunctionalRefinementBindingV2,
+    statement: &[u8; 32],
+    storage: usize,
+    budget: &mut Budget<'w>,
+    consume: impl FnOnce(
+        ProjectedRows<'_>,
+        &ProductionPolicyCheckedRefinementStagingV2,
+        &mut Budget<'w>,
+    ) -> Result<R, Error>,
+) -> Result<R, Error> {
+    with_scratch(budget, storage, |budget| {
         let input = fields.request().pliron_input();
         input
             .require_current_graph_v1(budget)
             .map_err(Error::Replay)?;
-        budget.charge_work(PROJECTION_STORAGE)?;
+        budget.charge_work(storage)?;
         let [output] = input.outputs() else {
             return Err(Error::Mismatch("one checked output"));
         };
@@ -155,15 +214,14 @@ pub(crate) fn with_conditional_contract_projection_v1<'w, R>(
             input.premises().len(),
             fields.read_arguments().len(),
         )?;
-        let report = execution.report();
         require_subjects(
             input.reference_subjects(),
-            report.binding(),
+            binding,
             staging.binding(),
             staging.boundary(),
             budget,
         )?;
-        if report.statement_identity() != report.binding().normalized_obligation_effect_ir_hash() {
+        if statement != binding.normalized_obligation_effect_ir_hash().as_bytes() {
             return Err(Error::Mismatch("executed statement binding"));
         }
         let reference = input.reference_subjects();
@@ -178,19 +236,6 @@ pub(crate) fn with_conditional_contract_projection_v1<'w, R>(
             safe_reference_mir_hash: *reference.safe_reference_mir_hash().as_bytes(),
             kernel_subject_identity: *reference.kernel_subject_identity().as_bytes(),
             kernel_mir_hash: *reference.kernel_mir_hash().as_bytes(),
-        };
-        let theorem = Theorem {
-            statement_identity: *report.statement_identity().as_bytes(),
-            generated_source_identity: *report.generated_source_identity().as_bytes(),
-            execution_identity: *report.execution_identity().as_bytes(),
-            receipt_identity: *report.receipt_identity().as_bytes(),
-            staging_receipt_identity: *staging.receipt_identity().digest().as_bytes(),
-            staging_obligation_identity: *staging
-                .binding()
-                .normalized_obligation_effect_ir_hash()
-                .as_bytes(),
-            staging_signer_identity: *staging.signer_identity().as_bytes(),
-            staging_execution_identity: *staging.execution_identity().as_bytes(),
         };
         let mut scratch = Scratch {
             arguments: [EMPTY_ARGUMENT; MAX_CONDITIONAL_ARGUMENTS_V1],
@@ -260,23 +305,25 @@ pub(crate) fn with_conditional_contract_projection_v1<'w, R>(
                 alignment: canonical.alignment(),
             };
         }
-        let projected = Input {
-            numerical_domain: ConditionalNumericalDomainV1::LittleEndianSharedIeeeV1,
+        let rows = ProjectedRows {
             subjects,
-            theorem,
             typed_roots: input.typed_root_commitments(),
             arguments,
             output,
             reads: &scratch.reads[..input.reads().len()],
             premises: &scratch.premises[..input.premises().len()],
         };
-        let result = with_encoded(&projected, budget, consume)?;
+        let result = consume(rows, staging, budget)?;
         input
             .require_current_graph_v1(budget)
             .map_err(Error::Replay)?;
         Ok(result)
     })
 }
+
+#[path = "compiler_descriptor_conditional_contract_projection_v2.rs"]
+mod v2;
+pub(crate) use v2::with_conditional_contract_projection_v2;
 
 fn require_counts(
     roots: usize,

@@ -70,6 +70,22 @@ observed. Those remain separate compiler, artifact, runtime, and qualification
 contracts. In particular, V9/V10 f32 wave ownership must not be read as a
 `gfx942` hardware-availability claim.
 
+`SimulationTargetV1` retains four closed observation identities:
+
+| Constructor | Identity | Explicit AMD profile |
+| --- | --- | --- |
+| `little_endian(Bits32)` | `little_endian_index32_v1` | None |
+| `little_endian(Bits64)` or `amdgpu_64()` | `amdgpu_64_little_endian_v1` | None |
+| `amdgpu_profile(Gfx942)` | `amdgpu_gfx942_little_endian_v2` | gfx942 |
+| `amdgpu_profile(Gfx950)` | `amdgpu_gfx950_little_endian_v2` | gfx950 |
+
+`amdgpu_from_device_target` accepts only the exact `gfx942:xnack-` and
+`gfx950:xnack-` production target strings. It never infers an explicit profile
+from index width or from the historical `amdgpu_64()` name. Both historical
+constructors keep their unprefixed V1 schedule, trace, diagnostic and reduction
+identities. Explicit profiles receive distinct committed identities without
+changing scalar execution semantics or granting target or hardware authority.
+
 V11/V12 `RestrictPointerAccess` preserves pointer identity, pointee type, and
 address space while changing only `ReadWrite` access to `ReadOnly`. Preflight
 rejects access widening, identity relabeling, write-only substitution, and any
@@ -229,7 +245,9 @@ against the currently runnable local identities and rejects context drift,
 missing or trailing decisions, duplicate or unavailable locals, phase drift,
 coverage drift, and transcript corruption. Decision retention has an explicit
 caller bound, a fixed hard cap, fallible reservation, and resident-byte
-admission. Unrecorded canonical execution retains no decision vector and never
+admission. Explicit AMD profile identity is part of the context: a record for
+gfx942 cannot replay as gfx950 or as the legacy width-only target, even though
+all three have 64-bit indices. Unrecorded canonical execution retains no decision vector and never
 fails a legacy run because of the recording bound.
 Successful records compact the execution-time reservation to the exact realized
 decision count before the record is returned.
@@ -277,6 +295,13 @@ detailed race has the exact fingerprint retained by a canonical report. It
 does not authenticate the report producer or replay the report; consumers that
 need execution-backed custody must still use the replay API.
 
+Reports for targets without an explicit AMD profile retain the exact
+`fe2o3-simulation-failure-reduction-v1` schema and legacy digest algorithm.
+Explicit gfx942/gfx950 reports use `fe2o3-simulation-failure-reduction-v2`, bind
+the exact target identity, and use a separate integrity domain. V1 cannot carry
+a profile tag; V2 requires an explicit profile with the checked 64-bit width.
+No decoder promotes a legacy report into an explicit profile.
+
 `PersistedSimulationScheduleDocumentV1` is the canonical, bounded JSON custody
 form for that same record. It adds exact raw-KIR versus simulation-bundle route,
 bundle subject when present, request byte identity, target profile, and every
@@ -285,6 +310,12 @@ noncanonical, oversized, structurally invalid, and integrity-corrupt input.
 Decoding grants no authority: callers compare the retained binding to already
 admitted inputs, then ordinary replay still performs every context,
 runnable-decision, coverage, and transcript check.
+
+The schedule document keeps its V1 outer schema. Its closed nested target
+identity distinguishes the two legacy tags from the two explicit V2 tags;
+decoding checks identity and index width together. Legacy documents preserve
+their canonical bytes and digests. Older readers reject the new nested tags
+rather than silently treating them as width-only targets.
 
 Before any mutable execution state is created, preflight visits the complete
 call graph reachable from the selected kernel, checks target-specific constants,

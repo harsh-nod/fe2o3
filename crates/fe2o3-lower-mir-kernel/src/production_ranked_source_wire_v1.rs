@@ -82,6 +82,11 @@ impl ProductionRankedSourceRowsV1 {
     pub fn executable_effect_sources(&self) -> &[Effect] {
         &self.effects
     }
+    /// Transfers the original vectors and capacities without changing their
+    /// storage receipt or granting source-correspondence authority.
+    pub fn into_parts(self) -> (Vec<Access>, Vec<Effect>) {
+        (self.access, self.effects)
+    }
 }
 
 /// Exact logical bytes transferred to the caller, not a verification receipt.

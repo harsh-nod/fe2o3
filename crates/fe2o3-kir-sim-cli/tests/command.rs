@@ -500,7 +500,7 @@ fn bundle_targets_execute_exact_embedded_kir_without_authority() {
         assert_eq!(admitted.bundle().target(), target);
         assert_eq!(
             admitted.input().simulation_target(),
-            fe2o3_kir_sim::SimulationTargetV1::amdgpu_64()
+            fe2o3_kir_sim::SimulationTargetV1::amdgpu_from_device_target(target).unwrap()
         );
         assert_eq!(
             admitted.input().simulation_bundle_subject(),
@@ -1718,4 +1718,232 @@ fn bound_request_rejects_post_admission_substitution_without_output() {
 
     assert_ne!(status, std::process::ExitCode::SUCCESS);
     assert!(!output.exists());
+}
+
+#[test]
+fn exact_bundle_profiles_survive_record_exploration_publication_and_replay_refusal() {
+    for (device, tag, other) in [
+        (
+            "gfx942:xnack-",
+            "amdgpu_gfx942_little_endian_v2",
+            "amdgpu_gfx950_little_endian_v2",
+        ),
+        (
+            "gfx950:xnack-",
+            "amdgpu_gfx950_little_endian_v2",
+            "amdgpu_gfx942_little_endian_v2",
+        ),
+    ] {
+        let directory = TestDirectory::new();
+        let (_, request) = write_success_fixture(&directory);
+        let bundle = directory.path().join("profile.fe2sim");
+        let schedule = directory.path().join("schedule.json");
+        fs::write(&bundle, simulation_bundle(device)).unwrap();
+        let recorded = binary()
+            .arg("--bundle")
+            .arg(&bundle)
+            .arg("--request")
+            .arg(&request)
+            .arg("--record-canonical-schedule")
+            .arg(&schedule)
+            .output()
+            .unwrap();
+        assert!(
+            recorded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&recorded.stderr)
+        );
+        let actual: serde_json::Value = serde_json::from_slice(&recorded.stdout).unwrap();
+        assert_eq!(actual["target_profile"]["identity"], tag);
+        assert_eq!(actual["target_profile"]["index_bits"], 64);
+        assert_eq!(actual["target_profile"]["max_workgroup_invocations"], 1024);
+        assert_eq!(actual["hardware_validation"], false);
+        assert_eq!(actual["performance_prediction"], false);
+        let encoded = fs::read(&schedule).unwrap();
+        let decoded =
+            fe2o3_kir_sim::PersistedSimulationScheduleDocumentV1::from_canonical_bytes(&encoded)
+                .unwrap();
+        assert_eq!(decoded.binding().target().identity_tag(), tag);
+        let loaded = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle, &request).unwrap();
+        assert_eq!(
+            loaded.input().simulation_target(),
+            decoded.binding().target()
+        );
+        assert_eq!(
+            loaded
+                .input()
+                .retained_bundle_target_v1()
+                .unwrap()
+                .unwrap()
+                .target()
+                .as_str(),
+            device
+        );
+
+        let published = directory.path().join("published.json");
+        let replayed = binary()
+            .arg("--bundle")
+            .arg(&bundle)
+            .arg("--request")
+            .arg(&request)
+            .arg("--replay-schedule")
+            .arg(&schedule)
+            .arg("--output")
+            .arg(&published)
+            .output()
+            .unwrap();
+        assert!(
+            replayed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&replayed.stderr)
+        );
+        assert!(replayed.stdout.is_empty());
+        let published: serde_json::Value =
+            serde_json::from_slice(&fs::read(&published).unwrap()).unwrap();
+        assert_eq!(published["target_profile"], actual["target_profile"]);
+
+        let explored = binary()
+            .arg("--bundle")
+            .arg(&bundle)
+            .arg("--request")
+            .arg(&request)
+            .args([
+                "--explore-seeded-schedules",
+                "2",
+                "--schedule-seed",
+                "17",
+                "--schedule-max-decisions",
+                "8",
+                "--exploration-max-retained-decisions",
+                "16",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            explored.status.success(),
+            "{}",
+            String::from_utf8_lossy(&explored.stderr)
+        );
+        let explored: serde_json::Value = serde_json::from_slice(&explored.stdout).unwrap();
+        assert_eq!(explored["target_profile"], actual["target_profile"]);
+        assert_eq!(explored["hardware_observed"], false);
+        assert_eq!(explored["exploration"]["completed"], 2);
+
+        for (index, substitute) in [other, "amdgpu_64_little_endian_v1"]
+            .into_iter()
+            .enumerate()
+        {
+            let tampered = std::str::from_utf8(&encoded)
+                .unwrap()
+                .replace(tag, substitute);
+            assert_ne!(tampered.as_bytes(), encoded);
+            fs::write(&schedule, tampered).unwrap();
+            let output = directory.path().join(format!("rejected-{index}.json"));
+            let rejected = binary()
+                .arg("--bundle")
+                .arg(&bundle)
+                .arg("--request")
+                .arg(&request)
+                .arg("--replay-schedule")
+                .arg(&schedule)
+                .arg("--output")
+                .arg(&output)
+                .output()
+                .unwrap();
+            assert!(!rejected.status.success());
+            assert!(rejected.stdout.is_empty());
+            assert!(!output.exists());
+            assert!(!rejected.stderr.is_empty());
+        }
+    }
+}
+
+#[test]
+fn exploration_race_witnesses_retain_each_exact_bundle_profile() {
+    for (device, tag, other) in [
+        (
+            "gfx942:xnack-",
+            "amdgpu_gfx942_little_endian_v2",
+            "gfx950:xnack-",
+        ),
+        (
+            "gfx950:xnack-",
+            "amdgpu_gfx950_little_endian_v2",
+            "gfx942:xnack-",
+        ),
+    ] {
+        let directory = TestDirectory::new();
+        let bundle = directory.path().join("race.fe2sim");
+        let request = directory.path().join("race-request.json");
+        let module = conflicting_store_module("profile_race");
+        fs::write(
+            &bundle,
+            simulation_bundle_for_module(module.clone(), device, None),
+        )
+        .unwrap();
+        fs::write(&request,
+            br#"{"schema":"fe2o3-simulation-request-v1","kernel":"conflict","grid":[2,1,1],"workgroup":[2,1,1],"arguments":[{"kind":"buffer","element":"u32","access":"read_write","alignment":4,"bytes":"0x00000000"}]}"#).unwrap();
+        let explored = binary()
+            .arg("--bundle")
+            .arg(&bundle)
+            .arg("--request")
+            .arg(&request)
+            .args([
+                "--explore-seeded-schedules",
+                "1",
+                "--schedule-seed",
+                "7",
+                "--schedule-max-decisions",
+                "8",
+                "--exploration-max-retained-decisions",
+                "8",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            explored.status.success(),
+            "{}",
+            String::from_utf8_lossy(&explored.stderr)
+        );
+        let explored: serde_json::Value = serde_json::from_slice(&explored.stdout).unwrap();
+        assert_eq!(explored["target_profile"]["identity"], tag);
+        let schedule = explored["witnesses"]["first_race"]["replay_schedule"]["document"]
+            .as_str()
+            .unwrap();
+        let decoded = fe2o3_kir_sim::PersistedSimulationScheduleDocumentV1::from_canonical_bytes(
+            schedule.as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(decoded.binding().target().identity_tag(), tag);
+        let path = directory.path().join("witness.json");
+        fs::write(&path, schedule).unwrap();
+        let replay = binary()
+            .arg("--bundle")
+            .arg(&bundle)
+            .arg("--request")
+            .arg(&request)
+            .arg("--replay-schedule")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            replay.status.success(),
+            "{}",
+            String::from_utf8_lossy(&replay.stderr)
+        );
+        fs::write(&bundle, simulation_bundle_for_module(module, other, None)).unwrap();
+        let rejected = binary()
+            .arg("--bundle")
+            .arg(&bundle)
+            .arg("--request")
+            .arg(&request)
+            .arg("--replay-schedule")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+        assert!(rejected.stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+        assert_eq!(error["kind"], "schedule_binding_mismatch");
+    }
 }
