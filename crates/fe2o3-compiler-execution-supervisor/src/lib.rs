@@ -121,6 +121,10 @@ pub use process::{
     PROTECTED_ISSUER_LAUNCH_WORK_V3, ProtectedIssuerBoundaryV3, ProtectedIssuerLaunchErrorV3,
     ProtectedIssuerWaitV3, ReadyProtectedIssuerV3, ServingProtectedIssuerV3,
 };
+pub use process::{
+    ProtectedIssuerSessionErrorV2, ProtectedIssuerSessionErrorV3, ProtectedIssuerSessionLimitsV2,
+    ProtectedIssuerSessionLimitsV3,
+};
 pub use process_reaper::{
     ProtectedIssuerCleanupAdmissionErrorV2, ProtectedIssuerCleanupErrorV2,
     ProtectedIssuerCleanupReportV2, ProtectedIssuerCleanupReservationV2,

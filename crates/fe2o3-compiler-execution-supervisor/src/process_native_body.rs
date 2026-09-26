@@ -66,7 +66,7 @@ struct RequestFunding<'a, 'work> {
     retained: usize,
 }
 impl RequestFunding<'_, '_> {
-    fn grow(&mut self, bytes: usize) -> Result<()> {
+    fn grow(&mut self, bytes: usize) -> std::result::Result<(), Resource> {
         let next = self
             .retained
             .checked_add(bytes)
@@ -81,6 +81,21 @@ impl Drop for RequestFunding<'_, '_> {
         self.budget
             .release_storage(self.retained)
             .expect("native request owners retain their exclusive ledger reservation");
+    }
+}
+
+impl<'a, 'work, T> Funded<T, RequestFunding<'a, 'work>> {
+    // Consuming callbacks retire their input before returning or unwinding. Guard
+    // the returned owner before reserving growth, including on reservation failure.
+    fn advance<U, E: From<Resource>>(
+        self,
+        operation: impl FnOnce(T, &mut Budget<'work>) -> std::result::Result<(U, usize), E>,
+    ) -> std::result::Result<Funded<U, RequestFunding<'a, 'work>>, E> {
+        let Funded { owner, funding } = self;
+        let (owner, growth) = operation(owner, funding.budget)?;
+        let mut next = Funded { owner, funding };
+        next.funding.grow(growth)?;
+        Ok(next)
     }
 }
 
@@ -380,13 +395,23 @@ impl Supervisor {
             budget.charge_work(ENTRY)?;
             return Err(Resource::Accounting.into());
         }
-        let mut guard = Funded {
+        let guard = Funded {
             owner: Some(prepared),
             funding: RequestFunding {
                 budget,
                 retained: consumed,
             },
         };
+        self.launch_funded(guard, cleanup, limits, funded_floor)
+    }
+
+    fn launch_funded<'a, 'work>(
+        &'a self,
+        mut guard: Funded<Option<Prepared>, RequestFunding<'a, 'work>>,
+        cleanup: &mut Cleanup,
+        limits: Wait,
+        funded_floor: usize,
+    ) -> Result<Launched<'a, 'work>> {
         guard.funding.budget.charge_work(ENTRY)?;
         guard.funding.grow(OWNER_GROWTH)?;
         let retained = guard.funding.retained;

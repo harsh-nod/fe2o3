@@ -70,6 +70,30 @@ readiness type. Shared wire framing is not authorization: readiness must match
 the exact child PID, launch manifest, and policy of the same family.
 See the [consuming-launch contract](../../docs/compiler-execution-consuming-launch-v2.md).
 
+`ProtectedIssuerSupervisorV2::run_session` and `ProtectedIssuerSupervisorV3::run_session`
+now compose handoff, preparation, consuming launch, readiness, publication and
+terminal wait without replacing the original request ledger. Each retained
+growth is reserved while its owner is guarded; refusal closes owners before
+retiring their adopted charges. Native session limits preserve distinct finite
+waits, not a conversion of V1's 24-hour policy. The returned exited owner still
+borrows the account. The service controller retains responsibility for pumping
+the independently funded cleanup pool. This is a session API, not listener or
+deployment activation; its complete protected execution is not yet validated.
+
+```rust
+use fe2o3_compiler_execution_supervisor::{ProtectedIssuerSupervisorV3 as Supervisor,
+    ProtectedIssuerCleanupServiceV2 as Cleanup, ProtectedIssuerSessionLimitsV3 as Limits,
+    ProtectedIssuerSessionErrorV3 as Error, ExitedProtectedIssuerV3 as Exited};
+use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+fn session<'a, 'w>(s: &'a Supervisor, control: std::os::fd::OwnedFd,
+    cleanup: &mut Cleanup, limits: Limits, budget: &'a mut Budget<'w>)
+    -> Result<Exited<'a, 'w>, Error>
+{
+    // Supervisor and consumed control storage must already be prepaid.
+    s.run_session(control, cleanup, limits, budget)
+}
+```
+
 Production native issuer/service/recovery integration and producer activation
 remain open. Four isolated distinct-UID **V2** synthetic consuming cases passed on
 MI350: ready/publication/natural exit, missing EOF, trailing bytes, and

@@ -475,18 +475,13 @@ fn funding_growth_one_below_preserves_prefix_and_first_refusal_on_retry() {
         budget: &mut budget,
         retained: RETAINED,
     };
-    assert!(
-        matches!(funding.grow(13), Err(Error::Resource(Resource::Storage(e)))
-        if e.actual() == FLOOR + 13 && e.limit() == limit)
-    );
+    assert!(matches!(funding.grow(13), Err(Resource::Storage(e))
+        if e.actual() == FLOOR + 13 && e.limit() == limit));
     assert_eq!(funding.retained, RETAINED);
     assert_eq!(funding.budget.storage(), FLOOR);
     assert_eq!(funding.budget.peak_storage(), FLOOR);
     assert_eq!(funding.budget.work(), 5);
-    assert!(matches!(
-        funding.grow(14),
-        Err(Error::Resource(Resource::Storage(_)))
-    ));
+    assert!(matches!(funding.grow(14), Err(Resource::Storage(_))));
     funding.grow(12).unwrap();
     assert_eq!(funding.retained, RETAINED + 12);
     assert_eq!(funding.budget.storage(), limit);
@@ -511,7 +506,7 @@ fn funding_retained_arithmetic_overflow_precedes_any_ledger_mutation() {
     };
     assert!(matches!(
         funding.grow(UNRELATED + 1),
-        Err(Error::Resource(Resource::Arithmetic))
+        Err(Resource::Arithmetic)
     ));
     assert_eq!(funding.retained, retained);
     assert_eq!(funding.budget.storage(), usize::MAX);
@@ -533,7 +528,7 @@ fn funding_ledger_total_overflow_preserves_owner_and_records_storage_denial() {
         retained: RETAINED,
     };
     assert!(
-        matches!(funding.grow(usize::MAX - RETAINED), Err(Error::Resource(Resource::Storage(e)))
+        matches!(funding.grow(usize::MAX - RETAINED), Err(Resource::Storage(e))
         if e.actual() == usize::MAX && e.limit() == usize::MAX)
     );
     assert_eq!(funding.retained, RETAINED);

@@ -4,7 +4,8 @@ use super::{
     child_work, spawn_child,
 };
 use crate::{
-    PreparedProtectedIssuerLaunchV2 as Prepared, ProtectedIssuerCleanupServiceV2 as Cleanup,
+    AcceptedCompilerExecutionHandoffV2 as Accepted, PreparedProtectedIssuerLaunchV2 as Prepared,
+    ProtectedIssuerCleanupServiceV2 as Cleanup, ProtectedIssuerHandoffErrorV2 as HandoffError,
     ProtectedIssuerLaunchPreparationErrorV2 as PreparationError,
     ProtectedIssuerSupervisorErrorV2 as SupervisorError, ProtectedIssuerSupervisorV2 as Supervisor,
     launch_v2::LaunchedInputsV2 as LaunchedInputs, process_cleanup::CleanupPollV1,
@@ -144,6 +145,20 @@ pub const PROTECTED_ISSUER_LAUNCH_WORK_V2: usize = LAUNCH_WORK;
 pub const PROTECTED_ISSUER_LAUNCH_SCRATCH_V2: usize = LAUNCH_SCRATCH;
 
 include!("process_native_body.rs");
+
+#[path = "process_native_session_adapter.rs"]
+mod session_adapter;
+session_adapter::native_session!(
+    ProtectedIssuerSessionLimitsV2,
+    ProtectedIssuerSessionErrorV2
+);
+use ProtectedIssuerSessionErrorV2 as SessionError;
+use ProtectedIssuerSessionLimitsV2 as SessionLimits;
+include!("process_native_session_body.rs");
+
+#[cfg(test)]
+#[path = "process_native_session_tests.rs"]
+mod session_tests;
 
 #[cfg(test)]
 #[path = "process_native_tests.rs"]
