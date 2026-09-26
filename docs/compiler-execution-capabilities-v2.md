@@ -16,8 +16,9 @@ independently admitted PolicyV2; structural admission is not a policy upgrade.
 
 `CompilerExecutionSigningKeyCapabilityV2` freshly admits a seed or transferred
 secret image under a pinned PolicyV2. It retains that complete typed policy
-identity and exposes only revalidation and read-only transfer, not signing.
-It cannot be constructed from a V1 key owner.
+identity and exposes bounded signing, revalidation and read-only transfer, not
+direct seed/key getters. Signing authenticates bytes, not a protected compiler
+occurrence. It cannot be constructed from a V1 key owner.
 
 `ProtectedExternalAnchorServiceAdmissionV2` separately admits the anchor endpoint
 and live service pidfd through bounded, allocation-free inspection. It preserves
@@ -181,6 +182,25 @@ The raw seed wire and destination slot 7 remain unchanged; custody alone does
 not authenticate an issuer service or activate a native launch.
 
 ## Native Supervisor Binding
+
+Both native key families also provide `reissue_root_template_for_current_service`.
+This consumes an anonymous mode-0400, exactly sealed, read-only CLOEXEC template
+owned by UID/GID 0:0. Current effective UID/GID must be nonroot and equal the
+same-family deployment record; that record must match the complete native policy.
+The result is a fresh service-owned key image, checked before return. Source and
+output metadata are rechecked, and seed staging is guarded before any read.
+
+Prepay the consumed `FILE_STORAGE` plus the borrowed deployment and policy charges.
+Returned growth is `Dkey - Dfile`; error closes the File but leaves its reservation
+for caller retirement. `REISSUE_WORK` includes fixed I/O, one key derivation and
+the nested native deployment-policy match. `REISSUE_STORAGE` is the additional
+peak of the I/O frame plus deployment-match scratch, all on the same ledger.
+
+The deployment record remains inert: this operation does not establish trusted
+parent provenance, a protected process profile, startup/recovery or execution.
+Rootless tests use a private expected-template-owner helper for positive mechanics
+and the public API for rejecting non-root-owned templates. They are not successful
+protected-root reissue evidence. The inherited production entry point remains V1.
 
 `ProtectedIssuerSupervisorV2` consumes a fresh native program, policy-bound key,
 strict native anchor transport, credential profile and root File. It preserves

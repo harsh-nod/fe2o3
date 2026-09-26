@@ -15,10 +15,14 @@ const EXTRA: usize = 19;
 const LIMIT: usize = 4_000_000;
 const OUTER_WORK: usize = Cap::REISSUE_WORK - DEPLOYMENT_WORK;
 
-fn rootless_service() -> Option<(u32, u32)> {
+fn rootless_service() -> (u32, u32) {
     let uid = rustix::process::geteuid().as_raw();
     let gid = rustix::process::getegid().as_raw();
-    (uid != 0 && gid != 0).then_some((uid, gid))
+    assert!(
+        uid != 0 && gid != 0,
+        "reissue mechanics require a nonroot test process"
+    );
+    (uid, gid)
 }
 
 fn different(value: u32) -> u32 {
@@ -102,9 +106,7 @@ fn assert_deployment_resource(error: &Error, storage: bool) {
 
 #[test]
 fn private_expected_owner_reissue_creates_fresh_custody_on_the_original_ledger() {
-    let Some((uid, gid)) = rootless_service() else {
-        return;
-    };
+    let (uid, gid) = rootless_service();
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, LIMIT);
     budget.reserve_storage(EXTRA).unwrap();
@@ -179,9 +181,7 @@ fn private_expected_owner_reissue_creates_fresh_custody_on_the_original_ledger()
 
 #[test]
 fn public_reissue_rejects_a_service_owned_template_even_for_exact_inert_records() {
-    let Some((uid, gid)) = rootless_service() else {
-        return;
-    };
+    let (uid, gid) = rootless_service();
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, LIMIT);
     let policy = policy(0, &mut budget);
@@ -205,9 +205,7 @@ fn public_reissue_rejects_a_service_owned_template_even_for_exact_inert_records(
 
 #[test]
 fn private_reissue_boundaries_wipe_staging_close_input_and_preserve_both_scope_floors() {
-    let Some((uid, gid)) = rootless_service() else {
-        return;
-    };
+    let (uid, gid) = rootless_service();
     let mut setup_work = Work::new(LIMIT);
     let mut setup = Budget::new(&mut setup_work, LIMIT);
     let policy = policy(0, &mut setup);
@@ -299,9 +297,7 @@ fn private_reissue_boundaries_wipe_staging_close_input_and_preserve_both_scope_f
 
 #[test]
 fn reissue_checks_current_uid_gid_and_the_complete_policy_before_reading_the_seed() {
-    let Some((uid, gid)) = rootless_service() else {
-        return;
-    };
+    let (uid, gid) = rootless_service();
     let mut setup_work = Work::new(LIMIT);
     let mut setup = Budget::new(&mut setup_work, LIMIT);
     let pinned = policy(0, &mut setup);
@@ -353,9 +349,7 @@ fn reissue_checks_current_uid_gid_and_the_complete_policy_before_reading_the_see
 
 #[test]
 fn private_expected_owner_requires_both_template_credentials_and_the_signing_seed() {
-    let Some((uid, gid)) = rootless_service() else {
-        return;
-    };
+    let (uid, gid) = rootless_service();
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, LIMIT);
     let policy = policy(0, &mut budget);
@@ -402,9 +396,7 @@ fn private_expected_owner_requires_both_template_credentials_and_the_signing_see
 
 #[test]
 fn private_reissue_rejects_wrong_access_mode_length_permissions_and_seals() {
-    let Some((uid, gid)) = rootless_service() else {
-        return;
-    };
+    let (uid, gid) = rootless_service();
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, LIMIT);
     let policy = policy(0, &mut budget);
@@ -463,9 +455,7 @@ fn private_reissue_rejects_wrong_access_mode_length_permissions_and_seals() {
 
 #[test]
 fn reissue_keeps_first_denials_across_success_and_nested_refusal() {
-    let Some((uid, gid)) = rootless_service() else {
-        return;
-    };
+    let (uid, gid) = rootless_service();
     let mut setup_work = Work::new(LIMIT);
     let mut setup = Budget::new(&mut setup_work, LIMIT);
     let policy = policy(0, &mut setup);
