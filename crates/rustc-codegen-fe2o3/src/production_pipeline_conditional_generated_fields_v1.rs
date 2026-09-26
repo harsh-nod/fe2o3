@@ -3,7 +3,7 @@
 use super::AuthenticatedProductionBindings;
 use crate::compiler_descriptor::{
     TypedDescriptorRootV1,
-    conditional_contract_projection_v1::with_conditional_contract_projection_v1,
+    conditional_contract_projection_v1::with_conditional_contract_projection_v2,
     conditional_generated_fields_v1::{ConditionalGeneratedFieldErrorV1, with_generated_fields_v1},
 };
 use crate::production_ranked_projection_v1::{
@@ -131,7 +131,7 @@ fn replay_with_check_v1(
                     fields.require_replayed_root_v1(root, budget)?;
                     #[cfg(test)]
                     observation::projection_callback(&fields, execution, budget);
-                    with_conditional_contract_projection_v1(
+                    with_conditional_contract_projection_v2(
                         &fields,
                         execution,
                         budget,

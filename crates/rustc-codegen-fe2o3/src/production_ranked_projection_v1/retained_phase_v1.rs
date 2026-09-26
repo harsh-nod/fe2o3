@@ -111,7 +111,7 @@ impl ProductionRankedSemanticProgramV1 {
             u32,
             &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
             &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
-            &fe2o3_verifier::ProductionConditionalFormulaExecutionV1,
+            &fe2o3_verifier::ProductionConditionalFormulaExecutionV2,
             &mut Budget<'_>,
         ) -> Result<
             crate::production_pipeline::conditional_generated_fields_v1::RetainedConditionalContractV1,

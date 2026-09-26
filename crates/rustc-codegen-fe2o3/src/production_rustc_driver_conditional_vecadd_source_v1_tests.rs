@@ -245,11 +245,15 @@ fn check_generated_fields(
     assert_eq!(fields.root, expected_root);
     assert_eq!(fields.kernel_binding, expected_kernel_binding);
     let contract =
-        fe2o3_kernel_descriptor::decode_conditional_invocation_contract_v1(contract, &mut |_| {
+        fe2o3_kernel_descriptor::decode_conditional_invocation_contract_v2(contract, &mut |_| {
             Ok::<_, ()>(())
         })
         .unwrap();
     assert_eq!(contract.subjects().kernel_id, fields.kernel_binding);
+    assert_eq!(
+        contract.theorem().cpu_input_commitment,
+        receipt.cpu_input_commitment
+    );
     assert_eq!(contract.argument_count(), fields.arguments.len());
     assert_eq!(contract.read_count(), fields.reads.len());
     assert_eq!(contract.output().argument, fields.output_argument);

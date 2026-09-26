@@ -32,7 +32,7 @@ pub(crate) struct ConditionalReferenceRootV1 {
     input: ProductionConditionalRootInputV1,
     _runtime: FunctionalRefinementVerusRuntimeLeaseV1,
     _receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
-    proof: fe2o3_verifier::RetainedProductionConditionalFormulaV1,
+    proof: fe2o3_verifier::RetainedProductionConditionalFormulaV2,
     contract: Option<RetainedConditionalContractV1>,
     _cpu_bounds_require_host: Option<u32>,
 }
@@ -95,14 +95,14 @@ impl ConditionalReferenceRootV1 {
     }
 
     #[cfg(test)]
-    pub(crate) fn report(&self) -> fe2o3_verifier::ProductionConditionalFormulaReportV1 {
+    pub(crate) fn report(&self) -> fe2o3_verifier::ProductionConditionalFormulaReportV2 {
         self.proof.report()
     }
 
     pub(crate) fn retained_storage_v1(&self) -> Result<usize, Resource> {
         self.input
             .retained_storage_v1()?
-            .checked_add(self.proof.retained_storage_v1())
+            .checked_add(self.proof.retained_storage_v2())
             .and_then(|n| {
                 n.checked_add(
                     self.contract
@@ -123,7 +123,7 @@ impl ConditionalReferenceRootV1 {
         budget: &mut Budget<'_>,
         consume: impl FnOnce(
             &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
-            &fe2o3_verifier::ProductionConditionalFormulaExecutionV1,
+            &fe2o3_verifier::ProductionConditionalFormulaExecutionV2,
             &mut Budget<'_>,
         ) -> Result<RetainedConditionalContractV1, Error>,
     ) -> Result<Self, Error> {
@@ -144,7 +144,7 @@ impl ConditionalReferenceRootV1 {
             input,
             budget,
             |request, budget| {
-                conditional_source_v1::replay_source_bound_cpu_formula_v1(
+                conditional_source_v1::replay_source_bound_cpu_formula_v2(
                     &proof,
                     request,
                     reference,
@@ -263,7 +263,7 @@ pub(crate) fn continue_reference_v1<'a>(
         input,
         budget,
         |request, budget| {
-            conditional_source_v1::retain_source_bound_cpu_formula_v1(
+            conditional_source_v1::retain_source_bound_cpu_formula_v2(
                 &runtime, request, references, root, budget, timeout,
             )
         },

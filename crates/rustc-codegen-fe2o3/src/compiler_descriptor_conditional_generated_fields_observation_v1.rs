@@ -2,7 +2,7 @@
 //! Observed rows and receipt digests are inert; completion is not finalization.
 use super::*;
 use fe2o3_mir_model::semantic_mir_v1::SemanticLocalRoleV1;
-use fe2o3_verifier::ProductionConditionalFormulaExecutionV1 as Execution;
+use fe2o3_verifier::ProductionConditionalFormulaExecutionV2 as Execution;
 use serde::Serialize;
 use std::cell::RefCell;
 
