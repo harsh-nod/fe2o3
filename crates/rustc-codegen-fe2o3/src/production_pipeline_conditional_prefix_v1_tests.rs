@@ -165,6 +165,89 @@ fn conditional_target_scope_refuses_replacing_original_account() {
     ));
 }
 
+fn early_resource_refusal(error: &ProductionPipelineError) -> Option<Resource> {
+    use super::super::CheckedOutputPolicy6StageErrorV1 as StageError;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrReplayAdmissionErrorV12 as CanonicalError, KernelIrEncodeError,
+    };
+    match error {
+        ProductionPipelineError::CheckedOutputPolicy6Stage(StageError::Resource(error))
+        | ProductionPipelineError::CheckedOutputPolicy6Stage(StageError::Canonical(
+            CanonicalError::Resource(error),
+        )) if matches!(error, Resource::Work(_) | Resource::Storage(_)) => Some(*error),
+        ProductionPipelineError::CheckedOutputPolicy6Stage(StageError::Canonical(
+            CanonicalError::Encode(KernelIrEncodeError::WorkLimit(limit)),
+        )) => Some(Resource::Work(*limit)),
+        _ => None,
+    }
+}
+
+#[test]
+fn conditional_early_resource_report_requires_exact_typed_quota_failure() {
+    use super::super::CheckedOutputPolicy6StageErrorV1 as StageError;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrReplayAdmissionErrorV12 as CanonicalError, KernelIrEncodeError,
+    };
+    let mut work = Work::new(0);
+    let mut budget = Budget::new(&mut work, 19);
+    let work_error = budget.charge_work(1).unwrap_err();
+    let storage_error = budget.reserve_storage(20).unwrap_err();
+    let stage = ProductionPipelineError::CheckedOutputPolicy6Stage;
+    for error in [work_error, storage_error] {
+        assert_eq!(
+            early_resource_refusal(&stage(StageError::Resource(error))),
+            Some(error)
+        );
+        assert_eq!(
+            early_resource_refusal(&stage(StageError::Canonical(CanonicalError::Resource(
+                error
+            )))),
+            Some(error),
+        );
+    }
+    let Resource::Work(limit) = work_error else {
+        panic!("work meter error")
+    };
+    assert_eq!(
+        early_resource_refusal(&stage(StageError::Canonical(CanonicalError::Encode(
+            KernelIrEncodeError::WorkLimit(limit),
+        )))),
+        Some(work_error),
+    );
+    for error in [
+        Resource::Accounting,
+        Resource::Arithmetic,
+        Resource::Allocation,
+    ] {
+        assert_eq!(
+            early_resource_refusal(&stage(StageError::Resource(error))),
+            None
+        );
+        assert_eq!(
+            early_resource_refusal(&stage(StageError::Canonical(CanonicalError::Resource(
+                error
+            )))),
+            None,
+        );
+    }
+    for error in [
+        CanonicalError::CanonicalMismatch,
+        CanonicalError::Encode(KernelIrEncodeError::TooLarge { max: 0 }),
+        CanonicalError::Encode(KernelIrEncodeError::Allocation),
+    ] {
+        assert_eq!(
+            early_resource_refusal(&stage(StageError::Canonical(error))),
+            None
+        );
+    }
+    assert_eq!(
+        early_resource_refusal(&ProductionPipelineError::RankedVerification(
+            RankedError::ConditionalReplay(JoinError::ProofExecution(work_error.to_string())),
+        )),
+        None,
+    );
+}
+
 struct Callbacks {
     calls: usize,
     mode: String,
@@ -282,15 +365,8 @@ impl rustc_driver::Callbacks for Callbacks {
                 None,
             )
         } else {
-            use super::super::CheckedOutputPolicy6StageErrorV1 as StageError;
-            use fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12 as CanonicalError;
-            let refused = match &error {
-                ProductionPipelineError::CheckedOutputPolicy6Stage(StageError::Resource(error))
-                | ProductionPipelineError::CheckedOutputPolicy6Stage(StageError::Canonical(
-                    CanonicalError::Resource(error),
-                )) => error,
-                _ => panic!("expected direct early resource refusal: {error}"),
-            };
+            let refused = early_resource_refusal(&error)
+                .unwrap_or_else(|| panic!("expected typed early resource refusal: {error}"));
             let kind = match refused {
                 Resource::Work(_) => "work",
                 Resource::Storage(_) => "storage",
