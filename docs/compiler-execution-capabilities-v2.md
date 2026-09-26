@@ -94,6 +94,41 @@ not trusted provisioning origin, measured process custody or launch authority.
 The protected parent must independently pin the deployment and policy. Production
 coordinator/startup integration remains incomplete.
 
+### External Anchor Deployment
+
+The native external-anchor deployment records bind an actual same-family
+supervisor deployment and policy, the exact anchor UID/GID and verification key,
+and an executable digest/length bounded at 128 MiB. They use distinct 168-byte
+V2/V3 frames and identity domains. Decoding verifies the complete supervisor
+identity and policy relationship; an independently rehashed record cannot replace
+either context owner. Publicly constructed configuration still requires trusted
+provisioning provenance and an independently pinned executable measurement.
+
+The supervisor-policy comparison runs on the same ledger as record decoding.
+Record operations charge 11280 work units including that nested comparison;
+their fixed peak includes both scopes. A digest or nominal family alone cannot
+substitute for the two actual borrowed owners.
+
+`CompilerExecutionExternalAnchorDeploymentCapabilityV2/V3` reuse the same sealed
+transport as supervisor deployment capabilities. File and inherited recovery take
+both `&Supervisor` and `&Policy`; their full retained charges stay borrowed on the
+original ledger. File recovery returns only growth above the consumed
+`FILE_STORAGE`. Inherited recovery leaves the source descriptor untouched, owns a
+private CLOEXEC duplicate, and returns its full retained charge. Revalidation and
+transfer validation require the exact admitted object, metadata, seals and bytes.
+
+Anchor capability I/O charges 38152 work units. Full recovery charges 49432 units
+including contextual decoding, with `ADMISSION_STORAGE = IO_STORAGE +
+COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_STORAGE_V2/V3`. Exact and one-short
+tests cover all three nested admission stages. These are logical quotas, not
+wall-clock, stack or RSS bounds. Neither a correctly rehashed executable
+measurement nor a sealed descriptor proves independently trusted provenance.
+
+The protected coordinator, anchor signing-key/provisioning owners and inherited
+service entry points still need native integration. Native deployment records,
+sealed transport, and passing local tests do not establish that protected startup
+or the production compiler has consumed them.
+
 ## Production Profile
 
 The only production native profile is

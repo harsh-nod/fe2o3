@@ -6,6 +6,10 @@ issue #272. M0-M7 and the 47/47 production-to-safe-GPU-launch matrix remain
 incomplete. This work grants no protected-proof, numerical-refinement,
 root-provisioned execution or GPU credit.
 
+Follow-up: [native deployment transport](conditional-native-deployment-transport-20260926.md)
+adds contextual sealed supervisor/anchor transport and native anchor records.
+It does not activate protected startup or the production compiler route.
+
 Base: `1f8c213f9d7c7c113276f28e2868141401380bbb`.
 Integrated code: `d5a47e272708d8b175ce29d58ed0da9e8875543a`.
 
