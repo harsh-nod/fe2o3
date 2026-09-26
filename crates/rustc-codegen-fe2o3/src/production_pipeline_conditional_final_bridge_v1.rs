@@ -216,23 +216,23 @@ impl RetainedFinalContentV5 {
             let report = proof.formula_report(ordinal).unwrap();
             let theorem = contract.theorem();
             assert_eq!(
-                theorem.statement_identity,
+                &theorem.statement_identity,
                 report.statement_identity().as_bytes()
             );
             assert_eq!(
-                theorem.generated_source_identity,
+                &theorem.generated_source_identity,
                 report.generated_source_identity().as_bytes()
             );
             assert_eq!(
-                theorem.execution_identity,
+                &theorem.execution_identity,
                 report.execution_identity().as_bytes()
             );
             assert_eq!(
-                theorem.receipt_identity,
+                &theorem.receipt_identity,
                 report.receipt_identity().as_bytes()
             );
             assert_eq!(
-                theorem.cpu_input_commitment,
+                &theorem.cpu_input_commitment,
                 report.cpu_input_commitment().as_bytes()
             );
         }
