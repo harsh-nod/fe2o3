@@ -21,6 +21,8 @@ use crate::{ProductionConditionalFormulaReportV2, RetainedProductionConditionalF
 mod account;
 #[path = "compiler_native_conditional_source_proof_v2/error.rs"]
 mod error;
+#[path = "compiler_native_conditional_final_v2.rs"]
+pub(crate) mod final_replay;
 #[path = "compiler_native_conditional_source_proof_v2/reconstruct.rs"]
 mod reconstruct;
 #[path = "compiler_native_conditional_source_proof_v2/root.rs"]
