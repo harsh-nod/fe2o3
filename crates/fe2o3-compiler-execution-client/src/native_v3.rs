@@ -69,3 +69,7 @@ use CompilerExecutionClientV3 as TestClient;
 #[cfg(test)]
 #[path = "native_admission_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "native_preparation_tests.rs"]
+mod preparation_tests;

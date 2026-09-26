@@ -71,8 +71,10 @@ pub(super) fn extract_amdgpu_llvm_in_active_session_v1(
     if transaction.has_authenticated_complete_body_v19() {
         return complete_body_v19::extract_llvm(transaction, output, expected_target);
     }
-    let lowered = transaction
-        .lower_production_target()
+    let mut target_account =
+        crate::production_target_account::new().map_err(|error| error.to_string())?;
+    let lowered = target_account
+        .with_budget(|budget| transaction.lower_production_target(budget))
         .map_err(|error| error.to_string())?;
     if let Some(expected_target) = expected_target
         && lowered.target_name() != expected_target
@@ -156,8 +158,10 @@ pub(super) fn extract_amdgpu_compiler_handoff_in_active_session_v1(
     if transaction.has_authenticated_complete_body_v19() {
         return complete_body_v19::extract_handoff(transaction, output, expected_target);
     }
-    let lowered = transaction
-        .lower_production_target()
+    let mut target_account =
+        crate::production_target_account::new().map_err(|error| error.to_string())?;
+    let lowered = target_account
+        .with_budget(|budget| transaction.lower_production_target(budget))
         .map_err(|error| error.to_string())?;
     validate_compiler_handoff_target(lowered.target_name(), expected_target)?;
     let target_name = lowered.target_name().to_owned();
@@ -207,8 +211,10 @@ fn extract_amdgpu_semantic_compiler_handoff_in_active_session_v3(
     if transaction.has_authenticated_complete_body_v19() {
         return Err("MIR36/KIR19 complete-body kernels have no admitted semantic V3/protected handoff route".to_owned());
     }
-    let lowered = transaction
-        .lower_production_target()
+    let mut target_account =
+        crate::production_target_account::new().map_err(|error| error.to_string())?;
+    let lowered = target_account
+        .with_budget(|budget| transaction.lower_production_target(budget))
         .map_err(|error| error.to_string())?;
     validate_compiler_handoff_target(lowered.target_name(), expected_target)?;
     let target_name = lowered.target_name().to_owned();

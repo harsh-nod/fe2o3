@@ -3,7 +3,7 @@
 ## Diagnostic Native Client
 
 `CompilerExecutionClientV2` and `CompilerExecutionClientV3` consume a connected unnamed `SOCK_SEQPACKET` peer
-and exclusively borrows the original canonical resource budget. It supports
+and exclusively borrow the original canonical resource budget. They support
 native receipt acquisition, journal-stage recovery, and fresh-challenge
 currentness authentication using actual owners from their own family. Neither
 retries V1 or the other native family. The V3 client joins conditional SubjectV3
@@ -21,9 +21,13 @@ compiler observation, durable commit-before-publication, independently
 administered anchors, or safe GPU launch. The shipping production route remains
 V1 until those native service integrations are validated.
 
-The terminal client retains an exclusive budget borrow. Early compiler admission
-still needs an original-account peer/deadline owner that can coexist with later
-compiler work; this API does not solve that production lifetime dependency.
+The consuming `prepare` step lends that same account to compiler preparation.
+It returns the client and prepared value only after checking account identity
+and the inherited storage floor. Errors or unwind close the peer, retain inner
+charges, and never repair a replaced account. Preparation does not extend the
+session deadline. This permits preparation before the terminal exchange without
+a fresh admission budget; it does not select a protected V3 launch policy or
+activate the V3 path in the compiler.
 
 ## Production V1 Client
 

@@ -115,6 +115,11 @@ macro_rules! native_client_transcripts {
                 let original = b.work_ledger_identity_v1();
                 b.reserve_storage(Client::PEER_STORAGE).unwrap();
                 let client = Client::admit(peer, TIMEOUT, &mut b).unwrap();
+                let (client, ()) = client.prepare::<_, Error>(|budget| {
+                    assert!(budget.work_ledger_identity_v1() == original);
+                    budget.charge_work(19)?;
+                    Ok(())
+                }).unwrap();
                 assert_eq!(client.cancel(&p).is_err(), wrong_kind);
                 assert_eq!(b.storage(), floor);
                 assert!(b.work_ledger_identity_v1() == original);

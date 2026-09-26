@@ -112,6 +112,44 @@ macro_rules! native_client_adapter {
                 })
             }
 
+            /// Runs preparation on the admitted session's original account.
+            /// The callback cannot access this client or exchange on this session.
+            /// It must finish all preparation before publishing external results.
+            /// Live input/output storage stays charged; errors and unwind do not
+            /// roll back preparation charges. Only a successful account postcheck
+            /// returns the client for its terminal exchange. The original absolute
+            /// deadline is not extended by preparation.
+            #[doc = concat!("```\nuse fe2o3_compiler_execution_client::{", stringify!($Client), " as Client, ", stringify!($Error), " as Error};\nfn prepare<'b, 'w>(client: Client<'b, 'w>) -> Result<(Client<'b, 'w>, u32), Error> {\n    client.prepare(|budget| { budget.charge_work(1)?; Ok(7) })\n}\n```\n```compile_fail\nuse fe2o3_compiler_execution_client::{", stringify!($Client), " as Client, ", stringify!($Error), " as Error};\nfn reuse(client: Client<'_, '_>) {\n    let _ = client.prepare::<(), Error>(|_| Ok(()));\n    let _ = client.prepare::<(), Error>(|_| Ok(()));\n}\n```")]
+            pub fn prepare<T, E>(
+                mut self,
+                run: impl FnOnce(&mut Budget<'work>) -> std::result::Result<T, E>,
+            ) -> std::result::Result<(Self, T), E>
+            where
+                E: From<ClientError>,
+            {
+                self.budget.charge_work(8).map_err(ClientError::from)?;
+                let floor = self.budget.storage();
+                let account = self.budget.work_ledger_identity_v1();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run(self.budget)
+                }));
+                let intact = account == self.budget.work_ledger_identity_v1()
+                    && self.budget.storage() >= floor;
+                if !intact {
+                    // Never refund our reservation against a replaced account or
+                    // damaged floor. Drop closes the peer without repairing either.
+                    self.retained = 0;
+                }
+                match result {
+                    Err(payload) => std::panic::resume_unwind(payload),
+                    Ok(result) if !intact => {
+                        drop(result);
+                        Err(ClientError::Resource(Resource::Accounting).into())
+                    }
+                    Ok(result) => result.map(|value| (self, value)),
+                }
+            }
+
             /// Executes Recover/Inspect and the required Prepare/Issue/Publish suffix.
             /// The subject is an expected input, never evidence that this process compiled it.
             /// Returns a full carriage charge; retire the consumed subject's charge separately.

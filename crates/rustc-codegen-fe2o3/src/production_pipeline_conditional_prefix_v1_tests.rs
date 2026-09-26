@@ -46,7 +46,7 @@ fn conditional_normal_entry_reaches_f_before_ordinary_attachment() {
         .find("if ranked.has_direct_conditional_roots_v2()")
         .unwrap();
     let refusal = normal
-        .find("return Err(ranked.conditional_production_finalizer_refusal_v5());")
+        .find("return Err(ranked.conditional_production_finalizer_refusal_v5(target_budget));")
         .unwrap();
     let attach = normal.find(".attach_target_neutral_checks()?").unwrap();
     assert!(verify < branch && branch < refusal && refusal < attach);
@@ -59,14 +59,10 @@ fn conditional_normal_entry_reaches_f_before_ordinary_attachment() {
         .split_once("pub(crate) fn has_direct_conditional_roots_v2(")
         .unwrap()
         .0;
-    assert_eq!(entry.matches("WorkBudgetV1::new(").count(), 1);
-    assert_eq!(entry.matches("Budget::new(").count(), 1);
-    let ceiling = entry.find("MAX_NATIVE_CONDITIONAL_STORAGE_V1").unwrap();
-    let continuation = entry
-        .find("self.conditional_finalizer_refusal_v2(")
-        .unwrap();
-    assert!(ceiling < continuation);
-    assert!(entry.contains("production_canonical_phase_policy_v1::WORK_LIMIT"));
+    assert!(!entry.contains("WorkBudgetV1::new("));
+    assert!(!entry.contains("Budget::new("));
+    assert!(entry.contains("budget: &mut Budget<'_>"));
+    assert!(entry.contains("self.conditional_finalizer_refusal_v2("));
     assert!(entry.contains("CanonicalKirLoopLimitsV1::default()"));
     assert!(entry.contains("CanonicalKirCrossBlockForwardingLimitsV1::default()"));
     assert!(!entry.contains("reserve_storage"));

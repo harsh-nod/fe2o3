@@ -3428,6 +3428,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// formal memory admission, and exact authenticated-target LLVM lowering.
     pub(crate) fn lower_production_target(
         self,
+        target_budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ) -> Result<TargetLoweredProductionCompilation, ProductionPipelineError> {
         let admitted = self.import_semantic_mir()?;
         let ranked = admitted
@@ -3436,7 +3437,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .materialize_target_neutral()?
             .verify_general_kernel_checks()?;
         if ranked.has_direct_conditional_roots_v2() {
-            return Err(ranked.conditional_production_finalizer_refusal_v5());
+            return Err(ranked.conditional_production_finalizer_refusal_v5(target_budget));
         }
         ranked
             .attach_target_neutral_checks()?
@@ -3552,9 +3553,11 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// or launch authority.
     pub(crate) fn publish_worker_handoff(
         self,
+        target_budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ) -> Result<fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1, ProductionPipelineError>
     {
-        self.lower_production_target()?.publish_worker_handoff()
+        self.lower_production_target(target_budget)?
+            .publish_worker_handoff()
     }
 
     /// Retains the original extraction milestone while consuming the same

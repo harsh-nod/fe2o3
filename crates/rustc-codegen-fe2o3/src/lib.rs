@@ -60,6 +60,7 @@ mod production_physical_lds_exchange_census_v39;
 mod production_physical_lds_exchange_source_abi_v39;
 mod production_physical_lds_exchange_terminal_v39;
 mod production_pipeline;
+mod production_target_account;
 mod production_tiled_region_source_v1;
 pub use production_rustc_driver_v1::run_diagnostic_ordered_composition_extraction_driver_v1;
 #[cfg(target_os = "linux")]
@@ -246,6 +247,7 @@ impl BuildAttemptSelection {
     }
 }
 struct RetainedProductionDeviceAdmission {
+    target_account: fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1,
     target: production_target_v1::RetainedProductionTargetV1,
     compiler_execution: protected_compiler_execution::AdmittedProtectedCompilerExecutionV1,
     build_attempt: artifact_transaction::BuildAttempt,
@@ -337,6 +339,11 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     ))
                 });
                 Some(RetainedProductionDeviceAdmission {
+                    target_account: production_target_account::new().unwrap_or_else(|error| {
+                        tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] target account admission failed: {error}"
+                        ))
+                    }),
                     target: production_target_v1::RetainedProductionTargetV1::authenticate_before_collection(
                         tcx,
                         &self.config.target,
@@ -395,6 +402,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 production_pipeline::ProductionDisposition::HostOnly => {}
                 production_pipeline::ProductionDisposition::DeviceTransaction => {
                     let RetainedProductionDeviceAdmission {
+                        mut target_account,
                         target,
                         compiler_execution,
                         build_attempt,
@@ -445,7 +453,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             invocation,
                             compiler_execution,
                         )
-                        .and_then(|transaction| transaction.publish_worker_handoff())
+                        .and_then(|transaction| {
+                            target_account
+                                .with_budget(|budget| transaction.publish_worker_handoff(budget))
+                        })
                         .map(|subject| subject.outer_handoff().byte_len());
                     match publication {
                         Ok(publication_length) => {
@@ -581,7 +592,11 @@ mod tests {
         assert!(production.contains(".take()"));
         assert!(!production.contains("build_attempt.unwrap_or_else"));
         assert!(production.contains("from_collected_device_closure("));
-        assert!(production.contains("publish_worker_handoff()"));
+        assert!(production.contains("publish_worker_handoff(budget)"));
+        assert!(
+            production
+                .contains(".with_budget(|budget| transaction.publish_worker_handoff(budget))")
+        );
         assert!(!production.contains("from_collected_device_closure_with_protected_invocation_v3"));
         assert!(!production.contains("publish_worker_handoff_v3"));
         assert!(!production.contains("None =>"));
@@ -597,6 +612,15 @@ mod tests {
             .find("let mono_partitions = tcx.collect_and_partition_mono_items")
             .expect("monomorphization boundary");
         assert!(admission < monomorphization);
+        let account = backend
+            .find("target_account: production_target_account::new()")
+            .unwrap();
+        let execution = backend
+            .find(
+                "compiler_execution: protected_compiler_execution::admit_for_production_codegen()",
+            )
+            .unwrap();
+        assert!(admission < account && account < execution && execution < monomorphization);
     }
 
     #[test]
