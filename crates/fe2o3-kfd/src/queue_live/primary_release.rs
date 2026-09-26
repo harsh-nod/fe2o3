@@ -176,6 +176,12 @@ impl PrimaryQueueReleaseCustodyV1 {
         self.parent.host_visible_backing_usage_v1()
     }
 
+    pub fn native_backing_usage_v1(
+        &self,
+    ) -> Option<fe2o3_resource_accounting::ResourceCreditUsageV1> {
+        self.parent.native_backing_usage_v1()
+    }
+
     pub fn release_in_place(
         &mut self,
     ) -> Result<ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1> {

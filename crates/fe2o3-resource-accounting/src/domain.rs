@@ -4,6 +4,7 @@ use super::*;
 use fe2o3_runtime_model::{R70ResourceBatchErrorV1, r70_resource_batch_reserve_v1};
 
 pub const MAX_RESOURCE_DOMAIN_DEPTH_V1: usize = 3;
+pub const MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Key {
@@ -34,6 +35,7 @@ struct DomainRecord {
 }
 
 struct State {
+    max_depth: usize,
     nodes: Vec<Option<Node>>,
     free_nodes: Vec<usize>,
     records: Vec<Option<DomainRecord>>,
@@ -118,6 +120,44 @@ impl ResourceCreditAccountV1 {
         max_domains: usize,
         max_records: usize,
     ) -> Result<Self, ResourceCreditErrorV1> {
+        Self::new_root_at_depth(
+            capacity,
+            max_domains,
+            max_records,
+            MAX_RESOURCE_DOMAIN_DEPTH_V1,
+        )
+    }
+
+    /// Fixed four-level profile for root, device, session and resource class.
+    /// Each class retains its own limits while session/device ceilings aggregate
+    /// all classes. Storage and lifetime rules are identical to `new_root`.
+    pub fn new_root_with_class_domains_v1(
+        capacity: ResourceVectorV1,
+        max_domains: usize,
+        max_records: usize,
+    ) -> Result<Self, ResourceCreditErrorV1> {
+        Self::new_root_at_depth(
+            capacity,
+            max_domains,
+            max_records,
+            MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1,
+        )
+    }
+
+    fn new_root_at_depth(
+        capacity: ResourceVectorV1,
+        max_domains: usize,
+        max_records: usize,
+        max_depth: usize,
+    ) -> Result<Self, ResourceCreditErrorV1> {
+        if ![
+            MAX_RESOURCE_DOMAIN_DEPTH_V1,
+            MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1,
+        ]
+        .contains(&max_depth)
+        {
+            return Err(ResourceCreditErrorV1::InvalidDomainCapacity);
+        }
         let baseline = ResourceVectorV1::ZERO.with(
             ResourceKindV1::ControlResidentBytes,
             resource_domain_bootstrap_bytes_v1(max_domains, max_records)?,
@@ -137,6 +177,7 @@ impl ResourceCreditAccountV1 {
         });
         let root = Arc::new(Root {
             state: Mutex::new(State {
+                max_depth,
                 nodes,
                 // The root slot is permanent. Keep the complete free-list capacity
                 // charged even though that index is never offered to a child.
@@ -164,7 +205,7 @@ impl ResourceCreditAccountV1 {
     /// Children inherit every ancestor ceiling; unused child capacity is not
     /// debited. Clones preserve exact leaf identity. A domain slot is reusable
     /// only after all handles, descendants and records are gone; quarantine
-    /// prevents reuse. The first profile allows three levels including root.
+    /// prevents reuse. The root's immutable profile selects three or four levels.
     pub fn new_child(
         &self,
         capacity: ResourceVectorV1,
@@ -177,7 +218,7 @@ impl ResourceCreditAccountV1 {
         state.require_live()?;
         let result = (|| {
             let (_, depth) = state.path(parent.key)?;
-            if depth == MAX_RESOURCE_DOMAIN_DEPTH_V1 {
+            if depth == state.max_depth {
                 return Err(ResourceCreditErrorV1::DomainDepth);
             }
             if max_records == 0 || max_records > state.records.len() {
@@ -309,12 +350,12 @@ impl State {
     fn path(
         &self,
         leaf: Key,
-    ) -> Result<([Key; MAX_RESOURCE_DOMAIN_DEPTH_V1], usize), ResourceCreditErrorV1> {
-        let mut path = [ROOT; MAX_RESOURCE_DOMAIN_DEPTH_V1];
+    ) -> Result<([Key; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1], usize), ResourceCreditErrorV1> {
+        let mut path = [ROOT; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1];
         let mut next = Some(leaf);
         let mut depth = 0;
         while let Some(key) = next {
-            if depth == path.len() {
+            if depth == path.len() || depth == self.max_depth {
                 return Err(ResourceCreditErrorV1::Invariant);
             }
             path[depth] = key;
@@ -396,7 +437,7 @@ impl DomainAccount {
             if count > state.free_records.len() {
                 return Err(ResourceCreditErrorV1::RecordCapacity);
             }
-            let mut next_used = [ResourceVectorV1::ZERO; MAX_RESOURCE_DOMAIN_DEPTH_V1];
+            let mut next_used = [ResourceVectorV1::ZERO; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1];
             let mut next_owner = state.next_owner;
             if next_owner == 0 {
                 return Err(ResourceCreditErrorV1::Invariant);
@@ -557,7 +598,7 @@ impl Root {
                 _ => return Err(ResourceCreditErrorV1::Invariant),
             };
             let (path, depth) = state.path(leaf)?;
-            let mut used = [ResourceVectorV1::ZERO; MAX_RESOURCE_DOMAIN_DEPTH_V1];
+            let mut used = [ResourceVectorV1::ZERO; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1];
             for (index, &key) in path[..depth].iter().enumerate() {
                 let node = state.node(key)?;
                 state.occupied_records(key)?;
@@ -646,3 +687,6 @@ impl Drop for DomainAccount {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod class_tests;

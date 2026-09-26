@@ -26,7 +26,19 @@ pub struct KfdNativeXgmiBackingUsageV1 {
     pub host_visible: Option<Gfx942HostVisibleBackingUsageV1>,
 }
 
+pub(super) enum EndpointAdmissionV1 {
+    Local(KfdNativeXgmiBackingBudgetV1),
+    Native(fe2o3_kfd::Gfx942NativeBackingAdmissionV1),
+}
+
 impl KfdNativeXgmiRuntimeBackendV1 {
+    /// Inclusive compound session usage, in the original endpoint argument order.
+    pub fn native_backing_usage_v1(
+        &self,
+    ) -> [Option<fe2o3_resource_accounting::ResourceCreditUsageV1>; 2] {
+        std::array::from_fn(|index| self.sessions[index].native_backing_usage_v1())
+    }
+
     /// Observes the original argument-ordered endpoints without native calls.
     pub fn backing_usage_v1(&self) -> [KfdNativeXgmiBackingUsageV1; 2] {
         std::array::from_fn(|index| KfdNativeXgmiBackingUsageV1 {
@@ -37,16 +49,28 @@ impl KfdNativeXgmiRuntimeBackendV1 {
     }
 }
 
-pub(super) fn acquire_sessions<D, S, E>(
+pub(super) fn admit_endpoints<D, B, A, E>(
+    devices: [&D; 2],
+    budgets: [B; 2],
+    mut admit: impl FnMut(&D, B) -> Result<A, E>,
+) -> Result<[A; 2], E> {
+    let [first_budget, second_budget] = budgets;
+    let first = admit(devices[0], first_budget)?;
+    let second = admit(devices[1], second_budget)?;
+    Ok([first, second])
+}
+
+pub(super) fn acquire_sessions<D, B, S, E>(
     devices: [D; 2],
-    budgets: [KfdNativeXgmiBackingBudgetV1; 2],
-    mut acquire: impl FnMut(D, KfdNativeXgmiBackingBudgetV1) -> Result<S, E>,
+    budgets: [B; 2],
+    mut acquire: impl FnMut(D, B) -> Result<S, E>,
 ) -> Result<[S; 2], E> {
     let [first, second] = devices;
-    let first = acquire(first, budgets[0])?;
+    let [first_budget, second_budget] = budgets;
+    let first = acquire(first, first_budget)?;
     // No inverse transition can return the first consumed device authority.
     // Neither an error nor unwind may abandon that acquired VM through Drop.
-    let second = match catch_unwind(AssertUnwindSafe(|| acquire(second, budgets[1]))) {
+    let second = match catch_unwind(AssertUnwindSafe(|| acquire(second, second_budget))) {
         Ok(Ok(session)) => session,
         Ok(Err(_)) | Err(_) => std::process::abort(),
     };

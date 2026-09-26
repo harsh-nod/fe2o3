@@ -31,7 +31,8 @@ impl Identity {
 
 struct DeviceEntry {
     identity: Identity,
-    budget: Gfx942HostVisibleBackingBudgetV1,
+    capacity: ResourceVectorV1,
+    record_limit: usize,
     account: ResourceCreditAccountV1,
 }
 
@@ -87,12 +88,30 @@ impl Gfx942HostBackingRootV1 {
         max_domains: usize,
         max_records: usize,
     ) -> Result<Self, ResourceCreditErrorV1> {
+        Self::new_with_profile(capacity, max_devices, max_domains, max_records, false)
+    }
+
+    fn new_with_profile(
+        capacity: ResourceVectorV1,
+        max_devices: usize,
+        max_domains: usize,
+        max_records: usize,
+        class_domains: bool,
+    ) -> Result<Self, ResourceCreditErrorV1> {
         if Self::bootstrap_bytes_v1(max_devices, max_domains, max_records)?
             > capacity.get(ResourceKindV1::ControlResidentBytes)
         {
             return Err(ResourceCreditErrorV1::Capacity);
         }
-        let account = ResourceCreditAccountV1::new_root(capacity, max_domains, max_records)?;
+        let account = if class_domains {
+            ResourceCreditAccountV1::new_root_with_class_domains_v1(
+                capacity,
+                max_domains,
+                max_records,
+            )?
+        } else {
+            ResourceCreditAccountV1::new_root(capacity, max_domains, max_records)?
+        };
         let devices = HostMetadataTableV1::try_new(max_devices, Some(&account), || None)?;
         Ok(Self(Arc::new(Inner {
             account,
@@ -125,6 +144,31 @@ impl Gfx942HostBackingRootV1 {
         device_budget: Gfx942HostVisibleBackingBudgetV1,
         budget: Gfx942HostVisibleBackingBudgetV1,
     ) -> Result<Gfx942HostBackingAdmissionV1, ResourceCreditErrorV1> {
+        self.with_device_account(
+            identity,
+            capacity(device_budget),
+            device_budget.max_allocations(),
+            |parent| {
+                let account = parent.new_child(capacity(budget), budget.max_allocations())?;
+                Ok(Gfx942HostBackingAdmissionV1 {
+                    root: self.clone(),
+                    identity,
+                    generation,
+                    budget,
+                    account,
+                    session: None,
+                })
+            },
+        )
+    }
+
+    fn with_device_account<T>(
+        &self,
+        identity: Identity,
+        capacity: ResourceVectorV1,
+        record_limit: usize,
+        create: impl FnOnce(&ResourceCreditAccountV1) -> Result<T, ResourceCreditErrorV1>,
+    ) -> Result<T, ResourceCreditErrorV1> {
         if identity.unique_id == 0 {
             return Err(ResourceCreditErrorV1::Invariant);
         }
@@ -136,41 +180,27 @@ impl Gfx942HostBackingRootV1 {
         if let Some(entry) = devices.iter().flatten().find(|entry| {
             entry.identity.unique_id == identity.unique_id || entry.identity.pci == identity.pci
         }) {
-            if entry.identity != identity || entry.budget != device_budget {
+            if entry.identity != identity
+                || entry.capacity != capacity
+                || entry.record_limit != record_limit
+            {
                 return Err(ResourceCreditErrorV1::Invariant);
             }
-            let account = entry
-                .account
-                .new_child(capacity(budget), budget.max_allocations())?;
-            return Ok(Gfx942HostBackingAdmissionV1 {
-                root: self.clone(),
-                identity,
-                generation,
-                budget,
-                account,
-            });
+            return create(&entry.account);
         }
         let slot = devices
             .iter()
             .position(Option::is_none)
             .ok_or(ResourceCreditErrorV1::DomainCapacity)?;
-        let parent = self
-            .0
-            .account
-            .new_child(capacity(device_budget), device_budget.max_allocations())?;
-        let account = parent.new_child(capacity(budget), budget.max_allocations())?;
+        let parent = self.0.account.new_child(capacity, record_limit)?;
+        let result = create(&parent)?;
         devices[slot] = Some(DeviceEntry {
             identity,
-            budget: device_budget,
+            capacity,
+            record_limit,
             account: parent,
         });
-        Ok(Gfx942HostBackingAdmissionV1 {
-            root: self.clone(),
-            identity,
-            generation,
-            budget,
-            account,
-        })
+        Ok(result)
     }
 
     pub fn usage_v1(&self) -> ResourceCreditUsageV1 {
@@ -227,6 +257,7 @@ pub struct Gfx942HostBackingAdmissionV1 {
     generation: DeviceKeyV1,
     budget: Gfx942HostVisibleBackingBudgetV1,
     account: ResourceCreditAccountV1,
+    session: Option<ResourceCreditAccountV1>,
 }
 
 impl Gfx942HostBackingAdmissionV1 {
@@ -245,18 +276,50 @@ impl Gfx942HostBackingAdmissionV1 {
     pub(crate) fn into_account(
         self,
         device: DeviceKeyV1,
-    ) -> Result<(ResourceCreditAccountV1, Gfx942HostBackingRootV1), ResourceCreditErrorV1> {
+    ) -> Result<(ResourceCreditAccountV1, BackingRootBindingV1), ResourceCreditErrorV1> {
         if self.generation != device {
             return Err(ResourceCreditErrorV1::Invariant);
         }
-        Ok((self.account, self.root))
+        Ok((
+            self.account,
+            BackingRootBindingV1 {
+                root: self.root,
+                session: self.session,
+            },
+        ))
+    }
+}
+
+pub(crate) struct BackingRootBindingV1 {
+    root: Gfx942HostBackingRootV1,
+    session: Option<ResourceCreditAccountV1>,
+}
+
+impl BackingRootBindingV1 {
+    pub(crate) fn retain_quarantine(&self) {
+        self.root.retain_quarantine();
+    }
+
+    pub(crate) fn session_usage(&self) -> Option<ResourceCreditUsageV1> {
+        self.session.as_ref().map(ResourceCreditAccountV1::usage)
     }
 }
 
 pub(crate) enum HostBackingAdmission {
     Local(Option<Gfx942HostVisibleBackingBudgetV1>),
     Rooted(Gfx942HostBackingAdmissionV1),
+    Native(Gfx942NativeBackingAdmissionV1),
 }
+
+mod native;
+pub(crate) use native::DeviceBackingAdmissionV1;
+pub use native::{
+    Gfx942NativeBackingAdmissionV1, Gfx942NativeBackingDeviceBudgetV1, Gfx942NativeBackingRootV1,
+    Gfx942NativeBackingSessionBudgetV1,
+};
+
+#[cfg(test)]
+pub(crate) use native::tests as native_tests;
 
 impl From<Option<Gfx942HostVisibleBackingBudgetV1>> for HostBackingAdmission {
     fn from(budget: Option<Gfx942HostVisibleBackingBudgetV1>) -> Self {

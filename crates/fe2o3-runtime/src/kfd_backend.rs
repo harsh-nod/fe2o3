@@ -1277,7 +1277,7 @@ pub struct KfdRuntimeBackendV1 {
     staging_budgets: StagingBudgetsV1,
     device_backing_budget: Option<Gfx942DeviceBackingBudgetV1>,
     host_visible_backing_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
-    rooted_host_backing: Option<native_budget::RootedHostBackingV1>,
+    rooted_backing: Option<native_budget::RootedBackingV1>,
     host_pool_limits: Option<fe2o3_kfd::Gfx942HostPoolLimitsV1>,
     device_pool_limits: Option<Gfx942DevicePoolLimitsV1>,
     staged_context_bytes: u64,
@@ -1726,7 +1726,7 @@ impl KfdRuntimeBackendV1 {
             staging_budgets,
             device_backing_budget: None,
             host_visible_backing_budget: None,
-            rooted_host_backing: None,
+            rooted_backing: None,
             device_pool_limits: None,
             host_pool_limits: None,
             staged_context_bytes: 0,
@@ -3188,7 +3188,7 @@ impl KfdRuntimeBackendV1 {
             return Ok(());
         }
         if self.queue.is_none() {
-            let admission = self.take_rooted_host_backing_v1()?;
+            let admission = self.take_rooted_backing_v1()?;
             let device = self.admitted_device.take().ok_or_else(|| {
                 Self::rejected(
                     KfdRuntimeBackendErrorKindV1::Unsupported,
@@ -3196,12 +3196,19 @@ impl KfdRuntimeBackendV1 {
                 )
             })?;
             let queue = match admission {
-                Some(admission) => device.create_compute_aql_queue_with_rooted_host_backing_v1(
-                    KFD_RUNTIME_RING_BYTES_V1,
-                    self.device_backing_budget,
-                    admission,
-                    self.dispatch_capacity.native().clone(),
-                ),
+                Some(native_budget::BackingAdmissionV1::Host(admission)) => device
+                    .create_compute_aql_queue_with_rooted_host_backing_v1(
+                        KFD_RUNTIME_RING_BYTES_V1,
+                        self.device_backing_budget,
+                        admission,
+                        self.dispatch_capacity.native().clone(),
+                    ),
+                Some(native_budget::BackingAdmissionV1::Native(admission)) => device
+                    .create_compute_aql_queue_with_rooted_native_backing_v1(
+                        KFD_RUNTIME_RING_BYTES_V1,
+                        admission,
+                        self.dispatch_capacity.native().clone(),
+                    ),
                 None => device.create_compute_aql_queue_with_backing_budgets_and_capacity_v1(
                     KFD_RUNTIME_RING_BYTES_V1,
                     self.device_backing_budget,
@@ -9406,6 +9413,67 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         second: CheckedGfx942XnackMinusDevice,
         budgets: [KfdNativeXgmiBackingBudgetV1; 2],
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        Self::from_checked_pair_with_admissions_v1(first, second, |_| {
+            Ok(budgets.map(xgmi_budget::EndpointAdmissionV1::Local))
+        })
+    }
+
+    /// Root admission for both ordered endpoints precedes either VM acquisition.
+    pub fn open_default_with_native_backing_root_v1(
+        first_unique_id: u64,
+        second_unique_id: u64,
+        root: &fe2o3_kfd::Gfx942NativeBackingRootV1,
+        device_budgets: [fe2o3_kfd::Gfx942NativeBackingDeviceBudgetV1; 2],
+        session_budgets: [fe2o3_kfd::Gfx942NativeBackingSessionBudgetV1; 2],
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        if admit_xgmi_unique_id_pair_v1(first_unique_id, second_unique_id).is_err() {
+            return Err(KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "native XGMI requires two distinct nonzero unique IDs",
+            ));
+        }
+        let first = KfdRuntimeBackendV1::open_checked_device_v1(first_unique_id)?;
+        let second = KfdRuntimeBackendV1::open_checked_device_v1(second_unique_id)?;
+        Self::from_checked_pair_with_native_backing_root_v1(
+            first,
+            second,
+            root,
+            device_budgets,
+            session_budgets,
+        )
+    }
+
+    pub fn from_checked_pair_with_native_backing_root_v1(
+        first: CheckedGfx942XnackMinusDevice,
+        second: CheckedGfx942XnackMinusDevice,
+        root: &fe2o3_kfd::Gfx942NativeBackingRootV1,
+        device_budgets: [fe2o3_kfd::Gfx942NativeBackingDeviceBudgetV1; 2],
+        session_budgets: [fe2o3_kfd::Gfx942NativeBackingSessionBudgetV1; 2],
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        Self::from_checked_pair_with_admissions_v1(first, second, |devices| {
+            xgmi_budget::admit_endpoints(
+                devices,
+                [
+                    (device_budgets[0], session_budgets[0]),
+                    (device_budgets[1], session_budgets[1]),
+                ],
+                |device, (parent, session)| {
+                    root.admit_session_v1(device, parent, session)
+                        .map(xgmi_budget::EndpointAdmissionV1::Native)
+                        .map_err(native_budget::rooted_host_backing_admission_error_v1)
+                },
+            )
+        })
+    }
+
+    fn from_checked_pair_with_admissions_v1(
+        first: CheckedGfx942XnackMinusDevice,
+        second: CheckedGfx942XnackMinusDevice,
+        prepare: impl FnOnce(
+            [&CheckedGfx942XnackMinusDevice; 2],
+        )
+            -> Result<[xgmi_budget::EndpointAdmissionV1; 2], KfdRuntimeBackendErrorV1>,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
         let first_observation = first.observation();
         let second_observation = second.observation();
         let first_unique_id = first_observation.unique_id();
@@ -9471,18 +9539,25 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 capabilities,
             },
         ];
-        let sessions = xgmi_budget::acquire_sessions([first, second], budgets, |device, budget| {
-            device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
-                budget.device,
-                budget.host_visible,
-            )
-        })
-        .map_err(|error| {
-            KfdRuntimeBackendErrorV1::new(
-                KfdRuntimeBackendErrorKindV1::Native,
-                format!("first XGMI VM acquisition: {error}"),
-            )
-        })?;
+        let admissions = prepare([&first, &second])?;
+        let sessions =
+            xgmi_budget::acquire_sessions([first, second], admissions, |device, admission| {
+                match admission {
+                    xgmi_budget::EndpointAdmissionV1::Local(budget) => device
+                        .acquire_shared_gtt_memory_session_with_backing_budgets_v1(
+                            budget.device,
+                            budget.host_visible,
+                        ),
+                    xgmi_budget::EndpointAdmissionV1::Native(admission) => device
+                        .acquire_shared_gtt_memory_session_with_rooted_native_backing_v1(admission),
+                }
+            })
+            .map_err(|error| {
+                KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::Native,
+                    format!("first XGMI VM acquisition: {error}"),
+                )
+            })?;
         Ok(Self {
             descriptions,
             sessions,

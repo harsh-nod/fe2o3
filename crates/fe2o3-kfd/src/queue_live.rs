@@ -4857,6 +4857,24 @@ impl CheckedGfx942XnackMinusDevice {
         .map(|(session, ())| session)
     }
 
+    /// Creates a queue whose N1 and N2 backing share one compound admission.
+    pub fn create_compute_aql_queue_with_rooted_native_backing_v1(
+        self,
+        ring_bytes: u32,
+        admission: crate::Gfx942NativeBackingAdmissionV1,
+        capacity: Gfx942FixedDispatchCapacityV1,
+    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_compute_aql_queue_with_runtime(
+            ring_bytes,
+            |_| Ok(()),
+            None,
+            None,
+            crate::resource_domains::HostBackingAdmission::Native(admission),
+            capacity,
+        )
+        .map(|(session, ())| session)
+    }
+
     pub(crate) fn create_compute_aql_queue_with<T>(
         self,
         ring_bytes: u32,
@@ -6319,6 +6337,14 @@ impl ComputeAqlQueueSessionV1 {
         self.engine
             .as_ref()
             .and_then(|engine| engine.backend.session.host_visible_backing_usage_v1())
+    }
+
+    pub fn native_backing_usage_v1(
+        &self,
+    ) -> Option<fe2o3_resource_accounting::ResourceCreditUsageV1> {
+        self.engine
+            .as_ref()
+            .and_then(|engine| engine.backend.session.native_backing_usage_v1())
     }
 
     /// Installs immutable device-cache limits before any SDMA resource attempt.

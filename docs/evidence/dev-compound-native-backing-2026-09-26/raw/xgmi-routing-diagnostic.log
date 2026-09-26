@@ -1,0 +1,18 @@
+
+running 1 test
+test kfd_backend::xgmi_budget::tests::xgmi_budget_production_wiring_preserves_defaults_order_and_classified_entry ... FAILED
+
+failures:
+
+---- kfd_backend::xgmi_budget::tests::xgmi_budget_production_wiring_preserves_defaults_order_and_classified_entry stdout ----
+
+thread 'kfd_backend::xgmi_budget::tests::xgmi_budget_production_wiring_preserves_defaults_order_and_classified_entry' (9) panicked at crates/fe2o3-runtime/src/kfd_backend/xgmi_budget/tests.rs:322:5:
+assertion failed: constructor.contains("device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    kfd_backend::xgmi_budget::tests::xgmi_budget_production_wiring_preserves_defaults_order_and_classified_entry
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1506 filtered out; finished in 0.01s
+

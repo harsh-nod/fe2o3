@@ -27,7 +27,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 mod batch;
 mod domain;
 pub use batch::MAX_RESOURCE_CREDIT_BATCH_MEMBERS_V1;
-pub use domain::{MAX_RESOURCE_DOMAIN_DEPTH_V1, resource_domain_bootstrap_bytes_v1};
+pub use domain::{
+    MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1, MAX_RESOURCE_DOMAIN_DEPTH_V1,
+    resource_domain_bootstrap_bytes_v1,
+};
 mod host_table;
 pub use host_table::{HostMetadataTableV1, host_metadata_table_payload_bytes_v1};
 

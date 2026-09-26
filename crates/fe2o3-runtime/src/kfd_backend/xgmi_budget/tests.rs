@@ -2,6 +2,77 @@ use super::*;
 use std::os::unix::process::ExitStatusExt;
 
 #[test]
+fn compound_backing_xgmi_admits_both_move_only_endpoints_before_vm_acquisition() {
+    use std::{cell::RefCell, rc::Rc};
+    struct Admission(u64, Rc<RefCell<Vec<u64>>>);
+    impl Drop for Admission {
+        fn drop(&mut self) {
+            self.1.borrow_mut().push(self.0);
+        }
+    }
+    for failure in ["none", "second_admit", "first_acquire", "admit_panic"] {
+        let dropped = Rc::new(RefCell::new(Vec::new()));
+        let calls = RefCell::new(Vec::new());
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let admissions =
+                admit_endpoints([&19, &7], [Box::new(11), Box::new(22)], |device, budget| {
+                    calls.borrow_mut().push(("admit", *device, *budget));
+                    if *device == 7 && failure == "second_admit" {
+                        return Err("admission");
+                    }
+                    if *device == 7 && failure == "admit_panic" {
+                        std::panic::panic_any("admission panic");
+                    }
+                    Ok(Admission(*device, dropped.clone()))
+                })?;
+            acquire_sessions([19, 7], admissions, |device, admission| {
+                assert_eq!(device, admission.0);
+                calls.borrow_mut().push(("acquire", device, 0));
+                if failure == "first_acquire" {
+                    return Err("acquisition");
+                }
+                Ok(admission)
+            })
+            .map(drop)
+        }));
+        let calls = calls.into_inner();
+        assert_eq!(&calls[..2], &[("admit", 19, 11), ("admit", 7, 22)]);
+        match failure {
+            "none" => {
+                assert_eq!(result.unwrap(), Ok(()));
+                assert_eq!(&calls[2..], &[("acquire", 19, 0), ("acquire", 7, 0)]);
+            }
+            "second_admit" => {
+                assert_eq!(result.unwrap(), Err("admission"));
+                assert_eq!(calls.len(), 2);
+            }
+            "first_acquire" => {
+                assert_eq!(result.unwrap(), Err("acquisition"));
+                assert_eq!(&calls[2..], &[("acquire", 19, 0)]);
+            }
+            "admit_panic" => {
+                assert_eq!(
+                    result.unwrap_err().downcast_ref::<&str>(),
+                    Some(&"admission panic")
+                );
+                assert_eq!(calls.len(), 2);
+            }
+            _ => unreachable!(),
+        }
+        let mut dropped = dropped.borrow().clone();
+        dropped.sort_unstable();
+        assert_eq!(
+            dropped,
+            if matches!(failure, "second_admit" | "admit_panic") {
+                vec![19]
+            } else {
+                vec![7, 19]
+            }
+        );
+    }
+}
+
+#[test]
 fn xgmi_budget_sessions_preserve_argument_order_and_independent_limits() {
     let budgets = [
         KfdNativeXgmiBackingBudgetV1 {
@@ -234,10 +305,21 @@ fn xgmi_budget_production_wiring_preserves_defaults_order_and_classified_entry()
         constructor
             .contains("Self::from_checked_pair_with_backing_budgets_v1(first, second, budgets)")
     );
-    assert!(constructor.contains("xgmi_budget::acquire_sessions([first, second], budgets,"));
+    let compact = constructor.split_whitespace().collect::<String>();
+    let prepare = compact
+        .find("letadmissions=prepare([&first,&second])?")
+        .unwrap();
+    let acquire = compact
+        .find("xgmi_budget::acquire_sessions([first,second],admissions,")
+        .unwrap();
+    assert!(prepare < acquire);
+    assert!(constructor.contains("xgmi_budget::admit_endpoints("));
     assert!(
-        constructor.contains("device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(")
+        constructor.contains(
+            ".acquire_shared_gtt_memory_session_with_rooted_native_backing_v1(admission)"
+        )
     );
+    assert!(compact.contains("device.acquire_shared_gtt_memory_session_with_backing_budgets_v1("));
     assert!(constructor.contains("budget.device,"));
     assert!(constructor.contains("budget.host_visible,"));
     assert!(!constructor.contains(".acquire_shared_gtt_memory_session()"));

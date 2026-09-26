@@ -26,7 +26,11 @@ mod device;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod resource_domains;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub use resource_domains::{Gfx942HostBackingAdmissionV1, Gfx942HostBackingRootV1};
+pub use resource_domains::{
+    Gfx942HostBackingAdmissionV1, Gfx942HostBackingRootV1, Gfx942NativeBackingAdmissionV1,
+    Gfx942NativeBackingDeviceBudgetV1, Gfx942NativeBackingRootV1,
+    Gfx942NativeBackingSessionBudgetV1,
+};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod retained_device;

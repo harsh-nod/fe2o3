@@ -1,16 +1,37 @@
 use super::*;
 
 #[test]
+fn compound_backing_consumed_policy_blocks_both_local_budgets_and_fallback() {
+    let mut backend = KfdRuntimeBackendV1::mock();
+    backend.rooted_backing = Some(RootedBackingV1::Native(None));
+    assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+    assert_busy(backend.configure_device_backing_budget_v1(device_budget()));
+    assert!(backend.host_visible_backing_budget.is_none());
+    assert!(backend.device_backing_budget.is_none());
+    assert!(matches!(
+        backend.take_rooted_backing_v1(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(matches!(
+        backend.rooted_backing,
+        Some(RootedBackingV1::Native(None))
+    ));
+    assert!(backend.queue.is_none());
+    assert!(backend.terminal_memory.is_none());
+    core::mem::forget(backend);
+}
+
+#[test]
 fn rooted_n1_consumed_policy_rejects_replacement_and_never_falls_back() {
     let mut backend = KfdRuntimeBackendV1::mock();
-    backend.rooted_host_backing = Some(RootedHostBackingV1::consumed_for_test());
+    backend.rooted_backing = Some(RootedBackingV1::consumed_for_test());
     assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
     assert!(backend.host_visible_backing_budget.is_none());
     assert!(matches!(
-        backend.take_rooted_host_backing_v1(),
+        backend.take_rooted_backing_v1(),
         Err(RuntimeBackendFailureV1::Terminal(_))
     ));
-    assert!(backend.rooted_host_backing.is_some());
+    assert!(backend.rooted_backing.is_some());
     assert!(backend.terminal);
     assert!(backend.queue.is_none());
     assert!(backend.terminal_memory.is_none());
@@ -52,7 +73,7 @@ fn rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission() {
         .split_once("pub fn from_checked_device_with_host_backing_root_v1<A>(")
         .unwrap()
         .1
-        .split_once("pub(super) fn take_rooted_host_backing_v1(")
+        .split_once("pub(super) fn take_rooted_backing_v1(")
         .unwrap()
         .0;
     assert!(
@@ -90,11 +111,22 @@ fn rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission() {
             .0
             .split_whitespace()
             .collect::<String>();
-        let admission = body.find("self.take_rooted_host_backing_v1()?").unwrap();
+        let admission = body.find("self.take_rooted_backing_v1()?").unwrap();
         let take = body.find("self.admitted_device.take()").unwrap();
+        let compound = body
+            .find(&native.replace("rooted_host", "rooted_native"))
+            .unwrap();
+        assert!(take < compound);
+        assert!(
+            body[take..compound]
+                .contains("Some(native_budget::BackingAdmissionV1::Native(admission))=>")
+        );
         let native = body.find(native).unwrap();
         assert!(admission < take && take < native);
-        assert!(body[take..native].contains("Some(admission)=>"));
+        assert!(
+            body[take..native]
+                .contains("Some(native_budget::BackingAdmissionV1::Host(admission))=>")
+        );
     }
 }
 

@@ -652,7 +652,7 @@ backing admission alone does not provide any of these mechanisms.
 | MEM-2B-HOST / R81 | Implemented locally; Resources proof and Native/Primary qualification remain | Ordinary coherent cache bounds preserve native debit through reuse and uncertain disposal. New host-cache adapter proof and Linux acceptance are open; all N1B variants are not prerequisites |
 | MEM-QUAL-HARNESS | Native example/checker; primary runner integration | Exercise actual optional N1/N2/cache budgets in both startup orders before signed pressure/reuse/disposal acceptance. Existing overlap/drain examples configure logical requested-byte limits, not these native budgets |
 | MEM-TXN-1 | Implemented in R70; prerequisite for compound MEM-3 creation | Atomic complete roster of vectors and owner slots returns independent move-only reservations. Ordinary late-member/record/generation failure leaves state unchanged; detected internal corruption poisons. Native composition remains open |
-| MEM-DOM-1 | Shared-root request accounting and rooted native N1 development; prerequisite for MEM-5 aggregate closure | Generic fixed-arena admission, immutable Context request attachment and a separate typed checked-device/N1 root are implemented in development. Both native startup orders consume the same N1 leaf and retain registry/quarantine custody. Whole-profile root construction, logical/native composition, remaining adapters, bootstrap/terminal headroom and formal/native qualification remain open; this is not a process-global ceiling |
+| MEM-DOM-1 | Shared-root request accounting and compound native N1/N2 development; prerequisite for MEM-5 aggregate closure | Generic fixed-arena admission, immutable Context request attachment and a separate typed checked-device/native root are implemented in development. Four-level native accounting preserves class ceilings and combined session records across all three startup routes and both XGMI endpoints. Whole-profile root construction, logical/native composition, remaining adapters, bootstrap/terminal headroom and formal/native qualification remain open; this is not a process-global ceiling |
 
 The implemented [batch API](runtime-resource-batch-v1.md) creates independent
 member reservations; it does not split an already-issued retained debit.
@@ -671,8 +671,10 @@ audit. Host images, journals, captures and independent native owners may be
 implemented incrementally, but the final aggregate gate includes all of them.
 The [shared-domain contract](runtime-resource-domains-v1.md) and its development
 evidence cover one atomic root coordinator and real Context request admission.
-They do not close hierarchy proofs, physical-device binding, native residency,
-charged batch output, external metadata or whole-process accounting.
+The [compound native profile](runtime-compound-native-backing-v1.md) adds
+canonical checked-device binding and actual N1/N2 adapters, separately from
+logical request accounts. Hierarchy/native proofs, complete native residency,
+charged batch output, external metadata and whole-process accounting remain open.
 
 ### Bounded Work Packets
 

@@ -88,7 +88,7 @@ struct DomainV1 {
     session_id: u64,
     device: DeviceKeyV1,
     vm: VmKeyV1,
-    root: Option<crate::Gfx942HostBackingRootV1>,
+    root: Option<crate::resource_domains::BackingRootBindingV1>,
 }
 
 impl DomainV1 {
@@ -117,6 +117,13 @@ pub(super) struct HostBackingAccountV1 {
 }
 
 impl HostBackingAccountV1 {
+    pub(super) fn session_usage(&self) -> Option<fe2o3_resource_accounting::ResourceCreditUsageV1> {
+        self.domain
+            .root
+            .as_ref()
+            .and_then(|root| root.session_usage())
+    }
+
     pub(super) fn new(
         session_id: u64,
         device: DeviceKeyV1,

@@ -101,13 +101,9 @@ HIP/HSA performance result is established by this implementation. Native
 qualification, root-required integration for the remaining resource classes,
 whole-profile bootstrap and formal refinement remain open.
 
-The next composition must preserve both per-class and combined session limits:
-root, canonical device, native session, then N1/N2 class accounts. Sharing a
-single mixed leaf would lose the existing per-class record limits and usage
-semantics; separate unrelated roots would lose aggregate enforcement. This
-requires an explicit bounded four-level profile while retaining the existing
-three-level profile's contract. Compound admission and adapter installation
-must roll back completely before effects. All three runtime startup paths and
-both XGMI endpoints must consume that compound admission without local fallback.
-The four-level hierarchy, mixed-pressure tests and correspondence proofs are
-future work, not capabilities supplied by the N1-only API above.
+The subsequent [compound N1/N2 profile](runtime-compound-native-backing-v1.md)
+implements a separate four-level root/device/session/class hierarchy,
+preserving both class and combined session ceilings. It supplies all-or-none
+adapter installation, all three runtime startup routes and both ordered XGMI
+endpoint admissions. It does not upgrade the N1-only API above. Whole-bootstrap
+reservation, logical/native composition and correspondence proofs remain open.

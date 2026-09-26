@@ -7,10 +7,13 @@ MEM-2A-FWD runtime configuration, device-only MEM-2B cache limits,
 locally. The remaining MEM-5 inventory/interface contract is
 proposed, reviewed on 2026-09-10. This does not close MEM-2 through MEM-5.
 Live backing/pool qualification, native adapter refinement, broader GTT profiles,
-compound native ownership, parent/split operations and global physical accounting
+whole-plan native ownership, arbitrary debit splitting and global physical accounting
 still require the reviewed handoffs below. R70's single-account batch reservation
 does not implement parent admission or arbitrary splitting of an issued debit.
 The [A1/A2 swarm plan](runtime-a1-a2-swarm-plan.md) owns scheduling and acceptance.
+The later [compound N1/N2 profile](runtime-compound-native-backing-v1.md)
+implements canonical root/device/session/class accounting in development;
+it does not reserve complete native bootstrap rosters.
 
 ## Current Boundary
 
@@ -33,6 +36,9 @@ R67's per-account retained `Arc` anchor prevents lost ambiguous credit custody.
 It does not bound the aggregate of new accounts or Contexts, and does not itself
 retain or authenticate a native allocation. Native ownership and accounting
 ownership must be structurally composed before claiming native budget closure.
+The compound native profile now retains N1/N2 and their canonical registry under
+one coordinator with independent byte coordinates and combined session records.
+It remains separate from Context requested bytes and other native profiles.
 
 Existing staging-byte, snapshot-byte, reply-count, queue-slot and memory-session
 limits are useful local guards. They are neither one transactional resource
@@ -323,11 +329,19 @@ bootstrap and terminal obligations below remain open.
 
 The subsequent [rooted N1 adapter](runtime-native-root-admission-v1.md) implements
 a typed canonical UID/PCI registry from retained checked devices, root-required
-ordinary coherent native backing intake and both runtime startup routes. Native
+ordinary coherent native backing intake and all three runtime startup routes. Native
 owners retain that registry; uncertain disposal anchors it across owner Drop.
 This joins actual N1 padded backing, not the separate Context request leaf or
 all native resource classes. Complete process/root construction, wrappers,
 bootstrap, remaining adapters and new formal/native qualification remain open.
+
+The [compound successor](runtime-compound-native-backing-v1.md) integrates N2
+under that same canonical-registry implementation with an explicit four-level
+profile. Distinct N1/N2 leaves retain their existing class ceilings and usage,
+while session/device/root enforce combined records. Both adapters install
+together; both XGMI endpoint admissions precede either VM acquisition. This
+does not reserve all future native allocations or compose logical Context,
+image, scaled metadata, executable/kernarg/AQL/userptr and bootstrap charges.
 
 The root itself consumes memory before it can issue accounts. Define one fixed,
 precharged bootstrap arena/layout and include it as baseline usage before child

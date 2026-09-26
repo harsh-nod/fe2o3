@@ -863,9 +863,20 @@ fn projected_dispose(fixture: &mut BackingConstructorFixture, token: HostMapped)
 
 #[test]
 fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders() {
-    for (compute_first, rooted) in [(false, false), (true, false), (false, true), (true, true)] {
+    use crate::resource_domains::native_tests;
+    use fe2o3_resource_accounting::ResourceKindV1 as K;
+
+    for (compute_first, profile) in [
+        (false, 0),
+        (true, 0),
+        (false, 1),
+        (true, 1),
+        (false, 2),
+        (true, 2),
+    ] {
         let mut fixture = BackingConstructorFixture::new(None);
-        let root = rooted.then(|| crate::resource_domains::tests::root(16384, 4));
+        let root = (profile == 1).then(|| crate::resource_domains::tests::root(16384, 4));
+        let native_root = (profile == 2).then(|| native_tests::root(65536, 65536, 8));
         if let Some(root) = &root {
             let admission = crate::resource_domains::tests::admission(
                 root,
@@ -882,11 +893,32 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
                     admission,
                 )
                 .unwrap();
+        } else if let Some(root) = &native_root {
+            let admission = native_tests::admission(
+                root,
+                fixture.device.model_key(),
+                native_tests::device_budget(8),
+                native_tests::budget(4, 4, 8),
+            );
+            fixture
+                .ownership
+                .configure_native_backing(
+                    &mut fixture.engine,
+                    fixture.device,
+                    fixture.vm,
+                    admission,
+                )
+                .unwrap();
         } else {
             configure_fixture(&mut fixture, true);
         }
-        let baseline = root.as_ref().map(|root| root.usage_v1());
-        let compute = compute_first.then(|| fixture.mapped_device());
+        let root_usage = || {
+            root.as_ref()
+                .map(|root| root.usage_v1())
+                .or_else(|| native_root.as_ref().map(|root| root.usage_v1()))
+        };
+        let baseline = root_usage();
+        let mut compute = compute_first.then(|| fixture.mapped_device());
         let host_before = (!compute_first).then(|| projected_host(&mut fixture));
         let authorities = compute.as_ref().into_iter().collect::<Vec<_>>();
         let mut queue = fixture.transfer(&authorities).unwrap();
@@ -901,12 +933,15 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
                 fixture.vm,
             )
             .unwrap();
+        if !compute_first && native_root.is_some() {
+            compute = Some(fixture.mapped_device());
+        }
         let token = host_before.unwrap_or_else(|| projected_host(&mut fixture));
         let identity = token.storage_identity();
         let before = usage(&fixture.engine);
         assert_eq!(before.used_backing_bytes, 8192);
         assert_eq!(before.used_allocation_records, 1);
-        let root_before = root.as_ref().map(|root| root.usage_v1());
+        let root_before = root_usage();
         if let Some(usage) = root_before {
             assert_eq!(
                 usage
@@ -918,7 +953,11 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
                 usage
                     .used
                     .get(fe2o3_resource_accounting::ResourceKindV1::AllocationRecords),
-                1
+                1 + u64::from(native_root.is_some())
+            );
+            assert_eq!(
+                usage.used.get(K::ResidentDeviceAllocationBytes),
+                if native_root.is_some() { 4096 } else { 0 }
             );
         }
         let owner = QueueKeyV1 {
@@ -1017,10 +1056,18 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
             .overwrite_mapped_host_visible_subrange(&mut token, 0, &[7])
             .unwrap();
         assert_eq!(usage(&fixture.engine), before);
-        assert_eq!(root.as_ref().map(|root| root.usage_v1()), root_before);
+        assert_eq!(root_usage(), root_before);
         projected_dispose(&mut fixture, token);
         debit(&fixture.engine, 0, 0);
-        assert_eq!(root.as_ref().map(|root| root.usage_v1()), baseline);
+        if let Some(root) = &native_root {
+            let remaining = root.usage_v1();
+            assert_eq!(remaining.used.get(K::ResidentHostAllocationBytes), 0);
+            assert_eq!(remaining.used.get(K::ResidentDeviceAllocationBytes), 4096);
+            assert_eq!(remaining.used.get(K::AllocationRecords), 1);
+            assert_eq!(fixture.usage().unwrap().used_allocation_records, 1);
+        } else {
+            assert_eq!(root_usage(), baseline);
+        }
         fixture
             .ownership
             .reclaim_foundation(
@@ -1043,6 +1090,11 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
             )
             .unwrap();
         debit(&fixture.engine, 0, 0);
+        if let Some(compute) = compute {
+            let unmapped = fixture.engine.unmap_device_memory(compute.lease).unwrap();
+            fixture.engine.release_device_memory(unmapped).unwrap();
+        }
+        assert_eq!(root_usage(), baseline);
         let before_calls = calls(&fixture.engine);
         assert!(
             fixture

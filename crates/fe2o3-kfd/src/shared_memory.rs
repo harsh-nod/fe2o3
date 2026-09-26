@@ -1350,6 +1350,18 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     }
 
     fn phase(&self) -> SharedMemorySessionPhaseV1 {
+        // Compound session usage covers both classes under one coordinator lock.
+        if let Some(usage) = self
+            .host_backing_account
+            .as_ref()
+            .and_then(HostBackingAccountV1::session_usage)
+        {
+            return if usage.poisoned || usage.quarantined_records != 0 {
+                SharedMemorySessionPhaseV1::Quarantined
+            } else {
+                self.phase
+            };
+        }
         if self.host_backing_account.as_ref().is_some_and(|account| {
             let usage = account.usage();
             usage.poisoned || usage.quarantined_records != 0
@@ -1382,6 +1394,15 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         vm: VmKeyV1,
         budget: Gfx942DeviceBackingBudgetV1,
     ) -> Result<(), MemorySessionError> {
+        self.require_pristine_device_backing_v1()?;
+        let account = DeviceBackingAccountV1::new(self.session_id, device, vm, budget)
+            .map_err(device_backing_accounting_error)?;
+        self.check_currentness()?;
+        self.device_backing_account = Some(account);
+        Ok(())
+    }
+
+    fn require_pristine_device_backing_v1(&self) -> Result<(), MemorySessionError> {
         self.require_active()?;
         if self.device_backing_account.is_some()
             || self.device_backing_activity_started
@@ -1394,10 +1415,6 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 "requires a fresh unsealed session without prior N2 activity",
             ));
         }
-        let account = DeviceBackingAccountV1::new(self.session_id, device, vm, budget)
-            .map_err(device_backing_accounting_error)?;
-        self.check_currentness()?;
-        self.device_backing_account = Some(account);
         Ok(())
     }
 
@@ -1417,19 +1434,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         budget: Gfx942HostVisibleBackingBudgetV1,
         admission: Option<crate::Gfx942HostBackingAdmissionV1>,
     ) -> Result<(), MemorySessionError> {
-        self.require_active()?;
-        if self.host_backing_account.is_some()
-            || self.host_backing_activity_started
-            || self.host_backing_configuration_closed
-            || self.allocations.iter().any(|record| {
-                record.layout.uapi_flags == KfdAllocMemoryFlags::HOST_VISIBLE_COHERENT.bits()
-                    && !record.userptr
-            })
-        {
-            return Err(MemorySessionError::HostVisibleBackingBudgetConfiguration(
-                "requires an unsealed session without prior ordinary coherent backing activity",
-            ));
-        }
+        self.require_pristine_host_backing_v1()?;
         let account = match admission {
             Some(admission) => HostBackingAccountV1::new_with_admission(
                 self.session_id,
@@ -1443,6 +1448,57 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         .map_err(host_backing_accounting_error)?;
         self.check_currentness()?;
         self.host_backing_account = Some(account);
+        Ok(())
+    }
+
+    fn require_pristine_host_backing_v1(&self) -> Result<(), MemorySessionError> {
+        self.require_active()?;
+        if self.host_backing_account.is_some()
+            || self.host_backing_activity_started
+            || self.host_backing_configuration_closed
+            || self.allocations.iter().any(|record| {
+                record.layout.uapi_flags == KfdAllocMemoryFlags::HOST_VISIBLE_COHERENT.bits()
+                    && !record.userptr
+            })
+        {
+            return Err(MemorySessionError::HostVisibleBackingBudgetConfiguration(
+                "requires an unsealed session without prior ordinary coherent backing activity",
+            ));
+        }
+        Ok(())
+    }
+
+    fn configure_native_backing_admission_v1(
+        &mut self,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+        admission: crate::Gfx942NativeBackingAdmissionV1,
+    ) -> Result<(), MemorySessionError> {
+        self.require_pristine_device_backing_v1()?;
+        self.require_pristine_host_backing_v1()?;
+        let budget = admission.budget_v1();
+        let (host, native) = admission
+            .into_parts()
+            .map_err(|error| device_backing_accounting_error(error.into()))?;
+        let host = HostBackingAccountV1::new_with_admission(
+            self.session_id,
+            device,
+            vm,
+            budget.host_budget(),
+            Some(host),
+        )
+        .map_err(host_backing_accounting_error)?;
+        let native = DeviceBackingAccountV1::new_with_admission(
+            self.session_id,
+            device,
+            vm,
+            budget.device_budget(),
+            Some(native),
+        )
+        .map_err(device_backing_accounting_error)?;
+        self.check_currentness()?;
+        self.host_backing_account = Some(host);
+        self.device_backing_account = Some(native);
         Ok(())
     }
 
@@ -4471,6 +4527,21 @@ impl QueueModelOwnershipV1 {
         )
     }
 
+    fn configure_native_backing<B: MemoryBackend>(
+        &self,
+        engine: &mut SharedMemoryEngine<B>,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+        admission: crate::Gfx942NativeBackingAdmissionV1,
+    ) -> Result<(), MemorySessionError> {
+        if !self.is_session_owned() {
+            return Err(MemorySessionError::DeviceBackingBudgetConfiguration(
+                "queue-owned or loaned memory cannot configure compound backing",
+            ));
+        }
+        engine.configure_native_backing_admission_v1(device.model_key(), vm, admission)
+    }
+
     fn take_foundation<B: MemoryBackend>(
         &mut self,
         engine: &mut SharedMemoryEngine<B>,
@@ -4939,14 +5010,30 @@ impl CheckedGfx942XnackMinusDevice {
         )
     }
 
+    /// Requires one compound N1/N2 session, with no independent-account fallback.
+    pub fn acquire_shared_gtt_memory_session_with_rooted_native_backing_v1(
+        self,
+        admission: crate::Gfx942NativeBackingAdmissionV1,
+    ) -> Result<SharedGttMemorySessionV1, MemorySessionError> {
+        self.acquire_shared_gtt_memory_session_with_host_admission_v1(
+            None,
+            HostBackingAdmission::Native(admission),
+        )
+    }
+
     pub(crate) fn acquire_shared_gtt_memory_session_with_host_admission_v1(
         self,
         device_budget: Option<Gfx942DeviceBackingBudgetV1>,
         host: HostBackingAdmission,
     ) -> Result<SharedGttMemorySessionV1, MemorySessionError> {
-        if let HostBackingAdmission::Rooted(admission) = &host
-            && !admission.matches_device_v1(&self)
-        {
+        let matching = match &host {
+            HostBackingAdmission::Local(_) => true,
+            HostBackingAdmission::Rooted(admission) => admission.matches_device_v1(&self),
+            HostBackingAdmission::Native(admission) => {
+                device_budget.is_none() && admission.matches_device_v1(&self)
+            }
+        };
+        if !matching {
             return Err(MemorySessionError::HostVisibleBackingBudgetConfiguration(
                 "foreign root-issued device admission",
             ));
@@ -4989,30 +5076,48 @@ impl CheckedGfx942XnackMinusDevice {
                 vm: model_vm.model_key(),
                 model_ownership: QueueModelOwnershipV1::new(),
             };
-            session
-                .model_ownership
-                .configure_optional_device_backing_budget(
-                    &mut session.engine,
-                    session.model_device,
-                    session.vm,
-                    device_budget,
-                )?;
             match host {
-                HostBackingAdmission::Local(host_budget) => session
-                    .model_ownership
-                    .configure_optional_host_visible_backing_budget(
-                        &mut session.engine,
-                        session.model_device,
-                        session.vm,
-                        host_budget,
-                    )?,
+                HostBackingAdmission::Local(host_budget) => {
+                    session
+                        .model_ownership
+                        .configure_optional_device_backing_budget(
+                            &mut session.engine,
+                            session.model_device,
+                            session.vm,
+                            device_budget,
+                        )?;
+                    session
+                        .model_ownership
+                        .configure_optional_host_visible_backing_budget(
+                            &mut session.engine,
+                            session.model_device,
+                            session.vm,
+                            host_budget,
+                        )?;
+                }
                 HostBackingAdmission::Rooted(admission) => {
+                    session
+                        .model_ownership
+                        .configure_optional_device_backing_budget(
+                            &mut session.engine,
+                            session.model_device,
+                            session.vm,
+                            device_budget,
+                        )?;
                     session.model_ownership.configure_rooted_host_backing(
                         &mut session.engine,
                         session.model_device,
                         session.vm,
                         admission,
                     )?
+                }
+                HostBackingAdmission::Native(admission) => {
+                    session.model_ownership.configure_native_backing(
+                        &mut session.engine,
+                        session.model_device,
+                        session.vm,
+                        admission,
+                    )?;
                 }
             }
             Ok(session)
@@ -5105,6 +5210,16 @@ impl SharedGttMemorySessionV1 {
             .host_backing_account
             .as_ref()
             .map(HostBackingAccountV1::usage)
+    }
+
+    /// Inclusive N1/N2 usage for the compound session, not an additional debit.
+    pub fn native_backing_usage_v1(
+        &self,
+    ) -> Option<fe2o3_resource_accounting::ResourceCreditUsageV1> {
+        self.engine
+            .host_backing_account
+            .as_ref()
+            .and_then(HostBackingAccountV1::session_usage)
     }
 
     pub(crate) fn validate_device_pool_domain_v1(
@@ -6961,6 +7076,7 @@ mod tests {
     mod host_backing;
     pub(super) mod live_coherent_insertion;
     pub(super) mod live_insertion;
+    mod native_backing;
     pub(super) mod preparation;
     mod primary_construction;
     pub(super) mod primary_projection;

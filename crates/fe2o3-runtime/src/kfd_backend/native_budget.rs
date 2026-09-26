@@ -4,21 +4,29 @@ use super::*;
 use fe2o3_kfd::{
     Gfx942DeviceBackingUsageV1, Gfx942DevicePoolUsageV1, Gfx942HostBackingAdmissionV1,
     Gfx942HostBackingRootV1, Gfx942HostPoolLimitsV1, Gfx942HostPoolUsageV1,
-    Gfx942HostVisibleBackingUsageV1,
+    Gfx942HostVisibleBackingUsageV1, Gfx942NativeBackingAdmissionV1,
+    Gfx942NativeBackingDeviceBudgetV1, Gfx942NativeBackingRootV1,
+    Gfx942NativeBackingSessionBudgetV1,
 };
 
-pub(super) struct RootedHostBackingV1 {
-    pending: Option<Gfx942HostBackingAdmissionV1>,
+pub(super) enum RootedBackingV1 {
+    Host(Option<Gfx942HostBackingAdmissionV1>),
+    Native(Option<Gfx942NativeBackingAdmissionV1>),
+}
+
+pub(super) enum BackingAdmissionV1 {
+    Host(Gfx942HostBackingAdmissionV1),
+    Native(Gfx942NativeBackingAdmissionV1),
 }
 
 #[cfg(test)]
-impl RootedHostBackingV1 {
+impl RootedBackingV1 {
     pub(super) fn consumed_for_test() -> Self {
-        Self { pending: None }
+        Self::Host(None)
     }
 }
 
-fn rooted_host_backing_admission_error_v1(
+pub(super) fn rooted_host_backing_admission_error_v1(
     error: fe2o3_resource_accounting::ResourceCreditErrorV1,
 ) -> KfdRuntimeBackendErrorV1 {
     use fe2o3_resource_accounting::ResourceCreditErrorV1 as CreditError;
@@ -29,7 +37,7 @@ fn rooted_host_backing_admission_error_v1(
         | CreditError::DomainCapacity => KfdRuntimeBackendErrorKindV1::Capacity,
         _ => KfdRuntimeBackendErrorKindV1::Terminal,
     };
-    KfdRuntimeBackendErrorV1::new(kind, format!("N1 root admission: {error}"))
+    KfdRuntimeBackendErrorV1::new(kind, format!("native backing root admission: {error}"))
 }
 
 #[cfg(test)]
@@ -79,30 +87,80 @@ impl KfdRuntimeBackendV1 {
             .map_err(rooted_host_backing_admission_error_v1)?;
         let mut backend = Self::from_checked_device(device, authority);
         backend.host_visible_backing_budget = Some(session_budget);
-        backend.rooted_host_backing = Some(RootedHostBackingV1 {
-            pending: Some(admission),
-        });
+        backend.rooted_backing = Some(RootedBackingV1::Host(Some(admission)));
         Ok(backend)
     }
 
-    pub(super) fn take_rooted_host_backing_v1(
+    /// Opens a backend with one required N1/N2 root, device and session budget.
+    pub fn open_default_with_native_backing_root_v1<A>(
+        device_unique_id: u64,
+        authority: A,
+        root: &Gfx942NativeBackingRootV1,
+        device_budget: Gfx942NativeBackingDeviceBudgetV1,
+        session_budget: Gfx942NativeBackingSessionBudgetV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1>
+    where
+        A: KfdRuntimeLaunchAuthorityV1 + 'static,
+    {
+        let device = Self::open_checked_device_v1(device_unique_id)?;
+        Self::from_checked_device_with_native_backing_root_v1(
+            device,
+            authority,
+            root,
+            device_budget,
+            session_budget,
+        )
+    }
+
+    pub fn from_checked_device_with_native_backing_root_v1<A>(
+        device: CheckedGfx942XnackMinusDevice,
+        authority: A,
+        root: &Gfx942NativeBackingRootV1,
+        device_budget: Gfx942NativeBackingDeviceBudgetV1,
+        session_budget: Gfx942NativeBackingSessionBudgetV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1>
+    where
+        A: KfdRuntimeLaunchAuthorityV1 + 'static,
+    {
+        let admission = root
+            .admit_session_v1(&device, device_budget, session_budget)
+            .map_err(rooted_host_backing_admission_error_v1)?;
+        let mut backend = Self::from_checked_device(device, authority);
+        backend.host_visible_backing_budget = Some(session_budget.host_budget());
+        backend.device_backing_budget = Some(session_budget.device_budget());
+        backend.rooted_backing = Some(RootedBackingV1::Native(Some(admission)));
+        Ok(backend)
+    }
+
+    pub(super) fn take_rooted_backing_v1(
         &mut self,
-    ) -> Result<
-        Option<Gfx942HostBackingAdmissionV1>,
-        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
-    > {
-        let Some(rooted) = &mut self.rooted_host_backing else {
-            return Ok(None);
+    ) -> Result<Option<BackingAdmissionV1>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let valid = match (&self.rooted_backing, self.admitted_device.as_ref()) {
+            (None, _) => return Ok(None),
+            (Some(RootedBackingV1::Host(Some(admission))), Some(device)) => {
+                admission.matches_device_v1(device)
+                    && Some(admission.budget_v1()) == self.host_visible_backing_budget
+            }
+            (Some(RootedBackingV1::Native(Some(admission))), Some(device)) => {
+                admission.matches_device_v1(device)
+                    && Some(admission.budget_v1().host_budget()) == self.host_visible_backing_budget
+                    && Some(admission.budget_v1().device_budget()) == self.device_backing_budget
+            }
+            _ => false,
         };
-        if !rooted.pending.as_ref().is_some_and(|admission| {
-            self.admitted_device
-                .as_ref()
-                .is_some_and(|device| admission.matches_device_v1(device))
-                && Some(admission.budget_v1()) == self.host_visible_backing_budget
-        }) {
-            return Err(self.terminal_error("rooted N1 admission is consumed or mismatched"));
+        if !valid {
+            return Err(self.terminal_error("rooted backing admission is consumed or mismatched"));
         }
-        Ok(rooted.pending.take())
+        Ok(Some(
+            match self.rooted_backing.as_mut().expect("validated policy") {
+                RootedBackingV1::Host(pending) => {
+                    BackingAdmissionV1::Host(pending.take().expect("validated admission"))
+                }
+                RootedBackingV1::Native(pending) => {
+                    BackingAdmissionV1::Native(pending.take().expect("validated admission"))
+                }
+            },
+        ))
     }
 
     /// Bounds cached-free ordinary coherent Host backing. Configure once before
@@ -171,7 +229,7 @@ impl KfdRuntimeBackendV1 {
         budget: Gfx942HostVisibleBackingBudgetV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_pristine_native_resource_configuration_v1()?;
-        if self.rooted_host_backing.is_some() || self.host_visible_backing_budget.is_some() {
+        if self.rooted_backing.is_some() || self.host_visible_backing_budget.is_some() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "host-visible backing limits must be configured once before resource creation",
@@ -204,6 +262,25 @@ impl KfdRuntimeBackendV1 {
             })
     }
 
+    /// Inclusive compound-session accounting from the retained native owner.
+    pub fn native_backing_usage_v1(
+        &self,
+    ) -> Option<fe2o3_resource_accounting::ResourceCreditUsageV1> {
+        self.queue
+            .as_ref()
+            .and_then(ComputeAqlQueueSessionV1::native_backing_usage_v1)
+            .or_else(|| {
+                self.primary_teardown
+                    .as_ref()
+                    .and_then(|owner| owner.native_backing_usage_v1())
+            })
+            .or_else(|| {
+                self.terminal_memory
+                    .as_ref()
+                    .and_then(SharedGttMemorySessionV1::native_backing_usage_v1)
+            })
+    }
+
     /// Selects immutable N2 backing limits before logical or native resource use.
     ///
     /// The selected limits are installed in the actual native memory session
@@ -216,7 +293,9 @@ impl KfdRuntimeBackendV1 {
         budget: Gfx942DeviceBackingBudgetV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_pristine_native_resource_configuration_v1()?;
-        if self.device_backing_budget.is_some() {
+        if matches!(self.rooted_backing, Some(RootedBackingV1::Native(_)))
+            || self.device_backing_budget.is_some()
+        {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "native backing limits must be configured once before resource creation",

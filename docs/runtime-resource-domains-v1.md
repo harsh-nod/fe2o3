@@ -2,10 +2,12 @@
 
 This is development of MEM-DOM-1, not complete bounded-memory qualification.
 The [shared accounting engine](../crates/fe2o3-resource-accounting/src/domain.rs)
-now supports a fixed-arena, three-level hierarchy, and Context allocation
+supports a fixed-arena, three-level hierarchy, and Context allocation
 admission can attach to it. The subsequent
 [rooted N1 adapter](runtime-native-root-admission-v1.md) adds checked-device
-parents and root-required native host-backing construction. Whole-profile
+parents and root-required native host-backing construction. The explicit
+[compound N1/N2 profile](runtime-compound-native-backing-v1.md) adds a fourth
+level for separate class leaves below combined session limits. Whole-profile
 physical identity/root reuse, remaining native adapters, complete bootstrap and
 formal refinement remain open.
 
@@ -16,7 +18,10 @@ free-list and batch-validation arenas. `new_child` consumes a vacant domain
 slot, not another allocation or independent ledger. A child has immutable
 parentage, capacity and record limit. Unused child capacity is not reserved
 against its parent: actual reservations contend for shared ancestor capacity.
-The three levels are generic accounting domains, not native-device capabilities.
+`new_root` retains its three-level bound; `new_root_with_class_domains_v1`
+explicitly selects a four-level bound. These are generic accounting domains,
+not native-device capabilities. A fifth level is rejected without mutation.
+Both profiles use the same fixed arenas and bootstrap size calculation.
 
 An account handle carries its root identity and a generation-bearing leaf key.
 `shares_ledger_with` requires both the exact root and leaf; `shares_root_with`
@@ -89,9 +94,10 @@ disposal and Context destruction do not reset quarantined parent usage.
 The Context-local device brand is not a stable physical-GPU identity. Canonical
 root-issued physical-device parents, native session/VM association, root-required
 constructors and accounting for work before attachment are still required.
-The rooted N1 constructor now joins ordinary coherent backing to its typed
-root/device hierarchy. It does not share the Context request leaf or yet compose
-that logical-request profile into the same typed root. Other backing,
+The rooted N1 constructor joins ordinary coherent backing to its typed
+root/device hierarchy; compound N1/N2 adds a combined session and class leaves.
+Neither shares the Context request leaf nor composes that logical-request
+profile into the same typed root. Other backing,
 module-image and scaled-table accounts remain separate. A request charge is not
 a native-residency measurement.
 
