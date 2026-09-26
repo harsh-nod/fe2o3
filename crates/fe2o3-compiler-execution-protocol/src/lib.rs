@@ -17,16 +17,24 @@ mod attestation_resources;
 mod client_profile;
 mod client_profile_codec;
 mod client_profile_v2;
+mod current_record_native_adapter;
 mod current_record_verification;
 mod external_anchor_deployment;
 mod external_anchor_provisioning;
 mod external_anchor_service;
 mod external_anchor_transaction;
+mod external_anchor_transaction_adapter;
 mod external_anchor_transaction_v2;
+mod external_anchor_transaction_v3;
 pub use external_anchor_transaction_v2::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_TRANSACTION_BYTES_V2,
     CompilerExecutionExternalAnchorTransactionIdentityV2,
     CompilerExecutionExternalAnchorTransactionV2, CompilerExecutionNativeJournalErrorV2,
+};
+pub use external_anchor_transaction_v3::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_TRANSACTION_BYTES_V3,
+    CompilerExecutionExternalAnchorTransactionIdentityV3,
+    CompilerExecutionExternalAnchorTransactionV3, CompilerExecutionNativeJournalErrorV3,
 };
 mod issuer_policy_adapter;
 mod issuer_policy_codec;
