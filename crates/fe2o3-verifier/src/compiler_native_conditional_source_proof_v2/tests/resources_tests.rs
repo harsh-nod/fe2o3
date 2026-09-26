@@ -60,7 +60,11 @@ fn original_account_exact_one_short_and_failed_work_history() {
         assert!(budget.work_ledger_identity_v1() == ledger);
     }
     budgeted(|b| {
+        // The fresh meter admits usize::MAX exactly; establish a prefix so
+        // the next charge genuinely overflows and records the first denial.
+        b.charge_work(1).unwrap();
         assert!(b.charge_work(usize::MAX).is_err());
+        assert_eq!(b.work(), 1);
         assert!(b.reserve_storage(usize::MAX).is_err());
         let denials = (b.failed_work(), b.failed_storage());
         let _ = run(b).unwrap();
