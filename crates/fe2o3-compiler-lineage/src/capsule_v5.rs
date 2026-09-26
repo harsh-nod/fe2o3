@@ -321,6 +321,17 @@ impl InertProductionSemanticCapsuleV5 {
     pub fn semantic_target_layout_bytes(&self) -> &[u8] {
         &self.canonical_bytes()[self.layout_range.clone()]
     }
+    /// Borrow inert layout fields from the preimage validated during decode.
+    /// This allocation-free getter has no ledger: callers prepay preimage length
+    /// plus176 work units and `size_of::<NativeConditionalTargetLayoutRefV1>()`
+    /// plus `size_of::<[&[u8]; 6]>()` plus `size_of::<[usize; 8]>()` scratch.
+    /// Keep the returned view paid while live. This establishes no live target facts.
+    pub fn semantic_target_layout(&self) -> NativeConditionalTargetLayoutRefV1<'_> {
+        crate::native_conditional_metadata_v1::target_layout::<Infallible>(
+            self.semantic_target_layout_bytes(),
+        )
+        .expect("immutable conditional target layout was validated at decode")
+    }
     /// Strictly decoded association, not a lowering theorem.
     pub const fn native_lowering(&self) -> &InertNativeLoweringAssociationV1 {
         &self.lowering

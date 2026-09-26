@@ -169,7 +169,9 @@ pub struct NativeConditionalTargetLayoutRefV1<'a> {
     /// Claimed original feature text.
     pub target_features: &'a str,
 }
-fn target_layout<E>(bytes: &[u8]) -> Result<NativeConditionalTargetLayoutRefV1<'_>, Error<E>> {
+pub(crate) fn target_layout<E>(
+    bytes: &[u8],
+) -> Result<NativeConditionalTargetLayoutRefV1<'_>, Error<E>> {
     let mut fields = [&[][..]; 6];
     let mut rest = bytes;
     for field in &mut fields {

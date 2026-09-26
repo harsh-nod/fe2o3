@@ -457,3 +457,42 @@ fn conditional_capsule_v5_rejects_invalid_ranges_and_preserves_inert_leaf_bounda
         assert!(InertProductionSemanticCapsuleV5::decode_owned(bad).is_err());
     }
 }
+
+#[test]
+fn conditional_capsule_v5_layout_getter_borrows_the_validated_preimage() {
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        let (_, metadata) = metadata(profile);
+        let (_, bytes) = capsule(&metadata);
+        let owner = InertProductionSemanticCapsuleV5::decode_owned(bytes).unwrap();
+        drop(metadata);
+        let view = owner.semantic_target_layout();
+        assert_eq!(view.rustc_llvm_target, "amdgcn-amd-amdhsa");
+        assert_eq!(view.live_rustc_data_layout, "layout");
+        assert_eq!(view.default_pointer_width_bits, 64);
+        assert_eq!(view.target_cpu, profile.cpu());
+        assert_eq!(view.target_features, "features");
+        assert_eq!(view, owner.semantic_target_layout());
+        let preimage = owner.semantic_target_layout_bytes();
+        let start = preimage.as_ptr() as usize;
+        let end = start + preimage.len();
+        for text in [
+            view.rustc_llvm_target,
+            view.live_rustc_data_layout,
+            view.target_cpu,
+            view.target_features,
+        ] {
+            let pointer = text.as_ptr() as usize;
+            assert!(pointer >= start && pointer + text.len() <= end);
+        }
+        let reconstructed = canonical_semantic_target_layout_transcript_v1(
+            view.rustc_llvm_target,
+            view.live_rustc_data_layout,
+            view.default_pointer_width_bits,
+            view.target_cpu,
+            view.target_features,
+        )
+        .unwrap();
+        assert_eq!(&*reconstructed, preimage);
+        assert!(!owner.grants_authority());
+    }
+}
