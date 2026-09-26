@@ -91,10 +91,12 @@ fn same_bytes_other_transaction_and_coherent_cpu_substitution_cannot_reuse_repla
     }
     assert_eq!(cases[0].3.finalized_hsaco, cases[1].3.finalized_hsaco);
     let (_, attempt, identity, first) = &cases[0];
-    for (_, other_attempt, other_identity, other) in &cases[1..] {
+    for (index, (_, other_attempt, other_identity, other)) in cases[1..].iter().enumerate() {
         assert_ne!(identity, other_identity);
         assert!(replay(*other_attempt, first).is_err());
-        for (outer, transcript, hsaco) in [
+        assert_eq!(other.outer_handoff == first.outer_handoff, index == 0);
+        assert_ne!(other.transcript, first.transcript);
+        for (swapped, (outer, transcript, hsaco)) in [
             (
                 &other.outer_handoff,
                 &first.transcript,
@@ -105,17 +107,24 @@ fn same_bytes_other_transaction_and_coherent_cpu_substitution_cannot_reuse_repla
                 &other.transcript,
                 &first.finalized_hsaco,
             ),
-        ] {
-            assert!(
-                revalidate_protected_worker_v3_finalizer_derivation_v1(
-                    *attempt,
-                    outer,
-                    first.external_provider_payloads.iter().map(Vec::as_slice),
-                    transcript,
-                    hsaco
-                )
-                .is_err()
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let result = revalidate_protected_worker_v3_finalizer_derivation_v1(
+                *attempt,
+                outer,
+                first.external_provider_payloads.iter().map(Vec::as_slice),
+                transcript,
+                hsaco,
             );
+            if index == 0 && swapped == 0 {
+                // The handoff bytes are identical; occurrence is bound by the
+                // attempt and transcript, whose substitutions must still fail.
+                assert_eq!(result.unwrap().finalization_identity(), *identity);
+            } else {
+                assert!(result.is_err());
+            }
         }
         // Same bytes are deliberately valid under their own lineage; changed
         // source/CPU bytes must additionally fail exact output reconstruction.
@@ -153,7 +162,7 @@ fn prepared_intent_refuses_a_different_producer_before_persisting() {
     let (wire, _) = wires(TARGET, "producer");
     let (_, finalized) = finalized(&directory, &wire, 0x71);
     let prepared = prepare_nominal_worker_publication_v5(&producer(), finalized).unwrap();
-    let other = ProducerIdentity::from_codegen("v5-other", Some(Path::new("v5-other.rs"))).unwrap();
+    let other = ProducerIdentity::from_codegen("v5_other", Some(Path::new("v5-other.rs"))).unwrap();
     assert!(matches!(
         persist_prepared_nominal_worker_publication_v5(&directory.0, &other, prepared),
         Err(WorkerV3HsacoPublicationErrorV1::ProducerIdentityMismatch)
@@ -231,7 +240,7 @@ fn wrong_typed_recovery_repairs_redo_before_refusal_and_correct_recovery_stays_i
         Err(StoreError::ReceiptNotDurable)
     ));
     assert_eq!(fs::read(&path).unwrap(), original);
-    let other = ProducerIdentity::from_codegen("v5-other", Some(Path::new("v5-other.rs"))).unwrap();
+    let other = ProducerIdentity::from_codegen("v5_other", Some(Path::new("v5-other.rs"))).unwrap();
     assert!(recover_nominal_worker_publication_v5(&directory.0, &other, attempt).is_err());
     assert_eq!(fs::read(&path).unwrap(), original);
     finish_build_attempt(&directory.0, &producer(), attempt).unwrap_err();
