@@ -5,6 +5,18 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Source-bound assertions and retained debugger failure — 2026-09-26
+
+The [assertion evaluator checkpoint](bf16-helper-root-assertion-qualification-20260926.md)
+connects the full shared evaluator and same-source decision scope to the original
+ledger. All 331 model tests, 2,536 backend tests, backend/extractor build and five
+fresh Rust sessions passed. Actual roots contain zero assertion terminators;
+positive assertion coverage comes from component controls, not those sessions.
+The [private debugger attempt](physical-debugger-publication-deadline-20260926.md)
+failed during report publication, with independently verified owned-family
+cleanup. No capture or public activation is claimed. Complete root recipe and
+normal continuation remain open; broad accepted exits stay **6/18**.
+
 ## Bounded initial debugger readiness — 2026-09-26
 
 The [readiness checkpoint](physical-debugger-initial-argv-readiness-20260926.md)

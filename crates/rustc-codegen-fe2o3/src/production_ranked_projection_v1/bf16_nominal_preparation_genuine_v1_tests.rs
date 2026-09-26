@@ -57,6 +57,33 @@ pub(super) fn observe_prepared_dense(
         source.source_call(),
         budget,
     )?;
+    let assertions =
+        super::bf16_nominal_source_preparation_v1::observe_root_assertion_preparation_for_test_v1(
+            owner,
+            inventory,
+            source.root(),
+            source.root(),
+            source.call_block(),
+            source.source_call(),
+            budget,
+        )?;
+    // Actual measured counts, not a positive-assertion coverage assumption.
+    assert!(assertions.blocks > 0);
+    assert!(assertions.true_decisions <= assertions.assertions);
+    // Test-harness telemetry only: fixed labels and scalar fields, retained by
+    // the qualification runner's capped stderr. This does not grant admission,
+    // prove a positive Assert exists, or measure formatting/I/O on the compiler
+    // resource ledger. All evaluator counts above came from the actual view.
+    eprintln!(
+        "fe2o3-root-assertion-observation-v1 root={} call_block={} permutation={:?} blocks={} assertions={} true_decisions={} logical_work={}",
+        source.root().index(),
+        source.call_block().index(),
+        source.return_permutation(),
+        assertions.blocks,
+        assertions.assertions,
+        assertions.true_decisions,
+        assertions.logical_work,
+    );
     assert_eq!(budget.storage(), entry);
     Ok(())
 }
@@ -311,6 +338,16 @@ pub(super) fn inspect_dense_final_controls(
         budget,
     )?;
     super::bf16_nominal_source_preparation_v1::root_cfg_preparation_controls_for_test_v1(
+        owner,
+        inventory,
+        inventory_storage,
+        source.root(),
+        source.root(),
+        source.call_block(),
+        source.source_call(),
+        budget,
+    )?;
+    super::bf16_nominal_source_preparation_v1::root_assertion_preparation_controls_for_test_v1(
         owner,
         inventory,
         inventory_storage,

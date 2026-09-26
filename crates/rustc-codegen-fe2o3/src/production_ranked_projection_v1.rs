@@ -13586,6 +13586,17 @@ mod source_loop_cfg_resources_v1;
 #[allow(dead_code)]
 mod assertion_resources_v1;
 
+#[path = "production_ranked_projection_v1/assertion_analyzer_resources_v1.rs"]
+#[allow(dead_code)]
+mod assertion_analyzer_resources_v1;
+use assertion_analyzer_resources_v1::{
+    AssertionGraphV1, AssertionTableV1, assertion_evaluator_local_frame_v1,
+    assertion_resource_accounting_v1, assertion_resource_overflow_v1,
+};
+use assertion_resources_v1::{
+    AssertionCacheV1, AssertionQueueV1, AssertionResourcesV1, AssertionSetV1, LegacyReserve,
+};
+
 fn projected_loop_cfg_graph_v1(
     function: &SemanticFunctionDeclV1,
 ) -> Result<ProjectedLoopCfgV1, ProductionRankedProjectionErrorV1> {
@@ -13645,19 +13656,19 @@ enum AssertionRangeExpressionTaskV1 {
     Unsupported,
 }
 
-struct AssertionStrictUpperBoundStateV1 {
+struct AssertionStrictUpperBoundStateV1<'a> {
     local: usize,
     use_block: usize,
     next_switch_block: usize,
     range: Option<UnsignedRangeProofV1>,
     can_reach_use: Vec<bool>,
     stability_visited: Vec<usize>,
-    stability_pending: VecDeque<usize>,
+    stability_pending: AssertionQueueV1<'a>,
     stability_generation: usize,
     proven_upper_bound: Option<u128>,
 }
 
-enum AssertionRangeFrameV1 {
+enum AssertionRangeFrameV1<'a> {
     Operand {
         task: AssertionRangeOperandTaskV1,
         use_site: ScalarAssignmentSiteV1,
@@ -13681,17 +13692,17 @@ enum AssertionRangeFrameV1 {
         use_block: usize,
         maximum: u128,
     },
-    ContinueStrictUpperBound(AssertionStrictUpperBoundStateV1),
+    ContinueStrictUpperBound(AssertionStrictUpperBoundStateV1<'a>),
     ApplyStrictUpperBoundCandidate {
-        state: AssertionStrictUpperBoundStateV1,
+        state: AssertionStrictUpperBoundStateV1<'a>,
         switch_block: usize,
         success_target: usize,
     },
 }
 
-fn push_assertion_range_frame_v1(
-    frames: &mut Vec<AssertionRangeFrameV1>,
-    frame: AssertionRangeFrameV1,
+fn push_assertion_range_frame_v1<'a>(
+    frames: &mut Vec<AssertionRangeFrameV1<'a>>,
+    frame: AssertionRangeFrameV1<'a>,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     frames.try_reserve(1).map_err(|_| {
         ProductionRankedProjectionErrorV1::Unsupported(
@@ -13762,16 +13773,17 @@ struct AssertionDefinitionInventoryV1 {
 struct SemanticAssertProofsV1<'a> {
     types: &'a [SemanticTypeDeclV1],
     function: &'a SemanticFunctionDeclV1,
-    graph: ProjectedLoopCfgV1,
-    definition_counts: Vec<u8>,
-    block_definitions: Vec<Vec<usize>>,
-    address_escaped: Vec<bool>,
-    assignments: Vec<Option<ScalarAssignmentSiteV1>>,
+    graph: AssertionGraphV1<'a>,
+    definition_counts: AssertionTableV1<'a, u8>,
+    block_definitions: AssertionTableV1<'a, Vec<usize>>,
+    address_escaped: AssertionTableV1<'a, bool>,
+    assignments: AssertionTableV1<'a, Option<ScalarAssignmentSiteV1>>,
     checked_assertion_blocks: Vec<Vec<usize>>,
     statement_definitions: Option<StatementDefinitionIndexV1>,
-    dominance: HashMap<(usize, usize), bool>,
-    zero_exclusion: HashMap<(usize, usize), bool>,
+    dominance: AssertionCacheV1<'a>,
+    zero_exclusion: AssertionCacheV1<'a>,
     work: usize,
+    resources: AssertionResourcesV1<'a>,
 }
 
 impl<'a> SemanticAssertProofsV1<'a> {
@@ -13779,9 +13791,40 @@ impl<'a> SemanticAssertProofsV1<'a> {
         types: &'a [SemanticTypeDeclV1],
         function: &'a SemanticFunctionDeclV1,
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        // Preserve exact legacy graph/inventory construction and error order.
         let graph = projected_loop_cfg_graph_v1(function)?;
         let inventory = assertion_definition_inventory(function)?;
-        let mut checked_assertion_blocks = vec![Vec::new(); function.locals().len()];
+        let mut resources = AssertionResourcesV1::legacy();
+        let checked_assertion_blocks = Self::checked_assertion_index_v1(function, &mut resources)?;
+        let dominance = AssertionCacheV1::new(&mut resources)?;
+        let zero_exclusion = AssertionCacheV1::new(&mut resources)?;
+        Ok(Self {
+            types,
+            function,
+            graph: AssertionGraphV1::Owned(graph),
+            definition_counts: AssertionTableV1::Owned(inventory.counts),
+            block_definitions: AssertionTableV1::Owned(inventory.blocks),
+            address_escaped: AssertionTableV1::Owned(inventory.address_escaped),
+            assignments: AssertionTableV1::Owned(inventory.assignments),
+            checked_assertion_blocks,
+            statement_definitions: None,
+            dominance,
+            zero_exclusion,
+            work: 0,
+            resources,
+        })
+    }
+
+    fn checked_assertion_index_v1(
+        function: &SemanticFunctionDeclV1,
+        resources: &mut AssertionResourcesV1<'a>,
+    ) -> Result<Vec<Vec<usize>>, ProductionRankedProjectionErrorV1> {
+        let mut checked_assertion_blocks = if resources.is_strict() {
+            resources.nested(function.locals().len())?
+        } else {
+            vec![Vec::new(); function.locals().len()]
+        };
+        resources.extra_work(function.blocks().len())?;
         for (block_index, block) in function.blocks().iter().enumerate() {
             let SemanticTerminatorKindV1::Assert { condition, .. } = block.terminator().kind()
             else {
@@ -13795,26 +13838,63 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     "a checked arithmetic assertion is outside the semantic local table",
                 ));
             };
-            blocks.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "checked arithmetic assertion storage cannot be reserved",
-                )
-            })?;
-            blocks.push(block_index);
+            resources.push_vec(
+                blocks,
+                block_index,
+                "checked arithmetic assertion storage cannot be reserved",
+            )?;
         }
+        Ok(checked_assertion_blocks)
+    }
+
+    // Only the private prepared-view entry and cfg(test) component seam call this.
+    // Table/graph authenticity belongs to those exact input constructors; this
+    // core never manufactures empty fallback tables or obtains fresh authority.
+    fn new_borrowed_assertion_tables_v1(
+        types: &'a [SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+        graph: &'a ProjectedLoopCfgV1,
+        definition_counts: &'a [u8],
+        block_definitions: &'a [Vec<usize>],
+        address_escaped: &'a [bool],
+        assignments: &'a [Option<ScalarAssignmentSiteV1>],
+        mut resources: AssertionResourcesV1<'a>,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        resources.reserve_frame::<Self>(0)?;
+        resources.extra_work(64)?;
+        let locals = function.locals().len();
+        let blocks = function.blocks().len();
+        if !resources.is_strict()
+            || definition_counts.len() != locals
+            || address_escaped.len() != locals
+            || assignments.len() != locals
+            || block_definitions.len() != blocks
+            || graph.successors.len() != blocks
+            || graph.predecessors.len() != blocks
+            || graph.reachable.len() != blocks
+            || graph.entry != function.entry().index() as usize
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "prepared assertion source tables differ from the exact function",
+            ));
+        }
+        let checked_assertion_blocks = Self::checked_assertion_index_v1(function, &mut resources)?;
+        let dominance = AssertionCacheV1::new(&mut resources)?;
+        let zero_exclusion = AssertionCacheV1::new(&mut resources)?;
         Ok(Self {
             types,
             function,
-            graph,
-            definition_counts: inventory.counts,
-            block_definitions: inventory.blocks,
-            address_escaped: inventory.address_escaped,
-            assignments: inventory.assignments,
+            graph: AssertionGraphV1::Borrowed(graph),
+            definition_counts: AssertionTableV1::Borrowed(definition_counts),
+            block_definitions: AssertionTableV1::Borrowed(block_definitions),
+            address_escaped: AssertionTableV1::Borrowed(address_escaped),
+            assignments: AssertionTableV1::Borrowed(assignments),
             checked_assertion_blocks,
             statement_definitions: None,
-            dominance: HashMap::new(),
-            zero_exclusion: HashMap::new(),
+            dominance,
+            zero_exclusion,
             work: 0,
+            resources,
         })
     }
 
@@ -13822,9 +13902,18 @@ impl<'a> SemanticAssertProofsV1<'a> {
         types: &'a [SemanticTypeDeclV1],
         function: &'a SemanticFunctionDeclV1,
     ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
-        let mut proof = Self::new(types, function)?;
-        let mut proved = vec![false; function.blocks().len()];
+        Self::new(types, function)?.analyze_existing_assertions_v1()
+    }
+
+    fn analyze_existing_assertions_v1(
+        &mut self,
+    ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
+        let function = self.function;
+        let mut proved = self.resources.filled(function.blocks().len(), false)?;
+        self.resources.extra_work(function.blocks().len())?;
         for (block_index, block) in function.blocks().iter().enumerate() {
+            self.resources.extra_work(64)?;
             let SemanticTerminatorKindV1::Assert {
                 condition,
                 expected,
@@ -13838,22 +13927,23 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 proved[block_index] = true;
                 continue;
             }
-            if proof.proves_literal_shift_assert_v1(condition, *expected, message, block_index)? {
+            if self.proves_literal_shift_assert_v1(condition, *expected, message, block_index)? {
                 proved[block_index] = true;
                 continue;
             }
-            if proof.proves_checked_overflow_assert_v1(
-                condition,
-                *expected,
-                message,
-                block_index,
-            )? {
+            if self.proves_checked_overflow_assert_v1(condition, *expected, message, block_index)? {
                 proved[block_index] = true;
                 continue;
             }
-            proved[block_index] = proof
-                .range_at_operand(condition, block_index, block.statements().len())?
-                .is_some_and(|range| range.is_exact(u128::from(*expected)));
+            proved[block_index] = {
+                // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                self.resources
+                    .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                        assertion_evaluator_local_frame_v1()?,
+                    )?;
+                self.range_at_operand(condition, block_index, block.statements().len())
+            }?
+            .is_some_and(|range| range.is_exact(u128::from(*expected)));
         }
         Ok(proved)
     }
@@ -13900,6 +13990,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         message: &SemanticAssertMessageV1,
         block: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if !expected {
             return Ok(false);
         }
@@ -14041,7 +14132,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             SemanticRvalueKindV1::Cast {
                 kind: SemanticCastKindV1::Integer,
                 operand,
-            } if same_semantic_operand_value_v1(operand, message_right)
+            } if self.resources.same_operand_value(operand, message_right)?
         ))
     }
 
@@ -14052,6 +14143,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         message: &SemanticAssertMessageV1,
         block: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if expected {
             return Ok(false);
         }
@@ -14096,8 +14188,12 @@ impl<'a> SemanticAssertProofsV1<'a> {
             SemanticCheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
         };
         if *operation != checked_operation
-            || !same_semantic_operand_value_v1(message_left, checked.left())
-            || !same_semantic_operand_value_v1(message_right, checked.right())
+            || !self
+                .resources
+                .same_operand_value(message_left, checked.left())?
+            || !self
+                .resources
+                .same_operand_value(message_right, checked.right())?
         {
             return Ok(false);
         }
@@ -14124,8 +14220,22 @@ impl<'a> SemanticAssertProofsV1<'a> {
         {
             return Ok(true);
         }
-        let left = self.range_at_operand(checked.left(), site.block, site.statement)?;
-        let right = self.range_at_operand(checked.right(), site.block, site.statement)?;
+        let left = {
+            // Prepay the complete recursive callee/result/error frame BEFORE entry.
+            self.resources
+                .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                    assertion_evaluator_local_frame_v1()?,
+                )?;
+            self.range_at_operand(checked.left(), site.block, site.statement)
+        }?;
+        let right = {
+            // Prepay the complete recursive callee/result/error frame BEFORE entry.
+            self.resources
+                .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                    assertion_evaluator_local_frame_v1()?,
+                )?;
+            self.range_at_operand(checked.right(), site.block, site.statement)
+        }?;
         let maximum = self.scalar_unsigned_maximum(checked.left().ty());
         Ok(Self::range_of_binary(checked_operation, left, right, maximum)?.is_some())
     }
@@ -14136,6 +14246,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_block: usize,
         use_statement: usize,
     ) -> Result<Option<AuthenticatedCheckedBinaryValueV1>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let Some(result_local) = tuple_field_operand_local_v1(operand, 0) else {
             return Ok(None);
         };
@@ -14153,6 +14264,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_block: usize,
         use_statement: usize,
     ) -> Result<Option<AuthenticatedCheckedBinaryValueV1>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if self.definition_counts.get(local).copied() != Some(1)
             || self.address_escaped.get(local).copied() != Some(false)
         {
@@ -14184,7 +14296,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "a checked arithmetic result is outside the assertion table",
             ))?;
+        self.resources.extra_work(assertion_count)?;
         for assertion_index in 0..assertion_count {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             let assertion_block = self.checked_assertion_blocks[local][assertion_index];
             let SemanticTerminatorKindV1::Assert {
@@ -14201,8 +14315,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 message,
                 SemanticAssertMessageV1::Overflow { operation, left, right }
                     if *operation == checked_operation
-                        && same_semantic_operand_value_v1(left, checked.left())
-                        && same_semantic_operand_value_v1(right, checked.right())
+                        && self.resources.same_operand_value(left, checked.left())?
+                        && self.resources.same_operand_value(right, checked.right())?
             );
             if tuple_field_operand_local_v1(condition, 1).map(|result| result.index() as usize)
                 != Some(local)
@@ -14230,7 +14344,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     local,
                     definition,
                     assertion_block,
-                    checked: checked.clone(),
+                    checked: self.resources.clone_checked_binary(checked)?,
                 }));
             }
         }
@@ -14241,6 +14355,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         &mut self,
         value: &AuthenticatedCheckedBinaryValueV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let SemanticTerminatorKindV1::Assert {
             condition,
             expected,
@@ -14262,6 +14377,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         projected_right: &ProjectedPipelineScalarV1,
         uniform_inductions: &[ProjectedUniformInductionV1],
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if self.proves_authenticated_checked_binary_total_v1(value)? {
             return Ok(true);
         }
@@ -14298,6 +14414,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         definition: ScalarAssignmentSiteV1,
         uniform_inductions: &[ProjectedUniformInductionV1],
     ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if let ProjectedPipelineScalarV1::Induction { induction } = projected {
             let Some(induction) = uniform_inductions.get(*induction) else {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -14312,11 +14429,18 @@ impl<'a> SemanticAssertProofsV1<'a> {
             let Some(type_maximum) = self.scalar_unsigned_maximum(operand.ty()) else {
                 return Ok(None);
             };
-            let Some(bound) = self.range_at_operand(
-                &induction.source_progress.bound_operand,
-                induction.header,
-                induction.source_progress.header_statement,
-            )?
+            let Some(bound) = {
+                // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                self.resources
+                    .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                        assertion_evaluator_local_frame_v1()?,
+                    )?;
+                self.range_at_operand(
+                    &induction.source_progress.bound_operand,
+                    induction.header,
+                    induction.source_progress.header_statement,
+                )
+            }?
             else {
                 return Ok(None);
             };
@@ -14331,7 +14455,14 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 maximum,
             }));
         }
-        self.range_at_operand(operand, definition.block, definition.statement)
+        {
+            // Prepay the complete recursive callee/result/error frame BEFORE entry.
+            self.resources
+                .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                    assertion_evaluator_local_frame_v1()?,
+                )?;
+            self.range_at_operand(operand, definition.block, definition.statement)
+        }
     }
 
     fn range_at_operand(
@@ -14340,6 +14471,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         block: usize,
         statement: usize,
     ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if block >= self.function.blocks().len()
             || statement > self.function.blocks()[block].statements().len()
         {
@@ -14347,11 +14479,18 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 "a compiler-derived unsigned cast has a stale semantic use site",
             ));
         }
-        self.evaluate_assertion_range_operand_v1(operand, block, statement)
+        {
+            // Prepay the complete recursive callee/result/error frame BEFORE entry.
+            self.resources
+                .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                    assertion_evaluator_local_frame_v1()?,
+                )?;
+            self.evaluate_assertion_range_operand_v1(operand, block, statement)
+        }
     }
 
     fn charge(&mut self, amount: usize) -> Result<(), ProductionRankedProjectionErrorV1> {
-        project_loop_graph_charge_v1(&mut self.work, amount)
+        self.resources.logical_work(&mut self.work, amount)
     }
 
     fn scalar_unsigned_maximum(&self, ty: SemanticTypeIdV1) -> Option<u128> {
@@ -14402,8 +14541,14 @@ impl<'a> SemanticAssertProofsV1<'a> {
         })
     }
 
-    fn assertion_range_operand_task_v1(operand: &SemanticOperandV1) -> AssertionRangeOperandTaskV1 {
-        match operand {
+    fn assertion_range_operand_task_v1(
+        &mut self,
+        operand: &SemanticOperandV1,
+    ) -> Result<AssertionRangeOperandTaskV1, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
+        self.resources
+            .reserve_frame::<AssertionRangeOperandTaskV1>(0)?;
+        Ok(match operand {
             SemanticOperandV1::Constant(constant) => AssertionRangeOperandTaskV1::Constant {
                 ty: constant.ty(),
                 bits: match constant.value() {
@@ -14419,20 +14564,23 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 } else if place.projections().is_empty() {
                     AssertionRangeOperandTaskV1::Local(place.local().index() as usize)
                 } else {
-                    AssertionRangeOperandTaskV1::ProjectedPlace(place.clone())
+                    AssertionRangeOperandTaskV1::ProjectedPlace(self.resources.clone_place(place)?)
                 }
             }
-        }
+        })
     }
 
     fn assertion_range_expression_task_v1(
-        &self,
+        &mut self,
         value: &fe2o3_mir_model::semantic_mir_v1::SemanticRvalueV1,
-    ) -> AssertionRangeExpressionTaskV1 {
+    ) -> Result<AssertionRangeExpressionTaskV1, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
+        self.resources
+            .reserve_frame::<AssertionRangeExpressionTaskV1>(0)?;
         let destination_maximum = self.scalar_unsigned_maximum(value.result_type());
-        match value.kind() {
+        Ok(match value.kind() {
             SemanticRvalueKindV1::Use(operand) => AssertionRangeExpressionTaskV1::Operand(
-                Self::assertion_range_operand_task_v1(operand),
+                self.assertion_range_operand_task_v1(operand)?,
             ),
             SemanticRvalueKindV1::Cast {
                 kind: SemanticCastKindV1::Integer,
@@ -14442,9 +14590,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 .zip(self.unsigned_integer_bits(value.result_type()))
                 .is_some_and(|(source, destination)| destination >= source) =>
             {
-                AssertionRangeExpressionTaskV1::Operand(Self::assertion_range_operand_task_v1(
-                    operand,
-                ))
+                AssertionRangeExpressionTaskV1::Operand(
+                    self.assertion_range_operand_task_v1(operand)?,
+                )
             }
             SemanticRvalueKindV1::Binary {
                 operation,
@@ -14453,32 +14601,103 @@ impl<'a> SemanticAssertProofsV1<'a> {
             } => AssertionRangeExpressionTaskV1::Binary {
                 operation: *operation,
                 destination_maximum,
-                left: Self::assertion_range_operand_task_v1(left),
-                right: Self::assertion_range_operand_task_v1(right),
-                left_source: left.clone(),
-                right_source: right.clone(),
+                left: self.assertion_range_operand_task_v1(left)?,
+                right: self.assertion_range_operand_task_v1(right)?,
+                left_source: self.resources.clone_operand(left)?,
+                right_source: self.resources.clone_operand(right)?,
             },
             _ => AssertionRangeExpressionTaskV1::Unsupported,
+        })
+    }
+
+    fn push_assertion_reserved_vec_v1<T>(
+        resources: &mut AssertionResourcesV1<'a>,
+        values: &mut Vec<T>,
+        value: T,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        resources.extra_work(64)?;
+        if resources.is_strict() {
+            resources.reserve_frame::<T>(std::mem::size_of::<Vec<T>>())?;
+            resources.extra_work(std::mem::size_of::<T>() + 1)?;
+            // All call sites retain their exact legacy upfront reservation.
+            // Strict mode refuses an unexpected growth instead of allocating
+            // through the unchecked legacy push.
+            if values.len() == values.capacity() && std::mem::size_of::<T>() != 0 {
+                return Err(assertion_resource_accounting_v1());
+            }
+        }
+        values.push(value);
+        Ok(())
+    }
+
+    fn push_assertion_range_frame_with_resources_v1(
+        &mut self,
+        frames: &mut Vec<AssertionRangeFrameV1<'a>>,
+        frame: AssertionRangeFrameV1<'a>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
+        if self.resources.is_strict() {
+            self.resources.push_vec(
+                frames,
+                frame,
+                "assertion range evaluator frame storage cannot be reserved",
+            )
+        } else {
+            push_assertion_range_frame_v1(frames, frame)
         }
     }
 
+    fn push_assertion_range_value_with_resources_v1(
+        &mut self,
+        values: &mut Vec<Option<UnsignedRangeProofV1>>,
+        value: Option<UnsignedRangeProofV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
+        if self.resources.is_strict() {
+            self.resources.push_vec(
+                values,
+                value,
+                "assertion range evaluator value storage cannot be reserved",
+            )
+        } else {
+            push_assertion_range_value_v1(values, value)
+        }
+    }
+
+    fn pop_assertion_range_value_with_resources_v1(
+        &mut self,
+        values: &mut Vec<Option<UnsignedRangeProofV1>>,
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
+        self.resources
+            .extra_work(std::mem::size_of::<Option<UnsignedRangeProofV1>>() + 1)?;
+        pop_assertion_range_value_v1(values)
+    }
+
     fn schedule_assertion_range_operand_v1(
-        frames: &mut Vec<AssertionRangeFrameV1>,
+        &mut self,
+        frames: &mut Vec<AssertionRangeFrameV1<'a>>,
         task: AssertionRangeOperandTaskV1,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<(), ProductionRankedProjectionErrorV1> {
-        push_assertion_range_frame_v1(frames, AssertionRangeFrameV1::Operand { task, use_site })
+        self.resources.extra_work(64)?;
+        self.push_assertion_range_frame_with_resources_v1(
+            frames,
+            AssertionRangeFrameV1::Operand { task, use_site },
+        )
     }
 
     fn schedule_assertion_range_expression_v1(
-        frames: &mut Vec<AssertionRangeFrameV1>,
+        &mut self,
+        frames: &mut Vec<AssertionRangeFrameV1<'a>>,
         values: &mut Vec<Option<UnsignedRangeProofV1>>,
         task: AssertionRangeExpressionTaskV1,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         match task {
             AssertionRangeExpressionTaskV1::Operand(operand) => {
-                Self::schedule_assertion_range_operand_v1(frames, operand, use_site)
+                self.schedule_assertion_range_operand_v1(frames, operand, use_site)
             }
             AssertionRangeExpressionTaskV1::Binary {
                 operation,
@@ -14488,7 +14707,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 left_source,
                 right_source,
             } => {
-                push_assertion_range_frame_v1(
+                self.push_assertion_range_frame_with_resources_v1(
                     frames,
                     AssertionRangeFrameV1::FinishBinary {
                         operation,
@@ -14498,23 +14717,24 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         use_site,
                     },
                 )?;
-                Self::schedule_assertion_range_operand_v1(frames, right, use_site)?;
-                Self::schedule_assertion_range_operand_v1(frames, left, use_site)
+                self.schedule_assertion_range_operand_v1(frames, right, use_site)?;
+                self.schedule_assertion_range_operand_v1(frames, left, use_site)
             }
             AssertionRangeExpressionTaskV1::Unsupported => {
-                push_assertion_range_value_v1(values, None)
+                self.push_assertion_range_value_with_resources_v1(values, None)
             }
         }
     }
 
     fn schedule_assertion_local_narrowing_v1(
         &mut self,
-        frames: &mut Vec<AssertionRangeFrameV1>,
+        frames: &mut Vec<AssertionRangeFrameV1<'a>>,
         local: usize,
         use_block: usize,
         maximum: u128,
         result: Option<UnsignedRangeProofV1>,
     ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         // A live safe-Rust unsigned scalar always inhabits its declared bit
         // width even when exact single-definition reconstruction is
         // unavailable (for example, a loop-carried induction). This fallback
@@ -14538,21 +14758,27 @@ impl<'a> SemanticAssertProofsV1<'a> {
         let block_count = self.function.blocks().len();
         let can_reach_use = self.blocks_reaching(use_block)?;
         let mut stability_visited = Vec::new();
-        stability_visited
-            .try_reserve_exact(block_count)
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof upper-bound stability storage cannot be reserved",
-                )
-            })?;
+        self.resources.reserve_vec(
+            &mut stability_visited,
+            block_count,
+            LegacyReserve::Exact,
+            "assertion proof upper-bound stability storage cannot be reserved",
+        )?;
+        if self.resources.is_strict() {
+            self.resources.extra_work(
+                block_count
+                    .checked_mul(std::mem::size_of_val(&0_usize) + 1)
+                    .ok_or_else(|| assertion_resource_overflow_v1())?,
+            )?;
+        }
         stability_visited.resize(block_count, 0_usize);
-        let mut stability_pending = VecDeque::new();
-        stability_pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof upper-bound stability worklist cannot be reserved",
-            )
-        })?;
-        push_assertion_range_frame_v1(
+        let mut stability_pending = AssertionQueueV1::new(&mut self.resources)?;
+        stability_pending.reserve(
+            block_count,
+            &mut self.resources,
+            "assertion proof upper-bound stability worklist cannot be reserved",
+        )?;
+        self.push_assertion_range_frame_with_resources_v1(
             frames,
             AssertionRangeFrameV1::ContinueStrictUpperBound(AssertionStrictUpperBoundStateV1 {
                 local,
@@ -14574,30 +14800,44 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_block: usize,
         use_statement: usize,
     ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let mut frames = Vec::new();
         let mut values = Vec::new();
-        let mut visiting = HashSet::new();
-        Self::schedule_assertion_range_operand_v1(
+        let mut visiting = AssertionSetV1::new(&mut self.resources)?;
+        let operand_task = self.assertion_range_operand_task_v1(operand)?;
+        self.schedule_assertion_range_operand_v1(
             &mut frames,
-            Self::assertion_range_operand_task_v1(operand),
+            operand_task,
             ScalarAssignmentSiteV1 {
                 block: use_block,
                 statement: use_statement,
             },
         )?;
 
-        while let Some(frame) = frames.pop() {
+        loop {
+            self.resources.extra_work(64)?;
+            self.resources
+                .extra_work(std::mem::size_of::<AssertionRangeFrameV1<'a>>() + 1)?;
+            let Some(frame) = frames.pop() else {
+                break;
+            };
             match frame {
                 AssertionRangeFrameV1::Operand { task, use_site } => {
                     self.charge(1)?;
                     match task {
                         AssertionRangeOperandTaskV1::Constant { ty, bits } => {
                             let Some(maximum) = self.scalar_unsigned_maximum(ty) else {
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             };
                             let Some(bits) = bits else {
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             };
                             let value = (bits <= maximum)
@@ -14605,27 +14845,39 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                                     "an unsigned scalar constant exceeds its semantic type",
                                 ))?;
-                            push_assertion_range_value_v1(&mut values, Some(value))?;
+                            self.push_assertion_range_value_with_resources_v1(
+                                &mut values,
+                                Some(value),
+                            )?;
                         }
                         AssertionRangeOperandTaskV1::ProjectedPlace(place) => {
                             self.charge(1)?;
                             let local = place.local().index() as usize;
                             if self.address_escaped.get(local).copied() != Some(false)
-                                || visiting.contains(&local)
+                                || visiting.contains(&local, &mut self.resources)?
                             {
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             }
                             let Some(site) = self.exact_reaching_assignment_v1(local, use_site)?
                             else {
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             };
                             let SemanticStatementKindV1::Assign(assignment) =
                                 self.function.blocks()[site.block].statements()[site.statement]
                                     .kind()
                             else {
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             };
                             let projected = match place.projections() {
@@ -14636,17 +14888,26 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                         SemanticRvalueKindV1::Aggregate(aggregate),
                                     ) = (downcast.kind(), field.kind(), assignment.value().kind())
                                     else {
-                                        push_assertion_range_value_v1(&mut values, None)?;
+                                        self.push_assertion_range_value_with_resources_v1(
+                                            &mut values,
+                                            None,
+                                        )?;
                                         continue;
                                     };
                                     let SemanticAggregateKindV1::EnumVariant(actual_variant) =
                                         aggregate.kind()
                                     else {
-                                        push_assertion_range_value_v1(&mut values, None)?;
+                                        self.push_assertion_range_value_with_resources_v1(
+                                            &mut values,
+                                            None,
+                                        )?;
                                         continue;
                                     };
                                     if projected_variant != *actual_variant {
-                                        push_assertion_range_value_v1(&mut values, None)?;
+                                        self.push_assertion_range_value_with_resources_v1(
+                                            &mut values,
+                                            None,
+                                        )?;
                                         continue;
                                     }
                                     aggregate.operands().get(projected_field as usize)
@@ -14657,7 +14918,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                         SemanticRvalueKindV1::Aggregate(aggregate),
                                     ) = (field.kind(), assignment.value().kind())
                                     else {
-                                        push_assertion_range_value_v1(&mut values, None)?;
+                                        self.push_assertion_range_value_with_resources_v1(
+                                            &mut values,
+                                            None,
+                                        )?;
                                         continue;
                                     };
                                     if !matches!(
@@ -14666,32 +14930,42 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                             | SemanticAggregateKindV1::Tuple
                                             | SemanticAggregateKindV1::Aggregate
                                     ) {
-                                        push_assertion_range_value_v1(&mut values, None)?;
+                                        self.push_assertion_range_value_with_resources_v1(
+                                            &mut values,
+                                            None,
+                                        )?;
                                         continue;
                                     }
                                     aggregate.operands().get(projected_field as usize)
                                 }
                                 _ => None,
                             };
-                            let Some(projected) =
-                                projected.filter(|value| value.ty() == place.ty()).cloned()
+                            let Some(projected) = projected
+                                .filter(|value| value.ty() == place.ty())
+                                .map(|value| self.resources.clone_operand(value))
+                                .transpose()?
                             else {
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             };
-                            visiting.try_reserve(1).map_err(|_| {
-                                ProductionRankedProjectionErrorV1::Unsupported(
-                                    "assertion range evaluator path storage cannot be reserved",
-                                )
-                            })?;
-                            visiting.insert(local);
-                            push_assertion_range_frame_v1(
+                            visiting.reserve(
+                                1,
+                                &mut self.resources,
+                                "assertion range evaluator path storage cannot be reserved",
+                            )?;
+                            visiting.insert(local, &mut self.resources)?;
+                            self.push_assertion_range_frame_with_resources_v1(
                                 &mut frames,
                                 AssertionRangeFrameV1::FinishProjectedPlace { local },
                             )?;
-                            Self::schedule_assertion_range_operand_v1(
+                            let projected_task =
+                                self.assertion_range_operand_task_v1(&projected)?;
+                            self.schedule_assertion_range_operand_v1(
                                 &mut frames,
-                                Self::assertion_range_operand_task_v1(&projected),
+                                projected_task,
                                 site,
                             )?;
                         }
@@ -14714,21 +14988,27 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                     "an assertion proof local is outside the semantic local table",
                                 ))?;
                             let Some(maximum) = self.scalar_unsigned_maximum(ty) else {
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             };
                             if self.address_escaped.get(local).copied() != Some(false)
-                                || visiting.contains(&local)
+                                || visiting.contains(&local, &mut self.resources)?
                             {
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             }
-                            visiting.try_reserve(1).map_err(|_| {
-                                ProductionRankedProjectionErrorV1::Unsupported(
-                                    "assertion range evaluator path storage cannot be reserved",
-                                )
-                            })?;
-                            visiting.insert(local);
+                            visiting.reserve(
+                                1,
+                                &mut self.resources,
+                                "assertion range evaluator path storage cannot be reserved",
+                            )?;
+                            visiting.insert(local, &mut self.resources)?;
                             match self.definition_counts.get(local).copied() {
                                 Some(0) if is_argument => {
                                     let minimum = if self
@@ -14783,9 +15063,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                             ),
                                         );
                                     };
-                                    let expression =
-                                        self.assertion_range_expression_task_v1(assignment.value());
-                                    push_assertion_range_frame_v1(
+                                    let expression = self
+                                        .assertion_range_expression_task_v1(assignment.value())?;
+                                    self.push_assertion_range_frame_with_resources_v1(
                                         &mut frames,
                                         AssertionRangeFrameV1::FinishLocalDefinition {
                                             local,
@@ -14793,7 +15073,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                             maximum,
                                         },
                                     )?;
-                                    Self::schedule_assertion_range_expression_v1(
+                                    self.schedule_assertion_range_expression_v1(
                                         &mut frames,
                                         &mut values,
                                         expression,
@@ -14815,20 +15095,26 @@ impl<'a> SemanticAssertProofsV1<'a> {
                             self.charge(1)?;
                             if self.definition_counts.get(local).copied() != Some(1)
                                 || self.address_escaped.get(local).copied() != Some(false)
-                                || visiting.contains(&local)
+                                || visiting.contains(&local, &mut self.resources)?
                             {
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             }
-                            visiting.try_reserve(1).map_err(|_| {
-                                ProductionRankedProjectionErrorV1::Unsupported(
-                                    "assertion range evaluator path storage cannot be reserved",
-                                )
-                            })?;
-                            visiting.insert(local);
+                            visiting.reserve(
+                                1,
+                                &mut self.resources,
+                                "assertion range evaluator path storage cannot be reserved",
+                            )?;
+                            visiting.insert(local, &mut self.resources)?;
                             let Some(site) = self.assignments.get(local).copied().flatten() else {
-                                visiting.remove(&local);
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                visiting.remove(&local, &mut self.resources)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             };
                             if !self.assignment_dominates_use(
@@ -14836,23 +15122,32 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 use_site.block,
                                 use_site.statement,
                             )? {
-                                visiting.remove(&local);
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                visiting.remove(&local, &mut self.resources)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             }
                             let SemanticStatementKindV1::Assign(assignment) =
                                 self.function.blocks()[site.block].statements()[site.statement]
                                     .kind()
                             else {
-                                visiting.remove(&local);
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                visiting.remove(&local, &mut self.resources)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             };
                             let SemanticRvalueKindV1::CheckedBinary(checked) =
                                 assignment.value().kind()
                             else {
-                                visiting.remove(&local);
-                                push_assertion_range_value_v1(&mut values, None)?;
+                                visiting.remove(&local, &mut self.resources)?;
+                                self.push_assertion_range_value_with_resources_v1(
+                                    &mut values,
+                                    None,
+                                )?;
                                 continue;
                             };
                             let operation = match checked.operation() {
@@ -14864,10 +15159,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 operation,
                                 destination_maximum: self
                                     .scalar_unsigned_maximum(checked.left().ty()),
-                                left: Self::assertion_range_operand_task_v1(checked.left()),
-                                right: Self::assertion_range_operand_task_v1(checked.right()),
-                                left_source: checked.left().clone(),
-                                right_source: checked.right().clone(),
+                                left: self.assertion_range_operand_task_v1(checked.left())?,
+                                right: self.assertion_range_operand_task_v1(checked.right())?,
+                                left_source: self.resources.clone_operand(checked.left())?,
+                                right_source: self.resources.clone_operand(checked.right())?,
                             };
                             let authenticated = self
                                 .authenticated_checked_binary_local_value_v1(
@@ -14878,33 +15173,46 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 .is_some();
                             let relational_range = match checked.operation() {
                                 SemanticCheckedBinaryOpV1::Subtract if authenticated => {
-                                    self.scaled_quotient_remainder_upper_range_v1(
-                                        checked.left(),
-                                        checked.right(),
-                                        site,
-                                    )?
+                                    {
+                                        // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                                        self.resources
+                                            .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                                                assertion_evaluator_local_frame_v1()?,
+                                            )?;
+                                        self.scaled_quotient_remainder_upper_range_v1(
+                                            checked.left(),
+                                            checked.right(),
+                                            site,
+                                        )
+                                    }?
                                     .or_else(|| {
                                         // On the exact checked-success edge, unsigned K-rhs
                                         // lies in [0,K], even when independent ranges overlap.
                                         self.literal_unsigned_subtraction_upper_range_v1(checked)
                                     })
                                 }
-                                SemanticCheckedBinaryOpV1::Multiply if authenticated => self
-                                    .bounded_quotient_product_upper_range_v1(
+                                SemanticCheckedBinaryOpV1::Multiply if authenticated => {
+                                    // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                                    self.resources
+                                        .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                                            assertion_evaluator_local_frame_v1()?,
+                                        )?;
+                                    self.bounded_quotient_product_upper_range_v1(
                                         checked.left(),
                                         checked.right(),
                                         site,
-                                    )?,
+                                    )
+                                }?,
                                 _ => None,
                             };
-                            push_assertion_range_frame_v1(
+                            self.push_assertion_range_frame_with_resources_v1(
                                 &mut frames,
                                 AssertionRangeFrameV1::FinishCheckedResult {
                                     local,
                                     relational_range,
                                 },
                             )?;
-                            Self::schedule_assertion_range_expression_v1(
+                            self.schedule_assertion_range_expression_v1(
                                 &mut frames,
                                 &mut values,
                                 expression,
@@ -14920,16 +15228,23 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     right_source,
                     use_site,
                 } => {
-                    let right = pop_assertion_range_value_v1(&mut values)?;
-                    let left = pop_assertion_range_value_v1(&mut values)?;
+                    let right = self.pop_assertion_range_value_with_resources_v1(&mut values)?;
+                    let left = self.pop_assertion_range_value_with_resources_v1(&mut values)?;
                     let mut result =
                         Self::range_of_binary(operation, left, right, destination_maximum)?;
                     if operation == SemanticBinaryOpV1::Divide
-                        && let Some(bound) = self.quotient_strict_product_upper_bound_v1(
-                            &left_source,
-                            &right_source,
-                            use_site,
-                        )?
+                        && let Some(bound) = {
+                            // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                            self.resources
+                                .reserve_frame::<Option<AuthenticatedQuotientStrictBoundV1>>(
+                                    assertion_evaluator_local_frame_v1()?,
+                                )?;
+                            self.quotient_strict_product_upper_bound_v1(
+                                &left_source,
+                                &right_source,
+                                use_site,
+                            )
+                        }?
                     {
                         let upper_bound = bound.maximum;
                         result = Some(match result {
@@ -14943,14 +15258,14 @@ impl<'a> SemanticAssertProofsV1<'a> {
                             },
                         });
                     }
-                    push_assertion_range_value_v1(&mut values, result)?;
+                    self.push_assertion_range_value_with_resources_v1(&mut values, result)?;
                 }
                 AssertionRangeFrameV1::FinishCheckedResult {
                     local,
                     relational_range,
                 } => {
-                    let result = pop_assertion_range_value_v1(&mut values)?;
-                    visiting.remove(&local);
+                    let result = self.pop_assertion_range_value_with_resources_v1(&mut values)?;
+                    visiting.remove(&local, &mut self.resources)?;
                     let result = match (result, relational_range) {
                         (Some(left), Some(right)) => {
                             let minimum = left.minimum.max(right.minimum);
@@ -14961,17 +15276,17 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         (Some(range), None) | (None, Some(range)) => Some(range),
                         (None, None) => None,
                     };
-                    push_assertion_range_value_v1(&mut values, result)?;
+                    self.push_assertion_range_value_with_resources_v1(&mut values, result)?;
                 }
                 AssertionRangeFrameV1::FinishProjectedPlace { local } => {
-                    visiting.remove(&local);
+                    visiting.remove(&local, &mut self.resources)?;
                 }
                 AssertionRangeFrameV1::FinishLocalDefinition {
                     local,
                     use_block,
                     maximum,
                 } => {
-                    let result = pop_assertion_range_value_v1(&mut values)?;
+                    let result = self.pop_assertion_range_value_with_resources_v1(&mut values)?;
                     self.schedule_assertion_local_narrowing_v1(
                         &mut frames,
                         local,
@@ -14983,6 +15298,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 AssertionRangeFrameV1::ContinueStrictUpperBound(mut state) => {
                     let mut scheduled = None;
                     while state.next_switch_block < self.function.blocks().len() {
+                        self.resources.extra_work(64)?;
                         let switch_block = state.next_switch_block;
                         state.next_switch_block += 1;
                         self.charge(1)?;
@@ -15055,13 +15371,14 @@ impl<'a> SemanticAssertProofsV1<'a> {
                             };
                             Some((
                                 simple_operand_local(left)?.index() as usize,
-                                Self::assertion_range_operand_task_v1(right),
+                                right,
                                 success_target,
                             ))
                         })(
                         ) else {
                             continue;
                         };
+                        let right = self.assertion_range_operand_task_v1(right)?;
                         let mut capture = site;
                         if !self.local_is_value_preserving_alias_of(
                             left_local,
@@ -15083,14 +15400,14 @@ impl<'a> SemanticAssertProofsV1<'a> {
                             state.local,
                             capture.statement,
                             statement_count,
-                        ) {
+                        )? {
                             continue;
                         }
                         scheduled = Some((right, site, switch_block, success_target));
                         break;
                     }
                     if let Some((task, site, switch_block, success_target)) = scheduled {
-                        push_assertion_range_frame_v1(
+                        self.push_assertion_range_frame_with_resources_v1(
                             &mut frames,
                             AssertionRangeFrameV1::ApplyStrictUpperBoundCandidate {
                                 state,
@@ -15098,7 +15415,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 success_target,
                             },
                         )?;
-                        Self::schedule_assertion_range_operand_v1(&mut frames, task, site)?;
+                        self.schedule_assertion_range_operand_v1(&mut frames, task, site)?;
                     } else {
                         if let Some(upper_bound) = state.proven_upper_bound {
                             state.range = Some(match state.range {
@@ -15118,8 +15435,11 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 state.range = None;
                             }
                         }
-                        visiting.remove(&state.local);
-                        push_assertion_range_value_v1(&mut values, state.range)?;
+                        visiting.remove(&state.local, &mut self.resources)?;
+                        self.push_assertion_range_value_with_resources_v1(
+                            &mut values,
+                            state.range,
+                        )?;
                     }
                 }
                 AssertionRangeFrameV1::ApplyStrictUpperBoundCandidate {
@@ -15127,7 +15447,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     switch_block,
                     success_target,
                 } => {
-                    let bound = pop_assertion_range_value_v1(&mut values)?;
+                    let bound = self.pop_assertion_range_value_with_resources_v1(&mut values)?;
                     if let Some(candidate) = bound.and_then(|bound| bound.maximum.checked_sub(1)) {
                         state.stability_generation = state
                             .stability_generation
@@ -15135,13 +15455,13 @@ impl<'a> SemanticAssertProofsV1<'a> {
                             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                                 "assertion proof upper-bound stability generation overflowed",
                             ))?;
-                        let mut edge = HashSet::new();
-                        edge.try_reserve(1).map_err(|_| {
-                            ProductionRankedProjectionErrorV1::Unsupported(
-                                "assertion proof upper-bound edge storage cannot be reserved",
-                            )
-                        })?;
-                        edge.insert((switch_block, success_target));
+                        let mut edge = AssertionSetV1::new(&mut self.resources)?;
+                        edge.reserve(
+                            1,
+                            &mut self.resources,
+                            "assertion proof upper-bound edge storage cannot be reserved",
+                        )?;
+                        edge.insert((switch_block, success_target), &mut self.resources)?;
                         if self.edge_set_dominates(&edge, state.use_block)?
                             && self.local_is_stable_from_revalidating_edge_to_use(
                                 state.local,
@@ -15161,7 +15481,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                             );
                         }
                     }
-                    push_assertion_range_frame_v1(
+                    self.push_assertion_range_frame_with_resources_v1(
                         &mut frames,
                         AssertionRangeFrameV1::ContinueStrictUpperBound(state),
                     )?;
@@ -15174,7 +15494,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 "assertion range evaluator did not finish with one exact result",
             ));
         }
-        pop_assertion_range_value_v1(&mut values)
+        self.pop_assertion_range_value_with_resources_v1(&mut values)
     }
 
     fn range_of_binary(
@@ -15297,10 +15617,12 @@ impl<'a> SemanticAssertProofsV1<'a> {
         operand: &SemanticOperandV1,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<Option<AuthenticatedCheckedBinaryValueV1>, ProductionRankedProjectionErrorV1> {
-        let mut operand = operand.clone();
+        self.resources.extra_work(64)?;
+        let mut operand = self.resources.clone_operand(operand)?;
         let mut use_site = use_site;
-        let mut visited = HashSet::new();
+        let mut visited = AssertionSetV1::new(&mut self.resources)?;
         loop {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             if tuple_field_operand_local_v1(&operand, 0).is_some()
                 && let Some(value) = self.authenticated_checked_binary_value_v1(
@@ -15318,7 +15640,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 return Ok(None);
             }
             let local = place.local().index() as usize;
-            if !visited.insert(local) {
+            if !visited.insert(local, &mut self.resources)? {
                 return Ok(None);
             }
             let Some(site) = self.exact_reaching_assignment_v1(local, use_site)? else {
@@ -15343,7 +15665,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 }
                 _ => return Ok(None),
             };
-            operand = next.clone();
+            operand = self.resources.clone_operand(next)?;
             use_site = site;
         }
     }
@@ -15357,16 +15679,18 @@ impl<'a> SemanticAssertProofsV1<'a> {
         Option<(ScalarAssignmentSiteV1, SemanticOperandV1, SemanticOperandV1)>,
         ProductionRankedProjectionErrorV1,
     > {
-        let mut operand = operand.clone();
+        self.resources.extra_work(64)?;
+        let mut operand = self.resources.clone_operand(operand)?;
         let mut use_site = use_site;
-        let mut visited = HashSet::new();
+        let mut visited = AssertionSetV1::new(&mut self.resources)?;
         loop {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             let Some(place) = raw_operand_place(&operand) else {
                 return Ok(None);
             };
             let local = place.local().index() as usize;
-            if !visited.insert(local) {
+            if !visited.insert(local, &mut self.resources)? {
                 return Ok(None);
             }
             let Some(site) = self.exact_reaching_assignment_v1(local, use_site)? else {
@@ -15384,10 +15708,14 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         left,
                         right,
                     } if *operation == expected_operation => {
-                        return Ok(Some((site, left.clone(), right.clone())));
+                        return Ok(Some((
+                            site,
+                            self.resources.clone_operand(left)?,
+                            self.resources.clone_operand(right)?,
+                        )));
                     }
                     SemanticRvalueKindV1::Use(next) if next.ty() == place.ty() => {
-                        operand = next.clone();
+                        operand = self.resources.clone_operand(next)?;
                         use_site = site;
                         continue;
                     }
@@ -15399,7 +15727,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         .zip(self.unsigned_integer_bits(next.ty()))
                         .is_some_and(|(destination, source)| destination >= source) =>
                     {
-                        operand = next.clone();
+                        operand = self.resources.clone_operand(next)?;
                         use_site = site;
                         continue;
                     }
@@ -15448,7 +15776,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             let Some(projected) = projected.filter(|projected| projected.ty() == place.ty()) else {
                 return Ok(None);
             };
-            operand = projected.clone();
+            operand = self.resources.clone_operand(projected)?;
             use_site = site;
         }
     }
@@ -15460,6 +15788,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<Option<AuthenticatedScaledQuotientRemainderV1>, ProductionRankedProjectionErrorV1>
     {
+        self.resources.extra_work(64)?;
         let Some(sum) = self.authenticated_checked_binary_source_v1(left, use_site)? else {
             return Ok(None);
         };
@@ -15477,6 +15806,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             (sum.checked.left(), sum.checked.right()),
             (sum.checked.right(), sum.checked.left()),
         ] {
+            self.resources.extra_work(64)?;
             let Some(scaled) =
                 self.authenticated_checked_binary_source_v1(scaled_operand, sum.definition)?
             else {
@@ -15489,6 +15819,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 (head_extent.checked.left(), head_extent.checked.right()),
                 (head_extent.checked.right(), head_extent.checked.left()),
             ] {
+                self.resources.extra_work(64)?;
                 let Some((quotient_site, quotient_numerator, quotient_divisor)) = self
                     .exact_binary_source_v1(
                         quotient_operand,
@@ -15502,7 +15833,11 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     (scaled.checked.left(), scaled.checked.right()),
                     (scaled.checked.right(), scaled.checked.left()),
                 ] {
-                    if !same_semantic_operand_value_v1(scaled_numerator, &quotient_numerator) {
+                    self.resources.extra_work(64)?;
+                    if !self
+                        .resources
+                        .same_operand_value(scaled_numerator, &quotient_numerator)?
+                    {
                         continue;
                     }
                     let Some((divisor_site, divisor_extent, divisor_scale)) = self
@@ -15514,8 +15849,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     else {
                         continue;
                     };
-                    if !same_semantic_operand_value_v1(&divisor_extent, extent)
-                        || !same_semantic_operand_value_v1(&divisor_scale, scale)
+                    if !self.resources.same_operand_value(&divisor_extent, extent)?
+                        || !self.resources.same_operand_value(&divisor_scale, scale)?
                         || !self.operand_has_globally_stable_value_at_v1(
                             &quotient_numerator,
                             quotient_site,
@@ -15532,11 +15867,11 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     return Ok(Some(AuthenticatedScaledQuotientRemainderV1 {
                         divisor: quotient_divisor,
                         divisor_use: quotient_site,
-                        extent: extent.clone(),
+                        extent: self.resources.clone_operand(extent)?,
                         extent_use: head_extent.definition,
-                        scale: scale.clone(),
+                        scale: self.resources.clone_operand(scale)?,
                         scale_use: scaled.definition,
-                        offset: offset.clone(),
+                        offset: self.resources.clone_operand(offset)?,
                         offset_use: sum.definition,
                     }));
                 }
@@ -15551,40 +15886,69 @@ impl<'a> SemanticAssertProofsV1<'a> {
         right: &SemanticOperandV1,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let Some(remainder) =
             self.authenticated_scaled_quotient_remainder_v1(left, right, use_site)?
         else {
             return Ok(None);
         };
-        let Some(scale) = self.range_at_operand(
-            &remainder.scale,
-            remainder.scale_use.block,
-            remainder.scale_use.statement,
-        )?
+        let Some(scale) = {
+            // Prepay the complete recursive callee/result/error frame BEFORE entry.
+            self.resources
+                .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                    assertion_evaluator_local_frame_v1()?,
+                )?;
+            self.range_at_operand(
+                &remainder.scale,
+                remainder.scale_use.block,
+                remainder.scale_use.statement,
+            )
+        }?
         else {
             return Ok(None);
         };
-        let Some(offset) = self.range_at_operand(
-            &remainder.offset,
-            remainder.offset_use.block,
-            remainder.offset_use.statement,
-        )?
+        let Some(offset) = {
+            // Prepay the complete recursive callee/result/error frame BEFORE entry.
+            self.resources
+                .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                    assertion_evaluator_local_frame_v1()?,
+                )?;
+            self.range_at_operand(
+                &remainder.offset,
+                remainder.offset_use.block,
+                remainder.offset_use.statement,
+            )
+        }?
         else {
             return Ok(None);
         };
-        let Some(divisor) = self.range_at_operand(
-            &remainder.divisor,
-            remainder.divisor_use.block,
-            remainder.divisor_use.statement,
-        )?
+        let Some(divisor) = {
+            // Prepay the complete recursive callee/result/error frame BEFORE entry.
+            self.resources
+                .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                    assertion_evaluator_local_frame_v1()?,
+                )?;
+            self.range_at_operand(
+                &remainder.divisor,
+                remainder.divisor_use.block,
+                remainder.divisor_use.statement,
+            )
+        }?
         else {
             return Ok(None);
         };
-        let Some(extent) = self.range_at_operand(
-            &remainder.extent,
-            remainder.extent_use.block,
-            remainder.extent_use.statement,
-        )?
+        let Some(extent) = {
+            // Prepay the complete recursive callee/result/error frame BEFORE entry.
+            self.resources
+                .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                    assertion_evaluator_local_frame_v1()?,
+                )?;
+            self.range_at_operand(
+                &remainder.extent,
+                remainder.extent_use.block,
+                remainder.extent_use.statement,
+            )
+        }?
         else {
             return Ok(None);
         };
@@ -15613,30 +15977,46 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_site: ScalarAssignmentSiteV1,
         use_block: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let Some(remainder) =
             self.authenticated_scaled_quotient_remainder_v1(left, right, use_site)?
         else {
             return Ok(false);
         };
-        if self
-            .range_at_operand(
+        if {
+            // Prepay the complete recursive callee/result/error frame BEFORE entry.
+            self.resources
+                .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                    assertion_evaluator_local_frame_v1()?,
+                )?;
+            self.range_at_operand(
                 &remainder.divisor,
                 remainder.divisor_use.block,
                 remainder.divisor_use.statement,
-            )?
-            .is_none_or(|range| range.minimum == 0)
-            || self
-                .range_at_operand(
+            )
+        }?
+        .is_none_or(|range| range.minimum == 0)
+            || {
+                // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                self.resources
+                    .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                        assertion_evaluator_local_frame_v1()?,
+                    )?;
+                self.range_at_operand(
                     &remainder.scale,
                     remainder.scale_use.block,
                     remainder.scale_use.statement,
-                )?
-                .is_none_or(|range| range.minimum == 0)
+                )
+            }?
+            .is_none_or(|range| range.minimum == 0)
         {
             return Ok(false);
         }
 
+        self.resources.extra_work(self.function.blocks().len())?;
+
         for (switch_block, block) in self.function.blocks().iter().enumerate() {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             let SemanticTerminatorKindV1::SwitchInt {
                 discriminant,
@@ -15732,13 +16112,13 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }
             // The exact remainder-zero edge makes extent=d*scale, so
             // q*d<=x implies q*extent<=x*scale<=x*scale+offset.
-            let mut success_edge = HashSet::new();
-            success_edge.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "divisibility proof edge storage cannot be reserved",
-                )
-            })?;
-            success_edge.insert((switch_block, success_target));
+            let mut success_edge = AssertionSetV1::new(&mut self.resources)?;
+            success_edge.reserve(
+                1,
+                &mut self.resources,
+                "divisibility proof edge storage cannot be reserved",
+            )?;
+            success_edge.insert((switch_block, success_target), &mut self.resources)?;
             if self.edge_set_dominates(&success_edge, use_block)? {
                 return Ok(true);
             }
@@ -15751,6 +16131,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         checked: &SemanticCheckedBinaryRvalueV1,
         subtraction_site: ScalarAssignmentSiteV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if checked.operation() != SemanticCheckedBinaryOpV1::Subtract
             || checked.left().ty() != checked.right().ty()
             || self.unsigned_integer_bits(checked.left().ty()).is_none()
@@ -15761,23 +16142,32 @@ impl<'a> SemanticAssertProofsV1<'a> {
         let block_count = self.function.blocks().len();
         let can_reach_use = self.blocks_reaching(subtraction_site.block)?;
         let mut stability_visited = Vec::new();
-        stability_visited
-            .try_reserve_exact(block_count)
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "unsigned subtraction lower-bound stability storage cannot be reserved",
-                )
-            })?;
+        self.resources.reserve_vec(
+            &mut stability_visited,
+            block_count,
+            LegacyReserve::Exact,
+            "unsigned subtraction lower-bound stability storage cannot be reserved",
+        )?;
+        if self.resources.is_strict() {
+            self.resources.extra_work(
+                block_count
+                    .checked_mul(std::mem::size_of_val(&0_usize) + 1)
+                    .ok_or_else(|| assertion_resource_overflow_v1())?,
+            )?;
+        }
         stability_visited.resize(block_count, 0_usize);
-        let mut stability_pending = VecDeque::new();
-        stability_pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "unsigned subtraction lower-bound stability worklist cannot be reserved",
-            )
-        })?;
+        let mut stability_pending = AssertionQueueV1::new(&mut self.resources)?;
+        stability_pending.reserve(
+            block_count,
+            &mut self.resources,
+            "unsigned subtraction lower-bound stability worklist cannot be reserved",
+        )?;
         let mut stability_generation = 0_usize;
 
+        self.resources.extra_work(self.function.blocks().len())?;
+
         for (switch_block, block) in self.function.blocks().iter().enumerate() {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             let SemanticTerminatorKindV1::SwitchInt {
                 discriminant,
@@ -15881,9 +16271,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_site: ScalarAssignmentSiteV1,
         can_reach_use: &[bool],
         visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
+        pending: &mut AssertionQueueV1<'a>,
         generation: &mut usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if compared.ty() != expected.ty() || self.unsigned_integer_bits(compared.ty()).is_none() {
             return Ok(false);
         }
@@ -15902,7 +16293,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     local,
                     comparison_site.statement,
                     comparison_site.statement + 1,
-                )
+                )?
             {
                 return Ok(false);
             }
@@ -15937,6 +16328,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         success_target: usize,
         use_block: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let block_count = self.function.blocks().len();
         if comparison_block >= block_count
             || success_target >= block_count
@@ -15944,36 +16336,46 @@ impl<'a> SemanticAssertProofsV1<'a> {
         {
             return Ok(false);
         }
-        let mut success_edge = HashSet::new();
-        success_edge.try_reserve(1).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "comparison edge authentication storage cannot be reserved",
-            )
-        })?;
-        success_edge.insert((comparison_block, success_target));
+        let mut success_edge = AssertionSetV1::new(&mut self.resources)?;
+        success_edge.reserve(
+            1,
+            &mut self.resources,
+            "comparison edge authentication storage cannot be reserved",
+        )?;
+        success_edge.insert((comparison_block, success_target), &mut self.resources)?;
         if !self.edge_set_dominates(&success_edge, use_block)? {
             return Ok(false);
         }
 
         let mut visited = Vec::new();
-        visited.try_reserve_exact(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "comparison edge reauthentication storage cannot be reserved",
-            )
-        })?;
+        self.resources.reserve_vec(
+            &mut visited,
+            block_count,
+            LegacyReserve::Exact,
+            "comparison edge reauthentication storage cannot be reserved",
+        )?;
+        if self.resources.is_strict() {
+            self.resources.extra_work(
+                block_count
+                    .checked_mul(std::mem::size_of_val(&false) + 1)
+                    .ok_or_else(|| assertion_resource_overflow_v1())?,
+            )?;
+        }
         visited.resize(block_count, false);
-        let mut pending = VecDeque::new();
-        pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "comparison edge reauthentication worklist cannot be reserved",
-            )
-        })?;
-        pending.push_back(use_block);
+        let mut pending = AssertionQueueV1::new(&mut self.resources)?;
+        pending.reserve(
+            block_count,
+            &mut self.resources,
+            "comparison edge reauthentication worklist cannot be reserved",
+        )?;
+        pending.push_back(use_block, &mut self.resources)?;
         visited[use_block] = true;
-        while let Some(block) = pending.pop_front() {
+        while let Some(block) = pending.pop_front(&mut self.resources)? {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             self.charge(self.graph.successors[block].len())?;
             for &successor in &self.graph.successors[block] {
+                self.resources.extra_work(64)?;
                 if block == comparison_block && successor == success_target {
                     continue;
                 }
@@ -15982,7 +16384,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 }
                 if !visited[successor] {
                     visited[successor] = true;
-                    pending.push_back(successor);
+                    pending.push_back(successor, &mut self.resources)?;
                 }
             }
         }
@@ -15996,6 +16398,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         right: &SemanticOperandV1,
         right_use: ScalarAssignmentSiteV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let Some((left, left_use)) = self.exact_unsigned_value_origin_v1(left, left_use)? else {
             return Ok(false);
         };
@@ -16042,10 +16445,12 @@ impl<'a> SemanticAssertProofsV1<'a> {
         Option<(SemanticOperandV1, ScalarAssignmentSiteV1)>,
         ProductionRankedProjectionErrorV1,
     > {
-        let mut operand = operand.clone();
+        self.resources.extra_work(64)?;
+        let mut operand = self.resources.clone_operand(operand)?;
         let mut use_site = use_site;
-        let mut visited = HashSet::new();
+        let mut visited = AssertionSetV1::new(&mut self.resources)?;
         loop {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             match &operand {
                 SemanticOperandV1::Constant(constant)
@@ -16059,7 +16464,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         && self.scalar_unsigned_maximum(place.ty()).is_some() =>
                 {
                     let local = place.local().index() as usize;
-                    if !visited.insert(local)
+                    if !visited.insert(local, &mut self.resources)?
                         || self.address_escaped.get(local).copied() != Some(false)
                     {
                         return Ok(None);
@@ -16088,7 +16493,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         }
                         _ => return Ok(Some((operand, use_site))),
                     };
-                    operand = next.clone();
+                    operand = self.resources.clone_operand(next)?;
                     use_site = site;
                 }
                 _ => return Ok(None),
@@ -16102,20 +16507,34 @@ impl<'a> SemanticAssertProofsV1<'a> {
         right: &SemanticOperandV1,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         for (quotient, extent) in [(left, right), (right, left)] {
+            self.resources.extra_work(64)?;
             let Some((quotient_site, numerator, divisor)) =
                 self.exact_binary_source_v1(quotient, use_site, SemanticBinaryOpV1::Divide)?
             else {
                 continue;
             };
-            let Some(bound) =
-                self.quotient_strict_product_upper_bound_v1(&numerator, &divisor, quotient_site)?
+            let Some(bound) = {
+                // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                self.resources
+                    .reserve_frame::<Option<AuthenticatedQuotientStrictBoundV1>>(
+                        assertion_evaluator_local_frame_v1()?,
+                    )?;
+                self.quotient_strict_product_upper_bound_v1(&numerator, &divisor, quotient_site)
+            }?
             else {
                 continue;
             };
-            if self
-                .range_at_operand(extent, use_site.block, use_site.statement)?
-                .is_none_or(|range| range.minimum == 0)
+            if {
+                // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                self.resources
+                    .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                        assertion_evaluator_local_frame_v1()?,
+                    )?;
+                self.range_at_operand(extent, use_site.block, use_site.statement)
+            }?
+            .is_none_or(|range| range.minimum == 0)
             {
                 continue;
             }
@@ -16152,11 +16571,14 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_site: ScalarAssignmentSiteV1,
         required_type: Option<SemanticTypeIdV1>,
     ) -> Result<Option<u128>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if required_type.is_some_and(|required| left.ty() != required || right.ty() != required) {
             return Ok(None);
         }
         let assignment_count = self.assignments.len();
+        self.resources.extra_work(assignment_count)?;
         for local in 0..assignment_count {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             if self.definition_counts.get(local).copied() != Some(1)
                 || self.address_escaped.get(local).copied() != Some(false)
@@ -16220,7 +16642,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
             {
                 return Ok(Some(maximum));
             }
+            self.resources.extra_work(self.function.blocks().len())?;
             for (switch_block, block) in self.function.blocks().iter().enumerate() {
+                self.resources.extra_work(64)?;
                 self.charge(1)?;
                 let SemanticTerminatorKindV1::SwitchInt {
                     discriminant,
@@ -16254,13 +16678,13 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     continue;
                 }
                 let success_target = zero_target.edge().target().index() as usize;
-                let mut success_edge = HashSet::new();
-                success_edge.try_reserve(1).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "explicit checked product edge storage cannot be reserved",
-                    )
-                })?;
-                success_edge.insert((switch_block, success_target));
+                let mut success_edge = AssertionSetV1::new(&mut self.resources)?;
+                success_edge.reserve(
+                    1,
+                    &mut self.resources,
+                    "explicit checked product edge storage cannot be reserved",
+                )?;
+                success_edge.insert((switch_block, success_target), &mut self.resources)?;
                 if self.edge_set_dominates(&success_edge, use_site.block)? {
                     return Ok(Some(maximum));
                 }
@@ -16276,6 +16700,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         right: &SemanticOperandV1,
         right_use: ScalarAssignmentSiteV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if self.same_exact_unsigned_value_v1(left, left_use, right, right_use)? {
             return Ok(true);
         }
@@ -16303,6 +16728,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         capture_site: ScalarAssignmentSiteV1,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let Some(block) = self.function.blocks().get(capture_site.block) else {
             return Ok(false);
         };
@@ -16315,7 +16741,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 local,
                 capture_site.statement,
                 capture_site.statement + 1,
-            )
+            )?
         } else {
             self.block_terminator_defines_local_v1(capture_site.block, local)
         };
@@ -16330,6 +16756,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         checked: &SemanticCheckedBinaryRvalueV1,
         product_site: ScalarAssignmentSiteV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if checked.operation() != SemanticCheckedBinaryOpV1::Multiply
             || checked.left().ty() != checked.right().ty()
             || self.unsigned_integer_bits(checked.left().ty()).is_none()
@@ -16341,7 +16768,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
             (checked.left(), checked.right()),
             (checked.right(), checked.left()),
         ] {
+            self.resources.extra_work(64)?;
+            self.resources.extra_work(self.function.blocks().len())?;
             for (switch_block, block) in self.function.blocks().iter().enumerate() {
+                self.resources.extra_work(64)?;
                 self.charge(1)?;
                 let SemanticTerminatorKindV1::SwitchInt {
                     discriminant,
@@ -16407,13 +16837,13 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 {
                     continue;
                 }
-                let mut success_edge = HashSet::new();
-                success_edge.try_reserve(1).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "strict product-bound edge storage cannot be reserved",
-                    )
-                })?;
-                success_edge.insert((switch_block, success_target));
+                let mut success_edge = AssertionSetV1::new(&mut self.resources)?;
+                success_edge.reserve(
+                    1,
+                    &mut self.resources,
+                    "strict product-bound edge storage cannot be reserved",
+                )?;
+                success_edge.insert((switch_block, success_target), &mut self.resources)?;
                 if !self.edge_set_dominates(&success_edge, product_site.block)? {
                     continue;
                 }
@@ -16443,6 +16873,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         checked: &SemanticCheckedBinaryRvalueV1,
         sum_site: ScalarAssignmentSiteV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if checked.operation() != SemanticCheckedBinaryOpV1::Add
             || checked.left().ty() != checked.right().ty()
             || self.unsigned_integer_bits(checked.left().ty()).is_none()
@@ -16454,6 +16885,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             (checked.left(), checked.right()),
             (checked.right(), checked.left()),
         ] {
+            self.resources.extra_work(64)?;
             let Some(product) =
                 self.authenticated_checked_binary_source_v1(product_operand, sum_site)?
             else {
@@ -16470,6 +16902,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 (product.checked.left(), product.checked.right()),
                 (product.checked.right(), product.checked.left()),
             ] {
+                self.resources.extra_work(64)?;
                 let index_bounds = self.authenticated_strict_unsigned_bounds_v1(
                     index,
                     product.definition,
@@ -16477,8 +16910,12 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 )?;
                 let offset_bounds =
                     self.authenticated_strict_unsigned_bounds_v1(offset, sum_site, sum_site)?;
+                self.resources.extra_work(index_bounds.len())?;
                 for (outer, outer_use) in &index_bounds {
+                    self.resources.extra_work(64)?;
+                    self.resources.extra_work(offset_bounds.len())?;
                     for (offset_extent, offset_extent_use) in &offset_bounds {
+                        self.resources.extra_work(64)?;
                         if !self.same_exact_unsigned_value_v1(
                             extent,
                             product.definition,
@@ -16519,6 +16956,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         checked: &SemanticCheckedBinaryRvalueV1,
         sum_site: ScalarAssignmentSiteV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         const MAX_NESTED_FLAT_INDEX_OFFSETS_V1: usize = 8;
 
         if checked.operation() != SemanticCheckedBinaryOpV1::Add
@@ -16531,23 +16969,31 @@ impl<'a> SemanticAssertProofsV1<'a> {
             (checked.left(), checked.right()),
             (checked.right(), checked.left()),
         ] {
+            self.resources.extra_work(64)?;
             let mut offsets = Vec::new();
-            offsets
-                .try_reserve_exact(MAX_NESTED_FLAT_INDEX_OFFSETS_V1)
-                .map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "nested flat-index offset storage cannot be reserved",
-                    )
-                })?;
-            offsets.push((tail_offset.clone(), sum_site));
-            if self.proves_strictly_bounded_unsigned_flat_index_path_v1(
-                base_operand,
-                sum_site,
-                sum_site,
-                checked.left().ty(),
+            self.resources.reserve_vec(
                 &mut offsets,
-                MAX_NESTED_FLAT_INDEX_OFFSETS_V1 - 1,
-            )? {
+                MAX_NESTED_FLAT_INDEX_OFFSETS_V1,
+                LegacyReserve::Exact,
+                "nested flat-index offset storage cannot be reserved",
+            )?;
+            {
+                let value = (self.resources.clone_operand(tail_offset)?, sum_site);
+                Self::push_assertion_reserved_vec_v1(&mut self.resources, &mut offsets, value)?;
+            };
+            if {
+                // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                self.resources
+                    .reserve_frame::<bool>(assertion_evaluator_local_frame_v1()?)?;
+                self.proves_strictly_bounded_unsigned_flat_index_path_v1(
+                    base_operand,
+                    sum_site,
+                    sum_site,
+                    checked.left().ty(),
+                    &mut offsets,
+                    MAX_NESTED_FLAT_INDEX_OFFSETS_V1 - 1,
+                )
+            }? {
                 return Ok(true);
             }
         }
@@ -16563,6 +17009,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         offsets: &mut Vec<(SemanticOperandV1, ScalarAssignmentSiteV1)>,
         remaining_offsets: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let Some(value) = self.authenticated_checked_binary_source_v1(operand, operand_use)? else {
             return Ok(false);
         };
@@ -16572,9 +17019,18 @@ impl<'a> SemanticAssertProofsV1<'a> {
 
         if value.checked.operation() == SemanticCheckedBinaryOpV1::Multiply {
             let mut combined_offset_maximum = Some(0_u128);
+            self.resources.extra_work(offsets.len())?;
             for (offset, offset_use) in offsets.iter() {
+                self.resources.extra_work(64)?;
                 combined_offset_maximum = combined_offset_maximum
-                    .zip(self.range_at_operand(offset, offset_use.block, offset_use.statement)?)
+                    .zip({
+                        // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                        self.resources
+                            .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                                assertion_evaluator_local_frame_v1()?,
+                            )?;
+                        self.range_at_operand(offset, offset_use.block, offset_use.statement)
+                    }?)
                     .and_then(|(combined, range)| combined.checked_add(range.maximum));
             }
 
@@ -16582,12 +17038,23 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 (value.checked.left(), value.checked.right()),
                 (value.checked.right(), value.checked.left()),
             ] {
-                let numeric_offset_bound = self
-                    .range_at_operand(extent, value.definition.block, value.definition.statement)?
-                    .zip(combined_offset_maximum)
-                    .is_some_and(|(extent_range, offset_maximum)| {
-                        offset_maximum < extent_range.minimum
-                    });
+                self.resources.extra_work(64)?;
+                let numeric_offset_bound = {
+                    // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                    self.resources
+                        .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                            assertion_evaluator_local_frame_v1()?,
+                        )?;
+                    self.range_at_operand(
+                        extent,
+                        value.definition.block,
+                        value.definition.statement,
+                    )
+                }?
+                .zip(combined_offset_maximum)
+                .is_some_and(|(extent_range, offset_maximum)| {
+                    offset_maximum < extent_range.minimum
+                });
                 if !numeric_offset_bound
                     && !self.proves_nested_offset_sum_below_product_extent_v1(
                         offsets,
@@ -16604,7 +17071,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     value.definition,
                     sum_site,
                 )?;
+                self.resources.extra_work(index_bounds.len())?;
                 for (outer, outer_use) in &index_bounds {
+                    self.resources.extra_work(64)?;
                     if self
                         .explicit_checked_product_maximum_v1(
                             outer,
@@ -16634,14 +17103,26 @@ impl<'a> SemanticAssertProofsV1<'a> {
             (value.checked.left(), value.checked.right()),
             (value.checked.right(), value.checked.left()),
         ] {
-            offsets.push((offset.clone(), value.definition));
-            let proved = self.proves_strictly_bounded_unsigned_flat_index_path_v1(
-                next,
-                value.definition,
-                sum_site,
-                scalar_type,
-                offsets,
-                remaining_offsets - 1,
+            self.resources.extra_work(64)?;
+            {
+                let captured = (self.resources.clone_operand(offset)?, value.definition);
+                Self::push_assertion_reserved_vec_v1(&mut self.resources, offsets, captured)?;
+            };
+            let proved = {
+                // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                self.resources
+                    .reserve_frame::<bool>(assertion_evaluator_local_frame_v1()?)?;
+                self.proves_strictly_bounded_unsigned_flat_index_path_v1(
+                    next,
+                    value.definition,
+                    sum_site,
+                    scalar_type,
+                    offsets,
+                    remaining_offsets - 1,
+                )
+            }?;
+            self.resources.extra_work(
+                std::mem::size_of::<Option<(SemanticOperandV1, ScalarAssignmentSiteV1)>>() + 1,
             )?;
             offsets.pop();
             if proved {
@@ -16659,6 +17140,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         sum_site: ScalarAssignmentSiteV1,
         scalar_type: SemanticTypeIdV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let Some(extent_product) =
             self.authenticated_checked_binary_source_v1(extent, extent_use)?
         else {
@@ -16671,8 +17153,11 @@ impl<'a> SemanticAssertProofsV1<'a> {
             return Ok(false);
         }
 
+        self.resources.extra_work(offsets.len())?;
+
         for (scaled_offset_index, (scaled_offset, scaled_offset_use)) in offsets.iter().enumerate()
         {
+            self.resources.extra_work(64)?;
             let Some(offset_product) =
                 self.authenticated_checked_binary_source_v1(scaled_offset, *scaled_offset_use)?
             else {
@@ -16686,12 +17171,21 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }
 
             let mut residual_maximum = Some(0_u128);
+            self.resources.extra_work(offsets.len())?;
             for (offset_index, (offset, offset_use)) in offsets.iter().enumerate() {
+                self.resources.extra_work(64)?;
                 if offset_index == scaled_offset_index {
                     continue;
                 }
                 residual_maximum = residual_maximum
-                    .zip(self.range_at_operand(offset, offset_use.block, offset_use.statement)?)
+                    .zip({
+                        // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                        self.resources
+                            .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                                assertion_evaluator_local_frame_v1()?,
+                            )?;
+                        self.range_at_operand(offset, offset_use.block, offset_use.statement)
+                    }?)
                     .and_then(|(combined, range)| combined.checked_add(range.maximum));
             }
             let Some(residual_maximum) = residual_maximum else {
@@ -16708,11 +17202,19 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     offset_product.checked.left(),
                 ),
             ] {
-                let Some(stride_range) = self.range_at_operand(
-                    offset_stride,
-                    offset_product.definition.block,
-                    offset_product.definition.statement,
-                )?
+                self.resources.extra_work(64)?;
+                let Some(stride_range) = {
+                    // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                    self.resources
+                        .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                            assertion_evaluator_local_frame_v1()?,
+                        )?;
+                    self.range_at_operand(
+                        offset_stride,
+                        offset_product.definition.block,
+                        offset_product.definition.statement,
+                    )
+                }?
                 else {
                     continue;
                 };
@@ -16734,6 +17236,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         extent_product.checked.left(),
                     ),
                 ] {
+                    self.resources.extra_work(64)?;
                     if !self.same_checked_product_operand_v1(
                         offset_stride,
                         offset_product.definition,
@@ -16742,7 +17245,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     )? {
                         continue;
                     }
+                    self.resources.extra_work(inner_bounds.len())?;
                     for (bound, bound_use) in &inner_bounds {
+                        self.resources.extra_work(64)?;
                         if self.same_checked_product_operand_v1(
                             bound,
                             *bound_use,
@@ -16767,33 +17272,46 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<Vec<(SemanticOperandV1, ScalarAssignmentSiteV1)>, ProductionRankedProjectionErrorV1>
     {
+        self.resources.extra_work(64)?;
         if self.unsigned_integer_bits(tested_value.ty()).is_none() {
             return Ok(Vec::new());
         }
         let can_reach_use = self.blocks_reaching(use_site.block)?;
         let block_count = self.function.blocks().len();
         let mut visited = Vec::new();
-        visited.try_reserve_exact(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "strict flat-index bound stability storage cannot be reserved",
-            )
-        })?;
+        self.resources.reserve_vec(
+            &mut visited,
+            block_count,
+            LegacyReserve::Exact,
+            "strict flat-index bound stability storage cannot be reserved",
+        )?;
+        if self.resources.is_strict() {
+            self.resources.extra_work(
+                block_count
+                    .checked_mul(std::mem::size_of_val(&0_usize) + 1)
+                    .ok_or_else(|| assertion_resource_overflow_v1())?,
+            )?;
+        }
         visited.resize(block_count, 0_usize);
-        let mut pending = VecDeque::new();
-        pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "strict flat-index bound stability worklist cannot be reserved",
-            )
-        })?;
+        let mut pending = AssertionQueueV1::new(&mut self.resources)?;
+        pending.reserve(
+            block_count,
+            &mut self.resources,
+            "strict flat-index bound stability worklist cannot be reserved",
+        )?;
         let mut generation = 0_usize;
         let mut bounds = Vec::new();
-        bounds.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "strict flat-index bound result storage cannot be reserved",
-            )
-        })?;
+        self.resources.reserve_vec(
+            &mut bounds,
+            block_count,
+            LegacyReserve::Amortized,
+            "strict flat-index bound result storage cannot be reserved",
+        )?;
+
+        self.resources.extra_work(self.function.blocks().len())?;
 
         for (switch_block, block) in self.function.blocks().iter().enumerate() {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             let SemanticTerminatorKindV1::SwitchInt {
                 discriminant,
@@ -16876,17 +17394,20 @@ impl<'a> SemanticAssertProofsV1<'a> {
             {
                 continue;
             }
-            let mut success_edge = HashSet::new();
-            success_edge.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "strict flat-index bound edge storage cannot be reserved",
-                )
-            })?;
-            success_edge.insert((switch_block, success_target));
+            let mut success_edge = AssertionSetV1::new(&mut self.resources)?;
+            success_edge.reserve(
+                1,
+                &mut self.resources,
+                "strict flat-index bound edge storage cannot be reserved",
+            )?;
+            success_edge.insert((switch_block, success_target), &mut self.resources)?;
             if self.edge_set_dominates(&success_edge, tested_use.block)?
                 && self.edge_set_dominates(&success_edge, use_site.block)?
             {
-                bounds.push((upper.clone(), condition_site));
+                {
+                    let value = (self.resources.clone_operand(upper)?, condition_site);
+                    Self::push_assertion_reserved_vec_v1(&mut self.resources, &mut bounds, value)?;
+                };
             }
         }
         Ok(bounds)
@@ -16903,9 +17424,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_site: ScalarAssignmentSiteV1,
         can_reach_use: &[bool],
         visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
+        pending: &mut AssertionQueueV1<'a>,
         generation: &mut usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if compared.ty() != expected.ty() || self.unsigned_integer_bits(compared.ty()).is_none() {
             return Ok(false);
         }
@@ -16997,6 +17519,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         capture_site: ScalarAssignmentSiteV1,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let block_count = self.function.blocks().len();
         let Some(capture_block) = self.function.blocks().get(capture_site.block) else {
             return Ok(false);
@@ -17026,7 +17549,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     .saturating_add(1)
                     .min(capture_block.statements().len()),
                 use_site.statement,
-            ));
+            )?);
         }
         if !self.assignment_dominates_use(capture_site, use_site.block, use_site.statement)?
             || self.block_defines_local_in_statement_range_v1(
@@ -17037,7 +17560,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     .saturating_add(1)
                     .min(capture_block.statements().len()),
                 capture_block.statements().len(),
-            )
+            )?
             || self.block_terminator_defines_local_v1(capture_site.block, local)
         {
             return Ok(false);
@@ -17045,31 +17568,41 @@ impl<'a> SemanticAssertProofsV1<'a> {
 
         let can_reach_use = self.blocks_reaching(use_site.block)?;
         let mut visited = Vec::new();
-        visited.try_reserve_exact(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "strict flat-index capture stability storage cannot be reserved",
-            )
-        })?;
+        self.resources.reserve_vec(
+            &mut visited,
+            block_count,
+            LegacyReserve::Exact,
+            "strict flat-index capture stability storage cannot be reserved",
+        )?;
+        if self.resources.is_strict() {
+            self.resources.extra_work(
+                block_count
+                    .checked_mul(std::mem::size_of_val(&false) + 1)
+                    .ok_or_else(|| assertion_resource_overflow_v1())?,
+            )?;
+        }
         visited.resize(block_count, false);
-        let mut pending = VecDeque::new();
-        pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "strict flat-index capture stability worklist cannot be reserved",
-            )
-        })?;
+        let mut pending = AssertionQueueV1::new(&mut self.resources)?;
+        pending.reserve(
+            block_count,
+            &mut self.resources,
+            "strict flat-index capture stability worklist cannot be reserved",
+        )?;
         self.charge(self.graph.successors[capture_site.block].len())?;
         for successor in &self.graph.successors[capture_site.block] {
+            self.resources.extra_work(64)?;
             if can_reach_use[*successor] && !visited[*successor] {
                 visited[*successor] = true;
-                pending.push_back(*successor);
+                pending.push_back(*successor, &mut self.resources)?;
             }
         }
-        while let Some(block) = pending.pop_front() {
+        while let Some(block) = pending.pop_front(&mut self.resources)? {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             let defines_local = if block == use_site.block {
-                self.block_defines_local_in_statement_range_v1(block, local, 0, use_site.statement)
+                self.block_defines_local_in_statement_range_v1(block, local, 0, use_site.statement)?
             } else {
-                self.block_defines_local(block, local)
+                self.block_defines_local(block, local)?
             };
             if defines_local {
                 return Ok(false);
@@ -17079,9 +17612,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }
             self.charge(self.graph.successors[block].len())?;
             for successor in &self.graph.successors[block] {
+                self.resources.extra_work(64)?;
                 if can_reach_use[*successor] && !visited[*successor] {
                     visited[*successor] = true;
-                    pending.push_back(*successor);
+                    pending.push_back(*successor, &mut self.resources)?;
                 }
             }
         }
@@ -17106,14 +17640,16 @@ impl<'a> SemanticAssertProofsV1<'a> {
         Option<(SemanticOperandV1, ScalarAssignmentSiteV1)>,
         ProductionRankedProjectionErrorV1,
     > {
+        self.resources.extra_work(64)?;
         let expected_type = operand.ty();
         if self.unsigned_integer_bits(expected_type).is_none() {
             return Ok(None);
         }
-        let mut operand = operand.clone();
+        let mut operand = self.resources.clone_operand(operand)?;
         let mut use_site = use_site;
-        let mut visited = HashSet::new();
+        let mut visited = AssertionSetV1::new(&mut self.resources)?;
         loop {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             match &operand {
                 SemanticOperandV1::Constant(constant) if constant.ty() == expected_type => {
@@ -17123,7 +17659,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     if place.projections().is_empty() && place.ty() == expected_type =>
                 {
                     let local = place.local().index() as usize;
-                    if !visited.insert(local)
+                    if !visited.insert(local, &mut self.resources)?
                         || self.address_escaped.get(local).copied() != Some(false)
                     {
                         return Ok(None);
@@ -17146,7 +17682,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     {
                         return Ok(None);
                     }
-                    operand = next.clone();
+                    operand = self.resources.clone_operand(next)?;
                     use_site = definition;
                 }
                 _ => return Ok(None),
@@ -17163,9 +17699,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_site: ScalarAssignmentSiteV1,
         can_reach_use: &[bool],
         visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
+        pending: &mut AssertionQueueV1<'a>,
         generation: &mut usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if self.unsigned_integer_bits(operand.ty()).is_none() {
             return Ok(false);
         }
@@ -17193,9 +17730,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_site: ScalarAssignmentSiteV1,
         can_reach_use: &[bool],
         visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
+        pending: &mut AssertionQueueV1<'a>,
         generation: &mut usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if self.address_escaped.get(local).copied() != Some(false)
             || self.block_defines_local_in_statement_range_v1(
                 comparison_site.block,
@@ -17204,7 +17742,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 self.function.blocks()[comparison_site.block]
                     .statements()
                     .len(),
-            )
+            )?
         {
             return Ok(false);
         }
@@ -17233,9 +17771,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_site: ScalarAssignmentSiteV1,
         can_reach_use: &[bool],
         visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
+        pending: &mut AssertionQueueV1<'a>,
         generation: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let block_count = self.function.blocks().len();
         if local >= self.function.locals().len()
             || edge_target >= block_count
@@ -17248,15 +17787,16 @@ impl<'a> SemanticAssertProofsV1<'a> {
             return Ok(false);
         }
 
-        pending.clear();
-        pending.push_back(edge_target);
+        pending.clear(&mut self.resources)?;
+        pending.push_back(edge_target, &mut self.resources)?;
         visited[edge_target] = generation;
-        while let Some(block) = pending.pop_front() {
+        while let Some(block) = pending.pop_front(&mut self.resources)? {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             let defines_local = if block == use_site.block {
-                self.block_defines_local_in_statement_range_v1(block, local, 0, use_site.statement)
+                self.block_defines_local_in_statement_range_v1(block, local, 0, use_site.statement)?
             } else {
-                self.block_defines_local(block, local)
+                self.block_defines_local(block, local)?
             };
             if defines_local {
                 return Ok(false);
@@ -17266,9 +17806,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }
             self.charge(self.graph.successors[block].len())?;
             for successor in &self.graph.successors[block] {
+                self.resources.extra_work(64)?;
                 if can_reach_use[*successor] && visited[*successor] != generation {
                     visited[*successor] = generation;
-                    pending.push_back(*successor);
+                    pending.push_back(*successor, &mut self.resources)?;
                 }
             }
         }
@@ -17276,13 +17817,24 @@ impl<'a> SemanticAssertProofsV1<'a> {
     }
 
     fn block_defines_local_in_statement_range_v1(
-        &self,
+        &mut self,
         block: usize,
         local: usize,
         start: usize,
         end: usize,
-    ) -> bool {
-        self.function.blocks()[block].statements()[start..end]
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
+        if self.resources.is_strict() {
+            let count = end
+                .checked_sub(start)
+                .ok_or_else(assertion_resource_overflow_v1)?;
+            self.resources.extra_work(
+                count
+                    .checked_mul(64)
+                    .ok_or_else(assertion_resource_overflow_v1)?,
+            )?;
+        }
+        Ok(self.function.blocks()[block].statements()[start..end]
             .iter()
             .any(|statement| {
                 let mut defines_local = false;
@@ -17290,7 +17842,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     defines_local |= local_definition_index(place) == Some(local);
                 });
                 defines_local
-            })
+            }))
     }
 
     fn exact_checked_overflow_flag_source_local_v1(
@@ -17298,16 +17850,18 @@ impl<'a> SemanticAssertProofsV1<'a> {
         operand: &SemanticOperandV1,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<Option<usize>, ProductionRankedProjectionErrorV1> {
-        let mut operand = operand.clone();
+        self.resources.extra_work(64)?;
+        let mut operand = self.resources.clone_operand(operand)?;
         let mut use_site = use_site;
-        let mut visited = HashSet::new();
+        let mut visited = AssertionSetV1::new(&mut self.resources)?;
         loop {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             let Some(place) = raw_operand_place(&operand) else {
                 return Ok(None);
             };
             let local = place.local().index() as usize;
-            if !visited.insert(local) {
+            if !visited.insert(local, &mut self.resources)? {
                 return Ok(None);
             }
             if let [field] = place.projections()
@@ -17330,7 +17884,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             let SemanticRvalueKindV1::Use(next) = assignment.value().kind() else {
                 return Ok(None);
             };
-            operand = next.clone();
+            operand = self.resources.clone_operand(next)?;
             use_site = site;
         }
     }
@@ -17340,6 +17894,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         operand: &SemanticOperandV1,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         match operand {
             SemanticOperandV1::Constant(_) => Ok(true),
             SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)
@@ -17357,6 +17912,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         divisor: &SemanticOperandV1,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<Option<AuthenticatedQuotientStrictBoundV1>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let (Some(numerator_local), Some(divisor_local)) = (
             simple_operand_local(numerator).map(|local| local.index() as usize),
             simple_operand_local(divisor).map(|local| local.index() as usize),
@@ -17366,9 +17922,15 @@ impl<'a> SemanticAssertProofsV1<'a> {
         if self.address_escaped.get(numerator_local).copied() != Some(false)
             || self.address_escaped.get(divisor_local).copied() != Some(false)
             || self.definition_counts.get(divisor_local).copied() != Some(1)
-            || self
-                .range_at_operand(divisor, use_site.block, use_site.statement)?
-                .is_none_or(|range| range.minimum == 0)
+            || {
+                // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                self.resources
+                    .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                        assertion_evaluator_local_frame_v1()?,
+                    )?;
+                self.range_at_operand(divisor, use_site.block, use_site.statement)
+            }?
+            .is_none_or(|range| range.minimum == 0)
         {
             return Ok(None);
         }
@@ -17376,24 +17938,33 @@ impl<'a> SemanticAssertProofsV1<'a> {
         let block_count = self.function.blocks().len();
         let can_reach_use = self.blocks_reaching(use_site.block)?;
         let mut stability_visited = Vec::new();
-        stability_visited
-            .try_reserve_exact(block_count)
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "quotient-bound stability storage cannot be reserved",
-                )
-            })?;
+        self.resources.reserve_vec(
+            &mut stability_visited,
+            block_count,
+            LegacyReserve::Exact,
+            "quotient-bound stability storage cannot be reserved",
+        )?;
+        if self.resources.is_strict() {
+            self.resources.extra_work(
+                block_count
+                    .checked_mul(std::mem::size_of_val(&0_usize) + 1)
+                    .ok_or_else(|| assertion_resource_overflow_v1())?,
+            )?;
+        }
         stability_visited.resize(block_count, 0_usize);
-        let mut stability_pending = VecDeque::new();
-        stability_pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "quotient-bound stability worklist cannot be reserved",
-            )
-        })?;
+        let mut stability_pending = AssertionQueueV1::new(&mut self.resources)?;
+        stability_pending.reserve(
+            block_count,
+            &mut self.resources,
+            "quotient-bound stability worklist cannot be reserved",
+        )?;
         let mut stability_generation = 0_usize;
         let mut proven_bound: Option<AuthenticatedQuotientStrictBoundV1> = None;
 
+        self.resources.extra_work(self.function.blocks().len())?;
+
         for (switch_block, block) in self.function.blocks().iter().enumerate() {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             let SemanticTerminatorKindV1::SwitchInt {
                 discriminant,
@@ -17467,7 +18038,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 condition_site.block,
                 condition_site.statement,
                 None,
-            )? || self.block_defines_local(switch_block, numerator_local)
+            )? || self.block_defines_local(switch_block, numerator_local)?
             {
                 continue;
             }
@@ -17479,18 +18050,31 @@ impl<'a> SemanticAssertProofsV1<'a> {
             if product.checked.operation() != SemanticCheckedBinaryOpV1::Multiply {
                 continue;
             }
-            let factor = if same_semantic_operand_value_v1(product.checked.left(), divisor) {
+            let factor = if self
+                .resources
+                .same_operand_value(product.checked.left(), divisor)?
+            {
                 product.checked.right()
-            } else if same_semantic_operand_value_v1(product.checked.right(), divisor) {
+            } else if self
+                .resources
+                .same_operand_value(product.checked.right(), divisor)?
+            {
                 product.checked.left()
             } else {
                 continue;
             };
-            let Some(factor_range) = self.range_at_operand(
-                factor,
-                product.definition.block,
-                product.definition.statement,
-            )?
+            let Some(factor_range) = {
+                // Prepay the complete recursive callee/result/error frame BEFORE entry.
+                self.resources
+                    .reserve_frame::<Option<UnsignedRangeProofV1>>(
+                        assertion_evaluator_local_frame_v1()?,
+                    )?;
+                self.range_at_operand(
+                    factor,
+                    product.definition.block,
+                    product.definition.statement,
+                )
+            }?
             else {
                 continue;
             };
@@ -17540,13 +18124,13 @@ impl<'a> SemanticAssertProofsV1<'a> {
             )? {
                 continue;
             }
-            let mut edge = HashSet::new();
-            edge.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "quotient-bound edge storage cannot be reserved",
-                )
-            })?;
-            edge.insert((switch_block, success_target));
+            let mut edge = AssertionSetV1::new(&mut self.resources)?;
+            edge.reserve(
+                1,
+                &mut self.resources,
+                "quotient-bound edge storage cannot be reserved",
+            )?;
+            edge.insert((switch_block, success_target), &mut self.resources)?;
             if !self.edge_set_dominates(&edge, use_site.block)? {
                 continue;
             }
@@ -17556,7 +18140,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             {
                 proven_bound = Some(AuthenticatedQuotientStrictBoundV1 {
                     maximum: candidate,
-                    factor: factor.clone(),
+                    factor: self.resources.clone_operand(factor)?,
                     factor_use: product.definition,
                 });
             }
@@ -17570,6 +18154,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_block: usize,
         use_statement: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if definition.block == use_block {
             return Ok(definition.statement < use_statement);
         }
@@ -17581,6 +18166,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         local: usize,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<Option<ScalarAssignmentSiteV1>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if self.address_escaped.get(local).copied() != Some(false) {
             return Ok(None);
         }
@@ -17597,7 +18183,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
             statement
         } else {
             let mut found = None;
+            self.resources.extra_work(use_site.statement)?;
             for statement in (0..use_site.statement).rev() {
+                self.resources.extra_work(64)?;
                 self.charge(1)?;
                 let kind = block.statements()[statement].kind();
                 let mut defines_local = false;
@@ -17636,34 +18224,46 @@ impl<'a> SemanticAssertProofsV1<'a> {
         local: usize,
         use_block: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if let Some(result) = self.zero_exclusion.get(&(local, use_block)).copied() {
+        self.resources.extra_work(64)?;
+        if let Some(result) = self
+            .zero_exclusion
+            .get(&(local, use_block), &mut self.resources)?
+        {
             return Ok(result);
         }
         let block_count = self.function.blocks().len();
         let can_reach_use = self.blocks_reaching(use_block)?;
-        let mut excluding_edges = HashSet::new();
-        excluding_edges.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof zero-excluding edge storage cannot be reserved",
-            )
-        })?;
+        let mut excluding_edges = AssertionSetV1::new(&mut self.resources)?;
+        excluding_edges.reserve(
+            block_count,
+            &mut self.resources,
+            "assertion proof zero-excluding edge storage cannot be reserved",
+        )?;
         let mut stability_visited = Vec::new();
-        stability_visited
-            .try_reserve_exact(block_count)
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof stability storage cannot be reserved",
-                )
-            })?;
+        self.resources.reserve_vec(
+            &mut stability_visited,
+            block_count,
+            LegacyReserve::Exact,
+            "assertion proof stability storage cannot be reserved",
+        )?;
+        if self.resources.is_strict() {
+            self.resources.extra_work(
+                block_count
+                    .checked_mul(std::mem::size_of_val(&0_usize) + 1)
+                    .ok_or_else(|| assertion_resource_overflow_v1())?,
+            )?;
+        }
         stability_visited.resize(block_count, 0_usize);
-        let mut stability_pending = VecDeque::new();
-        stability_pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof stability worklist cannot be reserved",
-            )
-        })?;
+        let mut stability_pending = AssertionQueueV1::new(&mut self.resources)?;
+        stability_pending.reserve(
+            block_count,
+            &mut self.resources,
+            "assertion proof stability worklist cannot be reserved",
+        )?;
         let mut stability_generation = 0_usize;
+        self.resources.extra_work(self.function.blocks().len())?;
         for (switch_block, block) in self.function.blocks().iter().enumerate() {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             let SemanticTerminatorKindV1::SwitchInt {
                 discriminant,
@@ -17690,7 +18290,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 None,
             )?;
             let discriminant_is_tested = discriminant_is_tested
-                && (discriminant_local == local || !self.block_defines_local(switch_block, local));
+                && (discriminant_local == local
+                    || !self.block_defines_local(switch_block, local)?);
             let excluding_target = if discriminant_is_tested {
                 Some(nonzero_target)
             } else {
@@ -17725,10 +18326,11 @@ impl<'a> SemanticAssertProofsV1<'a> {
             if !stable {
                 continue;
             }
-            excluding_edges.insert((switch_block, excluding_target));
+            excluding_edges.insert((switch_block, excluding_target), &mut self.resources)?;
         }
         let result = self.edge_set_dominates(&excluding_edges, use_block)?;
-        insert_assertion_proof_cache(&mut self.zero_exclusion, (local, use_block), result)?;
+        self.zero_exclusion
+            .insert((local, use_block), result, &mut self.resources)?;
         Ok(result)
     }
 
@@ -17736,6 +18338,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         &mut self,
         use_block: usize,
     ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let block_count = self.function.blocks().len();
         if use_block >= block_count {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -17743,27 +18346,37 @@ impl<'a> SemanticAssertProofsV1<'a> {
             ));
         }
         let mut can_reach_use = Vec::new();
-        can_reach_use.try_reserve_exact(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof reverse-reachability storage cannot be reserved",
-            )
-        })?;
+        self.resources.reserve_vec(
+            &mut can_reach_use,
+            block_count,
+            LegacyReserve::Exact,
+            "assertion proof reverse-reachability storage cannot be reserved",
+        )?;
+        if self.resources.is_strict() {
+            self.resources.extra_work(
+                block_count
+                    .checked_mul(std::mem::size_of_val(&false) + 1)
+                    .ok_or_else(|| assertion_resource_overflow_v1())?,
+            )?;
+        }
         can_reach_use.resize(block_count, false);
-        let mut reverse = VecDeque::new();
-        reverse.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof reverse-reachability worklist cannot be reserved",
-            )
-        })?;
-        reverse.push_back(use_block);
+        let mut reverse = AssertionQueueV1::new(&mut self.resources)?;
+        reverse.reserve(
+            block_count,
+            &mut self.resources,
+            "assertion proof reverse-reachability worklist cannot be reserved",
+        )?;
+        reverse.push_back(use_block, &mut self.resources)?;
         can_reach_use[use_block] = true;
-        while let Some(block) = reverse.pop_front() {
+        while let Some(block) = reverse.pop_front(&mut self.resources)? {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             self.charge(self.graph.predecessors[block].len())?;
             for predecessor in &self.graph.predecessors[block] {
+                self.resources.extra_work(64)?;
                 if !can_reach_use[*predecessor] {
                     can_reach_use[*predecessor] = true;
-                    reverse.push_back(*predecessor);
+                    reverse.push_back(*predecessor, &mut self.resources)?;
                 }
             }
         }
@@ -17777,9 +18390,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_block: usize,
         can_reach_use: &[bool],
         visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
+        pending: &mut AssertionQueueV1<'a>,
         generation: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let block_count = self.function.blocks().len();
         if local >= self.function.locals().len()
             || edge_target >= block_count
@@ -17793,12 +18407,13 @@ impl<'a> SemanticAssertProofsV1<'a> {
             return Ok(false);
         }
 
-        pending.clear();
-        pending.push_back(edge_target);
+        pending.clear(&mut self.resources)?;
+        pending.push_back(edge_target, &mut self.resources)?;
         visited[edge_target] = generation;
-        while let Some(block) = pending.pop_front() {
+        while let Some(block) = pending.pop_front(&mut self.resources)? {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
-            if self.block_defines_local(block, local) {
+            if self.block_defines_local(block, local)? {
                 return Ok(false);
             }
             if block == use_block {
@@ -17806,9 +18421,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }
             self.charge(self.graph.successors[block].len())?;
             for successor in &self.graph.successors[block] {
+                self.resources.extra_work(64)?;
                 if can_reach_use[*successor] && visited[*successor] != generation {
                     visited[*successor] = generation;
-                    pending.push_back(*successor);
+                    pending.push_back(*successor, &mut self.resources)?;
                 }
             }
         }
@@ -17831,9 +18447,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
         use_block: usize,
         can_reach_use: &[bool],
         visited: &mut [usize],
-        pending: &mut VecDeque<usize>,
+        pending: &mut AssertionQueueV1<'a>,
         generation: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let block_count = self.function.blocks().len();
         if local >= self.function.locals().len()
             || guard_source >= block_count
@@ -17861,13 +18478,15 @@ impl<'a> SemanticAssertProofsV1<'a> {
         // Mark exactly the blocks that can reach the use without first
         // returning to the guard. This excludes latch-side definitions whose
         // only route back to the use crosses a fresh successful guard edge.
-        pending.clear();
-        pending.push_back(use_block);
+        pending.clear(&mut self.resources)?;
+        pending.push_back(use_block, &mut self.resources)?;
         visited[use_block] = reverse_generation;
-        while let Some(block) = pending.pop_front() {
+        while let Some(block) = pending.pop_front(&mut self.resources)? {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             self.charge(self.graph.predecessors[block].len())?;
             for predecessor in &self.graph.predecessors[block] {
+                self.resources.extra_work(64)?;
                 if *predecessor == guard_source
                     || !can_reach_use[*predecessor]
                     || visited[*predecessor] == reverse_generation
@@ -17876,19 +18495,20 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     continue;
                 }
                 visited[*predecessor] = reverse_generation;
-                pending.push_back(*predecessor);
+                pending.push_back(*predecessor, &mut self.resources)?;
             }
         }
         if visited[guard_target] != reverse_generation {
             return Ok(true);
         }
 
-        pending.clear();
-        pending.push_back(guard_target);
+        pending.clear(&mut self.resources)?;
+        pending.push_back(guard_target, &mut self.resources)?;
         visited[guard_target] = forward_generation;
-        while let Some(block) = pending.pop_front() {
+        while let Some(block) = pending.pop_front(&mut self.resources)? {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
-            if self.block_defines_local(block, local) {
+            if self.block_defines_local(block, local)? {
                 return Ok(false);
             }
             if block == use_block {
@@ -17896,9 +18516,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }
             self.charge(self.graph.successors[block].len())?;
             for successor in &self.graph.successors[block] {
+                self.resources.extra_work(64)?;
                 if visited[*successor] == reverse_generation {
                     visited[*successor] = forward_generation;
-                    pending.push_back(*successor);
+                    pending.push_back(*successor, &mut self.resources)?;
                 }
             }
         }
@@ -17913,6 +18534,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         false_target: usize,
         true_target: usize,
     ) -> Result<Option<usize>, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         let switch_use = ScalarAssignmentSiteV1 {
             block: switch_block,
             statement: self.function.blocks()[switch_block].statements().len(),
@@ -17974,7 +18596,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         if !compares_tested_local_to_zero {
             return Ok(None);
         }
-        if site.block == switch_block && self.block_defines_local(switch_block, tested_local) {
+        if site.block == switch_block && self.block_defines_local(switch_block, tested_local)? {
             return Ok(None);
         }
         Ok(match operation {
@@ -18000,6 +18622,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         local: usize,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if self.address_escaped.get(local).copied() != Some(false) {
             return Ok(false);
         }
@@ -18015,10 +18638,24 @@ impl<'a> SemanticAssertProofsV1<'a> {
         }
     }
 
-    fn block_defines_local(&self, block: usize, local: usize) -> bool {
-        self.block_definitions
-            .get(block)
-            .is_some_and(|definitions| definitions.binary_search(&local).is_ok())
+    fn block_defines_local(
+        &mut self,
+        block: usize,
+        local: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
+        let definitions = self.block_definitions.get(block);
+        // Slice binary_search performs at most one comparison per bit plus one.
+        // Read-only length inspection precedes payment; no lookup precedes it.
+        let probes = definitions.map_or(1, |items| {
+            (usize::BITS - items.len().leading_zeros()) as usize + 1
+        });
+        self.resources.extra_work(
+            probes
+                .checked_mul(std::mem::size_of::<usize>() + 8)
+                .ok_or_else(assertion_resource_overflow_v1)?,
+        )?;
+        Ok(definitions.is_some_and(|items| items.binary_search(&local).is_ok()))
     }
 
     fn local_is_value_preserving_alias_of(
@@ -18029,9 +18666,11 @@ impl<'a> SemanticAssertProofsV1<'a> {
         mut use_statement: usize,
         capture: Option<&mut ScalarAssignmentSiteV1>,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         // Each followed definition must strictly precede its use in the same block, so
         // the statement index is both the cycle guard and the stack-independent bound.
         loop {
+            self.resources.extra_work(64)?;
             self.charge(1)?;
             if self.address_escaped.get(candidate).copied() != Some(false) {
                 return Ok(false);
@@ -18089,64 +18728,97 @@ impl<'a> SemanticAssertProofsV1<'a> {
         dominator: usize,
         block: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if dominator >= self.graph.successors.len() || block >= self.graph.successors.len() {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "an assertion proof dominance query is outside the semantic CFG",
             ));
         }
-        if let Some(result) = self.dominance.get(&(dominator, block)).copied() {
+        if let Some(result) = self
+            .dominance
+            .get(&(dominator, block), &mut self.resources)?
+        {
             return Ok(result);
         }
         if dominator == block {
             let result = self.graph.reachable[block];
-            insert_assertion_proof_cache(&mut self.dominance, (dominator, block), result)?;
+            self.dominance
+                .insert((dominator, block), result, &mut self.resources)?;
             return Ok(result);
         }
         if !self.graph.reachable[dominator] || !self.graph.reachable[block] {
-            insert_assertion_proof_cache(&mut self.dominance, (dominator, block), false)?;
+            self.dominance
+                .insert((dominator, block), false, &mut self.resources)?;
             return Ok(false);
         }
         let node_count = self.graph.successors.len();
         let mut visited = Vec::new();
-        visited.try_reserve_exact(node_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof dominance storage cannot be reserved",
-            )
-        })?;
+        self.resources.reserve_vec(
+            &mut visited,
+            node_count,
+            LegacyReserve::Exact,
+            "assertion proof dominance storage cannot be reserved",
+        )?;
+        if self.resources.is_strict() {
+            self.resources.extra_work(
+                node_count
+                    .checked_mul(std::mem::size_of_val(&false) + 1)
+                    .ok_or_else(|| assertion_resource_overflow_v1())?,
+            )?;
+        }
         visited.resize(node_count, false);
         let mut pending = Vec::new();
-        pending.try_reserve(node_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof dominance worklist cannot be reserved",
-            )
-        })?;
+        self.resources.reserve_vec(
+            &mut pending,
+            node_count,
+            LegacyReserve::Amortized,
+            "assertion proof dominance worklist cannot be reserved",
+        )?;
         if self.graph.entry != dominator {
             visited[self.graph.entry] = true;
-            pending.push(self.graph.entry);
+            Self::push_assertion_reserved_vec_v1(
+                &mut self.resources,
+                &mut pending,
+                self.graph.entry,
+            )?;
         }
-        while let Some(current) = pending.pop() {
+        loop {
+            self.resources.extra_work(64)?;
+            self.resources
+                .extra_work(std::mem::size_of::<Option<usize>>() + 1)?;
+            let Some(current) = pending.pop() else {
+                break;
+            };
             self.charge(1)?;
             if current == block {
-                insert_assertion_proof_cache(&mut self.dominance, (dominator, block), false)?;
+                self.dominance
+                    .insert((dominator, block), false, &mut self.resources)?;
                 return Ok(false);
             }
             self.charge(self.graph.successors[current].len())?;
             for successor in &self.graph.successors[current] {
+                self.resources.extra_work(64)?;
                 if *successor != dominator && !visited[*successor] {
                     visited[*successor] = true;
-                    pending.push(*successor);
+                    Self::push_assertion_reserved_vec_v1(
+                        &mut self.resources,
+                        &mut pending,
+                        *successor,
+                    )?;
                 }
             }
         }
-        insert_assertion_proof_cache(&mut self.dominance, (dominator, block), true)?;
+        self.dominance
+            .insert((dominator, block), true, &mut self.resources)?;
         Ok(true)
     }
 
     fn edge_set_dominates(
         &mut self,
-        excluding_edges: &HashSet<(usize, usize)>,
+        excluding_edges: &AssertionSetV1<'a, (usize, usize)>,
         block: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.resources.extra_work(64)?;
         if block >= self.graph.successors.len() {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "an assertion proof edge-set dominance query is outside the semantic CFG",
@@ -18157,37 +18829,58 @@ impl<'a> SemanticAssertProofsV1<'a> {
         }
         let node_count = self.graph.successors.len();
         let mut visited = Vec::new();
-        visited.try_reserve_exact(node_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof edge-dominance storage cannot be reserved",
-            )
-        })?;
+        self.resources.reserve_vec(
+            &mut visited,
+            node_count,
+            LegacyReserve::Exact,
+            "assertion proof edge-dominance storage cannot be reserved",
+        )?;
+        if self.resources.is_strict() {
+            self.resources.extra_work(
+                node_count
+                    .checked_mul(std::mem::size_of_val(&false) + 1)
+                    .ok_or_else(|| assertion_resource_overflow_v1())?,
+            )?;
+        }
         visited.resize(node_count, false);
         let mut pending = Vec::new();
-        pending.try_reserve(node_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof edge-dominance worklist cannot be reserved",
-            )
-        })?;
+        self.resources.reserve_vec(
+            &mut pending,
+            node_count,
+            LegacyReserve::Amortized,
+            "assertion proof edge-dominance worklist cannot be reserved",
+        )?;
         visited[self.graph.entry] = true;
-        pending.push(self.graph.entry);
-        while let Some(current) = pending.pop() {
+        Self::push_assertion_reserved_vec_v1(&mut self.resources, &mut pending, self.graph.entry)?;
+        loop {
+            self.resources.extra_work(64)?;
+            self.resources
+                .extra_work(std::mem::size_of::<Option<usize>>() + 1)?;
+            let Some(current) = pending.pop() else {
+                break;
+            };
             self.charge(1)?;
             if current == block {
                 return Ok(false);
             }
             self.charge(self.graph.successors[current].len())?;
             for successor in &self.graph.successors[current] {
-                if !excluding_edges.contains(&(current, *successor)) && !visited[*successor] {
+                self.resources.extra_work(64)?;
+                if !excluding_edges.contains(&(current, *successor), &mut self.resources)?
+                    && !visited[*successor]
+                {
                     visited[*successor] = true;
-                    pending.push(*successor);
+                    Self::push_assertion_reserved_vec_v1(
+                        &mut self.resources,
+                        &mut pending,
+                        *successor,
+                    )?;
                 }
             }
         }
         Ok(true)
     }
 }
-
 fn insert_assertion_proof_cache(
     cache: &mut HashMap<(usize, usize), bool>,
     key: (usize, usize),
@@ -24850,6 +25543,8 @@ mod cold_compile_error_tests;
 
 #[cfg(test)]
 mod tests {
+    include!("production_ranked_projection_v1/assertion_analyzer_resource_v1_tests.rs");
+    include!("production_ranked_projection_v1/assertion_analyzer_parity_v1_tests.rs");
     include!("production_ranked_projection_v1/multi_entry_induction_fixture_v1_tests.rs");
     include!("production_ranked_projection_v1/projection_01_tests.rs");
     include!("production_ranked_projection_v1/checked_output_admission_policy3_v1_fixture.rs");

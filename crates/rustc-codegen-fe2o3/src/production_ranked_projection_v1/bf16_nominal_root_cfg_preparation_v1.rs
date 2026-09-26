@@ -3,6 +3,20 @@
 use super::super::super::source_loop_cfg_resources_v1::projected_loop_cfg_graph_with_resources_v1;
 use super::*;
 
+#[path = "bf16_nominal_root_assertion_preparation_v1.rs"]
+#[allow(dead_code)]
+mod root_assertion_preparation_v1;
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use root_assertion_preparation_v1::{
+    NominalRootAssertionSourceV1, with_nominal_root_assertion_preparation_v1,
+};
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use root_assertion_preparation_v1::{
+    RootAssertionObservationV1, observe_root_assertion_preparation_for_test_v1,
+    root_assertion_preparation_controls_for_test_v1,
+};
+
 #[cfg(test)]
 #[path = "bf16_nominal_root_cfg_preparation_genuine_v1_tests.rs"]
 mod genuine;
@@ -17,6 +31,7 @@ pub(in crate::production_ranked_projection_v1) use genuine::{
 pub(in crate::production_ranked_projection_v1) struct NominalRootCfgSourceV1<'a> {
     source: &'a NominalRootSourceTablesV1<'a>,
     graph: &'a ProjectedLoopCfgV1,
+    types: &'a [SemanticTypeDeclV1],
 }
 impl NominalRootCfgSourceV1<'_> {
     pub(in crate::production_ranked_projection_v1) fn source_tables(
@@ -29,6 +44,9 @@ impl NominalRootCfgSourceV1<'_> {
     }
     pub(in crate::production_ranked_projection_v1) fn graph(&self) -> &ProjectedLoopCfgV1 {
         self.graph
+    }
+    pub(in crate::production_ranked_projection_v1) fn types(&self) -> &[SemanticTypeDeclV1] {
+        self.types
     }
 }
 fn graph_header<R>(callback_bytes: usize) -> Result<usize> {
@@ -85,6 +103,9 @@ where
         let view = NominalRootCfgSourceV1 {
             source: root,
             graph: &graph,
+            // Borrow only the already-joined actual Admitted source's types.
+            // The view header's size_of includes this immutable fat pointer.
+            types: source.types(),
         };
         let result = inspect(&view, budget);
         drop(graph);
