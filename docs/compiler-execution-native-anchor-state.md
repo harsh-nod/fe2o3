@@ -391,9 +391,14 @@ The supervisor's policy-neutral `ProvisionedProtectedIssuerServiceInputsV2`
 likewise admits, pins, clones and validates final listener/root objects under
 the original ledger using shared filesystem/socket checks. Only the fixed
 production pathname is public. Activation permits continuity but ends transfer.
-Compiler coordinator composition still uses V1 and remains to be migrated.
+Compiler coordinator native preparation now owns the genuine matching trust,
+three freshly sealed images, listener/root, two root-bound lifecycle leases and
+managed anchor. Lease validity is joined to the actual retained service root,
+not accepted as an unrelated valid lock. Preparation itself spawns nothing;
+production inherited composition, supervisor startup and consuming launch still
+use V1 and remain to be migrated.
 Current tests cover actual staged Files and rootless transport/refusal mechanics,
 not a successful native root deployment. Adapter-level post-clone failures and
 unwinds, including child-storage refusal and failure after endpoint receipt,
 still need direct coverage. See the
-[transfer checkpoint](evidence/conditional-native-transfer-20260926.md).
+[preparation checkpoint](evidence/conditional-native-compiler-preparation-20260926.md).

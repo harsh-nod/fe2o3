@@ -1,10 +1,31 @@
 # fe2o3 compiler-execution coordinator
 
-The production composition below currently uses V1 owners. Native anchor launch,
-supervisor transfer, and budgeted listener/root admission are available in the
-owning crates, but this coordinator has not yet composed them into a native
-production deployment. These APIs do not establish 47/47 safe GPU launch. See the
-[native transfer checkpoint](../../docs/evidence/conditional-native-transfer-20260926.md).
+The production composition below currently uses V1 owners. Native V2/V3 trust
+and preparation now compose genuine deployment/policy/key custody, three freshly
+sealed images, listener/root inputs, root-bound lifecycle leases and a managed
+anchor on the original resource ledger. Preparation creates no process: native
+inherited composition, supervisor startup and consuming launch remain unfinished.
+These APIs do not establish 47/47 safe GPU launch. See the
+[native preparation checkpoint](../../docs/evidence/conditional-native-compiler-preparation-20260926.md).
+
+## Native Preparation
+
+`CompilerExecutionSupervisorTrustV2/V3` bind actual same-family deployment,
+policy and signing-key owners. `PreparedCompilerExecutionSupervisorV2/V3`
+consume this trust plus the native service inputs, two native lifecycle leases
+and a genuine managed anchor. Both leases must protect the canonical sibling
+of the retained service root; independent validity alone is insufficient.
+Preparation pins exact root credentials, process and namespaces, and the three
+sealed supervisor/launcher/issuer images against their actual contexts.
+
+The input-storage and quota queries include complete source ownership, cumulative
+image growth and nested scratch. Reserve returned growth before retaining an
+owner, keep all consumed charges live, and retire the full retained charge only
+after Drop. Calls restore entry storage without resetting work or denial history.
+No V1 authority conversion, raw-descriptor accessor or public signing operation
+is exposed. The V1 program-source bundle is reused only as three untrusted Files.
+
+## Existing V1 Deployment
 
 This package owns the sole root-to-protected-supervisor deployment transition.
 It admits and pins the exact supervisor, static pre-exec launcher, and issuer
