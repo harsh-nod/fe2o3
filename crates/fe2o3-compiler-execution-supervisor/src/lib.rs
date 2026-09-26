@@ -44,7 +44,9 @@ mod listener;
 mod native_consuming_test_process;
 #[allow(unsafe_code)]
 mod process;
-mod process_cleanup;
+mod process_cleanup {
+    pub(crate) use fe2o3_protected_service_spawn::cleanup_bridge::{ChildCleanupV1, CleanupPollV1};
+}
 mod process_reaper;
 mod process_staging;
 mod program_v2;

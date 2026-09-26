@@ -12,7 +12,7 @@ const MAX_POLLS: usize = 500;
 const POLL_DELAY: Duration = Duration::from_millis(10);
 
 fn reserve_pool(reaper: &DeferredReaperV1) -> Vec<ReapSlotV1<'_>> {
-    (0..MAX_PROTECTED_ISSUER_PROCESSES_V1)
+    (0..CAPACITY)
         .map(|_| reaper.reserve_slot().unwrap())
         .collect()
 }
@@ -20,7 +20,7 @@ fn reserve_pool(reaper: &DeferredReaperV1) -> Vec<ReapSlotV1<'_>> {
 fn assert_full(reaper: &DeferredReaperV1) {
     assert!(matches!(
         reaper.reserve_slot(),
-        Err(ProtectedIssuerLaunchErrorV1::ProcessCapacity)
+        Err(LegacyCleanupReservationErrorV1::Capacity)
     ));
     assert!(reaper.thread_started.get().is_none());
 }
@@ -46,7 +46,7 @@ impl Drop for FakePipeCleanup<'_> {
 fn pending_cleanup_retains_its_descriptor_and_full_pool_capacity() {
     let reaper = DeferredReaperV1::new();
     let mut slots = reserve_pool(&reaper);
-    let slot = slots.remove(MAX_PROTECTED_ISSUER_PROCESSES_V1 / 2);
+    let slot = slots.remove(CAPACITY / 2);
     let cell = slot.cell;
     let (reader, _writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();
     let descriptor = reader.as_raw_fd();
@@ -77,7 +77,7 @@ fn pending_cleanup_retains_its_descriptor_and_full_pool_capacity() {
 fn missing_pidfd_quarantine_retains_capacity_across_every_pump() {
     let reaper = DeferredReaperV1::new();
     let mut slots = reserve_pool(&reaper);
-    let slot = slots.remove(MAX_PROTECTED_ISSUER_PROCESSES_V1 / 2);
+    let slot = slots.remove(CAPACITY / 2);
     let cell = slot.cell;
     slot.defer(ChildCleanupV1::new(None, getpid(), None));
     assert_eq!(cell.state.load(Ordering::Acquire), DEFERRED);
@@ -160,7 +160,7 @@ impl Drop for LiveChildGuard<'_> {
 fn terminal_cleanup_reclaims_exactly_its_slot_after_spawn_lease_transfer() {
     let reaper = DeferredReaperV1::new();
     let mut slots = reserve_pool(&reaper);
-    let slot = slots.remove(MAX_PROTECTED_ISSUER_PROCESSES_V1 / 2);
+    let slot = slots.remove(CAPACITY / 2);
     let cell = slot.cell;
     let spawn_lease = try_acquire_artifact_process_spawn_lease_v1().unwrap();
     let child = Command::new("/bin/true")

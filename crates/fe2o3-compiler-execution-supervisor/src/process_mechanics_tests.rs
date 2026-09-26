@@ -78,7 +78,9 @@ fn child_work_includes_the_capability_ceiling_without_wrapping() {
 fn observation_success_and_transient_errors_do_not_claim_reaping_or_ownership_loss() {
     // A descriptor-free record allows result handling to be tested without a
     // process, syscall, global reaper reservation, or artifact lock obligation.
-    let mut cleanup = ChildCleanupV1::new(None, rustix::process::Pid::from_raw(1).unwrap(), None);
+    // SAFETY: inert descriptor-free and lease-free record, never submitted as child evidence.
+    let mut cleanup =
+        unsafe { ChildCleanupV1::adopt(None, rustix::process::Pid::from_raw(1).unwrap(), None) };
     let operation = "observe exact issuer pidfd";
     for status in [None, Some(())] {
         assert_eq!(
@@ -103,8 +105,10 @@ fn observation_and_consuming_wait_echild_preserve_quarantine() {
         "observe exact issuer pidfd",
         "reap naturally exited issuer pidfd",
     ] {
-        let mut cleanup =
-            ChildCleanupV1::new(None, rustix::process::Pid::from_raw(1).unwrap(), None);
+        // SAFETY: inert descriptor-free and lease-free record, never submitted as child evidence.
+        let mut cleanup = unsafe {
+            ChildCleanupV1::adopt(None, rustix::process::Pid::from_raw(1).unwrap(), None)
+        };
         assert_eq!(
             child_wait_result::<()>(Some(&cleanup), operation, Err(Errno::CHILD)),
             Err(ChildProcessError::Io {

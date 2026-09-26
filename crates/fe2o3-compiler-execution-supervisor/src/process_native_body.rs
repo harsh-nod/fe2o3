@@ -472,7 +472,9 @@ impl Supervisor {
                         exec_reader.as_raw_fd(),
                         profile_writer.as_raw_fd(),
                     ],
-                    reservation.into_slot(),
+                    // SAFETY: spawn_child adopts the reserved slot with the atomic
+                    // child result and defers complete custody on failure/unwind.
+                    unsafe { reservation.into_spawn_slot() },
                     spawn_lease,
                 )?;
                 process.check_pidfd()?;

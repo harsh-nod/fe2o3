@@ -1,7 +1,7 @@
 //! Persistent funding for the existing cleanup pool, never a second reaper.
 
 use super::{DeferredReaperV1, EMPTY, ReapSlotV1, ReaperMode, deferred_reaper};
-use crate::MAX_PROTECTED_ISSUER_PROCESSES_V1 as CAPACITY;
+use crate::MAX_PROTECTED_SERVICE_PROCESSES_V2 as CAPACITY;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -21,7 +21,7 @@ pub(super) struct NativeAccount {
 
 /// Fixed failure categories for native cleanup funding and custody.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProtectedIssuerCleanupErrorV2 {
+pub enum ProtectedServiceCleanupErrorV2 {
     /// A different mode, active controller, or closed service prevents this operation.
     State,
     /// Persistent service or request accounting refused the operation before its work.
@@ -35,7 +35,7 @@ pub enum ProtectedIssuerCleanupErrorV2 {
     /// Orderly shutdown requires every slot to be empty.
     Busy,
 }
-use ProtectedIssuerCleanupErrorV2 as Failure;
+use ProtectedServiceCleanupErrorV2 as Failure;
 
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -64,29 +64,29 @@ impl From<Resource> for Failure {
 }
 
 /// Admission refusal returns the original ledger with all reached charges preserved.
-pub struct ProtectedIssuerCleanupAdmissionErrorV2 {
+pub struct ProtectedServiceCleanupAdmissionErrorV2 {
     error: Failure,
     account: Account,
 }
-impl ProtectedIssuerCleanupAdmissionErrorV2 {
+impl ProtectedServiceCleanupAdmissionErrorV2 {
     /// Recovers the refusal and original owned account, including denial history.
     pub fn into_parts(self) -> (Failure, Account) {
         (self.error, self.account)
     }
 }
-impl fmt::Debug for ProtectedIssuerCleanupAdmissionErrorV2 {
+impl fmt::Debug for ProtectedServiceCleanupAdmissionErrorV2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProtectedIssuerCleanupAdmissionErrorV2")
+        f.debug_struct("ProtectedServiceCleanupAdmissionErrorV2")
             .field("error", &self.error)
             .finish_non_exhaustive()
     }
 }
-impl fmt::Display for ProtectedIssuerCleanupAdmissionErrorV2 {
+impl fmt::Display for ProtectedServiceCleanupAdmissionErrorV2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.error.fmt(f)
     }
 }
-impl Error for ProtectedIssuerCleanupAdmissionErrorV2 {
+impl Error for ProtectedServiceCleanupAdmissionErrorV2 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.error)
     }
@@ -94,7 +94,7 @@ impl Error for ProtectedIssuerCleanupAdmissionErrorV2 {
 
 /// Inert cumulative accounting snapshot, not execution or successful-reaping evidence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProtectedIssuerCleanupReportV2 {
+pub struct ProtectedServiceCleanupReportV2 {
     /// Accepted service work, including the prefix supplied at admission.
     pub work: usize,
     /// Original cumulative work limit; recovery does not change it.
@@ -118,20 +118,20 @@ pub struct ProtectedIssuerCleanupReportV2 {
 /// background thread. Drop returns control, not custody: the same account and
 /// records remain in the pool for `recover`. Work limits are never renewed.
 ///
-/// This is policy-neutral cleanup funding, shared by native V2 and V3 consuming
-/// launch, not deployment authority. Logical quotas do not bound syscall or mutex latency.
+/// This is policy-neutral cleanup funding shared by issuer and root-service
+/// launches, not deployment authority. Logical quotas do not bound syscall or mutex latency.
 ///
 /// ```compile_fail
-/// use fe2o3_compiler_execution_supervisor::ProtectedIssuerCleanupServiceV2;
+/// use fe2o3_protected_service_spawn::ProtectedServiceCleanupServiceV2;
 /// fn clone<T: Clone>() {}
-/// clone::<ProtectedIssuerCleanupServiceV2>();
+/// clone::<ProtectedServiceCleanupServiceV2>();
 /// ```
-pub struct ProtectedIssuerCleanupServiceV2 {
+pub struct ProtectedServiceCleanupServiceV2 {
     reaper: &'static DeferredReaperV1,
     active: bool,
     shutdown_paid: bool,
 }
-use ProtectedIssuerCleanupServiceV2 as Service;
+use ProtectedServiceCleanupServiceV2 as Service;
 
 impl Service {
     /// Fixed pool/controller, outstanding reservation headers and logical pidfd charges.
@@ -141,7 +141,7 @@ impl Service {
     pub const STORAGE: usize = size_of::<DeferredReaperV1>()
         + size_of::<Self>()
         + CAPACITY
-            * (size_of::<ProtectedIssuerCleanupReservationV2>()
+            * (size_of::<ProtectedServiceCleanupReservationV2>()
                 + size_of::<std::os::fd::OwnedFd>());
     /// Admission/rollback, controller Drop and one shutdown attempt prepaid before use.
     pub const ADMISSION_WORK: usize = CONTROL_WORK * 2 + SHUTDOWN_WORK;
@@ -163,14 +163,14 @@ impl Service {
     ///
     /// Current storage must be empty; a previously accepted work prefix is preserved.
     /// Refusal returns the account. This cannot replace a legacy or closed service.
-    pub fn admit(account: Account) -> Result<Self, ProtectedIssuerCleanupAdmissionErrorV2> {
+    pub fn admit(account: Account) -> Result<Self, ProtectedServiceCleanupAdmissionErrorV2> {
         Self::admit_at(deferred_reaper(), account)
     }
 
     fn admit_at(
         reaper: &'static DeferredReaperV1,
         mut account: Account,
-    ) -> Result<Self, ProtectedIssuerCleanupAdmissionErrorV2> {
+    ) -> Result<Self, ProtectedServiceCleanupAdmissionErrorV2> {
         let mut mode = reaper
             .mode
             .lock()
@@ -184,7 +184,7 @@ impl Service {
             Ok(())
         });
         if let Err(error) = result {
-            return Err(ProtectedIssuerCleanupAdmissionErrorV2 { error, account });
+            return Err(ProtectedServiceCleanupAdmissionErrorV2 { error, account });
         }
         let admission_open = NativeAccount::can_fund_turn(&account);
         *mode = ReaperMode::Native(NativeAccount {
@@ -233,7 +233,7 @@ impl Service {
     ///
     /// Failed charges do not advance the cursor or touch a child. Smaller later
     /// turns may drain remaining work; any service denial stops new admissions.
-    pub fn pump(&mut self, visits: usize) -> Result<ProtectedIssuerCleanupReportV2, Failure> {
+    pub fn pump(&mut self, visits: usize) -> Result<ProtectedServiceCleanupReportV2, Failure> {
         if visits == 0 || visits > CAPACITY {
             return Err(Failure::InvalidTurn);
         }
@@ -260,7 +260,7 @@ impl Service {
     pub fn reserve_launch(
         &mut self,
         budget: &mut Budget<'_>,
-    ) -> Result<ProtectedIssuerCleanupReservationV2, Failure> {
+    ) -> Result<ProtectedServiceCleanupReservationV2, Failure> {
         budget.charge_work(Self::RESERVATION_WORK)?;
         let mut mode = self
             .reaper
@@ -272,11 +272,11 @@ impl Service {
             return Err(Failure::AdmissionStopped);
         }
         let slot = self.reaper.reserve_slot().map_err(|_| Failure::Capacity)?;
-        Ok(ProtectedIssuerCleanupReservationV2 { slot: Some(slot) })
+        Ok(ProtectedServiceCleanupReservationV2 { slot: Some(slot) })
     }
 
     /// Reads fixed account counters; does not scan cells or perform cleanup I/O.
-    pub fn report(&self) -> Result<ProtectedIssuerCleanupReportV2, Failure> {
+    pub fn report(&self) -> Result<ProtectedServiceCleanupReportV2, Failure> {
         let mut mode = self
             .reaper
             .mode
@@ -364,8 +364,8 @@ impl NativeAccount {
         result
     }
 
-    fn report(&self) -> ProtectedIssuerCleanupReportV2 {
-        ProtectedIssuerCleanupReportV2 {
+    fn report(&self) -> ProtectedServiceCleanupReportV2 {
+        ProtectedServiceCleanupReportV2 {
             work: self.ledger.work(),
             work_limit: self.ledger.work_limit(),
             failed_work: self.ledger.failed_work(),
@@ -384,25 +384,25 @@ impl NativeAccount {
 /// owner; that consuming integration is not enabled by this reservation alone.
 ///
 /// ```compile_fail
-/// use fe2o3_compiler_execution_supervisor::ProtectedIssuerCleanupReservationV2;
+/// use fe2o3_protected_service_spawn::ProtectedServiceCleanupReservationV2;
 /// fn clone<T: Clone>() {}
-/// clone::<ProtectedIssuerCleanupReservationV2>();
+/// clone::<ProtectedServiceCleanupReservationV2>();
 /// ```
-pub struct ProtectedIssuerCleanupReservationV2 {
+pub struct ProtectedServiceCleanupReservationV2 {
     slot: Option<ReapSlotV1<'static>>,
 }
-impl ProtectedIssuerCleanupReservationV2 {
+impl ProtectedServiceCleanupReservationV2 {
     pub(crate) fn into_slot(mut self) -> ReapSlotV1<'static> {
         self.slot.take().expect("unused native cleanup reservation")
     }
 }
-impl Drop for ProtectedIssuerCleanupReservationV2 {
+impl Drop for ProtectedServiceCleanupReservationV2 {
     fn drop(&mut self) {
         drop(self.slot.take());
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn isolated_cleanup(account: Account) -> Service {
     // A separate process-lifetime pool avoids selecting the production global
     // mode in rootless controller tests. It never contains real child records.

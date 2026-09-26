@@ -1,4 +1,4 @@
-//! Finite cleanup mechanics shared by foreground and deferred child custody.
+//! Finite cleanup mechanics shared by issuer and root-service child custody.
 //!
 //! The caller supplies exclusive consuming-wait ownership and retains this record
 //! in its existing reserved slot until terminal reaping. This module creates no
@@ -14,7 +14,7 @@ use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 /// Disposition of one finite cleanup attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[must_use]
-pub(crate) enum CleanupPollV1 {
+pub enum CleanupPollV1 {
     /// Retain the record and its slot for a later cleanup attempt.
     Pending,
     /// An exact consuming terminal wait succeeded; the caller may retire custody.
@@ -29,7 +29,7 @@ pub(crate) enum CleanupPollV1 {
 /// deliberately preserves unresolved resources; it is not a cleanup service or
 /// a replacement for retaining a reachable, accounted record in that table.
 #[must_use]
-pub(crate) struct ChildCleanupV1 {
+pub struct ChildCleanupV1 {
     pid: Pid,
     custody: CleanupCustodyV1<OwnedFd, ArtifactProcessSpawnLeaseV1>,
 }
@@ -51,17 +51,19 @@ impl ChildCleanupV1 {
         }
     }
 
-    pub(crate) fn pid(&self) -> Pid {
+    /// Returns the scalar identity bound by the trusted adoption protocol.
+    pub fn pid(&self) -> Pid {
         self.pid
     }
 
     /// Borrows the exact pidfd without transferring consuming-wait ownership.
-    pub(crate) fn pidfd(&self) -> Option<&OwnedFd> {
+    pub fn pidfd(&self) -> Option<&OwnedFd> {
         self.custody.pidfd.as_ref()
     }
 
-    #[cfg(test)]
-    pub(crate) fn retains_spawn_lease(&self) -> bool {
+    /// Test observation of the retained inherited-lock obligation, without releasing it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn retains_spawn_lease(&self) -> bool {
         self.custody.spawn_lease.is_some()
     }
 
@@ -69,7 +71,7 @@ impl ChildCleanupV1 {
     ///
     /// This includes signal `SRCH`. Missing-pidfd quarantine invents no errno.
     /// A recorded ownership loss reports `CHILD` before the next cleanup step.
-    pub(crate) fn last_errno(&self) -> Option<Errno> {
+    pub fn last_errno(&self) -> Option<Errno> {
         self.custody.last_errno()
     }
 
@@ -78,7 +80,7 @@ impl ChildCleanupV1 {
     /// The next cleanup step quarantines without signaling or waiting. This
     /// shared-reference notification releases no resources and preserves an
     /// already-confirmed terminal reap.
-    pub(crate) fn ownership_lost(&self) {
+    pub fn ownership_lost(&self) {
         self.custody.ownership_lost();
     }
 
@@ -106,7 +108,7 @@ impl ChildCleanupV1 {
     /// quarantined records retain their descriptor and any unverified spawn
     /// lease. Terminal reaping releases that lease but leaves descriptor and
     /// slot retirement to the caller. Repeated terminal calls perform no I/O.
-    pub(crate) fn step(&mut self) -> CleanupPollV1 {
+    pub fn step(&mut self) -> CleanupPollV1 {
         self.custody.step(&mut PidfdCleanupSyscallsV1)
     }
 }

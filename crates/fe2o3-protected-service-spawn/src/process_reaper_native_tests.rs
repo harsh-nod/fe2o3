@@ -1,7 +1,7 @@
 use super::super::{DEFERRED, EMPTY, QUARANTINED, RESERVED};
 use super::{
-    Account, Budget, CAPACITY, DeferredReaperV1, Failure, ProtectedIssuerCleanupReportV2 as Report,
-    ReaperMode, Resource, SHUTDOWN_WORK, Service,
+    Account, Budget, CAPACITY, DeferredReaperV1, Failure,
+    ProtectedServiceCleanupReportV2 as Report, ReaperMode, Resource, SHUTDOWN_WORK, Service,
 };
 use crate::process_cleanup::ChildCleanupV1;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
@@ -222,7 +222,7 @@ fn native_controller_is_unique_and_shutdown_permanently_excludes_both_modes() {
     assert!(matches!(Service::recover_at(&REAPER), Err(Failure::State)));
     assert!(matches!(
         REAPER.reserve(),
-        Err(crate::ProtectedIssuerLaunchErrorV1::InvalidProcessState(_))
+        Err(super::super::LegacyCleanupReservationErrorV1::Mode)
     ));
     let (error, returned) = Service::admit_at(
         &REAPER,
@@ -244,7 +244,7 @@ fn native_controller_is_unique_and_shutdown_permanently_excludes_both_modes() {
     assert!(matches!(Service::recover_at(&REAPER), Err(Failure::State)));
     assert!(matches!(
         REAPER.reserve(),
-        Err(crate::ProtectedIssuerLaunchErrorV1::InvalidProcessState(_))
+        Err(super::super::LegacyCleanupReservationErrorV1::Mode)
     ));
     let (error, refused) = Service::admit_at(
         &REAPER,
@@ -388,7 +388,7 @@ fn recovery_work_one_short_retains_unleased_custody_and_cannot_reset_the_ledger(
     assert_eq!(returned.storage(), 0);
     assert!(matches!(
         REAPER.reserve(),
-        Err(crate::ProtectedIssuerLaunchErrorV1::InvalidProcessState(_))
+        Err(super::super::LegacyCleanupReservationErrorV1::Mode)
     ));
     assert_record(&REAPER, 0, DEFERRED);
     assert!(REAPER.thread_started.get().is_none());
@@ -807,7 +807,7 @@ fn dropping_an_empty_exhausted_service_retains_the_pool_when_recovery_is_unfunde
     }
     assert!(matches!(
         REAPER.reserve(),
-        Err(crate::ProtectedIssuerLaunchErrorV1::InvalidProcessState(_))
+        Err(super::super::LegacyCleanupReservationErrorV1::Mode)
     ));
     assert_empty(&REAPER);
 }

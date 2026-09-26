@@ -4,8 +4,22 @@
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 compile_error!("fe2o3-protected-service-spawn requires Linux x86-64");
 
+#[doc(hidden)]
+#[allow(unsafe_code)]
+pub mod cleanup_bridge;
+mod process_cleanup;
+mod process_reaper;
 #[allow(unsafe_code)]
 mod syscall;
+
+pub use process_reaper::{
+    ProtectedServiceCleanupAdmissionErrorV2, ProtectedServiceCleanupErrorV2,
+    ProtectedServiceCleanupReportV2, ProtectedServiceCleanupReservationV2,
+    ProtectedServiceCleanupServiceV2,
+};
+
+/// Fixed process-global cleanup capacity shared by native issuer and root-service launches.
+pub const MAX_PROTECTED_SERVICE_PROCESSES_V2: usize = 64;
 
 use std::error::Error;
 use std::fmt;
