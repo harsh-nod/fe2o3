@@ -77,12 +77,14 @@ pub(super) use rich_source_preparation_v1::{
 mod root_source_preparation_v1;
 #[allow(unused_imports)]
 pub(super) use root_source_preparation_v1::{
-    NominalRootSourceTablesV1, with_nominal_root_source_preparation_v1,
+    NominalRootCfgSourceV1, NominalRootSourceTablesV1, with_nominal_root_cfg_preparation_v1,
+    with_nominal_root_source_preparation_v1,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(super) use root_source_preparation_v1::{
-    observe_root_source_preparation_for_test_v1, root_source_preparation_controls_for_test_v1,
+    observe_root_cfg_preparation_for_test_v1, observe_root_source_preparation_for_test_v1,
+    root_cfg_preparation_controls_for_test_v1, root_source_preparation_controls_for_test_v1,
 };
 
 fn prepare(

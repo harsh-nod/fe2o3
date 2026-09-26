@@ -13579,107 +13579,16 @@ fn project_loop_graph_charge_v1(
     Ok(())
 }
 
+#[path = "production_ranked_projection_v1/source_loop_cfg_resources_v1.rs"]
+mod source_loop_cfg_resources_v1;
+
 fn projected_loop_cfg_graph_v1(
     function: &SemanticFunctionDeclV1,
 ) -> Result<ProjectedLoopCfgV1, ProductionRankedProjectionErrorV1> {
-    let block_count = function.blocks().len();
-    if block_count == 0 || block_count > MAX_RANKED_BOUNDS_BLOCKS {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "semantic CFG exceeds the ranked block limit before loop analysis",
-        ));
-    }
-    let checked_target = |target: SemanticBlockIdV1| {
-        let target = target.index() as usize;
-        (target < block_count).then_some(target).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "a semantic CFG edge outside the function during loop analysis",
-            ),
-        )
-    };
-    let mut successors = Vec::with_capacity(block_count);
-    let mut edge_count = 0_usize;
-    for block in function.blocks() {
-        let mut block_successors = match block.terminator().kind() {
-            SemanticTerminatorKindV1::Goto(edge) => vec![checked_target(edge.target())?],
-            SemanticTerminatorKindV1::SwitchInt { targets, .. } => {
-                let mut successors = targets
-                    .values()
-                    .iter()
-                    .map(|target| checked_target(target.edge().target()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let otherwise = checked_target(targets.otherwise().target())?;
-                if !(targets.values().len() == 2
-                    && targets.values().iter().any(|target| target.value() == 0)
-                    && targets.values().iter().any(|target| target.value() == 1)
-                    && switch_fallback_is_empty_unreachable_v1(function, otherwise))
-                {
-                    successors.push(otherwise);
-                }
-                successors
-            }
-            SemanticTerminatorKindV1::Call(call) => call
-                .destination()
-                .map(|destination| checked_target(destination.edge().target()))
-                .transpose()?
-                .into_iter()
-                .collect(),
-            SemanticTerminatorKindV1::Assert { target, .. }
-            | SemanticTerminatorKindV1::Drop { target, .. } => {
-                vec![checked_target(target.target())?]
-            }
-            SemanticTerminatorKindV1::FalseEdge { .. } => {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a false edge before uniform induction CFG normalization",
-                ));
-            }
-            SemanticTerminatorKindV1::Return
-            | SemanticTerminatorKindV1::TailCall(_)
-            | SemanticTerminatorKindV1::UnwindResume
-            | SemanticTerminatorKindV1::UnwindTerminate
-            | SemanticTerminatorKindV1::Abort
-            | SemanticTerminatorKindV1::Unreachable => Vec::new(),
-        };
-        block_successors.sort_unstable();
-        block_successors.dedup();
-        edge_count = edge_count.checked_add(block_successors.len()).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "semantic CFG edge count overflow during loop analysis",
-            ),
-        )?;
-        if edge_count > MAX_RANKED_BOUNDS_EDGES {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "semantic CFG exceeds the ranked edge limit before loop analysis",
-            ));
-        }
-        successors.push(block_successors);
-    }
-    let mut predecessors = vec![Vec::new(); block_count];
-    for (source, targets) in successors.iter().enumerate() {
-        for &target in targets {
-            predecessors[target].push(source);
-        }
-    }
-    let entry = function.entry().index() as usize;
-    if entry >= block_count {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "semantic entry block outside the function during loop analysis",
-        ));
-    }
-    let mut reachable = vec![false; block_count];
-    let mut pending = vec![entry];
-    while let Some(block) = pending.pop() {
-        if reachable[block] {
-            continue;
-        }
-        reachable[block] = true;
-        pending.extend(successors[block].iter().copied());
-    }
-    Ok(ProjectedLoopCfgV1 {
-        successors,
-        predecessors,
-        reachable,
-        entry,
-    })
+    source_loop_cfg_resources_v1::projected_loop_cfg_graph_with_resources_v1(
+        function,
+        &mut bf16_nominal_preparation_resources_v1::PreparationResourcesV1::unmetered(),
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

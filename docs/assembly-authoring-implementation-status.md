@@ -5,6 +5,16 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Original-meter source CFG retention — 2026-09-26
+
+The [root CFG checkpoint](bf16-helper-root-cfg-qualification-20260926.md)
+retains the actual source graph with rich tables and induction evidence on the
+original ledger. All 331 model tests, 2,481 backend tests and five fresh genuine
+Rust sessions passed. The lossless comparison rehashed both dependency trees
+and preserved numerical, refusal, storage and peak results. Full assertion/range
+analysis and root/ranked/formal/LLVM continuation remain open; accepted broad
+exits stay **6/18**.
+
 ## Joined root-source preparation — 2026-09-26
 
 The [joined root-source checkpoint](bf16-helper-root-source-qualification-20260926.md)

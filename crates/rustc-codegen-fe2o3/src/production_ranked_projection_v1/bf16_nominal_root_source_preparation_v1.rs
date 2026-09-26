@@ -9,6 +9,18 @@ use fe2o3_mir_model::{
     analyze_semantic_u32_induction_no_overflow_with_meter_v1,
 };
 
+#[path = "bf16_nominal_root_cfg_preparation_v1.rs"]
+mod root_cfg_preparation_v1;
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use root_cfg_preparation_v1::{
+    NominalRootCfgSourceV1, with_nominal_root_cfg_preparation_v1,
+};
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use root_cfg_preparation_v1::{
+    observe_root_cfg_preparation_for_test_v1, root_cfg_preparation_controls_for_test_v1,
+};
+
 #[cfg(test)]
 #[path = "bf16_nominal_root_source_preparation_genuine_v1_tests.rs"]
 mod genuine;
