@@ -1,7 +1,6 @@
 //! Inert packet fixtures only: no protected producer, signing service or GPU credit.
 use super::*;
 use crate::{
-    CompilerExecutionAttestationReceiptV2 as Receipt,
     CompilerExecutionServiceRequestV1 as LegacyRequest,
     CompilerExecutionServiceResponseV1 as LegacyResponse,
 };
@@ -12,8 +11,6 @@ use sha2::{Digest, Sha256};
 mod fixture;
 #[path = "../tests/support/native_receipt_fixture.rs"]
 mod receipt_fixture;
-use CompilerExecutionServiceRequestV2 as ServiceRequest;
-use CompilerExecutionServiceResponseV2 as ServiceResponse;
 use fixture::{header, policy_wire, request_wire, seal};
 
 const LIMIT: usize = 2_000_000;
@@ -21,9 +18,9 @@ const WORK: usize = 30_000_000;
 const NONCE: [u8; 32] = [0x93; 32];
 
 fn native_carriage(budget: &mut Budget<'_>) -> Carriage {
-    let p = policy_wire(2);
-    let q = request_wire(2);
-    let r = receipt_fixture::receipt_wire(2);
+    let p = policy_wire(VERSION);
+    let q = request_wire(VERSION);
+    let r = receipt_fixture::receipt_wire(VERSION);
     let wires = p.len() + q.len() + r.len();
     budget.reserve_storage(wires).unwrap();
     let (p, _) = retain(Policy::decode(&p, budget), budget).unwrap();
@@ -88,7 +85,7 @@ fn responses<'a>(c: &'a Carriage, current: &'a Current) -> [PPayload<'a>; 9] {
 
 // Identity-only V3 wire with native identity coordinates and synthetic signed
 // anchor observations. This deliberately does NOT authenticate native carriage
-// currentness: the missing protected leaf constructor must do that separately.
+// currentness: the native currentness authenticator must do that separately.
 fn current_wire(c: &Carriage) -> Vec<u8> {
     use fe2o3_external_anchor_protocol::{
         AnchorPositionV1, AnchorTransitionReceiptV1, AnchoredStateV1, CallerNonceV1,
@@ -181,7 +178,7 @@ fn reseal(bytes: &mut [u8], response: bool) {
         } else {
             "COMPILER-EXECUTION-SERVICE-REQUEST"
         },
-        2,
+        VERSION,
     );
 }
 fn admitted(bytes: &[u8], response: bool) -> Result<()> {
@@ -390,7 +387,7 @@ fn resealed_bad_tags_reserved_lengths_positions_and_families_are_rejected() {
         let mut bad = bytes.clone();
         bad[7] = b'1';
         bad[8..10].copy_from_slice(&1u16.to_le_bytes());
-        // A valid V1 outer footer does not make V2 retry the legacy family.
+        // A valid V1 outer footer does not make this family retry the legacy family.
         seal(
             &mut bad,
             if response {
@@ -473,7 +470,7 @@ fn fully_resealed_request_publication_nonce_and_policy_mismatches_reject() {
             seal(
                 &mut bytes[REQUEST_PREFIX + 224..REQUEST_PREFIX + 914],
                 "INERT-COMPILER-EXECUTION-SUBJECT",
-                2,
+                VERSION,
             );
             let identity: [u8; 32] = bytes[REQUEST_PREFIX + 882..REQUEST_PREFIX + 914]
                 .try_into()
@@ -483,12 +480,12 @@ fn fully_resealed_request_publication_nonce_and_policy_mismatches_reject() {
         seal(
             &mut bytes[REQUEST_PREFIX + 24..REQUEST_PREFIX + 224],
             "COMPILER-EXECUTION-CHALLENGE",
-            2,
+            VERSION,
         );
         seal(
             &mut bytes[REQUEST_PREFIX..REQUEST_PREFIX + Q],
             "COMPILER-EXECUTION-REQUEST",
-            2,
+            VERSION,
         );
         reseal(&mut bytes, false);
         assert!(admitted(&bytes, false).is_err());
@@ -550,17 +547,17 @@ fn exact_and_one_short_decode_work_storage_and_input_floor() {
         ok.unwrap();
         assert!(
             used <= if response {
-                MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_DECODE_WORK_V2
+                MAX_RESPONSE_DECODE_WORK
             } else {
-                MAX_COMPILER_EXECUTION_SERVICE_REQUEST_DECODE_WORK_V2
+                MAX_REQUEST_DECODE_WORK
             }
         );
         assert!(
             peak - prefix
                 <= if response {
-                    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_DECODE_STORAGE_V2
+                    MAX_RESPONSE_DECODE_STORAGE
                 } else {
-                    MAX_COMPILER_EXECUTION_SERVICE_REQUEST_DECODE_STORAGE_V2
+                    MAX_REQUEST_DECODE_STORAGE
                 }
         );
         let (ok, actual, actual_peak, _) = measure(&bytes, response, used, peak, prefix);
@@ -605,7 +602,7 @@ fn constructors_check_prepaid_borrowed_owners_and_only_return_packet_storage() {
         budget.reserve_storage(floor - 1).unwrap();
         assert!(matches!(
             ServiceResponse::new(
-                CompilerExecutionServiceRequestIdentityV2([0x91; 32]),
+                RequestIdentity([0x91; 32]),
                 c.policy(),
                 payload,
                 &mut budget
@@ -655,16 +652,8 @@ fn exact_and_short_constructor_quotas_cover_publish_verification() {
     for case in 0..3 {
         for payload in requests(&c) {
             let publish = matches!(payload, QPayload::Publish { .. });
-            let total = if publish {
-                COMPILER_EXECUTION_SERVICE_PUBLISH_REQUEST_WORK_V2
-            } else {
-                QW
-            };
-            let scratch = if publish {
-                COMPILER_EXECUTION_SERVICE_PUBLISH_REQUEST_STORAGE_V2
-            } else {
-                QS
-            };
+            let total = if publish { PUBLISH_REQUEST_WORK } else { QW };
+            let scratch = if publish { PUBLISH_REQUEST_STORAGE } else { QS };
             let floor = c.policy().retained_storage() + payload.input_storage();
             let mut work = Work::new(total - usize::from(case == 1));
             let mut b = Budget::new(&mut work, floor + scratch - usize::from(case == 2));
@@ -687,12 +676,8 @@ fn exact_and_short_constructor_quotas_cover_publish_verification() {
             let mut work = Work::new(PW - usize::from(case == 1));
             let mut b = Budget::new(&mut work, floor + PS - usize::from(case == 2));
             b.reserve_storage(floor).unwrap();
-            let result = ServiceResponse::new(
-                CompilerExecutionServiceRequestIdentityV2([0x91; 32]),
-                c.policy(),
-                payload,
-                &mut b,
-            );
+            let result =
+                ServiceResponse::new(RequestIdentity([0x91; 32]), c.policy(), payload, &mut b);
             assert_eq!(b.storage(), floor);
             match case {
                 0 => {
@@ -714,9 +699,9 @@ fn packet_decode_is_not_policy_pinned_authentication() {
     let mut budget = Budget::new(&mut work, LIMIT);
     let c = native_carriage(&mut budget);
     let other = SigningKey::from_bytes(&[0x53; 32]);
-    let mut bytes = receipt_fixture::receipt_wire(2);
+    let mut bytes = receipt_fixture::receipt_wire(VERSION);
     bytes[272..304].copy_from_slice(&other.verifying_key().to_bytes());
-    receipt_fixture::sign(&mut bytes, 2, &other);
+    receipt_fixture::sign(&mut bytes, VERSION, &other);
     budget.reserve_storage(bytes.len()).unwrap();
     let (r, _) = retain(Receipt::decode(&bytes, &mut budget), &mut budget).unwrap();
     let (u, charge) = Publication::new([0x81; 32], [0x82; 32], r, &mut budget).unwrap();
@@ -820,5 +805,98 @@ fn fresh_native_families_have_distinct_identity_domains() {
         };
         assert_ne!(digest, derive_identity(legacy, &bytes[..bytes.len() - 32]));
         assert_ne!(digest, <[u8; 32]>::from(Sha256::digest(&bytes)));
+    }
+}
+
+#[test]
+fn native_families_reject_each_others_complete_packets_and_leaves() {
+    let other_version: u16 = if VERSION == 2 { 3 } else { 2 };
+    for (response, bytes) in packet_wires() {
+        let mut work = Work::new(WORK);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        budget.reserve_storage(bytes.len()).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let rejected = match (VERSION, response) {
+            (2, false) => {
+                crate::CompilerExecutionServiceRequestV3::decode(&bytes, &mut budget).is_err()
+            }
+            (2, true) => {
+                crate::CompilerExecutionServiceResponseV3::decode(&bytes, &mut budget).is_err()
+            }
+            (3, false) => {
+                crate::CompilerExecutionServiceRequestV2::decode(&bytes, &mut budget).is_err()
+            }
+            (3, true) => {
+                crate::CompilerExecutionServiceResponseV2::decode(&bytes, &mut budget).is_err()
+            }
+            _ => unreachable!(),
+        };
+        assert!(rejected);
+        assert_eq!(budget.storage(), bytes.len());
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        let mut other = bytes.clone();
+        other[7] = b'0' + other_version as u8;
+        other[8..10].copy_from_slice(&other_version.to_le_bytes());
+        seal(
+            &mut other,
+            if response {
+                "COMPILER-EXECUTION-SERVICE-RESPONSE"
+            } else {
+                "COMPILER-EXECUTION-SERVICE-REQUEST"
+            },
+            other_version,
+        );
+        assert!(matches!(admitted(&other, response), Err(Error::Header)));
+
+        let tag = bytes[10];
+        let (start, leaf) = match (response, tag) {
+            (false, 3 | 4) => (REQUEST_PREFIX, request_wire(other_version).to_vec()),
+            (false, 6) => (
+                REQUEST_PREFIX,
+                fixture::subject_wire(other_version).to_vec(),
+            ),
+            (true, 2) => (
+                RESPONSE_PREFIX,
+                fixture::challenge_wire(other_version).to_vec(),
+            ),
+            _ => continue,
+        };
+        let mut mixed = bytes;
+        mixed[start..start + leaf.len()].copy_from_slice(&leaf);
+        reseal(&mut mixed, response);
+        assert!(admitted(&mixed, response).is_err());
+    }
+}
+
+#[test]
+fn every_packet_has_independently_framed_identity_bytes() {
+    for (response, bytes) in packet_wires() {
+        let version = VERSION;
+        let prefix = if response {
+            RESPONSE_PREFIX
+        } else {
+            REQUEST_PREFIX
+        };
+        let mut expected = vec![0; bytes.len()];
+        let magic = match (version, response) {
+            (2, false) => b"F2O3CSQ2",
+            (2, true) => b"F2O3CSP2",
+            (3, false) => b"F2O3CSQ3",
+            (3, true) => b"F2O3CSP3",
+            _ => unreachable!(),
+        };
+        header(&mut expected, magic, version);
+        expected[10..12].copy_from_slice(&bytes[10..12]);
+        let p = if response { 56 } else { 24 };
+        expected[p..p + 32].copy_from_slice(&policy_wire(version)[184..]);
+        // Position, request correlation and leaf bytes have their own mutation tests.
+        if response {
+            expected[24..56].copy_from_slice(&bytes[24..56]);
+        }
+        expected[p + 32..prefix].copy_from_slice(&bytes[p + 32..prefix]);
+        let end = bytes.len() - 32;
+        expected[prefix..end].copy_from_slice(&bytes[prefix..end]);
+        reseal(&mut expected, response);
+        assert_eq!(expected, bytes);
     }
 }
