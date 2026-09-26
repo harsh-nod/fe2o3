@@ -5,6 +5,19 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Actual source-use observers and lifetime accounting — 2026-09-26
+
+The [actual-source checkpoint](bf16-actual-source-use-qualification-20260926.md)
+qualifies the previously pending real-source observers and independent oracle.
+Regression passed 331 model and 2,780 backend tests (189 ignored), builds, five
+actual Rust sessions and all 306 comparison controls. The strict real-source
+comparison passed with source-derived lifetime accounting; report storage/peaks
+remain exact. All 38 ordinary result bodies and 52 artifacts are unchanged.
+Complete operation streams, bounds/effects and normal nominal-helper admission
+remain open. Private debugger startup and controller CPU checks passed, but no
+new target execution or physical capture is claimed. Accepted broad exits
+remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Source-use and borrowed-local components — 2026-09-26
 
 The [component checkpoint](bf16-source-use-local-contract-components-20260926.md)

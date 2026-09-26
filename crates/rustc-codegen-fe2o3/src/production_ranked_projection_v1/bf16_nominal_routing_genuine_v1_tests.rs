@@ -288,7 +288,11 @@ fn boundary_probes(
             let mut budget = Budget::new(&mut work, storage_limit);
             budget.reserve_storage(incoming).unwrap();
             let ledger = budget.work_ledger_identity_v1();
+            let rich_peak_guard =
+                crate::production_ranked_projection_v1::bf16_nominal_source_preparation_v1::rich_peak::begin_probe(&budget);
             let result = observe_route(owner, source, inventory, &mut budget);
+            crate::production_ranked_projection_v1::bf16_nominal_source_preparation_v1::rich_peak::finish(&budget, &result);
+            drop(rich_peak_guard);
             assert!(budget.work_ledger_identity_v1() == ledger);
             assert_eq!(
                 budget.storage(),
@@ -339,6 +343,7 @@ fn boundary_probes(
         assert!(!short_storage.completed);
         assert_eq!(short_storage.failed_work, None);
         assert!(short_storage.failed_storage.is_some());
+        crate::production_ranked_projection_v1::bf16_nominal_source_preparation_v1::rich_peak::close_group();
         Ok(())
     })
 }
@@ -621,7 +626,15 @@ pub(crate) fn inspect_nominal_routing_genuine_for_test_v1(
 ) -> Result<()> {
     let before = budget.storage();
     let ledger = budget.work_ledger_identity_v1();
-    observe_route(owner, source, inventory, budget)?;
+    let rich_peak_guard =
+        crate::production_ranked_projection_v1::bf16_nominal_source_preparation_v1::rich_peak::begin_original(budget);
+    let rich_peak_result = observe_route(owner, source, inventory, budget);
+    crate::production_ranked_projection_v1::bf16_nominal_source_preparation_v1::rich_peak::finish(
+        budget,
+        &rich_peak_result,
+    );
+    drop(rich_peak_guard);
+    rich_peak_result?;
     assert_eq!(budget.storage(), before);
     // Negative/control bookkeeping is separately prepaid on the original
     // phase after the first genuine whole route has completed.

@@ -61,6 +61,10 @@ struct RetainedPreparationTablesV1 {
     provenance: LocalProvenanceV1,
 }
 
+#[cfg(test)]
+#[path = "bf16_rich_peak_v1_tests.rs"]
+pub(in crate::production_ranked_projection_v1) mod rich_peak;
+
 #[path = "bf16_nominal_rich_source_preparation_v1.rs"]
 mod rich_source_preparation_v1;
 #[allow(unused_imports)]

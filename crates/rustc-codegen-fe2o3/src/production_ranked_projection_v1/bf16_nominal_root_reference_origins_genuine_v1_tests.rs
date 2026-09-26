@@ -562,8 +562,12 @@ pub(super) fn observe_actual_root_reference_origins_for_test_v1(
         work,
         observed.guarded.assembly_frame,
     );
+    local_use_genuine::observe(owner, source, inventory, actual_inputs, budget)?;
     Ok(())
 }
+
+#[path = "bf16_nominal_local_use_genuine_v1_tests.rs"]
+mod local_use_genuine;
 
 #[test]
 fn actual_origin_genuine_headers_cover_outer_owners_and_control_transfers() {

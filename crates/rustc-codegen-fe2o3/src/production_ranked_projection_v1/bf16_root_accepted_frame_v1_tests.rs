@@ -129,6 +129,10 @@ impl State {
 thread_local! { static STATE: Cell<State> = const { Cell::new(State::empty()) }; }
 
 pub(in crate::production_ranked_projection_v1) fn start(scope: Scope) {
+    assert!(
+        !crate::production_ranked_projection_v1::local_use_frames::active(),
+        "accepted/local-use frame overlap"
+    );
     STATE.with(|cell| {
         let mut old = cell.get();
         if old.scope.is_some() || old.active || old.current.is_some() {
@@ -220,6 +224,19 @@ impl Drop for StageGuard {
     }
 }
 pub(in crate::production_ranked_projection_v1) fn record(kind: Kind, bytes: usize) {
+    use crate::production_ranked_projection_v1::local_use_frames as local;
+    if local::active() {
+        require_idle_for_local_use();
+        local::record(
+            match kind {
+                Kind::Assembly => local::FrameKind::Assembly,
+                Kind::CompleteGraph => local::FrameKind::CompleteGraph,
+                Kind::InitialGraph => local::FrameKind::InitialGraph,
+            },
+            bytes,
+        );
+        return;
+    }
     STATE.with(|cell| {
         let mut state = cell.get();
         // Hooks also execute in unrelated graph controls outside these observers.
@@ -240,6 +257,15 @@ pub(in crate::production_ranked_projection_v1) fn record(kind: Kind, bytes: usiz
             _ => state.invalid = true,
         }
         cell.set(state);
+    });
+}
+pub(in crate::production_ranked_projection_v1) fn require_idle_for_local_use() {
+    STATE.with(|cell| {
+        let state = cell.get();
+        assert!(
+            state.scope.is_none() && !state.active && state.current.is_none(),
+            "accepted/local-use frame overlap"
+        );
     });
 }
 fn valid(state: &State, scope: Scope) -> bool {
@@ -347,6 +373,15 @@ mod tests {
                 frames(values);
             }
         }
+    }
+    #[test]
+    fn scoped_frames_local_use_requires_idle_existing_observer() {
+        clear();
+        require_idle_for_local_use();
+        start(Scope::S5A);
+        assert!(catch_unwind(require_idle_for_local_use).is_err());
+        clear();
+        require_idle_for_local_use();
     }
     #[test]
     fn scoped_frames_fixed_storage_and_zero_sized_guards() {

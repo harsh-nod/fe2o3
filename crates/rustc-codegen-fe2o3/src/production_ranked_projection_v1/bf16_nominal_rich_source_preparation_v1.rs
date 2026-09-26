@@ -143,6 +143,95 @@ fn rich_header<R>(callback_bytes: usize) -> Result<usize> {
     }
     Ok(bytes)
 }
+// Diagnostic reconstruction only: exact historical two-field shape, not an
+// accepted old reservation, authority token, or production layout change.
+#[cfg(test)]
+#[allow(dead_code)]
+struct HistoricalRichNominalSourceTablesV1<'a> {
+    function: &'a SemanticFunctionDeclV1,
+    prepared: &'a RichPreparedSourceV1,
+}
+#[cfg(test)]
+fn reconstructed_historical_rich_header<R>(callback_bytes: usize) -> Result<usize> {
+    let mut bytes = 4096usize;
+    for amount in [
+        size_of::<RichPreparedSourceV1>(),
+        size_of::<Option<RetainedPreparationTablesV1>>(),
+        size_of::<HistoricalRichNominalSourceTablesV1<'static>>(),
+        size_of::<PreparationResourcesV1<'static, 'static>>(),
+        size_of::<ModelMeter<'static, 'static, 'static>>(),
+        size_of::<Custody>(),
+        callback_bytes.checked_mul(2).ok_or(Resource::Arithmetic)?,
+        size_of::<Result<R>>()
+            .checked_mul(2)
+            .ok_or(Resource::Arithmetic)?,
+    ] {
+        bytes = bytes.checked_add(amount).ok_or(Resource::Arithmetic)?;
+    }
+    Ok(bytes)
+}
+#[cfg(test)]
+fn rich_peak_layout<R, F>() -> Result<super::rich_peak::Layout> {
+    let mut other = 4096usize;
+    for amount in [
+        size_of::<RichPreparedSourceV1>(),
+        size_of::<Option<RetainedPreparationTablesV1>>(),
+        size_of::<PreparationResourcesV1<'static, 'static>>(),
+        size_of::<ModelMeter<'static, 'static, 'static>>(),
+        size_of::<Custody>(),
+        size_of::<F>().checked_mul(2).ok_or(Resource::Arithmetic)?,
+        size_of::<Result<R>>()
+            .checked_mul(2)
+            .ok_or(Resource::Arithmetic)?,
+    ] {
+        other = other.checked_add(amount).ok_or(Resource::Arithmetic)?;
+    }
+    Ok(super::rich_peak::Layout {
+        current: rich_header::<R>(size_of::<F>())?,
+        historical: reconstructed_historical_rich_header::<R>(size_of::<F>())?,
+        view: size_of::<RichNominalSourceTablesV1<'static>>(),
+        old_view: size_of::<HistoricalRichNominalSourceTablesV1<'static>>(),
+        other,
+        callback: size_of::<F>(),
+        result: size_of::<Result<R>>(),
+    })
+}
+#[cfg(test)]
+fn record_rich_peak_entry<R, F>(budget: &Budget<'_>) {
+    if super::rich_peak::rich_active() {
+        let layout = rich_peak_layout::<R, F>().expect("compiled rich diagnostic layout");
+        super::rich_peak::enter_rich(layout, budget);
+    }
+}
+#[cfg(test)]
+mod rich_peak_layout_tests {
+    use super::*;
+    fn check<R, F>() {
+        let l = rich_peak_layout::<R, F>().unwrap();
+        assert_eq!(l.current, l.other.checked_add(l.view).unwrap());
+        assert_eq!(l.historical, l.other.checked_add(l.old_view).unwrap());
+        assert_eq!(l.callback, size_of::<F>());
+        assert_eq!(l.result, size_of::<Result<R>>());
+        // No assumption about the numeric historical/current difference.
+        assert_eq!(l.old_view, 2 * size_of::<&'static RichPreparedSourceV1>());
+    }
+    #[test]
+    fn historical_formula_zero_sized_callback_and_result() {
+        check::<(), ()>();
+    }
+    #[test]
+    fn historical_formula_uses_the_actual_large_callback_and_result() {
+        check::<[usize; 31], [usize; 17]>();
+    }
+    #[test]
+    fn historical_formula_retains_overflow_refusal() {
+        assert!(matches!(
+            reconstructed_historical_rich_header::<()>(usize::MAX),
+            Err(QueryError::Resource(Resource::Arithmetic))
+        ));
+    }
+}
+
 fn with_rich_scope<'w, R, F>(
     callables: &[SemanticCallableDeclV1],
     types: &[SemanticTypeDeclV1],
@@ -159,6 +248,8 @@ where
     // entry-floor check before this private scope can reserve anything.
     let frame = rich_header::<R>(size_of::<F>())?;
     let before = Custody::new(budget)?;
+    #[cfg(test)]
+    record_rich_peak_entry::<R, F>(budget);
     budget.charge_work(32)?;
     let mut owned = 0usize;
     let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -167,6 +258,13 @@ where
             let (dense, option_producers, option_dominance) = {
                 let mut resources = PreparationResourcesV1::new(budget, &mut owned);
                 resources.reserve_storage(frame).map_err(query_error)?;
+                #[cfg(test)]
+                super::rich_peak::accepted(frame);
+                #[cfg(test)]
+                crate::production_ranked_projection_v1::local_use_frames::record(
+                    crate::production_ranked_projection_v1::local_use_frames::FrameKind::RichHeader,
+                    frame,
+                );
                 let dense = prepare_with_retained(
                     callables,
                     types,
@@ -206,6 +304,8 @@ where
             prepared: &prepared,
             original_ledger: (before.slot, before.ledger),
         };
+        #[cfg(test)]
+        super::rich_peak::before_inspect(budget);
         let result = inspect(&view, budget);
         drop(prepared);
         result
@@ -222,8 +322,12 @@ where
         }
     };
     before.check(budget, owned)?;
+    #[cfg(test)]
+    super::rich_peak::before_refund(owned, budget);
     // Refund only this scope's accepted charges. Surplus and denial history stay.
     budget.release_storage(owned)?;
+    #[cfg(test)]
+    super::rich_peak::after_refund(budget);
     result
 }
 

@@ -33,6 +33,7 @@ pub(super) fn observe_prepared_dense(
     super::bf16_nominal_final_candidate_v1::retained_effects_genuine::observe(
         owner, source, inventory, budget,
     )?;
+    super::bf16_nominal_source_preparation_v1::rich_peak::begin_stage(0, budget);
     super::bf16_nominal_source_preparation_v1::observe_rich_source_comparison_for_test_v1(
         owner,
         inventory,
@@ -42,6 +43,8 @@ pub(super) fn observe_prepared_dense(
         source.source_call(),
         budget,
     )?;
+    super::bf16_nominal_source_preparation_v1::rich_peak::end_stage(0, budget);
+    super::bf16_nominal_source_preparation_v1::rich_peak::begin_stage(1, budget);
     super::bf16_nominal_source_preparation_v1::observe_root_source_preparation_for_test_v1(
         owner,
         inventory,
@@ -51,6 +54,8 @@ pub(super) fn observe_prepared_dense(
         source.source_call(),
         budget,
     )?;
+    super::bf16_nominal_source_preparation_v1::rich_peak::end_stage(1, budget);
+    super::bf16_nominal_source_preparation_v1::rich_peak::begin_stage(2, budget);
     super::bf16_nominal_source_preparation_v1::observe_root_cfg_preparation_for_test_v1(
         owner,
         inventory,
@@ -60,6 +65,8 @@ pub(super) fn observe_prepared_dense(
         source.source_call(),
         budget,
     )?;
+    super::bf16_nominal_source_preparation_v1::rich_peak::end_stage(2, budget);
+    super::bf16_nominal_source_preparation_v1::rich_peak::begin_stage(3, budget);
     let assertions =
         super::bf16_nominal_source_preparation_v1::observe_root_assertion_preparation_for_test_v1(
             owner,
@@ -70,12 +77,17 @@ pub(super) fn observe_prepared_dense(
             source.source_call(),
             budget,
         )?;
+    super::bf16_nominal_source_preparation_v1::rich_peak::end_stage(3, budget);
+    super::bf16_nominal_source_preparation_v1::rich_peak::begin_stage(4, budget);
     super::canonical_assertion_facts_v1::observe_nominal_recipe_resources_for_test_v1(
         owner, source, inventory, budget,
     )?;
+    super::bf16_nominal_source_preparation_v1::rich_peak::end_stage(4, budget);
+    super::bf16_nominal_source_preparation_v1::rich_peak::begin_stage(5, budget);
     super::canonical_assertion_facts_v1::observe_nominal_initial_graph_for_test_v1(
         owner, source, inventory, budget,
     )?;
+    super::bf16_nominal_source_preparation_v1::rich_peak::end_stage(5, budget);
     // Actual measured counts, not a positive-assertion coverage assumption.
     assert!(assertions.blocks > 0);
     assert!(assertions.true_decisions <= assertions.assertions);

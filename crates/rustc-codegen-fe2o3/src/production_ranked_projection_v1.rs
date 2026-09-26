@@ -54,6 +54,12 @@ mod canonical_assertion_facts_v1;
 mod capability_state_access_v1;
 mod root_checked_references_v1;
 // Borrowed local DATA; actual block-stream traversal and admission remain pending.
+#[cfg(test)]
+#[path = "production_ranked_projection_v1/bf16_local_use_accepted_frames_v1_tests.rs"]
+mod local_use_frames;
+#[cfg(test)]
+#[path = "production_ranked_projection_v1/bf16_local_use_source_oracle_v1_tests.rs"]
+mod local_use_source_oracle;
 #[allow(dead_code)]
 mod root_local_contracts_v1;
 // Source-use DATA and paid site components, not a complete nominal stream.
@@ -24471,6 +24477,7 @@ mod tests {
     include!("production_ranked_projection_v1/root_checked_references_v1_tests.rs");
     include!("production_ranked_projection_v1/root_checked_reference_use_preparation_v1_tests.rs");
     include!("production_ranked_projection_v1/root_local_contracts_v1_tests.rs");
+    include!("production_ranked_projection_v1/bf16_local_use_source_oracle_controls_v1_tests.rs");
     include!("production_ranked_projection_v1/root_initial_capability_graph_v1_tests.rs");
     include!("production_ranked_projection_v1/root_reference_origin_preparation_v1_tests.rs");
     include!("production_ranked_projection_v1/root_invocation_index_preparation_v1_tests.rs");

@@ -618,7 +618,13 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
             let frame =
                 local_contract_frame_v1::<R, F>(size_of::<ActualRootLocalContractsV1<'static>>())?;
             resources.work(frame)?;
-            resources.reserve_storage(frame)
+            resources.reserve_storage(frame)?;
+            #[cfg(test)]
+            crate::production_ranked_projection_v1::local_use_frames::record(
+                crate::production_ranked_projection_v1::local_use_frames::FrameKind::LocalWrapper,
+                frame,
+            );
+            Ok(())
         })?;
         // The captured consumer is constructed only after its frame was paid.
         self.with_actual_root_reference_origins_v1(
@@ -688,7 +694,12 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
             }
             let frame = actual_use_frame::<R, F>()?;
             resources.work(frame)?;
-            resources.reserve_storage(frame)
+            resources.reserve_storage(frame)?;
+            #[cfg(test)]
+            crate::production_ranked_projection_v1::local_use_frames::record(
+                crate::production_ranked_projection_v1::local_use_frames::FrameKind::SourceUseWrapper, frame,
+            );
+            Ok(())
         })?;
         self.with_actual_root_reference_origins_v1(
             checked, rich, actual_inputs, pending,
