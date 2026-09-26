@@ -482,41 +482,6 @@ macro_rules! signing_key_capability {
             }
         }
 
-        // This guard borrows the original caller buffer; it never creates a second seed.
-        struct SeedGuard<'a>(&'a mut [u8; KEY_BYTES]);
-        impl Drop for SeedGuard<'_> {
-            fn drop(&mut self) {
-                self.0.zeroize();
-            }
-        }
-
-        fn read_secret<T>(
-            image: &SealedCapabilityImage,
-            use_seed: impl FnOnce(&[u8; KEY_BYTES]) -> Result<T>,
-        ) -> Result<T> {
-            image.validate_secret_fixed()?;
-            let mut seed = [0; KEY_BYTES];
-            with_secret(
-                &mut seed,
-                |seed| {
-                    image.read_fixed_into(seed)?;
-                    image.validate_secret_fixed()
-                },
-                use_seed,
-            )
-        }
-
-        // Guard before I/O: a short read, I/O error or post-read refusal can leave bytes.
-        fn with_secret<T>(
-            seed: &mut [u8; KEY_BYTES],
-            read: impl FnOnce(&mut [u8; KEY_BYTES]) -> Result<()>,
-            use_seed: impl FnOnce(&[u8; KEY_BYTES]) -> Result<T>,
-        ) -> Result<T> {
-            let seed = SeedGuard(seed);
-            read(seed.0)?;
-            use_seed(seed.0)
-        }
-
         fn require_policy_key(key: &SigningKey, policy: &Policy) -> Result<()> {
             if key.verifying_key().as_bytes() != policy.verifying_key() {
                 return Err(Error::Rejected(
@@ -552,7 +517,7 @@ macro_rules! signing_key_capability {
                     + size_of::<Ledger>()
                     + size_of::<std::result::Result<(), Resource>>()
                     + 2 * size_of::<bool>()
-                    + 2 * size_of::<SeedGuard<'static>>()
+                    + 2 * size_of::<SeedGuard<'static, KEY_BYTES>>()
                     + 128
                     + envelope_overhead::<(Cap, Storage), Error>()
                     + envelope_overhead::<(File, Storage), Error>()

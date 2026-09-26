@@ -2,10 +2,11 @@
 //!
 //! Record descriptors carry coordination evidence only. Signing-key capabilities carry
 //! service-owned secrets without a direct seed getter. Their transport Files contain readable
-//! secret material and must remain with trusted custody owners. Issuer custody has no signing operation; exact
-//! external-anchor custody can only be consumed into its key after deployment binding is
-//! revalidated. None of these capabilities grants compiler, publication, linking,
-//! receipt-issuance, loading, launch, or execution authority.
+//! secret material and must remain with trusted custody owners. Legacy anchor custody can
+//! be consumed into its raw key; native custody instead retains the key and meters signing.
+//! Signatures authenticate bytes, not the claimed compiler occurrence or durable state.
+//! None of these capabilities alone grants compiler, publication, linking, loading, launch,
+//! or execution authority.
 
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
@@ -26,6 +27,9 @@ mod compiler_execution_external_anchor_deployment_v2;
 mod compiler_execution_external_anchor_deployment_v3;
 mod compiler_execution_external_anchor_provisioning;
 mod compiler_execution_external_anchor_signing_key;
+mod compiler_execution_external_anchor_signing_key_native;
+mod compiler_execution_external_anchor_signing_key_v2;
+mod compiler_execution_external_anchor_signing_key_v3;
 mod compiler_execution_policy;
 mod compiler_execution_policy_native;
 mod compiler_execution_policy_v2;
@@ -43,6 +47,7 @@ mod compiler_execution_supervisor_deployment_native;
 mod compiler_execution_supervisor_deployment_v2;
 mod compiler_execution_supervisor_deployment_v3;
 mod native_capability;
+mod native_secret;
 mod rustc_invocation;
 mod sealed_image;
 mod trusted_profile_tree;
@@ -64,6 +69,8 @@ pub use compiler_execution_external_anchor_signing_key::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
     CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
 };
+pub use compiler_execution_external_anchor_signing_key_v2::CompilerExecutionExternalAnchorSigningKeyCapabilityV2;
+pub use compiler_execution_external_anchor_signing_key_v3::CompilerExecutionExternalAnchorSigningKeyCapabilityV3;
 pub use compiler_execution_policy::{
     COMPILER_EXECUTION_POLICY_CHILD_FD_V1, CompilerExecutionPolicyCapabilityV1,
 };

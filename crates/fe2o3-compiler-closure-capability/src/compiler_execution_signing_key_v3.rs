@@ -3,6 +3,7 @@ use crate::{
     native_capability::{
         CompilerExecutionCapabilityErrorV2 as Error, ENTRY_WORK, Result, Storage, envelope_overhead,
     },
+    native_secret::{SeedGuard, read_secret, with_secret},
     sealed_image::{CapabilityRole, SealedCapabilityImage},
 };
 use ed25519_dalek::{Signer, SigningKey};
@@ -24,7 +25,7 @@ use fe2o3_kernel_ir::{
 };
 use std::{fmt, fs::File, mem::size_of, os::fd::RawFd};
 use subtle::ConstantTimeEq;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::ZeroizeOnDrop;
 
 const KEY_BYTES: usize = 32;
 const CRYPTO_SCRATCH: usize = 4096;

@@ -47,10 +47,11 @@ mod state;
 mod tests;
 
 pub use protocol::{
-    ANCHOR_CHALLENGE_WIRE_LEN_V1, ANCHOR_OBSERVATION_SIGNED_LEN_V1, ANCHOR_OBSERVATION_WIRE_LEN_V1,
-    AnchorChallengeV1, AnchorKeyIdentityV1, AnchorPositionV1, AnchorProtocolErrorV1, CallerNonceV1,
-    ChallengeKindV1, EXTERNAL_ANCHOR_AUTHORITY_V1, EXTERNAL_ANCHOR_PROTOCOL_VERSION_V1,
-    HashChainHeadV1, PinnedAnchorKeyV1, TRANSACTION_IDENTITY_MAX_LEN_V1, TransactionDigestV1,
+    ANCHOR_CHALLENGE_WIRE_LEN_V1, ANCHOR_OBSERVATION_SIGNED_LEN_V1,
+    ANCHOR_OBSERVATION_SIGNING_BYTES_V1, ANCHOR_OBSERVATION_WIRE_LEN_V1, AnchorChallengeV1,
+    AnchorKeyIdentityV1, AnchorPositionV1, AnchorProtocolErrorV1, CallerNonceV1, ChallengeKindV1,
+    EXTERNAL_ANCHOR_AUTHORITY_V1, EXTERNAL_ANCHOR_PROTOCOL_VERSION_V1, HashChainHeadV1,
+    PinnedAnchorKeyV1, TRANSACTION_IDENTITY_MAX_LEN_V1, TransactionDigestV1,
     UnsignedAnchorObservationV1, derive_proposed_head_v1, derive_transaction_digest_v1,
 };
 pub use receipt::{
