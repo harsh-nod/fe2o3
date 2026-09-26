@@ -260,3 +260,280 @@ fn io_error(operation: &'static str, source: rustix::io::Errno) -> DaemonError {
         source: io::Error::from(source),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+    use std::fs::File;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[derive(Debug)]
+    enum TestError {
+        Daemon(DaemonError),
+        Resource(Resource),
+    }
+
+    impl From<DaemonError> for TestError {
+        fn from(error: DaemonError) -> Self {
+            Self::Daemon(error)
+        }
+    }
+
+    fn charge(
+        budget: &mut Budget<'_>,
+        attempts: &mut Vec<IoStep>,
+        step: IoStep,
+    ) -> Result<(), TestError> {
+        attempts.push(step);
+        budget.charge_work(step.work()).map_err(TestError::Resource)
+    }
+
+    #[test]
+    fn fixed_step_work_is_const_and_positive() {
+        const COSTS: [usize; 4] = [
+            IoStep::Validate.work(),
+            IoStep::Poll.work(),
+            IoStep::Receive.work(),
+            IoStep::Send.work(),
+        ];
+        assert_eq!(COSTS[0], 6152 + 64 * size_of::<libc::sockaddr_un>());
+        assert_eq!(&COSTS[1..], &[1032, 6920, 10248]);
+        assert!(COSTS.into_iter().all(|work| work > 0));
+    }
+
+    #[test]
+    fn validation_one_short_precedes_descriptor_refusal_and_exact_charge_converts_it() {
+        // This read-only non-socket descriptor must fail status validation before socket queries.
+        let peer: OwnedFd = File::open("/dev/null").unwrap().into();
+        for one_short in [false, true] {
+            let mut work = Work::new(17 + IoStep::Validate.work() - usize::from(one_short));
+            let mut budget = Budget::new(&mut work, 64);
+            budget.charge_work(17).unwrap();
+            budget.reserve_storage(64).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let mut attempts = Vec::new();
+            let result = validate_peer(&peer, &mut |step| charge(&mut budget, &mut attempts, step));
+            if one_short {
+                assert!(matches!(
+                    result,
+                    Err(TestError::Resource(Resource::Work(_)))
+                ));
+                assert_eq!(budget.work(), 17);
+                assert_eq!(budget.failed_work(), Some(17 + IoStep::Validate.work()));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(TestError::Daemon(DaemonError::InvalidPeerStatus))
+                ));
+                assert_eq!(budget.work(), 17 + IoStep::Validate.work());
+                assert_eq!(budget.failed_work(), None);
+            }
+            assert_eq!(attempts, [IoStep::Validate]);
+            assert_eq!(budget.storage(), 64);
+            assert_eq!(budget.peak_storage(), 64);
+            assert!(ledger == budget.work_ledger_identity_v1());
+        }
+    }
+
+    #[test]
+    fn receive_and_send_poll_precharge_refusals_are_terminal() {
+        let peer: OwnedFd = tempfile::tempfile().unwrap().into();
+        for sending in [false, true] {
+            let mut work = Work::new(IoStep::Poll.work() - 1);
+            let mut budget = Budget::new(&mut work, 0);
+            let mut attempts = Vec::new();
+            let mut meter = |step| charge(&mut budget, &mut attempts, step);
+            let result = if sending {
+                send_observation(
+                    &peer,
+                    &[0; ANCHOR_OBSERVATION_WIRE_LEN_V1],
+                    Duration::from_secs(30),
+                    &mut meter,
+                )
+            } else {
+                receive_challenge(&peer, &mut meter).map(|_| ())
+            };
+            assert!(matches!(
+                result,
+                Err(TestError::Resource(Resource::Work(_)))
+            ));
+            assert_eq!(attempts, [IoStep::Poll]);
+            assert_eq!(budget.work(), 0);
+            assert_eq!(budget.failed_work(), Some(IoStep::Poll.work()));
+        }
+    }
+
+    #[test]
+    fn ready_file_receive_and_send_refuse_before_socket_syscalls() {
+        // A regular file polls ready, but neither recvmsg nor send may be reached here.
+        let peer: OwnedFd = tempfile::tempfile().unwrap().into();
+        for operation in [IoStep::Receive, IoStep::Send] {
+            let mut work = Work::new(IoStep::Poll.work() + operation.work() - 1);
+            let mut budget = Budget::new(&mut work, 64);
+            budget.reserve_storage(64).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let mut attempts = Vec::new();
+            let mut meter = |step| charge(&mut budget, &mut attempts, step);
+            let result = if operation == IoStep::Send {
+                send_observation(
+                    &peer,
+                    &[0; ANCHOR_OBSERVATION_WIRE_LEN_V1],
+                    Duration::from_secs(30),
+                    &mut meter,
+                )
+            } else {
+                receive_challenge(&peer, &mut meter).map(|_| ())
+            };
+            assert!(matches!(
+                result,
+                Err(TestError::Resource(Resource::Work(_)))
+            ));
+            assert_eq!(attempts, [IoStep::Poll, operation]);
+            assert_eq!(budget.work(), IoStep::Poll.work());
+            assert_eq!(
+                budget.failed_work(),
+                Some(IoStep::Poll.work() + operation.work())
+            );
+            assert_eq!(budget.storage(), 64);
+            assert_eq!(budget.peak_storage(), 64);
+            assert!(ledger == budget.work_ledger_identity_v1());
+        }
+    }
+
+    #[test]
+    fn every_unsatisfied_poll_attempt_charges_the_original_ledger() {
+        let peer: OwnedFd = tempfile::tempfile().unwrap().into();
+        let mut work = Work::new(17 + 2 * IoStep::Poll.work());
+        let mut budget = Budget::new(&mut work, 128);
+        budget.charge_work(17).unwrap();
+        budget.reserve_storage(128).unwrap();
+        budget.release_storage(64).unwrap();
+        assert!(budget.charge_work(usize::MAX).is_err());
+        assert!(budget.reserve_storage(usize::MAX).is_err());
+        let denials = (budget.failed_work(), budget.failed_storage());
+        let ledger = budget.work_ledger_identity_v1();
+        let mut attempts = Vec::new();
+        // Regular files report IN, not PRI. Exercise the actual repeated-readiness branch,
+        // not an injected syscall or a claim to cover socket EINTR/EAGAIN retries.
+        let result = wait_for(&peer, PollFlags::IN | PollFlags::PRI, None, &mut |step| {
+            charge(&mut budget, &mut attempts, step)
+        });
+        assert!(matches!(
+            result,
+            Err(TestError::Resource(Resource::Work(_)))
+        ));
+        assert_eq!(attempts, [IoStep::Poll; 3]);
+        assert_eq!(budget.work(), 17 + 2 * IoStep::Poll.work());
+        assert_eq!(budget.storage(), 64);
+        assert_eq!(budget.peak_storage(), 128);
+        assert_eq!((budget.failed_work(), budget.failed_storage()), denials);
+        assert!(ledger == budget.work_ledger_identity_v1());
+    }
+
+    #[test]
+    fn expired_deadline_checks_follow_poll_precharge() {
+        let peer: OwnedFd = File::open("/dev/null").unwrap().into();
+        for one_short in [false, true] {
+            let mut work = Work::new(IoStep::Poll.work() - usize::from(one_short));
+            let mut budget = Budget::new(&mut work, 0);
+            let mut attempts = Vec::new();
+            let result = wait_for(&peer, PollFlags::OUT, Some(Instant::now()), &mut |step| {
+                charge(&mut budget, &mut attempts, step)
+            });
+            if one_short {
+                assert!(matches!(
+                    result,
+                    Err(TestError::Resource(Resource::Work(_)))
+                ));
+                assert_eq!(budget.work(), 0);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(TestError::Daemon(DaemonError::ResponseTimeout))
+                ));
+                assert_eq!(budget.work(), IoStep::Poll.work());
+            }
+            assert_eq!(attempts, [IoStep::Poll]);
+        }
+    }
+
+    #[test]
+    fn zero_send_timeout_charges_poll_but_never_send() {
+        let peer: OwnedFd = File::open("/dev/null").unwrap().into();
+        let mut work = Work::new(IoStep::Poll.work());
+        let mut budget = Budget::new(&mut work, 0);
+        let mut attempts = Vec::new();
+        let result = send_observation(
+            &peer,
+            &[0; ANCHOR_OBSERVATION_WIRE_LEN_V1],
+            Duration::ZERO,
+            &mut |step| charge(&mut budget, &mut attempts, step),
+        );
+        assert!(matches!(
+            result,
+            Err(TestError::Daemon(DaemonError::ResponseTimeout))
+        ));
+        assert_eq!(attempts, [IoStep::Poll]);
+        assert_eq!(budget.work(), IoStep::Poll.work());
+        assert_eq!(budget.failed_work(), None);
+    }
+
+    #[test]
+    fn send_deadline_overflow_preserves_legacy_precharge_precedence() {
+        let peer: OwnedFd = File::open("/dev/null").unwrap().into();
+        let mut work = Work::new(0);
+        let mut budget = Budget::new(&mut work, 0);
+        let mut attempts = Vec::new();
+        let result = send_observation(
+            &peer,
+            &[0; ANCHOR_OBSERVATION_WIRE_LEN_V1],
+            Duration::MAX,
+            &mut |step| charge(&mut budget, &mut attempts, step),
+        );
+        assert!(matches!(
+            result,
+            Err(TestError::Daemon(DaemonError::DeadlineOverflow))
+        ));
+        assert!(attempts.is_empty());
+        assert_eq!(budget.work(), 0);
+        assert_eq!(budget.failed_work(), None);
+    }
+
+    #[test]
+    fn send_charge_unwind_keeps_accepted_work_and_borrowed_descriptor() {
+        let peer: OwnedFd = tempfile::tempfile().unwrap().into();
+        let mut work = Work::new(IoStep::Poll.work() + IoStep::Send.work());
+        let mut budget = Budget::new(&mut work, 64);
+        budget.reserve_storage(64).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let mut attempts = Vec::new();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            send_observation(
+                &peer,
+                &[0; ANCHOR_OBSERVATION_WIRE_LEN_V1],
+                Duration::from_secs(30),
+                &mut |step| {
+                    charge(&mut budget, &mut attempts, step)?;
+                    assert_ne!(step, IoStep::Send, "injected pre-send charge unwind");
+                    Ok::<(), TestError>(())
+                },
+            )
+        }));
+        assert!(result.is_err());
+        assert_eq!(attempts, [IoStep::Poll, IoStep::Send]);
+        assert_eq!(budget.work(), IoStep::Poll.work() + IoStep::Send.work());
+        assert_eq!(budget.storage(), 64);
+        assert_eq!(budget.peak_storage(), 64);
+        assert!(ledger == budget.work_ledger_identity_v1());
+        assert!(
+            rustix::io::fcntl_getfd(&peer)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+    }
+}
