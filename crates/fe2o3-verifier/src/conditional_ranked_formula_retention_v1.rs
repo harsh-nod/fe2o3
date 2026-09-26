@@ -49,14 +49,16 @@ pub struct RetainedProductionConditionalFormulaV1 {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-struct RetainedSubjectV1 {
+pub(super) struct RetainedSubjectV1 {
     aggregate: DigestV1,
     source: DigestV1,
     graph: ProductionExactGraphIdentityV1,
     snapshot: OperationGraphSnapshotV1,
 }
 impl RetainedSubjectV1 {
-    fn from_request(request: &ProductionSourceBoundConditionalAggregateRequestV1<'_>) -> Self {
+    pub(super) fn from_request(
+        request: &ProductionSourceBoundConditionalAggregateRequestV1<'_>,
+    ) -> Self {
         let input = request.pliron_input();
         Self {
             aggregate: input.identity(),
@@ -175,7 +177,7 @@ impl RetainedProductionConditionalFormulaV1 {
     }
 }
 
-fn reimport(
+pub(super) fn reimport(
     report: ProductionConditionalFormulaReportV1,
     policy: &FunctionalRefinementImportPolicyV2,
     wire: &[u8],
@@ -189,15 +191,28 @@ fn reimport(
     {
         return Err(Error::Subject("conditional retained theorem substitution"));
     }
+    let proof = import_expected(expected.binding, policy, wire)?;
+    require_imported_identity(report, policy, &proof)
+}
+
+pub(super) fn import_expected(
+    binding: FunctionalRefinementBindingV2,
+    policy: &FunctionalRefinementImportPolicyV2,
+    wire: &[u8],
+) -> Result<ImportedFunctionalRefinementProofV2, Error> {
     // The existing strict importer bounds this singleton's internal storage.
     let mut importer = FunctionalRefinementReceiptImporterV2::new(policy.clone(), 1)
         .map_err(|_| Error::Subject("conditional retained import policy"))?;
-    let proof = importer
-        .import(
-            FunctionalRefinementImportExpectationV2::new(expected.binding),
-            wire,
-        )
-        .map_err(|_| Error::Subject("conditional retained signature/policy"))?;
+    importer
+        .import(FunctionalRefinementImportExpectationV2::new(binding), wire)
+        .map_err(|_| Error::Subject("conditional retained signature/policy"))
+}
+
+pub(super) fn require_imported_identity(
+    report: ProductionConditionalFormulaReportV1,
+    policy: &FunctionalRefinementImportPolicyV2,
+    proof: &ImportedFunctionalRefinementProofV2,
+) -> Result<(), Error> {
     if proof.execution_identity() != report.execution
         || proof.receipt_identity().digest() != report.receipt
         || proof.signer_identity() != policy.signer_identity()
@@ -217,10 +232,18 @@ fn retain_reservation<T>(
     bytes: usize,
     run: impl FnOnce(&mut Budget<'_>) -> Result<T, Error>,
 ) -> Result<T, Error> {
+    retain_reservation_using(budget, bytes, run)
+}
+
+pub(super) fn retain_reservation_using<T, E: From<Error>>(
+    budget: &mut Budget<'_>,
+    bytes: usize,
+    run: impl FnOnce(&mut Budget<'_>) -> Result<T, E>,
+) -> Result<T, E> {
     use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-    budget.charge_work(1)?;
+    budget.charge_work(1).map_err(Error::from)?;
     let account = budget.work_ledger_identity_v1();
-    budget.reserve_storage(bytes)?;
+    budget.reserve_storage(bytes).map_err(Error::from)?;
     let protected = budget.storage();
     let outcome = catch_unwind(AssertUnwindSafe(|| run(budget)));
     let valid = budget.work_ledger_identity_v1() == account && budget.storage() >= protected;
@@ -231,10 +254,10 @@ fn retain_reservation<T>(
                 drop(value);
             });
             if !valid {
-                return Err(Resource::Accounting.into());
+                return Err(Error::from(Resource::Accounting).into());
             }
-            budget.release_storage(bytes)?;
-            result.and(Err(Resource::Accounting.into()))
+            budget.release_storage(bytes).map_err(Error::from)?;
+            result.and(Err(Error::from(Resource::Accounting).into()))
         }
         Err(panic) => {
             if valid {
