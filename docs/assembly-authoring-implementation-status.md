@@ -5,6 +5,18 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Uniform operand preparation — 2026-09-26
+
+The [operand checkpoint](bf16-uniform-operand-qualification-20260926.md)
+shares ordinary and paid operand decisions while preserving argument-slot,
+operation and SSA mutations on later refusal. All 13 new controls passed;
+full regression passed 331 model and 2,878 backend tests (189 ignored),
+build and 83 JavaScript controls. Both normal ladders passed; all 38 result
+bodies and 52 artifacts are unchanged. Source-ordered comparison/induction/
+switch producers, authentic continuation and joint bounds ownership remain
+unfinished. The separate preparation-policy refactor is not part of this
+checkpoint. Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Source-bound bounds components — 2026-09-26
 
 The [bounds component checkpoint](bf16-bounds-components-qualification-20260926.md)

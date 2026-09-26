@@ -61,12 +61,15 @@ mod local_use_frames;
 #[path = "production_ranked_projection_v1/bf16_local_use_source_oracle_v1_tests.rs"]
 mod local_use_source_oracle;
 // Retained bounds-source DATA, not completed checks or an actual factory loan.
+// Paid operand component only; actual producer phase/custody is still pending.
 #[allow(dead_code)]
 mod root_bounds_extent_preparation_v1;
 #[allow(dead_code)]
 mod root_bounds_source_scan_v1;
 #[allow(dead_code)]
 mod root_local_contracts_v1;
+#[allow(dead_code)]
+mod root_uniform_operand_preparation_v1;
 // Source-use DATA and paid site components, not a complete nominal stream.
 #[allow(dead_code)]
 mod root_checked_reference_use_preparation_v1;
@@ -18488,43 +18491,15 @@ fn project_uniform_switch_operand_v1(
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
 ) -> Result<Option<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
-    if let Some(value) = constant_operand_value(operand, constants) {
-        reserve_operation(operations)?;
-        let result = next_value_id(next_value)?;
-        operations.push(ProductionRankedOperationV1::IndexConstant { result, value });
-        return Ok(Some(ProductionRankedValueV1::Local(result)));
-    }
-    let Some(local) = simple_operand_local(operand) else {
-        return Ok(None);
-    };
-    let local_index = local.index() as usize;
-    let origin = stable_argument_origins.get(local_index).copied().flatten();
-    let Some(origin) = origin.map(|origin| origin as usize) else {
-        return Ok(None);
-    };
-    let slot = arguments
-        .get_mut(origin)
-        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "a uniform switch argument origin outside the semantic local table",
-        ))?;
-    let argument = match *slot {
-        Some(argument) => argument,
-        None => {
-            let argument = u32::try_from(*next_argument).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "too many uniform switch ranked arguments",
-                )
-            })?;
-            *next_argument = next_argument.checked_add(1).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "uniform switch ranked argument count overflow",
-                ),
-            )?;
-            *slot = Some(argument);
-            argument
-        }
-    };
-    Ok(Some(ProductionRankedValueV1::Argument(argument)))
+    root_uniform_operand_preparation_v1::uniform_operand_legacy_v1(
+        operand,
+        constants,
+        stable_argument_origins,
+        arguments,
+        next_argument,
+        operations,
+        next_value,
+    )
 }
 
 fn project_runtime_slice_extent_argument_v1(
@@ -24414,6 +24389,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_03_tests.rs");
     include!("production_ranked_projection_v1/root_bounds_source_scan_v1_tests.rs");
     include!("production_ranked_projection_v1/root_bounds_extent_preparation_v1_tests.rs");
+    include!("production_ranked_projection_v1/root_uniform_operand_preparation_v1_tests.rs");
     include!("production_ranked_projection_v1/aggregate_value_projection_v2_tests.rs");
     mod gfx942_inline_value_projection_v30_tests {
         use super::*;
