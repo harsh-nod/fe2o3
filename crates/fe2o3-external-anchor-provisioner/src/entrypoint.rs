@@ -1,12 +1,14 @@
 //! Fixed-descriptor measured external-anchor provisioning helper.
 
-use core::ffi::{c_char, c_void};
+use crate::helper_io::{
+    STAGED_DESCRIPTOR_FLOOR_V1, close_fixed, exec_inherited_daemon, io_error, send_ready,
+    stage_above, take_fixed, validate_bootstrap,
+};
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
-use std::io::{self, IoSlice};
-use std::mem::MaybeUninit;
-use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::io;
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 
 use fe2o3_compiler_closure_capability::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
@@ -37,11 +39,7 @@ use fe2o3_protected_static_executable::{
     ProtectedStaticExecutableErrorV1, ProtectedStaticExecutableMeasurementV1,
     ProtectedStaticExecutableOwnerV1, ProtectedStaticExecutableV1,
 };
-use rustix::fs::OFlags;
-use rustix::net::{
-    AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketAddrAny,
-    SocketAddrUnix, SocketFlags, SocketType, sendmsg, socketpair,
-};
+use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
 use crate::{ExternalAnchorProvisioningReadyDispositionV1, ExternalAnchorProvisioningReadyV1};
 
@@ -53,10 +51,6 @@ pub const EXTERNAL_ANCHOR_HELPER_ROOT_FD_V1: RawFd = 4;
 pub const EXTERNAL_ANCHOR_HELPER_DAEMON_EXECUTABLE_FD_V1: RawFd = 5;
 /// Independent shared lifecycle lease transferred into the external-anchor daemon.
 pub const EXTERNAL_ANCHOR_HELPER_LIFECYCLE_FD_V1: RawFd = 6;
-
-const STAGED_DESCRIPTOR_FLOOR_V1: RawFd = 300;
-const CLOSE_RANGE_CLOEXEC_V1: u32 = 1 << 2;
-const EXEC_FAILURE_STAGE_BASE_V1: u8 = 0xe0;
 
 const _: () = assert!(EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1 == 3);
 const _: () = assert!(EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1 == 4);
@@ -390,218 +384,44 @@ fn require_descriptor_only_invocation_v1() -> Result<(), ExternalAnchorProvision
     Ok(())
 }
 
-fn take_fixed(
-    descriptor: RawFd,
-    role: &'static str,
-) -> Result<OwnedFd, ExternalAnchorProvisioningHelperErrorV1> {
-    // SAFETY: F_GETFD observes only the scalar fixed descriptor and reports invalid values via errno.
-    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
-    if flags < 0 {
-        return Err(descriptor_error("inspect inherited helper descriptor"));
-    }
-    if flags & libc::FD_CLOEXEC != 0 {
-        return Err(ExternalAnchorProvisioningHelperErrorV1::InvalidDescriptor {
-            role,
-            reason: "fixed descriptor is unexpectedly close-on-exec",
-        });
-    }
-    // SAFETY: F_DUPFD_CLOEXEC returns one new owned descriptor or reports errno.
-    let retained = unsafe {
-        libc::fcntl(
-            descriptor,
-            libc::F_DUPFD_CLOEXEC,
-            STAGED_DESCRIPTOR_FLOOR_V1,
-        )
-    };
-    if retained < 0 {
-        return Err(descriptor_error("retain inherited helper descriptor"));
-    }
-    // SAFETY: the successful fcntl returned a new descriptor owned by this process.
-    let retained = unsafe { OwnedFd::from_raw_fd(retained) };
-    close_fixed(descriptor)?;
-    Ok(retained)
-}
-
-fn close_fixed(descriptor: RawFd) -> Result<(), ExternalAnchorProvisioningHelperErrorV1> {
-    // SAFETY: callers close each inherited fixed descriptor once after private retention.
-    if unsafe { libc::close(descriptor) } != 0 {
-        return Err(descriptor_error("close inherited helper descriptor"));
-    }
-    Ok(())
-}
-
-fn stage_above(
-    source: &impl AsFd,
-    next: &mut RawFd,
-    role: &'static str,
-) -> Result<OwnedFd, ExternalAnchorProvisioningHelperErrorV1> {
-    let staged = rustix::io::fcntl_dupfd_cloexec(source, *next)
-        .map_err(|source| io_error("stage helper descriptor", source.into()))?;
-    *next = staged.as_raw_fd().checked_add(1).ok_or(
-        ExternalAnchorProvisioningHelperErrorV1::InvalidDescriptor {
-            role,
-            reason: "staged descriptor range overflowed",
-        },
-    )?;
-    Ok(staged)
-}
-
-fn validate_bootstrap<const REQUIRE_ROOT: bool>(
-    bootstrap: &OwnedFd,
-) -> Result<(), ExternalAnchorProvisioningHelperErrorV1> {
-    let descriptor_flags = rustix::io::fcntl_getfd(bootstrap)
-        .map_err(|source| io_error("inspect helper bootstrap descriptor", source.into()))?;
-    let status = rustix::fs::fcntl_getfl(bootstrap)
-        .map_err(|source| io_error("inspect helper bootstrap status", source.into()))?;
-    let forbidden = OFlags::APPEND | OFlags::ASYNC | OFlags::DIRECT | OFlags::PATH;
-    if !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC)
-        || status & OFlags::ACCMODE != OFlags::RDWR
-        || !status.contains(OFlags::NONBLOCK)
-        || status.intersects(forbidden)
-        || rustix::net::sockopt::socket_domain(bootstrap)
-            .map_err(|source| io_error("inspect helper bootstrap domain", source.into()))?
-            != AddressFamily::UNIX
-        || rustix::net::sockopt::socket_type(bootstrap)
-            .map_err(|source| io_error("inspect helper bootstrap type", source.into()))?
-            != SocketType::SEQPACKET
-        || rustix::net::sockopt::socket_acceptconn(bootstrap)
-            .map_err(|source| io_error("inspect helper bootstrap listener state", source.into()))?
-    {
-        return Err(ExternalAnchorProvisioningHelperErrorV1::InvalidBootstrap);
-    }
-    let unnamed = SocketAddrAny::from(SocketAddrUnix::new_unnamed());
-    let local = rustix::net::getsockname(bootstrap)
-        .map_err(|source| io_error("inspect helper bootstrap local address", source.into()))?;
-    let remote = rustix::net::getpeername(bootstrap)
-        .map_err(|source| io_error("inspect helper bootstrap remote address", source.into()))?;
-    if local != unnamed || remote.as_ref() != Some(&unnamed) {
-        return Err(ExternalAnchorProvisioningHelperErrorV1::InvalidBootstrap);
-    }
-    match rustix::net::sockopt::socket_error(bootstrap)
-        .map_err(|source| io_error("inspect helper bootstrap socket error", source.into()))?
-    {
-        Ok(()) => {}
-        Err(source) => {
-            return Err(io_error(
-                "helper bootstrap has a pending error",
-                source.into(),
-            ));
-        }
-    }
-    let peer = rustix::net::sockopt::socket_peercred(bootstrap)
-        .map_err(|source| io_error("inspect helper bootstrap peer credentials", source.into()))?;
-    let expected_parent = rustix::process::getppid();
-    if Some(peer.pid) != expected_parent
-        || (REQUIRE_ROOT && (!peer.uid.is_root() || !peer.gid.is_root()))
-    {
-        return Err(ExternalAnchorProvisioningHelperErrorV1::InvalidBootstrap);
-    }
-    Ok(())
-}
-
-fn send_ready(
-    bootstrap: &OwnedFd,
-    supervisor_peer: &OwnedFd,
-    ready: &ExternalAnchorProvisioningReadyV1,
-) -> Result<(), ExternalAnchorProvisioningHelperErrorV1> {
-    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
-    let mut ancillary = SendAncillaryBuffer::new(&mut space);
-    let descriptors = [supervisor_peer.as_fd()];
-    if !ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)) {
-        return Err(ExternalAnchorProvisioningHelperErrorV1::ReadyTransfer);
-    }
-    let count = sendmsg(
-        bootstrap,
-        &[IoSlice::new(ready.canonical_bytes())],
-        &mut ancillary,
-        SendFlags::NOSIGNAL,
-    )
-    .map_err(|source| io_error("send helper-ready endpoint", source.into()))?;
-    if count != ready.canonical_bytes().len() {
-        return Err(ExternalAnchorProvisioningHelperErrorV1::ReadyTransfer);
-    }
-    Ok(())
-}
-
 unsafe fn exec_daemon(staged: &StagedDaemonExecV1) -> ! {
-    // SAFETY: every operation below is a direct scalar Linux syscall over retained descriptors.
+    let transfers = [
+        (
+            staged.peer.as_raw_fd(),
+            EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1,
+            2,
+        ),
+        (
+            staged.root.as_raw_fd(),
+            EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1,
+            3,
+        ),
+        (
+            staged.lifecycle.as_raw_fd(),
+            EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1,
+            4,
+        ),
+        (
+            staged.deployment.as_raw_fd(),
+            COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
+            5,
+        ),
+        (
+            staged.key.as_raw_fd(),
+            COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
+            6,
+        ),
+    ];
+    // SAFETY: retained sources are staged above every target and this boundary is terminal.
     unsafe {
-        if libc::syscall(
-            libc::SYS_close_range,
-            3_u32,
-            u32::MAX,
-            CLOSE_RANGE_CLOEXEC_V1,
-        ) != 0
-        {
-            exec_fail(staged.bootstrap.as_raw_fd(), 1);
-        }
-        for (source, target, stage) in [
-            (
-                staged.peer.as_raw_fd(),
-                EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1,
-                2,
-            ),
-            (
-                staged.root.as_raw_fd(),
-                EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1,
-                3,
-            ),
-            (
-                staged.lifecycle.as_raw_fd(),
-                EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1,
-                4,
-            ),
-            (
-                staged.deployment.as_raw_fd(),
-                COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
-                5,
-            ),
-            (
-                staged.key.as_raw_fd(),
-                COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
-                6,
-            ),
-        ] {
-            if libc::dup3(source, target, 0) != target {
-                exec_fail(staged.bootstrap.as_raw_fd(), stage);
-            }
-        }
-        let name = c"fe2o3-external-anchor-service";
-        let arguments = [name.as_ptr().cast_mut(), std::ptr::null_mut()];
-        let environment = [std::ptr::null_mut::<c_char>()];
-        libc::syscall(
-            libc::SYS_execveat,
+        exec_inherited_daemon(
             staged.daemon.as_raw_fd(),
-            c"".as_ptr(),
-            arguments.as_ptr(),
-            environment.as_ptr(),
-            libc::AT_EMPTY_PATH,
-        );
-        exec_fail(staged.bootstrap.as_raw_fd(), 7)
-    }
-}
-
-unsafe fn exec_fail(bootstrap: RawFd, stage: u8) -> ! {
-    let message = EXEC_FAILURE_STAGE_BASE_V1.saturating_add(stage);
-    // SAFETY: bootstrap is a retained connected seqpacket and message points to one live byte.
-    let _ = unsafe {
-        libc::send(
-            bootstrap,
-            (&raw const message).cast::<c_void>(),
-            1,
-            libc::MSG_NOSIGNAL,
+            staged.bootstrap.as_raw_fd(),
+            &transfers,
+            c"fe2o3-external-anchor-service",
+            7,
         )
-    };
-    // SAFETY: process-local fail-closed termination after an unrecoverable exec stage.
-    unsafe { libc::_exit(127) }
-}
-
-fn descriptor_error(operation: &'static str) -> ExternalAnchorProvisioningHelperErrorV1 {
-    io_error(operation, io::Error::last_os_error())
-}
-
-fn io_error(operation: &'static str, source: io::Error) -> ExternalAnchorProvisioningHelperErrorV1 {
-    ExternalAnchorProvisioningHelperErrorV1::Io { operation, source }
+    }
 }
 
 /// Stable failure entering or executing the measured provisioning helper.
@@ -714,10 +534,12 @@ impl Error for ExternalAnchorProvisioningHelperErrorV1 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use rustix::fs::OFlags;
     use std::fs;
     use std::io::{IoSliceMut, Read};
-    use std::os::fd::{AsRawFd, OwnedFd};
+    use std::mem::MaybeUninit;
+    use std::os::fd::{AsFd, AsRawFd, OwnedFd};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::process::{Child, Command, Stdio};
@@ -996,6 +818,19 @@ mod tests {
                 RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
             ) {
                 Ok(received) => {
+                    if received.bytes == 0 {
+                        // Reap before reading stderr; an unexpected live child must not hang tests.
+                        let _ = child.kill();
+                        let status = child.wait().unwrap();
+                        let mut stderr = String::new();
+                        child
+                            .stderr
+                            .take()
+                            .unwrap()
+                            .read_to_string(&mut stderr)
+                            .unwrap();
+                        panic!("helper-ready EOF, child {status}: {stderr}");
+                    }
                     assert_eq!(received.bytes, payload.len());
                     assert!(
                         !received
@@ -1065,7 +900,7 @@ mod tests {
         rustix::io::fcntl_dupfd_cloexec(descriptor, 400).unwrap()
     }
 
-    fn static_pause_elf() -> Vec<u8> {
+    pub(crate) fn static_pause_elf() -> Vec<u8> {
         const HEADER: usize = 64;
         const PROGRAM: usize = 56;
         const PROGRAMS: usize = 4;

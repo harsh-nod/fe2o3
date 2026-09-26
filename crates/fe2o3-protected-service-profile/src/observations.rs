@@ -18,8 +18,14 @@ use std::{fmt, mem::size_of};
 mod bounded_io;
 #[path = "child_namespace_report.rs"]
 mod child_report;
+#[path = "observation_invocation.rs"]
+mod invocation;
 #[path = "observation_status.rs"]
 mod status;
+pub use invocation::{
+    DESCRIPTOR_INVOCATION_SCRATCH, DESCRIPTOR_INVOCATION_WORK, MAX_DESCRIPTOR_ARGV0_BYTES,
+    require_descriptor_only_invocation,
+};
 
 #[cfg(test)]
 pub(crate) use child_report::current_namespace_report_for_test;

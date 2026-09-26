@@ -39,7 +39,7 @@ pub const NATIVE_EXTERNAL_ANCHOR_PROCESS_WORK_LIMIT_V2: usize = 1 << 40;
 /// Finite logical storage quota used by the dedicated native daemon binaries.
 pub const NATIVE_EXTERNAL_ANCHOR_PROCESS_STORAGE_LIMIT_V2: usize = 1 << 30;
 
-const MAX_ARGV0: usize = 4096;
+const MAX_ARGV0: usize = fe2o3_protected_service_profile::observations::MAX_DESCRIPTOR_ARGV0_BYTES;
 const PEER: usize = 0;
 const ROOT: usize = 1;
 const LIFECYCLE: usize = 2;
@@ -50,6 +50,11 @@ const KEY: usize = 6;
 const INPUT_FDS: [RawFd; 7] = [3, 4, 5, 202, 220, 221, 222];
 
 const _: () = {
+    use fe2o3_protected_service_profile::observations as profile;
+    assert!(NATIVE_EXTERNAL_ANCHOR_STARTUP_WORK_V2 >= 8 + profile::DESCRIPTOR_INVOCATION_WORK);
+    assert!(
+        NATIVE_EXTERNAL_ANCHOR_STARTUP_FRAME_STORAGE_V2 >= profile::DESCRIPTOR_INVOCATION_SCRATCH
+    );
     use fe2o3_compiler_closure_capability::*;
     assert!(INPUT_FDS[POLICY] == COMPILER_EXECUTION_POLICY_CHILD_FD_V1);
     assert!(INPUT_FDS[SUPERVISOR] == COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1);
@@ -193,41 +198,12 @@ fn close_unrelated() -> Result<()> {
 }
 
 fn require_invocation() -> Result<()> {
-    use rustix::{
-        fs::{Mode, OFlags, open},
-        io::read,
-    };
-    let io = |source| Error::Io {
-        operation: "inspect native anchor invocation",
-        source,
-    };
-    let command = open(
-        c"/proc/self/cmdline",
-        OFlags::RDONLY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(io)?;
-    let mut bytes = [0_u8; MAX_ARGV0 + 1];
-    let n = read(&command, &mut bytes).map_err(io)?;
-    let mut extra = [0_u8; 1];
-    if n < 2
-        || n > MAX_ARGV0
-        || bytes[n - 1] != 0
-        || bytes[..n - 1].contains(&0)
-        || read(&command, &mut extra).map_err(io)? != 0
-    {
-        return Err(Error::RuntimeConfiguration);
-    }
-    let environment = open(
-        c"/proc/self/environ",
-        OFlags::RDONLY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(io)?;
-    if read(&environment, &mut extra).map_err(io)? != 0 {
-        return Err(Error::RuntimeConfiguration);
-    }
-    Ok(())
+    use fe2o3_protected_service_profile::observations::{self, Error as Observation};
+    observations::require_descriptor_only_invocation().map_err(|e| match e {
+        Observation::InvalidState(_) => Error::RuntimeConfiguration,
+        Observation::Io { operation, source } => Error::Io { operation, source },
+        e => Error::Profile(e.into()),
+    })
 }
 
 struct Profile {

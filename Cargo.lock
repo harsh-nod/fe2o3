@@ -1100,6 +1100,7 @@ dependencies = [
  "fe2o3-compiler-execution-lifecycle",
  "fe2o3-compiler-execution-protocol",
  "fe2o3-external-anchor-service",
+ "fe2o3-kernel-ir",
  "fe2o3-protected-service-profile",
  "fe2o3-protected-static-executable",
  "fe2o3-runtime-protocol",
