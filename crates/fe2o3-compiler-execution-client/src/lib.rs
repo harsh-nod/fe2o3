@@ -7,7 +7,7 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::mem;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
@@ -22,6 +22,8 @@ use fe2o3_compiler_execution_protocol::{
 };
 
 mod child_channel;
+mod inherited_admission;
+mod inherited_admission_adapter;
 mod native;
 mod native_adapter;
 mod native_v3;
@@ -153,47 +155,7 @@ impl CompilerExecutionClientV1 {
     pub fn admit_inherited_child(
         timeout: Duration,
     ) -> Result<Self, CompilerExecutionClientErrorV1> {
-        let child_fd = COMPILER_EXECUTION_SERVICE_CHILD_FD_V1;
-        // SAFETY: F_GETFD inspects only the fixed scalar descriptor.
-        let flags = unsafe { libc::fcntl(child_fd, libc::F_GETFD) };
-        if flags < 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::EBADF) {
-                return Err(CompilerExecutionClientErrorV1::MissingInheritedPeer);
-            }
-            // SAFETY: consume the canonical slot if the kernel still considers it present.
-            let _ = unsafe { libc::close(child_fd) };
-            return Err(CompilerExecutionClientErrorV1::Descriptor(error));
-        }
-        if flags & libc::FD_CLOEXEC != 0 {
-            // SAFETY: a present but inadmissible canonical descriptor is consumed exactly once.
-            if unsafe { libc::close(child_fd) } != 0 {
-                return Err(CompilerExecutionClientErrorV1::Descriptor(
-                    io::Error::last_os_error(),
-                ));
-            }
-            return Err(CompilerExecutionClientErrorV1::InheritedPeerCloseOnExec);
-        }
-        // SAFETY: F_DUPFD_CLOEXEC consumes one scalar descriptor and returns a distinct owned
-        // descriptor on success.
-        let retained = unsafe { libc::fcntl(child_fd, libc::F_DUPFD_CLOEXEC, 3) };
-        if retained < 0 {
-            let error = io::Error::last_os_error();
-            // SAFETY: failure to retain does not release the canonical descriptor.
-            let _ = unsafe { libc::close(child_fd) };
-            return Err(CompilerExecutionClientErrorV1::Descriptor(error));
-        }
-        // SAFETY: close consumes only the scalar inherited slot and reports absence through EBADF.
-        let close_result = unsafe { libc::close(child_fd) };
-        if close_result != 0 {
-            let error = io::Error::last_os_error();
-            // SAFETY: `retained` is the distinct descriptor returned by F_DUPFD_CLOEXEC.
-            unsafe { libc::close(retained) };
-            return Err(CompilerExecutionClientErrorV1::Descriptor(error));
-        }
-        // SAFETY: successful F_DUPFD_CLOEXEC returned unique ownership and the error path above
-        // closed it before returning.
-        let retained = unsafe { OwnedFd::from_raw_fd(retained) };
+        let retained = inherited_admission::retain_inherited_peer()?;
         Self::admit(retained, timeout)
     }
 

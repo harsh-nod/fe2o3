@@ -45,6 +45,11 @@ crate::native_adapter::native_client_adapter!(
     verify_native
 );
 
+crate::inherited_admission_adapter::inherited_admission_adapter!(
+    CompilerExecutionClientV2,
+    CompilerExecutionClientErrorV2
+);
+
 #[cfg(test)]
 use CompilerExecutionClientV2 as TestClient;
 #[cfg(test)]
