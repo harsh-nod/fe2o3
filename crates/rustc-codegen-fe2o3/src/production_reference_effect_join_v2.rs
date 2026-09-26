@@ -5,9 +5,7 @@ use std::{
     fmt,
 };
 
-use dialect_kernel::{
-    DYNAMIC_EXTENT, IndexBinaryKindAttr, OwnershipCoverageAttr, OwnershipPartitionAttr,
-};
+use dialect_kernel::{DYNAMIC_EXTENT, OwnershipCoverageAttr, OwnershipPartitionAttr};
 use fe2o3_functional_proof::{
     FunctionalRefinementSubjectsV2, ImportedFunctionalRefinementProofV2, SafeReferenceKindV2,
 };
@@ -19,8 +17,8 @@ use fe2o3_pliron::{
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
     ProductionReferenceOutputSiteV2, ProductionReferenceProofV2,
     ProductionRefinementStagingPolicyV2, ProductionSemanticBinaryOpV2, ProductionSemanticCastV2,
-    ProductionSemanticComparisonV2, ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2,
-    ProductionSemanticUnaryOpV2, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
+    ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
     stage_ranked_kernel_with_policy_checked_refinement_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
@@ -36,7 +34,7 @@ use crate::reference_effect_v1::{
     AuthenticatedReferenceEffectBindingsV1, ReferenceArgumentRelationV1, ReferenceBinaryOpV1,
     ReferenceCastKindV1, ReferenceConstantV1, ReferenceEffectExpressionV1, ReferenceEffectIrV1,
     ReferenceOutputCoordinateV1, ReferenceOutputWriteV1, ReferencePathPredicateV1,
-    ReferenceScalarTypeV1, ReferenceUnaryOpV1,
+    ReferenceScalarTypeV1,
 };
 
 const ROOT_NAME_V2: &str = "semantic_safety_module";

@@ -12,6 +12,7 @@ use fe2o3_verifier::portable_reference_v1::ReferenceReplayInputV1;
 
 type Error = ProductionReferenceEffectJoinErrorV2;
 
+#[cfg(test)]
 #[path = "production_conditional_cpu_read_premises_v1.rs"]
 pub(crate) mod read_premises_v1;
 
@@ -95,19 +96,3 @@ fn with_cpu_binding<R>(
 pub(crate) fn subjects(binding: &Binding) -> Result<FunctionalRefinementSubjectsV2, Error> {
     portable::reference_subjects_v1(&binding.kernel, &binding.reference).map_err(Error::from)
 }
-
-#[cfg(test)]
-fn require_read_origins(
-    blocks: &[fe2o3_pliron::ProductionRankedBlockV1],
-    load: &fe2o3_pliron::ProductionSemanticLoadV2,
-    source_argument: u32,
-    adjusted_argument: u32,
-    budget: &mut Budget<'_>,
-) -> Result<(), Error> {
-    portable::require_read_origins(blocks, load, source_argument, adjusted_argument, budget)
-        .map_err(Error::from)
-}
-
-#[cfg(test)]
-#[path = "production_conditional_read_origins_v1_tests.rs"]
-mod read_origin_tests;
