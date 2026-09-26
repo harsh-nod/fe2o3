@@ -19,6 +19,15 @@ macro_rules! signing_key_capability {
             pub const IO_WORK: usize = ENTRY_WORK + 64 * 1024 + 32 * KEY_BYTES;
             /// Create, consuming-file and inherited admission each derive one key.
             pub const ADMISSION_WORK: usize = Self::IO_WORK + Self::DERIVATION_WORK;
+            /// Complete reissue work: fixed secret I/O, one key derivation, and one
+            /// separately charged native deployment-policy match on the same ledger.
+            /// The I/O envelope includes pre/post template and current-owner checks,
+            /// source closure, a fresh image, and its guarded read-back; at most 72 calls.
+            pub const REISSUE_WORK: usize = Self::ADMISSION_WORK + 8 * 1024 + DEPLOYMENT_WORK;
+            /// Peak additional scratch while the native deployment match is nested
+            /// in the secret I/O frame. Borrowed deployment/policy and consumed File
+            /// reservations remain separately prepaid throughout the operation.
+            pub const REISSUE_STORAGE: usize = Self::IO_STORAGE + DEPLOYMENT_STORAGE;
             /// Additional logical scratch for result/staging owners, guarded seeds,
             /// metadata, fixed path/control frames and named crypto scratch. This is
             /// not a generated stack, allocator, kernel-page, RSS, or time bound.
@@ -76,6 +85,162 @@ macro_rules! signing_key_capability {
                             Self::decode_image(image, policy)?,
                             Storage(Self::RETAINED - Self::FILE_STORAGE),
                         ))
+                    },
+                )
+            }
+
+            /// Reissues a root-owned template into current nonroot service key custody.
+            ///
+            /// The consumed File must be an anonymous, immutable, mode-0400, read-only
+            /// CLOEXEC 32-byte image owned by UID/GID 0:0. Current effective UID/GID
+            /// must equal the deployment, which must bind the complete native policy.
+            /// The fresh image is created under those current credentials. All reads
+            /// and writes are single attempts; guarded seed staging is wiped on every
+            /// exit and unwind. Closing an image does not prove kernel-page erasure.
+            ///
+            /// Deployment remains inert configuration. The caller must INDEPENDENTLY
+            /// pin trusted deployment provenance; public construction/decoding and this
+            /// reissue do not authenticate provisioning or grant process authority.
+            /// No legacy admitted owner is constructed or upgraded.
+            ///
+            /// Prepay FILE_STORAGE + deployment.retained_storage() + policy.retained_storage().
+            /// The call charges REISSUE_WORK with REISSUE_STORAGE additional peak scratch,
+            /// restores entry storage, and returns only growth over the consumed File.
+            /// Preserve that File reservation and add the returned delta on success;
+            /// on error the File is closed and its reservation is left for the caller.
+            ///
+            /// ```compile_fail
+            /// use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV2 as Cap;
+            /// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorDeploymentV3 as D,
+            ///     CompilerExecutionIssuerPolicyV2 as P};
+            /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as B;
+            /// fn mix(f: std::fs::File, d: &D, p: &P, b: &mut B<'_>) {
+            ///     let _ = Cap::reissue_root_template_for_current_service(f, d, p, b);
+            /// }
+            /// ```
+            /// ```compile_fail
+            /// use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV3 as Cap;
+            /// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorDeploymentV2 as D,
+            ///     CompilerExecutionIssuerPolicyV3 as P};
+            /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as B;
+            /// fn mix(f: std::fs::File, d: &D, p: &P, b: &mut B<'_>) {
+            ///     let _ = Cap::reissue_root_template_for_current_service(f, d, p, b);
+            /// }
+            /// ```
+            /// ```compile_fail
+            /// use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV3 as Cap;
+            /// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorDeploymentV1 as D,
+            ///     CompilerExecutionIssuerPolicyV3 as P};
+            /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as B;
+            /// fn mix(f: std::fs::File, d: &D, p: &P, b: &mut B<'_>) {
+            ///     let _ = Cap::reissue_root_template_for_current_service(f, d, p, b);
+            /// }
+            /// ```
+            /// ```compile_fail
+            /// use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV3 as Cap;
+            /// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorDeploymentV3 as D,
+            ///     CompilerExecutionIssuerPolicyV2 as P};
+            /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as B;
+            /// fn mix(f: std::fs::File, d: &D, p: &P, b: &mut B<'_>) {
+            ///     let _ = Cap::reissue_root_template_for_current_service(f, d, p, b);
+            /// }
+            /// ```
+            /// ```compile_fail
+            /// use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV3 as Cap;
+            /// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorDeploymentV3 as D,
+            ///     CompilerExecutionIssuerPolicyV3 as P};
+            /// fn unmetered(f: std::fs::File, d: &D, p: &P) {
+            ///     let _ = Cap::reissue_root_template_for_current_service(f, d, p);
+            /// }
+            /// ```
+            /// ```compile_fail
+            /// use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV3 as Cap;
+            /// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorDeploymentV3 as D,
+            ///     CompilerExecutionIssuerPolicyV3 as P};
+            /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as B;
+            /// fn reuse(f: std::fs::File, d: &D, p: &P, b: &mut B<'_>) {
+            ///     let _ = Cap::reissue_root_template_for_current_service(f, d, p, b);
+            ///     let _ = f.metadata();
+            /// }
+            /// ```
+            /// ```compile_fail
+            /// use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV3 as Cap;
+            /// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorDeploymentV3 as D,
+            ///     CompilerExecutionIssuerPolicyV3 as P};
+            /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as B;
+            /// fn choose_owner(f: std::fs::File, d: &D, p: &P, b: &mut B<'_>) {
+            ///     let _ = Cap::reissue_template_for_current_service(f, d, p, (1000, 1000), &mut [0; 32], b);
+            /// }
+            /// ```
+            pub fn reissue_root_template_for_current_service(
+                image: File,
+                deployment: &Deployment,
+                policy: &Policy,
+                budget: &mut Budget<'_>,
+            ) -> Result<(Self, Storage)> {
+                let mut seed = [0; KEY_BYTES];
+                Self::reissue_template_for_current_service(
+                    image,
+                    deployment,
+                    policy,
+                    (0, 0),
+                    &mut seed,
+                    budget,
+                )
+            }
+
+            // Only the public root-owner wrapper is a production entry point.
+            // Private expected-owner tests exercise rootless mechanics, not provenance
+            // or protected-root execution. Borrowing staging lets tests inspect wiping.
+            fn reissue_template_for_current_service(
+                image: File,
+                deployment: &Deployment,
+                policy: &Policy,
+                template_owner: (u32, u32),
+                seed: &mut [u8; KEY_BYTES],
+                budget: &mut Budget<'_>,
+            ) -> Result<(Self, Storage)> {
+                let seed = SeedGuard(seed);
+                let floor = Self::FILE_STORAGE
+                    .checked_add(deployment.retained_storage())
+                    .and_then(|n| n.checked_add(policy.retained_storage()))
+                    .ok_or(Resource::Arithmetic)?;
+                Self::scope(
+                    budget,
+                    floor,
+                    Self::REISSUE_WORK - DEPLOYMENT_WORK,
+                    |budget| {
+                        if !deployment.matches_policy(policy, budget)? {
+                            return Err(Error::Rejected(
+                                "key reissue deployment names another native policy",
+                            ));
+                        }
+                        require_deployment_credentials(deployment)?;
+                        let growth = Self::RETAINED
+                            .checked_sub(Self::FILE_STORAGE)
+                            .ok_or(Resource::Accounting)?;
+                        let template =
+                            SealedCapabilityImage::from_file_fixed::<KEY_BYTES>(image, ROLE)?;
+                        template.validate_secret_owner_fixed(template_owner.0, template_owner.1)?;
+                        template.read_fixed_into(seed.0)?;
+                        template.validate_secret_owner_fixed(template_owner.0, template_owner.1)?;
+                        let key = SigningKey::from_bytes(seed.0);
+                        require_policy_key(&key, policy)?;
+                        let image = SealedCapabilityImage::create_fixed(seed.0, ROLE)?
+                            .into_read_only_fixed::<KEY_BYTES>()?;
+                        let admitted = Self {
+                            key,
+                            image,
+                            policy: policy.identity(),
+                        };
+                        admitted.check_image()?;
+                        template.validate_secret_owner_fixed(template_owner.0, template_owner.1)?;
+                        admitted.image.validate_secret_owner_fixed(
+                            deployment.service_uid(),
+                            deployment.service_gid(),
+                        )?;
+                        require_deployment_credentials(deployment)?;
+                        Ok((admitted, Storage(growth)))
                     },
                 )
             }
@@ -338,6 +503,21 @@ macro_rules! signing_key_capability {
             Ok(())
         }
 
+        fn require_deployment_credentials(deployment: &Deployment) -> Result<()> {
+            let uid = rustix::process::geteuid().as_raw();
+            let gid = rustix::process::getegid().as_raw();
+            if uid == 0
+                || gid == 0
+                || uid != deployment.service_uid()
+                || gid != deployment.service_gid()
+            {
+                return Err(Error::Rejected(
+                    "key reissue process does not have the nonroot deployment credentials",
+                ));
+            }
+            Ok(())
+        }
+
         const _: () = {
             use fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1 as Ledger;
             type Cap = $Cap;
@@ -349,7 +529,7 @@ macro_rules! signing_key_capability {
                     + size_of::<Ledger>()
                     + size_of::<std::result::Result<(), Resource>>()
                     + 2 * size_of::<bool>()
-                    + size_of::<SeedGuard<'static>>()
+                    + 2 * size_of::<SeedGuard<'static>>()
                     + 128
                     + envelope_overhead::<(Cap, Storage), Error>()
                     + envelope_overhead::<(File, Storage), Error>()

@@ -4,7 +4,8 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationErrorV2, CompilerExecutionAttestationErrorV3,
     CompilerExecutionClientProfileErrorV2, CompilerExecutionClientProfileErrorV3,
     CompilerExecutionNativeJournalErrorV3, CompilerExecutionServiceLaunchManifestErrorV2,
-    CompilerExecutionServiceLaunchManifestErrorV3,
+    CompilerExecutionServiceLaunchManifestErrorV3, CompilerExecutionSupervisorDeploymentErrorV2,
+    CompilerExecutionSupervisorDeploymentErrorV3,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -39,6 +40,8 @@ pub enum CompilerExecutionCapabilityErrorV2 {
     ProfileV3(CompilerExecutionClientProfileErrorV3),
     Launch(CompilerExecutionServiceLaunchManifestErrorV2),
     LaunchV3(CompilerExecutionServiceLaunchManifestErrorV3),
+    Deployment(CompilerExecutionSupervisorDeploymentErrorV2),
+    DeploymentV3(CompilerExecutionSupervisorDeploymentErrorV3),
     Io { operation: &'static str, errno: i32 },
     Rejected(&'static str),
 }
@@ -101,6 +104,16 @@ impl From<CompilerExecutionServiceLaunchManifestErrorV2> for CompilerExecutionCa
         Self::Launch(value)
     }
 }
+impl From<CompilerExecutionSupervisorDeploymentErrorV2> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionSupervisorDeploymentErrorV2) -> Self {
+        Self::Deployment(value)
+    }
+}
+impl From<CompilerExecutionSupervisorDeploymentErrorV3> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionSupervisorDeploymentErrorV3) -> Self {
+        Self::DeploymentV3(value)
+    }
+}
 impl fmt::Display for CompilerExecutionCapabilityErrorV2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -112,6 +125,8 @@ impl fmt::Display for CompilerExecutionCapabilityErrorV2 {
             Self::ProfileV3(e) => e.fmt(f),
             Self::Launch(e) => e.fmt(f),
             Self::LaunchV3(e) => e.fmt(f),
+            Self::Deployment(e) => e.fmt(f),
+            Self::DeploymentV3(e) => e.fmt(f),
             Self::Io { operation, errno } => {
                 write!(f, "native capability {operation}: errno {errno}")
             }
@@ -130,6 +145,8 @@ impl Error for CompilerExecutionCapabilityErrorV2 {
             Self::ProfileV3(e) => Some(e),
             Self::Launch(e) => Some(e),
             Self::LaunchV3(e) => Some(e),
+            Self::Deployment(e) => Some(e),
+            Self::DeploymentV3(e) => Some(e),
             Self::Io { .. } | Self::Rejected(_) => None,
         }
     }

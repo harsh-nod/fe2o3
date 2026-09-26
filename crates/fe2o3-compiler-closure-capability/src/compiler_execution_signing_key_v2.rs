@@ -7,6 +7,8 @@ use crate::{
 };
 use ed25519_dalek::{Signer, SigningKey};
 use fe2o3_compiler_execution_protocol::{
+    COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_STORAGE_V2 as DEPLOYMENT_STORAGE,
+    COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_WORK_V2 as DEPLOYMENT_WORK,
     CompilerExecutionAttestationReceiptV2 as Receipt,
     CompilerExecutionAttestationRequestV2 as Request,
     CompilerExecutionAttestationStorageV2 as ProtocolStorage,
@@ -16,6 +18,7 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionIssuerPolicyV2 as Policy,
     CompilerExecutionNativeJournalErrorV2 as JournalError,
     CompilerExecutionReceiptCarriageV2 as Carriage,
+    CompilerExecutionSupervisorDeploymentV2 as Deployment,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -90,3 +93,9 @@ mod tests;
 #[cfg(test)]
 #[path = "compiler_execution_signing_key_v2_binding_tests.rs"]
 mod binding_tests;
+
+#[cfg(test)]
+mod reissue_tests {
+    use super::CompilerExecutionSigningKeyCapabilityV2 as Cap;
+    include!("compiler_execution_signing_key_native_reissue_tests.rs");
+}

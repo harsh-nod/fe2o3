@@ -218,18 +218,42 @@ impl SealedCapabilityImage {
     }
 
     pub(crate) fn validate_secret_transfer_fixed(&self, transfer: &File) -> Result<()> {
+        self.validate_secret_transfer_owner_fixed(
+            transfer,
+            rustix::process::geteuid().as_raw(),
+            rustix::process::getegid().as_raw(),
+            "sealed secret image is not an anonymous current-owner read-only image",
+        )
+    }
+
+    /// Exact expected owner for a prepaid secret-template check. This validates
+    /// descriptor facts only; ownership is not trusted deployment provenance.
+    pub(crate) fn validate_secret_owner_fixed(&self, uid: u32, gid: u32) -> Result<()> {
+        self.validate_secret_transfer_owner_fixed(
+            &self.image,
+            uid,
+            gid,
+            "sealed secret image is not an anonymous expected-owner read-only image",
+        )
+    }
+
+    fn validate_secret_transfer_owner_fixed(
+        &self,
+        transfer: &File,
+        uid: u32,
+        gid: u32,
+        rejection: &'static str,
+    ) -> Result<()> {
         let metadata = self.revalidate_file_fixed(transfer)?;
         let status = rustix::fs::fcntl_getfl(transfer)
             .map_err(|e| Error::io("inspect sealed secret image access", e))?;
         if metadata.nlink() != 0
-            || metadata.uid() != rustix::process::geteuid().as_raw()
-            || metadata.gid() != rustix::process::getegid().as_raw()
+            || metadata.uid() != uid
+            || metadata.gid() != gid
             || status & rustix::fs::OFlags::ACCMODE != rustix::fs::OFlags::RDONLY
             || status.contains(rustix::fs::OFlags::PATH)
         {
-            return Err(Error::Rejected(
-                "sealed secret image is not an anonymous current-owner read-only image",
-            ));
+            return Err(Error::Rejected(rejection));
         }
         Ok(())
     }
