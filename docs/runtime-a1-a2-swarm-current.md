@@ -24,6 +24,20 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest asynchronous SDMA readiness development (2026-09-26): initially ready
+H2D/D2H copies now publish from authoritative DMA backing even when their CPU
+shadows are stale. The regression eliminates two required flushes without
+relaxing native-dirty reconciliation, dependency gating or compute-ready
+authentication. The
+[development packet](evidence/dev-sdma-shadow-readiness-2026-09-26/README.md)
+records seven focused passes, 1,543 broad passes, three existing socket-permission
+failures, 28 broad ignores, 52 doctests and passing strict static checks.
+Review also established that the cooperative router's blocking host-transfer
+leaves cannot satisfy the directed no-wait SPI: resumable child SDMA and
+native-dirty reconciliation remain prerequisites. This is CPU progress evidence,
+not native correctness, formal refinement or measured speedup. Pending
+peer-to-compute, accepted milestones, A1/A2 and HIP/HSA parity remain unchanged.
+
 Latest peer-producer composition development (2026-09-26): Context accepts
 logically successful, quiescent scalar peer copies as typed-launch producers.
 The KFD multi-device router retains completed cooperative parents independently
