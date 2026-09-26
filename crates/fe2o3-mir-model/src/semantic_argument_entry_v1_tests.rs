@@ -369,6 +369,7 @@ fn argument_definition_seed_has_exact_fixed_meter_boundaries() {
         assert_eq!(budget.used, expected);
         let mut exact = WorkBudgetV1 {
             used: LIMIT - expected,
+            ..Default::default()
         };
         assert_eq!(
             local_definition_counts(&function, &mut exact).unwrap(),
@@ -377,6 +378,7 @@ fn argument_definition_seed_has_exact_fixed_meter_boundaries() {
         assert_eq!(exact.used, LIMIT);
         let mut one_under = WorkBudgetV1 {
             used: LIMIT - expected + 1,
+            ..Default::default()
         };
         assert_eq!(
             local_definition_counts(&function, &mut one_under),
@@ -386,7 +388,10 @@ fn argument_definition_seed_has_exact_fixed_meter_boundaries() {
             })
         );
         assert_eq!(one_under.used, LIMIT + 1);
-        let mut seed_one_under = WorkBudgetV1 { used: LIMIT - 2 };
+        let mut seed_one_under = WorkBudgetV1 {
+            used: LIMIT - 2,
+            ..Default::default()
+        };
         assert_eq!(
             local_definition_counts(&function, &mut seed_one_under),
             Err(SemanticOptionDominanceErrorV1::WorkLimit {
@@ -394,7 +399,10 @@ fn argument_definition_seed_has_exact_fixed_meter_boundaries() {
                 limit: LIMIT
             })
         );
-        let mut overflow = WorkBudgetV1 { used: usize::MAX };
+        let mut overflow = WorkBudgetV1 {
+            used: usize::MAX,
+            ..Default::default()
+        };
         assert_eq!(
             local_definition_counts(&function, &mut overflow),
             Err(SemanticOptionDominanceErrorV1::WorkLimit {

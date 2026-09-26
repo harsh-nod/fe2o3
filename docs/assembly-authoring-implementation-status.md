@@ -5,6 +5,17 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Genuine dense propagation and borrowed ranked candidate — 2026-09-26
+
+The [new C2/C4 and proxy checkpoint](bf16-helper-dense-proxy-qualification-20260926.md)
+qualifies metered source preparation, all three actual propagation passes,
+function-qualified returns and final callback/resource-failure controls.
+The latest gate passed 404 CLI binary tests, 2,424 backend tests and five fresh
+Rust helper sessions with unchanged numerical results and logical peak storage.
+The proxy remains a borrowed recipe candidate during Final, not postflight-ready
+output or ordinary compilation. Full root/memory/CFG projection, source/ranked
+correspondence and formal/LLVM continuation remain open; broad exits stay **6/18**.
+
 ## Genuine helper routing and caller/result prerequisites — 2026-09-26
 
 The [new routing checkpoint](bf16-helper-routing-capability-qualification-20260926.md)

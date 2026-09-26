@@ -5,7 +5,10 @@
 //! permitted carrier address users are direct borrowed receivers consumed by
 //! descriptor-preserving, authenticated compiler intrinsics.
 
+use super::bf16_nominal_preparation_resources_v1::{PreparationResourcesV1, resource};
 use super::*;
+use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+use std::mem::size_of;
 
 pub(super) fn exclusive_owner_value_origins_v1(
     callables: &[SemanticCallableDeclV1],
@@ -21,11 +24,47 @@ pub(super) fn exclusive_owner_value_origins_v1(
     .map(|(origins, _)| origins)
 }
 
+/// Same carrier predicates; accepted reservations belong to the enclosing
+/// genuine source-preparation factory and remain owned until its scope ends.
+pub(super) fn exclusive_owner_value_origins_with_resources_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    definitions: &[u8],
+    resources: &mut PreparationResourcesV1<'_, '_>,
+) -> Result<Vec<Option<u32>>, ProductionRankedProjectionErrorV1> {
+    origins_with_limit_and_resources(
+        callables,
+        function,
+        definitions,
+        MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1,
+        resources,
+    )
+    .map(|(origins, _)| origins)
+}
+
 pub(super) fn origins_with_limit(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     definitions: &[u8],
     limit: usize,
+) -> Result<(Vec<Option<u32>>, usize), ProductionRankedProjectionErrorV1> {
+    origins_with_limit_and_resources(
+        callables,
+        function,
+        definitions,
+        limit,
+        &mut PreparationResourcesV1::unmetered(),
+    )
+}
+
+/// Private limit seam shared by legacy/resource controls. The local census
+/// counter and its refusal remain unchanged; original work is additional.
+pub(super) fn origins_with_limit_and_resources(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    definitions: &[u8],
+    limit: usize,
+    resources: &mut PreparationResourcesV1<'_, '_>,
 ) -> Result<(Vec<Option<u32>>, usize), ProductionRankedProjectionErrorV1> {
     let count = function.locals().len();
     if definitions.len() != count {
@@ -33,14 +72,17 @@ pub(super) fn origins_with_limit(
             "ExclusiveOwner carrier definitions do not match the local table",
         ));
     }
+    // Fixed lexical headers are prepaid separately from vector capacities.
+    resources.reserve_storage(carrier_frame_storage_v1()?)?;
     let mut work = 0;
-    charge(&mut work, limit, count)?;
+    charge(&mut work, limit, count, resources)?;
     charge(
         &mut work,
         limit,
         function.abi().source_argument_ownership().len(),
+        resources,
     )?;
-    let mut origins = filled(count, None)?;
+    let mut origins = resources.filled(count, None)?;
     if !function
         .abi()
         .source_argument_ownership()
@@ -48,22 +90,22 @@ pub(super) fn origins_with_limit(
     {
         return Ok((origins, work));
     }
-    let mut scan = CarrierScan::new(count, limit, work)?;
-    scan.charge(count)?;
-    let mut copies = filled(count, Vec::<usize>::new())?;
+    let mut scan = CarrierScan::new(count, limit, work, resources)?;
+    scan.charge(count, resources)?;
+    let mut copies = resources.nested::<usize>(count)?;
     let mut borrows = Vec::new();
     let mut edge_count = 0;
     for (index, local) in function.locals().iter().enumerate() {
-        scan.charge(1)?;
+        scan.charge(1, resources)?;
         if local.role() == SemanticLocalRoleV1::Return {
             scan.bad_carrier[index] = true;
             scan.bad_receiver[index] = true;
         }
     }
     for block in function.blocks() {
-        scan.charge(1)?;
+        scan.charge(1, resources)?;
         for statement in block.statements() {
-            scan.charge(1)?;
+            scan.charge(1, resources)?;
             match statement.kind() {
                 SemanticStatementKindV1::Assign(assignment) => {
                     let destination = assignment.destination();
@@ -71,10 +113,18 @@ pub(super) fn origins_with_limit(
                     let unique = destination.projections().is_empty()
                         && definitions.get(destination_index) == Some(&1);
                     if !destination.projections().is_empty() {
-                        scan.place(destination, false, false)?;
+                        scan.place(destination, false, false, resources)?;
                     }
                     match assignment.value().kind() {
                         SemanticRvalueKindV1::Use(operand) if unique => {
+                            // simple_operand_local first scans the complete transparent
+                            // projection spine. Pay that separate walk BEFORE entering
+                            // the helper; scan.operand below retains its unchanged local
+                            // census charge for its own later projection walk.
+                            resources.work(
+                                raw_operand_place(operand)
+                                    .map_or(0, |place| place.projections().len()),
+                            )?;
                             let source =
                                 simple_operand_local(operand).map(|id| id.index() as usize);
                             let exact = source.filter(|&source| {
@@ -99,14 +149,15 @@ pub(super) fn origins_with_limit(
                                         _ => definitions[source] == 1,
                                     }
                             });
-                            scan.operand(operand, exact.is_some(), false)?;
+                            scan.operand(operand, exact.is_some(), false, resources)?;
                             if let Some(source) = exact {
-                                scan.charge(1)?;
-                                push_local_provenance_edge_v1(
+                                scan.charge(1, resources)?;
+                                push_local_provenance_edge_with_resources_v1(
                                     &mut copies,
                                     source,
                                     destination_index,
                                     &mut edge_count,
+                                    resources,
                                 )?;
                             }
                         }
@@ -116,26 +167,26 @@ pub(super) fn origins_with_limit(
                         } if unique && place.projections().is_empty() => {
                             // Defer carrier permission until the complete receiver
                             // use census has excluded aliasing, writes and escapes.
-                            scan.place(place, true, false)?;
-                            scan.charge(1)?;
-                            borrows.try_reserve(1).map_err(|_| {
-                                failure("ExclusiveOwner carrier borrow storage cannot be reserved")
-                            })?;
-                            borrows.push((place.local().index() as usize, destination_index));
+                            scan.place(place, true, false, resources)?;
+                            scan.charge(1, resources)?;
+                            resources.push(
+                                &mut borrows,
+                                (place.local().index() as usize, destination_index),
+                            )?;
                         }
                         value => {
                             value.try_visit_operands(|operand| {
-                                scan.operand(operand, false, false)
+                                scan.operand(operand, false, false, resources)
                             })?;
                             match value {
                                 SemanticRvalueKindV1::Borrow { place, .. }
                                 | SemanticRvalueKindV1::AddressOf { place, .. }
                                 | SemanticRvalueKindV1::Length(place)
                                 | SemanticRvalueKindV1::Discriminant(place) => {
-                                    scan.place(place, false, false)?
+                                    scan.place(place, false, false, resources)?
                                 }
                                 SemanticRvalueKindV1::Load(load) => {
-                                    scan.place(load.source(), false, false)?
+                                    scan.place(load.source(), false, false, resources)?
                                 }
                                 _ => {}
                             }
@@ -143,58 +194,67 @@ pub(super) fn origins_with_limit(
                     }
                 }
                 SemanticStatementKindV1::Store(store) => {
-                    scan.place(store.destination(), false, false)?;
-                    scan.operand(store.value(), false, false)?;
+                    scan.place(store.destination(), false, false, resources)?;
+                    scan.operand(store.value(), false, false, resources)?;
                 }
                 SemanticStatementKindV1::AtomicRmw(atomic) => {
-                    scan.place(atomic.destination(), false, false)?;
-                    scan.place(atomic.address(), false, false)?;
-                    scan.operand(atomic.value(), false, false)?;
+                    scan.place(atomic.destination(), false, false, resources)?;
+                    scan.place(atomic.address(), false, false, resources)?;
+                    scan.operand(atomic.value(), false, false, resources)?;
                 }
                 SemanticStatementKindV1::AtomicCompareExchange(atomic) => {
-                    scan.place(atomic.destination(), false, false)?;
-                    scan.place(atomic.address(), false, false)?;
-                    scan.operand(atomic.expected(), false, false)?;
-                    scan.operand(atomic.replacement(), false, false)?;
+                    scan.place(atomic.destination(), false, false, resources)?;
+                    scan.place(atomic.address(), false, false, resources)?;
+                    scan.operand(atomic.expected(), false, false, resources)?;
+                    scan.operand(atomic.replacement(), false, false, resources)?;
                 }
                 SemanticStatementKindV1::SetDiscriminant { place, .. }
                 | SemanticStatementKindV1::Deinitialize(place) => {
-                    scan.place(place, false, false)?
+                    scan.place(place, false, false, resources)?
                 }
-                SemanticStatementKindV1::Assume(operand) => scan.operand(operand, false, false)?,
+                SemanticStatementKindV1::Assume(operand) => {
+                    scan.operand(operand, false, false, resources)?
+                }
                 SemanticStatementKindV1::StorageLive(_)
                 | SemanticStatementKindV1::StorageDead(_)
                 | SemanticStatementKindV1::Nop => {}
             }
         }
-        scan.charge(1)?;
+        scan.charge(1, resources)?;
         match block.terminator().kind() {
             SemanticTerminatorKindV1::Call(call) => {
                 let receiver_preserved = callables
                     .get(call.callee().index() as usize)
                     .is_some_and(descriptor_preserving);
                 for (ordinal, operand) in call.arguments().iter().enumerate() {
-                    scan.operand(operand, false, ordinal == 0 && receiver_preserved)?;
+                    scan.operand(
+                        operand,
+                        false,
+                        ordinal == 0 && receiver_preserved,
+                        resources,
+                    )?;
                 }
                 if let Some(destination) = call.destination()
                     && !destination.place().projections().is_empty()
                 {
-                    scan.place(destination.place(), false, false)?;
+                    scan.place(destination.place(), false, false, resources)?;
                 }
             }
             SemanticTerminatorKindV1::TailCall(call) => {
                 for operand in call.arguments() {
-                    scan.operand(operand, false, false)?;
+                    scan.operand(operand, false, false, resources)?;
                 }
             }
             SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
-                scan.operand(discriminant, false, false)?
+                scan.operand(discriminant, false, false, resources)?
             }
-            SemanticTerminatorKindV1::Drop { place, .. } => scan.place(place, false, false)?,
+            SemanticTerminatorKindV1::Drop { place, .. } => {
+                scan.place(place, false, false, resources)?
+            }
             SemanticTerminatorKindV1::Assert {
                 condition, message, ..
             } => {
-                scan.operand(condition, false, false)?;
+                scan.operand(condition, false, false, resources)?;
                 use fe2o3_mir_model::semantic_mir_v1::SemanticAssertMessageV1 as Message;
                 match message {
                     Message::BoundsCheck {
@@ -206,11 +266,11 @@ pub(super) fn origins_with_limit(
                         required_alignment: left,
                         found_alignment: right,
                     } => {
-                        scan.operand(left, false, false)?;
-                        scan.operand(right, false, false)?;
+                        scan.operand(left, false, false, resources)?;
+                        scan.operand(right, false, false, resources)?;
                     }
                     Message::DivisionByZero(operand) | Message::RemainderByZero(operand) => {
-                        scan.operand(operand, false, false)?
+                        scan.operand(operand, false, false, resources)?
                     }
                     Message::NullPointerDereference
                     | Message::ResumedAfterReturn
@@ -227,13 +287,13 @@ pub(super) fn origins_with_limit(
         }
     }
     for (carrier, receiver) in borrows {
-        scan.charge(1)?;
+        scan.charge(1, resources)?;
         if scan.bad_receiver[receiver] || scan.receiver_uses[receiver] == 0 {
             scan.bad_carrier[carrier] = true;
         }
     }
     for (index, local) in function.locals().iter().enumerate() {
-        scan.charge(1)?;
+        scan.charge(1, resources)?;
         if let SemanticLocalRoleV1::Argument(argument) = local.role()
             && definitions[index] == 0
             && !scan.bad_carrier[index]
@@ -250,11 +310,11 @@ pub(super) fn origins_with_limit(
     // Filtering before propagation makes an unsafe intermediate invalidate every
     // descendant, even when its mutation appears after the copy in source order.
     for (source, edges) in copies.iter_mut().enumerate() {
-        scan.charge(1)?;
+        scan.charge(1, resources)?;
         if scan.bad_carrier[source] {
             edges.clear();
         } else {
-            scan.charge(edges.len())?;
+            scan.charge(edges.len(), resources)?;
             edges.retain(|&destination| !scan.bad_carrier[destination]);
         }
     }
@@ -265,11 +325,13 @@ pub(super) fn origins_with_limit(
             .checked_mul(3)
             .and_then(|value| value.checked_add(edge_count))
             .ok_or(failure("ExclusiveOwner carrier work accounting overflowed"))?,
+        resources,
     )?;
-    propagate_exact_local_origins_v1(
+    propagate_exact_local_origins_with_resources_v1(
         &mut origins,
         &copies,
         "an ExclusiveOwner carrier has conflicting argument origins",
+        resources,
     )?;
     Ok((origins, scan.work))
 }
@@ -296,13 +358,24 @@ fn failure(message: &'static str) -> ProductionRankedProjectionErrorV1 {
     ProductionRankedProjectionErrorV1::Unsupported(message)
 }
 
-fn filled<T: Clone>(count: usize, value: T) -> Result<Vec<T>, ProductionRankedProjectionErrorV1> {
-    let mut values = Vec::new();
-    values
-        .try_reserve_exact(count)
-        .map_err(|_| failure("ExclusiveOwner carrier storage cannot be reserved"))?;
-    values.resize(count, value);
-    Ok(values)
+/// Logical stack/header reservation; no allocator/RSS claim. Nested inner Vec
+/// headers are paid by resources.nested; all payloads by the resource adapter.
+fn carrier_frame_storage_v1() -> Result<usize, ProductionRankedProjectionErrorV1> {
+    [
+        size_of::<CarrierScan>(),
+        size_of::<Vec<Option<u32>>>(),
+        size_of::<Vec<Vec<usize>>>(),
+        size_of::<Vec<(usize, usize)>>(),
+        size_of::<std::vec::IntoIter<(usize, usize)>>(),
+        size_of::<Result<(Vec<Option<u32>>, usize), ProductionRankedProjectionErrorV1>>(),
+        // Bounded nonrecursive iterator/borrow/counter frame.
+        512,
+    ]
+    .into_iter()
+    .try_fold(0usize, |sum, bytes| {
+        sum.checked_add(bytes)
+            .ok_or_else(|| resource(Resource::Arithmetic))
+    })
 }
 
 struct CarrierScan {
@@ -318,6 +391,7 @@ impl CarrierScan {
         count: usize,
         limit: usize,
         mut work: usize,
+        resources: &mut PreparationResourcesV1<'_, '_>,
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
         charge(
             &mut work,
@@ -325,18 +399,23 @@ impl CarrierScan {
             count
                 .checked_mul(3)
                 .ok_or(failure("ExclusiveOwner carrier work accounting overflowed"))?,
+            resources,
         )?;
         Ok(Self {
-            bad_carrier: filled(count, false)?,
-            bad_receiver: filled(count, false)?,
-            receiver_uses: filled(count, 0)?,
+            bad_carrier: resources.filled(count, false)?,
+            bad_receiver: resources.filled(count, false)?,
+            receiver_uses: resources.filled(count, 0)?,
             work,
             limit,
         })
     }
 
-    fn charge(&mut self, amount: usize) -> Result<(), ProductionRankedProjectionErrorV1> {
-        charge(&mut self.work, self.limit, amount)
+    fn charge(
+        &mut self,
+        amount: usize,
+        resources: &mut PreparationResourcesV1<'_, '_>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        charge(&mut self.work, self.limit, amount, resources)
     }
 
     fn local(
@@ -344,8 +423,9 @@ impl CarrierScan {
         local: SemanticLocalIdV1,
         carrier: bool,
         receiver: bool,
+        resources: &mut PreparationResourcesV1<'_, '_>,
     ) -> Result<(), ProductionRankedProjectionErrorV1> {
-        self.charge(1)?;
+        self.charge(1, resources)?;
         let index = local.index() as usize;
         let Some(bad) = self.bad_carrier.get_mut(index) else {
             return Err(failure(
@@ -365,13 +445,19 @@ impl CarrierScan {
         place: &SemanticPlaceV1,
         carrier: bool,
         receiver: bool,
+        resources: &mut PreparationResourcesV1<'_, '_>,
     ) -> Result<(), ProductionRankedProjectionErrorV1> {
         let whole = place.projections().is_empty();
-        self.local(place.local(), carrier && whole, receiver && whole)?;
+        self.local(
+            place.local(),
+            carrier && whole,
+            receiver && whole,
+            resources,
+        )?;
         for projection in place.projections() {
-            self.charge(1)?;
+            self.charge(1, resources)?;
             if let SemanticProjectionKindV1::Index(local) = projection.kind() {
-                self.local(local, false, false)?;
+                self.local(local, false, false, resources)?;
             }
         }
         Ok(())
@@ -382,11 +468,12 @@ impl CarrierScan {
         operand: &SemanticOperandV1,
         carrier: bool,
         receiver: bool,
+        resources: &mut PreparationResourcesV1<'_, '_>,
     ) -> Result<(), ProductionRankedProjectionErrorV1> {
-        self.charge(1)?;
+        self.charge(1, resources)?;
         match operand {
             SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
-                self.place(place, carrier, receiver)
+                self.place(place, carrier, receiver, resources)
             }
             SemanticOperandV1::Constant(_) => Ok(()),
         }
@@ -397,6 +484,7 @@ fn charge(
     work: &mut usize,
     limit: usize,
     amount: usize,
+    resources: &mut PreparationResourcesV1<'_, '_>,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     *work = work
         .checked_add(amount)
@@ -406,5 +494,5 @@ fn charge(
             "ExclusiveOwner carrier census exceeds the projection work limit",
         ));
     }
-    Ok(())
+    resources.work(amount)
 }

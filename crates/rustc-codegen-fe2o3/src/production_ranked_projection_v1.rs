@@ -5,6 +5,19 @@
 //! success edge uniquely controls an access to the same slice and index.
 
 mod aggregate_value_projection_v2;
+#[cfg(test)]
+mod bf16_nominal_preparation_genuine_v1_tests;
+#[allow(dead_code)]
+mod bf16_nominal_preparation_resources_v1;
+#[allow(dead_code)]
+mod bf16_nominal_source_algorithms_v1;
+#[allow(dead_code)]
+mod bf16_nominal_source_preparation_v1;
+use bf16_nominal_preparation_resources_v1::PreparationResourcesV1;
+use bf16_nominal_source_algorithms_v1::{
+    propagate_exact_local_origins_with_resources_v1, push_local_provenance_edge_with_resources_v1,
+};
+
 mod defined_helper_expression_v1;
 mod helper_value_template_v1;
 mod source_helper_value_context_v1;
@@ -28,8 +41,14 @@ pub(crate) mod bf16_nominal_call_routing_v1;
 mod bf16_nominal_capabilities_v1;
 // C3 is a scoped helper layout/return association, never normal admission.
 #[allow(dead_code)]
+mod bf16_nominal_dense_v1;
+#[allow(dead_code)]
 mod bf16_nominal_layout_return_v1;
+// Borrowed recipe candidate only: no Final, access or normal admission.
+#[allow(dead_code)]
+mod bf16_nominal_ranked_proxy_v1;
 mod canonical_assertion_facts_v1;
+mod capability_state_access_v1;
 mod tensor_capability_read_v1;
 #[cfg(test)]
 pub(crate) use canonical_assertion_facts_v1::{
@@ -6282,7 +6301,7 @@ fn charged_unique_capability_successors_v1(
 fn transfer_capability_statements_v1(
     function: &SemanticFunctionDeclV1,
     block_index: usize,
-    state: &mut ProjectedCapabilityStateV1,
+    state: &mut (impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     let block = &function.blocks()[block_index];
@@ -6365,7 +6384,7 @@ fn transfer_capability_statements_v1(
 
 fn consume_capability_rvalue_operands_v1(
     rvalue: &SemanticRvalueKindV1,
-    state: &mut ProjectedCapabilityStateV1,
+    state: &mut (impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
 ) {
     let _: Result<(), std::convert::Infallible> = rvalue.try_visit_operands(|operand| {
         consume_capability_operand_v1(state, operand);
@@ -6374,7 +6393,7 @@ fn consume_capability_rvalue_operands_v1(
 }
 
 fn consume_capability_operand_v1(
-    state: &mut ProjectedCapabilityStateV1,
+    state: &mut (impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     operand: &SemanticOperandV1,
 ) {
     let place = match operand {
@@ -6407,7 +6426,7 @@ fn projected_value_is_shared_read_v1(value: &ProjectedCapabilityValueV1) -> bool
 }
 
 fn consume_capability_operands_v1(
-    state: &mut ProjectedCapabilityStateV1,
+    state: &mut (impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     operands: &[SemanticOperandV1],
 ) {
     for operand in operands {
@@ -6415,11 +6434,17 @@ fn consume_capability_operands_v1(
     }
 }
 
-fn invalidate_capability_place_v1(state: &mut ProjectedCapabilityStateV1, place: &SemanticPlaceV1) {
+fn invalidate_capability_place_v1(
+    state: &mut (impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
+    place: &SemanticPlaceV1,
+) {
     invalidate_capability_local_v1(state, place.local().index() as usize);
 }
 
-fn invalidate_capability_local_v1(state: &mut ProjectedCapabilityStateV1, local: usize) {
+fn invalidate_capability_local_v1(
+    state: &mut (impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
+    local: usize,
+) {
     if state.contains_key(&local) {
         state.insert(local, ProjectedCapabilityValueV1::Invalid);
     }
@@ -6427,7 +6452,7 @@ fn invalidate_capability_local_v1(state: &mut ProjectedCapabilityStateV1, local:
 
 fn capability_origin_from_enum_aggregate_v1(
     aggregate: &fe2o3_mir_model::semantic_mir_v1::SemanticAggregateRvalueV1,
-    state: &ProjectedCapabilityStateV1,
+    state: &(impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     use_block: SemanticBlockIdV1,
 ) -> Result<Option<ProjectedCapabilityValueV1>, ProductionRankedProjectionErrorV1> {
@@ -6443,7 +6468,7 @@ fn capability_origin_from_enum_aggregate_v1(
 
 fn capability_origin_from_assignment_operand_v1(
     operand: &SemanticOperandV1,
-    state: &ProjectedCapabilityStateV1,
+    state: &(impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     use_block: SemanticBlockIdV1,
 ) -> Option<ProjectedCapabilityValueV1> {
@@ -6543,7 +6568,7 @@ fn projected_read_value_v1(
 
 fn authenticate_strided_read_v1(
     call: &SemanticDirectCallV1,
-    state: &ProjectedCapabilityStateV1,
+    state: &(impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     element: SemanticTypeIdV1,
     constants: &[Option<u64>],
 ) -> Option<ProjectedReadViewAccessV1> {
@@ -6590,7 +6615,7 @@ fn gfx950_transpose_profile_v1(
 
 fn resolve_gfx950_transpose_tile_v1(
     operand: &SemanticOperandV1,
-    state: &ProjectedCapabilityStateV1,
+    state: &(impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     expected_type: SemanticTypeIdV1,
     expected_state: ProjectedGfx950TransposeStateV1,
     expected_format: SemanticGfx950LdsTransposeFormatV1,
@@ -6611,19 +6636,21 @@ fn resolve_gfx950_transpose_tile_v1(
         return None;
     }
 
-    let mut candidates = state.values().filter_map(|value| match value {
-        ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(
-            tile,
-        )) if tile.state == expected_state && tile.format == expected_format => Some(*tile),
-        _ => None,
-    });
+    let mut candidates = state
+        .precharged_values_v1()
+        .filter_map(|value| match value {
+            ProjectedCapabilityValueV1::Known(
+                ProjectedCapabilityOriginV1::Gfx950TransposeTile(tile),
+            ) if tile.state == expected_state && tile.format == expected_format => Some(*tile),
+            _ => None,
+        });
     let candidate = candidates.next()?;
     candidates.next().is_none().then_some(candidate)
 }
 
 fn project_gfx950_transpose_current_v1(
     call: &SemanticDirectCallV1,
-    state: &ProjectedCapabilityStateV1,
+    state: &(impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     destination_type: SemanticTypeIdV1,
     tile_type: SemanticTypeIdV1,
     format: SemanticGfx950LdsTransposeFormatV1,
@@ -6654,7 +6681,7 @@ fn project_gfx950_transpose_current_v1(
 
 fn project_gfx950_transpose_stage_v1(
     call: &SemanticDirectCallV1,
-    state: &ProjectedCapabilityStateV1,
+    state: &(impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     destination_type: SemanticTypeIdV1,
     input_tile_type: SemanticTypeIdV1,
     output_tile_type: SemanticTypeIdV1,
@@ -6709,7 +6736,7 @@ fn project_gfx950_transpose_stage_v1(
 
 fn project_gfx950_transpose_publish_v1(
     call: &SemanticDirectCallV1,
-    state: &ProjectedCapabilityStateV1,
+    state: &(impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     destination_type: SemanticTypeIdV1,
     input_tile_type: SemanticTypeIdV1,
     output_tile_type: SemanticTypeIdV1,
@@ -6747,7 +6774,7 @@ fn project_gfx950_transpose_publish_v1(
 
 fn project_gfx950_transpose_read_v1(
     call: &SemanticDirectCallV1,
-    state: &ProjectedCapabilityStateV1,
+    state: &(impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     destination_type: SemanticTypeIdV1,
     tile_type: SemanticTypeIdV1,
     fragment_type: SemanticTypeIdV1,
@@ -6793,7 +6820,7 @@ fn transfer_capability_terminator_v1(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     block_index: usize,
-    state: &mut ProjectedCapabilityStateV1,
+    state: &mut (impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     local_allocations: &[Option<AllocationContractV1>],
     constants: &[Option<u64>],
     pipeline_owners: &[Option<usize>],
@@ -7249,7 +7276,7 @@ fn transfer_capability_terminator_v1(
             rhs,
             accumulator,
             ..
-        } => match authenticate_tensor_instruction_v1(call, state, *lhs, *rhs, *accumulator) {
+        } => match authenticate_tensor_instruction_read_v1(call, state, *lhs, *rhs, *accumulator) {
             Ok(authenticated) if destination.place().ty() == *accumulator_fragment => {
                 // The semantic value root remains stable for loop refinement,
                 // while the flow root identifies this exact tensor result for
@@ -7366,7 +7393,7 @@ fn transfer_capability_terminator_v1(
 
 fn authenticate_tensor_load_v1(
     call: &SemanticDirectCallV1,
-    state: &ProjectedCapabilityStateV1,
+    state: &(impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     contract: SemanticMfmaOperandContractV1,
     storage_layout: SemanticMfmaStorageLayoutV1,
 ) -> Option<ProjectedMfmaOperandV1> {
@@ -7404,7 +7431,7 @@ fn authenticate_tensor_load_v1(
 #[allow(clippy::too_many_arguments)]
 fn project_tensor_load_origin_v1(
     call: &SemanticDirectCallV1,
-    state: &ProjectedCapabilityStateV1,
+    state: &(impl capability_state_access_v1::CapabilityStateAccessV1 + ?Sized),
     destination_type: SemanticTypeIdV1,
     expected_output_type: SemanticTypeIdV1,
     contract: SemanticMfmaOperandContractV1,
@@ -7616,7 +7643,7 @@ fn tensor_capability_root_v1(kind: u8, words: &[u64]) -> DigestV1 {
 }
 
 fn capability_known_origin_v1(
-    state: &ProjectedCapabilityStateV1,
+    state: &(impl tensor_capability_read_v1::CapabilityStateReadV1 + ?Sized),
     operand: &SemanticOperandV1,
 ) -> Option<ProjectedCapabilityOriginV1> {
     tensor_capability_read_v1::capability_known_origin_read_v1(state, operand)
@@ -19445,163 +19472,14 @@ fn local_provenance_with_scalar_inventory_v1(
     definitions: &[u8],
     address_escaped: &[bool],
 ) -> Result<LocalProvenanceV1, ProductionRankedProjectionErrorV1> {
-    let local_count = function.locals().len();
-    if definitions.len() != local_count || address_escaped.len() != local_count {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "local provenance scalar custody tables do not match the semantic local table",
-        ));
-    }
-    let exclusive_owner_origins = exclusive_owner_carrier_v1::exclusive_owner_value_origins_v1(
+    bf16_nominal_source_algorithms_v1::local_provenance_with_resources_v1(
         callables,
+        types,
         function,
         definitions,
-    )?;
-    let mut stable_argument_origins = vec![None; local_count];
-    let mut allocation_origins = vec![None; local_count];
-    let mut allocation_provenance = vec![None; local_count];
-    let mut stable_edges = vec![Vec::new(); local_count];
-    let mut allocation_edges = vec![Vec::new(); local_count];
-    let mut allocation_contract_edges = vec![Vec::new(); local_count];
-    for (local_index, local) in function.locals().iter().enumerate() {
-        if let SemanticLocalRoleV1::Argument(argument) = local.role() {
-            if definitions[local_index] == 0 && !address_escaped[local_index] {
-                stable_argument_origins[local_index] = Some(argument);
-            }
-            allocation_origins[local_index] = Some(argument);
-            allocation_provenance[local_index] =
-                Some(LocalAllocationProvenanceV1::Argument(argument));
-        }
-    }
-    let mut edge_count = 0_usize;
-    for block in function.blocks() {
-        for statement in block.statements() {
-            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                continue;
-            };
-            let destination = assignment.destination();
-            if !destination.projections().is_empty()
-                || definitions
-                    .get(destination.local().index() as usize)
-                    .copied()
-                    != Some(1)
-            {
-                continue;
-            }
-            let destination = destination.local().index() as usize;
-            let stable_source = match assignment.value().kind() {
-                SemanticRvalueKindV1::Use(operand) | SemanticRvalueKindV1::Cast { operand, .. } => {
-                    simple_operand_local(operand)
-                }
-                _ => None,
-            };
-            if let Some(source) = stable_source {
-                let source = source.index() as usize;
-                if address_escaped.get(source).copied() == Some(false)
-                    && !address_escaped[destination]
-                {
-                    push_local_provenance_edge_v1(
-                        &mut stable_edges,
-                        source,
-                        destination,
-                        &mut edge_count,
-                    )?;
-                }
-            };
-
-            let allocation_source = match assignment.value().kind() {
-                SemanticRvalueKindV1::Use(operand) => {
-                    allocation_operand_local_v1(types, function, operand)
-                }
-                SemanticRvalueKindV1::Cast {
-                    kind: SemanticCastKindV1::Pointer,
-                    operand,
-                } => simple_operand_local(operand),
-                SemanticRvalueKindV1::Borrow { place, .. } => {
-                    borrowed_allocation_local_v1(function, place, &exclusive_owner_origins)
-                }
-                SemanticRvalueKindV1::AddressOf { place, .. } => {
-                    reborrowed_allocation_local_v1(place)
-                }
-                _ => None,
-            };
-            if let Some(source) = allocation_source {
-                push_local_provenance_edge_v1(
-                    &mut allocation_edges,
-                    source.index() as usize,
-                    destination,
-                    &mut edge_count,
-                )?;
-                push_local_provenance_edge_v1(
-                    &mut allocation_contract_edges,
-                    source.index() as usize,
-                    destination,
-                    &mut edge_count,
-                )?;
-            } else if let SemanticRvalueKindV1::Borrow { place, .. }
-            | SemanticRvalueKindV1::AddressOf { place, .. } = assignment.value().kind()
-                && place.projections().is_empty()
-                && function
-                    .locals()
-                    .get(place.local().index() as usize)
-                    .is_some_and(|local| !matches!(local.role(), SemanticLocalRoleV1::Argument(_)))
-            {
-                let origin = LocalAllocationProvenanceV1::Private(place.local());
-                match allocation_provenance.get_mut(destination) {
-                    Some(slot @ None) => *slot = Some(origin),
-                    Some(Some(existing)) if *existing == origin => {}
-                    Some(Some(_)) => {
-                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                            "a local may alias multiple kernel allocation origins",
-                        ));
-                    }
-                    None => {
-                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                            "a private allocation root is outside the semantic local table",
-                        ));
-                    }
-                }
-            }
-
-            if let SemanticRvalueKindV1::Binary {
-                operation: SemanticBinaryOpV1::Offset,
-                left,
-                ..
-            } = assignment.value().kind()
-                && let Some(source) = allocation_operand_local_v1(types, function, left)
-            {
-                // Pointer offsets retain only an authenticated external allocation
-                // contract. Private roots have no size/range contract and must not
-                // gain address-formation authority through raw pointer arithmetic.
-                push_local_provenance_edge_v1(
-                    &mut allocation_contract_edges,
-                    source.index() as usize,
-                    destination,
-                    &mut edge_count,
-                )?;
-            }
-        }
-    }
-
-    propagate_exact_local_origins_v1(
-        &mut stable_argument_origins,
-        &stable_edges,
-        "a runtime index may derive from multiple kernel arguments",
-    )?;
-    propagate_exact_local_origins_v1(
-        &mut allocation_provenance,
-        &allocation_edges,
-        "a local may alias multiple kernel allocation origins",
-    )?;
-    propagate_exact_local_origins_v1(
-        &mut allocation_origins,
-        &allocation_contract_edges,
-        "a local may alias multiple kernel allocation origins",
-    )?;
-    Ok(LocalProvenanceV1 {
-        stable_argument_origins,
-        allocation_origins,
-        allocation_provenance,
-    })
+        address_escaped,
+        &mut PreparationResourcesV1::unmetered(),
+    )
 }
 
 fn push_local_provenance_edge_v1(
@@ -19610,29 +19488,13 @@ fn push_local_provenance_edge_v1(
     destination: usize,
     edge_count: &mut usize,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
-    if source >= edges.len() || destination >= edges.len() {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "a local provenance edge is outside the semantic local table",
-        ));
-    }
-    *edge_count =
-        edge_count
-            .checked_add(1)
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "local provenance edge accounting overflowed",
-            ))?;
-    if *edge_count > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "local provenance edges exceed the charged projection limit",
-        ));
-    }
-    edges[source].try_reserve(1).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "local provenance edge storage cannot be reserved",
-        )
-    })?;
-    edges[source].push(destination);
-    Ok(())
+    push_local_provenance_edge_with_resources_v1(
+        edges,
+        source,
+        destination,
+        edge_count,
+        &mut PreparationResourcesV1::unmetered(),
+    )
 }
 
 fn propagate_exact_local_origins_v1<T: Copy + Eq>(
@@ -19640,52 +19502,12 @@ fn propagate_exact_local_origins_v1<T: Copy + Eq>(
     edges: &[Vec<usize>],
     conflict: &'static str,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
-    if origins.len() != edges.len() {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "local provenance tables have inconsistent lengths",
-        ));
-    }
-    let mut worklist = VecDeque::new();
-    worklist.try_reserve(origins.len()).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "local provenance dataflow worklist cannot be reserved",
-        )
-    })?;
-    worklist.extend(
-        origins
-            .iter()
-            .enumerate()
-            .filter_map(|(local, origin)| origin.map(|_| local)),
-    );
-    let mut work = 0_usize;
-    while let Some(source) = worklist.pop_front() {
-        let Some(origin) = origins[source] else {
-            continue;
-        };
-        for &destination in &edges[source] {
-            work = work
-                .checked_add(1)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "local provenance dataflow work accounting overflowed",
-                ))?;
-            if work > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "local provenance dataflow exceeds the charged projection limit",
-                ));
-            }
-            match origins[destination] {
-                None => {
-                    origins[destination] = Some(origin);
-                    worklist.push_back(destination);
-                }
-                Some(existing) if existing == origin => {}
-                Some(_) => {
-                    return Err(ProductionRankedProjectionErrorV1::Incomplete(conflict));
-                }
-            }
-        }
-    }
-    Ok(())
+    propagate_exact_local_origins_with_resources_v1(
+        origins,
+        edges,
+        conflict,
+        &mut PreparationResourcesV1::unmetered(),
+    )
 }
 
 fn reborrowed_allocation_local_v1(place: &SemanticPlaceV1) -> Option<SemanticLocalIdV1> {
@@ -19752,73 +19574,12 @@ fn local_allocation_contracts(
     function: &SemanticFunctionDeclV1,
     origins: &[Option<u32>],
 ) -> Result<Vec<Option<AllocationContractV1>>, ProductionRankedProjectionErrorV1> {
-    if origins.len() != function.locals().len() {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "allocation-origin and semantic-local tables have different lengths",
-        ));
-    }
-    let source_types = function.abi().source_input_types();
-    let source_ownership = function.abi().source_argument_ownership();
-    let abi_arguments = function.abi().adjusted_arguments();
-    if source_ownership.len() != source_types.len() {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "source ownership and semantic argument tables have different lengths",
-        ));
-    }
-    let mut arguments = vec![None; source_types.len()];
-    for (argument_index, &ty) in source_types.iter().enumerate() {
-        let type_decl = types.get(ty.index() as usize).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "a kernel argument type is outside the semantic type table",
-            ),
-        )?;
-        let abi_argument = abi_arguments.get(argument_index).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "a kernel source argument is missing its authenticated FnAbi record",
-            ),
-        )?;
-        let pointee = abi_argument
-            .value()
-            .pointee_override()
-            .or(type_decl.abi_properties().first_pointee());
-        let allocation_origin = u64::try_from(argument_index)
-            .ok()
-            .and_then(|index| index.checked_add(1))
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "a kernel argument index does not fit the allocation identity space",
-            ))?;
-        let first_pointer_noalias = match abi_argument.mode() {
-            SemanticAbiPassModeV1::Direct(attributes) => attributes.regular().no_alias(),
-            SemanticAbiPassModeV1::Pair { first, .. } => first.regular().no_alias(),
-            SemanticAbiPassModeV1::Ignore
-            | SemanticAbiPassModeV1::Cast { .. }
-            | SemanticAbiPassModeV1::Indirect { .. } => false,
-        };
-        let Some(pointee) = pointee else {
-            continue;
-        };
-        let abi_contract = allocation_contract_from_pointee(
-            pointee.kind(),
-            first_pointer_noalias,
-            allocation_origin,
-        );
-        let singleton_object = matches!(
-            source_ownership[argument_index],
-            SemanticSourceArgumentOwnershipV1::ExclusiveOwner
-        ) && matches!(type_decl.layout().backend_repr(), SemanticBackendReprV1::Scalar(scalar) if matches!(scalar.primitive(), SemanticBackendPrimitiveV1::Pointer { .. }));
-        arguments[argument_index] = Some(authenticated_source_allocation_contract_v1(
-            source_ownership[argument_index],
-            pointee.kind(),
-            AllocationContractV1 {
-                singleton_object,
-                ..abi_contract
-            },
-        )?);
-    }
-    Ok(origins
-        .iter()
-        .map(|origin| origin.and_then(|origin| arguments.get(origin as usize).copied().flatten()))
-        .collect())
+    bf16_nominal_source_algorithms_v1::local_allocation_contracts_with_resources_v1(
+        types,
+        function,
+        origins,
+        &mut PreparationResourcesV1::unmetered(),
+    )
 }
 
 fn volatile_load_frozen_shared_scalar_source_v1(
@@ -22995,90 +22756,10 @@ fn local_definition_counts(function: &SemanticFunctionDeclV1) -> Vec<u8> {
 fn assertion_definition_inventory(
     function: &SemanticFunctionDeclV1,
 ) -> Result<AssertionDefinitionInventoryV1, ProductionRankedProjectionErrorV1> {
-    let local_count = function.locals().len();
-    let mut counts = vec![0_u8; local_count];
-    let mut assignments = vec![None; local_count];
-    let mut address_escaped = vec![false; local_count];
-    let mut blocks = Vec::new();
-    blocks
-        .try_reserve_exact(function.blocks().len())
-        .map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof definition-block storage cannot be reserved",
-            )
-        })?;
-    for (block_index, block) in function.blocks().iter().enumerate() {
-        let mut definitions = Vec::new();
-        let capacity = block
-            .statements()
-            .len()
-            .checked_mul(2)
-            .and_then(|value| value.checked_add(1))
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof block-definition capacity overflowed",
-            ))?;
-        definitions.try_reserve(capacity).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof block-definition storage cannot be reserved",
-            )
-        })?;
-        for (statement_index, statement) in block.statements().iter().enumerate() {
-            if let SemanticStatementKindV1::Assign(assignment) = statement.kind() {
-                if assignment.destination().projections().is_empty()
-                    && let Some(local) = local_definition_index(assignment.destination())
-                {
-                    let Some(slot) = assignments.get_mut(local) else {
-                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                            "an assertion proof assignment is outside the semantic local table",
-                        ));
-                    };
-                    if slot.is_none() {
-                        *slot = Some(ScalarAssignmentSiteV1 {
-                            block: block_index,
-                            statement: statement_index,
-                        });
-                    }
-                }
-                if let Some(slot) = address_escaped_local_index_v1(assignment.value().kind())
-                    .and_then(|local| address_escaped.get_mut(local))
-                {
-                    *slot = true;
-                }
-            }
-            visit_statement_definition_places(statement.kind(), &mut |place| {
-                if let Some(local) = local_definition_index(place) {
-                    if let Some(slot) = counts.get_mut(local) {
-                        *slot = slot.saturating_add(1);
-                    }
-                    definitions.push(local);
-                }
-            });
-        }
-        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
-            && let Some(local) = call
-                .destination()
-                .and_then(|destination| local_definition_index(destination.place()))
-        {
-            if let Some(slot) = counts.get_mut(local) {
-                *slot = slot.saturating_add(1);
-            }
-            definitions.push(local);
-        }
-        definitions.sort_unstable();
-        definitions.dedup();
-        blocks.push(definitions);
-    }
-    for (local, assignment) in assignments.iter_mut().enumerate() {
-        if counts.get(local).copied() != Some(1) {
-            *assignment = None;
-        }
-    }
-    Ok(AssertionDefinitionInventoryV1 {
-        counts,
-        blocks,
-        assignments,
-        address_escaped,
-    })
+    bf16_nominal_source_algorithms_v1::assertion_definition_inventory_with_resources_v1(
+        function,
+        &mut PreparationResourcesV1::unmetered(),
+    )
 }
 
 fn visit_statement_definition_places(
@@ -24041,85 +23722,10 @@ enum ConstantDefinitionV1 {
 fn constant_locals(
     function: &SemanticFunctionDeclV1,
 ) -> Result<Vec<Option<u64>>, ProductionRankedProjectionErrorV1> {
-    let local_count = function.locals().len();
-    let mut definitions = Vec::new();
-    definitions.try_reserve_exact(local_count).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "constant-local definition storage cannot be reserved",
-        )
-    })?;
-    definitions.resize(local_count, ConstantDefinitionV1::Missing);
-    for block in function.blocks() {
-        for statement in block.statements() {
-            if let SemanticStatementKindV1::Assign(assignment) = statement.kind()
-                && let Some(definition) = address_escaped_local_index_v1(assignment.value().kind())
-                    .and_then(|local| definitions.get_mut(local))
-            {
-                *definition = ConstantDefinitionV1::Invalid;
-            }
-            if let SemanticStatementKindV1::Assign(assignment) = statement.kind() {
-                if local_definition_index(assignment.destination()).is_some() {
-                    record_constant_definition(
-                        &mut definitions,
-                        assignment.destination().local(),
-                        match (
-                            assignment.destination().projections(),
-                            assignment.value().kind(),
-                        ) {
-                            ([], SemanticRvalueKindV1::Use(operand)) => {
-                                constant_definition(operand)
-                            }
-                            _ => ConstantDefinitionV1::Invalid,
-                        },
-                    );
-                }
-            } else {
-                visit_statement_definition_places(statement.kind(), &mut |place| {
-                    if local_definition_index(place).is_some() {
-                        record_constant_definition(
-                            &mut definitions,
-                            place.local(),
-                            ConstantDefinitionV1::Invalid,
-                        );
-                    }
-                });
-            }
-        }
-        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
-            && let Some(destination) = call.destination()
-            && local_definition_index(destination.place()).is_some()
-        {
-            record_constant_definition(
-                &mut definitions,
-                destination.place().local(),
-                ConstantDefinitionV1::Invalid,
-            );
-        }
-    }
-    let mut states = Vec::new();
-    states.try_reserve_exact(local_count).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "constant-local resolution-state storage cannot be reserved",
-        )
-    })?;
-    states.resize(local_count, 0_u8);
-    let mut values = Vec::new();
-    values.try_reserve_exact(local_count).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "constant-local value storage cannot be reserved",
-        )
-    })?;
-    values.resize(local_count, None);
-    let mut path = Vec::new();
-    path.try_reserve_exact(local_count).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "constant-local resolution-path storage cannot be reserved",
-        )
-    })?;
-    for index in 0..definitions.len() {
-        resolve_constant_iterative(index, &definitions, &mut states, &mut values, &mut path);
-    }
-    Ok(values)
+    bf16_nominal_source_algorithms_v1::constant_locals_with_resources_v1(
+        function,
+        &mut PreparationResourcesV1::unmetered(),
+    )
 }
 
 fn constant_definition(operand: &SemanticOperandV1) -> ConstantDefinitionV1 {
@@ -24181,6 +23787,7 @@ fn record_constant_definition(
     }
 }
 
+#[cfg(test)]
 fn resolve_constant_iterative(
     index: usize,
     definitions: &[ConstantDefinitionV1],
@@ -24188,42 +23795,15 @@ fn resolve_constant_iterative(
     values: &mut [Option<u64>],
     path: &mut Vec<usize>,
 ) -> Option<u64> {
-    match states.get(index).copied() {
-        Some(2) => return values[index],
-        Some(1) | None => return None,
-        Some(_) => {}
-    }
-
-    path.clear();
-    let mut current = index;
-    // Constant aliases form a functional graph. Retain one reusable heap path
-    // so every traversed node can be finalized without recursive call depth.
-    loop {
-        match states.get(current).copied() {
-            Some(2) | Some(1) | None => break,
-            Some(_) => {}
-        }
-        states[current] = 1;
-        path.push(current);
-        match definitions[current] {
-            ConstantDefinitionV1::Direct(_) => break,
-            ConstantDefinitionV1::Alias(local) => current = local.index() as usize,
-            ConstantDefinitionV1::Missing | ConstantDefinitionV1::Invalid => break,
-        }
-    }
-
-    for current in path.drain(..).rev() {
-        let resolved = match definitions[current] {
-            ConstantDefinitionV1::Direct(value) => Some(value),
-            ConstantDefinitionV1::Alias(local) => {
-                values.get(local.index() as usize).copied().flatten()
-            }
-            ConstantDefinitionV1::Missing | ConstantDefinitionV1::Invalid => None,
-        };
-        states[current] = 2;
-        values[current] = resolved;
-    }
-    values[index]
+    bf16_nominal_source_algorithms_v1::resolve_constant_iterative_with_resources_v1(
+        index,
+        definitions,
+        states,
+        values,
+        path,
+        &mut PreparationResourcesV1::unmetered(),
+    )
+    .expect("legacy constant resolver allocation")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -25707,6 +25287,9 @@ mod tests {
     include!("production_ranked_projection_v1/projection_06_tests.rs");
     include!("production_ranked_projection_v1/projection_07_tests.rs");
     include!("production_ranked_projection_v1/projection_08_tests.rs");
+    include!(
+        "production_ranked_projection_v1/bf16_nominal_source_preparation_component_v1_tests.rs"
+    );
     include!("production_ranked_projection_v1/exclusive_owner_carrier_v1_tests.rs");
     include!("production_ranked_projection_v1/analysis_multi_split_v1_tests.rs");
     include!("production_ranked_projection_v1/induction_body_predicate_v1_tests.rs");

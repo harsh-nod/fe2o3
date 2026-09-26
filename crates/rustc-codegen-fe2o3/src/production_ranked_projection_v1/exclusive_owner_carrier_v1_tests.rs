@@ -526,4 +526,5 @@ mod exclusive_owner_carrier_tests {
             .is_err()
         );
     }
+    include!("exclusive_owner_carrier_resources_v1_tests.rs");
 }

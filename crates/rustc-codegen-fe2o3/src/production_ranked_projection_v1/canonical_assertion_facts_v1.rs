@@ -10,6 +10,11 @@ pub(crate) use bf16_nominal_facts_observation_v1::{
     inspect_foreign_nominal_facts_refusal_for_test_v1, inspect_nominal_routing_genuine_for_test_v1,
 };
 
+#[path = "bf16_nominal_capability_consumer_v1.rs"]
+mod bf16_nominal_capability_consumer_v1;
+#[allow(unused_imports)]
+pub(super) use bf16_nominal_capability_consumer_v1::with_nominal_capability_consumer_v1;
+
 use super::bf16_nominal_call_routing_v1::NominalCallVisitorV1;
 #[cfg(test)]
 use super::ranked_projection_source_v1::with_projection_source_budget_v1;

@@ -21,6 +21,29 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use std::cell::Cell;
 
+// Wrap EVERY existing genuine facts/control route in source preparation.
+// The complete dense route above is separate and still uses the real facts API.
+#[allow(clippy::too_many_arguments)]
+fn with_prepared_facts<'g, 'i, 'w, R: Copy + 'static>(
+    owner: &'g ProductionPreRankedKirOwnerV1,
+    inventory: &'i CanonicalKirInventoryV1<'g>,
+    root: SemanticFunctionIdV1,
+    caller: SemanticFunctionIdV1,
+    block: SemanticBlockIdV1,
+    call: &SemanticDirectCallV1,
+    budget: &mut Budget<'w>,
+    inspect: impl for<'r, 'b> FnOnce(
+        &mut CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w>,
+    ) -> Result<R>,
+) -> Result<R> {
+    crate::production_ranked_projection_v1::bf16_nominal_source_preparation_v1::with_nominal_source_preparation_v1(
+        owner, inventory, root, caller, block, call, budget,
+        |_inputs, budget| super::with_nominal_canonical_facts_observation_v1(
+            owner, inventory, root, caller, block, call, budget, inspect,
+        ),
+    )
+}
+
 const PROBE_WORK: usize = 8 * 1024 * 1024;
 const PROBE_SCRATCH: usize = 8 * 1024 * 1024;
 const TEST_HEADERS: usize = 4096;
@@ -81,6 +104,10 @@ fn observe_route(
         budget,
         |summaries, budget| {
             with_headers(budget, TEST_HEADERS, |budget| {
+                // SAME full route for original observation and every W/P/floor probe.
+                crate::production_ranked_projection_v1::bf16_nominal_preparation_genuine_v1_tests::observe_prepared_dense(
+                    owner, source, inventory, budget,
+                )?;
                 let semantic = owner.semantic_ssa().source_semantic();
                 // Finite iteration/observation work is prepaid, including both
                 // detailed and resolver callbacks' fixed assertions below.
@@ -107,7 +134,7 @@ fn observe_route(
                     [block]
                     .terminator()
                     .source();
-                with_nominal_canonical_facts_observation_v1(
+                with_prepared_facts(
                     owner,
                     inventory,
                     source.root(),
@@ -336,7 +363,7 @@ fn source_rejections(
         ),
     ] {
         let entered = Cell::new(false);
-        let result = with_nominal_canonical_facts_observation_v1(
+        let result = with_prepared_facts(
             owner,
             inventory,
             root,
@@ -352,7 +379,7 @@ fn source_rejections(
         assert!(matches!(result, Err(QueryError::Unavailable(_))));
         assert!(!entered.get());
     }
-    with_nominal_canonical_facts_observation_v1(
+    with_prepared_facts(
         owner,
         inventory,
         source.root(),
@@ -427,7 +454,7 @@ fn source_rejections(
         .unwrap();
         for detached in [&clone, &wrong] {
             let entered = Cell::new(false);
-            let result = with_nominal_canonical_facts_observation_v1(
+            let result = with_prepared_facts(
                 owner,
                 inventory,
                 source.root(),
@@ -460,7 +487,7 @@ fn callback_charge_controls(
         let before = budget.storage();
         let work_before = budget.work();
         let ledger = budget.work_ledger_identity_v1();
-        let result = with_nominal_canonical_facts_observation_v1(
+        let result = with_prepared_facts(
             owner,
             inventory,
             source.root(),
@@ -525,7 +552,7 @@ fn custody_accounting_probes(
             let protected = Cell::new(0);
             let entered = Cell::new(false);
             let mut replacement = Some(Budget::new(&mut foreign_work, limit));
-            let result = with_nominal_canonical_facts_observation_v1(
+            let result = with_prepared_facts(
                 owner,
                 inventory,
                 source.root(),
@@ -602,6 +629,9 @@ pub(crate) fn inspect_nominal_routing_genuine_for_test_v1(
         budget.charge_work(256)?;
         source_rejections(owner, source, inventory, budget)?;
         callback_charge_controls(owner, source, inventory, budget)?;
+        crate::production_ranked_projection_v1::bf16_nominal_preparation_genuine_v1_tests::inspect_dense_final_controls(
+            owner, source, inventory, inventory_storage, budget,
+        )?;
         boundary_probes(owner, source, inventory, inventory_storage, budget)?;
         custody_accounting_probes(owner, source, inventory, inventory_storage, budget)?;
         Ok(())
@@ -644,7 +674,7 @@ pub(crate) fn inspect_foreign_nominal_facts_refusal_for_test_v1(
     with_headers(budget, TEST_HEADERS, |budget| {
         budget.charge_work(32)?;
         let entered = Cell::new(false);
-        let result = with_nominal_canonical_facts_observation_v1(
+        let result = with_prepared_facts(
             owner,
             foreign_inventory,
             source.root(),
