@@ -121,6 +121,15 @@ original ledger. Only inert terminal observations escape. This is single-dispatc
 support, not an installed native worker pool, provisioning or recovery path.
 Named-socket validation remains required; local `bind` is refused with EPERM in
 the current restricted environment. No listener-to-issuer execution is credited.
+Native `run_turns` adds a finite sequential controller over that same service.
+It uses the original request account and exclusive persistent cleanup controller,
+requires funding for the selected cleanup pump before accepting another session,
+and pumps cleanup after every outcome, including request-budget refusal. The first
+non-idle dispatch error stops the call; its exact error and any simultaneous
+cleanup failure are returned separately. The fixed result counts earlier
+completions and retains only the last completion observation. Caller-owned cleanup
+must remain available for further draining; batch completion does not prove an
+empty pool. This is not deployed native provisioning or recovery.
 Every nested check uses the caller's ledger. Logical
 work/retained/scratch charges are not wall-time, RSS, kernel-memory or
 generated-stack bounds. See the

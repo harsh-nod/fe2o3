@@ -9,6 +9,8 @@ use crate::{MAX_PROTECTED_ISSUER_PROCESSES_V1, ProtectedIssuerLaunchErrorV1};
 
 #[path = "process_reaper_native.rs"]
 mod native;
+#[cfg(test)]
+pub(crate) use native::isolated_cleanup;
 pub use native::{
     ProtectedIssuerCleanupAdmissionErrorV2, ProtectedIssuerCleanupErrorV2,
     ProtectedIssuerCleanupReportV2, ProtectedIssuerCleanupReservationV2,

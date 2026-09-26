@@ -403,5 +403,12 @@ impl Drop for ProtectedIssuerCleanupReservationV2 {
 }
 
 #[cfg(test)]
+pub(crate) fn isolated_cleanup(account: Account) -> Service {
+    // A separate process-lifetime pool avoids selecting the production global
+    // mode in rootless controller tests. It never contains real child records.
+    Service::admit_at(Box::leak(Box::new(DeferredReaperV1::new())), account).unwrap()
+}
+
+#[cfg(test)]
 #[path = "process_reaper_native_tests.rs"]
 mod tests;

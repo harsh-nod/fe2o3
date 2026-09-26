@@ -220,6 +220,23 @@ checks; continuity errors override session outcomes as on the existing path.
 Only inert terminal facts are returned. Native worker dispatch, provisioning,
 recovery and listener-to-issuer validation remain outstanding.
 
+Native `run_turns` supplies bounded sequential dispatch over this admitted service,
+not a second supervisor or background reaper. Its nominal `DispatchLimitsV2/V3`
+contains 1-4096 turns, the exact native accept wait, and a cleanup scan of 1 through
+the fixed pool capacity. It prepays bookkeeping and temporary metadata on the
+original request account. The separately funded cleanup account must allow new
+admission and afford the selected post-dispatch scan before each accept attempt.
+Every attempted session is followed by that scan, including session-resource
+failure. An unfunded controller call also attempts independently funded cleanup.
+
+Accept deadline/attempt exhaustion counts as idle. Any other dispatch refusal
+stops the batch, preserving its exact error alongside the last cleanup result.
+The result counts completed sessions and retains their last inert observation,
+not every session identity or any authority. Both borrowed accounts retain their
+accepted prefixes and first denials across calls. The caller keeps exclusive
+cleanup control and must explicitly drain/shut down; returning a completed batch
+does not prove terminal cleanup, and neither account is silently renewed.
+
 ## Remaining Production Work
 
 The deployed issuer and service still use the previous family. Native inherited

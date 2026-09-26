@@ -33,3 +33,15 @@ use ProtectedIssuerSessionReportV2 as Report;
 type Result<T> = std::result::Result<T, Error>;
 
 include!("listener_native_body.rs");
+
+#[path = "listener_native_controller_adapter.rs"]
+mod controller;
+controller::native_controller!(
+    ProtectedIssuerDispatchLimitsV2,
+    ProtectedIssuerDispatchReportV2,
+    ProtectedIssuerDispatchStopV2
+);
+use ProtectedIssuerDispatchLimitsV2 as DispatchLimits;
+use ProtectedIssuerDispatchReportV2 as DispatchReport;
+use ProtectedIssuerDispatchStopV2 as DispatchStop;
+include!("listener_native_controller_body.rs");

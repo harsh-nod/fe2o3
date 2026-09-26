@@ -6,7 +6,8 @@ impl Service {
     /// Logical charge for the consumed inherited socket, including delta metadata.
     pub const SOCKET_STORAGE: usize = size_of::<(OwnedFd, Storage)>();
     /// Conservative metadata/path/report growth; not allocator use or RSS.
-    pub const OWNER_GROWTH: usize = size_of::<(Self, Report, Storage)>() + MAX_PATH_BYTES;
+    pub const OWNER_GROWTH: usize =
+        size_of::<(Self, Report, DispatchReport, Storage)>() + MAX_PATH_BYTES;
     /// Fixed allowance for socket observations, activation, metadata and retirement.
     /// Native supervisor checks and accept turns charge their work separately.
     pub const WORK: usize = ENTRY + 128 * 1024;

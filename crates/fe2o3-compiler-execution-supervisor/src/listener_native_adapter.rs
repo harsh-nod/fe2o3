@@ -93,6 +93,8 @@ macro_rules! native_service {
             InvalidListener(&'static str),
             /// Accept attempts or deadline are outside the finite contract.
             InvalidAcceptLimits,
+            /// Dispatch count or cleanup scan size is outside its finite contract.
+            InvalidDispatchLimits,
             /// The absolute accept deadline expired.
             AcceptTimeout,
             /// Every prepaid accept turn was used without a connection.
@@ -146,6 +148,9 @@ macro_rules! native_service {
                         write!(f, "invalid native issuer listener: {reason}")
                     }
                     Self::InvalidAcceptLimits => f.write_str("invalid native issuer accept limits"),
+                    Self::InvalidDispatchLimits => {
+                        f.write_str("invalid native issuer dispatch limits")
+                    }
                     Self::AcceptTimeout => f.write_str("native issuer accept timed out"),
                     Self::AcceptAttempts => f.write_str("native issuer accept attempts exhausted"),
                     Self::Resource(e) => e.fmt(f),
