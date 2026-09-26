@@ -24,6 +24,18 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest cooperative SDMA development (2026-09-26): authoritative DeviceLocal
+peer-copy leaves now use resumable child async submissions and one accounted
+64-KiB scratch window per phase. Ordering and cancellation preserve exact native
+custody; cleanup failure freezes the copy and its selected dependent path while
+retaining retryable private disposal. The
+[development packet](evidence/dev-cooperative-sdma-2026-09-26/README.md)
+records 12 focused passes, 1,555 broad passes, three unchanged socket-permission
+failures, 28 ignores, 52 doctests and passing strict static checks. Native-dirty
+reconciliation still blocks, and positive composed/native execution, directed
+router support, pending peer-to-compute, formal refinement and matched performance
+remain open. No accepted milestone, A1/A2 or HIP/HSA parity status changed.
+
 Latest asynchronous SDMA readiness development (2026-09-26): initially ready
 H2D/D2H copies now publish from authoritative DMA backing even when their CPU
 shadows are stale. The regression eliminates two required flushes without
