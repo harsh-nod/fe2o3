@@ -1,20 +1,20 @@
 use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-pub(super) struct Account {
+pub(crate) struct Account {
     address: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     floor: usize,
 }
 impl Account {
-    fn capture(budget: &Budget<'_>) -> Self {
+    pub(crate) fn capture(budget: &Budget<'_>) -> Self {
         Self {
             address: budget as *const Budget<'_> as usize,
             ledger: budget.work_ledger_identity_v1(),
             floor: budget.storage(),
         }
     }
-    fn require(&self, budget: &Budget<'_>, owned: usize) -> Result<(), Error> {
+    pub(crate) fn require(&self, budget: &Budget<'_>, owned: usize) -> Result<(), Error> {
         if self.address != budget as *const Budget<'_> as usize
             || self.ledger != budget.work_ledger_identity_v1()
             || self
@@ -22,6 +22,14 @@ impl Account {
                 .checked_add(owned)
                 .is_none_or(|floor| budget.storage() < floor)
         {
+            return Err(Resource::Accounting.into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn require_exact(&self, budget: &Budget<'_>, owned: usize) -> Result<(), Error> {
+        self.require(budget, owned)?;
+        if self.floor.checked_add(owned) != Some(budget.storage()) {
             return Err(Resource::Accounting.into());
         }
         Ok(())
@@ -38,7 +46,7 @@ pub(super) fn temporary<T>(
     temporary_using(budget, bytes, run)
 }
 
-pub(super) fn temporary_using<T, Failure: From<Error> + From<Resource>>(
+pub(crate) fn temporary_using<T, Failure: From<Error> + From<Resource>>(
     budget: &mut Budget<'_>,
     bytes: usize,
     run: impl FnOnce(&mut Budget<'_>) -> Result<T, Failure>,

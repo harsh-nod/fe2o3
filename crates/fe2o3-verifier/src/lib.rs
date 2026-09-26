@@ -18,6 +18,13 @@ mod authenticated_proof_binding;
 mod authenticated_verus_execution_v2;
 mod compiler_multi_root_proof_v1;
 mod compiler_multi_root_target_lineage_v1;
+mod compiler_native_conditional_handoff_v5;
+pub use compiler_native_conditional_handoff_v5::{
+    CompilerConditionalNativeSemanticHandoffErrorV5,
+    RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
+    RecoveredCompilerConditionalNativeSemanticHandoffV5,
+    recover_compiler_conditional_native_semantic_handoff_v5,
+};
 pub mod compiler_native_conditional_source_packet_v2;
 pub use compiler_native_conditional_source_packet_v2::{
     NativeConditionalPacketErrorV2, NativeConditionalSourcePacketInputV2,

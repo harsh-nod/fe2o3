@@ -30,7 +30,7 @@ use fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1;
 use std::mem::size_of;
 
 #[path = "compiler_native_conditional_final_v2/account.rs"]
-mod account;
+pub(crate) mod account;
 #[path = "compiler_native_conditional_final_v2/error.rs"]
 mod error;
 #[path = "compiler_native_conditional_final_v2/manifest.rs"]
