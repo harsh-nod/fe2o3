@@ -473,292 +473,326 @@ pub(super) fn encode_subject(
         {
             return Err(E::Mismatch("complete typed/source/formal root roster"));
         }
-        if pointer_width != 64 {
-            return Err(E::Mismatch("retained 64-bit rustc target"));
-        }
-        budget.reserve_storage(
-            DESCRIPTOR_QUERY_STORAGE_V3
-                .checked_add(size_of::<CompilerIdentityV1>())
-                .and_then(|v| v.checked_add(size_of::<ProducerIdentityV1>()))
-                .and_then(|v| v.checked_add(size_of::<DeviceDescriptorTableInputV3<'_>>()))
-                .and_then(|v| v.checked_add(size_of::<Sha256>()))
-                .and_then(|v| v.checked_add(size_of::<[&[u8]; 2]>() + size_of::<[u8; 32]>()))
-                .and_then(|v| {
-                    v.checked_add(size_of::<fe2o3_artifacts::RustNominalScalarEvidenceV3>())
+        with_subject_rows(
+            roots,
+            semantic,
+            module,
+            canonical_bytes,
+            profile,
+            pointer_width,
+            executable_domain,
+            producer_version,
+            budget,
+            |input, budget| {
+                budget.reserve_storage(DESCRIPTOR_ENCODER_SCRATCH_STORAGE_V3)?;
+                let length =
+                    encoded_device_descriptor_table_v3_len(&input, &mut |w| budget.charge_work(w))
+                        .map_err(E::Wire)?;
+                let mut wire = vector::<u8>(length, budget)?;
+                budget.charge_work(length)?;
+                wire.resize(length, 0);
+                encode_device_descriptor_table_v3(&input, &mut wire, &mut |w| {
+                    budget.charge_work(w)
                 })
-                .and_then(|v| v.checked_add(size_of::<ArgumentRow>()))
-                .and_then(|v| v.checked_add(size_of::<RootRow<'_>>()))
-                .and_then(|v| v.checked_add(size_of::<([CapabilityV1; 2], usize)>()))
-                .and_then(|v| v.checked_add(size_of::<[bool; 2]>()))
-                .ok_or(Resource::Arithmetic)?,
-        )?;
-        let mut count = 0usize;
-        for root in roots {
-            budget.charge_work(1)?;
-            if root.arguments.len() > fe2o3_kernel_descriptor::MAX_ARGUMENTS_PER_KERNEL {
-                return Err(E::Mismatch("bounded whole-root arguments"));
-            }
-            count = count
-                .checked_add(root.arguments.len())
-                .ok_or(Resource::Arithmetic)?;
+                .map_err(E::Wire)?;
+                Ok(wire)
+            },
+        )?
+    })
+}
+
+/// Borrowed producer rows, not a decoded V3 table or ordinary admission.
+/// Caller checks its own complete owner roster and owns the enclosing resource
+/// scope. The callback cannot retain these local row allocations. No refund is
+/// performed here, including on callback error or unwind.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn with_subject_rows<T>(
+    roots: &[TypedDescriptorRootV1],
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    module: &Module,
+    canonical_bytes: &[u8],
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    pointer_width: u16,
+    executable_domain: &[u8],
+    producer_version: &str,
+    budget: &mut Budget<'_>,
+    consume: impl FnOnce(DeviceDescriptorTableInputV3<'_>, &mut Budget<'_>) -> T,
+) -> R<T> {
+    if pointer_width != 64 {
+        return Err(E::Mismatch("retained 64-bit rustc target"));
+    }
+    budget.reserve_storage(
+        DESCRIPTOR_QUERY_STORAGE_V3
+            .checked_add(size_of::<CompilerIdentityV1>())
+            .and_then(|v| v.checked_add(size_of::<ProducerIdentityV1>()))
+            .and_then(|v| v.checked_add(size_of::<DeviceDescriptorTableInputV3<'_>>()))
+            .and_then(|v| v.checked_add(size_of::<Sha256>()))
+            .and_then(|v| v.checked_add(size_of::<[&[u8]; 2]>() + size_of::<[u8; 32]>()))
+            .and_then(|v| v.checked_add(size_of::<fe2o3_artifacts::RustNominalScalarEvidenceV3>()))
+            .and_then(|v| v.checked_add(size_of::<ArgumentRow>()))
+            .and_then(|v| v.checked_add(size_of::<RootRow<'_>>()))
+            .and_then(|v| v.checked_add(size_of::<([CapabilityV1; 2], usize)>()))
+            .and_then(|v| v.checked_add(size_of::<[bool; 2]>()))
+            .ok_or(Resource::Arithmetic)?,
+    )?;
+    let mut count = 0usize;
+    for root in roots {
+        budget.charge_work(1)?;
+        if root.arguments.len() > fe2o3_kernel_descriptor::MAX_ARGUMENTS_PER_KERNEL {
+            return Err(E::Mismatch("bounded whole-root arguments"));
         }
-        let mut ordered = vector::<&TypedDescriptorRootV1>(roots.len(), budget)?;
-        budget.charge_work(roots.len())?;
-        ordered.extend(roots);
-        // Fixed-key sorting is prepaid conservatively without a fallible comparator.
+        count = count
+            .checked_add(root.arguments.len())
+            .ok_or(Resource::Arithmetic)?;
+    }
+    let mut ordered = vector::<&TypedDescriptorRootV1>(roots.len(), budget)?;
+    budget.charge_work(roots.len())?;
+    ordered.extend(roots);
+    // Fixed-key sorting is prepaid conservatively without a fallible comparator.
+    budget.charge_work(
+        roots
+            .len()
+            .checked_mul(roots.len())
+            .and_then(|v| v.checked_mul(32))
+            .ok_or(Resource::Arithmetic)?,
+    )?;
+    ordered.sort_unstable_by_key(|root| root.kernel_binding_bytes());
+    if ordered
+        .windows(2)
+        .any(|rows| rows[0].kernel_binding_bytes() == rows[1].kernel_binding_bytes())
+    {
+        return Err(E::Mismatch("unique complete typed bindings"));
+    }
+    let mut argument_rows = vector::<ArgumentRow>(count, budget)?;
+    let mut root_rows = vector::<RootRow<'_>>(roots.len(), budget)?;
+    for root in ordered {
         budget.charge_work(
-            roots
+            root.arguments
                 .len()
-                .checked_mul(roots.len())
-                .and_then(|v| v.checked_mul(32))
+                .checked_mul(32)
+                .and_then(|v| v.checked_add(root.export_name.len()))
                 .ok_or(Resource::Arithmetic)?,
         )?;
-        ordered.sort_unstable_by_key(|root| root.kernel_binding_bytes());
-        if ordered
-            .windows(2)
-            .any(|rows| rows[0].kernel_binding_bytes() == rows[1].kernel_binding_bytes())
-        {
-            return Err(E::Mismatch("unique complete typed bindings"));
+        if root.arguments.len() != 0 {
+            super::laid_out_plan_v1::check(root).map_err(E::Descriptor)?;
         }
-        let mut argument_rows = vector::<ArgumentRow>(count, budget)?;
-        let mut root_rows = vector::<RootRow<'_>>(roots.len(), budget)?;
-        for root in ordered {
+        let mut matched = None;
+        for semantic_root in semantic.roots() {
+            budget.charge_work(2)?;
+            let function = semantic
+                .functions()
+                .get(semantic_root.index() as usize)
+                .ok_or(E::Mismatch("semantic root function"))?;
+            if function.kernel_entry().is_some_and(|entry| {
+                entry.kernel_binding_identity().as_bytes() == &root.kernel_binding_bytes()
+            }) {
+                if matched.replace(function).is_some() {
+                    return Err(E::Mismatch("unique source binding"));
+                }
+            }
+        }
+        let function = matched.ok_or(E::Mismatch("exact typed/source binding"))?;
+        validate_production_v1_semantic_root_ownership_evidence(root, semantic, function)
+            .map_err(E::Descriptor)?;
+        let start = argument_rows.len();
+        for (argument, source_type) in root
+            .arguments
+            .as_slice()
+            .iter()
+            .zip(function.abi().source_input_types())
+        {
             budget.charge_work(
-                root.arguments
+                argument
+                    .name
                     .len()
-                    .checked_mul(32)
-                    .and_then(|v| v.checked_add(root.export_name.len()))
+                    .checked_add(16)
                     .ok_or(Resource::Arithmetic)?,
             )?;
-            if root.arguments.len() != 0 {
-                super::laid_out_plan_v1::check(root).map_err(E::Descriptor)?;
+            let ty = semantic
+                .types()
+                .get(source_type.index() as usize)
+                .ok_or(E::Mismatch("source ABI type"))?;
+            if !nominal_kind_matches(argument.kind, ty.rust_type_kind()) {
+                return Err(E::Mismatch("actual rustc nominal kind"));
             }
-            let mut matched = None;
-            for semantic_root in semantic.roots() {
-                budget.charge_work(2)?;
-                let function = semantic
-                    .functions()
-                    .get(semantic_root.index() as usize)
-                    .ok_or(E::Mismatch("semantic root function"))?;
-                if function.kernel_entry().is_some_and(|entry| {
-                    entry.kernel_binding_identity().as_bytes() == &root.kernel_binding_bytes()
-                }) {
-                    if matched.replace(function).is_some() {
-                        return Err(E::Mismatch("unique source binding"));
-                    }
-                }
-            }
-            let function = matched.ok_or(E::Mismatch("exact typed/source binding"))?;
-            validate_production_v1_semantic_root_ownership_evidence(root, semantic, function)
-                .map_err(E::Descriptor)?;
-            let start = argument_rows.len();
-            for (argument, source_type) in root
-                .arguments
-                .as_slice()
-                .iter()
-                .zip(function.abi().source_input_types())
-            {
-                budget.charge_work(
-                    argument
-                        .name
-                        .len()
-                        .checked_add(16)
-                        .ok_or(Resource::Arithmetic)?,
-                )?;
-                let ty = semantic
-                    .types()
-                    .get(source_type.index() as usize)
-                    .ok_or(E::Mismatch("source ABI type"))?;
-                if !nominal_kind_matches(argument.kind, ty.rust_type_kind()) {
-                    return Err(E::Mismatch("actual rustc nominal kind"));
-                }
-                if matches!(
-                    argument.kind,
-                    DescriptorArgumentKindV1::CompilerLaidOutUsize
-                        | DescriptorArgumentKindV1::CompilerLaidOutIsize
-                ) {
-                    let kind = if argument.kind == DescriptorArgumentKindV1::CompilerLaidOutUsize {
-                        fe2o3_artifacts::RustNominalScalarKindV3::Usize
-                    } else {
-                        fe2o3_artifacts::RustNominalScalarKindV3::Isize
-                    };
-                    let evidence = fe2o3_artifacts::RustNominalScalarEvidenceV3::new(
-                        kind,
-                        fe2o3_artifacts::PointerWidth::Bits64,
-                    )
-                    .map_err(|_| E::Mismatch("nominal portable layout"))?;
-                    if argument.source_size != evidence.size()
-                        || argument.source_alignment != evidence.abi_alignment()
-                        || argument.rustc_abi_class != evidence.abi_class()
-                        || argument.layout.is_some()
-                    {
-                        return Err(E::Mismatch("nominal/physical rustc layout"));
-                    }
-                }
-                let (source, layout) = records(argument.kind, budget)?;
-                let (components, count, ownership, alias) = components(argument)?;
-                argument_rows.push(ArgumentRow {
-                    source,
-                    layout,
-                    components,
-                    count,
-                    ownership,
-                    alias,
-                });
-            }
-            let length = root
-                .export_name
-                .len()
-                .checked_add(3)
-                .ok_or(Resource::Arithmetic)?;
-            let mut symbol = vector::<u8>(length, budget)?;
-            budget.charge_work(length)?;
-            symbol.extend_from_slice(root.export_name.as_bytes());
-            symbol.extend_from_slice(b".kd");
-            let launch = launch(
-                root.source_launch()
-                    .ok_or(E::Mismatch("retained source launch"))?,
-                budget,
-            )?;
-            let binding = root.kernel_binding_bytes();
-            let source_evidence = evidence(
-                b"FE2O3/NOMINAL-SOURCE-ABI/V3\0",
-                &binding,
-                semantic.canonical_encoding(),
-                budget,
-            )?;
-            let ir = evidence(executable_domain, &binding, canonical_bytes, budget)?;
-            root_rows.push(RootRow {
-                root,
-                symbol,
-                launch,
-                start,
-                end: argument_rows.len(),
-                source: source_evidence,
-                ir,
-            });
-        }
-        let mut sources = vector::<SourceTypeRecordV3>(count, budget)?;
-        let mut layouts = vector::<DeviceLayoutRecordV1>(count, budget)?;
-        budget.charge_work(count)?;
-        for row in &argument_rows {
-            sources.push(row.source);
-            layouts.push(row.layout.clone());
-        }
-        budget.charge_work(
-            count
-                .checked_mul(count)
-                .and_then(|v| v.checked_mul(64))
-                .ok_or(Resource::Arithmetic)?,
-        )?;
-        sources.sort_unstable_by_key(|row| row.identity());
-        sources.dedup_by_key(|row| row.identity());
-        layouts.sort_unstable_by_key(DeviceLayoutRecordV1::identity);
-        layouts.dedup_by_key(|row| row.identity());
-        let mut arguments = vector::<LogicalArgumentInputV3<'_>>(count, budget)?;
-        for root in &root_rows {
-            for (index, (argument, row)) in root
-                .root
-                .arguments
-                .as_slice()
-                .iter()
-                .zip(&argument_rows[root.start..root.end])
-                .enumerate()
-            {
-                budget.charge_work(1)?;
-                arguments.push(LogicalArgumentInputV3 {
-                    source_index: u16::try_from(index).map_err(|_| Resource::Arithmetic)?,
-                    name: &argument.name,
-                    source_type: row.source.identity(),
-                    device_layout: row.layout.identity(),
-                    ownership: row.ownership,
-                    access: argument.access,
-                    alias: row.alias,
-                    components: &row.components[..row.count],
-                });
-            }
-        }
-        // Covers text comparisons in the allocation-free borrowed capability visitor.
-        budget.charge_work(canonical_bytes.len())?;
-        // Use the retained live rustc target, never an unverified capability tag.
-        budget.charge_work(1)?;
-        let has_exact_diagnostic_target = match profile {
-            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942
-            | fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => true,
-        };
-        let (capabilities, capability_count) =
-            inert_capabilities(module, has_exact_diagnostic_target, budget)?;
-        let mut kernels = vector::<KernelDescriptorInputV3<'_>>(roots.len(), budget)?;
-        let mut requirements = vector::<KernelTargetRequirementsV2>(roots.len(), budget)?;
-        for row in &root_rows {
-            budget.charge_work(8)?;
-            let root = row.root;
-            let id = KernelId::from_bytes(root.kernel_binding_bytes());
-            kernels.push(KernelDescriptorInputV3 {
-                kernel_id: id,
-                logical_name: &root.logical_name,
-                entry_name: &root.export_name,
-                descriptor_symbol: std::str::from_utf8(&row.symbol)
-                    .map_err(|_| E::Mismatch("descriptor symbol"))?,
-                source_evidence: row.source,
-                executable_ir_evidence: row.ir,
-                capabilities: &capabilities[..capability_count],
-                abi_layout: KernelAbiLayoutV1::new(
-                    root.explicit_argument_bytes,
-                    root.explicit_argument_bytes
-                        .checked_add(256)
-                        .ok_or(Resource::Arithmetic)?,
-                    root.kernarg_alignment_bytes,
+            if matches!(
+                argument.kind,
+                DescriptorArgumentKindV1::CompilerLaidOutUsize
+                    | DescriptorArgumentKindV1::CompilerLaidOutIsize
+            ) {
+                let kind = if argument.kind == DescriptorArgumentKindV1::CompilerLaidOutUsize {
+                    fe2o3_artifacts::RustNominalScalarKindV3::Usize
+                } else {
+                    fe2o3_artifacts::RustNominalScalarKindV3::Isize
+                };
+                let evidence = fe2o3_artifacts::RustNominalScalarEvidenceV3::new(
+                    kind,
+                    fe2o3_artifacts::PointerWidth::Bits64,
                 )
-                .map_err(E::Validation)?,
-                launch: &row.launch,
-                arguments: &arguments[row.start..row.end],
+                .map_err(|_| E::Mismatch("nominal portable layout"))?;
+                if argument.source_size != evidence.size()
+                    || argument.source_alignment != evidence.abi_alignment()
+                    || argument.rustc_abi_class != evidence.abi_class()
+                    || argument.layout.is_some()
+                {
+                    return Err(E::Mismatch("nominal/physical rustc layout"));
+                }
+            }
+            let (source, layout) = records(argument.kind, budget)?;
+            let (components, count, ownership, alias) = components(argument)?;
+            argument_rows.push(ArgumentRow {
+                source,
+                layout,
+                components,
+                count,
+                ownership,
+                alias,
             });
-            requirements.push(KernelTargetRequirementsV2::new(
-                id,
-                LdsRequirementsV2::new(0, 0).map_err(E::Validation)?,
-                RequiredWavefrontWidthV2::Wave64,
-                false,
-                SynchronizationRequirementsV2::empty(),
-                AtomicRequirementsV2::empty(),
-            ));
         }
-        let compiler = CompilerIdentityV1::new(
-            text(RUSTC_CODEGEN_FE2O3_COMPILER_NAME_V1, budget)?,
-            text(env!("CARGO_PKG_VERSION"), budget)?,
-            [0; 20],
-        );
-        let producer = ProducerIdentityV1::new(
-            text(RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1, budget)?,
-            text(producer_version, budget)?,
-        );
-        let target_name = profile.device_target();
-        budget.charge_work(target_name.len())?;
-        let device_target = DeviceTargetV1::new(
-            fe2o3_amd_target::AmdTargetId::parse(target_name)
-                .map_err(|_| E::Mismatch("retained target profile"))?,
-        );
-        let input = DeviceDescriptorTableInputV3 {
-            canonical_code_object_digest: CanonicalCodeObjectDigest::from_bytes([0; 32]),
-            code_object_version: CodeObjectVersion::V6,
-            compiler: &compiler,
-            producer: &producer,
-            device_target,
-            type_records: &sources,
-            layout_records: &layouts,
-            kernels: &kernels,
-            requirements: &requirements,
-        };
-        budget.reserve_storage(DESCRIPTOR_ENCODER_SCRATCH_STORAGE_V3)?;
-        let length = encoded_device_descriptor_table_v3_len(&input, &mut |w| budget.charge_work(w))
-            .map_err(E::Wire)?;
-        let mut wire = vector::<u8>(length, budget)?;
+        let length = root
+            .export_name
+            .len()
+            .checked_add(3)
+            .ok_or(Resource::Arithmetic)?;
+        let mut symbol = vector::<u8>(length, budget)?;
         budget.charge_work(length)?;
-        wire.resize(length, 0);
-        encode_device_descriptor_table_v3(&input, &mut wire, &mut |w| budget.charge_work(w))
-            .map_err(E::Wire)?;
-        Ok(wire)
-    })
+        symbol.extend_from_slice(root.export_name.as_bytes());
+        symbol.extend_from_slice(b".kd");
+        let launch = launch(
+            root.source_launch()
+                .ok_or(E::Mismatch("retained source launch"))?,
+            budget,
+        )?;
+        let binding = root.kernel_binding_bytes();
+        let source_evidence = evidence(
+            b"FE2O3/NOMINAL-SOURCE-ABI/V3\0",
+            &binding,
+            semantic.canonical_encoding(),
+            budget,
+        )?;
+        let ir = evidence(executable_domain, &binding, canonical_bytes, budget)?;
+        root_rows.push(RootRow {
+            root,
+            symbol,
+            launch,
+            start,
+            end: argument_rows.len(),
+            source: source_evidence,
+            ir,
+        });
+    }
+    let mut sources = vector::<SourceTypeRecordV3>(count, budget)?;
+    let mut layouts = vector::<DeviceLayoutRecordV1>(count, budget)?;
+    budget.charge_work(count)?;
+    for row in &argument_rows {
+        sources.push(row.source);
+        layouts.push(row.layout.clone());
+    }
+    budget.charge_work(
+        count
+            .checked_mul(count)
+            .and_then(|v| v.checked_mul(64))
+            .ok_or(Resource::Arithmetic)?,
+    )?;
+    sources.sort_unstable_by_key(|row| row.identity());
+    sources.dedup_by_key(|row| row.identity());
+    layouts.sort_unstable_by_key(DeviceLayoutRecordV1::identity);
+    layouts.dedup_by_key(|row| row.identity());
+    let mut arguments = vector::<LogicalArgumentInputV3<'_>>(count, budget)?;
+    for root in &root_rows {
+        for (index, (argument, row)) in root
+            .root
+            .arguments
+            .as_slice()
+            .iter()
+            .zip(&argument_rows[root.start..root.end])
+            .enumerate()
+        {
+            budget.charge_work(1)?;
+            arguments.push(LogicalArgumentInputV3 {
+                source_index: u16::try_from(index).map_err(|_| Resource::Arithmetic)?,
+                name: &argument.name,
+                source_type: row.source.identity(),
+                device_layout: row.layout.identity(),
+                ownership: row.ownership,
+                access: argument.access,
+                alias: row.alias,
+                components: &row.components[..row.count],
+            });
+        }
+    }
+    // Covers text comparisons in the allocation-free borrowed capability visitor.
+    budget.charge_work(canonical_bytes.len())?;
+    // Use the retained live rustc target, never an unverified capability tag.
+    budget.charge_work(1)?;
+    let has_exact_diagnostic_target = match profile {
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942
+        | fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => true,
+    };
+    let (capabilities, capability_count) =
+        inert_capabilities(module, has_exact_diagnostic_target, budget)?;
+    let mut kernels = vector::<KernelDescriptorInputV3<'_>>(roots.len(), budget)?;
+    let mut requirements = vector::<KernelTargetRequirementsV2>(roots.len(), budget)?;
+    for row in &root_rows {
+        budget.charge_work(8)?;
+        let root = row.root;
+        let id = KernelId::from_bytes(root.kernel_binding_bytes());
+        kernels.push(KernelDescriptorInputV3 {
+            kernel_id: id,
+            logical_name: &root.logical_name,
+            entry_name: &root.export_name,
+            descriptor_symbol: std::str::from_utf8(&row.symbol)
+                .map_err(|_| E::Mismatch("descriptor symbol"))?,
+            source_evidence: row.source,
+            executable_ir_evidence: row.ir,
+            capabilities: &capabilities[..capability_count],
+            abi_layout: KernelAbiLayoutV1::new(
+                root.explicit_argument_bytes,
+                root.explicit_argument_bytes
+                    .checked_add(256)
+                    .ok_or(Resource::Arithmetic)?,
+                root.kernarg_alignment_bytes,
+            )
+            .map_err(E::Validation)?,
+            launch: &row.launch,
+            arguments: &arguments[row.start..row.end],
+        });
+        requirements.push(KernelTargetRequirementsV2::new(
+            id,
+            LdsRequirementsV2::new(0, 0).map_err(E::Validation)?,
+            RequiredWavefrontWidthV2::Wave64,
+            false,
+            SynchronizationRequirementsV2::empty(),
+            AtomicRequirementsV2::empty(),
+        ));
+    }
+    let compiler = CompilerIdentityV1::new(
+        text(RUSTC_CODEGEN_FE2O3_COMPILER_NAME_V1, budget)?,
+        text(env!("CARGO_PKG_VERSION"), budget)?,
+        [0; 20],
+    );
+    let producer = ProducerIdentityV1::new(
+        text(RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1, budget)?,
+        text(producer_version, budget)?,
+    );
+    let target_name = profile.device_target();
+    budget.charge_work(target_name.len())?;
+    let device_target = DeviceTargetV1::new(
+        fe2o3_amd_target::AmdTargetId::parse(target_name)
+            .map_err(|_| E::Mismatch("retained target profile"))?,
+    );
+    let input = DeviceDescriptorTableInputV3 {
+        canonical_code_object_digest: CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        code_object_version: CodeObjectVersion::V6,
+        compiler: &compiler,
+        producer: &producer,
+        device_target,
+        type_records: &sources,
+        layout_records: &layouts,
+        kernels: &kernels,
+        requirements: &requirements,
+    };
+    Ok(consume(input, budget))
 }
 
 #[cfg(test)]
