@@ -12,8 +12,10 @@ sealed objects. They reuse the existing native descriptor and secret-custody
 implementation. Transfer revalidation checks object identity, not just equal
 bytes. Key use pins the complete policy and revalidates the sealed seed before
 and after signing. Seed staging is wiped on success, refusal and unwind.
-Logical resource charges stay on the caller's original account; returned owner
-storage must be reserved separately. These are not RSS or instruction bounds.
+Each operation uses the supplied account and requires prepaid retained inputs;
+the caller must preserve the original account across operations. These primitive
+capabilities do not independently retain a work owner. Returned owner storage
+must be reserved separately. These are not RSS or instruction bounds.
 
 An external-anchor transaction V3 consumes actual policy, request and publication
 V3 owners. Its version-separated 1,874-byte image binds the exact subject,
@@ -64,7 +66,7 @@ the existing bounded cache and private writable runtime directory.
 Each result applies to its named snapshot. Counts overlap and must not be added.
 Confirmed results:
 
-- Full protocol package before the final two additional tests: 188 library and
+- Working tree preceding `a842114bf`, before the final two tests: 188 library and
   integration tests, 68 compile-fail examples and five positive examples passed.
 - At `6d09a242f`: all ten new anchor/currentness tests passed, including exact
   and one-short nested budgets, valid resealed coordinate substitutions,
@@ -75,10 +77,13 @@ Confirmed results:
   examples passed. Four added tests call the actual V3 key receipt/currentness
   operations with same-ledger retention, underpaid inputs, wrong generation and
   stale challenge cases.
-
 - At `daafac70f`: all nine existing native Worker crash/restart/currentness
   regressions passed. These execute the ordinary test consumer, not protected
   process admission or a new V3 deployment.
+- At `a1e48cc17`: locked offline `cargo check --all-targets` passed for the
+  execution client, issuer, broker authority service, closure capabilities,
+  Cargo driver and rustc backend. These are Cargo target kinds, not GPU targets.
+  Existing warnings remain; this is not whole-workspace validation.
 
 Independent source review found no actionable correctness or resource-accounting
 issue in the protocol adapters and tests. An initial Worker regression filter
@@ -109,7 +114,13 @@ The Worker regression log has SHA256:
 2833b571afd687003082ddea22a4f0255b79ff8e24fc9c927beb569e27b8bc8e
 ```
 
-The latest observed public mains are identical at `db351c0df`, ahead of the
+The downstream check log has SHA256:
+
+```text
+7ea87cdefc6172f1fb73ee16406a17f8b9b06fe14979bb555fb84cfef725732c
+```
+
+Both public mains were most recently observed at `e934c1437`, ahead of the
 previous public checkpoint. Normal Git fetch still fails DNS, so these local
 commits are not yet merged with that concurrent work or pushed. GPU SSH name
 resolution also fails. No new remote job or scratch directory was created.
