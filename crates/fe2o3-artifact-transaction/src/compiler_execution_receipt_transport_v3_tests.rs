@@ -456,6 +456,56 @@ fn conditional_receipt_v3_underpaid_input_fails_before_filesystem_or_encoding() 
 }
 
 #[test]
+fn conditional_receipt_v3_underpaid_locked_recovery_keeps_ready_token() {
+    for gfx950 in [false, true] {
+        let mut setup_work = Work::new(usize::MAX);
+        let mut setup_budget = Budget::new(&mut setup_work, LIMIT);
+        let (f, handoff, subject) = setup_profile(gfx950, &mut setup_budget);
+        let receipt = publish_body(&f, &subject, &mut setup_budget).unwrap();
+        let lease = f.lease(handoff, &mut setup_budget);
+        let current = token(&lease, &mut setup_budget);
+        let required = current.storage.0 + lease.storage().0 + SUBJECT_STORAGE;
+        let sidecar = std::fs::read(f.slot().join(ENTRY)).unwrap();
+        // Isolated admission probes, not a production account transfer.
+        for paid in [0, required - 1] {
+            let mut work = Work::new(usize::MAX);
+            let mut budget = Budget::new(&mut work, LIMIT);
+            budget.reserve_storage(paid).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            assert!(matches!(
+                recover_compiler_execution_receipt_transport_with_currentness_v3(
+                    &lease,
+                    &current,
+                    &subject,
+                    &mut budget
+                ),
+                Err(Error::Resource(Resource::Accounting))
+            ));
+            assert_eq!(budget.work(), 8);
+            assert_eq!(budget.storage(), paid);
+            assert_eq!(budget.peak_storage(), paid);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert!(matches!(
+                lease.acquire_current_token(&mut setup_budget),
+                Err(CompilerModuleHandoffErrorV5::Busy)
+            ));
+            assert!(f.slot().join(READY_ENTRY).exists());
+            assert!(f.slot().join(PAYLOAD_ENTRY).exists());
+            assert!(!f.slot().join(CONSUMED_ENTRY).exists());
+            assert_eq!(std::fs::read(f.slot().join(ENTRY)).unwrap(), sidecar);
+        }
+        let (owner, storage) = recover_compiler_execution_receipt_transport_with_currentness_v3(
+            &lease,
+            &current,
+            &subject,
+            &mut setup_budget,
+        )
+        .unwrap();
+        check_owner(owner, storage, receipt, &mut setup_budget);
+    }
+}
+
+#[test]
 fn conditional_receipt_v3_exact_and_one_short_pipeline_budgets() {
     fn run(stage: u8, work_limit: usize, storage_limit: usize) -> (Result<()>, usize, usize) {
         let f = Fixture::new();
