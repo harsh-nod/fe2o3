@@ -38,6 +38,8 @@ const NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3: &[u8] =
     b"FE2O3/STRICT-V3-PROTECTED-WORKER-NOMINAL-DESCRIPTOR-FINALIZATION/V3\0";
 const NOMINAL_FINALIZED_IDENTITY_DOMAIN_V4: &[u8] =
     b"FE2O3/STRICT-V3-PROTECTED-WORKER-NOMINAL-DESCRIPTOR-FINALIZATION/V4\0";
+const NOMINAL_FINALIZED_IDENTITY_DOMAIN_V5: &[u8] =
+    b"FE2O3/STRICT-V3-PROTECTED-WORKER-NOMINAL-DESCRIPTOR-FINALIZATION/V5\0";
 
 /// Stable Worker V3 finalization identity. Descriptor V1 and nominal V3/V4 use
 /// distinct domains; this identity version is not a descriptor schema version.
@@ -690,6 +692,23 @@ pub(crate) fn calculate_nominal_worker_finalized_identity_v4(
     )
 }
 
+pub(crate) fn calculate_nominal_worker_finalized_identity_v5(
+    raw: &InspectedProtectedWorkerV3HsacoV1,
+    finalized: &crate::FinalizedNominalHsacoV5,
+    output: ContentIdentityV1,
+    descriptor: ContentIdentityV1,
+) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
+    calculate_worker_finalized_identity(
+        raw,
+        finalized.as_bytes(),
+        finalized.digest(),
+        output,
+        finalized.descriptor_bytes(),
+        descriptor,
+        NOMINAL_FINALIZED_IDENTITY_DOMAIN_V5,
+    )
+}
+
 fn calculate_worker_finalized_identity(
     raw: &InspectedProtectedWorkerV3HsacoV1,
     finalized_bytes: &[u8],
@@ -947,6 +966,23 @@ mod v3_tests {
             v4,
             calculate_finalized_identity_in_domain(&preimage, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3)
         );
+        assert_eq!(
+            NOMINAL_FINALIZED_IDENTITY_DOMAIN_V5,
+            b"FE2O3/STRICT-V3-PROTECTED-WORKER-NOMINAL-DESCRIPTOR-FINALIZATION/V5\0"
+        );
+        let v5 =
+            calculate_finalized_identity_in_domain(&preimage, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V5);
+        assert_eq!(
+            v5,
+            calculate_finalized_identity_in_domain(&preimage, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V5)
+        );
+        assert_ne!(v5, [0; 32]);
+        assert_ne!(v5, first);
+        assert_ne!(v5, v4);
+        assert_ne!(
+            v5,
+            calculate_finalized_identity_in_domain(&preimage, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3)
+        );
     }
 
     #[test]
@@ -957,6 +993,8 @@ mod v3_tests {
             calculate_finalized_identity_in_domain(&base, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3);
         let conditional =
             calculate_finalized_identity_in_domain(&base, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V4);
+        let conditional_v5 =
+            calculate_finalized_identity_in_domain(&base, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V5);
         macro_rules! assert_axis {
             ($field:ident, $value:expr) => {{
                 let mut changed = base.clone();
@@ -983,6 +1021,15 @@ mod v3_tests {
                     ),
                     conditional,
                     "conditional finalization identity omitted {}",
+                    stringify!($field)
+                );
+                assert_ne!(
+                    calculate_finalized_identity_in_domain(
+                        &changed,
+                        NOMINAL_FINALIZED_IDENTITY_DOMAIN_V5
+                    ),
+                    conditional_v5,
+                    "V5 conditional finalization identity omitted {}",
                     stringify!($field)
                 );
             }};

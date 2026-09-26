@@ -28,6 +28,8 @@ mod nominal;
 use nominal::RecoveredPublicationRef;
 #[path = "nominal_worker_publication_v4.rs"]
 mod nominal_v4;
+#[path = "nominal_worker_publication_v5.rs"]
+mod nominal_v5;
 pub use nominal::{
     PreparedNominalWorkerPublicationV3, PublishedNominalWorkerHsacoV3,
     RecoveredNominalWorkerPublicationV3, persist_prepared_nominal_worker_publication_v3,
@@ -38,6 +40,11 @@ pub use nominal_v4::{
     PreparedNominalWorkerPublicationV4, RecoveredNominalWorkerPublicationV4,
     persist_prepared_nominal_worker_publication_v4, prepare_nominal_worker_publication_v4,
     recover_nominal_worker_publication_v4,
+};
+pub use nominal_v5::{
+    PreparedNominalWorkerPublicationV5, RecoveredNominalWorkerPublicationV5,
+    persist_prepared_nominal_worker_publication_v5, prepare_nominal_worker_publication_v5,
+    recover_nominal_worker_publication_v5,
 };
 
 use crate::{
@@ -549,6 +556,8 @@ pub enum WorkerV3HsacoPublicationErrorV1 {
     NominalFinalization(crate::NominalWorkerFinalizationErrorV3<std::convert::Infallible>),
     NominalArtifactV4(crate::NominalFinalizationErrorV4<std::convert::Infallible>),
     NominalFinalizationV4(crate::NominalWorkerFinalizationErrorV4<std::convert::Infallible>),
+    NominalArtifactV5(crate::NominalFinalizationErrorV5<std::convert::Infallible>),
+    NominalFinalizationV5(crate::NominalWorkerFinalizationErrorV5<std::convert::Infallible>),
     ProducerIdentityMismatch,
     CompilerClosureMismatch,
     MissingExactFinalizerDerivation,
@@ -585,6 +594,8 @@ impl fmt::Display for WorkerV3HsacoPublicationErrorV1 {
             Self::NominalFinalization(error) => error.fmt(formatter),
             Self::NominalArtifactV4(error) => error.fmt(formatter),
             Self::NominalFinalizationV4(error) => error.fmt(formatter),
+            Self::NominalArtifactV5(error) => error.fmt(formatter),
+            Self::NominalFinalizationV5(error) => error.fmt(formatter),
             Self::ProducerIdentityMismatch => {
                 formatter.write_str("V3 publication producer differs from the prepared producer")
             }
@@ -641,6 +652,8 @@ impl Error for WorkerV3HsacoPublicationErrorV1 {
             Self::NominalFinalization(error) => Some(error),
             Self::NominalArtifactV4(error) => Some(error),
             Self::NominalFinalizationV4(error) => Some(error),
+            Self::NominalArtifactV5(error) => Some(error),
+            Self::NominalFinalizationV5(error) => Some(error),
             Self::CompactReplay(error) => Some(error),
             Self::Storage(error) => Some(error),
             Self::PublicationBinding(error) => Some(error),
@@ -1060,6 +1073,14 @@ fn validate_finalizer_replay_components<P: FinalizerProviderPayloadV1>(
             )
             .map_err(WorkerV3HsacoPublicationErrorV1::NominalFinalizationV4)?,
         ),
+        DescriptorSchema::NominalV5 => FinalizedOwner::NominalV5(
+            crate::finalize_protected_worker_nominal_hsaco_v5(
+                source,
+                crate::NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V5,
+                &mut |_| Ok::<_, std::convert::Infallible>(()),
+            )
+            .map_err(WorkerV3HsacoPublicationErrorV1::NominalFinalizationV5)?,
+        ),
     };
     let view = finalized.view();
     if view.raw().exact_bytes() != raw_hsaco {
@@ -1144,6 +1165,7 @@ fn derive_revalidated_finalizer_derivation(
             DescriptorSchema::V1 => 1,
             DescriptorSchema::NominalV3 => 3,
             DescriptorSchema::NominalV4 => 4,
+            DescriptorSchema::NominalV5 => 5,
         },
     }
 }
