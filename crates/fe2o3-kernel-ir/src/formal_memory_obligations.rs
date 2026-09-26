@@ -13,6 +13,8 @@ use crate::{
 };
 
 mod complete_body_v19;
+#[cfg(test)]
+mod distinct_invocation_v1_tests;
 mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
 mod ordered_composition_v1;
@@ -2014,7 +2016,9 @@ fn proves_distinct_invocation_disjointness(
     left: &FormalMemoryAccess,
     right: &FormalMemoryAccess,
 ) -> bool {
-    if left.invocations.last() == 0 || right.invocations.last() == 0 {
+    // Only the same singleton on both sides excludes every distinct invocation pair.
+    if left.invocations == right.invocations && left.invocations.start() == left.invocations.last()
+    {
         return true;
     }
     if left.byte_offset == right.byte_offset && left.byte_width == right.byte_width {

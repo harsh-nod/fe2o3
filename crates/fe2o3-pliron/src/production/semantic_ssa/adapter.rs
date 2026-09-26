@@ -576,6 +576,12 @@ fn compiler_intrinsic_accepts_transparent_borrow_v1(
                 ..
             },
         ) => argument == 0 && source_type == *context,
+        SemanticCompilerIntrinsicOperationV1::Execution(
+            fe2o3_mir_model::semantic_mir_v1::SemanticExecutionOperationV29::MaskedTileLoadU32 {
+                workgroup,
+                ..
+            },
+        ) => argument == 0 && source_type == *workgroup,
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent { scope, .. }
         | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { scope, .. } => {
             argument == 0 && source_type == *scope

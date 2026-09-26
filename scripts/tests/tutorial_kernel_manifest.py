@@ -455,6 +455,10 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         report = json.loads(result.stdout)
         self.assertEqual(report["schema"], "fe2o3-tutorial-kernel-pair-obligations-v2")
         identities = report["kernelInventory"]
+        for counts in (report, identities):
+            self.assertEqual(counts["knownVariantObligationCount"], 123)
+            self.assertEqual(counts["pendingVariantCount"], 121)
+            self.assertEqual(counts["unregisteredDisplayItemCount"], 27)
         self.assertIs(identities["runtimeCensusValidated"], False)
         self.assertEqual(identities["knownKernelIdentityCount"], 61)
         self.assertEqual(identities["negativeCaseCount"], 3)
@@ -623,6 +627,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         report = self.kernel_pair_report()
         self.assertEqual(report["schema"], "fe2o3-tutorial-kernel-pair-obligations-v1")
         self.assertNotIn("kernelInventory", report)
+        for key in ("knownVariantObligationCount", "pendingVariantCount", "unregisteredDisplayItemCount"):
+            self.assertNotIn(key, report)
         self.assertIs(report["inventoryComplete"], False)
         self.assertIsNone(report["requiredPairCount"])
 
