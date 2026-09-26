@@ -3,7 +3,10 @@
 This continues [the component checkpoint](cpu-bound-conditional-components-20260926.md).
 It is not 47/47 completion. All [#272](https://github.com/harsh-nod/fe2o3/issues/272)
 milestones remain open. Conditional production compilation still refuses before
-native output, publication, load and safe GPU launch.
+publication, load and safe GPU launch. The later
+[native handoff checkpoint](conditional-native-handoff-20260926.md) adds internal
+inert native assembly, recovery and execution-subject binding; it does not open
+those authority gates. Results below remain tied to their earlier snapshots.
 
 Latest local checkpoint: `9bf3bdded` passed 606 filtered library tests and all
 269 documentation tests across the backend, verifier, lowerer and AMD model.

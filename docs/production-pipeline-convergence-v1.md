@@ -248,6 +248,13 @@ bytes after payload deletion. One move-only buffer retains the body, with actual
 capacity charged and all native postcommit readback work prepaid. This is inert
 transport, not protected issuance or an activated production consumer.
 
+The separate [conditional V5 checkpoint](evidence/conditional-native-handoff-20260926.md)
+adds CPU-bound source/history packing, independent conditional recovery and its
+distinct execution SubjectV3. The normal conditional entry still refuses before
+publication. It cannot reuse the ordinary V4/SubjectV2 family as authority;
+protected acquisition, parent intake, Worker/finalizer and safe launch remain
+required integration work.
+
 The [native Worker adapter](../crates/fe2o3-hsaco-finalize/README.md#native-sourcef-worker-integration)
 now borrows the locked recovered token for preflight and consumes that exact
 occurrence through the existing candidate/replay engine. Its separate identity
