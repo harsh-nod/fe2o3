@@ -5,6 +5,21 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Checked helper query and final debugger startup — 2026-09-26
+
+The [source-owned nominal query](bf16-nominal-helper-query-qualification-20260926.md)
+now joins an actual retained Rust helper call to its canonical owner, ordered
+BF16/F32 components and return layout on the original bounded ledger.
+The merged gate passed 8,783 test executions with zero failures, including
+five fresh helper source sessions and historical/root-only compatibility.
+Normal helper ranked/formal/LLVM continuation remains unfinished.
+
+The [final debugger startup checkpoint](final-debugger-startup-qualification-20260926.md)
+records actual final-build MI2 startup and independently reviewed loaded files
+and cleanup. Consumer controls passed, but runtime bindings remain disabled.
+No target, physical capture or GPU dispatch was performed. Accepted broad exits
+remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Genuine Rust BF16 helper emission and CPU observation — 2026-09-26
 
 The [source-owned helper checkpoint](bf16-helper-source-cpu-qualification-20260926.md)

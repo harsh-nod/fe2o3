@@ -87,6 +87,7 @@ include!("production_bf16_call_coverage_v1.rs");
 include!("production_bf16_call_resources_v1.rs");
 include!("production_bf16_call_emission_v1.rs");
 include!("production_bf16_call_emission_view_v1.rs");
+include!("production_bf16_call_query_v1.rs");
 #[cfg(test)]
 #[path = "production_bf16_call_emission_v1_tests.rs"]
 mod bf16_call_emission_tests_v1;

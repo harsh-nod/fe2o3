@@ -4,6 +4,8 @@ use fe2o3_lower_mir_kernel::{
     Bf16CallInstanceEmissionViewV1, ProductionPreRankedKirOwnerV1, ProductionSemanticKirLimitsV1,
 };
 use std::cell::Cell;
+#[path = "bf16_nominal_call_query_v1_tests.rs"]
+mod nominal_call_query;
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 pub(crate) struct CpuPhase {
@@ -91,6 +93,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                                     {
                                         return Err(Error::Unavailable("genuine source/emission owner join"));
                                     }
+                                    nominal_call_query::inspect(&owner, relation, budget)?;
                                     source_seed.with_relation(relation, budget, |source, budget| {
                                         inspect(source, &emission, budget)
                                     })

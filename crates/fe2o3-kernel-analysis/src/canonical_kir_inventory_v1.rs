@@ -212,6 +212,37 @@ impl<'g> CanonicalKirInventoryV1<'g> {
         result.map(|inventory| (inventory, CanonicalKirInventoryStorageV1 { retained }))
     }
 
+    /// Recompute this exact inventory's logical retained receipt from immutable
+    /// row/index lengths. Names/types/operations are borrowed, not copied; their
+    /// bytes remain in the connected owner's separate reservation.
+    /// This adds no reservation and changes no derive/allocation semantics.
+    /// The fixed thirteen vector headers are charged before inspection.
+    pub fn retained_storage_v1(&self, budget: &mut Budget<'_>) -> Result<usize> {
+        budget.charge_work(14)?;
+        let mut bytes = size_of::<Self>();
+        macro_rules! retained {
+            ($rows:expr) => {
+                bytes = bytes
+                    .checked_add(retained_row_storage($rows)?)
+                    .ok_or(Resource::Arithmetic)?;
+            };
+        }
+        retained!(&self.functions);
+        retained!(&self.blocks);
+        retained!(&self.definitions);
+        retained!(&self.operations);
+        retained!(&self.uses);
+        retained!(&self.edges);
+        retained!(&self.edge_arguments);
+        retained!(&self.effects);
+        retained!(&self.calls);
+        retained!(&self.kernels);
+        retained!(&self.function_index);
+        retained!(&self.block_index);
+        retained!(&self.value_index);
+        Ok(bytes)
+    }
+
     pub const fn owner(&self) -> &'g VerifiedCanonicalKernelIrModuleV12 {
         self.owner
     }
@@ -757,16 +788,20 @@ fn census(owner: &VerifiedCanonicalKernelIrModuleV12, budget: &mut Budget<'_>) -
 fn ordinal(value: usize) -> Result<u32> {
     u32::try_from(value).map_err(|_| Resource::Arithmetic.into())
 }
+fn row_storage<T>(count: usize) -> Result<usize> {
+    count
+        .checked_mul(size_of::<T>())
+        .ok_or(Resource::Arithmetic.into())
+}
+fn retained_row_storage<T>(rows: &[T]) -> Result<usize> {
+    row_storage::<T>(rows.len())
+}
 fn allocate<T>(count: usize, budget: &mut Budget<'_>) -> Result<Vec<T>> {
     if count == 0 {
         return Ok(Vec::new());
     }
     budget.charge_work(1)?;
-    budget.reserve_storage(
-        count
-            .checked_mul(size_of::<T>())
-            .ok_or(Resource::Arithmetic)?,
-    )?;
+    budget.reserve_storage(row_storage::<T>(count)?)?;
     let mut values = Vec::new();
     values
         .try_reserve_exact(count)
