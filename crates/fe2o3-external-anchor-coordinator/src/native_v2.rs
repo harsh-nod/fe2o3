@@ -10,6 +10,9 @@ use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_WORK_V2 as DEPLOYMENT_WORK,
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_STORAGE_V2 as PROVISIONING_STORAGE,
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_WORK_V2 as PROVISIONING_WORK,
+    CompilerExecutionExternalAnchorDeploymentIdentityV2 as TransferDeploymentIdentity,
+    CompilerExecutionIssuerPolicyIdentityV2 as TransferPolicyIdentity,
+    CompilerExecutionSupervisorDeploymentIdentityV2 as TransferSupervisorIdentity,
 };
 #[cfg(test)]
 use fe2o3_compiler_execution_protocol::{
@@ -25,3 +28,11 @@ crate::native_launch_adapter::launch!(
     "2",
     "3"
 );
+crate::native_transfer_adapter::transfer!(
+    RootManagedExternalAnchorV2,
+    ExternalAnchorSupervisorTransferV2,
+    "2",
+    "3"
+);
+#[cfg(test)]
+type TransferFixture = ExternalAnchorSupervisorTransferV2;

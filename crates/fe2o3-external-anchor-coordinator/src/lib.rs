@@ -9,6 +9,7 @@ mod native;
 mod native_adapter;
 mod native_launch;
 mod native_launch_adapter;
+mod native_transfer_adapter;
 mod native_v2;
 mod native_v3;
 pub use native::{
@@ -18,8 +19,17 @@ pub use native::{
 pub use native_launch::{
     ExternalAnchorLaunchErrorV2, ExternalAnchorLaunchQuotaV2, ExternalAnchorLaunchStorageV2,
 };
-pub use native_v2::{PreparedExternalAnchorOccurrenceV2, RootManagedExternalAnchorV2};
-pub use native_v3::{PreparedExternalAnchorOccurrenceV3, RootManagedExternalAnchorV3};
+pub use native_transfer_adapter::{
+    ExternalAnchorSupervisorTransferQuotaV2, ExternalAnchorSupervisorTransferStorageV2,
+};
+pub use native_v2::{
+    ExternalAnchorSupervisorTransferV2, PreparedExternalAnchorOccurrenceV2,
+    RootManagedExternalAnchorV2,
+};
+pub use native_v3::{
+    ExternalAnchorSupervisorTransferV3, PreparedExternalAnchorOccurrenceV3,
+    RootManagedExternalAnchorV3,
+};
 
 use std::error::Error;
 use std::fmt;

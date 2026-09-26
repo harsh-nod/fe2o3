@@ -12,6 +12,7 @@ use std::{
 };
 
 include!("native_launch_cases_tests.rs");
+include!("native_transfer_cases_tests.rs");
 
 const LIMIT: usize = 1 << 34;
 fn public(seed: u8) -> [u8; 32] {
