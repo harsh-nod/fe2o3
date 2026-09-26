@@ -91,6 +91,8 @@ mod multi_allocation;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_state;
+mod cooperative_sdma;
+use cooperative_sdma::CooperativeSdmaLeafV1;
 mod scale_capacity;
 use scale_capacity::{RuntimeDispatchCapacityV1, RuntimeDispatchStateV1};
 #[cfg(feature = "hardware-diagnostic")]
@@ -7102,7 +7104,7 @@ struct RoutedHandleV1 {
 #[derive(Debug)]
 enum RoutedSubmissionV1 {
     Native { route: RoutedHandleV1, stream: u64 },
-    CooperativeCopy(CooperativeCopySubmissionV1),
+    CooperativeCopy(Box<CooperativeCopySubmissionV1>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -7139,6 +7141,8 @@ struct CooperativeCopySubmissionV1 {
     dependency_cursor: usize,
     dependency_depth: usize,
     staging: Vec<u8>,
+    scratch_byte_len: u64,
+    sdma_leaf: Option<CooperativeSdmaLeafV1>,
     phase: CooperativeCopyPhaseV1,
     byte_cursor: usize,
 }
@@ -8536,17 +8540,28 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 unreachable!("validated cooperative copy changed kind")
             };
             debug_assert!(!copy.is_quiescent());
+            assert!(
+                copy.sdma_leaf
+                    .as_ref()
+                    .is_none_or(|leaf| leaf.is_quiescent(&self.children[leaf.child()])),
+                "cooperative SDMA custody remains live"
+            );
             copy.phase = phase;
             let staging = core::mem::take(&mut copy.staging);
             let released_staging_bytes = u64::try_from(staging.len())
                 .expect("cooperative staging length was admitted as u64");
             debug_assert_eq!(released_staging_bytes, copy.source_region.byte_len);
+            let released_scratch = if copy.sdma_leaf.is_none() {
+                core::mem::take(&mut copy.scratch_byte_len)
+            } else {
+                0
+            };
             (
                 copy.stream,
                 copy.source,
                 copy.destination,
                 core::mem::take(&mut copy.dependencies),
-                released_staging_bytes,
+                released_staging_bytes + released_scratch,
                 copy.status(),
             )
         };
@@ -8572,6 +8587,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             stream,
             "pending cooperative stream retain count is indexed",
         );
+        if phase == CooperativeCopyPhaseV1::Cancelled {
+            self.restore_cooperative_stream_tail_v1(submission);
+        }
         self.note_cooperative_progress();
         status
     }
@@ -8599,6 +8617,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             if copy.is_quiescent() {
                 assert!(copy.dependencies.is_empty());
                 assert!(copy.staging.is_empty());
+                if let Some(leaf) = &copy.sdma_leaf {
+                    assert!(leaf.is_quiescent(&self.children[leaf.child()]));
+                } else {
+                    assert_eq!(copy.scratch_byte_len, 0);
+                }
+                expected_staging_bytes += copy.scratch_byte_len;
                 continue;
             }
             assert!(copy.dependency_cursor <= copy.dependencies.len());
@@ -8608,6 +8632,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             );
             expected_staging_bytes = expected_staging_bytes
                 .checked_add(copy.source_region.byte_len)
+                .and_then(|total| total.checked_add(copy.scratch_byte_len))
                 .unwrap();
             expected_allocation_owners
                 .entry(copy.source)
@@ -8740,11 +8765,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
 
     /// Advances at most one cooperative host-staging transition.
     ///
-    /// This is cooperative host progress, not background DMA. Submission is
-    /// nonblocking because no child allocation access occurs before this path.
-    /// A read/write transition issues one child range request of at most 64 KiB,
-    /// but that child may first reconcile allocation-wide native-dirty or copy-
-    /// on-write state; this is not a strict host-work or latency bound.
+    /// Submission and public observers never drive these leaves. Authoritative
+    /// DeviceLocal backing uses private child SDMA copies in 64-KiB chunks;
+    /// scratch and DMA custody survive every Pending observation. Native-dirty
+    /// reconciliation still uses the synchronous child host-transfer fallback,
+    /// so this is not the directed SPI's strict no-wait progress contract.
     fn progress_cooperative_copy(
         &mut self,
         submission: u64,
@@ -8755,7 +8780,14 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         if let Some(oldest) = self.oldest_pending_cooperative_dependency(submission)?
             && oldest != submission
         {
-            self.progress_cooperative_copy(oldest)?;
+            if let Err(failure) = self.progress_cooperative_copy(oldest) {
+                if matches!(failure, RuntimeBackendFailureV1::Quiescent(_)) {
+                    // Settle the complete selected path, including intermediate
+                    // copies that would otherwise be stranded behind a failed tail.
+                    self.fail_cooperative_dependency_path_v1(submission, oldest)?;
+                }
+                return Err(failure);
+            }
             return Ok(BackendPollV1::Pending);
         }
         let phase = match self.submissions.get(&submission).ok_or_else(|| {
@@ -8772,6 +8804,14 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 ));
             }
         };
+
+        if matches!(
+            phase,
+            CooperativeCopyPhaseV1::Read | CooperativeCopyPhaseV1::Write
+        ) && self.cooperative_sdma_leaf_is_selected_v1(submission)
+        {
+            return self.progress_cooperative_sdma_leaf_v1(submission);
+        }
 
         match phase {
             CooperativeCopyPhaseV1::Succeeded
@@ -9015,14 +9055,6 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "cooperative copy range exceeds its routed allocation",
             ));
         }
-        if self.children[source_route.child].allocation_is_active(source_route.local)
-            || self.children[destination_route.child].allocation_is_active(destination_route.local)
-        {
-            return Err(KfdRuntimeBackendV1::rejected(
-                KfdRuntimeBackendErrorKindV1::Busy,
-                "cooperative copy allocation is retained by an active native dispatch",
-            ));
-        }
         let len = usize::try_from(source.byte_len)
             .map_err(|_| KfdRuntimeBackendV1::capacity("copy staging size overflow"))?;
         let stream_tail = self.cooperative_stream_tails.get(&stream).copied();
@@ -9128,9 +9160,29 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             ));
         }
 
+        for route in [source_route, destination_route] {
+            if !self.cooperative_native_custody_is_ordered_v1(route, stream, &dependency_set) {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::Busy,
+                    "cooperative copy allocation has unrelated native custody",
+                ));
+            }
+        }
+
+        let scratch_byte_len = if [source_route, destination_route].into_iter().any(|route| {
+            let child = &self.children[route.child];
+            child.native_available
+                && child.allocations[&route.local].kind == RuntimeMemoryKindV1::DeviceLocal
+        }) {
+            source.byte_len.min(COOPERATIVE_COPY_CHUNK_BYTES_V1 as u64)
+        } else {
+            0
+        };
+
         let next_cooperative_staging_bytes = self
             .cooperative_staging_bytes
             .checked_add(source.byte_len)
+            .and_then(|total| total.checked_add(scratch_byte_len))
             .filter(|total| *total <= self.cooperative_staging_limit_bytes)
             .ok_or_else(|| {
                 KfdRuntimeBackendV1::capacity(
@@ -9239,6 +9291,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             "multi-device copy submission route allocation failed",
         )?;
         let staging = try_zeroed_staging_v1(len)?;
+        let copy_shell = try_uninit_box_v1().map_err(|()| {
+            KfdRuntimeBackendV1::capacity("cooperative copy owner allocation failed")
+        })?;
         let id = self.next_id()?;
 
         if let Some(owners) = self.cooperative_allocation_owners.get_mut(&source_route) {
@@ -9282,20 +9337,25 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         self.cooperative_staging_bytes = next_cooperative_staging_bytes;
         self.submissions.insert(
             id,
-            RoutedSubmissionV1::CooperativeCopy(CooperativeCopySubmissionV1 {
-                stream,
-                prior_stream_submission: stream_tail,
-                source: source_route,
-                source_region: source,
-                destination: destination_route,
-                destination_region: destination,
-                dependencies: dependency_submissions,
-                dependency_cursor: 0,
-                dependency_depth,
-                staging,
-                phase: CooperativeCopyPhaseV1::Dependencies,
-                byte_cursor: 0,
-            }),
+            RoutedSubmissionV1::CooperativeCopy(Box::write(
+                copy_shell,
+                CooperativeCopySubmissionV1 {
+                    stream,
+                    prior_stream_submission: stream_tail,
+                    source: source_route,
+                    source_region: source,
+                    destination: destination_route,
+                    destination_region: destination,
+                    dependencies: dependency_submissions,
+                    dependency_cursor: 0,
+                    dependency_depth,
+                    staging,
+                    scratch_byte_len,
+                    sdma_leaf: None,
+                    phase: CooperativeCopyPhaseV1::Dependencies,
+                    byte_cursor: 0,
+                },
+            )),
         );
         Ok(id)
     }
@@ -12077,6 +12137,9 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 "cooperative copy submission is pending",
             ));
         }
+        if cooperative_stream.is_some() {
+            self.release_cooperative_sdma_leaf_v1(submission)?;
+        }
         if let Some(route) = native_route {
             let result = self.children[route.child].release_submission_v1(route.local);
             self.latch(result)?;
@@ -13285,23 +13348,10 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             });
         }
 
-        let (stream, prior) = match &self.submissions[&submission] {
-            RoutedSubmissionV1::CooperativeCopy(copy) => {
-                (copy.stream, copy.prior_stream_submission)
-            }
-            RoutedSubmissionV1::Native { .. } => unreachable!(),
-        };
-        self.finish_cooperative_copy(submission, CooperativeCopyPhaseV1::Cancelled);
-        if self.cooperative_stream_tails.get(&stream) == Some(&submission) {
-            match prior {
-                Some(prior) => {
-                    self.cooperative_stream_tails.insert(stream, prior);
-                }
-                None => {
-                    self.cooperative_stream_tails.remove(&stream);
-                }
-            }
+        if !self.cancel_cooperative_sdma_leaf_v1(submission)? {
+            return Ok(crate::BackendCancellationV1::TooLate);
         }
+        self.finish_cooperative_copy(submission, CooperativeCopyPhaseV1::Cancelled);
         Ok(crate::BackendCancellationV1::Cancelled)
     }
 
@@ -13428,6 +13478,7 @@ mod retained_release_tests;
 
 #[cfg(test)]
 mod tests {
+    mod cooperative_sdma_tests;
     #[cfg(feature = "hardware-diagnostic")]
     mod directional_wait_diagnostic_tests;
     mod native_xgmi_creation_tests;

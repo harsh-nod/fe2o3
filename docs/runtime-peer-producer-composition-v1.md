@@ -49,8 +49,8 @@ formal-refinement, native-correctness or performance result.
 ## Pending Composition Work
 
 1. Add an explicit directed-copy contract to the multi-device router, which
-   currently exposes only ordinary cooperative copies. First replace its blocking
-   DeviceLocal host-transfer leaves with resumable child SDMA operations as
+   currently exposes only ordinary cooperative copies. Finish resumable
+   native-dirty preparation on top of the authoritative-backing child SDMA leaves
    described below. Then admit directed peer parents with their existing
    success-gated state, preserving one graph-wide depth bound. Ordinary pending
    peers need an explicit compatible completion contract before admission, not
@@ -75,17 +75,29 @@ formal-refinement, native-correctness or performance result.
 
 ## Nonblocking Transport Prerequisite
 
-The existing cooperative Read/Write phases call public child host-transfer APIs.
-Those can execute synchronous directional SDMA with a 30-second wait. A wrapper
-around that state machine would violate the directed SPI's no-wait contract,
-even with bounded dependency selection and 64-KiB range requests.
+Cooperative Read/Write phases now use the child's asynchronous copy ledger when
+DeviceLocal DMA backing is authoritative. Each phase retains a private
+HostVisible scratch allocation, logical stream and exact child submission.
+Scratch is at most 64 KiB and is reused across chunks. All source chunks are
+captured before any destination chunk is written. Public poll/wait remain
+observational; flush/drain drive publication, observation, readback and disposal.
+A clean private Ready head uses exact child progress, not a blocking stream flush.
+One flush can now return while a DeviceLocal leaf is Pending; callers must use
+drain or further explicit flushes to advance subsequent chunks and phases.
 
-The child asynchronous copy ledger already owns submission, observation,
-retirement and failure custody. Reuse those real submissions with retained,
-accounted private host staging and child streams. Outer D2H/H2D phases must
-retain the exact child operation through completion and cancellation; dropping
-a public event must not release either owner. Publication and observation must
-remain separate bounded actions, without calling the blocking child flush path.
+The router reserves one scratch window in addition to its full-copy Vec budget.
+Composed request mode charges the exact selected child account before backing
+effects. Scratch handles never enter the router's public handle tables. Ordered
+successors remain admissible while a predecessor's private DMA is live; every
+conflicting native custody owner must match that exact allowed predecessor.
+Published DMA cannot be cancelled or have its allocations released.
+
+Recoverable scratch disposal failure conclusively fails the copy and the selected
+dependent path. Only quiescent private cleanup custody and its charge remain;
+submission release retries disposal, never resumes destination writes. Terminal
+failure or unwind retains all potentially live custody and seals the router.
+This is development implementation, not native or formal qualification of the
+new cooperative adapter or positive native composed-account execution.
 
 Two dirty states have different authority. `sdma_shadow_dirty` means persistent
 DMA backing is authoritative and its CPU shadow may be stale. It no longer
@@ -94,5 +106,18 @@ The existing H2D compute-ready promotion still rejects dirty source shadows.
 `native_dirty` means separately materialized compute data must be reconciled;
 it still prevents immediate publication. That reconciliation needs bounded
 recycled-data reads and asynchronous uploads retaining exact extent/generation
-authority until success. This preparation and router integration remain open;
-no broad directed router support or latency improvement is established here.
+authority until success. That path still falls back to public child host-transfer
+APIs, which can wait synchronously for directional SDMA for up to 30 seconds.
+Resumable native-dirty preparation remains open; wrapping the current router in
+the directed SPI would still violate its no-wait contract. No broad directed
+router support, pending peer-to-compute admission or measured latency improvement
+is established here.
+
+Resumable reconciliation must capture the recycled dispatch generation once and
+pin its lane against replay, rebind and detach until settlement. The current
+synchronous path fetches the lane's current generation on entry; doing that on
+every resume could read a different dispatch. Reconciliation uploads need a
+private, exact-root SDMA purpose authenticating scratch, destination interval,
+descriptor and captured generation. Clearing dirty extents early or adding a
+general `skip_dirty` flag is not an acceptable substitute. Retire each upload
+before advancing its cursor, and remove only the fully reconciled extent.
