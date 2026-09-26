@@ -1669,11 +1669,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         stream: RuntimeStreamIdV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
-        let submissions: Vec<_> = self
+        let mut submissions: Vec<_> = self
             .submissions
             .iter()
             .filter_map(|(id, record)| (record.stream == stream).then_some(*id))
             .collect();
+        submissions.sort_unstable();
         for submission in submissions {
             self.transition_submission_status(
                 submission,
@@ -3839,6 +3840,7 @@ mod tests {
     mod peer_directed_tests;
     mod peer_segments_tests;
     mod producer_launch_tests;
+    mod quiescence_order_tests;
     mod submission_identity_tests;
     mod version_journal_tests;
 
