@@ -39,6 +39,15 @@ pub(super) fn observe_prepared_dense(
         source.source_call(),
         budget,
     )?;
+    super::bf16_nominal_source_preparation_v1::observe_root_source_preparation_for_test_v1(
+        owner,
+        inventory,
+        source.root(),
+        source.root(),
+        source.call_block(),
+        source.source_call(),
+        budget,
+    )?;
     assert_eq!(budget.storage(), entry);
     Ok(())
 }
@@ -281,5 +290,15 @@ pub(super) fn inspect_dense_final_controls(
     budget: &mut Budget<'_>,
 ) -> Result<()> {
     final_controls::inspect(owner, source, inventory, inventory_storage, budget)?;
-    final_candidate::controls(owner, source, inventory, inventory_storage, budget)
+    final_candidate::controls(owner, source, inventory, inventory_storage, budget)?;
+    super::bf16_nominal_source_preparation_v1::root_source_preparation_controls_for_test_v1(
+        owner,
+        inventory,
+        inventory_storage,
+        source.root(),
+        source.root(),
+        source.call_block(),
+        source.source_call(),
+        budget,
+    )
 }

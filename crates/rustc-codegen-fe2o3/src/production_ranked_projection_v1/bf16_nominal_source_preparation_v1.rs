@@ -73,6 +73,18 @@ pub(super) use rich_source_preparation_v1::{
     rich_frame_for_test_v1, with_rich_tables_for_test_v1,
 };
 
+#[path = "bf16_nominal_root_source_preparation_v1.rs"]
+mod root_source_preparation_v1;
+#[allow(unused_imports)]
+pub(super) use root_source_preparation_v1::{
+    NominalRootSourceTablesV1, with_nominal_root_source_preparation_v1,
+};
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(super) use root_source_preparation_v1::{
+    observe_root_source_preparation_for_test_v1, root_source_preparation_controls_for_test_v1,
+};
+
 fn prepare(
     callables: &[SemanticCallableDeclV1],
     types: &[SemanticTypeDeclV1],

@@ -5,6 +5,16 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Joined root-source preparation — 2026-09-26
+
+The [joined root-source checkpoint](bf16-helper-root-source-qualification-20260926.md)
+retains the actual complete-CFG induction report and rich tables on the original
+ledger. All 331 model tests, 2,460 backend tests and five fresh Rust-kernel
+sessions passed. An independently qualified lossless comparison rehashed both
+459-file dependency trees and confirmed unchanged numerical, mask, refusal,
+storage and peak results. Full root/ranked/formal/LLVM continuation and live
+debugger qualification remain open; broad accepted exits remain **6/18**.
+
 ## Strict induction resources and bounded debugger failure observations — 2026-09-26
 
 The [induction model checkpoint](bf16-helper-induction-resources-qualification-20260926.md)
