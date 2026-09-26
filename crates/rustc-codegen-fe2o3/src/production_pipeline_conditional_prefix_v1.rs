@@ -170,7 +170,20 @@ impl RankedVerifiedProductionCompilation {
     ) -> ProductionPipelineError {
         conditional_refusal(budget, |budget| {
             let prefix = self.prepare_conditional_prefix_for_f_v1(limits, budget)?;
-            Ok(prefix.into_finalizer_error_v1(budget))
+            if prefix
+                .preparation
+                .bindings
+                .transaction
+                .compiler_custody
+                .is_extraction_only()
+            {
+                // Source/F fixtures do not possess protected compiler custody.
+                return Ok(prefix.into_finalizer_error_v1(budget));
+            }
+            let native = bridge::native::prepare(prefix, budget).map_err(|error| {
+                ProductionPipelineError::conditional_final_bridge_v1(bridge::Error::Native(error))
+            })?;
+            Ok(native.into_finalizer_error(budget))
         })
     }
 }

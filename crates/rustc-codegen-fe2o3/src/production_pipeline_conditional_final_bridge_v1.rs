@@ -44,6 +44,9 @@ use fe2o3_verifier::{
 };
 use std::{convert::Infallible, fmt, mem::size_of};
 
+#[path = "production_pipeline_conditional_native_handoff_v5.rs"]
+pub(super) mod native;
+
 /// Typed but terminal: no source chain for ordinary refund classifiers.
 #[derive(Debug)]
 pub(crate) enum Error {
@@ -60,6 +63,7 @@ pub(crate) enum Error {
     Text(ConditionalModuleErrorV5),
     Composition(NativeConditionalFinalErrorV2),
     Lineage(ProductionTargetLineageErrorV3),
+    Native(native::Error),
     Mismatch(&'static str),
 }
 impl From<Resource> for Error {
@@ -88,6 +92,7 @@ impl fmt::Display for Error {
             Self::Text(e) => ("text", e),
             Self::Composition(e) => ("composition", e),
             Self::Lineage(e) => ("lowering identity", e),
+            Self::Native(e) => ("native handoff", e),
             Self::Mismatch(e) => ("subjects", e),
         };
         write!(f, "conditional F/V5 producer {stage}: {cause}")
