@@ -1896,6 +1896,22 @@ impl KfdRuntimeBackendV1 {
             .persistent_full_range_admission_for_launch_v1(pending.launch.borrowed())
             .is_some()
             || three_binding_admission.is_some();
+        if self.native_reconciliations.iter().flatten().any(|root| {
+            persistent_selected
+                || pending.launch.bindings.iter().any(|binding| {
+                    binding.region.allocation == root.allocation
+                        || (0..self.native_compute_lanes.len()).any(|lane| {
+                            self.native_reconciliation_pins_lane_v1(lane)
+                                && self.compute_lane_caches_allocation_v1(
+                                    lane,
+                                    binding.region.allocation,
+                                )
+                        })
+                })
+        }) {
+            self.pending_compute.insert(pending.id, pending);
+            return Ok(BackendPollV1::Pending);
+        }
         if persistent_selected && self.has_live_generated_native_v1() {
             self.pending_compute.insert(pending.id, pending);
             return Ok(BackendPollV1::Pending);
@@ -2799,6 +2815,7 @@ impl KfdRuntimeBackendV1 {
         ordinary_recipe: Arc<OwnedComputeLaunchV1>,
         prepared: PreparedLaunchV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_unpinned_native_lane_v1(self.selected_compute_lane)?;
         if matches!(
             &prepared.storage,
             PreparedLaunchStorageV1::PersistentFullRange(_)
@@ -4382,6 +4399,7 @@ impl KfdRuntimeBackendV1 {
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
         if self.has_live_generated_native_v1()
+            || self.native_reconciliations.iter().any(Option::is_some)
             || !self.streams.is_empty()
             || !self.events.is_empty()
             || !self.event_submission_retain_counts.is_empty()
@@ -4649,6 +4667,7 @@ impl KfdRuntimeBackendV1 {
     pub(super) fn synchronize_recycled_dispatch_data_v1(
         &mut self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_unpinned_native_lane_v1(self.selected_compute_lane)?;
         if self.recycled_dispatch.is_some() {
             let lane = self.selected_compute_lane;
             let mut dirty = Vec::new();

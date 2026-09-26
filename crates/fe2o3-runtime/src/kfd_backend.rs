@@ -93,6 +93,8 @@ mod compute_dispatch;
 mod compute_state;
 mod cooperative_sdma;
 use cooperative_sdma::CooperativeSdmaLeafV1;
+mod native_reconcile;
+use native_reconcile::NativeReconciliationV1;
 mod scale_capacity;
 use scale_capacity::{RuntimeDispatchCapacityV1, RuntimeDispatchStateV1};
 #[cfg(feature = "hardware-diagnostic")]
@@ -1270,6 +1272,9 @@ pub struct KfdRuntimeBackendV1 {
     stream_compute_lanes: HashMap<u64, usize>,
     selected_compute_lane: usize,
     native_dirty_extents: usize,
+    native_reconciliations: [Option<NativeReconciliationV1>; KFD_RUNTIME_MAX_COMPUTE_QUEUES_V1],
+    #[cfg(test)]
+    scripted_native_reconcile: Option<native_reconcile::ScriptedNativeReconcileV1>,
     active_sdma: HashMap<u64, ActiveSdmaCopyV1>,
     published_sdma_submissions: Vec<u64>,
     #[cfg(feature = "hardware-qualification")]
@@ -1720,6 +1725,9 @@ impl KfdRuntimeBackendV1 {
             stream_compute_lanes: HashMap::new(),
             selected_compute_lane: 0,
             native_dirty_extents: 0,
+            native_reconciliations: core::array::from_fn(|_| None),
+            #[cfg(test)]
+            scripted_native_reconcile: None,
             active_sdma: HashMap::new(),
             published_sdma_submissions: Vec::new(),
             #[cfg(feature = "hardware-qualification")]
@@ -2108,6 +2116,7 @@ impl KfdRuntimeBackendV1 {
 
     fn allocation_is_active(&self, allocation: u64) -> bool {
         self.allocation_custody.contains_key(&allocation)
+            || self.native_reconciliation_holds_v1(allocation)
     }
 
     fn reserve_event_submission_retain_v1(
@@ -2764,6 +2773,7 @@ impl KfdRuntimeBackendV1 {
                 lane.active.is_some() || !lane.pipeline.is_empty()
             };
             !active
+                && !self.native_reconciliation_pins_lane_v1(*lane)
                 && !self
                     .stream_compute_lanes
                     .values()
@@ -2960,6 +2970,7 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         lane: usize,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_unpinned_native_lane_v1(lane)?;
         self.with_compute_lane_state_v1(lane, |backend| {
             backend.detach_recycled_dispatch()?;
             backend.release_resident_data()
@@ -5165,6 +5176,13 @@ impl KfdRuntimeBackendV1 {
         allocation: u64,
         compute_lane: usize,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_unpinned_native_lane_v1(compute_lane)?;
+        if self.native_reconciliation_holds_v1(allocation) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "native reconciliation retains this allocation",
+            ));
+        }
         let dirty: Vec<_> = self
             .allocations
             .get(&allocation)
@@ -5235,11 +5253,15 @@ impl KfdRuntimeBackendV1 {
             Ok(updates) => updates,
             Err(detail) => return Err(self.terminal_error(detail)),
         };
-        let record = self
-            .allocations
-            .get_mut(&allocation)
-            .expect("native-dirty allocation remains retained");
         for (offset, bytes) in updates {
+            // Only the recycled extent is authoritative. Other shadow bytes
+            // may predate an already-completed asynchronous reconciliation.
+            self.upload_sdma_range_v1(allocation, offset as u64, &bytes)
+                .map_err(Self::after_possible_host_mutation)?;
+            let record = self
+                .allocations
+                .get_mut(&allocation)
+                .expect("native-dirty allocation remains retained");
             let end = offset
                 .checked_add(bytes.len())
                 .expect("validated native readback range fits host address space");
@@ -5248,18 +5270,14 @@ impl KfdRuntimeBackendV1 {
             } else {
                 Arc::make_mut(&mut record.bytes)[offset..end].copy_from_slice(&bytes);
             }
+            record.content_sha256 = None;
+            record.last_full_host_write = None;
         }
-        record.content_sha256 = None;
-        let bytes = Arc::clone(&record.bytes);
-        let _ = record;
-        self.upload_sdma_range_v1(allocation, 0, &bytes)
-            .map_err(Self::after_possible_host_mutation)?;
         if let Some(record) = self.allocations.get_mut(&allocation) {
             record
                 .native_dirty
                 .retain(|extent| extent.compute_lane != compute_lane);
             record.sdma_initialized = true;
-            record.sdma_shadow_dirty = false;
         }
         self.native_dirty_extents = self
             .native_dirty_extents
@@ -9172,7 +9190,6 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let scratch_byte_len = if [source_route, destination_route].into_iter().any(|route| {
             let child = &self.children[route.child];
             child.native_available
-                && child.allocations[&route.local].kind == RuntimeMemoryKindV1::DeviceLocal
         }) {
             source.byte_len.min(COOPERATIVE_COPY_CHUNK_BYTES_V1 as u64)
         } else {
@@ -12474,6 +12491,15 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
         self.require_no_generated_stream_v1(stream)?;
         self.allocations.reject_generated(source.allocation)?;
         self.allocations.reject_generated(destination.allocation)?;
+        if [source.allocation, destination.allocation]
+            .into_iter()
+            .any(|allocation| self.native_reconciliation_holds_v1(allocation))
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "native reconciliation retains a copy endpoint",
+            ));
+        }
         if !self.native_available {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,

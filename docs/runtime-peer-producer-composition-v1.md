@@ -103,21 +103,41 @@ Two dirty states have different authority. `sdma_shadow_dirty` means persistent
 DMA backing is authoritative and its CPU shadow may be stale. It no longer
 blocks initial async H2D/D2H publication when dependencies have already succeeded.
 The existing H2D compute-ready promotion still rejects dirty source shadows.
-`native_dirty` means separately materialized compute data must be reconciled;
-it still prevents immediate publication. That reconciliation needs bounded
-recycled-data reads and asynchronous uploads retaining exact extent/generation
-authority until success. That path still falls back to public child host-transfer
-APIs, which can wait synchronously for directional SDMA for up to 30 seconds.
-Resumable native-dirty preparation remains open; wrapping the current router in
-the directed SPI would still violate its no-wait contract. No broad directed
-router support, pending peer-to-compute admission or measured latency improvement
-is established here.
+`native_dirty` means separately materialized compute data must be reconciled.
+The native recycled read-into API accepts HostVisible authority only. Materialized
+launch admission rejects writable DeviceLocal bindings; persistent DeviceLocal
+compute instead dirties its SDMA shadow. Earlier descriptions of this work as
+DeviceLocal native-dirty asynchronous upload were incorrect.
 
-Resumable reconciliation must capture the recycled dispatch generation once and
-pin its lane against replay, rebind and detach until settlement. The current
-synchronous path fetches the lane's current generation on entry; doing that on
-every resume could read a different dispatch. Reconciliation uploads need a
-private, exact-root SDMA purpose authenticating scratch, destination interval,
-descriptor and captured generation. Clearing dirty extents early or adding a
-general `skip_dirty` flag is not an acceptable substitute. Retire each upload
-before advancing its cursor, and remove only the fully reconciled extent.
+Cooperative HostVisible reconciliation now captures the exact logical/native
+lane, returned generation, descriptor and dirty extent in a child-owned root.
+Each progress step reads and writes at most one private scratch window. Mapped
+HostVisible backing receives only that exact range, without GPU submit/wait.
+Lane/allocation pins survive across chunks; conflicting admitted compute remains
+Pending, not Failed. Only a fully reconciled extent is removed and counted down.
+Cancellation preserves an incomplete extent for retry. Changed generation or
+descriptor, mapped-write failure and unwind seal the router with authority and
+scratch retained.
+
+HostVisible destination writes also update only their exact persistent range,
+without detaching compute caches or refreshing the whole CPU shadow. Hash/write
+provenance is invalidated; ordinary launch preparation must refresh the shadow
+and overwrite stale native data before reuse. Active recipe reuse is excluded
+by allocation custody. The old synchronous reconciliation helper now also
+uploads exact extents, preventing stale bytes outside them from overwriting
+previously reconciled data; it preserves the incoming shadow-dirty flag.
+
+Scratch is reserved for every native endpoint at admission, including a clean
+HostVisible allocation that a retained producer can dirty before Read starts.
+The CPU fixture exercises generation/descriptor mismatch, multi-chunk writes,
+cancellation followed by retry, exact destination sentinels, later mapped-write
+fault/panic and compute Pending guards. It does not manufacture DeviceLocal
+recycled readback authority. Native execution and positive composed-account
+qualification remain required.
+
+This removes the identified cooperative mapped-host reconciliation fallback,
+but is not yet an implementation or qualification of the directed-copy SPI.
+Allocation, copy-on-write and driver calls do not establish a hard latency
+bound. The directed scheduler's version/depth contract, pending peer-to-compute
+admission, mixed-kind formal refinement and matched hardware measurements
+remain open.

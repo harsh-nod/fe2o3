@@ -13,6 +13,7 @@ type Failure = RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>;
 enum LeafStepV1 {
     Allocate,
     Stream,
+    Reconcile,
     Submit,
     Observe,
     Readback,
@@ -25,6 +26,7 @@ pub(super) struct CooperativeSdmaLeafV1 {
     allocation: Option<u64>,
     stream: Option<u64>,
     submission: Option<u64>,
+    reconciliation: Option<u64>,
     credit: Option<Gfx942RetainedRequestV1>,
     step: LeafStepV1,
 }
@@ -36,6 +38,7 @@ impl fmt::Debug for CooperativeSdmaLeafV1 {
             .field("allocation", &self.allocation)
             .field("stream", &self.stream)
             .field("submission", &self.submission)
+            .field("reconciliation", &self.reconciliation)
             .field("request_accounted", &self.credit.is_some())
             .field("step", &self.step)
             .finish()
@@ -119,7 +122,10 @@ impl CooperativeSdmaLeafV1 {
 
     fn cleanup(&mut self, child: &mut KfdRuntimeBackendV1) -> Result<bool, Failure> {
         // Keep each handle installed until its own disposal has succeeded.
-        if let Some(submission) = self.submission {
+        if let Some(root) = self.reconciliation {
+            child.release_native_reconciliation_v1(root);
+            self.reconciliation = None;
+        } else if let Some(submission) = self.submission {
             child.release_submission_v1(submission)?;
             self.submission = None;
         } else if let Some(allocation) = self.allocation {
@@ -175,9 +181,34 @@ fn progress_leaf_v1(
             .create_stream_v1(child.description.backend_device)
             .map(|stream| {
                 leaf.stream = Some(stream);
-                leaf.step = LeafStepV1::Submit;
+                leaf.step = if child.allocations[&leaf.endpoint.local]
+                    .native_dirty
+                    .is_empty()
+                {
+                    LeafStepV1::Submit
+                } else {
+                    LeafStepV1::Reconcile
+                };
                 LeafProgressV1::Changed
             }),
+        LeafStepV1::Reconcile => {
+            if let Some(root) = leaf.reconciliation {
+                return child
+                    .progress_native_reconciliation_v1(root)
+                    .map(|complete| {
+                        if complete {
+                            leaf.reconciliation = None;
+                        }
+                        LeafProgressV1::Changed
+                    });
+            }
+            leaf.reconciliation = child
+                .begin_native_reconciliation_v1(leaf.endpoint.local, leaf.allocation.unwrap())?;
+            if leaf.reconciliation.is_none() {
+                leaf.step = LeafStepV1::Submit;
+            }
+            Ok(LeafProgressV1::Changed)
+        }
         LeafStepV1::Submit => {
             let scratch = leaf.allocation.expect("prepared leaf has scratch");
             let stream = leaf.stream.expect("prepared leaf has a private stream");
@@ -188,6 +219,30 @@ fn progress_leaf_v1(
                 return Err(
                     child.terminal_error("retained cooperative endpoint became native-dirty")
                 );
+            }
+            if child.allocations[&leaf.endpoint.local].kind == RuntimeMemoryKindV1::HostVisible {
+                if reading {
+                    child.read_allocation_v1(
+                        leaf.endpoint.local,
+                        copy.source_region.byte_offset + start as u64,
+                        &mut copy.staging[start..end],
+                    )?;
+                } else {
+                    child.write_cooperative_host_range_v1(
+                        leaf.endpoint.local,
+                        copy.destination_region.byte_offset + start as u64,
+                        &copy.staging[start..end],
+                    )?;
+                }
+                copy.byte_cursor = end;
+                if end == copy.staging.len() {
+                    leaf.step = LeafStepV1::Cleanup(if reading {
+                        CooperativeCopyPhaseV1::Write
+                    } else {
+                        CooperativeCopyPhaseV1::Succeeded
+                    });
+                }
+                return Ok(LeafProgressV1::Changed);
             }
             if !reading {
                 child.write_allocation_v1(scratch, 0, &copy.staging[start..end])?;
@@ -389,8 +444,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let child = &self.children[route.child];
         let record = &child.allocations[&route.local];
         child.native_available
-            && record.kind == RuntimeMemoryKindV1::DeviceLocal
-            && record.native_dirty.is_empty()
+            && (record.kind == RuntimeMemoryKindV1::DeviceLocal
+                || !record.native_dirty.is_empty()
+                || copy.phase == CooperativeCopyPhaseV1::Write)
     }
 
     fn with_cooperative_leaf_v1<T>(
@@ -462,6 +518,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 allocation: None,
                 stream: None,
                 submission: None,
+                reconciliation: None,
                 credit: None,
                 step: LeafStepV1::Allocate,
             });
@@ -534,7 +591,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             leaf.step = LeafStepV1::Cleanup(CooperativeCopyPhaseV1::Cancelled);
             // At most one retired submission, one HostVisible allocation and
             // one logical stream; cleanup never waits for a DMA completion.
-            for _ in 0..4 {
+            for _ in 0..5 {
                 match leaf.cleanup(child) {
                     Ok(true) => return Ok(true),
                     Ok(false) => {}
@@ -548,7 +605,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     Err(failure) => return Err(failure),
                 }
             }
-            unreachable!("bounded private leaf cleanup exceeded its three owners")
+            unreachable!("bounded private leaf cleanup exceeded its four owners")
         });
         let cancelled = match cancelled {
             Err(failure @ RuntimeBackendFailureV1::Quiescent(_)) => {
@@ -584,12 +641,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         );
         self.with_cooperative_leaf_v1(submission, |child, copy| {
             let leaf = copy.sdma_leaf.as_mut().unwrap();
-            for _ in 0..4 {
+            for _ in 0..5 {
                 if leaf.cleanup(child)? {
                     return Ok(());
                 }
             }
-            unreachable!("bounded residual cleanup exceeded its three owners")
+            unreachable!("bounded residual cleanup exceeded its four owners")
         })?;
         let RoutedSubmissionV1::CooperativeCopy(copy) =
             self.submissions.get_mut(&submission).unwrap()

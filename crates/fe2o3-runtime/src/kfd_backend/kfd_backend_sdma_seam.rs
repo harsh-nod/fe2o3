@@ -172,6 +172,23 @@ pub(super) enum SdmaBufferOwnerV1 {
     Scripted(ScriptedBufferOwnerV1),
 }
 
+#[cfg(test)]
+impl SdmaBufferOwnerV1 {
+    pub(crate) fn scripted_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Scripted(host) => Some(&host.bytes),
+            Self::Native(_) => None,
+        }
+    }
+
+    pub(crate) fn scripted_bytes_mut(&mut self) -> Option<&mut [u8]> {
+        match self {
+            Self::Scripted(host) => Some(&mut host.bytes),
+            Self::Native(_) => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum DirectionalSdmaDeviceOwnerV1 {
     Native(Gfx942DirectionalQueuePersistentAllocationV1),
@@ -2349,7 +2366,7 @@ mod scripted {
     pub(crate) struct ScriptedBufferOwnerV1 {
         token: ScriptedOwnerTokenV1,
         kind: ScriptedBufferKindV1,
-        bytes: Vec<u8>,
+        pub(super) bytes: Vec<u8>,
         full_content_certificate: Option<ScriptedHostContentCertificateV1>,
     }
 
