@@ -13,8 +13,11 @@ use fe2o3_lower_mir_kernel::{
 use fe2o3_pliron::ProductionRefinementStagingPolicyV2 as EffectPolicy;
 use fe2o3_proof_contracts::DigestV1;
 
-mod resources;
+#[path = "tests/resources_tests.rs"]
+mod resources_tests;
+#[path = "tests/rows.rs"]
 mod rows;
+#[path = "tests/selector.rs"]
 mod selector;
 
 const FLOOR: usize = 43;

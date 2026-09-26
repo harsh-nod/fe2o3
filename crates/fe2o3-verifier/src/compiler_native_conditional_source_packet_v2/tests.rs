@@ -4,7 +4,7 @@ use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use fe2o3_lower_mir_kernel::ProductionSourceLaunchInputV1 as Geometry;
 
 mod hostile;
-mod resources;
+mod resources_tests;
 
 const FLOOR: usize = 37;
 
