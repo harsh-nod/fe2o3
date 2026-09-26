@@ -4,6 +4,9 @@ use crate::{
     listener::{ListenerFilesystemPolicyV1, ProvisionedProtectedIssuerSocketV1, SocketError},
     root_checks::{self, RootCheckError, RootSnapshot},
 };
+use fe2o3_compiler_execution_lifecycle::{
+    CompilerExecutionServiceLifecycleLeaseV2 as Lease, LifecycleLeaseErrorV2,
+};
 use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -70,6 +73,10 @@ impl Inputs {
     pub const WORK: usize = ENTRY + 256 * 1024;
     /// Logical temporary frame allowance, excluding retained owner/pair growth.
     pub const SCRATCH: usize = 8 * size_of::<Self>() + 4096;
+    /// Complete work for root-bound lifecycle validation, including input continuity.
+    pub const LIFECYCLE_WORK: usize = Self::WORK + Lease::ROOT_BINDING_WORK;
+    /// Complete additional peak while the lease checks the retained root's parent.
+    pub const LIFECYCLE_SCRATCH: usize = Self::SCRATCH + Lease::ROOT_BINDING_SCRATCH;
 
     /// Admits fresh descriptors using the fixed production pathname and policy.
     pub fn admit(
@@ -136,6 +143,36 @@ impl Inputs {
             Self::SCRATCH,
             |_| self.check(),
         )
+    }
+
+    /// Revalidates this exact root and its canonical shared lifecycle custody.
+    /// Both full owners must remain prepaid. No root descriptor is exposed, and
+    /// an independently valid lease from another parent cannot satisfy this join.
+    ///
+    /// ```
+    /// use fe2o3_compiler_execution_supervisor::{ProvisionedProtectedIssuerServiceInputsV2 as Inputs,
+    ///     ProtectedIssuerServiceProvisioningErrorV2 as Error};
+    /// use fe2o3_compiler_execution_lifecycle::CompilerExecutionServiceLifecycleLeaseV2 as Lease;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn check(inputs: &Inputs, lease: &Lease, b: &mut Budget<'_>) -> Result<(), Error> {
+    ///     inputs.validate_lifecycle(lease, b)
+    /// }
+    /// ```
+    /// ```compile_fail
+    /// use fe2o3_compiler_execution_supervisor::ProvisionedProtectedIssuerServiceInputsV2 as Inputs;
+    /// use fe2o3_compiler_execution_lifecycle::CompilerExecutionServiceLifecycleLeaseV2 as Lease;
+    /// fn unmetered(inputs: &Inputs, lease: &Lease) { let _ = inputs.validate_lifecycle(lease); }
+    /// ```
+    pub fn validate_lifecycle(&self, lease: &Lease, budget: &mut Budget<'_>) -> Result<()> {
+        let floor = self
+            .retained_storage()
+            .checked_add(lease.retained_storage())
+            .ok_or(Resource::Arithmetic)?;
+        budget.with_prepaid_scope(floor, ENTRY, Self::WORK, Self::SCRATCH, |b| {
+            self.check()?;
+            lease.revalidate_for_root(&self.root, b)?;
+            self.check()
+        })
     }
 
     /// Produces exact close-on-exec listener/root aliases before activation only.
@@ -238,6 +275,8 @@ impl Storage {
 pub enum ProtectedIssuerServiceProvisioningErrorV2 {
     /// Original request work or storage was insufficient.
     Resource(Resource),
+    /// Shared lifecycle custody does not match the retained service root.
+    Lifecycle(LifecycleLeaseErrorV2),
     /// Root shape or identity changed.
     Root(&'static str),
     /// Socket shape, identity, pathname, or activation state was invalid.
@@ -253,6 +292,11 @@ pub enum ProtectedIssuerServiceProvisioningErrorV2 {
 impl From<Resource> for Failure {
     fn from(error: Resource) -> Self {
         Self::Resource(error)
+    }
+}
+impl From<LifecycleLeaseErrorV2> for Failure {
+    fn from(error: LifecycleLeaseErrorV2) -> Self {
+        Self::Lifecycle(error)
     }
 }
 impl From<RootCheckError> for Failure {
@@ -278,6 +322,7 @@ impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Resource(error) => write!(f, "provisioning resource limit: {error}"),
+            Self::Lifecycle(error) => error.fmt(f),
             Self::Root(reason) => write!(f, "invalid protected issuer root: {reason}"),
             Self::Listener(reason) => write!(f, "invalid protected issuer listener: {reason}"),
             Self::Io { operation, source } => write!(f, "{operation}: {source}"),
@@ -288,6 +333,7 @@ impl Error for Failure {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Resource(error) => Some(error),
+            Self::Lifecycle(error) => Some(error),
             Self::Io { source, .. } => Some(source),
             _ => None,
         }

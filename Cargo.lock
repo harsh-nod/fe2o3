@@ -862,6 +862,7 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-execution-supervisor",
  "fe2o3-external-anchor-coordinator",
+ "fe2o3-kernel-ir",
  "fe2o3-protected-service-profile",
  "fe2o3-protected-service-spawn",
  "fe2o3-protected-static-executable",

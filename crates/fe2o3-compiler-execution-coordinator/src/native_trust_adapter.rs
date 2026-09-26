@@ -208,7 +208,7 @@ macro_rules! trust {
             /// Requires the full retained owner charge; entry storage and history persist.
             pub fn revalidate(&self, b: &mut Budget<'_>) -> Result<()> {
                 b.with_prepaid_scope(self.retained, ENTRY_WORK, LOCAL_WORK, Self::OUTER_STORAGE,
-                    |b| check(&self.deployment, &self.policy, &self.key_template, b))
+                    |b| check(self.deployment(), self.policy(), self.key_template(), b))
             }
 
             /// Borrows the actual native deployment capability, not an identity-only proxy.

@@ -2,7 +2,8 @@
 // They never fabricate Managed, Admission or Child owners. Successful protected
 // Managed cloning and final-pair validation require a real native root launch and
 // remain integration coverage gaps; the rootless tests do not establish authority.
-fn non_authoritative_transfer_packaging_fixture() -> (TransferFixture, [(u64, u64); 2]) {
+fn non_authoritative_transfer_packaging_fixture()
+-> (TransferFixture, [(u64, u64); 2], [tempfile::TempPath; 2]) {
     let mut w = Work::new(LIMIT);
     let mut b = Budget::new(&mut w, LIMIT);
     let policy = make_policy(0, &mut b);
@@ -17,8 +18,8 @@ fn non_authoritative_transfer_packaging_fixture() -> (TransferFixture, [(u64, u6
     )
     .unwrap();
     b.reserve_storage(charge.additional_storage()).unwrap();
-    let endpoint = tempfile::tempfile().unwrap();
-    let pidfd = tempfile::tempfile().unwrap();
+    let (endpoint, endpoint_path) = tempfile::NamedTempFile::new().unwrap().into_parts();
+    let (pidfd, pidfd_path) = tempfile::NamedTempFile::new().unwrap().into_parts();
     let objects = [identity(&endpoint), identity(&pidfd)];
     (
         TransferFixture {
@@ -30,11 +31,13 @@ fn non_authoritative_transfer_packaging_fixture() -> (TransferFixture, [(u64, u6
             policy: policy.policy().identity(),
         },
         objects,
+        [endpoint_path, pidfd_path],
     )
 }
 
 fn assert_transfer_objects_closed(objects: [(u64, u64); 2]) {
-    // Object identity, not recycled descriptor numbers, determines cleanup.
+    // Retained TempPaths pin these inodes even after the last descriptor closes.
+    // Neither descriptor-number reuse nor inode reuse can disguise cleanup.
     for object in objects {
         assert_eq!(refs(object), 0);
     }
@@ -42,7 +45,7 @@ fn assert_transfer_objects_closed(objects: [(u64, u64); 2]) {
 
 #[test]
 fn transfer_extraction_exact_work_floor_scratch_and_order() {
-    let (transfer, objects) = non_authoritative_transfer_packaging_fixture();
+    let (transfer, objects, _paths) = non_authoritative_transfer_packaging_fixture();
     const EXTRA: usize = 31;
     let floor = EXTRA + TransferFixture::STORAGE;
     let mut w = Work::new(TransferFixture::INTO_DESCRIPTORS_WORK);
@@ -94,7 +97,7 @@ fn transfer_extraction_exact_work_floor_scratch_and_order() {
 #[test]
 fn transfer_consuming_refusal_closes_both_fds_without_retiring_the_input_charge() {
     for mode in 0..4 {
-        let (transfer, objects) = non_authoritative_transfer_packaging_fixture();
+        let (transfer, objects, _paths) = non_authoritative_transfer_packaging_fixture();
         let floor = TransferFixture::STORAGE - usize::from(mode == 0);
         let work = match mode {
             1 => ENTRY_WORK - 1,
@@ -143,7 +146,7 @@ fn transfer_consuming_refusal_closes_both_fds_without_retiring_the_input_charge(
 
 #[test]
 fn transfer_extraction_preserves_prior_denials_and_peak() {
-    let (transfer, objects) = non_authoritative_transfer_packaging_fixture();
+    let (transfer, objects, _paths) = non_authoritative_transfer_packaging_fixture();
     let mut w = Work::new(TransferFixture::INTO_DESCRIPTORS_WORK);
     let mut b = Budget::new(
         &mut w,
@@ -177,7 +180,7 @@ fn transfer_extraction_preserves_prior_denials_and_peak() {
 #[test]
 fn transfer_extraction_checked_storage_and_work_overflow_close_inputs() {
     for storage_overflow in [true, false] {
-        let (transfer, objects) = non_authoritative_transfer_packaging_fixture();
+        let (transfer, objects, _paths) = non_authoritative_transfer_packaging_fixture();
         let mut w = Work::new(usize::MAX);
         let mut b = Budget::new(&mut w, usize::MAX);
         let floor = if storage_overflow {
@@ -206,7 +209,7 @@ fn transfer_extraction_checked_storage_and_work_overflow_close_inputs() {
 
 #[test]
 fn transfer_drop_and_caller_unwind_close_only_and_preserve_outer_ledger() {
-    let (transfer, objects) = non_authoritative_transfer_packaging_fixture();
+    let (transfer, objects, _paths) = non_authoritative_transfer_packaging_fixture();
     let mut w = Work::new(LIMIT);
     let mut b = Budget::new(&mut w, LIMIT);
     b.reserve_storage(TransferFixture::STORAGE).unwrap();
@@ -216,7 +219,7 @@ fn transfer_drop_and_caller_unwind_close_only_and_preserve_outer_ledger() {
     assert_eq!(b.work(), 0);
     b.release_storage(TransferFixture::STORAGE).unwrap();
 
-    let (transfer, objects) = non_authoritative_transfer_packaging_fixture();
+    let (transfer, objects, _paths) = non_authoritative_transfer_packaging_fixture();
     b.reserve_storage(TransferFixture::STORAGE).unwrap();
     let ledger = b.work_ledger_identity_v1();
     let outcome = catch_unwind(AssertUnwindSafe(|| {

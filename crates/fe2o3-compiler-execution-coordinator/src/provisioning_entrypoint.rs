@@ -1296,6 +1296,9 @@ impl Error for CompilerExecutionProvisioningInstallErrorV1 {
 }
 
 #[cfg(test)]
+pub(crate) use tests::static_pause_elf;
+
+#[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
@@ -1698,7 +1701,7 @@ mod tests {
         }
     }
 
-    fn static_pause_elf(discriminator: u8) -> Vec<u8> {
+    pub(crate) fn static_pause_elf(discriminator: u8) -> Vec<u8> {
         const HEADER: usize = 64;
         const PROGRAM: usize = 56;
         const PROGRAMS: usize = 4;

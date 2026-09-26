@@ -331,3 +331,131 @@ fn final_validation_exact_short_quotas_and_descriptor_flags() {
     drop((listener, root, owner));
     b.release_storage(floor).unwrap();
 }
+
+fn admitted_with_lifecycle(f: &Fixture, b: &mut Budget<'_>) -> (Inputs, Lease) {
+    use fe2o3_compiler_execution_protocol::{
+        COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1, COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1,
+    };
+    std::fs::set_permissions(&f.root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let state = f.root.join("state");
+    std::fs::create_dir(&state).unwrap();
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let lock = f.root.join(
+        Path::new(COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1)
+            .file_name()
+            .unwrap(),
+    );
+    std::fs::write(&lock, []).unwrap();
+    std::fs::set_permissions(
+        &lock,
+        std::fs::Permissions::from_mode(COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1),
+    )
+    .unwrap();
+    let root = File::open(&state).unwrap();
+    b.reserve_storage(Lease::STATE_ROOT_STORAGE).unwrap();
+    let (lease, charge) = Lease::open_non_authoritative_same_owner_test(&root, b).unwrap();
+    b.reserve_storage(charge.additional_storage()).unwrap();
+    // The same root File now becomes part of the prepaid listener/root pair.
+    b.reserve_storage(Inputs::PAIR_STORAGE - Lease::STATE_ROOT_STORAGE)
+        .unwrap();
+    let path = state.join("s.sock");
+    let socket = bound_named_seqpacket_socket(&path);
+    let (inputs, charge) = Inputs::admit_at(
+        socket,
+        root,
+        credentials(),
+        &path,
+        ListenerFilesystemPolicyV1::fixture(credentials()),
+        b,
+    )
+    .unwrap();
+    b.reserve_storage(charge.additional_storage()).unwrap();
+    (inputs, lease)
+}
+
+#[test]
+fn lifecycle_join_rejects_an_independently_valid_unrelated_lease() {
+    let f = Fixture::new("np-join");
+    let other = Fixture::new("np-join-other");
+    let mut work = Work::new(20 * Inputs::LIFECYCLE_WORK);
+    let mut b = Budget::new(&mut work, 1_000_000);
+    let (inputs, lease) = admitted_with_lifecycle(&f, &mut b);
+    let (other_inputs, other_lease) = admitted_with_lifecycle(&other, &mut b);
+    let floor = b.storage();
+    inputs.validate_lifecycle(&lease, &mut b).unwrap();
+    other_inputs
+        .validate_lifecycle(&other_lease, &mut b)
+        .unwrap();
+    assert!(matches!(
+        inputs.validate_lifecycle(&other_lease, &mut b),
+        Err(Failure::Lifecycle(_))
+    ));
+    inputs.validate_lifecycle(&lease, &mut b).unwrap();
+    std::fs::set_permissions(f.root.join("state"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        inputs.validate_lifecycle(&lease, &mut b),
+        Err(Failure::Root(_))
+    ));
+    assert_eq!(b.storage(), floor);
+    drop((inputs, lease, other_inputs, other_lease));
+    b.release_storage(floor).unwrap();
+}
+
+#[test]
+fn lifecycle_join_exact_short_quotas_and_complete_owner_floor() {
+    const LIMIT: usize = 10 * Inputs::LIFECYCLE_WORK;
+    for mode in 0..4 {
+        let f = Fixture::new(&format!("np-join-quota-{mode}"));
+        let mut work = Work::new(LIMIT);
+        // Fill the remaining storage below the known limit after admission; the
+        // original ledger then has exactly (or one less than) join scratch left.
+        let mut b = Budget::new(&mut work, 1_000_000);
+        let (inputs, lease) = admitted_with_lifecycle(&f, &mut b);
+        let owners = b.storage();
+        assert_eq!(owners, inputs.retained_storage() + lease.retained_storage());
+        let padding = if mode == 3 {
+            0
+        } else {
+            1_000_000 - owners - Inputs::LIFECYCLE_SCRATCH + usize::from(mode == 2)
+        };
+        b.reserve_storage(padding).unwrap();
+        if mode == 3 {
+            b.release_storage(1).unwrap();
+        }
+        let floor = b.storage();
+        let ledger = b.work_ledger_identity_v1();
+        b.charge_work(LIMIT - b.work() - Inputs::LIFECYCLE_WORK + usize::from(mode == 1))
+            .unwrap();
+        let result = inputs.validate_lifecycle(&lease, &mut b);
+        assert_eq!(b.storage(), floor);
+        assert!(b.work_ledger_identity_v1() == ledger);
+        match mode {
+            0 => {
+                result.unwrap();
+                assert_eq!(b.work(), LIMIT);
+                assert_eq!(b.peak_storage(), 1_000_000);
+            }
+            1 => assert!(matches!(
+                result,
+                Err(Failure::Lifecycle(LifecycleLeaseErrorV2::Resource(
+                    Resource::Work(_)
+                )))
+            )),
+            2 => {
+                assert!(matches!(
+                    result,
+                    Err(Failure::Lifecycle(LifecycleLeaseErrorV2::Resource(
+                        Resource::Storage(_)
+                    )))
+                ));
+                assert_eq!(b.failed_storage(), Some(1_000_001));
+            }
+            _ => assert!(matches!(
+                result,
+                Err(Failure::Resource(Resource::Accounting))
+            )),
+        }
+        drop((inputs, lease));
+        b.release_storage(floor).unwrap();
+    }
+}
