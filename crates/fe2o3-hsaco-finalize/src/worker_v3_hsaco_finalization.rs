@@ -41,7 +41,7 @@ const NOMINAL_FINALIZED_IDENTITY_DOMAIN_V4: &[u8] =
 const NOMINAL_FINALIZED_IDENTITY_DOMAIN_V5: &[u8] =
     b"FE2O3/STRICT-V3-PROTECTED-WORKER-NOMINAL-DESCRIPTOR-FINALIZATION/V5\0";
 
-/// Stable Worker V3 finalization identity. Descriptor V1 and nominal V3/V4 use
+/// Stable Worker V3 finalization identity. Descriptor V1 and nominal V3/V4/V5 use
 /// distinct domains; this identity version is not a descriptor schema version.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FinalizedProtectedWorkerV3HsacoIdentityV1([u8; 32]);

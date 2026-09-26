@@ -233,6 +233,16 @@ mod tests {
                 DescriptorSchema::from_abi(&native).unwrap()
             );
         }
+        bytes[8..10].copy_from_slice(&5u16.to_le_bytes());
+        for mode in [
+            crate::native_worker_finalization::NativeDescriptorMode::Legacy,
+            crate::native_worker_finalization::NativeDescriptorMode::V4,
+        ] {
+            assert!(matches!(
+                mode.from_abi(&bytes),
+                Err(E::DescriptorSchemaMismatch)
+            ));
+        }
         for end in 0..bytes.len() {
             assert!(matches!(
                 DescriptorSchema::from_abi(&bytes[..end]),

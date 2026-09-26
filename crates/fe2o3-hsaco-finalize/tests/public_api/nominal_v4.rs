@@ -59,12 +59,35 @@ fn fixture(
     entries: usize,
     hidden: bool,
     size: u32,
-    mut mutate: impl FnMut(&mut Value),
+    mutate: impl FnMut(&mut Value),
     count: usize,
     extra: &[&str],
 ) -> Fixture {
+    fixture_for_target(
+        wire,
+        entries,
+        hidden,
+        size,
+        mutate,
+        count,
+        extra,
+        GENERAL_V3_TARGET,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fixture_for_target(
+    wire: &[u8],
+    entries: usize,
+    hidden: bool,
+    size: u32,
+    mut mutate: impl FnMut(&mut Value),
+    count: usize,
+    extra: &[&str],
+    target: &str,
+) -> Fixture {
     let mut root = rmpv::decode::read_value(
-        &mut general_v3_metadata(GeneralV3Kernel::Alpha, size, 8, GENERAL_V3_TARGET).as_slice(),
+        &mut general_v3_metadata(GeneralV3Kernel::Alpha, size, 8, target).as_slice(),
     )
     .unwrap();
     let Value::Array(kernels) = field_mut(&mut root, "amdhsa.kernels") else {
@@ -122,7 +145,15 @@ fn fixture(
         .map(|(name, symbol)| (name.as_str(), symbol.as_str()))
         .collect::<Vec<_>>();
     let mut fixture = build_fixture_for_kernels(wire, &metadata, count, extra, &names, 0);
-    write_u32(&mut fixture.bytes, 48, 0x64c);
+    write_u32(
+        &mut fixture.bytes,
+        48,
+        match target {
+            "gfx942:xnack-" => 0x64c,
+            "gfx950:xnack-" => 0x64f,
+            _ => panic!("unsupported fixture target"),
+        },
+    );
     for offset in fixture.kernel_descriptor_offsets.iter().copied() {
         write_u32(&mut fixture.bytes, offset + 8, size);
         write_u32(&mut fixture.bytes, offset + 44, 1);

@@ -4,6 +4,8 @@
 mod nominal_v3;
 #[path = "worker_v3_hsaco_admission/nominal_v4.rs"]
 mod nominal_v4;
+#[path = "worker_v3_hsaco_admission/nominal_v5.rs"]
+mod nominal_v5;
 #[allow(unused_imports)]
 pub(crate) use nominal_v3::{
     publish_nominal_worker_v3_fixture_in_directory,
@@ -1401,6 +1403,27 @@ fn evidence_with_descriptor_source(
     fe2o3_artifact_transaction::BuildAttempt,
     InertProtectedFirstBuildWorkerV3EvidenceV1,
 ) {
+    evidence_with_handoff(directory, config, external_providers, || {
+        outer_with_descriptor_source(
+            config.invocation_seed,
+            config.module_seed,
+            &hsaco,
+            kernel_symbols,
+            config.lineage_mutation,
+            descriptor_source,
+        )
+    })
+}
+
+fn evidence_with_handoff(
+    directory: &TestDirectory,
+    config: EvidenceConfig,
+    external_providers: Vec<WorkerInputV1>,
+    handoff: impl FnOnce() -> InertSemanticCompilerModuleHandoffV3,
+) -> (
+    fe2o3_artifact_transaction::BuildAttempt,
+    InertProtectedFirstBuildWorkerV3EvidenceV1,
+) {
     let attempt = begin_build_attempt(
         &directory.0,
         &producer(),
@@ -1408,14 +1431,7 @@ fn evidence_with_descriptor_source(
         BuildSession::from_bytes([config.attempt_seed.wrapping_add(1); 16]),
     )
     .unwrap();
-    let handoff = outer_with_descriptor_source(
-        config.invocation_seed,
-        config.module_seed,
-        &hsaco,
-        kernel_symbols,
-        config.lineage_mutation,
-        descriptor_source,
-    );
+    let handoff = handoff();
     let receipt = publish_compiler_module_handoff_in_slot_v3(
         &directory.0,
         &producer(),
@@ -3529,12 +3545,21 @@ fn module_handoff_for_kernels(
     hsaco: &[u8],
     kernel_symbols: &[(&str, &str)],
 ) -> CompilerModuleHandoffV2 {
+    module_handoff_for_kernels_target(seed, hsaco, kernel_symbols, target())
+}
+
+fn module_handoff_for_kernels_target(
+    seed: u8,
+    hsaco: &[u8],
+    kernel_symbols: &[(&str, &str)],
+    target: DeviceTargetV1,
+) -> CompilerModuleHandoffV2 {
     let mut module = format!("; ModuleID = 'raw-hsaco-v3-{seed:02x}'\n").into_bytes();
     module.extend_from_slice(RAW_HSACO_MARKER);
     module.extend_from_slice(hex_encode(hsaco).as_bytes());
     module.push(b'\n');
     let envelope =
-        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target(), CodeObjectVersion::V6)
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
             .unwrap();
     let mut symbols = kernel_symbols
         .iter()
@@ -3552,7 +3577,7 @@ fn module_handoff_for_kernels(
     let manifest = CompilerModuleSymbolManifestV1::new(symbols).unwrap();
     CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmTextIr,
-        target(),
+        target,
         CodeObjectVersion::V6,
         envelope,
         manifest,

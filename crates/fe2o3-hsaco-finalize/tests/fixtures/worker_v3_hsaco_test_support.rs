@@ -620,8 +620,20 @@ pub(crate) fn slice_fixture_with_descriptor_table_and_workgroup(
     descriptor_table: &[u8],
     workgroup_size: u32,
 ) -> Fixture {
+    slice_fixture_with_descriptor_table_workgroup_target(
+        descriptor_table,
+        workgroup_size,
+        "gfx942:xnack-",
+    )
+}
+
+pub(crate) fn slice_fixture_with_descriptor_table_workgroup_target(
+    descriptor_table: &[u8],
+    workgroup_size: u32,
+    target: &str,
+) -> Fixture {
     let mut options = FixtureOptions::valid();
-    options.target = "gfx942:xnack-";
+    options.target = target;
     options.include_export = false;
     options.required_workgroup_size = [workgroup_size, 1, 1];
     options.max_flat_workgroup_size = workgroup_size;
