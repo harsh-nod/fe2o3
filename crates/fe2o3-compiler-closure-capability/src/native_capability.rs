@@ -1,7 +1,8 @@
 //! Shared move-only transport for native public trust and identity records.
 use crate::sealed_image::{CapabilityRole, SealedCapabilityImage};
 use fe2o3_compiler_execution_protocol::{
-    CompilerExecutionAttestationErrorV2, CompilerExecutionClientProfileErrorV2,
+    CompilerExecutionAttestationErrorV2, CompilerExecutionAttestationErrorV3,
+    CompilerExecutionClientProfileErrorV2, CompilerExecutionNativeJournalErrorV3,
     CompilerExecutionServiceLaunchManifestErrorV2,
 };
 use fe2o3_kernel_ir::{
@@ -31,6 +32,8 @@ pub(crate) use CompilerExecutionCapabilityStorageV2 as Storage;
 pub enum CompilerExecutionCapabilityErrorV2 {
     Resource(Resource),
     Policy(CompilerExecutionAttestationErrorV2),
+    PolicyV3(CompilerExecutionAttestationErrorV3),
+    JournalV3(CompilerExecutionNativeJournalErrorV3),
     Profile(CompilerExecutionClientProfileErrorV2),
     Launch(CompilerExecutionServiceLaunchManifestErrorV2),
     Io { operation: &'static str, errno: i32 },
@@ -67,6 +70,19 @@ impl From<CompilerExecutionClientProfileErrorV2> for CompilerExecutionCapability
         Self::Profile(value)
     }
 }
+impl From<CompilerExecutionAttestationErrorV3> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionAttestationErrorV3) -> Self {
+        Self::PolicyV3(value)
+    }
+}
+impl From<CompilerExecutionNativeJournalErrorV3> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionNativeJournalErrorV3) -> Self {
+        match value {
+            CompilerExecutionNativeJournalErrorV3::Resource(resource) => Self::Resource(resource),
+            error => Self::JournalV3(error),
+        }
+    }
+}
 impl From<CompilerExecutionServiceLaunchManifestErrorV2> for CompilerExecutionCapabilityErrorV2 {
     fn from(value: CompilerExecutionServiceLaunchManifestErrorV2) -> Self {
         Self::Launch(value)
@@ -77,6 +93,8 @@ impl fmt::Display for CompilerExecutionCapabilityErrorV2 {
         match self {
             Self::Resource(e) => e.fmt(f),
             Self::Policy(e) => e.fmt(f),
+            Self::PolicyV3(e) => e.fmt(f),
+            Self::JournalV3(e) => e.fmt(f),
             Self::Profile(e) => e.fmt(f),
             Self::Launch(e) => e.fmt(f),
             Self::Io { operation, errno } => {
@@ -91,6 +109,8 @@ impl Error for CompilerExecutionCapabilityErrorV2 {
         match self {
             Self::Resource(e) => Some(e),
             Self::Policy(e) => Some(e),
+            Self::PolicyV3(e) => Some(e),
+            Self::JournalV3(e) => Some(e),
             Self::Profile(e) => Some(e),
             Self::Launch(e) => Some(e),
             Self::Io { .. } | Self::Rejected(_) => None,

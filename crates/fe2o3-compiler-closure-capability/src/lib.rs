@@ -22,11 +22,15 @@ mod compiler_execution_external_anchor_deployment;
 mod compiler_execution_external_anchor_provisioning;
 mod compiler_execution_external_anchor_signing_key;
 mod compiler_execution_policy;
+mod compiler_execution_policy_native;
 mod compiler_execution_policy_v2;
+mod compiler_execution_policy_v3;
 mod compiler_execution_service_launch;
 mod compiler_execution_service_launch_v2;
 mod compiler_execution_signing_key;
+mod compiler_execution_signing_key_native;
 mod compiler_execution_signing_key_v2;
+mod compiler_execution_signing_key_v3;
 mod compiler_execution_supervisor_deployment;
 mod native_capability;
 mod rustc_invocation;
@@ -51,6 +55,7 @@ pub use compiler_execution_policy::{
     COMPILER_EXECUTION_POLICY_CHILD_FD_V1, CompilerExecutionPolicyCapabilityV1,
 };
 pub use compiler_execution_policy_v2::CompilerExecutionPolicyCapabilityV2;
+pub use compiler_execution_policy_v3::CompilerExecutionPolicyCapabilityV3;
 pub use compiler_execution_service_launch::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_CHILD_FD_V1,
     CompilerExecutionServiceLaunchCapabilityV1,
@@ -60,6 +65,7 @@ pub use compiler_execution_signing_key::{
     COMPILER_EXECUTION_SIGNING_KEY_ISSUER_FD_V1, CompilerExecutionSigningKeyCapabilityV1,
 };
 pub use compiler_execution_signing_key_v2::CompilerExecutionSigningKeyCapabilityV2;
+pub use compiler_execution_signing_key_v3::CompilerExecutionSigningKeyCapabilityV3;
 pub use compiler_execution_supervisor_deployment::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1,
     CompilerExecutionSupervisorDeploymentCapabilityV1,
