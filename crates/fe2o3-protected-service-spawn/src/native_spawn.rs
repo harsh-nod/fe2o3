@@ -259,11 +259,12 @@ impl StagedProtectedServiceExecV2 {
     }
     /// Complete successful work quota for an observed supported capability ceiling.
     pub fn spawn_work(&self, cap_last_cap: u32) -> Result<usize> {
+        Self::spawn_work_for(self.inner.descriptor_count(), cap_last_cap)
+    }
+    /// Checked pre-staging quota query; inert counts do not admit descriptors or a child.
+    pub fn spawn_work_for(descriptors: usize, cap_last_cap: u32) -> Result<usize> {
         Self::SPAWN_WORK
-            .checked_add(native_work::child_work(
-                self.inner.descriptor_count(),
-                cap_last_cap,
-            )?)
+            .checked_add(native_work::child_work(descriptors, cap_last_cap)?)
             .and_then(|n| n.checked_add(Cleanup::RESERVATION_WORK))
             .ok_or(Resource::Arithmetic.into())
     }

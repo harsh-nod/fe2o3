@@ -32,7 +32,8 @@ macro_rules! preparation {
         /// Owns native deployment/provisioning/key/lease/images and a pinned state root.
         /// Actual same-family policy and supervisor capabilities are borrowed afresh on
         /// each operation; identities alone are insufficient. No V1 owner upgrade,
-        /// raw descriptor/key accessor, generic provider, or public launch exists.
+        /// raw descriptor/key accessor or generic provider exists. Launch requires
+        /// actual same-family contexts, finite cleanup funding and the original ledger.
         /// Root-owned configuration does not authenticate provisioning provenance.
         ///
         /// Prepay prepare_input_storage(), including BOTH full source images and all
@@ -41,7 +42,8 @@ macro_rules! preparation {
         /// reserve returned GROWTH_STORAGE before retention, keeping consumed charges.
         /// On consuming failure all owned inputs close, but their reservations remain
         /// for caller cleanup. After Drop retire FULL retained_storage(); borrowed
-        /// contexts retain their own reservations. No persistence, spawn or signing occurs.
+        /// contexts retain their own reservations. Preparation performs no persistence,
+        /// spawn or signing; the separate consuming launch enters the measured helper.
         ///
         /// ```
         #[doc = concat!("use fe2o3_external_anchor_coordinator::{", stringify!($Prepared), " as Prepared, ExternalAnchorPreparationErrorV2 as Error};")]

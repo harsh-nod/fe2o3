@@ -26,10 +26,10 @@ pub(crate) const MAX_PHASE_ATTEMPTS: usize = 120_001;
 pub(crate) const MAX_GATE_ATTEMPTS: usize = 64;
 const MAX_TIMEOUT: Duration = Duration::from_secs(120);
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
-const CONTROL_BYTES: usize = rustix::cmsg_space!(ScmRights(1));
-
-/// Uniform alternative to Boundary::work(), covering its most expensive case.
-pub(crate) const ATTEMPT_WORK: usize = Boundary::ReadyTransfer.work();
+#[allow(unsafe_code)]
+// SAFETY: the fixed payload size fits c_uint and CMSG alignment cannot overflow.
+// Unlike rustix's unaligned byte-buffer allowance, this is the exact libc ABI size.
+const CONTROL_BYTES: usize = unsafe { libc::CMSG_SPACE(size_of::<i32>() as u32) as usize };
 
 /// Profile, ready and exec phases can each check liveness before all but their
 /// last primary attempt. Observer::is_live has its own original-ledger quota.

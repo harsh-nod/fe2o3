@@ -118,8 +118,8 @@ pub struct ProtectedServiceCleanupReportV2 {
 /// background thread. Drop returns control, not custody: the same account and
 /// records remain in the pool for `recover`. Work limits are never renewed.
 ///
-/// This is policy-neutral cleanup funding, not deployment authority. Issuer and
-/// trusted root spawn consume it; root coordinator integration is pending.
+/// This is policy-neutral cleanup funding, not deployment authority. Native issuer
+/// and root coordinator launches consume it through the same pool.
 /// Logical quotas do not bound syscall or mutex latency.
 ///
 /// ```compile_fail

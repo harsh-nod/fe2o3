@@ -11,6 +11,8 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
+include!("native_launch_cases_tests.rs");
+
 const LIMIT: usize = 1 << 34;
 fn public(seed: u8) -> [u8; 32] {
     ed25519_dalek::SigningKey::from_bytes(&[seed; 32])

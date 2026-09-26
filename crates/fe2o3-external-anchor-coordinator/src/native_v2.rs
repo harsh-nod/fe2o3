@@ -19,3 +19,9 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionSupervisorDeploymentV2 as Supervisor,
 };
 crate::native_adapter::preparation!(PreparedExternalAnchorOccurrenceV2, "2", "3");
+crate::native_launch_adapter::launch!(
+    PreparedExternalAnchorOccurrenceV2,
+    RootManagedExternalAnchorV2,
+    "2",
+    "3"
+);

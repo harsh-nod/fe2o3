@@ -142,6 +142,69 @@ fn endpoint() -> OwnedFd {
     tempfile::tempfile().unwrap().into()
 }
 
+#[test]
+fn real_seqpacket_receive_adopts_exact_cloexec_right_and_closes_rejected_extras() {
+    use rustix::net::{
+        AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags,
+        SocketType, sendmsg, socketpair,
+    };
+    use std::{io::IoSlice, mem::MaybeUninit};
+    let (sender, receiver) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let file = endpoint();
+    let original = identity(&file);
+    let refs = || {
+        std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .filter_map(|entry| std::fs::metadata(entry.ok()?.path()).ok())
+            .filter(|metadata| (metadata.dev(), metadata.ino()) == (original.1, original.2))
+            .count()
+    };
+    assert_eq!(refs(), 1);
+    for count in [1, 2, 3] {
+        let fds = [file.as_fd(); 3];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
+        let mut ancillary = SendAncillaryBuffer::new(&mut space);
+        assert!(ancillary.push(SendAncillaryMessage::ScmRights(&fds[..count])));
+        let ready = Ready::new(Disposition::Initialized);
+        assert_eq!(
+            sendmsg(
+                &sender,
+                &[IoSlice::new(ready.canonical_bytes())],
+                &mut ancillary,
+                SendFlags::DONTWAIT | SendFlags::NOSIGNAL
+            )
+            .unwrap(),
+            READY_BYTES
+        );
+        let received = receive_packet(receiver.as_fd()).unwrap();
+        if count == 1 {
+            let (ready, received) = received.validate().unwrap();
+            assert_eq!(ready.disposition(), Disposition::Initialized);
+            let observed = identity(&received);
+            assert_eq!((observed.1, observed.2), (original.1, original.2));
+            assert!(
+                rustix::io::fcntl_getfd(&received)
+                    .unwrap()
+                    .contains(rustix::io::FdFlags::CLOEXEC)
+            );
+            assert_eq!(refs(), 2);
+            drop(received);
+        } else {
+            assert!(matches!(
+                received.validate(),
+                Err(Failure::MalformedReadyTransfer)
+            ));
+        }
+        assert_eq!(refs(), 1, "received rights escaped for count {count}");
+    }
+}
+
 // Compare object identity, not the raw number, which another test can reuse.
 fn identity(fd: &OwnedFd) -> (i32, u64, u64) {
     let stat = rustix::fs::fstat(fd).unwrap();
@@ -185,7 +248,7 @@ fn exact_timeout_policy_and_attempt_costs() {
     assert_eq!(Boundary::Progress.work(), 1352);
     assert_eq!(CONTROL_BYTES, 24);
     assert_eq!(Boundary::ReadyTransfer.work(), 10_440);
-    assert_eq!(ATTEMPT_WORK, 10_440);
+    assert_eq!(Boundary::ReadyTransfer.work(), 10_440);
     assert_eq!(MAX_LIVENESS_CHECKS, 360_000);
     assert_eq!(MAX_WORK, 2_272_425_504);
     assert!(ATTEMPT_SCRATCH >= size_of::<ReadyPacket>() + size_of::<(Ready, OwnedFd)>());

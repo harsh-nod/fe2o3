@@ -1,5 +1,5 @@
 //! Finite cleanup mechanics for protected-service child custody.
-//! Consumed by issuer launches and trusted root spawn; root coordinator integration is pending.
+//! Consumed by native issuer and root coordinator launches through one shared pool.
 //!
 //! The caller supplies exclusive consuming-wait ownership and retains this record
 //! in its existing reserved slot until terminal reaping. This module creates no
