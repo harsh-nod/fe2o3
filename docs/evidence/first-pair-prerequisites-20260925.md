@@ -145,3 +145,81 @@ Artifacts are retained under:
 The archive includes closed green/red/outstanding logs and exit files, both gate
 summaries, runner scripts, and the pinned projection/report. Build caches are
 disposable; Git source identities and retained evidence are preserved.
+
+## Public Main Requalification
+
+Both public mains advanced during validation. Two signed-off merges preserved
+that work without overlapping the prerequisite edits. These are separate test
+identities; the earlier candidate's results are not relabeled as later tests.
+
+### Shared CPU Replay Merge
+
+- Upstream: `a66be6440b418871ea39c17c012e50372aeccbe7`.
+- Tested merge: `697fb0d99baf34b732acce046fdcba2641d7496b`.
+- Tree: `1cd275e7c7d908a25545ece34ff341efad6cfafd`.
+- Stable source fingerprint:
+  `202fa43ac3ab1016dc37046f010ccd35fce261e01cbcfb86e1f34c47463631fd`.
+
+Fresh runs passed 11 portable-reference tests and one compile-fail doctest;
+249 complete verifier tests (15 ignored); 180 backend reference tests
+(nine ignored); 358 backend pipeline tests (three ignored); 833 kernel-IR
+tests; 52 formal-memory integration tests; 1,612 Pliron tests; 14 execution
+lowerer tests; one genuine-provider regression; and the normal backend check.
+The actual row source/CPU/replay gate, 56 identity tests and diff check also
+passed. Focused tests and overlapping filters are not additive coverage counts.
+
+The first wrapper incorrectly expected narrower reference/pipeline counts and
+treated all verifier tests as nonignored. Its three count-check exits of 66
+are retained; the underlying Rust commands exited zero with the counts above.
+The reference selection was repeated with its corrected 180-pass check.
+An SSH disconnect stopped the outer script after the pipeline run; the remaining
+checks were resumed only after confirming the old process had ended. No missing
+run or ignored test was counted as passing. Native LLVM and full formatting
+again failed with exits 101 and 1, respectively.
+
+### BF16 Source-Transport Merge
+
+- Upstream: `fcd482cdfea0a35ed0db368e3695d2c194b1dc6a`.
+- Tested merge: `fd6f80f749728f89894ed98f2b69172385210e38`.
+- Tree: `0640e0faf51884d5106f84fc76f9fa1fdb6940f8`.
+- Stable source fingerprint:
+  `ff4476a60f3bae7dd3308cb5ae6b7ef0ff2794f2a68702728d5ef1756ab5107b`.
+
+The new upstream work touches adjacent nominal-reference analysis and source
+import. Independent review found no prerequisite integration conflict. Fresh
+checks on this exact merge were:
+
+| Gate | Result |
+| --- | --- |
+| Distinct-invocation regressions | 6 passed |
+| Complete Pliron library | 1,621 passed, zero failed/ignored |
+| Execution-discharge lowerer subset | 14 passed |
+| BF16 call-instance relation controls | 20 passed |
+| BF16 whole-owner integration controls | 10 passed |
+| BF16 frontend controls | 15 passed, two genuine-source tests ignored |
+| Genuine provider descriptor/ABI regression | 1 passed |
+| Normal backend library check | Passed |
+| Ordinary row source export, CPU execution and replay | Passed |
+| Identity reporting suite | 56 passed |
+| Required native LLVM positive | Failed, exit 101 |
+| Full workspace formatting | Failed, exit 1 |
+
+The row gate retains the same 688 execution/replay observations and refusal
+corpus described above. The native gate still fails on the first gfx942 LDS
+kernel's single formal-memory conflict. Formatting still identifies the same
+two untouched files listed above. No actual BF16 helper execution, native
+qualification, whole-workspace green result, or completed tutorial pair follows
+from these scoped checks. The upstream genuine BF16 source evidence retains
+its own original identity and materialization refusal.
+
+All runs used the same mi300x toolchain, serialized build lock, offline/locked
+dependencies, timeouts and 12 GiB combined target/scratch cap. The documentation
+update after these runs is not a new compiler test identity.
+
+Additional archives in the retained validation directory:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `pair-next-merged-qualification-20260925.tar.gz` (41 files) | `50fd8ea83b93d7ea9504a942def01d78f186bd33643d38d25904ada59c39c635` |
+| `pair-next-bf16-qualification-20260925.tar.gz` (27 files) | `5c47272c342280400ab58384d14563f5208d50dd2dcbea6c825017484fbb67c6` |
+| `pair-next-bf16-merge-20260925.tsv` | `eb04727f9541cf18c1a016c8b80aa61fa49950a38a7b3ddafb37f2f3aaeff98a` |
