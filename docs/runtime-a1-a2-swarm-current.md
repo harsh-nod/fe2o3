@@ -24,6 +24,19 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest threaded release development (2026-09-26): the actual feature-enabled
+VecAdd release benchmark now passes the unchanged strict policy under an
+explicit musl static-PIE profile; the GNU candidate remains rejected for exactly
+`dlsym`. The real release gate runs through local and hosted generic CI, with
+compiled prohibited-symbol controls, nine retained thread bodies, exact enabled
+usage, and source/tool/std/CRT continuity checks. The
+[development packet](evidence/dev-threaded-release-2026-09-26/README.md)
+retains both final artifacts and all earlier attempts. It records 11 calibration
+groups, 28 auditor tests and independent CI dispatch checks. This is ELF/link
+qualification, not fresh native lifecycle, DeviceLocal thread execution, formal
+refinement or performance evidence. #277 remains open; accepted milestones,
+A1/A2 and HIP/HSA parity are unchanged.
+
 Latest async bounded-settlement development (2026-09-26): ordinary async drivers
 now retain a producer quiescence diagnostic and continue bounded progress while
 the exact requested submission remains Pending. A depth-256 regression covers
@@ -3301,7 +3314,7 @@ their implementation to an idle runtime lane:
 | Mixed SIMT/tile consumer | [#275](https://github.com/harsh-nod/fe2o3/issues/275), with #134/#271/#272: generated launch/resource contracts and kernel-family qualification through the existing pipeline. Reconcile exact compiler-owner handoffs; do not duplicate their active work or wait for all distributed milestones before developing the initial admitted path. |
 | Protected kernels | #89/#88/#98/#104/#105/#123 plus the compiler-owned device-language G2/G4 milestones; exact ABI/effect contracts, independent output/layout oracles and architecture-specific execution |
 | Release and diagnostics | Offline installation #252, disposable-machine deployment #253 and debugger descendant containment #269; keep deployment and debugger ownership separate from queue construction |
-| Threaded release closure | [#277](https://github.com/harsh-nod/fe2o3/issues/277): resolve the strict ELF rejection of the GNU threaded VecAdd benchmark without weakening policy, add release CI coverage and separately investigate the observed teardown failure; functional kernel checks do not establish full-smoke or release qualification |
+| Threaded release closure | [#277](https://github.com/harsh-nod/fe2o3/issues/277): qualify the explicitly selected [threaded release profile](runtime-threaded-release-v1.md) without weakening policy and retain strict release CI coverage. The newer issue update reports the earlier teardown defect fixed; fresh native lifecycle and performance qualification remain separate from ELF acceptance. GNU still fails the strict policy. |
 | Broad qualification | G8 and A6/A7: differential testing, supported-target evidence, isolated fault campaigns and matched complete-output performance, not CPU suite wall time |
 
 These are coordination queues, not additional running agents. Worker V3's
