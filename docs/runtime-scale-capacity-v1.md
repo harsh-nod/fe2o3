@@ -69,17 +69,20 @@ Pipeline debits remain after native shutdown until backend/table destruction.
 Launch snapshots, kernargs, maps and provisional roster-index vectors are not
 covered by this payload accounting.
 
-These limits do not make every credit rejection retryable. Initial/auxiliary
-DATA initializers can precede the epoch-table reservation. Exhaustion after
-initial-binding admission or pristine-continuation consumption follows the
-existing terminal-custody policy; it does not restore the prior live queue.
-Budgeting must include replacement peaks. Moving this reservation ahead of all
-native preparation, with proved rollback, remains further admission work.
-That requires an owned preallocated table, not a transient budget check, before
-initial binding enters mutable work, auxiliary construction takes rooted custody,
-or pristine rebind consumes its continuation. Runtime classification after logical
-acceptance also needs review: a lower pre-entry rejection does not by itself prove
-a rejected/retryable Context launch.
+Qualification1024 now owns its epoch table before native preparation entry and
+transfers that same table into preparation. Initial and auxiliary binding reserve
+before DATA callbacks; rebind reserves before consuming the pristine continuation
+or moving DATA into preparation. Primary and replacement construction retain the
+preallocated owner with their consumed inputs. Default64 preserves its prior
+allocation timing. Pre-entry exhaustion avoids new native mutation but does not
+return consumed inputs or establish retryable Context launch admission. In
+particular, auxiliary initializer captures rejected by the epoch-table preflight
+remain deliberately retained, not disposed or returned. Later failures retain
+existing terminal custody, and runtime error classification remains conservative.
+Budgeting must still include
+replacement peaks; recoverable runtime-facing admission, aggregate backing/control/
+slot accounting and formal refinement remain open. See the
+[owned-preflight development packet](evidence/dev-epoch-preflight-2026-09-25/README.md).
 
 CPU tests use production construction/preparation sequencers with simulated
 native operations. Their epoch reservations are not GPU publication receipts.

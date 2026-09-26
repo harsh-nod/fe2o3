@@ -1,0 +1,61 @@
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized] target(s) in 37.20s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-epoch-preflight-target-20260925-e0cHbCB1/debug/deps/fe2o3_kfd-0b12f6a7b1bdedc6)
+
+running 53 tests
+test queue::live::rebind_tests::data_release::detached_release_direct_missing_engine_transports_parent ... ok
+test queue::live::rebind_tests::data_release::detached_release_bound_dispatch_precedes_bad_ledger ... ok
+test queue::live::rebind_tests::data_release::detached_release_public_preflight_preserves_precedence_and_owners ... ok
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_bound_dispatch_precedes_full_and_invalid_size ... ok
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_missing_engine_retains_terminal_parent_without_panic_marker ... ok
+test queue::live::rebind_tests::data_release::detached_release_facade_restores_before_transport_even_after_suppressed_error ... ok
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_production_wiring_never_grants_initialized_authority ... ok
+test queue::live::rebind_tests::insertion::coherent_insertion_actual_bound_dispatch_precedes_full_and_malformed_ledger ... ok
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_public_preflight_preserves_owners_and_precedence ... ok
+test queue::live::rebind_tests::insertion::coherent_insertion_concrete_facade_restores_before_transport_for_all_routes ... ok
+test queue::live::rebind_tests::insertion::coherent_insertion_production_routing_preserves_root_and_terminal_owner ... ok
+test queue::live::rebind_tests::insertion::device_allocation_insertion_bound_dispatch_precedes_full_and_invalid_request ... ok
+test queue::live::rebind_tests::insertion::coherent_insertion_all_public_entrypoints_preserve_preflight_precedence ... ok
+test queue::live::rebind_tests::insertion::device_allocation_insertion_production_wiring_preserves_uninitialized_custody ... ok
+test queue::live::rebind_tests::insertion::device_allocation_insertion_missing_engine_retains_parent_without_panic_marker ... ok
+test queue::live::rebind_tests::insertion::device_insertion_concrete_bound_dispatch_precedes_full_and_malformed_ledger ... ok
+test queue::live::rebind_tests::insertion::device_allocation_insertion_public_preflight_preserves_owners_and_precedence ... ok
+test queue::live::rebind_tests::insertion::device_insertion_concrete_preflight_keeps_error_precedence_and_healthy_parent ... ok
+test queue::live::rebind_tests::insertion::device_insertion_concrete_facade_restores_before_transport_even_after_swallowed_error ... ok
+test queue::live::rebind_tests::ordinary_rebind_caught_internal_preflight_panic_still_transports ... ok
+test queue::live::rebind_tests::ordinary_rebind_healthy_preflight_retains_parent_without_new_poison ... ok
+test queue::live::rebind_tests::insertion::device_insertion_production_routing_roots_reserves_settles_commits_then_extracts ... ok
+test queue::live::rebind_tests::ordinary_rebind_public_direct_wrapper_transports_terminal_parent ... ok
+test queue::live::rebind_tests::ordinary_rebind_production_routing_roots_before_loan_and_commits_after_validation ... ok
+test queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport ... ok
+test queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_terminal_ingress_preserves_preexisting_detached_custody ... ok
+test queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_terminal_reentry_preserves_complete_cancellation_custody ... ok
+test queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_terminal_wrong_shape_or_generation_returns_exact_receipt ... ok
+test queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_wrong_state_preserves_exact_published_lease ... ok
+test queue::live::rebind_tests::preparation::ordinary_rebind_generation_and_suppressed_failure_never_install_invalid_owner ... ok
+test queue::live::rebind_tests::preparation::ordinary_rebind_opening_and_validation_faults_keep_original_owners ... ok
+test queue::live::rebind_tests::preparation::ordinary_rebind_preflight_retains_exact_inputs_and_preserves_rejection_class ... ok
+test queue::live::rebind_tests::preparation::ordinary_rebind_real_loan_operation_retake_matrix_preserves_custody ... ok
+test queue::live::rebind_tests::preparation::ordinary_rebind_all_preparation_stages_retain_original_prefixes ... ok
+test queue::live::rebind_tests::preparation::pristine::facade::pristine_rebind_facade_retains_restored_primary_and_later_auxiliary_slots ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_corrupted_continuation_records_failed_generation ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_failed_complete_cannot_be_suppressed ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_opening_failure_retains_unconsumed_continuation ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_preflight_retains_exact_inputs_without_entered_poison_policy ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_real_loan_operation_retake_matrix_preserves_custody ... ok
+test queue::live::rebind_tests::preparation::scaled_preflight::scaled_rebind_credit_exhaustion_preserves_continuation_and_exact_inputs ... ok
+test queue::live::rebind_tests::preparation::scaled_preflight::scaled_rebind_post_entry_failures_retain_the_preallocated_debit ... ok
+test queue::live::rebind_tests::recycled_detach::recycled_detach_direct_missing_engine_transports_parent_before_error ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_all_preparation_stages_retain_original_prefixes ... ok
+test queue::live::rebind_tests::recycled_detach::recycled_detach_production_routing_roots_before_loan_and_commits_after_retake ... ok
+test queue::live::rebind_tests::recycled_detach::recycled_detach_facade_restores_selected_owner_and_keeps_transport_sticky ... ok
+test queue::live::rebind_tests::retained_control_release::retained_control_absent_and_ordinary_owners_return_false_without_engine_access ... ok
+test queue::live::rebind_tests::retained_control_release::retained_control_direct_missing_engine_transports_parent_before_returning_error ... ok
+test queue::live::rebind_tests::retained_control_release::retained_control_facade_restores_exact_selected_owner_before_sticky_parent_transport ... ok
+test queue::live::rebind_tests::recycled_detach::recycled_detach_public_preflight_rejection_preserves_owner_without_transport ... ok
+test queue::live::rebind_tests::scaled_pristine_rebind_rejects_equal_budget_wrong_ledger_before_consuming_continuation ... ok
+test queue::live::rebind_tests::retained_control_release::retained_control_public_preflight_preserves_exact_owner_and_does_not_request_transport ... ok
+
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 3.84s
+

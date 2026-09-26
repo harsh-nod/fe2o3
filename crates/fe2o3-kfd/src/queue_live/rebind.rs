@@ -9,6 +9,7 @@ pub(in crate::queue) struct LiveRebindRootV1<'a, const N: usize> {
     pub(in crate::queue) preparation: Option<FixedDispatchPreparationCustodyV1<N>>,
     pub(in crate::queue) predecessor: Option<u64>,
     pub(in crate::queue) continuation: Option<PristineDispatchContinuationV1>,
+    pub(in crate::queue) prepared_generation: Option<PreparedDispatchGenerationV1>,
     ordinary_entered: bool,
     pristine_entered: bool,
 }
@@ -27,6 +28,7 @@ impl<'a, const N: usize> LiveRebindRootV1<'a, N> {
             preparation: None,
             predecessor,
             continuation: None,
+            prepared_generation: None,
             ordinary_entered: false,
             pristine_entered: false,
         })
@@ -58,16 +60,16 @@ impl ComputeAqlQueueSessionV1 {
             LiveRebindRootV1::new(programs, packets, data, self.detached_dispatch_generation);
         self.settle_fixed_dispatch_rebind_with_v1(
             root,
-            |session, programs, preparation, predecessor, continuation| {
+            |session, programs, preparation, predecessor, continuation, prepared_generation| {
                 let capacity = session.dispatch_capacity.clone();
                 session.with_live_queue_memory_model(|memory| {
                     match predecessor {
                         Some(predecessor) => super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_after_detach_with_capacity_in_place(
-                            memory, programs, preparation, predecessor, &capacity,
+                            memory, programs, preparation, predecessor, &capacity, prepared_generation,
                         ),
                         None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1(
                             memory, programs, preparation,
-                            continuation.take().expect("one unpublished continuation"),
+                            continuation, prepared_generation,
                         ),
                     }.map_err(Into::into)
                 })
@@ -86,6 +88,7 @@ impl ComputeAqlQueueSessionV1 {
             &mut FixedDispatchPreparationCustodyV1<N>,
             Option<u64>,
             &mut Option<PristineDispatchContinuationV1>,
+            &mut Option<PreparedDispatchGenerationV1>,
         ) -> Result<(), ComputeAqlQueueSessionErrorV1>,
         validate: impl FnOnce(
             &mut Self,
@@ -101,6 +104,16 @@ impl ComputeAqlQueueSessionV1 {
                 session.preflight_fixed_dispatch_rebind_v1::<N>(
                     root.data.as_ref().expect("rooted rebind inputs"),
                 )?;
+                root.prepared_generation = match session.unpublished_dispatch.continuation.as_ref()
+                {
+                    Some(continuation) => continuation.preallocate_resume::<N>()?,
+                    None => PreparedDispatchGenerationV1::preallocate::<N>(
+                        &session.dispatch_capacity,
+                        DispatchGenerationSeedV1::Detached(
+                            root.predecessor.expect("preflighted detached predecessor"),
+                        ),
+                    )?,
+                };
                 if session.unpublished_dispatch.is_detached() {
                     root.pristine_entered = true;
                     root.continuation = session.unpublished_dispatch.continuation.take();
@@ -117,6 +130,7 @@ impl ComputeAqlQueueSessionV1 {
                     root.preparation.as_mut().expect("rooted preparation"),
                     root.predecessor,
                     &mut root.continuation,
+                    &mut root.prepared_generation,
                 )
             },
             |session, root| match &root.preparation {

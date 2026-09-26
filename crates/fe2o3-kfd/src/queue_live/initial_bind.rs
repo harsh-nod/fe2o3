@@ -59,6 +59,7 @@ pub(super) struct InitialBindingCustodyV1<'a, const N: usize, I, P> {
     initializer: Option<I>,
     pub(super) data: Vec<Gfx942FixedDispatchDataV1>,
     pub(super) preparation: Option<FixedDispatchPreparationCustodyV1<N>>,
+    pub(super) prepared_generation: Option<PreparedDispatchGenerationV1>,
     pub(super) terminal_parent: Option<P>,
     started: bool,
     #[cfg(test)]
@@ -80,6 +81,7 @@ impl<'a, const N: usize, I, P> InitialBindingCustodyV1<'a, N, I, P> {
             initializer: Some(initializer),
             data: Vec::new(),
             preparation: None,
+            prepared_generation: None,
             terminal_parent: None,
             started: false,
             #[cfg(test)]
@@ -115,6 +117,10 @@ where
         root.data.try_reserve_exact(data_count).map_err(|_| {
             ComputeAqlQueueSessionErrorV1::Contract("initial dispatch data roster allocation")
         })?;
+        root.prepared_generation = PreparedDispatchGenerationV1::preallocate::<N>(
+            &capacity,
+            DispatchGenerationSeedV1::Fresh,
+        )?;
         root.started = true;
         parent.currentness()?;
         let (operation, retake) = parent.with_preparation(|memory| {
@@ -140,6 +146,7 @@ where
                 &root.programs,
                 preparation,
                 &capacity,
+                &mut root.prepared_generation,
             )
             .map_err(Into::into)
         })?;

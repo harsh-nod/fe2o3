@@ -104,7 +104,7 @@ fn pristine_rebind_facade_retains_restored_primary_and_later_auxiliary_slots() {
                 |selected| {
                     let settled = selected.session.settle_fixed_dispatch_rebind_with_v1(
                         root,
-                        |session, programs, preparation, predecessor, continuation| {
+                        |session, programs, preparation, predecessor, continuation, prepared_generation| {
                             assert!(predecessor.is_none());
                             assert!(session.unpublished_dispatch.continuation.is_none());
                             assert_eq!(continuation.as_ref().unwrap().next_generation_for_test(), 7);
@@ -120,7 +120,7 @@ fn pristine_rebind_facade_retains_restored_primary_and_later_auxiliary_slots() {
                                 |f| {
                                     f.calls[1] += 1;
                                     prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1(
-                                        &mut f.memory, programs, preparation, continuation.take().unwrap(),
+                                        &mut f.memory, programs, preparation, continuation, prepared_generation,
                                     ).map_err(Into::into)
                                 },
                                 |f, loan| {

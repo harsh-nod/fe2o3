@@ -15,6 +15,9 @@ mod prefix_cases;
 #[path = "integration_release_tests.rs"]
 mod release_cases;
 
+#[path = "integration_scaled_preflight_tests.rs"]
+mod scaled_preflight_cases;
+
 struct Original {
     primary: Box<Root>,
     lanes: Vec<AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1<Fixture>>>,

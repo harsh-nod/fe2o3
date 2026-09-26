@@ -113,6 +113,7 @@ pub(super) struct PrimaryQueueConstructionV1<P, E: PrimaryEnvironmentV1 = LinuxP
     pub(super) memory: Option<E::Memory>,
     pub(super) preparation: P,
     pub(super) dispatch_capacity: Gfx942FixedDispatchCapacityV1,
+    pub(super) prepared_generation: Option<PreparedDispatchGenerationV1>,
     pub(super) dispatch: Option<DispatchResourceOwnerV1>,
     pub(super) completed: Option<CompletedPrimaryV1<E>>,
     ring: Option<RingConstructionV1>,
@@ -161,6 +162,10 @@ where
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         self.dispatch_capacity.validate_batch::<N>()?;
         validate_fixed_batch_ring::<N>(ring_bytes)?;
+        self.prepared_generation = PreparedDispatchGenerationV1::preallocate::<N>(
+            &self.dispatch_capacity,
+            DispatchGenerationSeedV1::Recycled(self.preparation.1),
+        )?;
         let memory = self.memory.as_mut().expect("construction memory");
         let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
         let (_, predecessor, programs, preparation) = &mut self.preparation;
@@ -170,6 +175,7 @@ where
             preparation,
             *predecessor,
             &self.dispatch_capacity,
+            &mut self.prepared_generation,
         )?;
         self.dispatch = Some(preparation.take_completed()?);
         self.construct(
@@ -217,6 +223,7 @@ impl<P, E: PrimaryEnvironmentV1> PrimaryQueueConstructionV1<P, E> {
             memory: Some(memory),
             preparation,
             dispatch_capacity: Gfx942FixedDispatchCapacityV1::default(),
+            prepared_generation: None,
             dispatch: None,
             completed: None,
             ring: None,

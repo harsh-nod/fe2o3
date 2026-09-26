@@ -43,10 +43,36 @@ impl PristineDispatchContinuationV1 {
             self.account.as_ref(),
         )
     }
+
+    pub(in crate::queue) fn preallocate_resume<const N: usize>(
+        &self,
+    ) -> Result<Option<PreparedDispatchGenerationV1>, Gfx942DispatchBindingErrorV1> {
+        PreparedDispatchGenerationV1::preallocate::<N>(
+            &Gfx942FixedDispatchCapacityV1 {
+                profile: self.capacity_profile,
+                account: self.account.clone(),
+            },
+            DispatchGenerationSeedV1::Pristine(self.next_generation),
+        )
+    }
+
+    fn resume_preallocated(
+        &self,
+        prepared: &mut Option<PreparedDispatchGenerationV1>,
+    ) -> Result<DispatchGenerationOwnerV1, Gfx942DispatchBindingErrorV1> {
+        PreparedDispatchGenerationV1::take_for(
+            prepared,
+            &Gfx942FixedDispatchCapacityV1 {
+                profile: self.capacity_profile,
+                account: self.account.clone(),
+            },
+            DispatchGenerationSeedV1::Pristine(self.next_generation),
+        )
+    }
 }
 
 impl DispatchGenerationOwnerV1 {
-    fn ensure_pristine(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    pub(super) fn ensure_pristine(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
         self.ensure_not_poisoned()?;
         if self.recipe_queue.is_some()
             || self.recycled_generation.is_some()
@@ -344,12 +370,29 @@ pub(in crate::queue) fn prepare_public_fixed_dispatch_resources_after_pristine_a
     memory: &mut impl preparation::PreparationMemoryV1,
     programs: &[ValidatedKernelEnvelope<'_>],
     custody: &mut FixedDispatchPreparationCustodyV1<N>,
-    continuation: PristineDispatchContinuationV1,
+    continuation: &mut Option<PristineDispatchContinuationV1>,
+    prepared: &mut Option<PreparedDispatchGenerationV1>,
 ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    let generation = match continuation.as_ref() {
+        Some(value)
+            if value.capacity_profile == FixedDispatchCapacityProfileV1::Default64
+                && prepared.is_none() =>
+        {
+            continuation.take().expect("default continuation").resume()
+        }
+        Some(value) => {
+            let generation = value.resume_preallocated(prepared);
+            if generation.is_ok() {
+                drop(continuation.take());
+            }
+            generation
+        }
+        None => Err(Gfx942DispatchBindingErrorV1::ResourcePhase),
+    };
     custody.prepare_in_place(
         memory,
         programs,
-        continuation.resume(),
+        generation,
         PersistentFixedDispatchControlStateV1::Ordinary,
     )
 }

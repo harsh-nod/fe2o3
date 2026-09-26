@@ -24,6 +24,23 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest owned-preflight development (2026-09-26 UTC): the scaled native paths now
+reserve an actual epoch table before mutable preparation and transfer that same
+allocation without a second debit. Initial/auxiliary callbacks and pristine
+continuation consumption follow reservation. Default64 timing and conservative
+runtime failure classification remain unchanged. The
+[development packet](evidence/dev-epoch-preflight-2026-09-25/README.md) records
+23 scaled tests, 152 dispatch-binding tests, 53 rebind tests and 49 selected
+construction regressions passing; these groups overlap. The full runtime run
+reports 1,444 passed, three existing telemetry `EPERM` failures and 28 ignored.
+The non-construction KFD subset reports 1,289 passed and its existing socket
+admission failure, with 295 construction tests filtered out. Strict Clippy,
+default-feature checking, formatting and all 73 KFD/runtime doctests pass.
+This is not full CPU qualification. SSH still fails during hostname resolution.
+Recoverable runtime-facing admission, aggregate accounting, scaled formal refinement,
+native depth/reuse/rebind, signed replay and matched performance remain open.
+No accepted checkpoint or A1/A2 status changes.
+
 Latest scaled-depth development (2026-09-25): a separate scale-feature-only
 ignored native canary now inspects all 2,048 original retained receipts across
 two lanes, exact runtime and profiler joins, distinct runtime-custody and native

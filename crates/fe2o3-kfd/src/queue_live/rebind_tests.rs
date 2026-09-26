@@ -56,7 +56,7 @@ fn scaled_pristine_rebind_rejects_equal_budget_wrong_ledger_before_consuming_con
     let mut retained = None;
     let result = session.settle_fixed_dispatch_rebind_with_v1(
         root,
-        |_, _, _, _, _| panic!("wrong ledger cannot enter preparation"),
+        |_, _, _, _, _, _| panic!("wrong ledger cannot enter preparation"),
         |_, _| panic!("wrong ledger cannot enter validation"),
         |root| retained = Some(root),
     );
@@ -105,7 +105,7 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
     assert!(entry.contains(
         "None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1("
     ));
-    assert_eq!(entry.matches("continuation.take()").count(), 1);
+    assert_eq!(entry.matches("continuation.take()").count(), 0);
     let pristine = include_str!("../queue_dispatch_binding/pristine_abort.rs")
         .split("fn prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1")
         .nth(1)
@@ -114,7 +114,8 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
         .next()
         .unwrap();
     assert!(pristine.contains("custody.prepare_in_place("));
-    assert!(pristine.contains("continuation.resume(),"));
+    assert!(pristine.contains("value.resume_preallocated(prepared)"));
+    assert!(pristine.contains("continuation.take()"));
     assert!(!pristine.contains('?'));
     let settlement = source
         .split("pub(in crate::queue) fn settle_fixed_dispatch_rebind_with_v1")
@@ -124,10 +125,11 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
         .next()
         .unwrap();
     let rooted_preparation = settlement.find("root.preparation = Some(").unwrap();
+    let preallocated = settlement.find("root.prepared_generation = match").unwrap();
     let rooted_continuation = settlement
         .find("root.continuation = session.unpublished_dispatch.continuation.take()")
         .unwrap();
-    assert!(rooted_continuation < rooted_preparation);
+    assert!(preallocated < rooted_continuation && rooted_continuation < rooted_preparation);
     let preparation_call = settlement.find("prepare(\n").unwrap();
     let validated = settlement
         .find("Some(preparation) => validate(session, preparation)")
@@ -149,13 +151,14 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
         .next()
         .unwrap();
     assert!(forwarder.contains("custody.prepare_in_place("));
-    assert!(forwarder.contains("DispatchGenerationOwnerV1::after_detached_with_capacity("));
+    assert!(forwarder.contains("PreparedDispatchGenerationV1::take_for("));
+    assert!(forwarder.contains("DispatchGenerationSeedV1::Detached(predecessor_generation)"));
     assert!(!forwarder.contains("after_recycled"));
     assert!(
         forwarder.find("capacity.validate_batch::<N>()?").unwrap()
             < forwarder.find("custody.prepare_in_place(").unwrap()
     );
-    assert!(forwarder.contains("capacity.account.as_ref()"));
+    assert!(forwarder.contains("prepared,"));
     let facade = include_str!("../queue_live.rs")
         .split("impl ComputeAqlQueueLaneDispatchV1<'_>")
         .nth(1)

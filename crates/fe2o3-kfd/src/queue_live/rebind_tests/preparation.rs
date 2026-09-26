@@ -13,6 +13,8 @@ use fe2o3_aql::AqlDispatchGeometryV1;
 
 #[path = "preparation/pristine.rs"]
 mod pristine;
+#[path = "preparation/scaled_preflight.rs"]
+mod scaled_preflight;
 pub(in crate::queue) use pristine::{
     pristine_constructor_regression_v1, pristine_settlement_regression_v1,
 };
@@ -187,7 +189,7 @@ fn exercise_source(
     let _ = take_dispatch_terminal_process_gate_record_v1();
     let result = session.settle_fixed_dispatch_rebind_with_v1(
         root,
-        |session, programs, preparation, generation, continuation| {
+        |session, programs, preparation, generation, continuation, prepared_generation| {
             assert_eq!(generation, predecessor);
             assert!(session.unpublished_dispatch.continuation.is_none());
             assert_eq!(continuation.as_ref().map(|c| c.next_generation_for_test()),
@@ -216,7 +218,7 @@ fn exercise_source(
                         ),
                         None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1(
                             &mut f.memory, programs, preparation,
-                            continuation.take().expect("retained pristine continuation"),
+                            continuation, prepared_generation,
                         ),
                     }.map_err(Into::into);
                     if suppress_operation_error {
@@ -609,7 +611,7 @@ fn preflight_source(pristine: bool) {
         let _ = take_dispatch_terminal_process_gate_record_v1();
         let settled = session.settle_fixed_dispatch_rebind_with_v1(
             root,
-            |_, _, _, _, _| panic!("preflight entered preparation"),
+            |_, _, _, _, _, _| panic!("preflight entered preparation"),
             |_, _| panic!("preflight entered validation"),
             |root| {
                 assert_eq!(&*root as *const _, root_identity);

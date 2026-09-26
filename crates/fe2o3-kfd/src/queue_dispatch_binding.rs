@@ -14,6 +14,12 @@ pub(crate) mod control_release;
 pub(crate) mod preparation;
 pub(crate) use preparation::FixedDispatchPreparationCustodyV1;
 
+#[path = "queue_dispatch_binding/generation_preflight.rs"]
+mod generation_preflight;
+pub(in crate::queue) use generation_preflight::{
+    DispatchGenerationSeedV1, PreparedDispatchGenerationV1,
+};
+
 #[path = "queue_dispatch_binding/pristine_abort.rs"]
 pub(crate) mod pristine_abort;
 pub(super) use pristine_abort::{
@@ -4075,15 +4081,16 @@ pub(super) fn prepare_public_fixed_dispatch_resources_after_recycle_with_capacit
     custody: &mut FixedDispatchPreparationCustodyV1<N>,
     predecessor_generation: u64,
     capacity: &Gfx942FixedDispatchCapacityV1,
+    prepared: &mut Option<PreparedDispatchGenerationV1>,
 ) -> Result<(), Gfx942DispatchBindingErrorV1> {
     capacity.validate_batch::<N>()?;
     custody.prepare_in_place(
         memory,
         programs,
-        DispatchGenerationOwnerV1::after_recycled_with_capacity(
-            predecessor_generation,
-            capacity.profile,
-            capacity.account.as_ref(),
+        PreparedDispatchGenerationV1::take_for(
+            prepared,
+            capacity,
+            DispatchGenerationSeedV1::Recycled(predecessor_generation),
         ),
         PersistentFixedDispatchControlStateV1::Ordinary,
     )
@@ -4112,15 +4119,16 @@ pub(super) fn prepare_public_fixed_dispatch_resources_after_detach_with_capacity
     custody: &mut FixedDispatchPreparationCustodyV1<N>,
     predecessor_generation: u64,
     capacity: &Gfx942FixedDispatchCapacityV1,
+    prepared: &mut Option<PreparedDispatchGenerationV1>,
 ) -> Result<(), Gfx942DispatchBindingErrorV1> {
     capacity.validate_batch::<N>()?;
     custody.prepare_in_place(
         memory,
         programs,
-        DispatchGenerationOwnerV1::after_detached_with_capacity(
-            predecessor_generation,
-            capacity.profile,
-            capacity.account.as_ref(),
+        PreparedDispatchGenerationV1::take_for(
+            prepared,
+            capacity,
+            DispatchGenerationSeedV1::Detached(predecessor_generation),
         ),
         PersistentFixedDispatchControlStateV1::Ordinary,
     )
@@ -4207,12 +4215,13 @@ pub(super) fn prepare_public_fixed_dispatch_resources_with_capacity_in_place<con
     programs: &[ValidatedKernelEnvelope<'_>],
     custody: &mut FixedDispatchPreparationCustodyV1<N>,
     capacity: &Gfx942FixedDispatchCapacityV1,
+    prepared: &mut Option<PreparedDispatchGenerationV1>,
 ) -> Result<(), Gfx942DispatchBindingErrorV1> {
     capacity.validate_batch::<N>()?;
     custody.prepare_in_place(
         memory,
         programs,
-        DispatchGenerationOwnerV1::with_capacity(1, capacity.profile, capacity.account.as_ref()),
+        PreparedDispatchGenerationV1::take_for(prepared, capacity, DispatchGenerationSeedV1::Fresh),
         PersistentFixedDispatchControlStateV1::Ordinary,
     )
 }

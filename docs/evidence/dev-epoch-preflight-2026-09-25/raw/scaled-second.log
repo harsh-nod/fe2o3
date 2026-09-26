@@ -1,0 +1,32 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0063]: missing field `append` in initializer of `live::PreparedAuxiliaryComputeLaneSlotV1`
+  --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_scaled_preflight_tests.rs:67:21
+   |
+67 |                     PreparedAuxiliaryComputeLaneSlotV1 { index: 0, generation: 1 },
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `append`
+
+error[E0599]: no method named `unwrap` found for struct `queue::dispatch_binding::pristine_abort::PristineDispatchContinuationV1` in the current scope
+  --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/scaled_preflight.rs:14:121
+   |
+14 |             let continuation = pristine.then(|| PristineDispatchContinuationV1::from_fresh_capacity_for_test(&capacity).unwrap());
+   |                                                                                                                         ^^^^^^ method not found in `queue::dispatch_binding::pristine_abort::PristineDispatchContinuationV1`
+   |
+  ::: crates/fe2o3-kfd/src/queue_dispatch_binding/pristine_abort.rs:6:1
+   |
+ 6 | pub(crate) struct PristineDispatchContinuationV1 {
+   | ------------------------------------------------ method `unwrap` not found for this struct
+
+error[E0599]: no method named `unwrap` found for struct `queue::dispatch_binding::pristine_abort::PristineDispatchContinuationV1` in the current scope
+  --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/scaled_preflight.rs:79:121
+   |
+79 |             let continuation = pristine.then(|| PristineDispatchContinuationV1::from_fresh_capacity_for_test(&capacity).unwrap());
+   |                                                                                                                         ^^^^^^ method not found in `queue::dispatch_binding::pristine_abort::PristineDispatchContinuationV1`
+   |
+  ::: crates/fe2o3-kfd/src/queue_dispatch_binding/pristine_abort.rs:6:1
+   |
+ 6 | pub(crate) struct PristineDispatchContinuationV1 {
+   | ------------------------------------------------ method `unwrap` not found for this struct
+
+Some errors have detailed explanations: E0063, E0599.
+For more information about an error, try `rustc --explain E0063`.
+error: could not compile `fe2o3-kfd` (lib test) due to 3 previous errors

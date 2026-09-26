@@ -10,6 +10,15 @@ pub(super) fn capacity() -> (Gfx942FixedDispatchCapacityV1, ResourceCreditAccoun
         4,
     )
     .unwrap();
+    let probe = PreparedDispatchGenerationV1::preallocate::<1>(
+        &Gfx942FixedDispatchCapacityV1::qualification_1024(account.clone()),
+        DispatchGenerationSeedV1::Fresh,
+    )
+    .unwrap();
+    let payload = account.usage().used;
+    drop(probe);
+    assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
+    let account = ResourceCreditAccountV1::new(payload, 1).unwrap();
     (
         Gfx942FixedDispatchCapacityV1::qualification_1024(account.clone()),
         account,
@@ -31,11 +40,16 @@ fn scaled_primary_and_replacement_construct_with_exact_account_and_1024_slots() 
             if replacement {
                 root.construct_replacement(entry, 65_536)
             } else {
+                root.prepared_generation = PreparedDispatchGenerationV1::preallocate::<1>(
+                    &root.dispatch_capacity,
+                    DispatchGenerationSeedV1::Fresh,
+                )?;
                 prepare_public_fixed_dispatch_resources_with_capacity_in_place(
                     root.memory.as_mut().unwrap(),
                     &root.preparation.2,
                     &mut root.preparation.3,
                     &root.dispatch_capacity,
+                    &mut root.prepared_generation,
                 )?;
                 root.dispatch = Some(root.preparation.3.take_completed()?);
                 root.construct(
@@ -66,7 +80,7 @@ fn scaled_primary_and_replacement_construct_with_exact_account_and_1024_slots() 
 }
 
 #[test]
-fn scaled_auxiliary_preparation_charges_shared_account_before_ring_allocation() {
+fn scaled_auxiliary_preparation_charges_shared_account_before_data_initialization() {
     let (mut memory, t) = setup_memory();
     let (programs, [packet, _, _]) = recipe();
     let (capacity, account) = capacity();
@@ -84,7 +98,10 @@ fn scaled_auxiliary_preparation_charges_shared_account_before_ring_allocation() 
             queue_resource_plan_for_test_v1(65_536),
             65_536,
             &programs,
-            |memory| Ok(memory.roster()),
+            |memory| {
+                assert_eq!(account.usage().retained_records, 1);
+                Ok(memory.roster())
+            },
         )
         .unwrap();
     entry.stage = None;
@@ -110,7 +127,6 @@ fn scaled_auxiliary_preparation_charges_shared_account_before_ring_allocation() 
         1,
     )
     .unwrap();
-    let mut snapshot = PrimaryPreparationSnapshotV1::packets(core::slice::from_ref(&packet));
     let mut auxiliary = AuxiliaryConstructionV1::<1, Fixture>::with_capacity(
         [packet],
         Gfx942FixedDispatchCapacityV1::qualification_1024(short.clone()),
@@ -124,22 +140,14 @@ fn scaled_auxiliary_preparation_charges_shared_account_before_ring_allocation() 
                 queue_resource_plan_for_test_v1(65_536),
                 65_536,
                 &programs,
-                |memory| {
-                    let data = memory.roster();
-                    snapshot.capture_data_vector_v1(&data, data.capacity());
-                    Ok(data)
-                }
+                |_| panic!("credit exhaustion cannot enter DATA initialization")
             )
             .is_err()
     );
     assert!(!t.borrow().calls.contains(&"allocate-ring"));
-    assert_ne!(memory.observation().calls, before.calls);
-    assert_eq!(&memory.observation().calls[5..], &before.calls[5..]);
-    auxiliary
-        .preparation
-        .as_ref()
-        .unwrap()
-        .primary_assert_snapshot_v1(&memory, &snapshot, None);
+    assert_eq!(memory.observation(), before);
+    assert!(auxiliary.preparation.is_none());
+    assert!(auxiliary.data.is_none());
     assert_eq!(short.usage().used, ResourceVectorV1::ZERO);
 }
 

@@ -117,6 +117,7 @@ impl ComputeAqlQueueSessionV1 {
 
 pub(super) struct AuxiliaryConstructionV1<const N: usize, E: PrimaryEnvironmentV1 = Platform> {
     dispatch_capacity: Gfx942FixedDispatchCapacityV1,
+    prepared_generation: Option<PreparedDispatchGenerationV1>,
     #[cfg(test)]
     pub(super) preparation_fault: Option<(
         crate::queue::dispatch_binding::preparation::PreparationStageV1,
@@ -163,6 +164,7 @@ impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
     ) -> Self {
         Self {
             dispatch_capacity,
+            prepared_generation: None,
             #[cfg(test)]
             preparation_fault: None,
             packets: Some(packets),
@@ -189,6 +191,15 @@ impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
         }
     }
 
+    fn preallocate_generation(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        PreparedDispatchGenerationV1::ensure_preallocated::<N>(
+            &mut self.prepared_generation,
+            &self.dispatch_capacity,
+            DispatchGenerationSeedV1::Fresh,
+        )
+        .map_err(Into::into)
+    }
+
     pub(super) fn prepare_dispatch(
         &mut self,
         memory: &mut E::Memory,
@@ -207,6 +218,7 @@ impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
         E::Memory: PreparationMemoryV1,
     {
         self.dispatch_capacity.validate_batch::<N>()?;
+        self.preallocate_generation()?;
         capture_returned_preparation_v1(memory, &mut self.data, prepare_data)?;
         self.preparation = Some(FixedDispatchPreparationCustodyV1::new(
             self.packets.take().expect("fixed packets"),
@@ -222,6 +234,7 @@ impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
             programs,
             preparation,
             &self.dispatch_capacity,
+            &mut self.prepared_generation,
         )?;
         self.dispatch = Some(preparation.take_completed()?);
         self.prepare(memory, entry, geometry, ring_bytes)
@@ -490,7 +503,7 @@ pub(super) fn construct_auxiliary_compute_lane_v1<const N: usize>(
 }
 
 pub(super) fn run_auxiliary_construction_with_v1<const N: usize, P: AuxiliaryParentV1>(
-    scope: Box<AuxiliaryConstructionScopeV1<N, P>>,
+    mut scope: Box<AuxiliaryConstructionScopeV1<N, P>>,
     ring_bytes: u32,
     programs: &[fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>],
     slot: PreparedAuxiliaryComputeLaneSlotV1,
@@ -503,6 +516,13 @@ pub(super) fn run_auxiliary_construction_with_v1<const N: usize, P: AuxiliaryPar
 where
     <P::Environment as PrimaryEnvironmentV1>::Memory: PreparationMemoryV1,
 {
+    if let Err(error) = scope.construction.preallocate_generation() {
+        // The consuming boundary cannot return captures that may own native DATA.
+        // Retain them without running destructors, as with the rejected scope.
+        core::mem::forget(prepare_data);
+        retain(scope);
+        return Err(error);
+    }
     settle_auxiliary_construction_with_v1(
         scope,
         P::check_currentness,

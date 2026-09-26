@@ -86,6 +86,9 @@ impl SharedGttMemorySessionV1 {
         let mut root = root.run(|root, entry| {
             root.dispatch_capacity.validate_batch::<N>()?;
             validate_fixed_batch_ring::<N>(ring_bytes)?;
+            root.prepared_generation = PreparedDispatchGenerationV1::preallocate::<N>(
+                &root.dispatch_capacity, DispatchGenerationSeedV1::Fresh,
+            )?;
             let memory = root.memory.as_mut().expect("construction memory");
             let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
             super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_with_capacity_in_place(
@@ -93,6 +96,7 @@ impl SharedGttMemorySessionV1 {
                 &root.preparation.0,
                 &mut root.preparation.1,
                 &root.dispatch_capacity,
+                &mut root.prepared_generation,
             )?;
             root.dispatch = Some(root.preparation.1.take_completed()?);
             root.construct(

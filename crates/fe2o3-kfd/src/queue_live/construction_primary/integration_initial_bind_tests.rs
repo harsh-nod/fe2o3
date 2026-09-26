@@ -52,6 +52,15 @@ fn scaled_initial_binding_preserves_bootstrap_capacity_and_bounds_inputs_before_
 
     let (programs, [packet, _, _]) = recipe();
     let root = InitialBindingCustodyV1::new(programs, [packet], |memory: &mut Memory, _| {
+        assert_eq!(account.usage().retained_records, 1);
+        assert!(
+            account
+                .reserve(fe2o3_resource_accounting::ResourceVectorV1::ZERO.with(
+                    fe2o3_resource_accounting::ResourceKindV1::ControlResidentBytes,
+                    1,
+                ))
+                .is_err()
+        );
         Ok(memory.host(true))
     });
     bind_initial_with_v1(&mut parent, root, 1, |_| panic!("valid initial binding")).unwrap();
@@ -74,7 +83,7 @@ impl Drop for InitializerDrop {
 }
 
 #[test]
-fn scaled_initial_credit_exhaustion_retains_materialized_data_and_terminal_parent() {
+fn scaled_initial_credit_exhaustion_preserves_parent_before_currentness_and_data() {
     use fe2o3_resource_accounting::{ResourceCreditAccountV1, ResourceVectorV1};
     let (memory, trace) = setup_memory();
     trace.borrow_mut().local_gate = Some(LocalGateV1::new());
@@ -91,15 +100,18 @@ fn scaled_initial_credit_exhaustion_retains_materialized_data_and_terminal_paren
     assert!(result.is_ok());
     let mut parent = Some(parent_from_completed(constructor.completed.take().unwrap()));
     let (programs, [packet, _, _]) = recipe();
-    let snapshot = RefCell::new(PrimaryPreparationSnapshotV1::packets(
-        core::slice::from_ref(&packet),
-    ));
-    let root = InitialBindingCustodyV1::new(programs, [packet], |memory: &mut Memory, _| {
-        let data = memory.host(true);
-        snapshot
-            .borrow_mut()
-            .capture_data(core::slice::from_ref(&data));
-        Ok(data)
+    let before = parent
+        .as_ref()
+        .unwrap()
+        .engine
+        .backend
+        .session
+        .observation();
+    let mut calls = trace.borrow().calls.clone();
+    // Borrowed owner validation precedes the credit reservation, not native work.
+    calls.push("release-validate-owners");
+    let root = InitialBindingCustodyV1::new(programs, [packet], |_: &mut Memory, _| {
+        panic!("credit exhaustion cannot enter initializer")
     });
     let mut retained = None;
     let result = bind_initial_with_v1(&mut parent, root, 1, |root| retained = Some(root));
@@ -109,17 +121,82 @@ fn scaled_initial_credit_exhaustion_retains_materialized_data_and_terminal_paren
             Gfx942DispatchBindingErrorV1::HostAllocationCapacity { .. }
         ))
     ));
-    assert!(parent.is_none());
+    assert!(!parent.as_ref().unwrap().poisoned);
+    assert_eq!(
+        parent
+            .as_ref()
+            .unwrap()
+            .engine
+            .backend
+            .session
+            .observation(),
+        before
+    );
+    assert_eq!(trace.borrow().calls, calls);
     let retained = retained.unwrap();
-    let terminal = retained.terminal_parent.as_ref().unwrap();
-    assert!(terminal.poisoned);
-    retained
-        .preparation
-        .as_ref()
-        .unwrap()
-        .primary_assert_descriptors_v1(&snapshot.borrow(), None);
+    assert!(retained.terminal_parent.is_none());
+    assert!(retained.preparation.is_none());
+    assert!(retained.prepared_generation.is_none());
+    assert!(retained.data.is_empty());
     assert!(!trace.borrow().calls.contains(&"initial-validation"));
     assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
+}
+
+#[test]
+fn scaled_initial_post_entry_failures_retain_preallocated_epoch_storage() {
+    for stage in ["initial-currentness", "initial-data", "generation"] {
+        for panic in [false, true] {
+            let (memory, trace) = setup_memory();
+            trace.borrow_mut().local_gate = Some(LocalGateV1::new());
+            let (capacity, account) = super::super::capacity_cases::capacity();
+            let mut constructor = Root::<()>::new_with(memory, ());
+            constructor.dispatch_capacity = capacity;
+            let (mut constructor, result) = run_with(
+                constructor,
+                QueueRingBackingV1::AqlSpecial,
+                None,
+                |_| Ok(()),
+            );
+            assert!(result.is_ok());
+            let mut parent = Some(parent_from_completed(constructor.completed.take().unwrap()));
+            let (programs, [packet, _, _]) = recipe();
+            let mut root =
+                InitialBindingCustodyV1::new(programs, [packet], |memory: &mut Memory, _| {
+                    assert_eq!(account.usage().retained_records, 1);
+                    step("initial-data")?;
+                    Ok(memory.host(true))
+                });
+            if stage == "generation" {
+                root.preparation_fault = Some((PreparationStageV1::Generation, panic));
+            } else {
+                trace.borrow_mut().fault = Some((stage, 1, panic));
+            }
+            let retained = RefCell::new(None);
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                bind_initial_with_v1(&mut parent, root, 1, |root| {
+                    *retained.borrow_mut() = Some(root)
+                })
+            }));
+            assert_eq!(result.is_err(), panic);
+            assert!(!matches!(result, Ok(Ok(()))));
+            assert!(parent.is_none());
+            let retained = retained.into_inner().unwrap();
+            assert!(retained.terminal_parent.as_ref().unwrap().poisoned);
+            assert_eq!(
+                retained.prepared_generation.is_some(),
+                stage != "generation"
+            );
+            assert_eq!(retained.preparation.is_some(), stage == "generation");
+            assert_eq!(account.usage().retained_records, 1);
+            trace.borrow_mut().fault = None;
+            // CPU fixture teardown is not native terminal-custody recovery.
+            drop(retained);
+            assert_eq!(
+                account.usage().used,
+                fe2o3_resource_accounting::ResourceVectorV1::ZERO
+            );
+        }
+    }
 }
 
 impl InitialBindingParentV1 for Option<Parent> {

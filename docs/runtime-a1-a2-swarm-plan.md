@@ -926,6 +926,14 @@ startup paths and both pipeline tables, and scaled custody reserves 1,024 owners
 per allocation. Generated, DeviceLocal and persistent scaled paths reject early;
 default capacity/dependency limits stay unchanged. Aggregate admission, scaled
 formal refinement and native qualification remain open.
+Owned-preflight implementation (2026-09-26): scaled native construction and
+rebinding now reserve a real epoch table before preparation entry and transfer
+that same owner without a second debit. Initial/auxiliary callbacks and pristine
+continuation consumption follow reservation; Default64 timing is unchanged.
+Consuming rejection still retains inputs, so this does not establish public
+retryable admission or change runtime terminal classification. The
+[development packet](evidence/dev-epoch-preflight-2026-09-25/README.md) separates
+CPU validation from the remaining native, aggregate-admission and proof gates.
 The scale-only ignored retained-depth canary now inspects all original native
 receipts, exact runtime/profile joins, separate runtime/native saturation
 rejections and the ten-to-two-to-zero metadata ledger lifecycle. Its
@@ -962,7 +970,7 @@ the separately measured 2,048-native-epoch roster.
 
 Report accepted/queued, native-published, unresolved and retired counts
 separately, including peak occupancy per native resource. The current restricted
-compute profile has two lanes and at most 64 fixed-dispatch epochs per lane;
+default production compute profile has two lanes and at most 64 fixed-dispatch epochs per lane;
 directional SDMA queues have their own finite slot limits. Thousands of accepted
 operations cycling through these slots are not thousands of simultaneously
 published native operations. CPU tests with 2,048 operations qualify neither.
