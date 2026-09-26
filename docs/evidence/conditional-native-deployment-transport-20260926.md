@@ -10,6 +10,10 @@ is granted by these transport APIs or local tests.
 Base: `cf98106d17b4808dac78f6572ab9a60317409f45`.
 Integrated code: `d6a2f03665ad6bcd0b403cc22c3fc75035097123`.
 
+Follow-up: the [native anchor provisioning checkpoint](conditional-native-anchor-provisioning-20260926.md)
+adds signing-key and provisioning owners. Their protected startup integration
+remains incomplete; the results below describe this earlier code checkpoint.
+
 ## Implementation
 
 - `01ed40fad`: the existing sealed-record transport now accepts a private borrowed

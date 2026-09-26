@@ -124,10 +124,68 @@ tests cover all three nested admission stages. These are logical quotas, not
 wall-clock, stack or RSS bounds. Neither a correctly rehashed executable
 measurement nor a sealed descriptor proves independently trusted provenance.
 
-The protected coordinator, anchor signing-key/provisioning owners and inherited
-service entry points still need native integration. Native deployment records,
-sealed transport, and passing local tests do not establish that protected startup
-or the production compiler has consumed them.
+### External Anchor Provisioning
+
+`CompilerExecutionExternalAnchorProvisioningV2/V3` bind the actual same-family
+anchor deployment and a helper executable digest/nonzero length bounded at
+128 MiB. Their distinct 128-byte frames and identity domains reject V1 and
+cross-family substitutions. Public recovery requires the actual deployment,
+not its digest; that owner already binds the supervisor and policy. All record
+operations cost 4104 logical work units on the original ledger.
+
+`CompilerExecutionExternalAnchorProvisioningCapabilityV2/V3` carry these records
+through the existing contextual sealed transport. Creation consumes the native
+record. Recovery borrows the complete deployment charge and either consumes a
+File charge (returning growth) or borrows an inherited File charge (returning
+full private CLOEXEC custody). I/O costs 36872 work units; full recovery costs
+40976, with outer I/O scratch plus native decoder scratch. Revalidation requires
+the exact admitted inode, metadata, seals and bytes.
+
+A correctly rehashed helper change describes different inert configuration; it
+does not authenticate an executable. Before protected use, the trusted parent
+must independently pin provenance and compare the actual measured helper with
+`matches_deployment_and_helper`.
+
+### External Anchor Signing Keys
+
+`CompilerExecutionExternalAnchorSigningKeyCapabilityV2/V3` freshly admit a seed
+or native secret image under the actual same-family anchor deployment. Their
+88-byte images contain a 24-byte role/family header, the complete 32-byte
+deployment identity and a 32-byte seed. They reject legacy raw-seed images,
+issuer owners and substituted deployments, even when the verification key is
+unchanged. They expose no raw key/seed getter, `AsFd`, clone or legacy upgrade.
+
+Secret staging shares the issuer's wiping guards. Guards precede admission and
+partial I/O and wipe on ordinary return and unwind. Sealed images must be
+anonymous, read-only, mode0400, and owned by the current UID/GID. A transferred
+File remains readable secret material requiring trusted custody; kernel-page
+erasure, prior copies, abort and termination are not covered.
+
+Root-template reissue additionally requires source ownership 0:0 and the exact
+nonroot service credentials from the deployment. It creates a fresh service-owned
+image and rechecks both images and credentials before returning. Root ownership
+alone does not authenticate provisioning provenance. Local tests exercise fresh
+reissue mechanics through a private expected-owner hook; genuine root-to-service
+reissue remains unexecuted in this checkpoint.
+
+`sign_observation` uses the existing fixed domain-separated anchor transcript,
+checks the challenge's pinned key and validates key custody before and after
+signing. It authenticates the caller's reported position, not persistence or
+currentness. The durable service must establish the position before signing.
+
+The key's I/O, admission, reissue and observation work quotas are 68360, 133896,
+142088 and 267792 respectively. Borrowed deployment, key and challenge charges
+remain prepaid as applicable; consuming File operations return growth, inherited
+admission returns full custody, and signing returns the full observation charge.
+Scopes preserve prior work, peak and first-denial history. These are logical
+quotas, not timing, generated-stack or RSS bounds.
+
+The protected coordinator, provisioning helper and inherited service entry points
+still need to consume these native owners. Current helper/service startup uses
+V1 owners and raw keys. Passing local tests does not establish protected startup
+or production compiler integration. See the
+[anchor provisioning checkpoint](evidence/conditional-native-anchor-provisioning-20260926.md)
+for exact validation and remaining gates.
 
 ## Production Profile
 
@@ -209,7 +267,7 @@ instructions/stack, allocator behavior, page cache, or process RSS.
 
 ## Native Signing-Key Custody
 
-The key image is exactly 32 bytes. In addition to the shared mode, length, seal,
+The issuer key image is exactly 32 bytes. In addition to the shared mode, length, seal,
 CLOEXEC and retained-inode checks, it must be anonymous, owned by the current
 effective UID/GID, RDONLY and not O_PATH. Creation seals a writable memfd, then
 reopens that same retained inode read-only using a fixed stack path buffer.
