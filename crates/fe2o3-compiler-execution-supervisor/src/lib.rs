@@ -34,6 +34,7 @@ mod handoff_v2;
 mod handoff_v2_io;
 #[cfg(test)]
 mod handoff_v2_test_process;
+mod handoff_v3;
 mod launch;
 mod launch_checks;
 mod launch_v2;
@@ -85,6 +86,10 @@ pub use handoff::{AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErro
 pub use handoff_v2::{
     AcceptedCompilerExecutionHandoffV2, ProtectedIssuerHandoffErrorV2,
     ProtectedIssuerHandoffStorageV2,
+};
+pub use handoff_v3::{
+    AcceptedCompilerExecutionHandoffV3, ProtectedIssuerHandoffErrorV3,
+    ProtectedIssuerHandoffStorageV3,
 };
 pub use launch::{PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1};
 pub use launch_v2::{
