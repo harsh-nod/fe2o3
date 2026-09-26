@@ -54,6 +54,7 @@ pub(crate) fn fd_inventory() -> BTreeMap<i32, FdIdentity> {
                 );
             }
             Err(error) if error.raw_os_error() == Some(libc::ENOENT) => disappeared += 1,
+            // fe2o3-hygiene: allow-panic -- isolated test census must fail on unreadable descriptors.
             Err(error) => panic!("cannot inventory fd {fd}: {error}"),
         }
     }
