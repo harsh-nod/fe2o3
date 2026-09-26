@@ -155,7 +155,7 @@ fn changed_subject(subject: &Subject, offset: usize, budget: &mut Budget<'_>) ->
     bytes[offset] ^= 1;
     if (152..344).contains(&offset) {
         let pin = |i| bytes[i..i + 32].try_into().unwrap();
-        let closure = fe2o3_build_authority::CompilerClosureV3::new(
+        let closure = fe2o3_build_authority::CompilerClosureV2::new(
             pin(152),
             pin(184),
             pin(216),
