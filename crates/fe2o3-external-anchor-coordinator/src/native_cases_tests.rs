@@ -679,8 +679,14 @@ fn revalidation_requires_actual_context_and_rechecks_mutable_image_metadata() {
     ));
     let (file, c) = p.helper.try_clone_for_exec(&mut b).unwrap();
     b.reserve_storage(c.additional_storage()).unwrap();
-    // In a root fixture the image is service-owned; root can still make this mutation.
-    rustix::fs::fchmod(&file, Mode::from_raw_mode(0o500)).unwrap();
+    // F_SEAL_EXEC locks execute bits, but read/write permissions remain mutable.
+    assert_eq!(
+        rustix::fs::fchmod(&file, Mode::from_raw_mode(0o500)),
+        Err(rustix::io::Errno::PERM)
+    );
+    p.revalidate_inner::<false>(&f.supervisor, &f.policy, &mut b)
+        .unwrap();
+    rustix::fs::fchmod(&file, Mode::from_raw_mode(0o755)).unwrap();
     let live = b.storage();
     assert!(matches!(
         p.revalidate_inner::<false>(&f.supervisor, &f.policy, &mut b),
