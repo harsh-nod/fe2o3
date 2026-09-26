@@ -1,5 +1,5 @@
-//! Five genuine compiler sessions for authenticated helper transport only.
-//! Successful transport MUST still encounter the unchanged ordinary refusal.
+//! Five separate genuine-source sessions for retained helper CPU observation.
+//! This sibling never changes or satisfies the historical transport-only gate.
 use super::gfx942_inline_value_qualification_v30_tests::{
     checked, invocation_for_fixture, read_bounded, sanitized,
 };
@@ -14,16 +14,21 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[path = "gfx942_bf16_tile_values_inputs_v1_tests.rs"]
 mod inputs;
-#[path = "gfx942_bf16_tile_values_observation_v1_tests.rs"]
-pub(super) mod observation;
+use super::gfx942_bf16_tile_values_qualification_v1_tests::observation as source_observation;
+use super::gfx942_tiled_region_qualification_v1_tests::observation::cpu::oracle;
+use fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1 as Error;
+#[path = "gfx942_bf16_call_source_cpu_capture_v1_tests.rs"]
+mod capture;
+#[path = "gfx942_bf16_call_source_cpu_observation_v1_tests.rs"]
+mod observed;
 
-const OUTPUT_ENV: &str = "FE2O3_TEST_BF16_TILE_VALUES_OUTPUT_V1";
-const CHILD_ENV: &str = "FE2O3_TEST_BF16_TILE_VALUES_INPUTS_V1";
-const CASE_ENV: &str = "FE2O3_TEST_BF16_TILE_VALUES_CASE_V1";
+const OUTPUT_ENV: &str = "FE2O3_TEST_BF16_CALL_CPU_OUTPUT_V1";
+const CHILD_ENV: &str = "FE2O3_TEST_BF16_CALL_CPU_INPUTS_V1";
+const CASE_ENV: &str = "FE2O3_TEST_BF16_CALL_CPU_CASE_V1";
 const PACKAGE: &str = "fe2o3-bf16-tile-promotion-v1-fixture";
 const CRATE_NAME: &str = "fe2o3_bf16_tile_promotion_v1_fixture";
-const CHILD: &str = "production_rustc_driver_v1::gfx942_bf16_tile_values_qualification_v1_tests::actual_bf16_tile_values_child";
-const PREFIX: &str = "FE2O3_BF16_TILE_VALUES_SOURCE_OBSERVATION_V1 ";
+const CHILD: &str = "production_rustc_driver_v1::gfx942_bf16_call_source_cpu_qualification_v1_tests::actual_bf16_call_source_cpu_child";
+const PREFIX: &str = "FE2O3_BF16_CALL_SOURCE_CPU_OBSERVATION_V1 ";
 const FEATURES: [&str; 3] = ["identity", "swap01", "wrong-launch"];
 const CORE: [&str; 5] = [
     "identity",
@@ -144,9 +149,9 @@ impl Callbacks for BodyCallbacks<'_> {
                 tcx,
                 crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
             ) {
-                Ok(transaction) => observation::observe(transaction, self.case),
+                Ok(transaction) => observed::observe(transaction, self.case),
                 Err(error) => {
-                    json!({"stage":"actual_source_or_callback_refused","diagnostic":error,"phase":null,"snapshot":null,"callback":null,"collection_refused":true})
+                    json!({"stage":"actual_helper_source_cpu_refused","diagnostic":error,"phase":null,"cpu":null,"progress":null,"collection_refused":true})
                 }
             },
         );
@@ -155,7 +160,7 @@ impl Callbacks for BodyCallbacks<'_> {
 }
 #[test]
 #[ignore = "genuine isolated helper source child; invoke through the five-session parent"]
-fn actual_bf16_tile_values_child() {
+fn actual_bf16_call_source_cpu_child() {
     let started = std::time::Instant::now();
     let directory =
         PathBuf::from(std::env::var_os(CHILD_ENV).expect("actual preparation directory"));
@@ -208,8 +213,8 @@ fn actual_bf16_tile_values_child() {
         &format!("{case}.observed.json"),
         &json!({"case":case,"observation":observed,"accepted":false,"acceptance_requires_completed_parent":true}),
     );
-    observation::accept(&case, &observed).unwrap();
-    if let Some(bytes) = observed["snapshot"]["source_sha256"].as_array() {
+    accept(&case, &observed).unwrap();
+    if let Some(bytes) = observed["cpu"]["source"]["source_sha256"].as_array() {
         assert_eq!(
             Value::Array(bytes.clone()),
             serde_json::to_value(<[u8; 32]>::from(Sha256::digest(
@@ -226,15 +231,15 @@ fn actual_bf16_tile_values_child() {
     );
     assert_eq!(inputs::derive_record(&directory, feature), actual);
     timely(started.elapsed(), 300).unwrap();
-    let frame=serde_json::to_string(&json!({"schema":"fe2o3-test-bf16-tile-values-source-observation-v1","case":case,"feature":feature,"invocation":actual,"observation":observed,"actual_rustc_callbacks":callbacks.calls,"source_and_dependencies_unchanged":true,"transport_only":true,"emitted_helper_qualified":false,"normal_qualified":false,"numerical_cpu_qualified":false,"grants_artifact_or_launch_authority":false,"hardware_observed":false})).unwrap();
-    assert!(frame.len() <= 128 * 1024);
+    let frame=serde_json::to_string(&json!({"schema":"fe2o3-test-bf16-call-source-cpu-observation-v1","case":case,"feature":feature,"invocation":actual,"observation":observed,"actual_rustc_callbacks":callbacks.calls,"source_and_dependencies_unchanged":true,"transport_only":false,"emitted_helper_qualified":matches!(case.as_str(),"identity"|"swap01"),"normal_qualified":false,"numerical_cpu_qualified":matches!(case.as_str(),"identity"|"swap01"),"grants_artifact_or_launch_authority":false,"hardware_observed":false})).unwrap();
+    assert!(frame.len() <= 256 * 1024);
     timely(started.elapsed(), 300).unwrap();
     println!("\n{PREFIX}{frame}");
     timely(started.elapsed(), 300).unwrap();
 }
 #[test]
 #[ignore = "five genuine compiler sessions: Identity/Swap01 transport, launch refusal, callback error/panic"]
-fn actual_bf16_tile_values_ladder() {
+fn actual_bf16_call_source_cpu_ladder() {
     let started = std::time::Instant::now();
     let requested = PathBuf::from(std::env::var_os(OUTPUT_ENV).expect("fresh task-owned output"));
     let directory = create_output(&requested);
@@ -336,7 +341,7 @@ fn actual_bf16_tile_values_ladder() {
         let observed: Value = serde_json::from_str(frames[0]).unwrap();
         assert_eq!(
             observed["schema"],
-            "fe2o3-test-bf16-tile-values-source-observation-v1"
+            "fe2o3-test-bf16-call-source-cpu-observation-v1"
         );
         assert_eq!(observed["case"], case);
         assert_eq!(observed["feature"], feature);
@@ -346,17 +351,23 @@ fn actual_bf16_tile_values_ladder() {
         );
         assert_eq!(observed["actual_rustc_callbacks"], 1);
         assert_eq!(observed["source_and_dependencies_unchanged"], true);
-        assert_eq!(observed["transport_only"], true);
+        assert_eq!(observed["transport_only"], false);
+        assert_eq!(
+            observed["emitted_helper_qualified"],
+            matches!(case, "identity" | "swap01")
+        );
+        assert_eq!(
+            observed["numerical_cpu_qualified"],
+            matches!(case, "identity" | "swap01")
+        );
         for key in [
-            "emitted_helper_qualified",
             "normal_qualified",
-            "numerical_cpu_qualified",
             "grants_artifact_or_launch_authority",
             "hardware_observed",
         ] {
             assert_eq!(observed[key], false);
         }
-        observation::accept(case, &observed["observation"]).unwrap();
+        accept(case, &observed["observation"]).unwrap();
         let raw: Value = serde_json::from_slice(
             &read_bounded(&directory.join(format!("{case}.observed.json")), 256 * 1024).unwrap(),
         )
@@ -375,61 +386,219 @@ fn actual_bf16_tile_values_ladder() {
     assert_eq!(observations.len(), 5);
     assert_eq!(inputs::current_sources(), sources);
     assert_eq!(inputs::dependency_snapshot(&directory).0, dependencies);
-    let report = json!({"schema":"fe2o3-test-bf16-tile-values-source-ladder-v1","actual_rustc_sessions":5,"expected_positive_transports":2,"expected_unchanged_normal_refusals":2,"expected_source_refusals":1,"expected_callback_error_panic":2,"observations":observations,"source_files":sources,"dependency_snapshot":dependencies,"fresh_dependency_builds":1,"transport_only":true,"emitted_helper_qualified":false,"normal_qualified":false,"numerical_cpu_qualified":false,"source_publication_attempted":false,"native_execution_attempted":false,"grants_artifact_or_launch_authority":false,"cleanup_scope":"reused bounded direct-child/process-group helper, not whole-family supervision","acceptance":"completed successful parent test required; JSON is historical only"});
+    let report = json!({"schema":"fe2o3-test-bf16-call-source-cpu-ladder-v1","actual_rustc_sessions":5,"expected_positive_sources":2,"expected_positive_numerical_runs":36,"expected_request_refusals":32,"expected_unchanged_normal_refusals":2,"expected_source_refusals":1,"expected_callback_error_panic":2,"callback_controls_completed_numerical_runs":2,"observations":observations,"source_files":sources,"dependency_snapshot":dependencies,"fresh_dependency_builds":1,"transport_only":false,"emitted_helper_qualified":true,"normal_qualified":false,"numerical_cpu_qualified":true,"source_publication_attempted":false,"native_execution_attempted":false,"grants_artifact_or_launch_authority":false,"cleanup_scope":"reused bounded direct-child/process-group helper, not whole-family supervision","acceptance":"completed successful parent test required; JSON is historical only"});
     timely(started.elapsed(), 1200).unwrap();
     publish_json(&directory, "observation.json", &report);
     timely(started.elapsed(), 1200).unwrap();
 }
-#[test]
-fn bf16_source_controls_keep_closed_case_names_and_original_deadlines() {
-    for case in [
-        "../identity",
-        "identity,swap01",
-        "identity-error,wrong-launch",
-        "",
-    ] {
-        assert!(feature_for_case(case).is_err());
-    }
-    for seconds in [300, 1200] {
-        let exact = std::time::Duration::from_secs(seconds);
-        assert!(timely(exact - std::time::Duration::from_nanos(1), seconds).is_ok());
-        assert!(timely(exact, seconds).is_err());
-        assert!(timely(exact + std::time::Duration::from_nanos(1), seconds).is_err());
-    }
-}
-#[test]
-fn bf16_source_output_location_refuses_candidate_before_create() {
-    let repo = Path::new("/task/candidate");
-    assert!(intended_output(repo, std::ffi::OsStr::new("outputs"), repo).is_err());
-    assert!(intended_output(Path::new("/task"), std::ffi::OsStr::new("candidate"), repo).is_err());
-    assert!(
-        intended_output(
-            Path::new("/task"),
-            std::ffi::OsStr::new("../elsewhere"),
-            repo
-        )
-        .is_err()
-    );
-    assert_eq!(
-        intended_output(
-            Path::new("/task"),
-            std::ffi::OsStr::new("fresh-helper"),
-            repo
-        )
-        .unwrap(),
-        Path::new("/task/fresh-helper")
-    );
-}
 
+fn count(value: &Value) -> Result<u64, &'static str> {
+    value.as_u64().ok_or("missing actual nonnegative counter")
+}
+fn accept(case: &str, report: &Value) -> Result<(), &'static str> {
+    if !CORE.contains(&case) {
+        return Err("unknown source CPU case");
+    }
+    let diagnostic = report["diagnostic"]
+        .as_str()
+        .ok_or("actual refusal diagnostic absent")?;
+    if case == "wrong-launch" {
+        if report["stage"] != "actual_helper_source_cpu_refused"
+            || !report["phase"].is_null()
+            || !report["cpu"].is_null()
+            || !report["progress"].is_null()
+        {
+            return Err("wrong launch did not refuse before nominal callback");
+        }
+        if !diagnostic.contains("BF16 helper requires explicit WG64 and one workgroup") {
+            return Err("wrong launch diagnostic differs");
+        }
+        return Ok(());
+    }
+    let control = matches!(case, "identity-error" | "identity-panic");
+    let cpu = &report["cpu"];
+    let phase = &report["phase"];
+    let permutation = if case == "swap01" {
+        [1, 0, 2, 3]
+    } else {
+        [0, 1, 2, 3]
+    };
+    let source = &cpu["source"];
+    if report["stage"] != "actual_helper_source_cpu_observed"
+        || report["unexpected_normal_success"] != false
+        || report["normal_qualified"] != false
+        || report["hardware_observed"] != false
+        || report["source_authority_in_copied_row"] != false
+        || phase["same_ledger"] != true
+        || phase["failed_work"] != false
+        || phase["failed_storage"] != false
+        || phase["normal_succeeded"] != false
+        || phase["materialized"] != !control
+        || phase["normal_attempted"] != !control
+        || count(&phase["occurrence_storage"])? == 0
+        || count(&phase["nominal_storage"])? == 0
+        || count(&phase["reverification_peak_storage"])? > 2 * 1024 * 1024 * 1024
+        || count(&phase["phase_peak_storage"])? > 2 * 1024 * 1024 * 1024
+        || count(&phase["phase_peak_storage"])? < count(&phase["reverification_peak_storage"])?
+        || cpu["same_original_ledger"] != true
+        || cpu["source_authority_in_copied_row"] != false
+        || source["return_permutation"] != json!(permutation)
+        || cpu["sites"]["permutation"] != json!(permutation)
+        || source["root"] == source["helper"]
+        || cpu["sites"]["root"] == cpu["sites"]["helper"]
+        || source["source_authority_in_copied_row"] != false
+        || count(&cpu["canonical_bytes"])? == 0
+        || count(&cpu["canonical_bytes"])? > 16384
+    {
+        return Err("actual source, nominal owner, original ledger or two-envelope peak differs");
+    }
+    for field in [
+        "source_sha256",
+        "root_mir_sha256",
+        "helper_mir_sha256",
+        "semantic_sha256",
+        "helper_source_signature_sha256",
+        "helper_fn_abi_sha256",
+    ] {
+        if source[field].as_array().is_none_or(|a| a.len() != 32) {
+            return Err("actual Rust/MIR/FnABI identity absent");
+        }
+    }
+    if source["helper_actual_abi_modes"] != json!([1, 3, 3, 4, 4]) {
+        return Err("actual Rust helper FnABI modes differ");
+    }
+    let accounting = report["accounting"]
+        .as_array()
+        .ok_or("actual callback accounting absent")?;
+    if accounting.len() != 6 {
+        return Err("callback accounting shape");
+    }
+    let reserve = count(&accounting[4])?;
+    let extra = if control { 23 } else { 0 };
+    if reserve == 0
+        || reserve > 131072
+        || count(&accounting[5])? != extra
+        || count(&accounting[1])?
+            != count(&accounting[0])?
+                .checked_add(reserve + extra)
+                .ok_or("callback overflow")?
+        || count(&accounting[3])? <= count(&accounting[2])?
+        || count(&phase["work"])? < count(&accounting[3])?
+    {
+        return Err("actual CPU callback floor/work differ");
+    }
+    let retained = if control {
+        0
+    } else {
+        count(&phase["occurrence_storage"])?
+            .checked_add(count(&phase["nominal_storage"])?)
+            .ok_or("retained overflow")?
+    };
+    if count(&phase["final_storage"])?
+        != count(&phase["entry_storage"])?
+            .checked_add(reserve + extra)
+            .and_then(|v| v.checked_add(retained))
+            .ok_or("phase overflow")?
+    {
+        return Err("source/SSA owner drop-before-refund or retained receipt differs");
+    }
+    if control {
+        let marker = if case == "identity-panic" {
+            "CallbackPanicked"
+        } else {
+            "genuine helper CPU source callback error control"
+        };
+        if !diagnostic.contains(marker) {
+            return Err("source CPU callback control not reached");
+        }
+    } else if !diagnostic.contains("BF16 nominal source-ranked projection") {
+        return Err("ordinary nominal consumer refusal not reached");
+    }
+    let expected_attempts = if control { 1 } else { 34 };
+    if count(&cpu["attempted_runs"])? != expected_attempts
+        || report["progress"]["floor_restored"] != true
+        || !report["progress"]["debug_failure"].is_null()
+    {
+        return Err("numerical run series incomplete");
+    }
+    let runs = cpu["runs"]
+        .as_array()
+        .ok_or("actual numerical runs absent")?;
+    let negatives = cpu["negatives"]
+        .as_array()
+        .ok_or("actual negative controls absent")?;
+    if runs.len() != 18 || negatives.len() != 16 {
+        return Err("finite numerical row counts differ");
+    }
+    for (index, run) in runs.iter().enumerate() {
+        if control && index > 0 {
+            if !run.is_null() {
+                return Err("callback control continued numerical runs");
+            }
+            continue;
+        }
+        let pattern = index / 3;
+        let length = oracle::LENGTHS[index % 3];
+        let helper = oracle::expected(pattern);
+        let caller = capture::expected_call(&helper, permutation);
+        let stores = if length == 64 {
+            u64::MAX
+        } else {
+            (1u64 << length) - 1
+        };
+        let backing = run["actual_allocations"]
+            .as_array()
+            .ok_or("backing identity absent")?;
+        if run["pattern"] != pattern
+            || run["output_length"] != length
+            || run["helper_values_row_major_le_hex"] != serde_json::to_value(helper).unwrap()
+            || run["caller_values_row_major_le_hex"] != serde_json::to_value(caller).unwrap()
+            || run["output_with_canaries_le_hex"]
+                != serde_json::to_value(capture::expected_output(pattern, length, permutation))
+                    .unwrap()
+            || count(&run["helper_lane_mask"])? != u64::MAX
+            || count(&run["caller_lane_mask"])? != u64::MAX
+            || count(&run["committed_store_lane_mask"])? != stores
+            || count(&run["records"])? == 0
+            || count(&run["steps"])? == 0
+            || count(&run["storage_floor"])? != count(&run["storage_after"])?
+            || count(&run["work_after"])? <= count(&run["work_before"])?
+            || backing.len() != 3
+            || backing[0] == backing[1]
+            || backing[0] == backing[2]
+            || backing[1] == backing[2]
+        {
+            return Err("actual four-component helper/caller/frame/output observation differs");
+        }
+    }
+    for (index, negative) in negatives.iter().enumerate() {
+        if control {
+            if !negative.is_null() {
+                return Err("callback control ran negatives");
+            }
+            continue;
+        }
+        if negative["control"] != serde_json::to_value(oracle::NEGATIVES[index]).unwrap()
+            || negative["observed"] != observed::expected(oracle::NEGATIVES[index])
+            || negative["helper_lane_mask"] != 0
+            || negative["caller_lane_mask"] != 0
+            || negative["global_writes"] != 0
+            || negative["floor_restored"] != true
+        {
+            return Err("actual request refusal or delivered observation differs");
+        }
+    }
+    Ok(())
+}
 #[test]
-fn helper_fixture_is_separate_and_has_one_retained_nominal_source_call() {
-    let source = include_str!("../../tests/fixtures/bf16-tile-promotion-v1/src/lib.rs");
-    assert!(source.contains("#![no_std]"));
-    assert_eq!(source.matches("#[inline(never)]").count(), 1);
-    assert_eq!(source.matches("fn __fe2o3_bf16_tile").count(), 1);
-    assert_eq!(source.matches("let result = __fe2o3_bf16_tile").count(), 1);
-    assert_eq!(source.matches(".multiply_accumulate(").count(), 1);
-    assert_eq!(source.matches(".into_values()").count(), 1);
-    assert!(source.contains("Bf16MfmaAFragment<'wave>"));
-    assert!(source.contains("F32AccumulatorFragment<'wave>"));
+fn helper_cpu_acceptance_does_not_count_transport_or_normal_flags_as_execution() {
+    for report in [
+        json!({"stage":"actual_borrowed_transport_then_ordinary_refusal","diagnostic":"old transport"}),
+        json!({"stage":"actual_helper_source_cpu_observed","diagnostic":"BF16 consumer unavailable","cpu":{}}),
+        Value::Null,
+    ] {
+        assert!(accept("identity", &report).is_err());
+        assert!(accept("swap01", &report).is_err());
+    }
+    assert!(accept("identity,swap01", &Value::Null).is_err());
 }

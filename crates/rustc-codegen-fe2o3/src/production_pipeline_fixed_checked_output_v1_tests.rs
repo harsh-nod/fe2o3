@@ -3,6 +3,28 @@ use super::*;
 use std::cell::Cell;
 
 #[test]
+fn nominal_bf16_refuses_before_header_transfer_callback() {
+    let entered = Cell::new(false);
+    let mut work = Work::new(HEADER_WORK);
+    let mut budget = Budget::new(&mut work, 23);
+    budget.reserve_storage(23).unwrap();
+    let result = transfer_header(SourcePolicy::Bf16Nominal, &mut budget, || {
+        entered.set(true);
+        Ok(())
+    });
+    assert!(matches!(result, Err(ProductionPipelineError::PreRankedMaterialization(
+        fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Lowering(
+            fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable {
+                consumer: "BF16 nominal fixed checked output",
+            }
+        )
+    ))));
+    assert!(!entered.get());
+    assert_eq!(budget.storage(), 23);
+    assert_eq!(budget.peak_storage(), 23);
+}
+
+#[test]
 fn fixed_facade_accounts_only_additional_in_place_header_for_each_source_shape() {
     let total = std::mem::size_of::<FixedCheckedOutputProductionCompilationV1>();
     assert_eq!(

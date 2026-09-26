@@ -181,6 +181,7 @@ fn lower_scalar_instances(
         signatures.insert(
             id,
             LoweredFunctionSignatureV1 {
+                bf16_nominal: false,
                 parameter_semantic_types: declaration.abi().source_input_types().to_vec(),
                 call_arguments: plan.call_arguments.clone(),
                 parameter_types: plan.parameter_types.clone(),

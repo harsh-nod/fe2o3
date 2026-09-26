@@ -63,6 +63,8 @@ pub enum ProductionHelperSourcePolicyV1 {
     RawEmpty,
     /// At least one helper needs the sealed source-local Unit relation.
     UnitLocal,
+    /// Closed nominal BF16 helper; legacy ranked/normal/CPU consumers refuse.
+    Bf16Nominal,
 }
 
 /// One executable mixed-SSA graph constructed before ranked verification.
@@ -346,7 +348,9 @@ impl ProductionPreRankedKirOwnerV1 {
     /// Returns only a consumer-routing category. The typed source relation must
     /// still be borrowed and checked by any stage that supports local helpers.
     pub fn helper_source_policy_v1(&self) -> ProductionHelperSourcePolicyV1 {
-        if self.helper_memory.unit_source.is_empty() {
+        if self.helper_memory.bf16_nominal.is_some() {
+            ProductionHelperSourcePolicyV1::Bf16Nominal
+        } else if self.helper_memory.unit_source.is_empty() {
             ProductionHelperSourcePolicyV1::RawEmpty
         } else {
             ProductionHelperSourcePolicyV1::UnitLocal
@@ -357,7 +361,7 @@ impl ProductionPreRankedKirOwnerV1 {
         &self,
         consumer: &'static str,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        if self.helper_source_policy_v1() == ProductionHelperSourcePolicyV1::UnitLocal {
+        if self.helper_source_policy_v1() != ProductionHelperSourcePolicyV1::RawEmpty {
             return Err(
                 ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable { consumer },
             );

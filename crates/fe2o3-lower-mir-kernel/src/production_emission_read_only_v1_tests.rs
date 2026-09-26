@@ -25,6 +25,7 @@ fn tables(ssa: &ProductionSemanticSsaOwnerV1) -> (Ids, Signatures) {
         signatures.insert(
             id,
             LoweredFunctionSignatureV1 {
+                bf16_nominal: false,
                 parameter_semantic_types: vec![],
                 call_arguments: vec![],
                 parameter_types: vec![],
@@ -66,6 +67,7 @@ fn plumbing_tables(count: usize) -> (Ids, Signatures, Vec<Type>) {
         signatures.insert(
             id,
             LoweredFunctionSignatureV1 {
+                bf16_nominal: false,
                 parameter_semantic_types: vec![SemanticTypeIdV1::from_index(0)],
                 call_arguments: vec![HelperCallArgumentV1 {
                     source_argument: index as u32,
@@ -78,7 +80,11 @@ fn plumbing_tables(count: usize) -> (Ids, Signatures, Vec<Type>) {
             },
         );
     }
-    let results = if count == 0 { vec![] } else { vec![boxed_type()] };
+    let results = if count == 0 {
+        vec![]
+    } else {
+        vec![boxed_type()]
+    };
     (ids, signatures, results)
 }
 
@@ -168,11 +174,23 @@ fn actual_constructor_borrows_empty_single_and_multiple_typed_tables() {
             &mut budget,
         )
         .unwrap();
-        assert!(matches!(&lowering.defined_function_ids, EmissionReadOnlyV1::Borrowed(_)));
-        assert!(matches!(&lowering.defined_function_signatures, EmissionReadOnlyV1::Borrowed(_)));
-        assert!(matches!(&lowering.result_types, EmissionReadOnlyV1::Borrowed(_)));
+        assert!(matches!(
+            &lowering.defined_function_ids,
+            EmissionReadOnlyV1::Borrowed(_)
+        ));
+        assert!(matches!(
+            &lowering.defined_function_signatures,
+            EmissionReadOnlyV1::Borrowed(_)
+        ));
+        assert!(matches!(
+            &lowering.result_types,
+            EmissionReadOnlyV1::Borrowed(_)
+        ));
         assert!(std::ptr::eq(&*lowering.defined_function_ids, &ids));
-        assert!(std::ptr::eq(&*lowering.defined_function_signatures, &signatures));
+        assert!(std::ptr::eq(
+            &*lowering.defined_function_signatures,
+            &signatures
+        ));
         assert!(std::ptr::eq(&*lowering.result_types, &results));
         assert_eq!(lowering.defined_function_ids.len(), count);
         assert_eq!(lowering.defined_function_signatures.len(), count);
@@ -182,13 +200,19 @@ fn actual_constructor_borrows_empty_single_and_multiple_typed_tables() {
             assert!(std::ptr::eq(actual, signature));
             assert_eq!(lowering.defined_function_ids[id], ids[id]);
             assert_eq!(actual.parameter_types, signature.parameter_types);
-            assert!(std::ptr::eq(pointee(&actual.parameter_types[0]), pointee(&signature.parameter_types[0])));
+            assert!(std::ptr::eq(
+                pointee(&actual.parameter_types[0]),
+                pointee(&signature.parameter_types[0])
+            ));
             assert_eq!(actual.call_arguments[0].tuple_field, Some(2));
             assert_eq!(actual.call_arguments[0].component, Some(3));
             assert_eq!(actual.result_semantic_type, signature.result_semantic_type);
         }
         if count != 0 {
-            assert!(std::ptr::eq(pointee(&lowering.result_types[0]), pointee(&results[0])));
+            assert!(std::ptr::eq(
+                pointee(&lowering.result_types[0]),
+                pointee(&results[0])
+            ));
         }
         drop(lowering);
         budget.release_storage(budget.storage() - FLOOR).unwrap();
@@ -209,25 +233,34 @@ fn actual_constructor_keeps_owned_temporaries_and_boxed_results_alive() {
         let result_pointer = results.as_ptr();
         let type_pointer = signatures[&key].parameter_types.as_ptr();
         let name_pointer = ids[&key].as_str().as_ptr();
-        let lowering = construct(
-            &ssa,
-            key,
-            ids,
-            signatures,
-            results,
-            &mut budget,
-        )
-        .unwrap();
+        let lowering = construct(&ssa, key, ids, signatures, results, &mut budget).unwrap();
         (lowering, result_pointer, type_pointer, name_pointer)
     };
     let key = SemanticFunctionIdV1::from_index(1);
-    assert!(matches!(&lowering.defined_function_ids, EmissionReadOnlyV1::Owned(_)));
-    assert!(matches!(&lowering.defined_function_signatures, EmissionReadOnlyV1::Owned(_)));
-    assert!(matches!(&lowering.result_types, EmissionReadOnlyV1::Owned(_)));
+    assert!(matches!(
+        &lowering.defined_function_ids,
+        EmissionReadOnlyV1::Owned(_)
+    ));
+    assert!(matches!(
+        &lowering.defined_function_signatures,
+        EmissionReadOnlyV1::Owned(_)
+    ));
+    assert!(matches!(
+        &lowering.result_types,
+        EmissionReadOnlyV1::Owned(_)
+    ));
     assert_eq!(lowering.defined_function_ids.len(), 3);
     assert_eq!(lowering.defined_function_ids[&key].as_str(), "read_only_0");
-    assert_eq!(lowering.defined_function_ids[&key].as_str().as_ptr(), name_pointer);
-    assert_eq!(lowering.defined_function_signatures[&key].parameter_types.as_ptr(), type_pointer);
+    assert_eq!(
+        lowering.defined_function_ids[&key].as_str().as_ptr(),
+        name_pointer
+    );
+    assert_eq!(
+        lowering.defined_function_signatures[&key]
+            .parameter_types
+            .as_ptr(),
+        type_pointer
+    );
     assert_eq!(lowering.result_types.as_ptr(), result_pointer);
     assert_eq!(lowering.result_types[0], boxed_type());
     drop(lowering);
@@ -255,7 +288,10 @@ fn repeated_instances_share_tables_and_preserve_cumulative_constructor_work() {
             &mut budget,
         )
         .unwrap();
-        assert!(std::ptr::eq(&*lowering.defined_function_signatures, &signatures));
+        assert!(std::ptr::eq(
+            &*lowering.defined_function_signatures,
+            &signatures
+        ));
         assert!(std::ptr::eq(&*lowering.result_types, &results));
         drop(lowering);
         let delta = (budget.work() - before_work, budget.storage() - FLOOR);
@@ -282,8 +318,13 @@ struct Emission {
 
 // Exercise the same constructor and real block/terminator emitter with both
 // input representations. The existing admitted fixture has no statements.
-fn emit(ssa: &ProductionSemanticSsaOwnerV1, selected: SemanticFunctionIdV1,
-    owned: bool, work_limit: usize, storage_limit: usize) -> Emission {
+fn emit(
+    ssa: &ProductionSemanticSsaOwnerV1,
+    selected: SemanticFunctionIdV1,
+    owned: bool,
+    work_limit: usize,
+    storage_limit: usize,
+) -> Emission {
     let (ids, signatures) = tables(ssa);
     let results = Vec::new();
     let mut work = Work::new(work_limit);
@@ -291,34 +332,62 @@ fn emit(ssa: &ProductionSemanticSsaOwnerV1, selected: SemanticFunctionIdV1,
     budget.reserve_storage(FLOOR).unwrap();
     let ledger = budget.work_ledger_identity_v1();
     let function = (|| -> Result<Function, ProductionSemanticKirErrorV1> {
-        let ids = if owned { EmissionReadOnlyV1::Owned(ids.clone()) }
-            else { EmissionReadOnlyV1::Borrowed(&ids) };
-        let signatures = if owned { EmissionReadOnlyV1::Owned(signatures.clone()) }
-            else { EmissionReadOnlyV1::Borrowed(&signatures) };
-        let result_types = if owned { EmissionReadOnlyV1::Owned(results.clone()) }
-            else { EmissionReadOnlyV1::Borrowed(&results) };
+        let ids = if owned {
+            EmissionReadOnlyV1::Owned(ids.clone())
+        } else {
+            EmissionReadOnlyV1::Borrowed(&ids)
+        };
+        let signatures = if owned {
+            EmissionReadOnlyV1::Owned(signatures.clone())
+        } else {
+            EmissionReadOnlyV1::Borrowed(&signatures)
+        };
+        let result_types = if owned {
+            EmissionReadOnlyV1::Owned(results.clone())
+        } else {
+            EmissionReadOnlyV1::Borrowed(&results)
+        };
         let mut lowering = construct(ssa, selected, ids, signatures, result_types, &mut budget)?;
         let semantic = ssa.source_semantic();
         let source = &semantic.functions()[selected.index() as usize];
         let mut blocks = Vec::new();
-        for block in ssa.plan_for_function(selected).unwrap().plan().reverse_postorder() {
+        for block in ssa
+            .plan_for_function(selected)
+            .unwrap()
+            .plan()
+            .reverse_postorder()
+        {
             let block = SemanticBlockIdV1::from_index(block.get());
             let original = &source.blocks()[block.index() as usize];
             assert!(original.statements().is_empty());
             let mut target = BasicBlock::new(lowering.kernel_block_id_v1(block)?);
             lowering.begin_block(block, &mut target)?;
             target.terminator = Some(lowering.lower_terminator(
-                block, original.terminator().kind(), &mut target.operations,
+                block,
+                original.terminator().kind(),
+                &mut target.operations,
             )?);
             blocks.push(target);
         }
-        require_semantic_ssa_definitions_consumed_v1(selected.index(), &lowering.pending_semantic_ssa_definitions)?;
+        require_semantic_ssa_definitions_consumed_v1(
+            selected.index(),
+            &lowering.pending_semantic_ssa_definitions,
+        )?;
         drop(lowering);
         Ok(if selected == semantic.roots()[0] {
-            Function::kernel_entry("placed_root", Signature::new(vec![], vec![]), vec![], blocks)
+            Function::kernel_entry(
+                "placed_root",
+                Signature::new(vec![], vec![]),
+                vec![],
+                blocks,
+            )
         } else {
-            Function::internal_helper(helper_function_id_v1(selected, source),
-                Signature::new(vec![], vec![]), vec![], blocks)
+            Function::internal_helper(
+                helper_function_id_v1(selected, source),
+                Signature::new(vec![], vec![]),
+                vec![],
+                blocks,
+            )
         })
     })();
     let resource = match &function {
@@ -343,7 +412,10 @@ fn emit(ssa: &ProductionSemanticSsaOwnerV1, selected: SemanticFunctionIdV1,
 #[test]
 fn borrowed_and_owned_constructors_emit_the_same_complete_production_functions() {
     let ssa = source();
-    for selected in [SemanticFunctionIdV1::from_index(0), SemanticFunctionIdV1::from_index(1)] {
+    for selected in [
+        SemanticFunctionIdV1::from_index(0),
+        SemanticFunctionIdV1::from_index(1),
+    ] {
         let borrowed = emit(&ssa, selected, false, WORK, STORAGE);
         let owned = emit(&ssa, selected, true, WORK, STORAGE);
         assert!(borrowed.function.is_ok());
@@ -351,8 +423,12 @@ fn borrowed_and_owned_constructors_emit_the_same_complete_production_functions()
         let mut work = Work::new(WORK);
         let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
         let actual = resource_tests::emission_placement_lowering_tests::lower_placed_function(
-            &ssa, selected, SemanticEmissionPlacementV1::default(), &mut budget,
-        ).unwrap();
+            &ssa,
+            selected,
+            SemanticEmissionPlacementV1::default(),
+            &mut budget,
+        )
+        .unwrap();
         assert_eq!(borrowed.function.as_ref().unwrap(), &actual.function);
         drop(actual);
         budget.release_storage(budget.storage()).unwrap();
@@ -371,15 +447,24 @@ fn borrowed_and_owned_constructors_have_identical_exact_and_short_resource_resul
         (baseline.work, baseline.peak, true),
         (baseline.work - 1, baseline.peak, false),
         (baseline.work, baseline.peak - 1, false),
-    ].into_iter().enumerate() {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let borrowed = emit(&ssa, root, false, work, storage);
         let owned = emit(&ssa, root, true, work, storage);
         assert_eq!(borrowed, owned);
         assert_eq!(borrowed.function.is_ok(), succeeds);
         match index {
             0 => assert_eq!(borrowed.resource, None),
-            1 => assert!(matches!(borrowed.resource, Some(ArgumentResourceV1::Work(_)))),
-            2 => assert!(matches!(borrowed.resource, Some(ArgumentResourceV1::Storage(_)))),
+            1 => assert!(matches!(
+                borrowed.resource,
+                Some(ArgumentResourceV1::Work(_))
+            )),
+            2 => assert!(matches!(
+                borrowed.resource,
+                Some(ArgumentResourceV1::Storage(_))
+            )),
             _ => unreachable!(),
         }
     }
@@ -390,7 +475,9 @@ fn unwinding_drops_owned_view_once_and_never_drops_borrowed_input() {
     use std::{cell::Cell, rc::Rc};
     struct Counted(Rc<Cell<usize>>);
     impl Drop for Counted {
-        fn drop(&mut self) { self.0.set(self.0.get() + 1); }
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
     }
     let borrowed_drops = Rc::new(Cell::new(0));
     let owned_drops = Rc::new(Cell::new(0));

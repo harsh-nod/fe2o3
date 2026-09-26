@@ -44,6 +44,16 @@ fn resource(error: Resource) -> ProductionPipelineError {
 
 const HEADER_WORK: usize = 2;
 
+fn nominal_unavailable() -> ProductionPipelineError {
+    ProductionPipelineError::PreRankedMaterialization(
+        fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Lowering(
+            fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable {
+                consumer: "BF16 nominal fixed checked output",
+            },
+        ),
+    )
+}
+
 fn direct_native_source(
     admitted: &fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1,
 ) -> &Owner {
@@ -55,6 +65,7 @@ fn direct_native_source(
 
 fn additional_header(source: SourcePolicy) -> Result<usize, ProductionPipelineError> {
     let moved = match source {
+        SourcePolicy::Bf16Nominal => return Err(nominal_unavailable()),
         SourcePolicy::RawEmpty => std::mem::size_of::<Direct>(),
         SourcePolicy::UnitLocal => std::mem::size_of::<Erased>(),
     };
@@ -118,6 +129,7 @@ impl RankedVerifiedProductionCompilation {
             crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
         );
         let stage = transfer_header(source, &mut budget, || match source {
+            SourcePolicy::Bf16Nominal => Err(nominal_unavailable()),
             SourcePolicy::RawEmpty => self.lower_checked_output_policy6_v1().map(Stage::Direct),
             SourcePolicy::UnitLocal => self
                 .lower_silent_unit_checked_output_policy6_v1()

@@ -22,6 +22,8 @@ pub struct ProductionHelperMemoryStorageV1(usize);
 
 impl ProductionHelperMemoryStorageV1 {
     /// Header and actual vector-capacity bytes, excluding the executable graph.
+    /// The nominal BF16 profile additionally retains its conservative prepaid
+    /// construction envelope until owner teardown; this is not RSS.
     pub const fn retained_storage(self) -> usize {
         self.0
     }
@@ -32,6 +34,7 @@ enum RetainedHelperKindV1 {
     NotHelper,
     Pending,
     RawEmpty,
+    Bf16Nominal,
     Local {
         allocations: (usize, usize),
         accesses: (usize, usize),
@@ -77,6 +80,7 @@ struct SealedHelperMemoryV1 {
     control: Vec<RetainedLocalControlV1>,
     edge_bindings: Vec<RetainedLocalEdgeBindingV1>,
     unit_source: SealedUnitLocalSourceV1,
+    bf16_nominal: Option<Box<SealedBf16CallRelationV1>>,
     capture: HelperOccurrenceCaptureV1,
     storage: ProductionHelperMemoryStorageV1,
     analysis_storage: usize,
@@ -203,6 +207,7 @@ impl SealedHelperMemoryV1 {
                 control: Vec::new(),
                 edge_bindings: Vec::new(),
                 unit_source: SealedUnitLocalSourceV1::empty(),
+                bf16_nominal: None,
                 capture: HelperOccurrenceCaptureV1::Absent,
                 storage: ProductionHelperMemoryStorageV1(std::mem::size_of::<Self>()),
                 analysis_storage: 0,
@@ -329,6 +334,7 @@ impl SealedHelperMemoryV1 {
             control,
             edge_bindings,
             unit_source,
+            bf16_nominal: None,
             capture: HelperOccurrenceCaptureV1::Absent,
             storage: ProductionHelperMemoryStorageV1(storage),
             analysis_storage: 0,
@@ -705,6 +711,9 @@ impl ProductionPreRankedKirOwnerV1 {
                     edge_bindings,
                 }))
             }
+            RetainedHelperKindV1::Bf16Nominal => Err(bf16_emission_refusal_v1(
+                "BF16 generic call-local-frame consumer unavailable",
+            )),
             RetainedHelperKindV1::NotHelper | RetainedHelperKindV1::Pending => Err(mismatch()),
         }
     }
@@ -742,6 +751,11 @@ impl ProductionPreRankedKirOwnerV1 {
             &mut ArgumentBudgetV1<'w>,
         ) -> Result<R, ProductionSemanticKirErrorV1>,
     ) -> Result<R, ProductionSemanticKirErrorV1> {
+        if self.helper_source_policy_v1() == ProductionHelperSourcePolicyV1::Bf16Nominal {
+            return Err(bf16_emission_refusal_v1(
+                "BF16 generic helper-memory consumer unavailable",
+            ));
+        }
         with_canonical_call_scratch_v1(budget, |budget| {
             budget.charge_work(7)?;
             if !inventory.belongs_to(self.executable()) {

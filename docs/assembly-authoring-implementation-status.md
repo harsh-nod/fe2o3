@@ -5,6 +5,18 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Genuine Rust BF16 helper emission and CPU observation — 2026-09-26
+
+The [source-owned helper checkpoint](bf16-helper-source-cpu-qualification-20260926.md)
+now connects actual Rust helper analysis to canonical Function/Call/Return and
+two-frame CPU observation. Identity and Swap01 each passed 18 numerical cases
+and 16 request refusals; wrong-launch and callback error/panic sessions also
+passed. The unchanged 2 GiB logical ledger covers replay and both live owners.
+The compatibility gate passed 4,569 test executions with zero failures, including
+fresh historical helper and root-only core/normal/CPU source ladders.
+Helper normal ranked/formal/LLVM continuation, edited-tile promotion and hardware
+remain open. Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Closed BF16 helper-call CPU observation — 2026-09-26
 
 The [two-frame CPU checkpoint](bf16-helper-call-cpu-qualification-20260926.md)

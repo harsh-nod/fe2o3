@@ -123,12 +123,25 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
                 measured(profile, mutation, WORK, STORAGE);
             result.unwrap();
             assert_eq!((storage_denial, work_denial), (None, None));
-            // V20 enlarges retained OperationKind storage; work and the exact
-            // nested first-denial phase are unchanged on both target profiles.
+            // The historical V20 baseline below predates the inline optional
+            // nominal-helper relation. This phase retains one source owner,
+            // so pay its actual new header once without changing work or the
+            // exact nested first-denial phase on either target profile.
+            let nominal_header = std::mem::size_of::<Option<Box<SealedBf16CallRelationV1>>>();
             let expected = if mutation {
-                (2_733_569, 3_335_168, 2_686_896, 3_309_341)
+                (
+                    2_733_569,
+                    3_335_168 + nominal_header,
+                    2_686_896,
+                    3_309_341 + nominal_header,
+                )
             } else {
-                (249_631, 1_949_434, 238_296, 1_933_493)
+                (
+                    249_631,
+                    1_949_434 + nominal_header,
+                    238_296,
+                    1_933_493 + nominal_header,
+                )
             };
             assert_eq!((work, peak), (expected.0, expected.1));
             let (result, accepted, actual_peak, storage_denial, work_denial) =

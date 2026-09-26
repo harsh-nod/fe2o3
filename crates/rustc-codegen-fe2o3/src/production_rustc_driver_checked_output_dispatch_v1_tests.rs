@@ -17,10 +17,11 @@ pub(super) enum Route {
 }
 
 impl Route {
-    fn from_policy(policy: ProductionHelperSourcePolicyV1) -> Self {
+    fn from_policy(policy: ProductionHelperSourcePolicyV1) -> Option<Self> {
         match policy {
-            ProductionHelperSourcePolicyV1::RawEmpty => Self::DirectRawEmpty,
-            ProductionHelperSourcePolicyV1::UnitLocal => Self::SilentUnitLocal,
+            ProductionHelperSourcePolicyV1::RawEmpty => Some(Self::DirectRawEmpty),
+            ProductionHelperSourcePolicyV1::UnitLocal => Some(Self::SilentUnitLocal),
+            ProductionHelperSourcePolicyV1::Bf16Nominal => None,
         }
     }
 }
@@ -45,14 +46,19 @@ impl Stage {
         ranked: RankedVerifiedProductionCompilation,
     ) -> Result<Self, ProductionPipelineError> {
         match Route::from_policy(ranked.checked_output_source_policy_v1()) {
-            Route::DirectRawEmpty => ranked
+            Some(Route::DirectRawEmpty) => ranked
                 .lower_checked_output_policy4_v1()
                 .map(Box::new)
                 .map(Self::Direct),
-            Route::SilentUnitLocal => ranked
+            Some(Route::SilentUnitLocal) => ranked
                 .lower_silent_unit_checked_output_policy4_v1()
                 .map(Box::new)
                 .map(Self::Erased),
+            None => Err(ProductionPipelineError::PreRankedMaterialization(
+                fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Lowering(
+                    fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable { consumer: "BF16 nominal test dispatch" },
+                ),
+            )),
         }
     }
 
@@ -264,11 +270,15 @@ pub(super) fn check_private_helper_route(
 fn qualification_route_exhaustively_classifies_source_policy() {
     assert_eq!(
         Route::from_policy(ProductionHelperSourcePolicyV1::RawEmpty),
-        Route::DirectRawEmpty
+        Some(Route::DirectRawEmpty)
     );
     assert_eq!(
         Route::from_policy(ProductionHelperSourcePolicyV1::UnitLocal),
-        Route::SilentUnitLocal
+        Some(Route::SilentUnitLocal)
+    );
+    assert_eq!(
+        Route::from_policy(ProductionHelperSourcePolicyV1::Bf16Nominal),
+        None
     );
 }
 

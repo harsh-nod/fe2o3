@@ -2,20 +2,21 @@
 use super::*;
 use fe2o3_kernel_ir::{AccessMode, ScalarType};
 use fe2o3_kir_sim::*;
-pub(super) const TARGET: SimulationTargetV1 = SimulationTargetV1::amdgpu_64();
-pub(super) const PATTERNS: usize = 6;
-pub(super) const LENGTHS: [usize; 3] = [64, 13, 0];
-pub(super) const CANARY: u32 = 0x7f12_3456;
-pub(super) const INPUT_IDS: [BufferBackingIdV1; 3] = [
+pub(in crate::production_rustc_driver_v1) const TARGET: SimulationTargetV1 =
+    SimulationTargetV1::amdgpu_64();
+pub(in crate::production_rustc_driver_v1) const PATTERNS: usize = 6;
+pub(in crate::production_rustc_driver_v1) const LENGTHS: [usize; 3] = [64, 13, 0];
+pub(in crate::production_rustc_driver_v1) const CANARY: u32 = 0x7f12_3456;
+pub(in crate::production_rustc_driver_v1) const INPUT_IDS: [BufferBackingIdV1; 3] = [
     BufferBackingIdV1(11),
     BufferBackingIdV1(12),
     BufferBackingIdV1(13),
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct Words(pub [u32; 256]);
+pub(in crate::production_rustc_driver_v1) struct Words(pub [u32; 256]);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct Output(pub [u8; 272]);
+pub(in crate::production_rustc_driver_v1) struct Output(pub [u8; 272]);
 impl Serialize for Output {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut text = [0u8; 544];
@@ -40,7 +41,7 @@ impl Serialize for Words {
         serializer.serialize_str(std::str::from_utf8(&text).expect("fixed lowercase hex"))
     }
 }
-pub(super) fn integer_bits(value: i64) -> u32 {
+pub(in crate::production_rustc_driver_v1) fn integer_bits(value: i64) -> u32 {
     if value == 0 {
         return 0;
     }
@@ -50,7 +51,7 @@ pub(super) fn integer_bits(value: i64) -> u32 {
     let fraction = ((magnitude - (1 << exponent)) << (23 - exponent)) as u32;
     (u32::from(value < 0) << 31) | ((exponent + 127) << 23) | fraction
 }
-pub(super) fn dense(pattern: usize) -> ([i64; 256], [i64; 256]) {
+pub(in crate::production_rustc_driver_v1) fn dense(pattern: usize) -> ([i64; 256], [i64; 256]) {
     assert!(pattern < PATTERNS);
     let mut a = [0; 256];
     let mut b = [0; 256];
@@ -73,7 +74,7 @@ pub(super) fn dense(pattern: usize) -> ([i64; 256], [i64; 256]) {
     }
     (a, b)
 }
-pub(super) fn expected(pattern: usize) -> Words {
+pub(in crate::production_rustc_driver_v1) fn expected(pattern: usize) -> Words {
     let (a, b) = dense(pattern);
     let mut output = [0; 256];
     for row in 0..16 {
@@ -88,11 +89,18 @@ pub(super) fn expected(pattern: usize) -> Words {
     }
     Words(output)
 }
-pub(super) fn lane_word(expected: &Words, lane: usize, component: usize) -> u32 {
+pub(in crate::production_rustc_driver_v1) fn lane_word(
+    expected: &Words,
+    lane: usize,
+    component: usize,
+) -> u32 {
     assert!(lane < 64 && component < 4);
     expected.0[(4 * (lane / 16) + component) * 16 + lane % 16]
 }
-pub(super) fn expected_output(pattern: usize, length: usize) -> Output {
+pub(in crate::production_rustc_driver_v1) fn expected_output(
+    pattern: usize,
+    length: usize,
+) -> Output {
     assert!(LENGTHS.contains(&length));
     let mut bytes = [0; 272];
     let expected = expected(pattern);
@@ -106,7 +114,7 @@ pub(super) fn expected_output(pattern: usize, length: usize) -> Output {
     }
     Output(bytes)
 }
-pub(super) fn bytes(pattern: usize, input: usize) -> Vec<u8> {
+pub(in crate::production_rustc_driver_v1) fn bytes(pattern: usize, input: usize) -> Vec<u8> {
     let (a, b) = dense(pattern);
     let values = if input == 0 { a } else { b };
     let mut bytes = Vec::with_capacity(512);
@@ -116,7 +124,7 @@ pub(super) fn bytes(pattern: usize, input: usize) -> Vec<u8> {
     bytes
 }
 #[derive(Clone, Copy, Debug, Serialize)]
-pub(super) enum Control {
+pub(in crate::production_rustc_driver_v1) enum Control {
     Positive,
     UninitializedA,
     UninitializedB,
@@ -135,7 +143,7 @@ pub(super) enum Control {
     Grid65,
     Wave32,
 }
-pub(super) const NEGATIVES: [Control; 16] = [
+pub(in crate::production_rustc_driver_v1) const NEGATIVES: [Control; 16] = [
     Control::UninitializedA,
     Control::UninitializedB,
     Control::NegativeZeroA,
@@ -153,7 +161,7 @@ pub(super) const NEGATIVES: [Control; 16] = [
     Control::Grid65,
     Control::Wave32,
 ];
-pub(super) fn request(
+pub(in crate::production_rustc_driver_v1) fn request(
     kernel: &fe2o3_kernel_ir::KernelId,
     pattern: usize,
     length: usize,
@@ -246,7 +254,11 @@ pub(super) fn request(
     }
     request
 }
-pub(super) fn check_output(run: &SimulationExecutionV1, pattern: usize, length: usize) {
+pub(in crate::production_rustc_driver_v1) fn check_output(
+    run: &SimulationExecutionV1,
+    pattern: usize,
+    length: usize,
+) {
     assert_eq!(run.invocations_executed(), 64);
     assert_eq!(run.workgroups_visited(), 1);
     assert_eq!(run.shared_buffers().len(), 3);

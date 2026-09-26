@@ -515,4 +515,4 @@ pub(super) mod normal;
 
 // Separate genuine-source numerical gate; historical inspection/normal modes are unchanged.
 #[path = "gfx942_tiled_region_cpu_v1_tests.rs"]
-mod cpu;
+pub(in crate::production_rustc_driver_v1) mod cpu;

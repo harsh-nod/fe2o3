@@ -48,6 +48,12 @@ const CAPTURE_PREFLIGHT_WORK: usize = 2;
 const MATERIALIZATION_WORK: usize =
     CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK + ORIGIN_WORK + HELPER_WORK;
 
+fn nominal_relation_header() -> usize {
+    // The private relation is boxed only for nominal owners. Its optional
+    // pointer is inline even for legacy owners; no relation heap exists here.
+    std::mem::size_of::<Option<Box<()>>>()
+}
+
 fn empty_helper_payload() -> usize {
     // Mirror the private three-way custody tag, including its inhabited payload.
     #[allow(dead_code)]
@@ -61,6 +67,7 @@ fn empty_helper_payload() -> usize {
         + std::mem::size_of::<Capture>()
         + std::mem::size_of::<fe2o3_lower_mir_kernel::ProductionHelperMemoryStorageV1>()
         + std::mem::size_of::<usize>()
+        + nominal_relation_header()
 }
 fn origin_retained_payload() -> usize {
     // Three Vec headers + receipt, four requested function-association rows.
@@ -102,13 +109,18 @@ fn role_tree_payload() -> usize {
     3 * (11 * key + 14 * std::mem::size_of::<usize>()) + 4 * key
 }
 
-fn complete_storage() -> usize {
+fn canonical_storage() -> usize {
     // Inverse plus role tree dominates both encoder scratch and verifier
     // scratch: module rows5 + max(CFG peak16, retained CFG11 + definitions3).
     assert!(role_tree_payload() > 5 + 16);
     assert!(role_tree_payload() > origin_peak_scratch());
-    assert!(role_tree_payload() > origin_retained_payload() + empty_helper_payload());
     retained_payload() + role_tree_payload()
+}
+
+fn complete_storage() -> usize {
+    // Include the new optional pointer in final custody independently of
+    // the inverse-validation scratch peak.
+    canonical_storage().max(retained_payload() + origin_retained_payload() + empty_helper_payload())
 }
 
 fn fixture() -> (ProductionSemanticSsaOwnerV1, ProductionSourceLaunchRosterV1) {
@@ -274,7 +286,7 @@ fn pre_ranked_exact_canonical_envelope_preserves_nonzero_prefixes() {
 fn pre_ranked_one_under_work_denies_hash_without_spending_rejected_chunk() {
     let short = admit(
         CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK - 1,
-        complete_storage(),
+        canonical_storage(),
     );
     assert!(matches!(
         short.result,
@@ -287,7 +299,7 @@ fn pre_ranked_one_under_work_denies_hash_without_spending_rejected_chunk() {
         short.work,
         WORK_PREFIX + CAPTURE_PREFLIGHT_WORK + BEFORE_HASH
     );
-    assert_eq!(short.peak, STORAGE_PREFIX + complete_storage());
+    assert_eq!(short.peak, STORAGE_PREFIX + canonical_storage());
     assert_eq!(
         short.rejected_work,
         Some(WORK_PREFIX + CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK)
@@ -299,14 +311,14 @@ fn pre_ranked_one_under_work_denies_hash_without_spending_rejected_chunk() {
 fn pre_ranked_one_under_storage_denies_inverse_comparison_scratch() {
     let short = admit(
         CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK,
-        complete_storage() - 1,
+        canonical_storage() - 1,
     );
     assert!(matches!(
         short.result,
         Err(ProductionPreRankedKirErrorV1::Canonical(CanonicalKernelIrReplayAdmissionErrorV12::Decode(
             KernelIrDecodeError::Resource(CanonicalKernelIrVerificationResourceErrorV1::Storage(error))
-        ))) if error.actual() == STORAGE_PREFIX + complete_storage()
-            && error.limit() == STORAGE_PREFIX + complete_storage() - 1
+        ))) if error.actual() == STORAGE_PREFIX + canonical_storage()
+            && error.limit() == STORAGE_PREFIX + canonical_storage() - 1
     ));
     let encoder_peak =
         std::mem::size_of::<VerifiedCanonicalKernelIrV12>() + WIRE + role_tree_payload();
@@ -321,14 +333,14 @@ fn pre_ranked_one_under_storage_denies_inverse_comparison_scratch() {
     assert_eq!(short.rejected_work, None);
     assert_eq!(
         short.rejected_storage,
-        Some(STORAGE_PREFIX + complete_storage())
+        Some(STORAGE_PREFIX + canonical_storage())
     );
 }
 
 #[test]
 fn pre_ranked_one_under_complete_work_denies_origin_coverage_without_resetting_history() {
     let origin_complete = CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK + ORIGIN_WORK;
-    let short = admit(origin_complete - 1, complete_storage());
+    let short = admit(origin_complete - 1, canonical_storage());
     assert!(
         matches!(short.result, Err(ProductionPreRankedKirErrorV1::Lowering(
         ProductionSemanticKirErrorV1::AssertOrigin(SemanticKirAssertOriginErrorV1::Resource(
@@ -340,7 +352,7 @@ fn pre_ranked_one_under_complete_work_denies_origin_coverage_without_resetting_h
     assert_eq!(short.work, WORK_PREFIX + origin_complete - 1);
     assert_eq!(short.rejected_work, Some(WORK_PREFIX + origin_complete));
     assert_eq!(short.rejected_storage, None);
-    assert_eq!(short.peak, STORAGE_PREFIX + complete_storage());
+    assert_eq!(short.peak, STORAGE_PREFIX + canonical_storage());
 }
 
 #[test]

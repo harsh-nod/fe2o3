@@ -28,6 +28,15 @@ impl<'s> RankedProjectionSourceV1<'s> {
     pub(super) fn from_materialized_checked(
         owner: &'s ProductionPreRankedKirOwnerV1,
     ) -> Result<Self, Error> {
+        if owner.helper_source_policy_v1()
+            == fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::Bf16Nominal
+        {
+            return Err(Error::StructuralValidation(
+                fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable {
+                    consumer: "BF16 nominal source-ranked projection",
+                },
+            ));
+        }
         let minimum_storage = owner
             .unit_local_source_storage_floor_v1()
             .map_err(Error::StructuralValidation)?;
@@ -44,7 +53,7 @@ impl<'s> RankedProjectionSourceV1<'s> {
     #[cfg(test)]
     pub(super) fn from_legacy(owner: &'s ProductionPreRankedKirOwnerV1) -> Result<Self, Error> {
         if owner.helper_source_policy_v1()
-            == fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::UnitLocal
+            != fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::RawEmpty
         {
             return Err(Error::StructuralValidation(
                 fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable {

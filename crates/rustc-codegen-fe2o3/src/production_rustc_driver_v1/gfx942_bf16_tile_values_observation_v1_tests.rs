@@ -32,7 +32,7 @@ const CALLBACK_REFUSAL: &str = "genuine BF16 helper callback refused for account
 const NORMAL_REFUSAL: &str =
     "helper parameter is not an exact by-value scalar aggregate or shared slice";
 #[derive(Clone, Copy, Debug, Serialize)]
-struct Snapshot {
+pub(in crate::production_rustc_driver_v1) struct Snapshot {
     source_sha256: [u8; 32],
     root_mir_sha256: [u8; 32],
     helper_mir_sha256: [u8; 32],
@@ -76,7 +76,7 @@ fn abi_mode(mode: &rustc_target::callconv::PassMode) -> u8 {
         PassMode::Indirect { .. } => 4,
     }
 }
-fn snapshot(
+pub(in crate::production_rustc_driver_v1) fn snapshot(
     view: &SourceOwnedBf16TileValuesRegionV1<'_, '_>,
     budget: &mut Budget<'_>,
 ) -> Result<Snapshot, Error> {

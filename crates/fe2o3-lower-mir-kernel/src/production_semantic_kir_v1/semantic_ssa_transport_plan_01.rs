@@ -128,6 +128,7 @@ impl SemanticControlFlowSsaPlanV1 {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -142,6 +143,7 @@ impl SemanticControlFlowSsaPlanV1 {
         mut emission_work: Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
         execution: Option<&ExecutionAvailabilityV29<'_>>,
         lifecycle: Option<&dyn ExecutionLifecycleConsumerV29>,
+        nominal_parameters: Option<&[PlannedParameterLocalBindingV1]>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let SemanticSsaTransportInputV1 {
             types,
@@ -154,7 +156,7 @@ impl SemanticControlFlowSsaPlanV1 {
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
-        let compiler_issued_bindings = compiler_issued_ssa_bindings_v1(
+        let mut compiler_issued_bindings = compiler_issued_ssa_bindings_v1(
             types,
             callables,
             function,
@@ -162,6 +164,32 @@ impl SemanticControlFlowSsaPlanV1 {
             lifecycle,
             emission_work.as_deref_mut(),
         )?;
+        if let Some(parameters) = nominal_parameters {
+            for parameter in parameters {
+                if let PlannedParameterLocalBindingV1::Bf16Nominal {
+                    local,
+                    semantic_type,
+                    descriptor,
+                    ..
+                } = parameter
+                {
+                    let declaration = function
+                        .locals()
+                        .get(*local)
+                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                    if !declaration.role().is_entry_argument() || declaration.ty() != *semantic_type
+                    {
+                        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                    }
+                    if compiler_issued_bindings
+                        .insert(*semantic_type, *descriptor)
+                        .is_some_and(|old| old != *descriptor)
+                    {
+                        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                    }
+                }
+            }
+        }
         let shared = semantic_ssa.plan();
         let retained_cross_edge = semantic_ssa
             .retained_cross_edge_variables()

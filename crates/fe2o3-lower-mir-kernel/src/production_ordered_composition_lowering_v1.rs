@@ -38,6 +38,7 @@ fn lower_one_semantic_function_v1<'facts>(
         placement,
         execution,
         None,
+        None,
     )
 }
 
@@ -81,6 +82,7 @@ fn lower_one_semantic_function_with_calls_v29<'facts>(
         execution,
         execution_calls,
         lifecycle,
+        None,
         None,
     )
 }

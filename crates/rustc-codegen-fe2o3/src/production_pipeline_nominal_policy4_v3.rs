@@ -85,6 +85,11 @@ impl RankedVerifiedProductionCompilation {
         scoped(budget, move |budget| {
             let (admitted, ranked_verification, bindings) =
                 match self.ranked.materialized().helper_source_policy_v1() {
+                    Policy::Bf16Nominal => {
+                        return Err(E::Mismatch(
+                            "BF16 nominal descriptor continuation unavailable",
+                        ));
+                    }
                     Policy::RawEmpty => {
                         let stage = self
                             .prepare_admitted_policy4_v1(budget)

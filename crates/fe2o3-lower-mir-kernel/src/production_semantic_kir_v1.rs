@@ -79,6 +79,17 @@ use fe2o3_pliron::{
 use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
+include!("production_bf16_call_parameters_v1.rs");
+include!("production_bf16_call_capture_v1.rs");
+include!("production_bf16_call_full_wave_v1.rs");
+include!("production_bf16_call_replay_v1.rs");
+include!("production_bf16_call_coverage_v1.rs");
+include!("production_bf16_call_resources_v1.rs");
+include!("production_bf16_call_emission_v1.rs");
+include!("production_bf16_call_emission_view_v1.rs");
+#[cfg(test)]
+#[path = "production_bf16_call_emission_v1_tests.rs"]
+mod bf16_call_emission_tests_v1;
 include!("production_ordered_region_pre_ranked_v16.rs");
 include!("production_ordered_region_inspection_v1.rs");
 include!("production_ordered_program_pre_ranked_v17.rs");
@@ -10312,6 +10323,7 @@ struct LoweredFunctionPlanV1 {
 
 #[derive(Clone)]
 struct LoweredFunctionSignatureV1 {
+    bf16_nominal: bool,
     parameter_semantic_types: Vec<SemanticTypeIdV1>,
     call_arguments: Vec<HelperCallArgumentV1>,
     parameter_types: Vec<Type>,
@@ -10328,6 +10340,12 @@ struct HelperCallArgumentV1 {
 
 #[derive(Clone)]
 enum PlannedParameterLocalBindingV1 {
+    Bf16Nominal {
+        local: usize,
+        semantic_type: SemanticTypeIdV1,
+        descriptor: SemanticPromotedBindingV1,
+        values: Vec<ValueDef>,
+    },
     Direct {
         local: usize,
         value: ValueId,
@@ -10676,6 +10694,7 @@ fn lower_one_semantic_function_for_composition_v1<'facts>(
     placement: SemanticEmissionPlacementV1,
     execution: Option<ExecutionAvailabilityV29<'_>>,
     ordered_composition: Option<OrderedCompositionPermitV1>,
+    bf16: Option<&mut Bf16CallEmissionStateV1<'_>>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     lower_one_semantic_function_with_composition_v1(
         semantic,
@@ -10697,6 +10716,7 @@ fn lower_one_semantic_function_for_composition_v1<'facts>(
         None,
         None,
         ordered_composition,
+        bf16,
     )
 }
 
@@ -10721,6 +10741,7 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
     execution_calls: Option<&mut dyn ExecutionDefinedCallConsumerV29>,
     lifecycle: Option<&mut dyn ExecutionLifecycleConsumerV29>,
     ordered_composition: Option<OrderedCompositionPermitV1>,
+    bf16: Option<&mut Bf16CallEmissionStateV1<'_>>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     if ordered_composition.is_some_and(|permit| !permit.matches(semantic)) {
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -10788,7 +10809,8 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
                     kernel_ir_value: *value,
                 })
             }
-            PlannedParameterLocalBindingV1::Flattened { .. } => None,
+            PlannedParameterLocalBindingV1::Flattened { .. }
+            | PlannedParameterLocalBindingV1::Bf16Nominal { .. } => None,
         }
     }));
     let failure_block = has_runtime_assert
@@ -11051,6 +11073,17 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
                 })?;
         }
     }
+    if let Some(state) = bf16 {
+        // Reborrow the emitter's original ledger; do not create a second
+        // mutable borrow while its source-SSA maps remain live.
+        let emission_budget = lowering
+            .emission_work
+            .take()
+            .ok_or(ArgumentResourceV1::Accounting)?;
+        state
+            .capture
+            .record(state.source, plan, &lowering, emission_budget)?;
+    }
     #[cfg(test)]
     let execution_observation = lowering
         .execution
@@ -11257,7 +11290,8 @@ fn lower_module_with_assert_origins_v1(
 
 // A pending continuation is not admission: the final merged graph still needs
 // the independent physical and source/SSA helper checks before owner creation.
-enum HelperLoweringAdmissionV1 {
+enum HelperLoweringAdmissionV1<'a> {
+    PendingBf16Nominal(Bf16CallEmissionStateV1<'a>),
     RawPure,
     PendingUnitLocal { requires_source: bool },
     // Private same-source permit; final V17 structural admission is mandatory.
@@ -11315,7 +11349,8 @@ fn lower_module_for_helper_admission_v1(
             assert_origins,
             &mut budget,
         ),
-        HelperLoweringAdmissionV1::PendingOrderedComposition(_) => {
+        HelperLoweringAdmissionV1::PendingOrderedComposition(_)
+        | HelperLoweringAdmissionV1::PendingBf16Nominal(_) => {
             return Err(ordered_composition_refusal_v1(
                 "composition requires the caller-owned cumulative ledger",
             ));
@@ -12160,14 +12195,26 @@ fn lower_single_root_module(
         closure_budget,
     )?);
     for function_id in closure.iter().copied().skip(1) {
-        plans.push(direct_scalar_helper_plan_v1(
-            semantic,
-            selected_root,
-            function_id,
-            defined_function_ids[&function_id].clone(),
-            limits.max_operations,
-            closure_budget,
-        )?);
+        let plan = match admission {
+            HelperLoweringAdmissionV1::PendingBf16Nominal(state) => bf16_parameter_plan_v1(
+                state.source,
+                semantic,
+                selected_root,
+                function_id,
+                defined_function_ids[&function_id].clone(),
+                closure_budget,
+                call_budget,
+            )?,
+            _ => direct_scalar_helper_plan_v1(
+                semantic,
+                selected_root,
+                function_id,
+                defined_function_ids[&function_id].clone(),
+                limits.max_operations,
+                closure_budget,
+            )?,
+        };
+        plans.push(plan);
     }
     // Declaration expansion was charged before growing each parameter roster.
     // Charge its repetition at call sites before cloning signatures or bodies.
@@ -12204,6 +12251,9 @@ fn lower_single_root_module(
             (
                 plan.semantic_function,
                 LoweredFunctionSignatureV1 {
+                    bf16_nominal: plan.parameter_local_bindings.iter().any(|binding| {
+                        matches!(binding, PlannedParameterLocalBindingV1::Bf16Nominal { .. })
+                    }),
                     parameter_semantic_types: semantic.functions()
                         [plan.semantic_function.index() as usize]
                         .abi()
@@ -12328,6 +12378,10 @@ fn lower_single_root_module(
                         }
                         _ => None,
                     },
+                    match admission {
+                        HelperLoweringAdmissionV1::PendingBf16Nominal(state) => Some(state),
+                        _ => None,
+                    },
                 )?;
                 remaining_operations = remaining_operations
                     .checked_sub(lowered.emitted_operations)
@@ -12405,6 +12459,9 @@ fn lower_single_root_module(
                     call_budget,
                 )?;
             }
+            if let HelperLoweringAdmissionV1::PendingBf16Nominal(state) = admission {
+                bf16_pending_capabilities_v1(state, &plans, &mut module, symbol, call_budget)?;
+            }
             finish_semantic_root_module_v1(
                 &mut module,
                 symbol,
@@ -12420,6 +12477,13 @@ fn lower_single_root_module(
                     .function(&plan.kernel_ir_function)
                     .is_some_and(|decision| decision.is_complete_and_pure())
                 {
+                    // This private pending category is not an effect summary.
+                    // The only producer holds the live checked BF16 relation,
+                    // and cannot return an owner until exact nominal replay.
+                    if let HelperLoweringAdmissionV1::PendingBf16Nominal(state) = admission {
+                        bf16_pending_helper_v1(state, plan, &module, call_budget)?;
+                        continue;
+                    }
                     // Source context has checked every helper scalar/marker statement.
                     // This private continuation cannot escape as an owner until the
                     // complete immutable V17 composition independently validates it.

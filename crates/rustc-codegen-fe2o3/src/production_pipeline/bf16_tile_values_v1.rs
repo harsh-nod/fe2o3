@@ -10,6 +10,9 @@ use fe2o3_kernel_ir::{
 use fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1 as Error;
 
 #[cfg(test)]
+#[path = "bf16_tile_values_cpu_v1_tests.rs"]
+mod cpu;
+#[cfg(test)]
 #[path = "bf16_tile_values_observation_v1_tests.rs"]
 mod observation;
 
@@ -30,98 +33,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             &mut Budget<'work>,
         ) -> Result<R, Error>,
     ) -> Result<(MaterializedNeutralProductionCompilation, R), Box<ProductionPipelineError>> {
-        let CollectedRustStage {
-            tcx,
-            closure,
-            typed_descriptor_roots,
-            debug_source_capture,
-            transaction,
-        } = self.stage;
-        // This finite inspection does not acquire protected-publication policy.
-        if !transaction.compiler_custody.is_extraction_only() {
-            return Err(Box::new(unavailable(
-                "BF16 source inspection requires extraction-only custody",
-            )));
-        }
-        let imported: crate::collector::AuthenticatedBf16TileValuesMirV1<'tcx> =
-            crate::collector::construct_production_semantic_mir_bf16_tile_values_v1(
-                tcx,
-                closure,
-                debug_source_capture,
-            )
-            .map_err(ProductionPipelineError::SemanticImport)?;
-        let (constructed, source_seed) = imported.into_parts();
-        let crate::collector::ConstructedProductionSemanticMirV1 {
-            semantic_mir,
-            context_entries,
-            rustc_identity_inventory,
-            rustc_preflight_plan,
-            rustc_target,
-            reference_effect_bindings,
-            debug_source_files,
-            debug_source_scopes,
-            debug_source_variables,
-            debug_capture_gap,
-        } = constructed;
-        let typed_descriptor_roots =
-            crate::compiler_descriptor::order_typed_descriptor_roots_by_semantic_v1(
-                typed_descriptor_roots,
-                &semantic_mir,
-            )
-            .map_err(ProductionPipelineError::DescriptorEvidence)?;
-        let admitted: ProductionCompilation<'tcx, AdmittedSemanticMirStage> =
-            ProductionCompilation {
-                stage: AdmittedSemanticMirStage {
-                    semantic_mir,
-                    bindings: AuthenticatedProductionBindings {
-                        context_entries,
-                        rustc_identity_inventory,
-                        rustc_preflight_plan,
-                        rustc_target,
-                        reference_effect_bindings,
-                        debug_source_files,
-                        debug_source_scopes,
-                        debug_source_variables,
-                        debug_capture_gap,
-                        typed_descriptor_roots,
-                        transaction,
-                    },
-                },
-                invariant_session: PhantomData,
-            };
-        let ssa = admitted
-            .construct_semantic_middle_end()?
-            .construct_semantic_ssa()?;
-        if source_seed.semantic_sha256()
-            != ssa
-                .stage
-                .semantic_ssa
-                .source_semantic()
-                .semantic_sha256()
-                .as_bytes()
-            || !ssa
-                .stage
-                .bindings
-                .rustc_target
-                .rustc_layout()
-                .has_exact_codegen_profile("gfx942", "-wavefrontsize32,+wavefrontsize64,-xnack")
-            || !ssa
-                .stage
-                .bindings
-                .reference_effect_bindings
-                .as_slice()
-                .is_empty()
-            || ssa
-                .stage
-                .bindings
-                .rustc_preflight_plan
-                .rustc_identity_inventory_sha256()
-                != ssa.stage.bindings.rustc_identity_inventory.sha256()
-        {
-            return Err(Box::new(unavailable(
-                "BF16 actual source/target/lineage or refinement scope differs",
-            )));
-        }
+        let (ssa, source_seed) = self.prepare_bf16_tile_values_source_v1()?;
         // This is the existing meter created by the ordinary phase. No sibling
         // meter is created, and no work is reconstructed from observed counters.
         let prepared = ssa.with_prepared_materialization_budget_v29(|prepared, budget| {
@@ -230,5 +142,110 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             },
             observed,
         ))
+    }
+    fn prepare_bf16_tile_values_source_v1(
+        self,
+    ) -> Result<
+        (
+            ProductionCompilation<'tcx, SsaSemanticMirStage>,
+            crate::production_bf16_tile_values_source_v1::AuthenticatedBf16TileValuesSourceSeedV1<
+                'tcx,
+            >,
+        ),
+        Box<ProductionPipelineError>,
+    > {
+        let CollectedRustStage {
+            tcx,
+            closure,
+            typed_descriptor_roots,
+            debug_source_capture,
+            transaction,
+        } = self.stage;
+        // This finite inspection does not acquire protected-publication policy.
+        if !transaction.compiler_custody.is_extraction_only() {
+            return Err(Box::new(unavailable(
+                "BF16 source inspection requires extraction-only custody",
+            )));
+        }
+        let imported: crate::collector::AuthenticatedBf16TileValuesMirV1<'tcx> =
+            crate::collector::construct_production_semantic_mir_bf16_tile_values_v1(
+                tcx,
+                closure,
+                debug_source_capture,
+            )
+            .map_err(ProductionPipelineError::SemanticImport)?;
+        let (constructed, source_seed) = imported.into_parts();
+        let crate::collector::ConstructedProductionSemanticMirV1 {
+            semantic_mir,
+            context_entries,
+            rustc_identity_inventory,
+            rustc_preflight_plan,
+            rustc_target,
+            reference_effect_bindings,
+            debug_source_files,
+            debug_source_scopes,
+            debug_source_variables,
+            debug_capture_gap,
+        } = constructed;
+        let typed_descriptor_roots =
+            crate::compiler_descriptor::order_typed_descriptor_roots_by_semantic_v1(
+                typed_descriptor_roots,
+                &semantic_mir,
+            )
+            .map_err(ProductionPipelineError::DescriptorEvidence)?;
+        let admitted: ProductionCompilation<'tcx, AdmittedSemanticMirStage> =
+            ProductionCompilation {
+                stage: AdmittedSemanticMirStage {
+                    semantic_mir,
+                    bindings: AuthenticatedProductionBindings {
+                        context_entries,
+                        rustc_identity_inventory,
+                        rustc_preflight_plan,
+                        rustc_target,
+                        reference_effect_bindings,
+                        debug_source_files,
+                        debug_source_scopes,
+                        debug_source_variables,
+                        debug_capture_gap,
+                        typed_descriptor_roots,
+                        transaction,
+                    },
+                },
+                invariant_session: PhantomData,
+            };
+        let ssa = admitted
+            .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?;
+        if source_seed.semantic_sha256()
+            != ssa
+                .stage
+                .semantic_ssa
+                .source_semantic()
+                .semantic_sha256()
+                .as_bytes()
+            || !ssa
+                .stage
+                .bindings
+                .rustc_target
+                .rustc_layout()
+                .has_exact_codegen_profile("gfx942", "-wavefrontsize32,+wavefrontsize64,-xnack")
+            || !ssa
+                .stage
+                .bindings
+                .reference_effect_bindings
+                .as_slice()
+                .is_empty()
+            || ssa
+                .stage
+                .bindings
+                .rustc_preflight_plan
+                .rustc_identity_inventory_sha256()
+                != ssa.stage.bindings.rustc_identity_inventory.sha256()
+        {
+            return Err(Box::new(unavailable(
+                "BF16 actual source/target/lineage or refinement scope differs",
+            )));
+        }
+        Ok((ssa, source_seed))
     }
 }

@@ -3,6 +3,28 @@ use super::*;
 use std::cell::Cell;
 
 #[test]
+fn nominal_bf16_refuses_before_header_transfer_callback() {
+    let entered = Cell::new(false);
+    let mut work = Work::new(HEADER_WORK);
+    let mut budget = Budget::new(&mut work, 23);
+    budget.reserve_storage(23).unwrap();
+    let result = transfer_header(SourcePolicy::Bf16Nominal, &mut budget, || {
+        entered.set(true);
+        Ok(())
+    });
+    assert!(matches!(result, Err(ProductionPipelineError::PreRankedMaterialization(
+        fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Lowering(
+            fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable {
+                consumer: "BF16 nominal fixed checked output",
+            }
+        )
+    ))));
+    assert!(!entered.get());
+    assert_eq!(budget.storage(), 23);
+    assert_eq!(budget.peak_storage(), 23);
+}
+
+#[test]
 fn direct_original_accessors_are_one_actual_v12_n_not_compatibility_bytes() {
     use fe2o3_kernel_ir::{
         VERIFIED_CANONICAL_KERNEL_IR_V12_IDENTITY_DOMAIN_V1 as DOMAIN,
