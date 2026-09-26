@@ -136,6 +136,16 @@ def mutations(body):
     return cases
 
 
+def proof_command(root, verifier, focus=None):
+    # Stop counterexample enumeration after the first logical failure. Extra
+    # error-search queries can exhaust the solver after it has found a witness.
+    # Use the same setting for positives; keep the default SMT resource budget.
+    return ["/usr/bin/timeout", "--foreground", "--signal=TERM", "--kill-after=5", "120", str(verifier),
+            "--crate-type", "lib", "--triggers-mode", "silent", "--no-cheating", "--output-json", "--error-format=json",
+            "--no-report-long-running", "--num-threads", "4", "--multiple-errors", "0",
+            *([] if focus is None else ["--verify-function", focus, "--verify-root"]), str(root / FILES[1])]
+
+
 def main():
     need(sys.flags.isolated and sys.flags.dont_write_bytecode and not sys.flags.optimize, "use python3 -I -B")
     parser = argparse.ArgumentParser(description=__doc__)
@@ -187,10 +197,7 @@ def main():
                 and json.dumps(result.get("verus"), sort_keys=True) == json.dumps(prior.VERIFIER, sort_keys=True))
 
     def proof(root, focus=None):
-        return ["/usr/bin/timeout", "--foreground", "--signal=TERM", "--kill-after=5", "120", str(args.verus),
-                "--crate-type", "lib", "--triggers-mode", "silent", "--no-cheating", "--output-json", "--error-format=json",
-                "--no-report-long-running", "--num-threads", "4",
-                *([] if focus is None else ["--verify-function", focus, "--verify-root"]), str(root / FILES[1])]
+        return proof_command(root, args.verus, focus)
 
     def exact(expected):
         return lambda status, stdout, stderr: status == 0 and not stderr and stdout == expected
@@ -205,7 +212,7 @@ def main():
     phase("inherited-classifier-tests", [sys.executable, "-I", "-B", str(ROOT / LEAF.with_name("test-run.py"))],
           exact("PASS: leaf outcome negative classifier (12 groups)\n"))
     phase("campaign-tests", [sys.executable, "-I", "-B", str(ROOT / TEST)],
-          exact("PASS: production planner campaign calibration (6 groups)\n"))
+          exact("PASS: production planner campaign calibration (7 groups)\n"))
     phase("source-tests", [sys.executable, "-I", "-B", str(ROOT / V / "test-completion-reconciliation-source.py")],
           exact("PASS: completion planner source calibration (8 groups)\n"))
     phase("source-body", [sys.executable, "-I", "-B", str(ROOT / V / "check-completion-reconciliation-source.py"),
