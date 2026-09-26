@@ -1,35 +1,26 @@
 //! Synthetic native launch/readiness fixture, never a production issuer.
 //!
-//! Build with scripts/build-native-ready-fixture.sh. The artifact fixes the
-//! mode; the child reads neither argv nor environment. Default example builds
-//! select ready. All modes admit native inputs and the exact 65533/65533 profile.
+//! Build with scripts/build-native-ready-fixture.sh DIR [v2|v3]. The artifact
+//! fixes the family and mode; the child reads neither argv nor environment.
+//! Default example builds select V2 ready; --cfg
+//! fe2o3_native_ready_fixture_family="v3" selects genuine V3 input/readiness types.
+//! All modes admit native inputs and the exact 65533/65533 profile.
 //! No signing key, durable state, compiler request, or recovery API is used.
 //!
-//! ready: emit ReadyV2, close every writer, then await cancellation or one exact
-//! service-peer packet containing the single inert stop byte 0x01. The fixture
-//! client must send it only after publication, to exercise Serving -> Exited.
-//! no-eof: emit ReadyV2 and retain fd9. trailing: emit ReadyV2 plus a zero byte,
+//! ready: emit the selected family's Ready, close every writer, then await
+//! cancellation or one exact service-peer packet containing the single inert
+//! stop byte 0x01. The fixture client must send it only after publication, to
+//! exercise Serving -> Exited.
+//! no-eof: emit Ready and retain fd9. trailing: emit Ready plus a zero byte,
 //! then close fd9. silent: retain fd9 without writing. Negative modes only wait
 //! for cancellation. Every wait has a 25-second deadline and finite attempts;
 //! expiry is failure, never evidence of successful readiness or cancellation.
 
-use fe2o3_compiler_closure_capability::{
-    CompilerExecutionPolicyCapabilityV2 as PolicyCapability,
-    CompilerExecutionServiceLaunchCapabilityV2 as LaunchCapability,
-};
 use fe2o3_compiler_execution_issuer::{
     COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1 as MANIFEST_FD,
     COMPILER_EXECUTION_ISSUER_PEER_FD_V1 as PEER_FD,
     COMPILER_EXECUTION_ISSUER_POLICY_FD_V1 as POLICY_FD,
     COMPILER_EXECUTION_ISSUER_READY_FD_V1 as READY_FD,
-    CompilerExecutionIssuerLaunchInputsV2 as Inputs,
-};
-use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_ISSUER_POLICY_WORK_V2 as POLICY_WORK,
-    COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_WORK_V2 as MANIFEST_WORK,
-    COMPILER_EXECUTION_SERVICE_READY_BYTES_V2 as READY_BYTES,
-    COMPILER_EXECUTION_SERVICE_READY_WORK_V2 as READY_WORK,
-    CompilerExecutionServiceReadyV2 as Ready,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -46,6 +37,52 @@ use std::{
     os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd},
     process::ExitCode,
     time::{Duration, Instant},
+};
+
+// Select nominal owners and their exact charges together. The shared body never
+// attempts another family's decoder or converts an admitted owner.
+#[allow(unexpected_cfgs)]
+mod family {
+    #[cfg(all(
+        fe2o3_native_ready_fixture_family = "v2",
+        fe2o3_native_ready_fixture_family = "v3"
+    ))]
+    compile_error!("select only one native readiness fixture family");
+
+    #[cfg(not(fe2o3_native_ready_fixture_family = "v3"))]
+    pub(super) use fe2o3_compiler_closure_capability::{
+        CompilerExecutionPolicyCapabilityV2 as PolicyCapability,
+        CompilerExecutionServiceLaunchCapabilityV2 as LaunchCapability,
+    };
+    #[cfg(fe2o3_native_ready_fixture_family = "v3")]
+    pub(super) use fe2o3_compiler_closure_capability::{
+        CompilerExecutionPolicyCapabilityV3 as PolicyCapability,
+        CompilerExecutionServiceLaunchCapabilityV3 as LaunchCapability,
+    };
+    #[cfg(not(fe2o3_native_ready_fixture_family = "v3"))]
+    pub(super) use fe2o3_compiler_execution_issuer::CompilerExecutionIssuerLaunchInputsV2 as Inputs;
+    #[cfg(fe2o3_native_ready_fixture_family = "v3")]
+    pub(super) use fe2o3_compiler_execution_issuer::CompilerExecutionIssuerLaunchInputsV3 as Inputs;
+    #[cfg(not(fe2o3_native_ready_fixture_family = "v3"))]
+    pub(super) use fe2o3_compiler_execution_protocol::{
+        COMPILER_EXECUTION_ISSUER_POLICY_WORK_V2 as POLICY_WORK,
+        COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_WORK_V2 as MANIFEST_WORK,
+        COMPILER_EXECUTION_SERVICE_READY_BYTES_V2 as READY_BYTES,
+        COMPILER_EXECUTION_SERVICE_READY_WORK_V2 as READY_WORK,
+        CompilerExecutionServiceReadyV2 as Ready,
+    };
+    #[cfg(fe2o3_native_ready_fixture_family = "v3")]
+    pub(super) use fe2o3_compiler_execution_protocol::{
+        COMPILER_EXECUTION_ISSUER_POLICY_WORK_V3 as POLICY_WORK,
+        COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_WORK_V3 as MANIFEST_WORK,
+        COMPILER_EXECUTION_SERVICE_READY_BYTES_V3 as READY_BYTES,
+        COMPILER_EXECUTION_SERVICE_READY_WORK_V3 as READY_WORK,
+        CompilerExecutionServiceReadyV3 as Ready,
+    };
+}
+use family::{
+    Inputs, LaunchCapability, MANIFEST_WORK, POLICY_WORK, PolicyCapability, READY_BYTES,
+    READY_WORK, Ready,
 };
 
 #[path = "native_ready_fixture/io.rs"]
