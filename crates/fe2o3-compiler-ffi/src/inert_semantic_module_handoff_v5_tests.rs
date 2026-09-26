@@ -143,6 +143,20 @@ fn conditional_outer_v5_shared_capacity_ranges_and_both_profiles() {
         assert_eq!(owner.capsule().source_packet_bytes(), b"source");
         assert!(!owner.grants_authority());
         assert!(!owner.capsule().grants_authority());
+        let final_receipt = owner.capsule().final_compiler_module_commitment();
+        assert_eq!(
+            final_receipt,
+            &InertFinalCompilerModuleCommitmentReceiptV3::from_canonical_preimage(
+                InertFinalCompilerModuleCommitmentV3::from_handoff(owner.module_handoff())
+                    .unwrap()
+                    .canonical_bytes(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            final_receipt.canonical_preimage().as_ptr(),
+            owner.capsule().final_module_commitment_bytes().as_ptr(),
+        );
         drop(backing);
         assert!(weak.upgrade().is_some());
         drop(owner);
@@ -219,7 +233,16 @@ fn conditional_outer_v5_caps_and_decode_schedule_preserve_v4_terms() {
         );
         assert_eq!(
             inert_semantic_compiler_module_handoff_decode_work_v5(n).unwrap(),
-            old + 4 * n
+            old + 6 * n
+        );
+        assert_eq!(
+            inert_semantic_compiler_module_handoff_decode_work_v5(n).unwrap(),
+            14 * n
+                + 128 * n.min(262338)
+                + 128 * n.min(524288)
+                + 320 * n.min(16777216)
+                + 4096 * (n / 5).min(16384)
+                + 7900672
         );
     }
     for n in [
@@ -233,6 +256,14 @@ fn conditional_outer_v5_caps_and_decode_schedule_preserve_v4_terms() {
     assert!(
         INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V5
             > INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V3
+    );
+    assert_eq!(
+        INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V5,
+        INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V3
+            + INERT_PRODUCTION_SEMANTIC_CAPSULE_WORKING_STORAGE_V5
+            + INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_SEAL_STORAGE_V5
+            + std::mem::size_of::<InertSemanticCompilerModuleHandoffV5>()
+            + std::mem::size_of::<native::Finished>(),
     );
     for (a, b) in [
         (0, 1),

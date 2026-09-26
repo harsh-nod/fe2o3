@@ -496,3 +496,103 @@ fn conditional_capsule_v5_layout_getter_borrows_the_validated_preimage() {
         assert!(!owner.grants_authority());
     }
 }
+
+#[test]
+fn conditional_capsule_v5_cached_final_receipt_matches_v3_golden_and_shared_range() {
+    // A const accessor can compose with the existing const identity getter; no
+    // content decoder, hashing callback or resource ledger is needed at access.
+    const fn identity(
+        owner: &InertProductionSemanticCapsuleV5,
+    ) -> InertFinalCompilerModuleCommitmentIdentityV3 {
+        owner.final_compiler_module_commitment().identity()
+    }
+    let preimage = b"FFI alone admits this";
+    let expected =
+        InertFinalCompilerModuleCommitmentReceiptV3::from_canonical_preimage(preimage.to_vec())
+            .unwrap();
+    let golden = [
+        0x18, 0x2d, 0x73, 0xe7, 0xa9, 0xa7, 0xc1, 0x8f, 0x62, 0x6a, 0x57, 0x60, 0x4b, 0x1f, 0xb7,
+        0x5d, 0xa2, 0x13, 0xa3, 0xbb, 0xa9, 0x4a, 0xab, 0x5c, 0xc6, 0x93, 0x55, 0xa8, 0x68, 0x96,
+        0x93, 0x1a,
+    ];
+    assert_eq!(expected.identity().sha256(), &golden);
+    assert_eq!(
+        golden,
+        hash(
+            b"FE2O3/INERT-LINEAGE-CONTENT/FINAL-COMPILER-MODULE-COMMITMENT/V3\0",
+            preimage,
+        )
+    );
+    assert_ne!(golden, <[u8; 32]>::from(Sha256::digest(preimage)));
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        let (ml, metadata) = metadata(profile);
+        let (cl, bytes) = capsule(&metadata);
+        let mut backing = Vec::with_capacity(bytes.len() + 4096);
+        backing.extend_from_slice(&[7; 13]);
+        backing.extend_from_slice(&bytes);
+        backing.extend_from_slice(&[9; 17]);
+        let backing = Arc::new(backing);
+        let weak = Arc::downgrade(&backing);
+        let owner = InertProductionSemanticCapsuleV5::decode_shared_vec(
+            backing.clone(),
+            13..13 + bytes.len(),
+        )
+        .unwrap();
+        let at = 13 + cl.metadata_range().start + ml.final_module_commitment_range().start;
+        let cached = owner.final_compiler_module_commitment();
+        assert_eq!(cached, &expected);
+        assert_eq!(cached.canonical_preimage().as_ptr(), backing[at..].as_ptr());
+        assert_eq!(
+            owner.final_module_commitment_bytes().as_ptr(),
+            backing[at..].as_ptr()
+        );
+        assert_eq!(identity(&owner).byte_len(), preimage.len() as u64);
+        let references = Arc::strong_count(&backing);
+        for _ in 0..32 {
+            assert!(std::ptr::eq(
+                owner.final_compiler_module_commitment(),
+                cached
+            ));
+            assert_eq!(identity(&owner), expected.identity());
+            assert_eq!(Arc::strong_count(&backing), references);
+        }
+        drop(backing);
+        drop(bytes);
+        drop(metadata);
+        assert_eq!(owner.final_module_commitment_bytes(), preimage);
+        assert_eq!(identity(&owner).sha256(), &golden);
+        assert!(weak.upgrade().is_some());
+        assert!(!owner.grants_authority());
+        drop(owner);
+        assert!(weak.upgrade().is_none());
+    }
+}
+
+#[test]
+fn conditional_capsule_v5_resealed_final_preimage_changes_only_inert_content() {
+    let (ml, mut metadata) = metadata(Profile::Gfx942);
+    let (_, bytes) = capsule(&metadata);
+    let original = InertProductionSemanticCapsuleV5::decode_owned(bytes).unwrap();
+    metadata[ml.final_module_commitment_range().start] ^= 1;
+    seal_native_conditional_metadata_v1(ml, &mut metadata, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    let (_, bytes) = capsule(&metadata);
+    let changed = InertProductionSemanticCapsuleV5::decode_owned(bytes).unwrap();
+    assert_ne!(
+        original.final_module_commitment_bytes(),
+        changed.final_module_commitment_bytes()
+    );
+    assert_ne!(
+        original.final_compiler_module_commitment().identity(),
+        changed.final_compiler_module_commitment().identity(),
+    );
+    assert_eq!(
+        changed.final_compiler_module_commitment(),
+        &InertFinalCompilerModuleCommitmentReceiptV3::from_canonical_preimage(
+            changed.final_module_commitment_bytes().to_vec(),
+        )
+        .unwrap(),
+    );
+    // Lineage still accepts an opaque leaf. Only FFI may validate its schema/module join.
+    assert!(!original.grants_authority());
+    assert!(!changed.grants_authority());
+}

@@ -63,14 +63,18 @@ pub const MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3: usize = 4 * 1024 * 1024;
 pub const MAX_CANONICAL_SEMANTIC_MIR_BYTES_V3: usize = 128 * 1024 * 1024;
 
 // Conditional metadata transports preimages without duplicating their receipt hashes.
+// Each cached identity is derived and then checked by the existing shared decoder:
+// callers prepay two hash visits per retained preimage, with no payload copy.
 pub(crate) fn conditional_metadata_receipts(
     backing: SharedBackingV3,
     inventory: Range<usize>,
     preflight: Range<usize>,
+    final_commitment: Range<usize>,
 ) -> Result<
     (
         InertRustcIdentityInventoryReceiptV3,
         InertRustcPreflightPlanReceiptV3,
+        InertFinalCompilerModuleCommitmentReceiptV3,
     ),
     LineageDecodeErrorV3,
 > {
@@ -89,6 +93,10 @@ pub(crate) fn conditional_metadata_receipts(
     Ok((
         retain!(InertRustcIdentityInventoryReceiptV3, inventory),
         retain!(InertRustcPreflightPlanReceiptV3, preflight),
+        retain!(
+            InertFinalCompilerModuleCommitmentReceiptV3,
+            final_commitment
+        ),
     ))
 }
 

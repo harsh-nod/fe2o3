@@ -1,8 +1,8 @@
 //! Conditional metadata/carrier framing; never an ordinary V3 base.
 use crate::{
-    InertNativeLoweringAssociationV1, InertRustcIdentityInventoryReceiptV3,
-    InertRustcPreflightPlanReceiptV3, LineageDecodeErrorV3, NativeLoweringAssociationErrorV1,
-    bounded_pair as pair,
+    InertFinalCompilerModuleCommitmentReceiptV3, InertNativeLoweringAssociationV1,
+    InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3, LineageDecodeErrorV3,
+    NativeLoweringAssociationErrorV1, bounded_pair as pair,
     native_conditional_carrier_v1::*,
     native_conditional_metadata_v1::*,
     native_conditional_output_v1::MAX_NATIVE_CONDITIONAL_STORAGE_V1,
@@ -150,7 +150,9 @@ impl<'a> InertProductionSemanticCapsuleRefV5<'a> {
 }
 
 /// Fixed simultaneous framing/owner scratch, excluding backing and invocation
-/// heap metadata. FFI quotes its inherited bounded decode metadata separately.
+/// heap metadata. The owner size includes all three cached receipt headers;
+/// their preimages share the separately paid backing. FFI quotes its inherited
+/// bounded decode metadata separately.
 pub const INERT_PRODUCTION_SEMANTIC_CAPSULE_WORKING_STORAGE_V5: usize =
     size_of::<InertProductionSemanticCapsuleRefV5<'static>>()
         + size_of::<InertProductionSemanticCapsuleLayoutV5>()
@@ -217,9 +219,9 @@ pub struct InertProductionSemanticCapsuleV5 {
     target: DeviceTargetV1,
     inventory: InertRustcIdentityInventoryReceiptV3,
     preflight: InertRustcPreflightPlanReceiptV3,
+    final_commitment: InertFinalCompilerModuleCommitmentReceiptV3,
     lowering: InertNativeLoweringAssociationV1,
     layout_range: Range<usize>,
-    commitment_range: Range<usize>,
     carrier_range: Range<usize>,
     history_range: Range<usize>,
     catalog_range: Range<usize>,
@@ -255,7 +257,7 @@ impl InertProductionSemanticCapsuleV5 {
         let shift = |base: usize, r: Range<usize>| base + r.start..base + r.end;
         let metadata_base = frame.layout.metadata_range().start;
         let metadata = frame.metadata.layout;
-        let (inventory, preflight) = conditional_metadata_receipts(
+        let (inventory, preflight, final_commitment) = conditional_metadata_receipts(
             shared.clone(),
             shift(
                 range.start + metadata_base,
@@ -264,6 +266,10 @@ impl InertProductionSemanticCapsuleV5 {
             shift(
                 range.start + metadata_base,
                 metadata.rustc_preflight_range(),
+            ),
+            shift(
+                range.start + metadata_base,
+                metadata.final_module_commitment_range(),
             ),
         )
         .map_err(Error::Content)?;
@@ -275,7 +281,6 @@ impl InertProductionSemanticCapsuleV5 {
         let descriptor_range = shift(output_base, output.descriptor_range());
         let source_range = shift(carrier_range.start, frame.carrier.layout.source_range());
         let layout_range = shift(metadata_base, metadata.semantic_target_layout_range());
-        let commitment_range = shift(metadata_base, metadata.final_module_commitment_range());
         let carrier_identity = frame.carrier.identity();
         let identity = frame.identity();
         Ok(Self {
@@ -285,9 +290,9 @@ impl InertProductionSemanticCapsuleV5 {
             target,
             inventory,
             preflight,
+            final_commitment,
             lowering,
             layout_range,
-            commitment_range,
             carrier_range,
             history_range,
             catalog_range,
@@ -336,9 +341,17 @@ impl InertProductionSemanticCapsuleV5 {
     pub const fn native_lowering(&self) -> &InertNativeLoweringAssociationV1 {
         &self.lowering
     }
+    /// Cached inert lineage receipt over the whole final-module preimage.
+    /// This getter neither hashes nor allocates; the caller prepays its two hash
+    /// visits and retained header before decode. No FFI parsing or authority is added.
+    pub const fn final_compiler_module_commitment(
+        &self,
+    ) -> &InertFinalCompilerModuleCommitmentReceiptV3 {
+        &self.final_commitment
+    }
     /// Compact final-module preimage; only FFI decodes this schema.
     pub fn final_module_commitment_bytes(&self) -> &[u8] {
-        &self.canonical_bytes()[self.commitment_range.clone()]
+        self.final_commitment.canonical_preimage()
     }
     /// Complete conditional carrier encoding.
     pub fn carrier_bytes(&self) -> &[u8] {

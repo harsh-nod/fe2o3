@@ -50,6 +50,8 @@ pub const INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_SEAL_STORAGE_V5: usize =
 /// Conservative versioned logical decode allowance, NOT measured allocator/RSS
 /// usage. Reserve alongside the ENTIRE backing capacity before unmetered decode;
 /// retain while decoded metadata lives. No graph/source/descriptor admission is included.
+/// Capsule and outer owner sizes include the cached final lineage receipt header;
+/// its preimage retains the same backing, not another payload allocation.
 pub const INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V5: usize =
     INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V3
         + INERT_PRODUCTION_SEMANTIC_CAPSULE_WORKING_STORAGE_V5
@@ -58,14 +60,15 @@ pub const INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V5: usi
         + size_of::<native::Finished>();
 
 /// Prepay before content-decoder entry; never refund accepted work on failure.
-/// The inherited V4 schedule is unchanged. Four additional full-image traversals
-/// cover conditional output/auxiliary hashing and metadata/layout receipt visits.
-/// Total12 visits plus inherited invocation128/envelope128/manifest320/row4096
+/// The inherited V4 schedule is unchanged. Six additional full-image traversals
+/// cover conditional output/auxiliary hashing, metadata/layout receipt visits,
+/// and final lineage receipt identity derivation plus shared decode validation.
+/// Total14 visits plus inherited invocation128/envelope128/manifest320/row4096
 /// terms and fixed allowance. Pinned parser/toolchain changes require a new audit;
 /// this is a logical visit bound, not proof of runtime or semantic correctness.
 pub fn inert_semantic_compiler_module_handoff_decode_work_v5(n: usize) -> Result<usize, Failure> {
     let base = native::decode_work(n)?;
-    Ok(n.checked_mul(4)
+    Ok(n.checked_mul(6)
         .and_then(|extra| base.checked_add(extra))
         .ok_or(InertSemanticCompilerModuleHandoffErrorV3::LengthOverflow)?)
 }
