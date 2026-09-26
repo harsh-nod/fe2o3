@@ -1,0 +1,148 @@
+--- a/crates/fe2o3-kfd/src/resource_domains/composed.rs
++++ b/crates/fe2o3-kfd/src/resource_domains/composed.rs
+@@ -1,6 +1,7 @@
+ //! Request/N1/N2 accounting minting and native intake; Context witnesses are separate.
+ 
+ use super::*;
++include!("qualification_account.rs");
+ use crate::Gfx942DeviceBackingBudgetV1;
+ use fe2o3_resource_accounting::{ResourceReservationV1, RetainedResourceCreditsV1};
+ 
+--- a/crates/fe2o3-runtime/src/context.rs
++++ b/crates/fe2o3-runtime/src/context.rs
+@@ -3799,6 +3799,7 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    mod qualification;
+     mod allocation_admission_tests;
+     mod allocation_outcome_tests;
+     mod async_journal_tests;
+@@ -3914,6 +3915,7 @@
+ 
+     #[derive(Debug, Default)]
+     struct MockBackend {
++        request_profile: Option<qualification::Profile>,
+         producer_launch: producer_launch_tests::MockProducerLaunchState,
+         next: u64,
+         enumeration_calls: usize,
+@@ -4237,6 +4239,34 @@
+     impl RuntimeBackendV1 for MockBackend {
+         type Error = MockError;
+ 
++        fn allocation_admission_profile_v1(&self) -> Result<RuntimeAllocationAdmissionProfileV1, RuntimeBackendFailureV1<Self::Error>> {
++            Ok(match &self.request_profile {
++                None => RuntimeAllocationAdmissionProfileV1::Legacy,
++                Some(profile) => RuntimeAllocationAdmissionProfileV1::Required(profile.entries.clone()),
++            })
++        }
++
++        fn allocate_with_request_v1(&mut self, device: u64, kind: RuntimeMemoryKindV1,
++            bytes: u64, alignment: u64, witness: RuntimeAllocationRequestWitnessV1<'_>)
++            -> RuntimeRequestAllocationResultV1<Self::Error>
++        {
++            let profile = self.request_profile.as_mut().unwrap();
++            profile.calls += 1;
++            let entry = profile.entries.iter().find(|entry| entry.backend_device_v1() == device).unwrap();
++            assert!(witness.matches_v1(entry, bytes));
++            let outcome = profile.outcome;
++            RuntimeRequestAllocationResultV1::Outcome(match outcome {
++                0 => return RuntimeRequestAllocationResultV1::Unsupported,
++                1 => self.allocate_v1(device, kind, bytes, alignment).map(RuntimeBackendAllocationOutcomeV1::Allocated),
++                2 => Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(MockError("settled"))),
++                3 => Err(RuntimeBackendFailureV1::Rejected(MockError("rejected"))),
++                4 => Err(RuntimeBackendFailureV1::Quiescent(MockError("uncertain"))),
++                5 => Err(RuntimeBackendFailureV1::Terminal(MockError("terminal"))),
++                6 => panic!("qualification allocation panic"),
++                _ => unreachable!(),
++            })
++        }
++
+         fn execution_capabilities_v1(&self, _device: u64) -> RuntimeExecutionCapabilitiesV1 {
+             self.execution_capabilities
+         }
+--- a/crates/fe2o3-runtime/src/context/allocation_witness.rs
++++ b/crates/fe2o3-runtime/src/context/allocation_witness.rs
+@@ -1,6 +1,7 @@
+ //! Required request accounting at the Context/backend boundary.
+ 
+ use super::*;
++include!("qualification_binding.rs");
+ use fe2o3_kfd::{CheckedGfx942XnackMinusDevice, Gfx942RequestAccountV1, Gfx942RetainedRequestV1};
+ use fe2o3_runtime_model::ModelDeviceAdmissionV1;
+ 
+--- a/crates/fe2o3-runtime/src/context/allocation_admission/tests.rs
++++ b/crates/fe2o3-runtime/src/context/allocation_admission/tests.rs
+@@ -1,4 +1,5 @@
+ use super::*;
++mod qualification;
+ 
+ #[test]
+ fn required_empty_roster_does_not_mean_legacy() {
+--- a/crates/fe2o3-runtime/src/context/generated_preparation/tests/shell_tests.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation/tests/shell_tests.rs
+@@ -1,4 +1,5 @@
+ use super::*;
++mod qualification;
+ use crate::authorized_execution::tests::{TestAuthorityV1, source_authority, source_projection};
+ use crate::generated_source::GeneratedHostRosterV1;
+ use crate::{GeneratedGfx942PersistentStorageV1, RuntimeGfx942GeneratedSourceMutV1};
+--- a/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs
++++ b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs
+@@ -1,4 +1,5 @@
+ use super::*;
++mod qualification;
+ 
+ mod async_tests;
+ mod disposal_tests;
+--- a/crates/fe2o3-runtime/src/context/versions.rs
++++ b/crates/fe2o3-runtime/src/context/versions.rs
+@@ -70,6 +70,8 @@
+     Disposed,
+ }
+ 
++include!("qualification_versions.rs");
++
+ pub(super) struct ContextVersionsV1 {
+     journal: ContextProducerReadJournalV1,
+     phases: Vec<Option<AllocationPhaseV1>>,
+--- a/crates/fe2o3-runtime/src/kfd_backend.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend.rs
+@@ -6107,6 +6107,8 @@
+     }
+ }
+ 
++include!("kfd_backend/qualification_runtime.rs");
++
+ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+     type Error = KfdRuntimeBackendErrorV1;
+ 
+--- a/crates/fe2o3-runtime/src/kfd_backend/generated_shells/tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_shells/tests.rs
+@@ -1,4 +1,5 @@
+ use super::*;
++mod qualification;
+ use crate::RuntimeLaunchGeometryV1;
+ use crate::authorized_execution::tests::{TestAuthorityV1, source_authority, source_projection};
+ 
+--- a/crates/fe2o3-runtime/src/kfd_backend/xgmi_request.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/xgmi_request.rs
+@@ -3,6 +3,8 @@
+ #![forbid(unsafe_code)]
+ 
+ use super::*;
++#[cfg(test)]
++mod qualification;
+ use crate::{
+     RuntimeAllocationAdmissionProfileV1, RuntimeAllocationDeviceAdmissionV1,
+     RuntimeAllocationRequestWitnessV1,
+--- a/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs
+@@ -3,6 +3,7 @@
+ 
+ use super::*;
+ 
++mod qualification_model;
+ mod shell_tests;
+ 
+ impl RuntimeContextV1<KfdRuntimeBackendV1> {

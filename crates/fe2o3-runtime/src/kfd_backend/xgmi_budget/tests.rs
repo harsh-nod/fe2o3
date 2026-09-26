@@ -310,7 +310,7 @@ fn xgmi_budget_production_wiring_preserves_defaults_order_and_classified_entry()
         .find("letadmissions=prepare([&first,&second])?")
         .unwrap();
     let acquire = compact
-        .find("xgmi_budget::acquire_sessions([first,second],admissions,")
+        .find("xgmi_budget::bind_before_acquire([first,second],admissions,")
         .unwrap();
     assert!(prepare < acquire);
     assert!(constructor.contains("xgmi_budget::admit_endpoints("));
@@ -334,11 +334,20 @@ fn xgmi_budget_production_wiring_preserves_defaults_order_and_classified_entry()
         .split("    fn release_allocation_v1(")
         .next()
         .unwrap();
-    assert!(allocation.contains("xgmi_budget::allocate("));
+    assert!(
+        allocation
+            .contains("self.allocate_xgmi_request_v1(device, kind, byte_len, alignment, None)")
+    );
+    let source = include_str!("../xgmi_request.rs");
+    let allocation = source
+        .split("    pub(super) fn allocate_xgmi_request_v1(")
+        .nth(1)
+        .unwrap();
+    assert!(allocation.contains("xgmi_budget::allocate_record("));
     assert!(allocation.contains("allocate_gfx942_xgmi_device_memory_classified_v1("));
     assert!(allocation.contains("fe2o3_kfd::Gfx942XgmiAllocationFailureV1::disposition"));
     assert!(!allocation.contains(".allocate_gfx942_xgmi_device_memory("));
-    let queue = source
+    let queue = include_str!("../../kfd_backend.rs")
         .split("    fn ensure_queue(")
         .nth(1)
         .unwrap()

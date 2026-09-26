@@ -24,7 +24,21 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest multi-device request-witness development (2026-09-26): the ordinary KFD
+Latest composed XGMI request development (2026-09-26): the separate native
+two-endpoint backend now accepts complete request/N1/N2 admissions in original
+endpoint order, authenticates selected request witnesses before allocation
+effects, and retains mandatory policy through clean shutdown. The
+[development packet](evidence/dev-runtime-xgmi-request-2026-09-26/README.md)
+records 191 focused production passes, 50 doctests, strict static checks and
+21 isolated typed-account groups. Removing the witness guard triggers two
+intended assertions. Broad Runtime tests report 1,505 passes, three known
+socket-environment failures and 28 ignores. Counts overlap. The CPU adapter
+does not execute checked-device admission, successful public constructors,
+the actual native trait path or native shutdown. Worker transport, native
+replay, formal composition and matched HIP/HSA performance remain open.
+No accepted milestone, A1/A2 status or parity claim changes.
+
+Earlier multi-device request-witness development (2026-09-26): the ordinary KFD
 multi-device router now accepts complete composed request/N1/N2 profiles, with
 production and semantic-authority constructors and selected-child witness
 authentication. Allocation routes/outer IDs commit only on success; errors
@@ -34,7 +48,7 @@ survives partial and complete shutdown. The
 records 26 focused production passes, 49 doctests, strict static checks and
 21 isolated typed-account groups. Broad Runtime tests report 1,497 passes,
 three known socket-environment failures and 28 ignores. Counts overlap; this
-is not full CPU or native qualification. Native XGMI and Worker transport,
+is not full CPU or native qualification. At that checkpoint, native XGMI and Worker transport,
 checked-constructor/native replay, formal composition and matched HIP/HSA
 performance remain open. No accepted milestone or parity claim changes.
 

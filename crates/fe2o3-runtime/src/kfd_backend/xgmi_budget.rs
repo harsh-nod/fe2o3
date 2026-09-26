@@ -29,6 +29,7 @@ pub struct KfdNativeXgmiBackingUsageV1 {
 pub(super) enum EndpointAdmissionV1 {
     Local(KfdNativeXgmiBackingBudgetV1),
     Native(fe2o3_kfd::Gfx942NativeBackingAdmissionV1),
+    Composed(fe2o3_kfd::Gfx942ComposedBackingAdmissionV1),
 }
 
 impl KfdNativeXgmiRuntimeBackendV1 {
@@ -77,6 +78,53 @@ pub(super) fn acquire_sessions<D, B, S, E>(
     Ok([first, second])
 }
 
+pub(super) fn bind_before_acquire<D, A, P, S, E>(
+    devices: [D; 2],
+    admissions: [A; 2],
+    bind: impl FnOnce([&D; 2], &[A; 2]) -> Result<P, E>,
+    acquire: impl FnMut(D, A) -> Result<S, E>,
+) -> Result<(P, [S; 2]), E> {
+    let policy = bind(devices.each_ref(), &admissions)?;
+    let sessions = acquire_sessions(devices, admissions, acquire)?;
+    Ok((policy, sessions))
+}
+
+pub(super) fn allocate_record<R, E: fmt::Display>(
+    terminal: &mut bool,
+    next_handle: &mut u64,
+    records: &mut HashMap<u64, R>,
+    operation: impl FnOnce() -> Result<R, E>,
+    disposition: impl FnOnce(&E) -> Gfx942XgmiAllocationDispositionV1,
+) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+    if *terminal || *next_handle == 0 || records.contains_key(next_handle) {
+        *terminal = true;
+        return Err(RuntimeBackendFailureV1::Terminal(
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Terminal,
+                "invalid native XGMI allocation handle",
+            ),
+        ));
+    }
+    records.try_reserve(1).map_err(|_| {
+        KfdNativeXgmiRuntimeBackendV1::rejected(
+            KfdRuntimeBackendErrorKindV1::Capacity,
+            "XGMI allocation table",
+        )
+    })?;
+    let id = *next_handle;
+    *next_handle = id.checked_add(1).ok_or_else(|| {
+        KfdNativeXgmiRuntimeBackendV1::rejected(
+            KfdRuntimeBackendErrorKindV1::Capacity,
+            "native XGMI handle space exhausted",
+        )
+    })?;
+    let record = allocate(terminal, operation, disposition)?;
+    // The ID is vacant and storage reserved before native effects. No callbacks
+    // or fallible work may separate returned custody from its indexed owner.
+    records.insert(id, record);
+    Ok(id)
+}
+
 pub(super) fn allocate<A, E: fmt::Display>(
     terminal: &mut bool,
     operation: impl FnOnce() -> Result<A, E>,
@@ -112,5 +160,7 @@ pub(super) fn allocate<A, E: fmt::Display>(
     }
 }
 
+#[cfg(test)]
+mod request_tests;
 #[cfg(test)]
 mod tests;

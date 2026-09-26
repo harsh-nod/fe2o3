@@ -141,7 +141,15 @@ fn native_xgmi_retirement_runtime_wiring_borrows_slots_and_guards_terminal_roots
         .split("    fn next_id(")
         .next()
         .unwrap();
-    assert!(require.contains("Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1"));
+    assert!(require.contains("self.require_healthy_xgmi_v1()?"));
+    let healthy = implementation
+        .split("    fn require_healthy_xgmi_v1(")
+        .nth(1)
+        .unwrap()
+        .split("    fn require_live(")
+        .next()
+        .unwrap();
+    assert!(healthy.contains("Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1"));
     let shutdown = implementation
         .split("    pub fn shutdown_native_v1(")
         .nth(1)

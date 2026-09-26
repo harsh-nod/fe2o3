@@ -171,7 +171,15 @@ fn native_xgmi_runtime_wires_persistent_roots_and_guards_teardown() {
         .split("    fn next_id(")
         .next()
         .unwrap();
-    assert!(require.contains("!root.is_vacant()"));
+    assert!(require.contains("self.require_healthy_xgmi_v1()?"));
+    let healthy = implementation
+        .split("    fn require_healthy_xgmi_v1(")
+        .nth(1)
+        .unwrap()
+        .split("    fn require_live(")
+        .next()
+        .unwrap();
+    assert!(healthy.contains("!root.is_vacant()"));
     let shutdown = implementation
         .split("    pub fn shutdown_native_v1(")
         .nth(1)

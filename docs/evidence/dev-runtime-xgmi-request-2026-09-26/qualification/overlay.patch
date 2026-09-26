@@ -1,0 +1,21 @@
+--- a/crates/fe2o3-runtime/src/kfd_backend/xgmi_request.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/xgmi_request.rs
+@@ -3,6 +3,8 @@
+ #![forbid(unsafe_code)]
+ 
+ use super::*;
++#[cfg(test)]
++mod qualification;
+ use crate::{
+     RuntimeAllocationAdmissionProfileV1, RuntimeAllocationDeviceAdmissionV1,
+     RuntimeAllocationRequestWitnessV1,
+--- a/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs
+@@ -3,6 +3,7 @@
+ 
+ use super::*;
+ 
++mod qualification_model;
+ mod shell_tests;
+ 
+ impl RuntimeContextV1<KfdRuntimeBackendV1> {

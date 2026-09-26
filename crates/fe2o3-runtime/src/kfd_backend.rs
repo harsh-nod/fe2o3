@@ -102,6 +102,7 @@ mod xgmi_budget;
 pub use xgmi_budget::{KfdNativeXgmiBackingBudgetV1, KfdNativeXgmiBackingUsageV1};
 mod xgmi_directed;
 mod xgmi_progress;
+mod xgmi_request;
 mod xgmi_segments;
 mod xgmi_segments_diagnostic;
 #[cfg(feature = "hardware-diagnostic")]
@@ -7818,6 +7819,7 @@ pub struct KfdNativeXgmiRuntimeBackendV1 {
     dependency_depths: HashMap<u64, usize>,
     dependency_waiters: HashMap<u64, Vec<u64>>,
     directed_roots: HashMap<u64, xgmi_directed::Root>,
+    request_policy: xgmi_request::RequestPolicyV1,
 }
 
 fn settle_xgmi_queue_retirement<Q, E>(
@@ -9464,9 +9466,12 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             },
         ];
         let admissions = prepare([&first, &second])?;
-        let sessions =
-            xgmi_budget::acquire_sessions([first, second], admissions, |device, admission| {
-                match admission {
+        let (request_policy, sessions) = xgmi_budget::bind_before_acquire(
+            [first, second],
+            admissions,
+            xgmi_request::RequestPolicyV1::from_admissions,
+            |device, admission| {
+                let result = match admission {
                     xgmi_budget::EndpointAdmissionV1::Local(budget) => device
                         .acquire_shared_gtt_memory_session_with_backing_budgets_v1(
                             budget.device,
@@ -9474,14 +9479,18 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                         ),
                     xgmi_budget::EndpointAdmissionV1::Native(admission) => device
                         .acquire_shared_gtt_memory_session_with_rooted_native_backing_v1(admission),
-                }
-            })
-            .map_err(|error| {
-                KfdRuntimeBackendErrorV1::new(
-                    KfdRuntimeBackendErrorKindV1::Native,
-                    format!("first XGMI VM acquisition: {error}"),
-                )
-            })?;
+                    xgmi_budget::EndpointAdmissionV1::Composed(admission) => {
+                        device.acquire_shared_gtt_memory_session_with_composed_backing_v1(admission)
+                    }
+                };
+                result.map_err(|error| {
+                    KfdRuntimeBackendErrorV1::new(
+                        KfdRuntimeBackendErrorKindV1::Native,
+                        format!("first XGMI VM acquisition: {error}"),
+                    )
+                })
+            },
+        )?;
         Ok(Self {
             descriptions,
             sessions,
@@ -9517,6 +9526,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             dependency_depths: HashMap::new(),
             dependency_waiters: HashMap::new(),
             directed_roots: HashMap::new(),
+            request_policy,
         })
     }
 
@@ -9545,7 +9555,9 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         RuntimeBackendFailureV1::Quiescent(KfdRuntimeBackendErrorV1::new(kind, detail))
     }
 
-    fn require_live(&self) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+    fn require_healthy_xgmi_v1(
+        &self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if self.terminal
             || self
                 .queue_creation_roots
@@ -9564,6 +9576,11 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 ),
             ));
         }
+        Ok(())
+    }
+
+    fn require_live(&self) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_healthy_xgmi_v1()?;
         if self.shutdown {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
@@ -10479,6 +10496,33 @@ impl KfdNativeXgmiRuntimeBackendV1 {
 impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
     type Error = KfdRuntimeBackendErrorV1;
 
+    fn allocation_admission_profile_v1(
+        &self,
+    ) -> Result<crate::RuntimeAllocationAdmissionProfileV1, RuntimeBackendFailureV1<Self::Error>>
+    {
+        // Policy remains observable after clean shutdown; it grants no native authority.
+        self.require_healthy_xgmi_v1()?;
+        self.request_policy.profile(
+            self.descriptions
+                .each_ref()
+                .map(|entry| entry.backend_device),
+        )
+    }
+
+    fn allocate_with_request_v1(
+        &mut self,
+        device: u64,
+        kind: RuntimeMemoryKindV1,
+        byte_len: u64,
+        alignment: u64,
+        witness: crate::RuntimeAllocationRequestWitnessV1<'_>,
+    ) -> crate::RuntimeRequestAllocationResultV1<Self::Error> {
+        crate::RuntimeRequestAllocationResultV1::Outcome(
+            self.allocate_xgmi_request_v1(device, kind, byte_len, alignment, Some(witness))
+                .map(RuntimeBackendAllocationOutcomeV1::Allocated),
+        )
+    }
+
     fn execution_capabilities_v1(&self, device: u64) -> RuntimeExecutionCapabilitiesV1 {
         if self.device_index(device).is_none() {
             return RuntimeExecutionCapabilitiesV1::default();
@@ -10546,50 +10590,7 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         byte_len: u64,
         alignment: u64,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-        self.require_live()?;
-        let index = self.device_index(device).ok_or_else(|| {
-            Self::rejected(
-                KfdRuntimeBackendErrorKindV1::WrongDevice,
-                "unknown native XGMI device",
-            )
-        })?;
-        if kind != RuntimeMemoryKindV1::DeviceLocal {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::Unsupported,
-                "native XGMI exposes PUBLIC device-local allocations only",
-            ));
-        }
-        if byte_len == 0 || alignment == 0 || !alignment.is_power_of_two() {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                "native XGMI allocation geometry",
-            ));
-        }
-        self.allocations.try_reserve(1).map_err(|_| {
-            Self::rejected(
-                KfdRuntimeBackendErrorKindV1::Capacity,
-                "XGMI allocation table",
-            )
-        })?;
-        let id = self.next_id()?;
-        let lease = xgmi_budget::allocate(
-            &mut self.terminal,
-            || {
-                self.sessions[index]
-                    .allocate_gfx942_xgmi_device_memory_classified_v1(byte_len, alignment)
-            },
-            fe2o3_kfd::Gfx942XgmiAllocationFailureV1::disposition,
-        )?;
-        self.allocations.insert(
-            id,
-            XgmiRuntimeAllocationV1 {
-                device: index,
-                byte_len,
-                alignment,
-                authority: Some(XgmiAllocationAuthorityV1::Unmapped(lease)),
-            },
-        );
-        Ok(id)
+        self.allocate_xgmi_request_v1(device, kind, byte_len, alignment, None)
     }
 
     fn release_allocation_v1(

@@ -144,7 +144,7 @@ inventing logical requests; they do not enforce a per-allocation witness.
 Context now adopts the existing typed request account, since another child
 would exceed the four-level hierarchy. The single-device Runtime constructors
 and mandatory Context/backend witness transport are implemented as described
-below. Ordered composed XGMI intake remains open.
+below, including ordered composed XGMI intake. Native replay remains open.
 
 New composed device/session budgets must directly describe requested, host and
 device byte ceilings plus an explicit combined-record ceiling. Do not reinterpret
@@ -249,15 +249,41 @@ CPU fixtures cover actual Context/trait witness routing and typed account/root
 custody, not checked-device minting or native constructor execution. Generated
 shell APIs remain single-device; native XGMI is a separate backend.
 
+### Native XGMI Runtime Integration
+
+The [XGMI request packet](evidence/dev-runtime-xgmi-request-2026-09-26/README.md)
+extends the separate two-endpoint backend with composed-root constructors.
+Both root admissions and full device/bundle/request binding checks precede
+either VM acquisition. Lower native account installation remains fallible;
+the existing second-acquisition fail-stop rule is unchanged. Original endpoint
+order is preserved even when device IDs are not sorted.
+
+Required policy retains both distinct typed request leaves independently of
+the consumed native admissions. Complete profile discovery rejects an unhealthy
+endpoint instead of truncating the roster. Each allocation checks only its
+selected endpoint's exact witness before storage reservation, handle advancement
+or native effects. Direct witness-free allocation cannot bypass the profile.
+Clean shutdown preserves inert Required-profile visibility without permitting
+native operations.
+
+Both allocation APIs share the same preflighted record transaction. Native
+capacity rejection retains its classification and the existing consumed-handle
+behavior. Other lower failures and panics seal the backend; no inferred
+settled-no-owner outcome refunds uncertain custody. Successful lease custody
+is indexed immediately into a pre-reserved vacant record.
+
+CPU tests execute the production request policy and record transaction, with
+typed accounting/Context fixtures through a synthetic backend. They do not
+execute the checked-device admission bridge, public successful constructors,
+real native trait path, peer mapping, shutdown or kernel/copy engines. Source
+wiring checks do not replace those execution gates. No new formal refinement
+or matched performance result is claimed.
+
 ### Remaining Integration Gates
 
-- Ordered XGMI forwarding needs complete account rosters and
-  per-selected-endpoint witness checks before outer IDs or native effects.
-  Both XGMI admissions precede either VM. Swapped endpoints, wrong routes and
-  supplied witnesses for a legacy endpoint must reject, not silently fall back.
-- Native XGMI remains native-only/legacy, not a composed request-profile path.
-  Multi-device checked construction, partial-admission cleanup and native
-  startup/shutdown still require hardware qualification.
+- Composed XGMI and multi-device checked construction, partial-admission cleanup,
+  selected-endpoint forwarding and native startup/shutdown require hardware
+  qualification. CPU policy and structural checks are not native acceptance.
 - Worker proxies do not transport borrowed request witnesses. Wrapping a
   composed backend fails closed at witness-free server allocation; this is an
   unsupported composition, not transparent profile transport.
