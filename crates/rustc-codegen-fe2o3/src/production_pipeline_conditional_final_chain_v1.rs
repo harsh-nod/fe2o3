@@ -149,7 +149,6 @@ impl FinalChain {
         })
     }
 
-    #[cfg(test)]
     pub(super) fn output(&self) -> &Owner {
         self.forwarded.output()
     }

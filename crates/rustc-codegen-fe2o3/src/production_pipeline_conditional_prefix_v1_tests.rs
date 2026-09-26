@@ -65,6 +65,8 @@ pub(super) fn source_replayed() -> Result<(), ProductionPipelineError> {
 
 pub(super) fn installed(value: &ConditionalPrefixForFV1) {
     if OBSERVING.load(Ordering::SeqCst) {
+        // Passive retained-content observation, not a count of verifier imports.
+        value.content.assert_observed_v5();
         assert_eq!(AGREEMENTS.load(Ordering::SeqCst), 1);
         assert_eq!(REPLAY_COMPLETED.load(Ordering::SeqCst), 1);
         assert!(value.preparation.ranked.has_conditional_roots_v1());

@@ -15,6 +15,10 @@ pub(crate) struct RetainedConditionalContractV1 {
 }
 
 impl RetainedConditionalContractV1 {
+    /// Immutable original replay projection; content alone is not source custody.
+    pub(crate) fn canonical_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
     pub(super) fn copy_unreserved(bytes: &[u8], budget: &mut Budget<'_>) -> Result<Self, Error> {
         if bytes.is_empty() || bytes.len() > MAX_CONDITIONAL_INVOCATION_BYTES_V1 {
             return Err(Error::Mismatch("bounded encoded conditional contract"));

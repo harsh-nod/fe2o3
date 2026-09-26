@@ -4,9 +4,7 @@ use super::{
     Budget, DirectPolicy6PreparationV1, Owner, ProductionPipelineError, Profile,
     RankedVerifiedProductionCompilation, Resource, resource,
 };
-use crate::production_native_source_lineage_v1::{
-    PreparedConditionalSourcePacketV2, prepare_retained_native_conditional_source_packet_v2,
-};
+use crate::production_native_source_lineage_v1::PreparedConditionalSourcePacketV2;
 use crate::production_pipeline::checked_output_policy7_v1::scoped;
 use crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1 as RankedError;
 use crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2 as JoinError;
@@ -19,6 +17,8 @@ use fe2o3_lower_mir_kernel::{
     ProductionSourceBoundConditionalAggregateRequestV1 as Request,
 };
 
+#[path = "production_pipeline_conditional_final_bridge_v1.rs"]
+pub(in crate::production_pipeline) mod bridge;
 #[path = "production_pipeline_conditional_final_chain_v1.rs"]
 mod chain;
 pub(in crate::production_pipeline) use chain::FinalChain;
@@ -34,6 +34,7 @@ pub(in crate::production_pipeline) struct ConditionalPrefixForFV1 {
     preparation: DirectPolicy6PreparationV1,
     chain: FinalChain,
     packet: PreparedConditionalSourcePacketV2,
+    content: bridge::RetainedFinalContentV5,
     retained_floor: usize,
 }
 
@@ -65,6 +66,7 @@ impl RankedVerifiedProductionCompilation {
                 .reserve_storage(
                     size_of::<ConditionalPrefixForFV1>()
                         .checked_sub(size_of::<PreparedConditionalSourcePacketV2>())
+                        .and_then(|n| n.checked_sub(size_of::<bridge::RetainedFinalContentV5>()))
                         .ok_or_else(|| resource(Resource::Arithmetic))?,
                 )
                 .map_err(resource)?;
@@ -101,12 +103,9 @@ impl RankedVerifiedProductionCompilation {
             bound,
             checked,
         } = preparation;
-        let (ranked, packet) = prepare_retained_native_conditional_source_packet_v2(
-            ranked,
-            &bindings.typed_descriptor_roots,
-            budget,
-        )
-        .map_err(ProductionPipelineError::conditional_packet_v2)?;
+        let (ranked, packet, content) =
+            bridge::prepare(ranked, &bindings, &bound, &checked, &chain, budget)
+                .map_err(ProductionPipelineError::conditional_final_bridge_v1)?;
         let value = ConditionalPrefixForFV1 {
             preparation: DirectPolicy6PreparationV1 {
                 ranked,
@@ -116,6 +115,7 @@ impl RankedVerifiedProductionCompilation {
             },
             chain,
             packet,
+            content,
             retained_floor: budget.storage(),
         };
         #[cfg(test)]
@@ -136,6 +136,7 @@ impl ConditionalPrefixForFV1 {
             preparation,
             chain: _chain,
             packet: _packet,
+            content: _content,
             ..
         } = self;
         let DirectPolicy6PreparationV1 {

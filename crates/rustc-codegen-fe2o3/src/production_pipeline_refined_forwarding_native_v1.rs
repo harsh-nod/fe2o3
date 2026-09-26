@@ -31,6 +31,9 @@ pub(crate) enum RefinedForwardingNativeStageErrorV1 {
     Worker(Box<worker::RefinedForwardingWorkerErrorV1>),
     BoundedUnroll(loop_unroll_native_v1::LoopUnrollNativeStageErrorV1),
     ConditionalPacket(Box<crate::production_native_source_lineage_v1::ConditionalPacketErrorV2>),
+    ConditionalFinalBridge(
+        Box<super::checked_output_policy6_v1::conditional_prefix_v1::bridge::Error>,
+    ),
 }
 impl fmt::Display for RefinedForwardingNativeStageErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -46,6 +49,7 @@ impl std::error::Error for RefinedForwardingNativeStageErrorV1 {
             Self::Worker(error) => Some(error.as_ref()),
             Self::BoundedUnroll(error) => Some(error),
             Self::ConditionalPacket(error) => Some(error.as_ref()),
+            Self::ConditionalFinalBridge(error) => Some(error.as_ref()),
             _ => None,
         }
     }
@@ -59,6 +63,13 @@ fn resource(value: Resource) -> ProductionPipelineError {
     error(RefinedForwardingNativeStageErrorV1::Resource(value))
 }
 impl ProductionPipelineError {
+    pub(in crate::production_pipeline) fn conditional_final_bridge_v1(
+        value: super::checked_output_policy6_v1::conditional_prefix_v1::bridge::Error,
+    ) -> Self {
+        error(RefinedForwardingNativeStageErrorV1::ConditionalFinalBridge(
+            Box::new(value),
+        ))
+    }
     pub(in crate::production_pipeline) fn conditional_packet_v2(
         value: crate::production_native_source_lineage_v1::ConditionalPacketErrorV2,
     ) -> Self {

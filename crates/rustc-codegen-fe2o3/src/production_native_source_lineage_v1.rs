@@ -15,6 +15,7 @@ pub(crate) use owned_packet::{
 mod conditional_packet;
 pub(crate) use conditional_packet::{
     ConditionalPacketErrorV2, PreparedConditionalSourcePacketV2,
+    prepare_retained_native_conditional_source_packet_using_v2,
     prepare_retained_native_conditional_source_packet_v2,
 };
 

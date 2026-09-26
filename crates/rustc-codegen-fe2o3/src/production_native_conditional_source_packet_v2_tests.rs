@@ -12,6 +12,96 @@ impl Drop for Dropped {
 }
 
 #[test]
+fn conditional_packet_selected_consumer_preserves_source_only_account_sequence() {
+    // Compare the original typed scope and the generic selected-consumer scope,
+    // without constructing any sealed source or successful proof receipt.
+    let mut observations = Vec::new();
+    for generic in [false, true] {
+        let mut work = Work::new(100);
+        let mut budget = Budget::new(&mut work, 1000);
+        budget.reserve_storage(FLOOR).unwrap();
+        let account = budget.work_ledger_identity_v1();
+        let run = |budget: &mut Budget<'_>| -> Result<(_, usize), E> {
+            let mut values = vector::<u64>(3, budget)?;
+            values.extend_from_slice(&[1, 2, 3]);
+            budget.reserve_storage(23)?;
+            budget.charge_work(7)?;
+            let retained = size_of::<Vec<u64>>() + values.capacity() * size_of::<u64>();
+            Ok((values, retained))
+        };
+        let result = if generic {
+            retain_using(&mut budget, run)
+        } else {
+            retain(&mut budget, run)
+        }
+        .unwrap();
+        assert!(budget.work_ledger_identity_v1() == account);
+        observations.push((
+            result,
+            budget.work(),
+            budget.storage(),
+            budget.peak_storage(),
+            budget.failed_work(),
+            budget.failed_storage(),
+        ));
+    }
+    assert_eq!(observations[0], observations[1]);
+}
+
+#[test]
+fn conditional_packet_selected_consumer_typed_late_errors_and_unwind_are_terminal() {
+    #[derive(Debug)]
+    struct Terminal(Resource);
+    impl From<Resource> for Terminal {
+        fn from(value: Resource) -> Self {
+            Self(value)
+        }
+    }
+    for mode in 0..4 {
+        let mut work = Work::new(100);
+        let mut foreign = Work::new(100);
+        let mut budget = Budget::new(&mut work, 100);
+        budget.reserve_storage(FLOOR).unwrap();
+        let drops = Rc::new(Cell::new(0));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            retain_using(
+                &mut budget,
+                |budget| -> Result<(Dropped, usize), Terminal> {
+                    budget.reserve_storage(23)?;
+                    budget.charge_work(7)?;
+                    let owner = Dropped(drops.clone());
+                    match mode {
+                        0 => return Err(Terminal(Resource::Accounting)),
+                        1 => panic!("inert selected consumer unwind"),
+                        2 => {
+                            budget.release_storage(24)?;
+                        }
+                        _ => {
+                            *budget = Budget::new(&mut foreign, 100);
+                            budget.reserve_storage(FLOOR + 23)?;
+                        }
+                    }
+                    Ok((owner, 8))
+                },
+            )
+        }));
+        assert_eq!(drops.get(), 1);
+        if mode == 1 {
+            assert!(result.is_err());
+        } else {
+            assert!(matches!(
+                result.unwrap(),
+                Err(Terminal(Resource::Accounting))
+            ));
+        }
+        assert_eq!(
+            budget.storage(),
+            if mode == 2 { FLOOR - 1 } else { FLOOR + 23 }
+        );
+    }
+}
+
+#[test]
 fn conditional_packet_capacity_exact_one_short_and_denials_stay_on_original_account() {
     let run = |budget: &mut Budget<'_>| {
         retain(budget, |budget| {
