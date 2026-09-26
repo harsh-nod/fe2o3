@@ -14,6 +14,7 @@ fe2o3-compiler-closure-capability.workspace = true
 fe2o3-compiler-execution-lifecycle.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
 fe2o3-external-anchor-protocol.workspace = true
+fe2o3-kernel-ir.workspace = true
 fe2o3-protected-static-executable.workspace = true
 fe2o3-protected-service-profile.workspace = true
 libc.workspace = true

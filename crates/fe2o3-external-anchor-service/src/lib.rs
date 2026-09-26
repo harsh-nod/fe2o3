@@ -31,10 +31,18 @@ use sha2::{Digest, Sha256};
 mod durable_core;
 #[allow(unsafe_code)]
 mod entrypoint;
+mod native;
+mod native_adapter;
+mod native_v2;
+mod native_v3;
 #[allow(unsafe_code)]
 mod service;
 
 pub(crate) use durable_core::DurableAnchorCoreV1;
+
+pub use native::{NativeExternalAnchorErrorV2, NativeExternalAnchorStorageV2};
+pub use native_v2::DurableExternalAnchorV2;
+pub use native_v3::DurableExternalAnchorV3;
 
 pub use entrypoint::{
     EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1, EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1,
