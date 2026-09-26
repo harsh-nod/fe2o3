@@ -5,11 +5,15 @@
 mod bounded_pair;
 mod capsule;
 mod capsule_v4;
+mod capsule_v5;
 mod error;
 mod multi_root_correspondence_payload_v2;
 mod multi_root_proof_roster_v2;
 mod multi_root_target_lineage_v2;
 mod multi_root_target_lineage_v3;
+mod native_conditional_carrier_v1;
+mod native_conditional_metadata_v1;
+mod native_conditional_output_v1;
 mod native_lowering_association_v1;
 mod native_neutral_module_v1;
 mod native_neutral_subject_v1;
@@ -29,6 +33,7 @@ pub use capsule::{
     OrderedInertSemanticLineageReceiptsV3,
 };
 pub use capsule_v4::*;
+pub use capsule_v5::*;
 pub use error::{LineageDecodeErrorV3, LineageErrorV3};
 pub use multi_root_correspondence_payload_v2::{
     MULTI_ROOT_CORRESPONDENCE_PAYLOAD_MAGIC_V2, MULTI_ROOT_CORRESPONDENCE_PAYLOAD_POLICY_V2,
@@ -64,6 +69,9 @@ pub use multi_root_target_lineage_v3::{
     MultiRootTargetBindingTranscriptV3, MultiRootTargetWorkgroupInputV3,
     MultiRootTargetWorkgroupV3,
 };
+pub use native_conditional_carrier_v1::*;
+pub use native_conditional_metadata_v1::*;
+pub use native_conditional_output_v1::*;
 pub use native_lowering_association_v1::*;
 pub use native_neutral_module_v1::{
     NativeNeutralModuleErrorV1, NativeNeutralModuleRefV1, encode_native_neutral_module_v1,
