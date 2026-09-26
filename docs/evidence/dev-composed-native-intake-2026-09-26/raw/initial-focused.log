@@ -1,0 +1,57 @@
+   Compiling typenum v1.20.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+   Compiling cfg-if v1.0.4
+   Compiling spin v0.12.3
+   Compiling libc v0.2.189
+   Compiling cpufeatures v0.3.1
+   Compiling rustix v1.1.4
+   Compiling bitflags v2.13.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+   Compiling arrayvec v0.7.8
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+   Compiling hybrid-array v0.4.14
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized] target(s) in 1m 07s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-composed-native-target-20260926-w0rrulgd/debug/deps/fe2o3_kfd-0b12f6a7b1bdedc6)
+
+running 25 tests
+test resource_domains::composed::tests::composed_request_batch_is_atomic_and_pending_members_keep_registry ... ok
+test resource_domains::composed::tests::composed_request_budget_bounds_and_exact_bootstrap ... ok
+test resource_domains::composed::tests::composed_request_canonical_parent_and_all_device_limits_are_immutable ... ok
+test resource_domains::composed::tests::composed_request_class_device_root_and_generic_record_ceilings_apply ... ok
+test resource_domains::composed::tests::composed_request_cold_reservation_keeps_registry_then_cancels_cleanly ... ok
+test resource_domains::composed::tests::composed_request_cold_retained_credit_releases_or_preserves_registry ... ok
+test resource_domains::composed::tests::composed_request_cross_session_root_and_generation_substitutions_reject ... ok
+test resource_domains::composed::tests::composed_request_native_sibling_quarantine_preserves_typed_registry ... ok
+test resource_domains::composed::tests::composed_request_partial_batch_drop_and_native_bundle_drop_order ... ok
+test resource_domains::composed::tests::composed_request_partial_mint_never_publishes_or_leaks_domains ... ok
+test resource_domains::composed::tests::composed_request_quarantine_retains_ancestor_pressure_without_global_poison ... ok
+test resource_domains::composed::tests::composed_request_three_classes_contend_for_one_combined_record_limit ... ok
+test resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained ... ok
+test shared_memory::tests::composed_backing::composed_backing_accepts_healthy_reserved_and_retained_requests ... ok
+test queue::live::tests::backing_constructor_forwarding_precedes_prepare_and_keeps_process_vm_envelope ... ok
+test shared_memory::tests::composed_backing::composed_backing_engine_drop_quarantines_native_records_before_last_request_owner ... ok
+test shared_memory::tests::composed_backing::composed_backing_combined_records_contend_and_refund_independently_in_all_orders ... ok
+test shared_memory::tests::composed_backing::composed_backing_failed_install_without_external_credit_releases_registry ... ok
+test shared_memory::tests::composed_backing::composed_backing_install_failure_preserves_request_and_existing_configuration ... ok
+test shared_memory::tests::composed_backing::composed_backing_outstanding_request_can_outlive_clean_native_engine ... ok
+test shared_memory::tests::composed_backing::composed_backing_quarantine_before_and_during_install_never_commits_partial_accounts ... ok
+test shared_memory::tests::composed_backing::composed_backing_queue_owned_and_loaned_configuration_reject_without_effects ... ok
+test shared_memory::tests::composed_backing::composed_backing_request_quarantine_seals_selected_session_not_sibling ... ok
+test shared_memory::tests::composed_backing::composed_backing_native_disposal_error_and_unwind_preserve_all_custody ... ok
+test shared_memory::tests::host_backing::n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 1616 filtered out; finished in 0.02s
+

@@ -269,6 +269,10 @@ pub(crate) struct DeviceBackingAdmissionV1 {
 }
 
 impl DeviceBackingAdmissionV1 {
+    pub(crate) const fn budget_v1(&self) -> Gfx942DeviceBackingBudgetV1 {
+        self.budget
+    }
+
     pub(crate) fn into_account(
         self,
         device: DeviceKeyV1,

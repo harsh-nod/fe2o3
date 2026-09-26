@@ -309,6 +309,7 @@ pub(crate) enum HostBackingAdmission {
     Local(Option<Gfx942HostVisibleBackingBudgetV1>),
     Rooted(Gfx942HostBackingAdmissionV1),
     Native(Gfx942NativeBackingAdmissionV1),
+    Composed(Gfx942ComposedBackingAdmissionV1),
 }
 
 mod native;
@@ -326,6 +327,8 @@ pub use composed::{
     Gfx942RequestReservationsV1, Gfx942RetainedRequestV1,
 };
 
+#[cfg(test)]
+pub(crate) use composed::tests as composed_tests;
 #[cfg(test)]
 pub(crate) use native::tests as native_tests;
 

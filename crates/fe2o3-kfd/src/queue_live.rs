@@ -4875,6 +4875,26 @@ impl CheckedGfx942XnackMinusDevice {
         .map(|(session, ())| session)
     }
 
+    /// Creates a queue with sibling request/N1/N2 custody. Internal queue
+    /// backing does not synthesize logical request charges. Context witness
+    /// enforcement is a separate runtime contract, not supplied by this intake.
+    pub fn create_compute_aql_queue_with_composed_backing_v1(
+        self,
+        ring_bytes: u32,
+        admission: crate::Gfx942ComposedBackingAdmissionV1,
+        capacity: Gfx942FixedDispatchCapacityV1,
+    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_compute_aql_queue_with_runtime(
+            ring_bytes,
+            |_| Ok(()),
+            None,
+            None,
+            crate::resource_domains::HostBackingAdmission::Composed(admission),
+            capacity,
+        )
+        .map(|(session, ())| session)
+    }
+
     pub(crate) fn create_compute_aql_queue_with<T>(
         self,
         ring_bytes: u32,
@@ -6339,6 +6359,8 @@ impl ComputeAqlQueueSessionV1 {
             .and_then(|engine| engine.backend.session.host_visible_backing_usage_v1())
     }
 
+    /// Inclusive session usage, including requests in the composed profile.
+    /// This is not native-only residency or a logical-allocation count.
     pub fn native_backing_usage_v1(
         &self,
     ) -> Option<fe2o3_resource_accounting::ResourceCreditUsageV1> {
@@ -14107,6 +14129,17 @@ mod tests {
             .unwrap();
         let vm_identity = acquisition.find("NEXT_MODEL_VM_ID").unwrap();
         assert!(validate_rooted < vm_identity && vm_identity < begin);
+        let composed_live = acquisition.find("!admission.is_live_v1()").unwrap();
+        assert!(validate_rooted < composed_live && composed_live < vm_identity);
+        let composed_wrapper = production
+            .split("pub fn create_compute_aql_queue_with_composed_backing_v1(")
+            .nth(1)
+            .unwrap()
+            .split("pub ")
+            .next()
+            .unwrap();
+        assert!(composed_wrapper.contains("HostBackingAdmission::Composed(admission)"));
+        assert!(composed_wrapper.contains("self.create_compute_aql_queue_with_runtime("));
         let bind = acquisition
             .find("engine.backend.bind_model_vm(VmIdV1(vm_id))?")
             .unwrap();
@@ -14119,6 +14152,8 @@ mod tests {
         let finish = acquisition
             .find("finish_process_vm_attempt(result.is_ok(), pid, gpu_id)")
             .unwrap();
+        let configure_composed = acquisition.find(".configure_composed_backing(").unwrap();
+        assert!(bind < configure_composed && configure_composed < finish);
         assert!(
             begin < bind
                 && bind < configure

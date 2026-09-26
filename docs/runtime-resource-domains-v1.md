@@ -143,9 +143,12 @@ shared planner/arena proofs do not yet prove its mutex/record association or
 Context composition.
 The [typed composed minting foundation](evidence/dev-composed-request-2026-09-26/README.md)
 now constructs that third request class alongside N1/N2 and preserves the typed
-registry through request-token lifetime. This accounting API has no mandatory
-Context installation or native consumer yet. Request witnesses, complete native
-composition and their adapter proofs remain open.
+registry through request-token lifetime. The subsequent
+[lower KFD intake](evidence/dev-composed-native-intake-2026-09-26/README.md)
+installs request/N1/N2 accounts together in memory and compute-queue constructors,
+retains typed custody and observes selected-session quarantine. Mandatory
+Context installation, allocation witnesses, Runtime startup orders, ordered
+composed XGMI intake, native qualification and adapter proofs remain open.
 
 The [development evidence](evidence/dev-resource-domains-2026-09-26/README.md)
 separates core tests, actual Context/MockBackend paths and broader regressions.

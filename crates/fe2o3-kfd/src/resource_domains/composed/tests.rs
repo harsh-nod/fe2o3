@@ -30,15 +30,15 @@ fn root_capacity(bytes: u64, records: u64) -> ResourceVectorV1 {
         .with(K::AllocationRecords, records)
 }
 
-fn root() -> Gfx942ComposedBackingRootV1 {
+pub(crate) fn root() -> Gfx942ComposedBackingRootV1 {
     Gfx942ComposedBackingRootV1::new(root_capacity(65536, 32), 2, 24, 40).unwrap()
 }
 
-fn device_budget() -> Gfx942ComposedBackingDeviceBudgetV1 {
+pub(crate) fn device_budget() -> Gfx942ComposedBackingDeviceBudgetV1 {
     Gfx942ComposedBackingDeviceBudgetV1::new(65536, 65536, 65536, 16).unwrap()
 }
 
-fn budget(records: usize) -> Gfx942ComposedBackingSessionBudgetV1 {
+pub(crate) fn budget(records: usize) -> Gfx942ComposedBackingSessionBudgetV1 {
     bounded_budget(8, records)
 }
 
@@ -57,7 +57,7 @@ fn admission(root: &Gfx942ComposedBackingRootV1) -> Gfx942ComposedBackingAdmissi
         .unwrap()
 }
 
-fn observer(
+pub(crate) fn observer(
     root: &Gfx942ComposedBackingRootV1,
 ) -> impl Fn() -> Option<ResourceCreditUsageV1> + use<> {
     let weak = Arc::downgrade(&root.0.0);
@@ -65,6 +65,15 @@ fn observer(
         weak.upgrade()
             .map(|inner| Gfx942HostBackingRootV1(inner).usage_v1())
     }
+}
+
+pub(crate) fn admission_for_device(
+    root: &Gfx942ComposedBackingRootV1,
+    device: DeviceKeyV1,
+    parent: Gfx942ComposedBackingDeviceBudgetV1,
+    budget: Gfx942ComposedBackingSessionBudgetV1,
+) -> Gfx942ComposedBackingAdmissionV1 {
+    root.admit(identity(1), device, parent, budget).unwrap()
 }
 
 fn class_account(a: &Gfx942ComposedBackingAdmissionV1, class: usize) -> &ResourceCreditAccountV1 {
@@ -250,6 +259,34 @@ fn composed_request_cross_session_root_and_generation_substitutions_reject() {
         assert!(!a.request.matches_retained_charge_v1(&credit, 9));
         credit.release_after_disposal().unwrap();
         equal.release_after_rejection().unwrap();
+    }
+}
+
+#[test]
+fn composed_request_native_intake_rejects_incoherent_parts() {
+    for foreign in [false, true] {
+        for class in 0..3 {
+            let root = root();
+            let other = if foreign { self::root() } else { root.clone() };
+            let mut a = admission(&root);
+            let mut b = admission(&other);
+            match class {
+                0 => std::mem::swap(&mut a.request, &mut b.request),
+                1 => std::mem::swap(&mut a.host, &mut b.host),
+                2 => std::mem::swap(&mut a.device, &mut b.device),
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                a.into_parts(key(1)),
+                Err(ResourceCreditErrorV1::Invariant)
+            ));
+            assert!(matches!(
+                b.into_parts(key(1)),
+                Err(ResourceCreditErrorV1::Invariant)
+            ));
+            assert_eq!(root.usage_v1().used.get(K::AllocationRecords), 0);
+            assert_eq!(other.usage_v1().used.get(K::AllocationRecords), 0);
+        }
     }
 }
 

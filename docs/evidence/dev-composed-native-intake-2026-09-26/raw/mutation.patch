@@ -1,0 +1,15 @@
+--- a/crates/fe2o3-kfd/src/shared_memory.rs
++++ b/crates/fe2o3-kfd/src/shared_memory.rs
+@@ -1540,12 +1540,6 @@
+         )
+         .map_err(device_backing_accounting_error)?;
+         self.check_currentness()?;
+-        if request
+-            .as_ref()
+-            .is_some_and(|account| !account.is_session_live_v1())
+-        {
+-            return self.quarantine(MemorySessionError::SharedSessionQuarantined);
+-        }
+         self.host_backing_account = Some(host);
+         self.device_backing_account = Some(native);
+         self.composed_request_account = request;

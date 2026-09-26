@@ -1,4 +1,4 @@
-//! Request/N1/N2 accounting minting. Native and Context installation are separate.
+//! Request/N1/N2 accounting minting and native intake; Context witnesses are separate.
 
 use super::*;
 use crate::Gfx942DeviceBackingBudgetV1;
@@ -150,7 +150,7 @@ impl Gfx942ComposedBackingSessionBudgetV1 {
 
 /// Canonical accounting root for sibling request/N1/N2 leaves.
 ///
-/// This minting API alone does not install mandatory Context/native witnesses.
+/// Native intake retains all three classes; mandatory Context witnesses are separate.
 /// Admissions cannot be downgraded into native-only admissions or raw accounts.
 /// Existing native-only and independent-account defaults are unchanged.
 #[derive(Clone)]
@@ -304,6 +304,27 @@ impl Gfx942ComposedBackingAdmissionV1 {
             && self.device.generation == device.model_admission().model_key()
     }
 
+    pub(crate) fn is_live_v1(&self) -> bool {
+        self.request.is_session_live_v1()
+    }
+
+    pub(crate) fn into_parts(
+        self,
+        device: DeviceKeyV1,
+    ) -> Result<
+        (
+            Gfx942RequestAccountV1,
+            Gfx942HostBackingAdmissionV1,
+            DeviceBackingAdmissionV1,
+        ),
+        ResourceCreditErrorV1,
+    > {
+        if !self.coherent() || self.request.0.generation != device || !self.is_live_v1() {
+            return Err(ResourceCreditErrorV1::Invariant);
+        }
+        Ok((self.request, self.host, self.device))
+    }
+
     fn coherent(&self) -> bool {
         let request = &self.request.0;
         self.host.identity == request.identity
@@ -355,6 +376,11 @@ impl Drop for RequestInner {
 pub struct Gfx942RequestAccountV1(Arc<RequestInner>);
 
 impl Gfx942RequestAccountV1 {
+    pub(crate) fn is_session_live_v1(&self) -> bool {
+        let usage = self.session_usage_v1();
+        !usage.poisoned && usage.quarantined_records == 0
+    }
+
     pub fn matches_device_v1(&self, device: &CheckedGfx942XnackMinusDevice) -> bool {
         self.0.identity == Identity::of(device)
             && self.0.generation == device.model_admission().model_key()
@@ -516,4 +542,4 @@ impl Gfx942RetainedRequestV1 {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

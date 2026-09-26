@@ -85,6 +85,8 @@ is unchanged.
 queue, primary teardown or terminal memory ownership. XGMI returns observations
 in original endpoint argument order. Snapshots grant no execution or refund
 authority. Legacy constructors retain their existing behavior.
+For a composed session this observation includes request, N1 and N2 usage;
+it is neither native-only residency nor a logical-allocation count.
 
 ## Verification Boundary
 
@@ -111,7 +113,7 @@ matched HIP/HSA performance remain open. Accepted milestones are unchanged.
 
 The [exact retained-credit query](evidence/dev-retained-charge-2026-09-26/README.md)
 and [typed composed minting](evidence/dev-composed-request-2026-09-26/README.md)
-are implemented prerequisites, not installation of a logical/native profile.
+are implemented prerequisites for the logical/native profile.
 The latter adds a separate root and budgets with one session and sibling request,
 N1 and N2 leaves. Typed request reservations and retained credits preserve the
 canonical registry even before any native allocation exists. Clean cancellation
@@ -119,10 +121,27 @@ or release remains reclaimable; quarantine preserves registry custody and debit.
 The owning batch iterator reuses the generic token array. Native-only extraction
 and raw-account/token extraction are unavailable.
 
-Context must adopt this existing typed request account; creating another child
-would exceed the four-level hierarchy. The minting API currently has no composed
-native constructor or mandatory Context/backend witness transport. Its CPU tests
-do not qualify native lifetime, actual shutdown or formal adapter composition.
+The lower KFD constructors
+`acquire_shared_gtt_memory_session_with_composed_backing_v1` and
+`create_compute_aql_queue_with_composed_backing_v1` now consume the full admission.
+They check device identity and observed session health before the VM attempt,
+then validate binding/currentness/health again before installing all three
+accounts together. Healthy reserved or retained requests are allowed at intake.
+No class is installed on failure; an installation panic quarantines the engine
+and preserves the original panic. The engine retains the typed request account
+alongside native accounts and observes inclusive session quarantine at checked
+operation boundaries. An unrelated session retains spare capacity and remains
+active. A health snapshot is not atomic exclusion against another request clone
+quarantining during an already-started operation.
+
+The [lower-intake evidence](evidence/dev-composed-native-intake-2026-09-26/README.md)
+uses FakeBackend and queue-foundation/pool fixtures plus constructor source
+checks. It does not qualify Linux intake, actual shutdown, hardware behavior or
+formal adapter composition. These constructors charge native backing without
+inventing logical requests; they do not enforce a per-allocation witness.
+Context must adopt the existing typed request account, since another child
+would exceed the four-level hierarchy. Runtime constructors, mandatory
+Context/backend witness transport and ordered composed XGMI intake remain open.
 
 New composed device/session budgets must directly describe requested, host and
 device byte ceilings plus an explicit combined-record ceiling. Do not reinterpret
@@ -146,3 +165,38 @@ generation or accounting-invariant failures; ambiguity must not refund custody.
 Generic ledger quarantine retains ancestor pressure without globally poisoning
 spare-capacity siblings; native session sealing must be enforced by its consumer.
 The mandatory witness interfaces and native qualification remain unimplemented.
+
+### Next Runtime Integration Gates
+
+These are outstanding implementation requirements, not enabled capabilities:
+
+- `resource_credits.rs`: preserve typed KFD request accounts, reservations and
+  retained credits in private variants, including an owning batch iterator.
+  Do not extract generic tokens or allocate a second output array after commit.
+- `Context::open_configured_v1`: validate a complete backend-device-keyed
+  mandatory roster against enumeration before exposing the Context. Reject
+  missing, extra and duplicate entries; preserve exact Context device brands
+  and full native model admissions. Later local/domain configuration must not
+  replace those accounts. Per-device optional hooks alone cannot prove coverage.
+- Ordinary allocation: privately construct a non-Clone witness for the exact
+  retained credit, account, device and full requested extent. Pass the witness
+  by value while Context keeps ownership of its credit. A default backend hook
+  must return explicit unsupported status, not invoke a legacy method with the
+  witness ignored. Unsupported must not require constructing generic
+  `Self::Error`. Preserve current rejection/settlement/quarantine outcomes.
+- `native_budget.rs` and all SDMA-first, compute-first and generated-first
+  switches: retain the typed request account independently of one-shot native
+  admission. Both old KFD allocation entry points must reject a mandatory
+  profile before identity advancement, staging or native work, including on a
+  backend returned by shutdown. Worker protocols without witness transport
+  cannot advertise the profile.
+- Generated shells are logical requests. Finish structural preflight, atomically
+  retain their whole request roster and authenticate exact order/cardinality,
+  device/account/extent before committing identities, journal or backend tables.
+  A private witness-bound plan must reject unbound materialization. Later DATA
+  adoption charges N1/N2, not a second request. Shell-only and adopted retirement
+  must each release the original request exactly once after disposal.
+- Ordered XGMI and multi-device forwarding need complete account rosters and
+  per-selected-endpoint witness checks before outer IDs or native effects.
+  Both XGMI admissions precede either VM. Swapped endpoints, wrong routes and
+  supplied witnesses for a legacy endpoint must reject, not silently fall back.

@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized] target(s) in 59.89s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-composed-native-target-20260926-w0rrulgd/debug/deps/fe2o3_kfd-0b12f6a7b1bdedc6)
+
+running 1 test
+test shared_memory::tests::composed_backing::composed_backing_quarantine_before_and_during_install_never_commits_partial_accounts ... FAILED
+
+failures:
+
+---- shared_memory::tests::composed_backing::composed_backing_quarantine_before_and_during_install_never_commits_partial_accounts stdout ----
+
+thread 'shared_memory::tests::composed_backing::composed_backing_quarantine_before_and_during_install_never_commits_partial_accounts' (62) panicked at crates/fe2o3-kfd/src/shared_memory/tests/composed_backing.rs:36:5:
+assertion failed: engine.composed_request_account.is_none()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shared_memory::tests::composed_backing::composed_backing_quarantine_before_and_during_install_never_commits_partial_accounts
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1642 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

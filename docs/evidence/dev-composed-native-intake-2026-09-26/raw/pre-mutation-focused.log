@@ -1,0 +1,35 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized] target(s) in 57.00s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-composed-native-target-20260926-w0rrulgd/debug/deps/fe2o3_kfd-0b12f6a7b1bdedc6)
+
+running 27 tests
+test resource_domains::composed::tests::composed_request_batch_is_atomic_and_pending_members_keep_registry ... ok
+test resource_domains::composed::tests::composed_request_budget_bounds_and_exact_bootstrap ... ok
+test resource_domains::composed::tests::composed_request_canonical_parent_and_all_device_limits_are_immutable ... ok
+test resource_domains::composed::tests::composed_request_class_device_root_and_generic_record_ceilings_apply ... ok
+test resource_domains::composed::tests::composed_request_cold_reservation_keeps_registry_then_cancels_cleanly ... ok
+test resource_domains::composed::tests::composed_request_cold_retained_credit_releases_or_preserves_registry ... ok
+test resource_domains::composed::tests::composed_request_cross_session_root_and_generation_substitutions_reject ... ok
+test resource_domains::composed::tests::composed_request_native_intake_rejects_incoherent_parts ... ok
+test resource_domains::composed::tests::composed_request_native_sibling_quarantine_preserves_typed_registry ... ok
+test resource_domains::composed::tests::composed_request_partial_batch_drop_and_native_bundle_drop_order ... ok
+test queue::live::tests::backing_constructor_forwarding_precedes_prepare_and_keeps_process_vm_envelope ... ok
+test resource_domains::composed::tests::composed_request_partial_mint_never_publishes_or_leaks_domains ... ok
+test resource_domains::composed::tests::composed_request_quarantine_retains_ancestor_pressure_without_global_poison ... ok
+test resource_domains::composed::tests::composed_request_three_classes_contend_for_one_combined_record_limit ... ok
+test resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained ... ok
+test shared_memory::tests::composed_backing::composed_backing_accepts_healthy_reserved_and_retained_requests ... ok
+test shared_memory::tests::composed_backing::composed_backing_device_and_root_record_pressure_cross_sessions ... ok
+test shared_memory::tests::composed_backing::composed_backing_combined_records_contend_and_refund_independently_in_all_orders ... ok
+test shared_memory::tests::composed_backing::composed_backing_engine_drop_quarantines_native_records_and_retains_registry ... ok
+test shared_memory::tests::composed_backing::composed_backing_failed_install_without_external_credit_releases_registry ... ok
+test shared_memory::tests::composed_backing::composed_backing_install_failure_preserves_request_and_existing_configuration ... ok
+test shared_memory::tests::composed_backing::composed_backing_outstanding_request_can_outlive_clean_native_engine ... ok
+test shared_memory::tests::composed_backing::composed_backing_quarantine_before_and_during_install_never_commits_partial_accounts ... ok
+test shared_memory::tests::composed_backing::composed_backing_queue_owned_and_loaned_configuration_reject_without_effects ... ok
+test shared_memory::tests::composed_backing::composed_backing_request_quarantine_seals_selected_session_not_sibling ... ok
+test shared_memory::tests::composed_backing::composed_backing_native_disposal_error_and_unwind_preserve_all_custody ... ok
+test shared_memory::tests::host_backing::n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 1616 filtered out; finished in 0.02s
+

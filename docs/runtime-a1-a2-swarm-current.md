@@ -24,7 +24,23 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest composed-request development (2026-09-26): a separate typed accounting
+Latest composed native-intake development (2026-09-26): lower KFD memory and
+compute-queue constructors now consume the entire request/N1/N2 admission,
+install all accounts together, retain typed custody and observe selected-session
+quarantine. Healthy retained/reserved requests remain admissible. The
+[development packet](evidence/dev-composed-native-intake-2026-09-26/README.md)
+records 27 focused passes and an assertion-rejected mutation that removes the
+final liveness check. Broad libraries report 1,034 model, 70 accounting, 1,346
+KFD and 1,482 Runtime passes with the same four socket failures; all 69 selected
+construction tests, 107 doctests, strict Clippy, no-default checks and formatting pass.
+Coverage overlaps and this is not full CPU qualification.
+This is lower KFD intake, not automatic Context adoption or
+mandatory allocation witnesses. Runtime startup orders, generated rosters,
+ordered composed XGMI intake and their formal/native qualification remain open.
+MI300X resolution still fails; no native/performance result or accepted milestone
+is claimed.
+
+Earlier composed-request development (2026-09-26): a separate typed accounting
 root now mints sibling request/N1/N2 leaves under one canonical device/session,
 with explicit combined-record limits. Request reservations and retained credits
 preserve the typed registry through cold lifetime, while clean cancellation and

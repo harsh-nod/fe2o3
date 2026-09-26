@@ -863,7 +863,7 @@ fn projected_dispose(fixture: &mut BackingConstructorFixture, token: HostMapped)
 
 #[test]
 fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders() {
-    use crate::resource_domains::native_tests;
+    use crate::resource_domains::{composed_tests, native_tests};
     use fe2o3_resource_accounting::ResourceKindV1 as K;
 
     for (compute_first, profile) in [
@@ -873,10 +873,14 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
         (true, 1),
         (false, 2),
         (true, 2),
+        (false, 3),
+        (true, 3),
     ] {
         let mut fixture = BackingConstructorFixture::new(None);
         let root = (profile == 1).then(|| crate::resource_domains::tests::root(16384, 4));
         let native_root = (profile == 2).then(|| native_tests::root(65536, 65536, 8));
+        let composed_root = (profile == 3).then(composed_tests::root);
+        let mut request = None;
         if let Some(root) = &root {
             let admission = crate::resource_domains::tests::admission(
                 root,
@@ -909,6 +913,29 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
                     admission,
                 )
                 .unwrap();
+        } else if let Some(root) = &composed_root {
+            let admission = composed_tests::admission_for_device(
+                root,
+                fixture.device.model_key(),
+                composed_tests::device_budget(),
+                composed_tests::budget(8),
+            );
+            request = Some(
+                admission
+                    .request_account_v1()
+                    .reserve_v1(4100)
+                    .unwrap()
+                    .retain(),
+            );
+            fixture
+                .ownership
+                .configure_composed_backing(
+                    &mut fixture.engine,
+                    fixture.device,
+                    fixture.vm,
+                    admission,
+                )
+                .unwrap();
         } else {
             configure_fixture(&mut fixture, true);
         }
@@ -916,6 +943,7 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
             root.as_ref()
                 .map(|root| root.usage_v1())
                 .or_else(|| native_root.as_ref().map(|root| root.usage_v1()))
+                .or_else(|| composed_root.as_ref().map(|root| root.usage_v1()))
         };
         let baseline = root_usage();
         let mut compute = compute_first.then(|| fixture.mapped_device());
@@ -933,7 +961,7 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
                 fixture.vm,
             )
             .unwrap();
-        if !compute_first && native_root.is_some() {
+        if !compute_first && profile >= 2 {
             compute = Some(fixture.mapped_device());
         }
         let token = host_before.unwrap_or_else(|| projected_host(&mut fixture));
@@ -953,11 +981,15 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
                 usage
                     .used
                     .get(fe2o3_resource_accounting::ResourceKindV1::AllocationRecords),
-                1 + u64::from(native_root.is_some())
+                1 + u64::from(profile >= 2) + u64::from(request.is_some())
             );
             assert_eq!(
                 usage.used.get(K::ResidentDeviceAllocationBytes),
-                if native_root.is_some() { 4096 } else { 0 }
+                if profile >= 2 { 4096 } else { 0 }
+            );
+            assert_eq!(
+                usage.used.get(K::RequestedAllocationBytes),
+                if request.is_some() { 4100 } else { 0 }
             );
         }
         let owner = QueueKeyV1 {
@@ -1059,11 +1091,14 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
         assert_eq!(root_usage(), root_before);
         projected_dispose(&mut fixture, token);
         debit(&fixture.engine, 0, 0);
-        if let Some(root) = &native_root {
-            let remaining = root.usage_v1();
+        if profile >= 2 {
+            let remaining = root_usage().unwrap();
             assert_eq!(remaining.used.get(K::ResidentHostAllocationBytes), 0);
             assert_eq!(remaining.used.get(K::ResidentDeviceAllocationBytes), 4096);
-            assert_eq!(remaining.used.get(K::AllocationRecords), 1);
+            assert_eq!(
+                remaining.used.get(K::AllocationRecords),
+                1 + u64::from(request.is_some())
+            );
             assert_eq!(fixture.usage().unwrap().used_allocation_records, 1);
         } else {
             assert_eq!(root_usage(), baseline);
@@ -1108,6 +1143,10 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
                 .is_err()
         );
         assert_eq!(calls(&fixture.engine), before_calls);
+        if let Some(request) = request {
+            request.release_after_disposal().unwrap();
+            assert_eq!(root_usage().unwrap().used.get(K::AllocationRecords), 0);
+        }
     }
 }
 

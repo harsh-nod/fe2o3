@@ -1236,6 +1236,7 @@ struct SharedMemoryEngine<B: MemoryBackend> {
     device_backing_account: Option<DeviceBackingAccountV1>,
     device_backing_activity_started: bool,
     device_backing_configuration_closed: bool,
+    composed_request_account: Option<crate::Gfx942RequestAccountV1>,
     #[cfg(test)]
     shared_lookup_comparisons: Cell<usize>,
     #[cfg(test)]
@@ -1342,6 +1343,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             device_backing_account: None,
             device_backing_activity_started: false,
             device_backing_configuration_closed: false,
+            composed_request_account: None,
             #[cfg(test)]
             shared_lookup_comparisons: Cell::new(0),
             #[cfg(test)]
@@ -1350,11 +1352,16 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     }
 
     fn phase(&self) -> SharedMemorySessionPhaseV1 {
-        // Compound session usage covers both classes under one coordinator lock.
+        // Inclusive session usage covers native classes and a composed request leaf.
         if let Some(usage) = self
-            .host_backing_account
+            .composed_request_account
             .as_ref()
-            .and_then(HostBackingAccountV1::session_usage)
+            .map(crate::Gfx942RequestAccountV1::session_usage_v1)
+            .or_else(|| {
+                self.host_backing_account
+                    .as_ref()
+                    .and_then(HostBackingAccountV1::session_usage)
+            })
         {
             return if usage.poisoned || usage.quarantined_records != 0 {
                 SharedMemorySessionPhaseV1::Quarantined
@@ -1404,7 +1411,8 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
 
     fn require_pristine_device_backing_v1(&self) -> Result<(), MemorySessionError> {
         self.require_active()?;
-        if self.device_backing_account.is_some()
+        if self.composed_request_account.is_some()
+            || self.device_backing_account.is_some()
             || self.device_backing_activity_started
             || self.device_backing_configuration_closed
             || !self.device_memory.is_empty()
@@ -1453,7 +1461,8 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
 
     fn require_pristine_host_backing_v1(&self) -> Result<(), MemorySessionError> {
         self.require_active()?;
-        if self.host_backing_account.is_some()
+        if self.composed_request_account.is_some()
+            || self.host_backing_account.is_some()
             || self.host_backing_activity_started
             || self.host_backing_configuration_closed
             || self.allocations.iter().any(|record| {
@@ -1476,15 +1485,48 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     ) -> Result<(), MemorySessionError> {
         self.require_pristine_device_backing_v1()?;
         self.require_pristine_host_backing_v1()?;
-        let budget = admission.budget_v1();
         let (host, native) = admission
             .into_parts()
             .map_err(|error| device_backing_accounting_error(error.into()))?;
+        self.install_compound_backing_accounts_v1(device, vm, host, native, None)
+    }
+
+    fn configure_composed_backing_admission_v1(
+        &mut self,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+        admission: crate::Gfx942ComposedBackingAdmissionV1,
+    ) -> Result<(), MemorySessionError> {
+        self.require_pristine_device_backing_v1()?;
+        self.require_pristine_host_backing_v1()?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (request, host, native) = admission
+                .into_parts(device)
+                .map_err(|error| device_backing_accounting_error(error.into()))?;
+            self.install_compound_backing_accounts_v1(device, vm, host, native, Some(request))
+        }));
+        match result {
+            Ok(result) => result,
+            Err(payload) => {
+                self.phase = SharedMemorySessionPhaseV1::Quarantined;
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
+
+    fn install_compound_backing_accounts_v1(
+        &mut self,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+        host: crate::Gfx942HostBackingAdmissionV1,
+        native: crate::resource_domains::DeviceBackingAdmissionV1,
+        request: Option<crate::Gfx942RequestAccountV1>,
+    ) -> Result<(), MemorySessionError> {
         let host = HostBackingAccountV1::new_with_admission(
             self.session_id,
             device,
             vm,
-            budget.host_budget(),
+            host.budget_v1(),
             Some(host),
         )
         .map_err(host_backing_accounting_error)?;
@@ -1492,13 +1534,20 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             self.session_id,
             device,
             vm,
-            budget.device_budget(),
+            native.budget_v1(),
             Some(native),
         )
         .map_err(device_backing_accounting_error)?;
         self.check_currentness()?;
+        if request
+            .as_ref()
+            .is_some_and(|account| !account.is_session_live_v1())
+        {
+            return self.quarantine(MemorySessionError::SharedSessionQuarantined);
+        }
         self.host_backing_account = Some(host);
         self.device_backing_account = Some(native);
+        self.composed_request_account = request;
         Ok(())
     }
 
@@ -4542,6 +4591,21 @@ impl QueueModelOwnershipV1 {
         engine.configure_native_backing_admission_v1(device.model_key(), vm, admission)
     }
 
+    fn configure_composed_backing<B: MemoryBackend>(
+        &self,
+        engine: &mut SharedMemoryEngine<B>,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+        admission: crate::Gfx942ComposedBackingAdmissionV1,
+    ) -> Result<(), MemorySessionError> {
+        if !self.is_session_owned() {
+            return Err(MemorySessionError::DeviceBackingBudgetConfiguration(
+                "queue-owned or loaned memory cannot configure composed backing",
+            ));
+        }
+        engine.configure_composed_backing_admission_v1(device.model_key(), vm, admission)
+    }
+
     fn take_foundation<B: MemoryBackend>(
         &mut self,
         engine: &mut SharedMemoryEngine<B>,
@@ -5021,6 +5085,19 @@ impl CheckedGfx942XnackMinusDevice {
         )
     }
 
+    /// Installs sibling request/N1/N2 custody before backing allocation or queue
+    /// certification. This lower memory API charges backing, not logical requests;
+    /// callers must separately retain a request for each logical allocation.
+    pub fn acquire_shared_gtt_memory_session_with_composed_backing_v1(
+        self,
+        admission: crate::Gfx942ComposedBackingAdmissionV1,
+    ) -> Result<SharedGttMemorySessionV1, MemorySessionError> {
+        self.acquire_shared_gtt_memory_session_with_host_admission_v1(
+            None,
+            HostBackingAdmission::Composed(admission),
+        )
+    }
+
     pub(crate) fn acquire_shared_gtt_memory_session_with_host_admission_v1(
         self,
         device_budget: Option<Gfx942DeviceBackingBudgetV1>,
@@ -5032,11 +5109,17 @@ impl CheckedGfx942XnackMinusDevice {
             HostBackingAdmission::Native(admission) => {
                 device_budget.is_none() && admission.matches_device_v1(&self)
             }
+            HostBackingAdmission::Composed(admission) => {
+                device_budget.is_none() && admission.matches_device_v1(&self)
+            }
         };
         if !matching {
             return Err(MemorySessionError::HostVisibleBackingBudgetConfiguration(
                 "foreign root-issued device admission",
             ));
+        }
+        if matches!(&host, HostBackingAdmission::Composed(admission) if !admission.is_live_v1()) {
+            return Err(MemorySessionError::SharedSessionQuarantined);
         }
         let pid = std::process::id();
         let gpu_id = self.observation().kfd_gpu_id();
@@ -5113,6 +5196,14 @@ impl CheckedGfx942XnackMinusDevice {
                 }
                 HostBackingAdmission::Native(admission) => {
                     session.model_ownership.configure_native_backing(
+                        &mut session.engine,
+                        session.model_device,
+                        session.vm,
+                        admission,
+                    )?;
+                }
+                HostBackingAdmission::Composed(admission) => {
+                    session.model_ownership.configure_composed_backing(
                         &mut session.engine,
                         session.model_device,
                         session.vm,
@@ -5212,7 +5303,8 @@ impl SharedGttMemorySessionV1 {
             .map(HostBackingAccountV1::usage)
     }
 
-    /// Inclusive N1/N2 usage for the compound session, not an additional debit.
+    /// Inclusive session usage, including requests in the composed profile.
+    /// This is not an additional debit or a logical-allocation count.
     pub fn native_backing_usage_v1(
         &self,
     ) -> Option<fe2o3_resource_accounting::ResourceCreditUsageV1> {
@@ -7068,6 +7160,7 @@ pub(crate) use tests::queue_construction::{
 #[cfg(test)]
 mod tests {
     mod allocation;
+    mod composed_backing;
     mod device_backing;
     pub(super) mod device_initialization;
     mod device_pool;
@@ -7155,6 +7248,7 @@ mod tests {
         currentness_calls: usize,
         fail_currentness_at: Option<usize>,
         panic_currentness_at: Option<usize>,
+        quarantine_request_at: Option<(usize, crate::Gfx942RetainedRequestV1)>,
         operational_currentness_calls: usize,
         fail_operational_currentness_at: Option<usize>,
         panic_operational_currentness_at: Option<usize>,
@@ -7206,6 +7300,7 @@ mod tests {
                 currentness_calls: 0,
                 fail_currentness_at: None,
                 panic_currentness_at: None,
+                quarantine_request_at: None,
                 operational_currentness_calls: 0,
                 fail_operational_currentness_at: None,
                 panic_operational_currentness_at: None,
@@ -7324,6 +7419,13 @@ mod tests {
         }
         fn check_currentness(&mut self) -> Result<(), MemorySessionError> {
             self.currentness_calls += 1;
+            if self
+                .quarantine_request_at
+                .as_ref()
+                .is_some_and(|(at, _)| *at == self.currentness_calls)
+            {
+                self.quarantine_request_at.take().unwrap().1.quarantine();
+            }
             if self.panic_currentness_at == Some(self.currentness_calls) {
                 std::panic::panic_any(("N2 native panic", "currentness"));
             }
