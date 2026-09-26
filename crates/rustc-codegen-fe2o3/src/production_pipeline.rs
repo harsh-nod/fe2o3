@@ -4260,10 +4260,13 @@ mod tests {
             ssa < materialize && materialize < verify && verify < lower,
             "semantic SSA, ranked verification, and lowering typestates are out of order",
         );
-        assert!(
-            include_str!("production_ranked_projection_v1.rs")
-                .contains("prepare_reference_effect_request_v2")
-        );
+        let projection = include_str!("production_ranked_projection_v1.rs");
+        assert!(projection.contains(
+            "include!(\"production_ranked_projection_v1/root_recipe_core_v1.rs\");"
+        ));
+        assert!(projection.contains("verify_prepared_ranked_root_recipe_v1("));
+        let recipe = include_str!("production_ranked_projection_v1/root_recipe_core_v1.rs");
+        assert!(recipe.contains("prepare_reference_effect_request_v2"));
     }
 
     #[test]

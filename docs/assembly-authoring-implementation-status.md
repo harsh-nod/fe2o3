@@ -5,6 +5,16 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Shared ordinary root preparation — 2026-09-26
+
+The [shared root-recipe checkpoint](bf16-shared-root-recipe-qualification-20260926.md)
+separates complete ordinary preparation from its immediate mandatory verification.
+All 331 model and 2,544 backend tests, backend/extractor build, 36 fresh normal
+composition sessions and two fresh direct-BF16 continuation sessions passed.
+This preserves existing ordinary compilation; it does not admit the nominal
+helper path. The strict original-meter adapter, complete memory/source mapping
+and nominal normal continuation remain open. Broad accepted exits stay **6/18**.
+
 ## Source-bound assertions and retained debugger failure — 2026-09-26
 
 The [assertion evaluator checkpoint](bf16-helper-root-assertion-qualification-20260926.md)
