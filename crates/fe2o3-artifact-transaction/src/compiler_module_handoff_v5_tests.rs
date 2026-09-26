@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicUsize;
 const LIMIT: usize = MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5;
 
 #[path = "compiler_module_handoff_v5_fixture_tests.rs"]
-mod fixture;
+pub(crate) mod fixture;
 use fixture::{Fixture, token};
 
 #[test]

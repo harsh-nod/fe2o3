@@ -59,6 +59,13 @@ mod attempt;
 mod attempt_scoped_hsaco_publication;
 mod compiler_artifact_generation_v1;
 mod compiler_execution_subject;
+pub use compiler_execution_subject::conditional_v3::{
+    CompilerExecutionSubjectErrorV3, INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V3,
+    INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V3, INERT_COMPILER_EXECUTION_SUBJECT_STORAGE_V3,
+    INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V3, INERT_COMPILER_EXECUTION_SUBJECT_WORK_V3,
+    InertCompilerExecutionSubjectIdentityV3, InertCompilerExecutionSubjectStorageV3,
+    InertCompilerExecutionSubjectV3,
+};
 pub use compiler_execution_subject::native_v2::{
     CompilerExecutionSubjectErrorV2, INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V2,
     INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V2, INERT_COMPILER_EXECUTION_SUBJECT_STORAGE_V2,

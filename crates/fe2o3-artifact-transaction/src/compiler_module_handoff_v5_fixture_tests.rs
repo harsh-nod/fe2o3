@@ -5,7 +5,7 @@ use crate::{BuildInvocation, BuildSession, begin_build_attempt};
 use fe2o3_compiler_ffi::*;
 use fe2o3_compiler_lineage::*;
 
-pub(super) struct Fixture {
+pub(crate) struct Fixture {
     pub path: PathBuf,
     pub producer: ProducerIdentity,
     pub attempt: BuildAttempt,
@@ -100,13 +100,54 @@ pub(super) fn token(
     token
 }
 
-fn outer() -> Handoff {
+pub(crate) fn outer() -> Handoff {
+    outer_variant(false, 7)
+}
+
+pub(crate) fn outer_variant(gfx950: bool, leaf: u8) -> Handoff {
     // Reuse only public inert invocation/receipt fixture content, not V3 authority
     // or an ordinary base inside V5. Construct the V5 tree independently.
     let old = super::super::super::semantic_v3::tests::outer(7);
-    let invocation =
-        fe2o3_rustc_invocation::encode_descriptor_v3(old.capsule().invocation()).unwrap();
-    let target = old.module_handoff().target();
+    let original = old.capsule().invocation();
+    let target_text = if gfx950 {
+        "gfx950:xnack-"
+    } else {
+        original.amd_target()
+    };
+    let environment = fe2o3_rustc_invocation::CompileEnvironmentV2::from_child_environment(
+        original
+            .compile_environment()
+            .entries()
+            .iter()
+            .map(|entry| {
+                (
+                    entry.key().into(),
+                    if entry.key() == "FE2O3_TARGET" {
+                        target_text
+                    } else {
+                        entry.value()
+                    }
+                    .into(),
+                )
+            }),
+    )
+    .unwrap();
+    let invocation = fe2o3_rustc_invocation::RustcInvocationDescriptorV3::new(
+        fe2o3_rustc_invocation::RustcInvocationDescriptorV2::new(
+            *original.rustc_executable_sha256(),
+            *original.codegen_backend_sha256(),
+            original.rustc().clone(),
+            environment,
+        )
+        .unwrap(),
+        *original.compiler_closure(),
+    )
+    .unwrap();
+    if !gfx950 {
+        assert_eq!(&invocation, original);
+    }
+    let invocation = fe2o3_rustc_invocation::encode_descriptor_v3(&invocation).unwrap();
+    let target = DeviceTargetV1::parse(target_text).unwrap();
     let llvm = old.module_handoff().module_bytes();
     let module = CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmTextIr,
@@ -124,7 +165,7 @@ fn outer() -> Handoff {
     .unwrap();
     let commitment = InertFinalCompilerModuleCommitmentV3::from_handoff(&module).unwrap();
     let output_layout = NativeConditionalOutputLayoutV1::new::<()>(19, 23, 29).unwrap();
-    let mut output = vec![7; output_layout.encoded_len()];
+    let mut output = vec![leaf; output_layout.encoded_len()];
     seal_native_conditional_output_v1(output_layout, &mut output, LIMIT, |_| Ok::<_, ()>(()))
         .unwrap();
     let carrier_layout = NativeConditionalCarrierLayoutV1::new::<()>(output.len(), 31).unwrap();
@@ -142,12 +183,13 @@ fn outer() -> Handoff {
         &output[output_layout.descriptor_range()],
         llvm,
         module.canonical_bytes(),
+        gfx950,
     );
     let layout = canonical_semantic_target_layout_transcript_v1(
         "amdgcn-amd-amdhsa",
         "e-p:64:64",
         64,
-        "gfx942",
+        if gfx950 { "gfx950" } else { "gfx942" },
         "-wavefrontsize32,+wavefrontsize64,-xnack",
     )
     .unwrap();
@@ -231,12 +273,16 @@ fn lowering_fixture(
     descriptor: &[u8],
     llvm: &[u8],
     module: &[u8],
+    gfx950: bool,
 ) -> InertNativeLoweringAssociationV1 {
     // Literal inherited V1 header avoids adding a production target dependency
     // just for this inert fixture. Every coordinate uses the public inert codec.
     let mut bytes = [0; NATIVE_LOWERING_ASSOCIATION_BYTES_V1];
     bytes[..16].copy_from_slice(b"F2NLOW1\0\x01\0\x01\0\x60\x01\0\0");
     bytes[16..24].copy_from_slice(&[1, 0, 12, 0, 6, 0, 0, 0]);
+    if gfx950 {
+        bytes[16] = 2;
+    }
     let subject = InertNativeNeutralSubjectV1::new([1; 32], 19, [2; 32], 23).unwrap();
     bytes[24..120].copy_from_slice(subject.canonical_bytes());
     let axis =
