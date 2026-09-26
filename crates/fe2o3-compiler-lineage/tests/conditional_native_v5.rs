@@ -428,7 +428,7 @@ fn conditional_metadata_v1_work_refusal_and_truncation_preserve_input() {
         let mut remaining = limit;
         let r = read_native_conditional_metadata_v1(&original, LIMIT, |n| {
             remaining = remaining.checked_sub(n).ok_or(())?;
-            Ok(())
+            Ok::<(), ()>(())
         });
         assert_eq!(r.is_ok(), limit == total);
     }
