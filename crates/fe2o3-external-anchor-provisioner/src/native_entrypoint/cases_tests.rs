@@ -199,28 +199,43 @@ fn native_helper_exec_retains_only_the_exact_daemon_table_and_lifecycle_lock() {
     let mut child = spawn(files, FAMILY, "exec", &report);
     let deadline = Instant::now() + Duration::from_secs(20);
     let result = catch_unwind(AssertUnwindSafe(|| {
-        loop {
+        let fds = loop {
             assert!(
                 child.try_wait().unwrap().is_none(),
                 "helper terminated before exec: {}",
                 fs::read_to_string(&report).unwrap_or_default()
             );
-            if fs::metadata(format!("/proc/{}/exe", child.id()))
-                .is_ok_and(|m| (m.dev(), m.ino()) == expected)
+            let fds = fs::read_dir(format!("/proc/{}/fd", child.id())).and_then(|entries| {
+                let mut fds = entries
+                    .map(|entry| Ok(entry?.file_name().to_str().unwrap().parse::<i32>().unwrap()))
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                fds.sort_unstable();
+                Ok(fds)
+            });
+            if let Err(error) = &fds {
+                assert!(
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                    ),
+                    "unexpected descriptor observation failure: {error}"
+                );
+            }
+            // Exec transiently changes procfs access and publishes exe before CLOEXEC cleanup.
+            if fds
+                .as_ref()
+                .is_ok_and(|fds| fds == &[3, 4, 5, 202, 220, 221, 222])
+                && fs::metadata(format!("/proc/{}/exe", child.id()))
+                    .is_ok_and(|m| (m.dev(), m.ino()) == expected)
             {
-                break;
+                break fds.unwrap();
             }
             assert!(
                 Instant::now() < deadline,
-                "native terminal exec exceeded deadline"
+                "native terminal exec exceeded deadline; descriptors: {fds:?}"
             );
             std::thread::sleep(Duration::from_millis(10));
-        }
-        let mut fds: Vec<i32> = fs::read_dir(format!("/proc/{}/fd", child.id()))
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_str().unwrap().parse().unwrap())
-            .collect();
-        fds.sort_unstable();
+        };
         assert_eq!(fds, [3, 4, 5, 202, 220, 221, 222]);
         let lock = dir.path().join(
             std::path::Path::new(

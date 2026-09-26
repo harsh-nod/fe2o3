@@ -340,7 +340,7 @@ macro_rules! family {
                     Ok(k)
                 }
             }
-            include!("cases.rs");
+            include!("cases_tests.rs");
         }
     };
 }
