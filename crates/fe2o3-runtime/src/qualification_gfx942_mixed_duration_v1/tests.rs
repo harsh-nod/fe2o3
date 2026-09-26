@@ -61,6 +61,7 @@ impl Invocation {
 
 #[test]
 fn exact_pair_admits_both_objects_and_no_cross_profile_tuple() {
+    assert!(std::mem::size_of::<AdmittedGfx942MixedDurationQualificationV1>() <= 64);
     let admitted = admit_gfx942_mixed_duration_qualification_v1().unwrap();
     let invocation = Invocation::new();
     let allocations = [invocation.allocation()];

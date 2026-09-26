@@ -32,6 +32,8 @@ pub const GFX942_MIXED_DURATION_QUALIFICATION_SIGNATURE_V1: [u8; 32] = [
 ];
 
 const POLICY: &[u8] = include_bytes!("../fixtures/trusted-gfx942-mixed-duration-v1/policy-v1.txt");
+const INITIAL: &[u8; GFX942_MIXED_DURATION_QUALIFICATION_BUFFER_BYTES_V1] =
+    include_bytes!("../fixtures/trusted-gfx942-mixed-duration-v1/initial.bin");
 
 struct Fixture {
     source: &'static [u8],
@@ -141,7 +143,7 @@ impl std::error::Error for Gfx942MixedDurationQualificationAdmissionErrorV1 {}
 /// Non-cloneable evidence for the exact embedded pair, with no production authority.
 #[derive(Debug)]
 pub struct AdmittedGfx942MixedDurationQualificationV1 {
-    initial: [u8; GFX942_MIXED_DURATION_QUALIFICATION_BUFFER_BYTES_V1],
+    initial: &'static [u8; GFX942_MIXED_DURATION_QUALIFICATION_BUFFER_BYTES_V1],
     initial_sha256: [u8; 32],
 }
 
@@ -260,7 +262,10 @@ pub fn admit_gfx942_mixed_duration_qualification_v1() -> Result<
             return Err(Error::AbiOrEffects);
         }
     }
-    let initial = gfx942_mixed_duration_qualification_initial_v1();
+    let initial = INITIAL;
+    if *initial != gfx942_mixed_duration_qualification_initial_v1() {
+        return Err(Error::Identity);
+    }
     Ok(AdmittedGfx942MixedDurationQualificationV1 {
         initial_sha256: Sha256::digest(initial).into(),
         initial,

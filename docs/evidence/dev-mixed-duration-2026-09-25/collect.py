@@ -15,6 +15,7 @@ TARGETS = [
     Path("/dev/shm/fe2o3-mixed-duration-target-20260925-NohI5JUH"),
     Path("/dev/shm/fe2o3-mixed-duration-cold-20260925-sXxJH5mI"),
     Path("/dev/shm/fe2o3-mixed-duration-cold-v2-20260925-EJqXyU7y"),
+    Path("/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S"),
 ]
 
 
@@ -69,7 +70,7 @@ def main():
     need(sys.flags.isolated and sys.flags.dont_write_bytecode and not sys.flags.optimize, "use python3 -I -B")
     need(shutil.rmtree.avoids_symlink_attacks, "descriptor-relative cleanup")
     verify = runpy.run_path(str(HERE / "verify.py"))["verify"]
-    verified = verify(SCRATCH / "signed-cpu-v2")
+    verified = verify(SCRATCH / "signed-cpu-v3")
     records = [json.loads(path.read_text()) for path in SCRATCH.rglob("record.json")]
     no_groups(records)
     before = {str(root): inventory(root) for root in [SCRATCH, *TARGETS]}
@@ -81,7 +82,7 @@ def main():
     original_files = {name: row["sha256"] for name, row in before[str(SCRATCH)].items() if "sha256" in row}
     retained_files = {name: row["sha256"] for name, row in retained.items() if "sha256" in row}
     need(original_files == retained_files, "byte-exact full scratch retention")
-    need(verify(destination / "signed-cpu-v2") == verified, "independent retained replay")
+    need(verify(destination / "signed-cpu-v3") == verified, "independent retained replay")
     save(HERE / "retention.json", dict(files=retained_files, verification=verified, records=len(records)))
     save(HERE / "cleanup-before.json", before)
     no_groups(records)
