@@ -10,6 +10,10 @@ is granted by these APIs or local tests.
 Base: `fed174dfb8da96c4376cc9a2b1ea33876a8119be`.
 Integrated code: `9489ad756d7642263f9c574028dd69b5c9f5fcc1`.
 
+Follow-up: the [durable anchor checkpoint](conditional-native-durable-anchor-20260926.md)
+integrates these keys with the shared persistence engine; native protected startup
+is still pending. Results below belong to this earlier source checkpoint.
+
 ## Implementation
 
 - `d12ba2752`: native V2/V3 anchor key owners bind role, family, full deployment
