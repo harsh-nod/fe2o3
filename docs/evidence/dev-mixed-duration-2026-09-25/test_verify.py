@@ -10,6 +10,28 @@ VERIFY = runpy.run_path(str(Path(__file__).with_name("verify.py")))
 
 
 class ElfJoinTests(unittest.TestCase):
+    def test_auxiliary_command_substitution(self):
+        commands = VERIFY["auxiliary_commands"]()
+        self.assertEqual(set(commands), {"runner-tests", "fixture-rebuild", "rustc", "short-disassembly", "long-disassembly"})
+        for expected in commands.values():
+            VERIFY["check_command"](dict(command=expected), expected)
+            for wrong in (["/bin/true"], expected[:-1]):
+                with self.assertRaises(ValueError):
+                    VERIFY["check_command"](dict(command=wrong), expected)
+
+    def test_missing_or_duplicate_roster(self):
+        rows = ["test_" + str(index) for index in range(1438)]
+        rows += ["qualification_gfx942_mixed_duration_v1::tests::test_" + str(index) for index in range(7)]
+        rows += ["kfd_backend::retained_release_tests::mixed_duration::" + name for name in (
+            "native_mixed_duration_profiles_preserve_full_output_and_refund_backing",
+            "native_owned_later_short_completes_while_earlier_long_signal_is_pending")]
+        def render(names):
+            return "\n".join(name + ": test" for name in names) + "\n1447 tests, 0 benchmarks\n"
+        self.assertEqual(VERIFY["check_roster"](render(rows)), rows)
+        for wrong in ("", render(rows[:-1]), render([*rows[:-1], rows[0]]), render(rows).replace("1447 tests", "1446 tests")):
+            with self.assertRaises(ValueError):
+                VERIFY["check_roster"](wrong)
+
     def test_archive_roster_rejects_duplicates_and_special_paths(self):
         entry = tarfile.TarInfo("crates/source.rs")
         self.assertEqual(set(VERIFY["check_members"]([entry])), {"crates/source.rs"})

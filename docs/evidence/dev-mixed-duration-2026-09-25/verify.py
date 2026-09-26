@@ -42,6 +42,30 @@ def check_command(record, expected):
     need(record["command"] == expected, "exact command arguments")
 
 
+def check_roster(stdout):
+    rows = [line.removesuffix(": test") for line in stdout.splitlines() if line.endswith(": test")]
+    need(len(rows) == len(set(rows)) == 1447, "exact unique retained roster")
+    need(stdout.rstrip().endswith("1447 tests, 0 benchmarks"), "complete retained roster")
+    need(sum("qualification_gfx942_mixed_duration_v1::tests::" in row for row in rows) == 7,
+         "seven qualification tests")
+    for name in ("native_mixed_duration_profiles_preserve_full_output_and_refund_backing",
+                 "native_owned_later_short_completes_while_earlier_long_signal_is_pending"):
+        need(rows.count("kfd_backend::retained_release_tests::mixed_duration::" + name) == 1, "exact native canary")
+    return rows
+
+
+def auxiliary_commands():
+    fixtures = "crates/fe2o3-runtime/fixtures/trusted-gfx942-mixed-duration-v1"
+    return {
+        "runner-tests": ["/usr/bin/python3", "-I", "-B",
+                         "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-2026-09-25/test_run.py"],
+        "fixture-rebuild": ["bash", fixtures + "/build-and-verify.sh"],
+        "rustc": ["rustc", "-Vv"],
+        **{name + "-disassembly": ["/opt/rocm/llvm/bin/llvm-objdump", "--disassemble", "--mcpu=gfx942",
+                                    fixtures + "/" + name + ".hsaco"] for name in ("short", "long")},
+    }
+
+
 def raw_counts(stdout):
     return [list(map(int, row)) for row in re.findall(
         r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;", stdout, re.M)]
@@ -99,17 +123,22 @@ def verify(root):
     records = {path.parent.name: read(path) for path in root.glob("*/record.json")}
     need(records.keys() == expected_phases | {"signature", "source-archive", "gnu-roster", "musl-roster"}, "exact command roster")
     need(all(row["status"] == 0 and row["group_absent"] for row in records.values()), "successful reaped commands")
+    rosters = []
     for platform in ("gnu", "musl"):
         metadata = read(root / (platform + "-runtime-tests.json"))
         compressed = (root / (platform + "-runtime-tests.gz")).read_bytes()
         check_elf(compressed, metadata, results[platform], records[platform])
+        check_command(records[platform + "-roster"], [metadata["path"], "--list"])
+        rosters.append(check_roster((root / (platform + "-roster") / "stdout.log").read_text()))
         need(results[platform]["counts"] == [[1423, 0, 24, 0, 0]], "exact CPU counts")
         stdout = (root / platform / "stdout.log").read_text()
         need(raw_counts(stdout) == [[1423, 0, 24, 0, 0]], "actual test summary")
+    need(rosters[0] == rosters[1], "identical cross-target rosters")
     expected_docs = [[4, 0, 0, 0, 0], [42, 0, 0, 0, 0]]
     need(results["doctests"]["counts"] == raw_counts((root / "doctests/stdout.log").read_text()) == expected_docs, "raw split doctests")
     cargo = ["cargo", "test", "--locked", "--offline", "-p", "fe2o3-runtime"]
     expected_commands = {
+        **auxiliary_commands(),
         "gnu-build": [*cargo, "--all-features", "--lib", "--no-run", "--message-format=json"],
         "musl-build": [*cargo, "--all-features", "--lib", "--target", "x86_64-unknown-linux-musl", "--no-run", "--message-format=json"],
         "doctests": [*cargo, "--all-features", "--doc"],
