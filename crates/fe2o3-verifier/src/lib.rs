@@ -25,6 +25,7 @@ pub use compiler_native_conditional_source_packet_v2::{
     encode_native_conditional_source_packet_v2, with_decoded_native_conditional_source_packet_v2,
 };
 mod compiler_native_source_proof_v1;
+mod compiler_native_symbol_manifest_v1;
 mod compiler_nominal_abi_v3;
 mod compiler_proof_binding_v3;
 mod compiler_refined_forwarding_output_v1;

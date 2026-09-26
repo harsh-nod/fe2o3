@@ -35,13 +35,21 @@ pub(super) fn temporary<T>(
     bytes: usize,
     run: impl FnOnce(&mut Budget<'_>) -> Result<T, Error>,
 ) -> Result<T, Error> {
+    temporary_using(budget, bytes, run)
+}
+
+pub(super) fn temporary_using<T, Failure: From<Error> + From<Resource>>(
+    budget: &mut Budget<'_>,
+    bytes: usize,
+    run: impl FnOnce(&mut Budget<'_>) -> Result<T, Failure>,
+) -> Result<T, Failure> {
     let account = Account::capture(budget);
     budget.charge_work(1)?;
     budget.reserve_storage(bytes)?;
     let result = run(budget);
     if let Err(error) = account.require(budget, bytes) {
         drop(result);
-        return Err(error);
+        return Err(error.into());
     }
     if result.is_ok() {
         budget.release_storage(bytes)?;
@@ -51,10 +59,18 @@ pub(super) fn temporary<T>(
 
 /// Existing C1 custody is unreserved only after the entire closed route succeeds.
 /// Never invoke source-only C1 refund classification on a final-route error.
+#[cfg(test)]
 pub(super) fn transfer<T>(
     budget: &mut Budget<'_>,
     run: impl FnOnce(&mut Budget<'_>) -> Result<(T, NativeConditionalSourceStorageV2), Error>,
 ) -> Result<(T, NativeConditionalSourceStorageV2), Error> {
+    transfer_using(budget, run)
+}
+
+pub(super) fn transfer_using<T, Failure: From<Error> + From<Resource>>(
+    budget: &mut Budget<'_>,
+    run: impl FnOnce(&mut Budget<'_>) -> Result<(T, NativeConditionalSourceStorageV2), Failure>,
+) -> Result<(T, NativeConditionalSourceStorageV2), Failure> {
     let account = Account::capture(budget);
     budget.charge_work(8)?;
     let result = catch_unwind(AssertUnwindSafe(|| run(budget)));
@@ -64,13 +80,13 @@ pub(super) fn transfer<T>(
     };
     if let Err(error) = account.require(budget, 0) {
         drop(result);
-        return Err(error);
+        return Err(error.into());
     }
     match result {
         Ok((owner, storage)) => {
             if let Err(error) = account.require(budget, storage.retained_storage()) {
                 drop(owner);
-                return Err(error);
+                return Err(error.into());
             }
             if let Err(error) = budget.release_storage(budget.storage() - account.floor) {
                 drop(owner);

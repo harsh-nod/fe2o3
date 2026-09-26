@@ -9,6 +9,9 @@ use std::{
 
 const FLOOR: usize = 19;
 
+#[path = "hook_tests.rs"]
+mod hook;
+
 fn budgeted<T>(run: impl FnOnce(&mut Budget<'_>) -> T) -> T {
     let mut work = Work::new(usize::MAX);
     let mut budget = Budget::new(&mut work, usize::MAX);

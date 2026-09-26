@@ -13,6 +13,7 @@ use crate::conditional_contract_request_v2::check_conditional_contract_content_v
 use crate::conditional_ranked_formulas_v1::import_and_check_conditional_ranked_formula_v2;
 use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
 use fe2o3_amdgcn_model::{
+    ReplayedNativeV12TextDescriptorRelationV5 as Relation,
     check_native_v12_text_descriptor_relation_v5,
     check_production_target_coordinate_preservation_v1,
 };
@@ -32,6 +33,8 @@ use std::mem::size_of;
 mod account;
 #[path = "compiler_native_conditional_final_v2/error.rs"]
 mod error;
+#[path = "compiler_native_conditional_final_v2/manifest.rs"]
+pub(crate) mod manifest;
 #[path = "compiler_native_conditional_final_v2/roster.rs"]
 mod roster;
 pub use error::NativeConditionalFinalErrorV2;
@@ -81,9 +84,44 @@ pub fn validate_native_conditional_source_through_f_v2(
     inputs: Inputs<'_, '_, '_>,
     budget: &mut Budget<'_>,
 ) -> Result<Output, Error> {
-    account::transfer(budget, |budget| {
+    validate_native_conditional_source_through_f_using_v2(
+        packet_bytes,
+        accepted,
+        inputs,
+        budget,
+        |_, _, _, _| Ok(()),
+    )
+}
+
+fn header<Failure>(callback: usize) -> Result<usize, Resource> {
+    HEADER
+        .checked_sub(size_of::<Result<Output, Error>>())
+        .and_then(|n| n.checked_add(size_of::<Result<Output, Failure>>()))
+        .and_then(|n| n.checked_add(callback))
+        .ok_or(Resource::Arithmetic)
+}
+
+/// The join sees the same checked relation before C0/account postchecks. Its
+/// unit result cannot transfer borrowed custody. All failures stay terminal.
+pub(crate) fn validate_native_conditional_source_through_f_using_v2<Failure>(
+    packet_bytes: &[u8],
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    inputs: Inputs<'_, '_, '_>,
+    budget: &mut Budget<'_>,
+    join: impl FnOnce(
+        &ReplayedNativeSourceV1,
+        &DecodedHistory<'_, '_>,
+        &Relation<'_, '_, '_, '_, '_>,
+        &mut Budget<'_>,
+    ) -> Result<(), Failure>,
+) -> Result<Output, Failure>
+where
+    Failure: From<Error> + From<SourceError> + From<Resource>,
+{
+    let header = header::<Failure>(std::mem::size_of_val(&join))?;
+    account::transfer_using(budget, |budget| {
         require_backing(packet_bytes, &inputs, budget)?;
-        account::temporary(budget, HEADER, |budget| {
+        account::temporary_using(budget, header, |budget| {
             require_limits(
                 inputs.decoded_history.frame().limits(),
                 inputs.expected_limits,
@@ -94,7 +132,7 @@ pub fn validate_native_conditional_source_through_f_v2(
                 .check_semantics(budget)
                 .map_err(|error| Error(Cause::History(error)))?;
             let storage = history.storage().retained_storage();
-            account::temporary(budget, storage, move |budget| {
+            account::temporary_using(budget, storage, move |budget| {
                 let result = with_decoded_native_conditional_source_packet_v2(
                     packet_bytes,
                     budget,
@@ -106,7 +144,7 @@ pub fn validate_native_conditional_source_through_f_v2(
                             |source, packet, roots, retained, budget| {
                                 check_source(
                                     source, packet, accepted, roots, retained, &inputs, &history,
-                                    budget,
+                                    budget, join,
                                 )
                             },
                         )
@@ -114,7 +152,7 @@ pub fn validate_native_conditional_source_through_f_v2(
                 )
                 .map_err(|error| Error(Cause::Packet(error)));
                 drop(history);
-                result?
+                result.map_err(Failure::from)?
             })
         })
     })
@@ -159,7 +197,7 @@ fn require_backing(
     Ok(())
 }
 
-fn check_source(
+fn check_source<Failure>(
     source: &ReplayedNativeSourceV1,
     packet: &NativeConditionalSourcePacketInputV2<'_>,
     accepted: &[NativeConditionalRootPolicyV2<'_>],
@@ -168,7 +206,16 @@ fn check_source(
     inputs: &Inputs<'_, '_, '_>,
     history: &History<'_>,
     budget: &mut Budget<'_>,
-) -> Result<(), Error> {
+    join: impl FnOnce(
+        &ReplayedNativeSourceV1,
+        &DecodedHistory<'_, '_>,
+        &Relation<'_, '_, '_, '_, '_>,
+        &mut Budget<'_>,
+    ) -> Result<(), Failure>,
+) -> Result<(), Failure>
+where
+    Failure: From<Error> + From<SourceError> + From<Resource>,
+{
     let (coordinates, storage) = check_production_target_coordinate_preservation_v1(
         source.source().executable(),
         inputs.decoded_history.graph(Role::B),
@@ -176,7 +223,7 @@ fn check_source(
         budget,
     )
     .map_err(|error| Error(Cause::Coordinates(error)))?;
-    account::temporary(budget, storage.retained_storage(), move |budget| {
+    account::temporary_using(budget, storage.retained_storage(), move |budget| {
         roster::check(source, packet, history.output(), inputs.descriptors, budget)?;
         reconstruct::reconstruct_roots(
             source,
@@ -234,10 +281,15 @@ fn check_source(
             budget,
         )
         .map_err(|error| Error(Cause::Text(error)))?;
-        account::temporary(budget, relation.storage().retained_storage(), move |_| {
-            drop(relation);
-            Ok(())
-        })?;
+        account::temporary_using(
+            budget,
+            relation.storage().retained_storage(),
+            move |budget| {
+                let result = join(source, inputs.decoded_history, &relation, budget);
+                drop(relation);
+                result
+            },
+        )?;
         drop(coordinates);
         Ok(())
     })

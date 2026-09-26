@@ -599,6 +599,7 @@ pub(super) fn roots(
 }
 
 fn symbols(output: &Graph, native: &Native, table: &Table, budget: &mut Budget<'_>) -> R<()> {
+    use crate::compiler_native_symbol_manifest_v1::{contains, count_matches};
     let manifest = native.symbol_manifest();
     budget.reserve_storage(size_of::<[usize; 5]>())?;
     let mut counts = [0usize; 5];
@@ -618,7 +619,7 @@ fn symbols(output: &Graph, native: &Native, table: &Table, budget: &mut Budget<'
             FunctionRole::ExternalImport => (Symbol::UnresolvedExternalImport, 3),
         };
         if function.role != FunctionRole::KernelEntry
-            && !manifest.symbols(role).any(|s| s == function.id.as_str())
+            && !contains(manifest, role, function.id.as_str())
         {
             return Err(E::Mismatch("complete F symbol manifest"));
         }
@@ -632,13 +633,15 @@ fn symbols(output: &Graph, native: &Native, table: &Table, budget: &mut Budget<'
                 .checked_add(1)
                 .ok_or(Resource::Arithmetic)?,
         )?;
-        if !manifest
-            .symbols(Symbol::KernelDescriptor)
-            .any(|s| s == descriptor.descriptor_symbol().as_str())
-            || !manifest
-                .symbols(Symbol::KernelEntry)
-                .any(|s| s == descriptor.entry_name().as_str())
-        {
+        if !contains(
+            manifest,
+            Symbol::KernelDescriptor,
+            descriptor.descriptor_symbol().as_str(),
+        ) || !contains(
+            manifest,
+            Symbol::KernelEntry,
+            descriptor.entry_name().as_str(),
+        ) {
             return Err(E::Mismatch("complete descriptor symbol manifest"));
         }
         counts[4] += 1;
@@ -654,7 +657,7 @@ fn symbols(output: &Graph, native: &Native, table: &Table, budget: &mut Budget<'
     .zip(counts)
     {
         budget.charge_work(1)?;
-        if manifest.role_count(role) != count {
+        if !count_matches(manifest, role, count) {
             return Err(E::Mismatch("no extra native symbols"));
         }
     }
