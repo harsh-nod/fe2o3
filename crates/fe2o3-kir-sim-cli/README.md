@@ -69,6 +69,15 @@ never re-lowers source, invokes a compiler, launches hardware, or falls back
 between execution modes. A separately supplied request retains the same strict
 16 MiB boundary and preflight checks as raw KIR.
 
+The exact declarations `gfx942:xnack-` and `gfx950:xnack-` select distinct
+`amdgpu_gfx942_little_endian_v2` and `amdgpu_gfx950_little_endian_v2` simulation
+identities. Result output, persisted bindings, replay and exploration retain
+that same admitted target; a target label is not reconstructed from its index
+width. Existing declared-target custody and route checks remain mandatory.
+Raw KIR routes retain `amdgpu_64_little_endian_v1`, the legacy 64-bit
+little-endian layout with no explicit AMD profile. This does not infer a GPU
+target declaration or grant execution authority.
+
 The library also exposes `load_debug_simulation_bundle_v2` for the debugger's
 explicit V2 envelope route. It strictly verifies the outer V2 bytes, the exact
 embedded V1 bundle, and the independently committed Source Map V2 payload.
@@ -185,6 +194,15 @@ subject, request bytes, target, limits, context, transcript, seed, coverage, and
 decisions.
 Binding drift is rejected before execution; runnable-decision and transcript
 validation remains in the simulator itself.
+
+The V1 schedule envelope has a closed nested target tag. Explicit bundle
+profiles use their V2 identity tags with checked 64-bit indices; old readers
+reject those tags. Raw legacy schedules retain their exact V1 bytes and
+digests, and replay never promotes a legacy target to an explicit profile.
+Failure-reduction reports likewise remain V1 for legacy targets, while explicit
+bundle profiles use `fe2o3-simulation-failure-reduction-v2` with an exact target
+tag and a separate integrity domain. Cross-profile and legacy/profile
+substitution are refused before a reproducer is accepted.
 
 For those same schedule-supported inputs,
 `--explore-seeded-schedules COUNT --schedule-seed FIRST_U64` is a separate,

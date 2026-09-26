@@ -1360,6 +1360,7 @@ dependencies = [
 name = "fe2o3-kir-sim"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-amd-target",
  "fe2o3-kernel-ir",
  "rustc_apfloat",
  "serde",
