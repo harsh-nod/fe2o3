@@ -59,15 +59,15 @@ with graph and account postchecks before callback results escape. Its 13 compone
 tests pass. The private contract checker compares theorem fields, CPU/staging
 commitments, ordered roots/read occurrences/premises, source arguments and physical
 descriptor layout against that request and execution. Its first 17 component
-tests pass; five additional full-field layout tests await execution.
+tests pass; five additional full-field layout tests also pass at `7648f5e31`.
 
 The private source-through-F composition checks the independently accepted history
 limits, source/target coordinates, complete root roster, each root's final-history
 and contract agreement in that same import, then the V5/native-text relation. It
 returns only existing source-content custody, not final artifact authority. Review
 found and fixed a missing fifth simultaneously live account-header charge, adding
-an exact/one-short regression. Composition and its new tests await compilation;
-the production caller is not wired to this entry. Original nominal/context custody
+an exact/one-short regression. The composition compiles and all 12 new component
+tests pass; the production caller is not wired to this entry. Original nominal/context custody
 and machine refinement are still separate required boundaries.
 
 The consumer supports a complete conditional root roster, not mixed ordinary or
@@ -97,11 +97,13 @@ hidden GPUs and the unchanged resource limits.
 | `13e0da0f2` | backend conditional library tests | 156 passed, 29 capture/protected tests ignored |
 | `13e0da0f2` | kernel compile matrix shell harness | 79 manifest, 12 occurrence, 56 identity and 28 fixture-binding tests passed, plus shell controls |
 | `acda59d9f` | contract checker components | 17 passed; all four affected library test targets compiled |
+| `7648f5e31` | integrated conditional library suite, all four packages | 450 passed, 30 capture/proof tests ignored |
+| `7648f5e31` | all four packages' documentation tests | 264 compile-fail and 5 positive tests passed; none ignored |
 
 The shell harness uses fake Cargo/ROCm controls, not actual tutorial compilation
 or hardware. Filtered and ignored tests receive no execution credit. These local
-results do not include genuine imported proofs or compile-fail documentation for
-the newly added APIs. Log SHA256s, in the five-row order above:
+results do not include genuine imported proofs. Log SHA256s for the five rows
+from `13e0da0f2` through `acda59d9f`, in order:
 
 ```text
 007e967ba1b1088725e0063bb4f4308472efba52c5c8bea6cdc7e61a57727dc5
@@ -111,14 +113,30 @@ cd62839f07d89dcc6c8f38083c08ed7fb7391a2b207be82f8fc9c4f0ea38a5db
 d77ad3f653084653de66c1f0bc770580e22037a4ffab1d7eaf0404d670389d2b
 ```
 
+The integrated library log SHA256 is
+`4b9042087393de1337f03a60b9340c15ae9b71df9b9c64c4b63a1b8cf3964921`;
+the documentation log SHA256 is
+`daed0a79c68a89ade2cb0591fce3fb625f52a244dbbb7d13094984eb17eb30e1`.
+The 450 passing tests comprise 16 AMD-model, 139 lowerer, 139 verifier and 156
+backend cases. Counts overlap earlier snapshots and must not be added together.
+The private same-import hook has a compiled caller-shape control and component
+tests, but no external borrow-escape compile-fail test; an external import of
+that private function would test privacy instead of the callback's lifetime.
+
 Earlier failed runs are preserved. The merged lockfile required matching pending
 manifest contract digests and the dependent curriculum/inventory snapshots; no
 proof status or expected kernel output changed. One resource test wrongly expected
 `usize::MAX` to overflow a fresh `usize::MAX` meter; the corrected test charges a
 prefix first, matching the concurrent public-main correction. The corrected local
-runs above passed. Public-main CI `36220960215` still failed the old inventory
+runs above passed. Public-main CI `36220960215` failed the old inventory
 snapshot; its five codegen shards and parity job passed, but that is not a green
 integrated workflow or protected-runtime evidence.
+
+Both public main branches subsequently advanced to `123a2c59` with the same
+inventory correction and concurrent BF16 work. That commit is not the tested
+local integration snapshot. Normal Git fetch currently fails DNS here, so the
+new local integration commits have not been merged with it or pushed. Preserve
+that concurrent work; do not force-push the local branch over either main.
 
 The `50a696f75` check fixes a missing descriptor backing/view lifetime bound
 found in the preceding `3f8a6dcff` attempt. Those terminal checks used the normal
