@@ -84,3 +84,7 @@ fn with_encoded_v2<'w, R>(
         Ok(consume(view, budget))
     })
 }
+
+#[cfg(test)]
+#[path = "compiler_descriptor_conditional_contract_projection_v2_tests.rs"]
+mod tests;
