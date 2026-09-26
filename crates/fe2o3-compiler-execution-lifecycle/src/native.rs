@@ -41,7 +41,7 @@ pub enum LifecycleLeaseErrorV2 {
     Resource(Resource),
     /// The shared root-owned lifecycle-file contract or a finite syscall failed.
     Lease(LeaseError),
-    /// The retained parent descriptor no longer denotes its admitted device/inode.
+    /// The retained or root-derived parent does not denote the admitted device/inode.
     ParentChanged,
 }
 
@@ -190,6 +190,14 @@ impl CompilerExecutionServiceLifecycleLeaseV2 {
     pub const ADMISSION_WORK: usize = ENTRY_WORK + 64 * 1024;
     /// Complete work for retained-object revalidation, including entry and cleanup.
     pub const REVALIDATION_WORK: usize = ENTRY_WORK + 32 * 1024;
+    /// Complete root-binding work, including entry and two retained checks.
+    /// Each retained check costs 23 calls. Deriving the actual root's parent,
+    /// its six policy calls, identity and canonical sibling checks, and close
+    /// add ten calls. All 56 calls are single attempts; 64 weighted slots also
+    /// cover fixed comparisons and control. This is not a syscall latency bound.
+    pub const ROOT_BINDING_WORK: usize = ENTRY_WORK + 64 * 1024;
+    /// Fixed check scratch plus the full temporary root-derived parent owner.
+    pub const ROOT_BINDING_SCRATCH: usize = Self::IO_STORAGE + Self::FILE_STORAGE;
     /// Complete clone or transfer-validation work, including entry and cleanup.
     /// Two owner checks cost 46 fixed calls, the candidate check 15, and cloning
     /// adds one duplication and at most one close on refusal. No syscall retries.
@@ -349,6 +357,78 @@ impl CompilerExecutionServiceLifecycleLeaseV2 {
         )
     }
 
+    /// Rechecks this lease against the actual state root's canonical sibling lock.
+    /// Requires the full retained lease plus STATE_ROOT_STORAGE prepaid on the
+    /// original ledger; a containing root owner's full charge stays live too.
+    /// Derives a fresh parent descriptor from the borrowed root, validates its
+    /// security policy and exact admitted identity, and checks its canonical
+    /// lifecycle pathname against the retained file. A valid unrelated parent
+    /// is refused. No caller-supplied identity substitutes for these observations.
+    ///
+    /// This binds the root's parent, not the root directory's own identity or
+    /// policy: distinct roots under the same canonical parent share this lock.
+    /// The enclosing root owner must validate its own exact directory custody.
+    /// Checks are point-in-time observations, not protection against later moves.
+    /// No retained storage is returned. All exits close the temporary parent and
+    /// restore entry storage, preserving work, peak and first-denial history.
+    /// Neither borrowed input is closed or explicitly unlocked on refusal.
+    ///
+    /// ```
+    /// use fe2o3_compiler_execution_lifecycle::{CompilerExecutionServiceLifecycleLeaseV2 as Lease,
+    ///     LifecycleLeaseErrorV2 as Error};
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn check(lease: &Lease, root: &std::fs::File, b: &mut Budget<'_>) -> Result<(), Error> {
+    ///     lease.revalidate_for_root(root, b)
+    /// }
+    /// ```
+    /// ```compile_fail
+    /// use fe2o3_compiler_execution_lifecycle::CompilerExecutionServiceLifecycleLeaseV2 as Lease;
+    /// fn unmetered(lease: &Lease, root: &std::fs::File) { lease.revalidate_for_root(root); }
+    /// ```
+    /// ```compile_fail
+    /// use fe2o3_compiler_execution_lifecycle::CompilerExecutionServiceLifecycleLeaseV2 as Lease;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn identity_only(lease: &Lease, identity: (u64, u64), b: &mut Budget<'_>) {
+    ///     lease.revalidate_for_root(&identity, b);
+    /// }
+    /// ```
+    pub fn revalidate_for_root(
+        &self,
+        state_root: &impl AsFd,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.revalidate_for_root_with(state_root, budget, |_| Ok(()))
+    }
+
+    // Private observer exercises refusal/unwind with the temporary parent live.
+    fn revalidate_for_root_with(
+        &self,
+        state_root: &impl AsFd,
+        budget: &mut Budget<'_>,
+        after_parent: impl FnOnce(&File) -> Result<()>,
+    ) -> Result<()> {
+        let floor = Self::RETAINED
+            .checked_add(Self::STATE_ROOT_STORAGE)
+            .ok_or(Resource::Arithmetic)?;
+        budget.with_prepaid_scope(
+            floor,
+            ENTRY_WORK,
+            Self::ROOT_BINDING_WORK,
+            Self::ROOT_BINDING_SCRATCH,
+            |_| {
+                self.check()?;
+                let parent = open_parent(state_root)?;
+                after_parent(&parent)?;
+                validate_parent(&parent, self.inner.expected_uid, self.inner.expected_gid)?;
+                if parent_identity(&parent)? != self.parent_identity {
+                    return Err(LifecycleLeaseErrorV2::ParentChanged);
+                }
+                validate_named_file(&parent, self.inner.snapshot)?;
+                self.check()
+            },
+        )
+    }
+
     /// Returns a distinct CLOEXEC File sharing this lease's open file description
     /// by construction, using one F_DUPFD_CLOEXEC attempt after revalidation.
     /// The owner remains prepaid; reserve the returned FULL FILE_STORAGE before
@@ -485,3 +565,7 @@ mod tests;
 #[cfg(test)]
 #[path = "native_transfer_tests.rs"]
 mod transfer_tests;
+
+#[cfg(test)]
+#[path = "native_root_binding_tests.rs"]
+mod root_binding_tests;
