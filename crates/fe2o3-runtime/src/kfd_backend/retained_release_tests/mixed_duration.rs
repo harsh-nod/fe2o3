@@ -13,6 +13,8 @@ use std::future::Future;
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread;
 
+mod observers;
+
 struct ThreadWake(thread::Thread);
 
 impl Wake for ThreadWake {

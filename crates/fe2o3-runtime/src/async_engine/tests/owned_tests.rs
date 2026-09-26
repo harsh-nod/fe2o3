@@ -523,6 +523,7 @@ fn thousands_of_owned_operations_complete_out_of_order_after_observer_drop() {
     );
     let (stream, kernel) = launch_fixture(&handle);
     let mut futures = Vec::new();
+    let admission_deadline = Instant::now() + Duration::from_secs(10);
     for _ in 0..2048 {
         loop {
             match handle.launch(
@@ -536,7 +537,13 @@ fn thousands_of_owned_operations_complete_out_of_order_after_observer_drop() {
                     futures.push(Some(future));
                     break;
                 }
-                Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull) => thread::yield_now(),
+                Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull) => {
+                    assert!(
+                        Instant::now() < admission_deadline,
+                        "owner admission stalled"
+                    );
+                    thread::yield_now();
+                }
                 Err(error) => panic!("unexpected admission error: {error}"),
             }
         }

@@ -253,6 +253,7 @@ fn r62_thousands_of_tracked_operations_mix_timeout_cancel_and_drop() {
     let mut observers = Vec::new();
     let mut controls = Vec::new();
     let mut cancelled = 0;
+    let admission_deadline = Instant::now() + Duration::from_secs(10);
     for index in 0..2048 {
         let future = loop {
             match handle.launch_tracked(
@@ -263,7 +264,13 @@ fn r62_thousands_of_tracked_operations_mix_timeout_cancel_and_drop() {
                 Vec::new(),
             ) {
                 Ok(future) => break future,
-                Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull) => thread::yield_now(),
+                Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull) => {
+                    assert!(
+                        Instant::now() < admission_deadline,
+                        "owner admission stalled"
+                    );
+                    thread::yield_now();
+                }
                 Err(error) => panic!("unexpected admission failure: {error}"),
             }
         };
@@ -638,6 +645,45 @@ fn r62_timeout_unregisters_old_waker_without_consuming_concurrent_result() {
         poll(&mut future, Waker::noop()),
         Poll::Ready(Ok(_))
     ));
+    assert!(h.context.cleanup().is_complete());
+}
+
+#[test]
+fn recovered_timeout_rearms_pending_operation_without_reissuing_or_waking_old_observer() {
+    let mut h = Harness::new();
+    let future = h.launch();
+    let control = future.control();
+    let mut driver = h.receive();
+    assert!(!driver.advance(&mut h.context));
+    let old = Arc::new(WakeCounter(AtomicUsize::new(0)));
+    let new = Arc::new(WakeCounter(AtomicUsize::new(0)));
+    let mut timed = future.observe_with_timeout(ready(()));
+    let mut recovered = match poll(&mut timed, &Waker::from(Arc::clone(&old))) {
+        Poll::Ready(Timeout::TimedOut { operation }) => operation,
+        _ => panic!("pending operation must return its original consumer"),
+    };
+    assert!(control.same_operation(&recovered.control()));
+    assert!(poll(&mut recovered, &Waker::from(Arc::clone(&new))).is_pending());
+    assert_eq!(h.state.lock().unwrap().statuses.len(), 1);
+    assert_eq!(h.state.lock().unwrap().release_calls, 0);
+    h.succeed();
+    assert!(driver.advance(&mut h.context));
+    assert_eq!(old.0.load(AtomicOrdering::SeqCst), 0);
+    assert_eq!(new.0.load(AtomicOrdering::SeqCst), 1);
+    let result = match poll(&mut recovered, Waker::noop()) {
+        Poll::Ready(Ok(result)) => result,
+        _ => panic!("the rearmed consumer retains the one result"),
+    };
+    assert_eq!(
+        result.observation.unwrap(),
+        RuntimeCompletionStatusV1::Succeeded
+    );
+    assert_eq!(control.phase(), Phase::ObservationFinished);
+    assert_eq!(h.state.lock().unwrap().statuses.len(), 1);
+    h.context
+        .release_submission(result.submission.unwrap())
+        .unwrap();
+    assert_eq!(h.state.lock().unwrap().release_calls, 1);
     assert!(h.context.cleanup().is_complete());
 }
 

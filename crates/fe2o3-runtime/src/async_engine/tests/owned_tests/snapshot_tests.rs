@@ -175,6 +175,56 @@ fn r64_snapshot_channel_rejection_and_shutdown_disposal_refund_exactly() {
 }
 
 #[test]
+fn frozen_tracked_launch_queue_rejection_refunds_both_budgets_without_submission() {
+    let mut h = Harness::new(16, 1);
+    h.handle.observer.reply_budget = reply_budget::ReplyBudgetV1::new(3);
+    let accepted = h.handle.enqueue_launch_tracked(h.request()).unwrap();
+    let control = accepted.control();
+    assert_eq!(h.used(), 8);
+    assert_eq!(h.handle.observer().reply_cells_in_use(), 1);
+    assert!(matches!(
+        h.handle.enqueue_launch_tracked(h.request()),
+        Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull)
+    ));
+    assert_eq!(h.used(), 8);
+    assert_eq!(h.handle.observer().reply_cells_in_use(), 1);
+    assert!(h.state.lock().unwrap().issues.is_empty());
+    let mut driver = h.pop();
+    assert!(h.receiver.try_recv().is_err());
+    assert!(!driver.advance(&mut h.context));
+    assert_eq!(h.used(), 0);
+    let mut state = h.state.lock().unwrap();
+    assert_eq!(state.issues.len(), 1);
+    assert_eq!(state.issues[0].2, vec![0; 8]);
+    *state.statuses.values_mut().next().unwrap() = BackendPollV1::Succeeded;
+    drop(state);
+    assert!(driver.advance(&mut h.context));
+    drop(driver);
+    let result = join_command(accepted).unwrap();
+    assert_eq!(
+        result.observation.unwrap(),
+        RuntimeCompletionStatusV1::Succeeded
+    );
+    assert_eq!(
+        control.phase(),
+        RuntimeAsyncOperationPhaseV1::ObservationFinished
+    );
+    assert_eq!(h.handle.observer().reply_cells_in_use(), 0);
+    let retry = h.handle.enqueue_launch_tracked(h.request()).unwrap();
+    assert_eq!(h.used(), 8);
+    assert_eq!(h.handle.observer().reply_cells_in_use(), 1);
+    drop(retry);
+    drop(h.pop_factory());
+    assert_eq!(h.used(), 0);
+    assert_eq!(h.handle.observer().reply_cells_in_use(), 0);
+    assert_eq!(h.state.lock().unwrap().issues.len(), 1);
+    h.context
+        .release_submission(result.submission.unwrap())
+        .unwrap();
+    assert!(h.context.cleanup().is_complete());
+}
+
+#[test]
 fn r64_snapshot_freezes_once_and_releases_payload_not_native_custody() {
     let mut h = Harness::new(8, 1);
     let request = h.request();
