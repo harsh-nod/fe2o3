@@ -835,6 +835,19 @@ fn prepare_actual_shared_body_vecadd_inputs() {
 #[test]
 #[ignore = "prepared consuming source replay; protected runtime admission required, no Cargo or GPU"]
 fn actual_prepared_shared_body_vecadd_retains_formula_then_requires_conditional_finalizer() {
+    run_prepared_source(CHILD, false);
+}
+
+#[test]
+#[ignore = "prepared genuine B2 composition; protected runtime required, no Cargo or GPU"]
+fn actual_prepared_conditional_reference_composition_both_targets() {
+    run_prepared_source(
+        "production_rustc_driver_v1::checked_output_source_v1_tests::conditional_bound_source::vecadd::conditional_reference_composition_source_child",
+        true,
+    );
+}
+
+fn run_prepared_source(child_selector: &str, composition: bool) {
     let root = PathBuf::from(env::var_os(INPUTS).expect("prepared Vecadd inputs"));
     let results = PathBuf::from(env::var_os(RESULTS).expect("fresh Vecadd results root"));
     let before = checked_preparation(&root).unwrap();
@@ -881,7 +894,7 @@ fn actual_prepared_shared_body_vecadd_retains_formula_then_requires_conditional_
             .env(REQUEST, serde_json::to_string(&request).unwrap())
             .args([
                 "--exact",
-                CHILD,
+                child_selector,
                 "--ignored",
                 "--nocapture",
                 "--test-threads=1",
@@ -936,7 +949,28 @@ fn actual_prepared_shared_body_vecadd_retains_formula_then_requires_conditional_
         );
         empty_output(&input.join("compiler-output")).unwrap();
         assert_eq!(before.source, bounded_source_stamps().unwrap());
-        reports.push(serde_json::json!({"target": invocation.target, "report": response}));
+        let mut row = serde_json::json!({"target": invocation.target, "report": response});
+        if composition {
+            use crate::production_reference_effect_join_v2::conditional_source_v1::composition_tests;
+            let value: serde_json::Value = serde_json::from_slice(
+                &read_bounded(&output.join("Composition.json"), TEXT_CAP).unwrap(),
+            )
+            .unwrap();
+            composition_tests::check_report(&value);
+            let text = std::str::from_utf8(&stdout).unwrap();
+            assert_eq!(
+                text.matches(&format!("test {child_selector} ... ok"))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                text.matches("test result: ok. 1 passed; 0 failed; 0 ignored;")
+                    .count(),
+                1
+            );
+            row["composition"] = value;
+        }
+        reports.push(row);
     }
     assert_eq!(
         json(&before).unwrap(),
@@ -944,7 +978,8 @@ fn actual_prepared_shared_body_vecadd_retains_formula_then_requires_conditional_
         "prepared inputs changed during protected replay"
     );
     write_json(&results.join("report.json"), &serde_json::json!({
-        "schema": "fe2o3-test-conditional-vecadd-prepared-results-v1",
+        "schema": if composition { "fe2o3-test-conditional-reference-composition-prepared-results-v1" }
+            else { "fe2o3-test-conditional-vecadd-prepared-results-v1" },
         "preparation_sha256": crate::encode_hex(&Sha256::digest(read_bounded(&root.join("preparation.json"), JSON_CAP).unwrap())),
         "targets": reports, "actual_rustc_callback": true, "qualification_credit": false,
         "default_manifest_selection": false, "grants_artifact_or_launch_authority": false,

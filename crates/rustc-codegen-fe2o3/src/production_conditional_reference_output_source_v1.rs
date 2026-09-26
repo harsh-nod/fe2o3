@@ -65,6 +65,8 @@ pub(crate) fn replay_source_bound_cpu_formula_v1<R>(
         &mut Budget<'_>,
     ) -> R,
 ) -> Result<R, Error> {
+    #[cfg(test)]
+    composition_tests::on_replay(request, binding, semantic_root, budget);
     with_cpu_binding(request, binding, semantic_root, budget, |cpu, budget| {
         cpu.require_subjects(budget)?;
         retained
@@ -96,3 +98,7 @@ fn with_cpu_binding<R>(
 pub(crate) fn subjects(binding: &Binding) -> Result<FunctionalRefinementSubjectsV2, Error> {
     portable::reference_subjects_v1(&binding.kernel, &binding.reference).map_err(Error::from)
 }
+
+#[cfg(test)]
+#[path = "production_conditional_reference_genuine_composition_v1_tests.rs"]
+pub(crate) mod composition_tests;

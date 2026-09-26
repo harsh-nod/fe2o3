@@ -655,6 +655,28 @@ fn conditional_vecadd_source_child() {
     );
 }
 
+#[test]
+#[ignore = "prepared composition child only; actual lower request, rederived CPU binding and admitted proof runtime"]
+fn conditional_reference_composition_source_child() {
+    use crate::production_reference_effect_join_v2::conditional_source_v1::composition_tests;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let report = composition_tests::observe(conditional_vecadd_source_child);
+    let result = PathBuf::from(env::var_os(CHILD_RESULT).expect("existing child result path"));
+    let path = result.parent().unwrap().join("Composition.json");
+    let bytes = serde_json::to_vec(&report).unwrap();
+    assert!(bytes.len() <= 1024 * 1024);
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
+    eprintln!("CONDITIONAL REFERENCE COMPOSITION: {report}");
+}
+
 fn run(cases: &[Case], target: &str, stages: &[Stage]) {
     let workspace = workspace();
     let scratch = crate::test_temp_dir::TestTempDir::create("fe2o3-conditional-vecadd");
