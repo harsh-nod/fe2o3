@@ -9,6 +9,9 @@
 use std::{fmt, fmt::Write as _};
 
 use fe2o3_functional_proof::{FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2};
+use fe2o3_functional_proof::{
+    FunctionalRefinementImportPolicyV2, ImportedFunctionalRefinementProofV2,
+};
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
@@ -34,9 +37,12 @@ mod memory;
 mod retention;
 #[path = "conditional_ranked_formula_source_v1.rs"]
 mod source;
+#[path = "conditional_ranked_formulas_v2.rs"]
+mod v2;
 pub use retention::{
     RetainedProductionConditionalFormulaV1, execute_and_retain_conditional_ranked_formula_v1,
 };
+pub use v2::*;
 
 // Distinct from the old expression-only statement, including byte layout and
 // the deliberately shared (not ISA-proved) IEEE operator interpretation.
@@ -169,40 +175,66 @@ fn execute_formula(
     // separately bounded; returned text/symbols and this owner are prepaid here.
     with_scratch(budget, retention::PREPARATION_STORAGE, |budget| {
         let prepared = prepare(request, budget)?;
-        let (retained, policy) = execute_and_import_generated_mir_pliron_composition_locally_v1(
-            runtime,
-            prepared.source,
-            prepared.binding,
-            timeout_seconds,
-        )
-        .map_err(Error::Execution)?;
-        let proof = retained.proof();
-        if proof.binding() != prepared.binding
-            || proof.boundary() != FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron
-            || !proof.signature_and_policy_verified()
-            || !policy.accepts_signer(proof.signer_identity())
-            || policy.toolchain() != proof.toolchain()
-        {
-            return Err(Error::Subject("imported conditional formula receipt"));
-        }
-        let accepted_policy = retention::accepted_policy(&retained, &policy)?;
-        current(request.pliron_input(), budget)?;
-        let execution = ProductionConditionalFormulaExecutionV1 {
-            report: ProductionConditionalFormulaReportV1 {
-                statement: prepared.binding.normalized_obligation_effect_ir_hash(),
-                generated_source: prepared.generated_source,
-                binding: prepared.binding,
-                execution: proof.execution_identity(),
-                receipt: proof.receipt_identity().digest(),
-            },
-            retained,
-        };
+        let (report, retained, accepted_policy) =
+            execute_prepared(runtime, request, prepared, budget, timeout_seconds)?;
+        let execution = ProductionConditionalFormulaExecutionV1 { report, retained };
         Ok(retention::retain_checked(
             execution,
             accepted_policy,
             request,
         ))
     })
+}
+
+// Shared execution machinery; reports are inert and versioned owners stay separate.
+fn execute_prepared(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    request: &ProductionSourceBoundConditionalAggregateRequestV1<'_>,
+    prepared: Prepared,
+    budget: &mut Budget<'_>,
+    timeout_seconds: u32,
+) -> Result<
+    (
+        ProductionConditionalFormulaReportV1,
+        RetainedImportedFunctionalRefinementReceiptV2,
+        FunctionalRefinementImportPolicyV2,
+    ),
+    Error,
+> {
+    let (retained, policy) = execute_and_import_generated_mir_pliron_composition_locally_v1(
+        runtime,
+        prepared.source,
+        prepared.binding,
+        timeout_seconds,
+    )
+    .map_err(Error::Execution)?;
+    let proof = retained.proof();
+    if proof.binding() != prepared.binding
+        || proof.boundary() != FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron
+        || !proof.signature_and_policy_verified()
+        || !policy.accepts_signer(proof.signer_identity())
+        || policy.toolchain() != proof.toolchain()
+    {
+        return Err(Error::Subject("imported conditional formula receipt"));
+    }
+    let accepted_policy = retention::accepted_policy(&retained, &policy)?;
+    current(request.pliron_input(), budget)?;
+    let report = report_for_proof(prepared.binding, prepared.generated_source, proof);
+    Ok((report, retained, accepted_policy))
+}
+
+fn report_for_proof(
+    binding: FunctionalRefinementBindingV2,
+    generated_source: DigestV1,
+    proof: &ImportedFunctionalRefinementProofV2,
+) -> ProductionConditionalFormulaReportV1 {
+    ProductionConditionalFormulaReportV1 {
+        statement: binding.normalized_obligation_effect_ir_hash(),
+        generated_source,
+        binding,
+        execution: proof.execution_identity(),
+        receipt: proof.receipt_identity().digest(),
+    }
 }
 
 // Release only this module's reservation. A downstream consuming callback may
@@ -213,10 +245,18 @@ fn with_scratch<R>(
     bytes: usize,
     run: impl FnOnce(&mut Budget<'_>) -> Result<R, Error>,
 ) -> Result<R, Error> {
+    with_scratch_using(budget, bytes, run)
+}
+
+fn with_scratch_using<R, E: From<Error>>(
+    budget: &mut Budget<'_>,
+    bytes: usize,
+    run: impl FnOnce(&mut Budget<'_>) -> Result<R, E>,
+) -> Result<R, E> {
     use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-    budget.charge_work(1)?;
+    budget.charge_work(1).map_err(Error::from)?;
     let account = budget.work_ledger_identity_v1();
-    budget.reserve_storage(bytes)?;
+    budget.reserve_storage(bytes).map_err(Error::from)?;
     let protected = budget.storage();
     let result = catch_unwind(AssertUnwindSafe(|| run(budget)));
     let cleanup = if budget.work_ledger_identity_v1() == account && budget.storage() >= protected {
@@ -226,7 +266,7 @@ fn with_scratch<R>(
     };
     match result {
         Ok(result) => {
-            cleanup?;
+            cleanup.map_err(Error::from)?;
             result
         }
         Err(panic) => resume_unwind(panic),
@@ -304,14 +344,7 @@ fn prepare(
     let generated_source = DigestV1::from_untrusted_bytes(source.identity().as_bytes());
     // The conditional statement already commits to exact source/graph, typed
     // roots, subjects, argument/read occurrences and the closed premise roster.
-    let obligation = obligation_identity([
-        input.identity(),
-        generated_source,
-        staging.receipt_identity().digest(),
-        staging.binding().normalized_obligation_effect_ir_hash(),
-        staging.signer_identity(),
-        staging.execution_identity(),
-    ]);
+    let obligation = obligation_identity(obligation_commitments(input, generated_source));
     let binding =
         FunctionalRefinementBindingV2::from_subjects(input.reference_subjects(), obligation)
             .map_err(|_| Error::Subject("conditional formula binding"))?;
@@ -320,6 +353,22 @@ fn prepare(
         generated_source,
         binding,
     })
+}
+
+fn obligation_commitments(
+    input: &ProductionConditionalAggregateInputV1<'_>,
+    generated_source: DigestV1,
+) -> [DigestV1; 6] {
+    // Only called after prepare has checked the singleton staging roster.
+    let staging = &input.retained_policy_checked_refinement_staging()[0];
+    [
+        input.identity(),
+        generated_source,
+        staging.receipt_identity().digest(),
+        staging.binding().normalized_obligation_effect_ir_hash(),
+        staging.signer_identity(),
+        staging.execution_identity(),
+    ]
 }
 
 fn require_read_roster(

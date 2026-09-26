@@ -412,6 +412,28 @@ run the conditional-authority and existing identity-comparison tests, runtime
 compile-fail doctests, and the full source-inventory gate. This reconciliation
 grants no runtime, native, GPU or protected authority.
 
+### Fallible CPU Codec Node Allocation
+
+The private `Scope::boxed` helper in
+`fe2o3-verifier/src/portable_reference_v1/codec.rs` adds one unsafe block.
+The codec must prepay storage and report allocation failure on the original
+budget. It uses the stable fallible Vec allocator rather than adding an unstable
+allocator API requirement or making an infallible Box allocation.
+
+The helper rejects zero-sized types, reserves exactly one element, verifies the
+returned capacity, and initializes exactly one value. The resulting boxed slice
+and that value have identical allocation size, alignment, and global allocator.
+The raw cast removes only slice-length metadata; ownership transfers once into
+`Box<T>`, with no surviving alias or duplicate destructor. Failure drops the
+original value and allocation before the enclosing scratch reservation is
+released. The code comment records these obligations at the conversion.
+
+Review covers the complete private helper and its recursive-expression callers.
+Tests cover zero-sized refusal, over-alignment, a single destructor on normal,
+error and unwind paths, and budget cleanup. Run the CPU codec tests and the
+source-inventory gate after integration. This allocation primitive authenticates
+no CPU source, proof, compiler artifact, or GPU launch.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

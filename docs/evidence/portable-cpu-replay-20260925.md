@@ -1,5 +1,9 @@
 # Shared CPU Replay And Protected F Status
 
+Later checkpoint: [CPU-bound conditional proof components](cpu-bound-conditional-components-20260926.md).
+The candidate and results below remain historical; the later record includes
+the second protected retry and its remaining failure.
+
 Compiler candidate: `ca75075ed1612ff7d1c6a82a778ff3db5345395d`.
 This follows the [conditional source-to-F integration](conditional-final-source-join-20260925.md).
 The shared CPU replay implementation and its local regressions pass. The first

@@ -1,4 +1,4 @@
-use crate::conditional_invocation_codec_v1::ConditionalInvocationContractV1;
+use crate::conditional_invocation_codec::{Theorem, View};
 use crate::conditional_invocation_rows_v1 as row;
 use crate::conditional_invocation_v1::*;
 use sha2::{Digest, Sha256};
@@ -25,7 +25,7 @@ impl Records for ConditionalInvocationContractInputV1<'_> {
             .ok_or(invalid("premise reference"))
     }
 }
-impl Records for ConditionalInvocationContractV1<'_> {
+impl<T> Records for View<'_, T> {
     fn argument(&self, i: usize) -> FormatResult<ConditionalArgumentBindingV1> {
         self.record(1, i, row::ARGUMENT, row::argument)
     }
@@ -37,7 +37,7 @@ impl Records for ConditionalInvocationContractV1<'_> {
     }
 }
 
-pub(crate) fn length(counts: [usize; 4]) -> FormatResult<usize> {
+pub(crate) fn length(counts: [usize; 4], fixed: usize) -> FormatResult<usize> {
     let [roots, arguments, reads, premises] = counts;
     if roots == 0
         || roots > MAX_CONDITIONAL_ROOTS_V1
@@ -48,7 +48,7 @@ pub(crate) fn length(counts: [usize; 4]) -> FormatResult<usize> {
     {
         return Err(invalid("record count"));
     }
-    let mut n = row::FIXED;
+    let mut n = fixed;
     for (count, stride) in counts
         .into_iter()
         .zip([32, row::ARGUMENT, row::READ, row::PREMISE])
@@ -77,9 +77,14 @@ fn layout(width: u64, alignment: u32) -> FormatResult<()> {
 /// Only the exact current verifier preimage is checked. In particular we cannot
 /// recompute the aggregate or graph from this projection, authenticate a signer,
 /// or verify that the receipt binds these claims. The consuming owner must do so.
-pub(crate) fn theorem_matches(subjects: ConditionalSubjectsV1, t: ConditionalTheoremV1) -> bool {
+pub(crate) fn theorem_matches(
+    domain: &[u8],
+    subjects: ConditionalSubjectsV1,
+    t: ConditionalTheoremV1,
+    cpu_input: Option<[u8; 32]>,
+) -> bool {
     let mut hash = Sha256::new();
-    hash.update(CONDITIONAL_MEMORY_THEOREM_DOMAIN_V1);
+    hash.update(domain);
     for d in [
         subjects.aggregate_statement_identity,
         t.generated_source_identity,
@@ -90,21 +95,24 @@ pub(crate) fn theorem_matches(subjects: ConditionalSubjectsV1, t: ConditionalThe
     ] {
         hash.update(d);
     }
+    if let Some(cpu_input) = cpu_input {
+        hash.update(cpu_input);
+    }
     let expected: [u8; 32] = hash.finalize().into();
     t.statement_identity == expected
 }
 
 /// Shared by encode preflight and independent decode, after bounded precharge.
-pub(crate) fn validate(
+pub(crate) fn validate<T: Theorem>(
     rows: &impl Records,
     counts: [usize; 4],
     subjects: ConditionalSubjectsV1,
-    theorem: ConditionalTheoremV1,
+    theorem: T,
     output: ConditionalOutputV1,
 ) -> FormatResult<()> {
     use ConditionalArgumentRoleV1 as Role;
     use ConditionalRuntimePremiseV1 as P;
-    length(counts)?;
+    length(counts, T::FIXED)?;
     let [_, arguments, reads, premises] = counts;
     // Structural parity with FunctionalRefinementSubjectsV2's MIR profile,
     // not evidence that any of the required subjects came from that owner.
@@ -119,7 +127,7 @@ pub(crate) fn validate(
     {
         return Err(invalid("MIR subject shape"));
     }
-    if !theorem_matches(subjects, theorem) {
+    if !theorem.matches(subjects) {
         return Err(invalid("theorem preimage"));
     }
     if usize::from(output.argument) >= arguments {

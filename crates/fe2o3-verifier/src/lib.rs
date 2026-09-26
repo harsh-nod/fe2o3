@@ -24,6 +24,7 @@ mod compiler_proof_binding_v3;
 mod compiler_refined_forwarding_output_v1;
 mod compiler_target_lineage_v1;
 mod conditional_ranked_formulas_v1;
+pub mod conditional_reference_v1;
 mod control_flow_binding;
 mod executor;
 mod functional_refinement_receipt_v2;
@@ -90,9 +91,13 @@ pub use compiler_refined_forwarding_output_v1::{
     recover_compiler_refined_forwarding_output_v1,
 };
 pub use conditional_ranked_formulas_v1::{
-    ProductionConditionalFormulaErrorV1, ProductionConditionalFormulaExecutionV1,
-    ProductionConditionalFormulaReportV1, RetainedProductionConditionalFormulaV1,
-    execute_and_retain_conditional_ranked_formula_v1, with_conditional_ranked_formula_execution_v1,
+    ProductionConditionalFormulaErrorV1, ProductionConditionalFormulaErrorV2,
+    ProductionConditionalFormulaExecutionV1, ProductionConditionalFormulaExecutionV2,
+    ProductionConditionalFormulaReportV1, ProductionConditionalFormulaReportV2,
+    RetainedProductionConditionalFormulaV1, RetainedProductionConditionalFormulaV2,
+    execute_and_retain_conditional_ranked_formula_v1,
+    execute_and_retain_conditional_ranked_formula_v2,
+    import_and_retain_conditional_ranked_formula_v2, with_conditional_ranked_formula_execution_v1,
 };
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
 // authenticate and execute only the recorder; they do not show that Verus or a

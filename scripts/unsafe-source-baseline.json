@@ -943,6 +943,9 @@
     "block": 12,
     "extern_block": 2
   },
+  "crates/fe2o3-verifier/src/portable_reference_v1/codec.rs": {
+    "block": 1
+  },
   "crates/fe2o3-verifier/tests/support/recorder.rs": {
     "block": 1,
     "extern_block": 1

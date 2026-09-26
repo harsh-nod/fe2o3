@@ -159,7 +159,7 @@ impl ConditionalReferenceRootV1 {
                         budget
                             .reserve_storage(encoded.retained_storage_v1())
                             .map_err(failure)?;
-                        Ok(encoded)
+                        Ok::<_, Error>(encoded)
                     },
                 )
             },
