@@ -4586,6 +4586,7 @@ pub(crate) mod semantic_v3 {
     }
 
     impl receipt_transport::Subject for crate::InertCompilerExecutionSubjectV1 {
+        type Error = crate::CompilerExecutionSubjectErrorV2;
         type Schema = HandoffV3Schema;
         type Postcheck = ();
         const ENTRY: &'static str = COMPILER_EXECUTION_RECEIPT_ENTRY_V1;
