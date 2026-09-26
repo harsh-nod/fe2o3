@@ -1,0 +1,101 @@
+# Shared Resource Domains V1
+
+This is development of MEM-DOM-1, not complete bounded-memory qualification.
+The [shared accounting engine](../crates/fe2o3-resource-accounting/src/domain.rs)
+now supports a fixed-arena, three-level hierarchy, and Context allocation
+admission can attach to it. Physical-device identity, mandatory root reuse,
+native adapters, complete bootstrap and formal refinement remain open.
+
+## Identity And Admission
+
+`ResourceCreditAccountV1::new_root` owns one mutex and bounded node, record,
+free-list and batch-validation arenas. `new_child` consumes a vacant domain
+slot, not another allocation or independent ledger. A child has immutable
+parentage, capacity and record limit. Unused child capacity is not reserved
+against its parent: actual reservations contend for shared ancestor capacity.
+The three levels are generic accounting domains, not native-device capabilities.
+
+An account handle carries its root identity and a generation-bearing leaf key.
+`shares_ledger_with` requires both the exact root and leaf; `shares_root_with`
+does not imply interchangeable leaf accounts. A compact token binds the root,
+owner generation and global record slot; that exact record retains the leaf key
+and immutable ancestor path. Domain and record generations never
+wrap. Domain slots are reusable only after their handles, descendants and
+records are gone. Quarantined records prevent reuse.
+
+Scalar and whole-roster admission check every ancestor's complete resource
+vector and record limit before one commit under the root mutex. Rejection for
+capacity, records or generation exhaustion changes no usage, owner generation
+or occupied/free roster. Validation scratch is temporary state, not a debit.
+The existing R67 arithmetic/phase decisions and R70 batch planner are reused.
+Every member remains independently retainable and disposable; release updates
+its entire ancestor path. Child and ancestor readings are inclusive projections
+of the same global records, not additional physical allocations to sum together.
+
+Quarantine changes the original record phase without new arena storage. One
+existing Arc anchor retains the root and its full bootstrap baseline after
+outside handles disappear. Invariant/mutex poison seals the entire root;
+ordinary capacity rejection does not. No callback or native operation is used
+to admit, cancel, retire or quarantine a credit.
+
+Metadata tables retain only their payload and credit, not a duplicate account
+handle. `HostMetadataTableV1::account()` now returns an owned optional handle
+recovered from the exact retained record. This is a source-API change from the
+previous borrowed return: borrowed consumers use `.as_ref()`, and callers that
+already wanted an owned handle remove `.cloned()`. Recovery preserves the leaf
+before original table disposal and remains inert on a valid poisoned record.
+It adds no heap allocation and keeps the existing 64-byte table-header limit.
+
+## Bootstrap Boundary
+
+`resource_domain_bootstrap_bytes_v1` derives checked Rust payload sizes from
+the actual coordinator, domain/record slot types, full free-list capacities and
+batch-validation bitmap. `new_root` checks that baseline against
+`ControlResidentBytes` before allocating, verifies exact Rust `Vec` capacities,
+and keeps the whole arena charged through vacancy, slot reuse and quarantine.
+Child construction and credit transitions allocate no new ledger storage.
+
+This is a Rust payload contract, not total heap residency. Arc control headers,
+allocator rounding/headers, external account handles, returned batch boxes,
+Context registries and arbitrary error/panic/callback payloads are excluded.
+The batch output is allocated and boxed before ledger commitment, but is not
+charged to this root. A future bounded batch-output adapter remains necessary.
+Fallible Vec allocation failures dispose already-created local storage; global
+allocator abort is not an in-process recovery guarantee.
+
+The root is not precharged to a higher process account. A caller may create
+unrelated roots, and legacy independent accounts remain available. Therefore
+this bounds participating supplied charges, not every allocation in a process.
+The bounded production profile must require a persistent root and cover its
+complete actual bootstrap before a process/global claim is supportable.
+
+## Context Integration
+
+`RuntimeContextV1::configure_allocation_admission_in_domain_v1` creates a private
+child branded with that Context's exact device ID. Attachment rejects existing
+accounts or live allocations on that device; once installed it cannot be
+replaced by another root or by the legacy local-budget method, even after clean
+release. Other Context devices remain unconfigured unless explicitly attached.
+
+The existing allocation and roster-preflight paths consume these same child
+tokens. Two participating Contexts compete for ancestor requested-byte and
+allocation-record limits before backend entry. Definite rejection and confirmed
+disposal refund the exact member; uncertain allocation, terminal/panicking
+disposal and Context destruction do not reset quarantined parent usage.
+
+The Context-local device brand is not a stable physical-GPU identity. Canonical
+root-issued physical-device parents, native session/VM association, root-required
+constructors and accounting for work before attachment are still required.
+KFD backing, module-image and scaled-table accounts are not automatically joined
+to this hierarchy. A request charge is not a native-residency measurement.
+
+## Verification Gates
+
+The [development evidence](evidence/dev-resource-domains-2026-09-26/README.md)
+separates core tests, actual Context/MockBackend paths and broader regressions.
+It does not prove the new hierarchy by reusing R67/R70 proofs. New obligations
+include exact ancestry and node reuse, all-ancestor conservation, failure
+atomicity, quarantine lifetime, bootstrap correspondence and lock/arena
+refinement. Mutations must omit an ancestor or final coordinate, refund
+quarantine, reuse a retained node, accept a foreign root or duplicate a debit.
+Native cost extraction/disposal and matched HIP/HSA measurements remain separate.

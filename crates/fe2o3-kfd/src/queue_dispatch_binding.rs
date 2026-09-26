@@ -5221,7 +5221,7 @@ impl DispatchResourceOwnerV1 {
     ) {
         assert!(capacity.matches(
             self.generation.capacity_profile,
-            self.generation.slots.account()
+            self.generation.slots.account().as_ref()
         ));
         let mut identities = Vec::new();
         for slot in 0..capacity.profile().slots() {

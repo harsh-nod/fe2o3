@@ -652,7 +652,7 @@ backing admission alone does not provide any of these mechanisms.
 | MEM-2B-HOST / R81 | Implemented locally; Resources proof and Native/Primary qualification remain | Ordinary coherent cache bounds preserve native debit through reuse and uncertain disposal. New host-cache adapter proof and Linux acceptance are open; all N1B variants are not prerequisites |
 | MEM-QUAL-HARNESS | Native example/checker; primary runner integration | Exercise actual optional N1/N2/cache budgets in both startup orders before signed pressure/reuse/disposal acceptance. Existing overlap/drain examples configure logical requested-byte limits, not these native budgets |
 | MEM-TXN-1 | Implemented in R70; prerequisite for compound MEM-3 creation | Atomic complete roster of vectors and owner slots returns independent move-only reservations. Ordinary late-member/record/generation failure leaves state unchanged; detected internal corruption poisons. Native composition remains open |
-| MEM-DOM-1 | Resources domain contract; primary root/construction hooks; prerequisite for MEM-5 aggregate closure | Bind root/device/Context accounts and reserve bootstrap/terminal headroom before ownership. Repeated Context creation and simultaneous failures cannot reset the ceiling or require unreserved bookkeeping. Session-local accounting may land first only with its narrower scope explicit |
+| MEM-DOM-1 | Shared-root request-accounting development; primary/native construction hooks remain; prerequisite for MEM-5 aggregate closure | Generic fixed-arena root/child admission and opt-in immutable Context attachment are implemented in development. Canonical physical-device identity, mandatory root construction, complete bootstrap/terminal headroom and native account attachment remain open. Repeated participating Contexts cannot reset quarantined request credit; this is not a process-global ceiling |
 
 The implemented [batch API](runtime-resource-batch-v1.md) creates independent
 member reservations; it does not split an already-issued retained debit.
@@ -669,6 +669,10 @@ completion/control storage, when they use the exact admitted ordinary profile.
 MEM-DOM-1 must not be postponed to a documentation-only final
 audit. Host images, journals, captures and independent native owners may be
 implemented incrementally, but the final aggregate gate includes all of them.
+The [shared-domain contract](runtime-resource-domains-v1.md) and its development
+evidence cover one atomic root coordinator and real Context request admission.
+They do not close hierarchy proofs, physical-device binding, native residency,
+charged batch output, external metadata or whole-process accounting.
 
 ### Bounded Work Packets
 

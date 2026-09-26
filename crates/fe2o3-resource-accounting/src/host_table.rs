@@ -25,7 +25,6 @@ pub fn host_metadata_table_payload_bytes_v1<T>(len: usize) -> Option<u64> {
 pub struct HostMetadataTableV1<T> {
     slots: Vec<T>,
     credits: Option<RetainedResourceCreditsV1>,
-    account: Option<ResourceCreditAccountV1>,
 }
 
 impl<T> HostMetadataTableV1<T> {
@@ -70,13 +69,15 @@ impl<T> HostMetadataTableV1<T> {
         Ok(Self {
             slots,
             credits: reservation.map(|reservation| reservation.retain()),
-            account: account.cloned(),
         })
     }
 
-    /// Borrows the ledger handle; cloning that handle duplicates no table or debit.
-    pub fn account(&self) -> Option<&ResourceCreditAccountV1> {
-        self.account.as_ref()
+    /// Clones the exact ledger handle without duplicating the table or debit.
+    /// Identity lives with the retained credit, not a second inline account copy.
+    pub fn account(&self) -> Option<ResourceCreditAccountV1> {
+        self.credits
+            .as_ref()
+            .map(RetainedResourceCreditsV1::account)
     }
 
     /// A copy is a distinct allocation and requires its own complete reservation.
@@ -85,7 +86,7 @@ impl<T> HostMetadataTableV1<T> {
         T: Clone,
     {
         let mut values = self.slots.iter();
-        Self::try_new(self.slots.len(), self.account.as_ref(), || {
+        Self::try_new(self.slots.len(), self.account().as_ref(), || {
             values.next().expect("exact source table length").clone()
         })
     }
@@ -109,7 +110,7 @@ impl<T: core::fmt::Debug> core::fmt::Debug for HostMetadataTableV1<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("HostMetadataTableV1")
             .field("slots", &self.slots)
-            .field("accounted", &self.account.is_some())
+            .field("accounted", &self.credits.is_some())
             .finish()
     }
 }
@@ -117,9 +118,9 @@ impl<T: core::fmt::Debug> core::fmt::Debug for HostMetadataTableV1<T> {
 impl<T: PartialEq> PartialEq for HostMetadataTableV1<T> {
     fn eq(&self, other: &Self) -> bool {
         self.slots == other.slots
-            && match (&self.account, &other.account) {
+            && match (self.account(), other.account()) {
                 (None, None) => true,
-                (Some(left), Some(right)) => std::sync::Arc::ptr_eq(&left.0, &right.0),
+                (Some(left), Some(right)) => left.shares_ledger_with(&right),
                 _ => false,
             }
     }

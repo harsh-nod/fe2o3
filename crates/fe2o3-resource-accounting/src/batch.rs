@@ -25,7 +25,9 @@ impl ResourceCreditAccountV1 {
     /// debiting resources or advancing owners. Every reservation follows retain/cancel
     /// rules. Adapters must retain all potentially affected members before their
     /// first native effect, and establish disposal separately for each member.
-    /// No parent account, native cost witness or partial debit refund is implied.
+    /// Shared-root accounts apply the same transaction to every ancestor using
+    /// preallocated validation scratch. The returned box remains external,
+    /// uncharged metadata. No native cost witness or partial debit refund is implied.
     ///
     /// ```compile_fail
     /// use fe2o3_resource_accounting::{ResourceCreditAccountV1, ResourceVectorV1};
@@ -41,8 +43,18 @@ impl ResourceCreditAccountV1 {
         if charges.is_empty() || charges.len() > MAX_RESOURCE_CREDIT_BATCH_MEMBERS_V1 {
             return Err(ResourceCreditErrorV1::InvalidRecordCapacity);
         }
+        if let AccountHandle::Domain(account) = &self.0 {
+            let mut output = Vec::new();
+            output
+                .try_reserve_exact(charges.len())
+                .map_err(|_| ResourceCreditErrorV1::AllocationFailed)?;
+            output.resize_with(charges.len(), || ResourceReservationV1 { token: None });
+            let mut output = output.into_boxed_slice();
+            account.reserve_into(charges, &mut output)?;
+            return Ok(output);
+        }
         let record_capacity = {
-            let state = self.0.lock();
+            let state = self.independent().lock();
             if state.poisoned {
                 return Err(ResourceCreditErrorV1::Invariant);
             }
@@ -64,7 +76,7 @@ impl ResourceCreditAccountV1 {
             .map_err(|_| ResourceCreditErrorV1::AllocationFailed)?;
         occupied.resize(record_capacity.div_ceil(64), 0u64);
 
-        let mut state = self.0.lock();
+        let mut state = self.independent().lock();
         if state.poisoned {
             return Err(ResourceCreditErrorV1::Invariant);
         }
@@ -74,7 +86,7 @@ impl ResourceCreditAccountV1 {
         let admission = r70_resource_batch_reserve_v1(
             state.used,
             charges,
-            self.0.capacity,
+            self.independent().capacity,
             state.free.len(),
             state.next_owner,
         )
@@ -130,7 +142,7 @@ impl ResourceCreditAccountV1 {
                 phase: Phase::Reserved,
             });
             reservation.token = Some(Token {
-                account: Arc::clone(&self.0),
+                account: TokenAccount::Independent(Arc::clone(self.independent())),
                 slot,
                 owner,
             });
@@ -166,7 +178,7 @@ mod tests {
 
     fn snapshot(account: &ResourceCreditAccountV1) -> StateSnapshot {
         let usage = account.usage();
-        let state = account.0.lock();
+        let state = account.independent().lock();
         StateSnapshot {
             usage,
             owners: state
@@ -188,9 +200,9 @@ mod tests {
         assert_eq!(account.usage().reserved_records, 3);
         for (index, member) in members.iter().enumerate() {
             let token = member.token.as_ref().unwrap();
-            assert!(Arc::ptr_eq(&token.account, &account.0));
+            assert!(token.account_handle().shares_ledger_with(&account));
             assert_eq!(token.owner, index as u64 + 1);
-            let state = account.0.lock();
+            let state = account.independent().lock();
             assert_eq!(state.records[token.slot].unwrap().charge, charges[index]);
         }
         let mut members = members.into_vec().into_iter();
@@ -253,7 +265,7 @@ mod tests {
     #[test]
     fn complete_owner_interval_is_checked_before_generation_assignment() {
         let account = account(8, 3);
-        account.0.lock().next_owner = u64::MAX - 2;
+        account.independent().lock().next_owner = u64::MAX - 2;
         let before = snapshot(&account);
         assert!(matches!(
             account.reserve_batch(&[bytes(1); 3]),
@@ -263,7 +275,7 @@ mod tests {
         let members = account.reserve_batch(&[bytes(1); 2]).unwrap();
         assert_eq!(members[0].token.as_ref().unwrap().owner, u64::MAX - 2);
         assert_eq!(members[1].token.as_ref().unwrap().owner, u64::MAX - 1);
-        assert_eq!(account.0.lock().next_owner, u64::MAX);
+        assert_eq!(account.independent().lock().next_owner, u64::MAX);
         drop(members);
         assert_eq!(account.usage().used, bytes(0));
     }
@@ -282,7 +294,7 @@ mod tests {
             ));
             assert_eq!(snapshot(&account), before);
         }
-        account.0.lock().next_owner = 0;
+        account.independent().lock().next_owner = 0;
         let mut before = snapshot(&account);
         assert!(matches!(
             account.reserve_batch(&[bytes(1)]),
@@ -296,7 +308,7 @@ mod tests {
     fn corrupt_record_counters_poison_without_debit_or_owner_advance() {
         for reserved in [1, usize::MAX] {
             let account = account(8, 3);
-            account.0.lock().reserved = reserved;
+            account.independent().lock().reserved = reserved;
             let mut before = snapshot(&account);
             assert!(matches!(
                 account.reserve_batch(&[bytes(1)]),
@@ -306,7 +318,7 @@ mod tests {
             assert_eq!(snapshot(&account), before);
         }
         let account = account(8, 3);
-        account.0.lock().free.push(0);
+        account.independent().lock().free.push(0);
         let mut before = snapshot(&account);
         assert!(matches!(
             account.reserve_batch(&[bytes(1)]),
@@ -320,7 +332,7 @@ mod tests {
     fn duplicate_or_invalid_free_slots_poison_without_issuing_any_token() {
         for free in [vec![0, 1, 1], vec![0, 1, 3]] {
             let account = account(8, 3);
-            account.0.lock().free = free;
+            account.independent().lock().free = free;
             let mut before = snapshot(&account);
             assert!(matches!(
                 account.reserve_batch(&[bytes(1); 3]),
@@ -344,8 +356,8 @@ mod tests {
         let account = account(8, 3);
         let existing = account.reserve(bytes(2)).unwrap();
         let slot = existing.token.as_ref().unwrap().slot;
-        let original = account.0.lock().free.clone();
-        account.0.lock().free = vec![slot, 2];
+        let original = account.independent().lock().free.clone();
+        account.independent().lock().free = vec![slot, 2];
         let mut before = snapshot(&account);
         assert!(matches!(
             account.reserve_batch(&[bytes(1); 2]),
@@ -353,9 +365,9 @@ mod tests {
         ));
         before.usage.poisoned = true;
         assert_eq!(snapshot(&account), before);
-        account.0.lock().free = original;
+        account.independent().lock().free = original;
         drop(existing);
-        account.0.lock().quarantine_anchor = None;
+        account.independent().lock().quarantine_anchor = None;
     }
 
     #[test]
@@ -388,7 +400,7 @@ mod tests {
         assert_eq!(account.usage().quarantined_records, 1);
         assert_eq!(account.usage().retained_records, 0);
         // Test resources are synthetic; remove only their process-lifetime anchor.
-        account.0.lock().quarantine_anchor = None;
+        account.independent().lock().quarantine_anchor = None;
     }
 
     #[test]
@@ -397,10 +409,14 @@ mod tests {
         let second = account(8, 2);
         let a = first.reserve_batch(&[bytes(3), bytes(5)]).unwrap();
         let b = second.reserve_batch(&[bytes(3), bytes(5)]).unwrap();
-        assert!(!Arc::ptr_eq(
-            &a[0].token.as_ref().unwrap().account,
-            &b[0].token.as_ref().unwrap().account
-        ));
+        assert!(
+            !a[0]
+                .token
+                .as_ref()
+                .unwrap()
+                .account_handle()
+                .shares_ledger_with(&b[0].token.as_ref().unwrap().account_handle())
+        );
         drop(a);
         assert_eq!(first.usage().used, bytes(0));
         assert_eq!(second.usage().used, bytes(8));

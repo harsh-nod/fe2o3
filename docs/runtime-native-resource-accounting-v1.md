@@ -313,6 +313,14 @@ independent reservations are not whole-plan atomic admission.
 
 ### Bootstrap And Quarantine
 
+Development now includes [shared resource domains](runtime-resource-domains-v1.md):
+one precharged fixed Rust arena, atomic ancestor accounting and opt-in immutable
+Context request-admission children. This covers participating requested-byte and
+record charges plus the ledger arena payload, not canonical physical-device
+identity, mandatory root construction or native/Context bootstrap. Batch output,
+external registries and allocator/Arc internals are still excluded. The complete
+bootstrap and terminal obligations below remain open.
+
 The root itself consumes memory before it can issue accounts. Define one fixed,
 precharged bootstrap arena/layout and include it as baseline usage before child
 or native admission. Child-account arenas and free lists must reserve their

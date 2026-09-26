@@ -6,10 +6,11 @@
 //! native-disposal authority. Adapters must retain tokens privately with the
 //! actual resources whose charges they represent.
 //!
-//! This is the extracted R67 account engine, not a hierarchical budget or native
-//! cost adapter. Each account has a bounded owner arena; its actual host bytes,
-//! parent/device ceilings, bootstrap storage and aggregate quarantine remain
-//! separate implementation work. Bounded single-account batch admission creates
+//! Independent R67 accounts and opt-in shared-root domains are accounting, not
+//! native cost adapters. Independent accounts leave their arena uncharged;
+//! shared roots precharge fixed Rust arena payloads and update every ancestor
+//! atomically. Neither establishes physical-device or process-global limits.
+//! Bounded batch admission creates
 //! independent member reservations; issued debits cannot be split or partially
 //! refunded.
 //!
@@ -24,7 +25,9 @@ use fe2o3_runtime_model::{
 use std::sync::{Arc, Mutex, MutexGuard};
 
 mod batch;
+mod domain;
 pub use batch::MAX_RESOURCE_CREDIT_BATCH_MEMBERS_V1;
+pub use domain::{MAX_RESOURCE_DOMAIN_DEPTH_V1, resource_domain_bootstrap_bytes_v1};
 mod host_table;
 pub use host_table::{HostMetadataTableV1, host_metadata_table_payload_bytes_v1};
 
@@ -42,6 +45,10 @@ pub enum ResourceCreditErrorV1 {
     RecordCapacity,
     GenerationExhausted,
     Invariant,
+    InvalidDomainCapacity,
+    DomainCapacity,
+    DomainDepth,
+    NotHierarchical,
 }
 
 impl core::fmt::Display for ResourceCreditErrorV1 {
@@ -182,15 +189,45 @@ impl Account {
     }
 }
 
-/// One independent account. Clones share its opaque ledger identity and capacity.
+/// One account. Clones share its opaque ledger identity and capacity.
 /// This handle is not a runtime-device or native-session capability.
 #[derive(Clone)]
-pub struct ResourceCreditAccountV1(Arc<Account>);
+pub struct ResourceCreditAccountV1(AccountHandle);
+
+#[derive(Clone)]
+enum AccountHandle {
+    Independent(Arc<Account>),
+    Domain(domain::DomainAccount),
+}
 
 impl ResourceCreditAccountV1 {
     /// Compares ledger identity, not current usage or equal capacity limits.
     pub fn shares_ledger_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        match (&self.0, &other.0) {
+            (AccountHandle::Independent(a), AccountHandle::Independent(b)) => Arc::ptr_eq(a, b),
+            (AccountHandle::Domain(a), AccountHandle::Domain(b)) => a.same_account(b),
+            _ => false,
+        }
+    }
+
+    fn independent(&self) -> &Arc<Account> {
+        match &self.0 {
+            AccountHandle::Independent(account) => account,
+            AccountHandle::Domain(_) => unreachable!("domain routed before independent access"),
+        }
+    }
+
+    #[cfg(test)]
+    fn transition(
+        &self,
+        slot: usize,
+        owner: u64,
+        action: Action,
+    ) -> Result<(), ResourceCreditErrorV1> {
+        match &self.0 {
+            AccountHandle::Independent(account) => account.transition(slot, owner, action),
+            AccountHandle::Domain(account) => account.transition(slot, owner, action),
+        }
     }
 
     /// Creates one bounded account without performing any native operation.
@@ -210,7 +247,7 @@ impl ResourceCreditAccountV1 {
         free.try_reserve_exact(max_reservations)
             .map_err(|_| ResourceCreditErrorV1::AllocationFailed)?;
         free.extend((0..max_reservations).rev());
-        Ok(Self(Arc::new(Account {
+        Ok(Self(AccountHandle::Independent(Arc::new(Account {
             capacity,
             state: Mutex::new(AccountState {
                 used: ResourceVectorV1::ZERO,
@@ -223,14 +260,17 @@ impl ResourceCreditAccountV1 {
                 poisoned: false,
                 quarantine_anchor: None,
             }),
-        })))
+        }))))
     }
 
     /// Returns an inert snapshot, not resource ownership or disposal evidence.
     pub fn usage(&self) -> ResourceCreditUsageV1 {
-        let state = self.0.lock();
+        if let AccountHandle::Domain(account) = &self.0 {
+            return account.usage();
+        }
+        let state = self.independent().lock();
         ResourceCreditUsageV1 {
-            capacity: self.0.capacity,
+            capacity: self.independent().capacity,
             used: state.used,
             reserved_records: state.reserved,
             retained_records: state.retained,
@@ -245,11 +285,16 @@ impl ResourceCreditAccountV1 {
         &self,
         charge: ResourceVectorV1,
     ) -> Result<ResourceReservationV1, ResourceCreditErrorV1> {
-        let mut state = self.0.lock();
+        if let AccountHandle::Domain(account) = &self.0 {
+            let mut output = [ResourceReservationV1 { token: None }];
+            account.reserve_into(&[charge], &mut output)?;
+            return Ok(output.into_iter().next().expect("one reservation"));
+        }
+        let mut state = self.independent().lock();
         if state.poisoned {
             return Err(ResourceCreditErrorV1::Invariant);
         }
-        let next_used = r67_resource_reserve_v1(state.used, charge, self.0.capacity)
+        let next_used = r67_resource_reserve_v1(state.used, charge, self.independent().capacity)
             .ok_or(ResourceCreditErrorV1::Capacity)?;
         let slot = *state
             .free
@@ -274,7 +319,7 @@ impl ResourceCreditAccountV1 {
         state.reserved += 1;
         Ok(ResourceReservationV1 {
             token: Some(Token {
-                account: Arc::clone(&self.0),
+                account: TokenAccount::Independent(Arc::clone(self.independent())),
                 slot,
                 owner,
             }),
@@ -283,9 +328,32 @@ impl ResourceCreditAccountV1 {
 }
 
 struct Token {
-    account: Arc<Account>,
+    account: TokenAccount,
     slot: usize,
     owner: u64,
+}
+
+enum TokenAccount {
+    Independent(Arc<Account>),
+    Domain(Arc<domain::Root>),
+}
+
+impl Token {
+    fn transition(&self, action: Action) -> Result<(), ResourceCreditErrorV1> {
+        match &self.account {
+            TokenAccount::Independent(account) => account.transition(self.slot, self.owner, action),
+            TokenAccount::Domain(root) => root.transition_record(self.slot, self.owner, action),
+        }
+    }
+
+    fn account_handle(&self) -> ResourceCreditAccountV1 {
+        match &self.account {
+            TokenAccount::Independent(account) => {
+                ResourceCreditAccountV1(AccountHandle::Independent(Arc::clone(account)))
+            }
+            TokenAccount::Domain(root) => root.account_for_record(self.slot, self.owner),
+        }
+    }
 }
 
 /// Cancellation of this pre-issue reservation is safe because the adapter must
@@ -299,8 +367,7 @@ impl ResourceReservationV1 {
     pub fn retain(mut self) -> RetainedResourceCreditsV1 {
         let token = self.token.take().expect("reservation consumed once");
         token
-            .account
-            .transition(token.slot, token.owner, Action::Retain)
+            .transition(Action::Retain)
             .expect("private reservation retains its exact live owner");
         RetainedResourceCreditsV1 { token: Some(token) }
     }
@@ -309,9 +376,7 @@ impl ResourceReservationV1 {
 impl Drop for ResourceReservationV1 {
     fn drop(&mut self) {
         if let Some(token) = self.token.take() {
-            let _ = token
-                .account
-                .transition(token.slot, token.owner, Action::CancelUnissued);
+            let _ = token.transition(Action::CancelUnissued);
         }
     }
 }
@@ -338,6 +403,13 @@ pub struct RetainedResourceCreditsV1 {
 }
 
 impl RetainedResourceCreditsV1 {
+    pub(crate) fn account(&self) -> ResourceCreditAccountV1 {
+        self.token
+            .as_ref()
+            .expect("live retained credit")
+            .account_handle()
+    }
+
     /// Accounting transition for an adapter-established no-effect rejection.
     /// This method does not observe a backend or certify that rejection occurred.
     /// Quiescence alone is not sufficient disposal evidence.
@@ -355,7 +427,7 @@ impl RetainedResourceCreditsV1 {
 
     fn release(mut self, action: Action) -> Result<(), ResourceCreditErrorV1> {
         let token = self.token.as_ref().expect("retained credits consumed once");
-        token.account.transition(token.slot, token.owner, action)?;
+        token.transition(action)?;
         self.token = None;
         Ok(())
     }
@@ -368,9 +440,7 @@ impl RetainedResourceCreditsV1 {
 impl Drop for RetainedResourceCreditsV1 {
     fn drop(&mut self) {
         if let Some(token) = self.token.take() {
-            let _ = token
-                .account
-                .transition(token.slot, token.owner, Action::Quarantine);
+            let _ = token.transition(Action::Quarantine);
         }
     }
 }
@@ -401,13 +471,13 @@ mod tests {
         let account = account(16, 1, 3);
         let first = account.reserve(charge(8)).unwrap();
         let before = account.usage();
-        let next_owner = account.0.lock().next_owner;
+        let next_owner = account.independent().lock().next_owner;
         assert!(matches!(
             account.reserve(charge(1)),
             Err(ResourceCreditErrorV1::Capacity)
         ));
         assert_eq!(account.usage(), before);
-        assert_eq!(account.0.lock().next_owner, next_owner);
+        assert_eq!(account.independent().lock().next_owner, next_owner);
         drop(first);
         assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
     }
@@ -423,13 +493,13 @@ mod tests {
         retained.release_after_disposal().unwrap();
         assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
         assert_eq!(account.usage().retained_records, 0);
-        assert_eq!(account.0.lock().free.len(), 2);
+        assert_eq!(account.independent().lock().free.len(), 2);
     }
 
     #[test]
     fn abandoned_retained_token_preserves_charge_after_all_external_handles_drop() {
         let account = account(16, 2, 2);
-        let weak = Arc::downgrade(&account.0);
+        let weak = Arc::downgrade(account.independent());
         let retained = account.reserve(charge(9)).unwrap().retain();
         retained.quarantine();
         assert_eq!(account.usage().quarantined_records, 1);
@@ -453,15 +523,13 @@ mod tests {
         let token = second.token.as_ref().unwrap();
         assert_ne!(token.owner, old_owner);
         assert_eq!(
-            account
-                .0
-                .transition(token.slot, old_owner, Action::ReleaseDisposed),
+            account.transition(token.slot, old_owner, Action::ReleaseDisposed),
             Err(ResourceCreditErrorV1::Invariant)
         );
         assert_eq!(account.usage().used, charge(8));
         assert!(account.usage().poisoned);
         drop(second);
-        account.0.lock().quarantine_anchor = None;
+        account.independent().lock().quarantine_anchor = None;
     }
 
     #[test]
@@ -470,10 +538,13 @@ mod tests {
         let second = account(16, 1, 1);
         let a = first.reserve(charge(8)).unwrap().retain();
         let b = second.reserve(charge(8)).unwrap().retain();
-        assert!(!Arc::ptr_eq(
-            &a.token.as_ref().unwrap().account,
-            &b.token.as_ref().unwrap().account
-        ));
+        assert!(
+            !a.token
+                .as_ref()
+                .unwrap()
+                .account_handle()
+                .shares_ledger_with(&b.token.as_ref().unwrap().account_handle())
+        );
         a.release_after_disposal().unwrap();
         assert_eq!(first.usage().used, ResourceVectorV1::ZERO);
         assert_eq!(second.usage().used, charge(8));
@@ -491,7 +562,7 @@ mod tests {
         ));
         assert_eq!(account.usage(), before);
         drop(first);
-        account.0.lock().next_owner = u64::MAX;
+        account.independent().lock().next_owner = u64::MAX;
         let before = account.usage();
         assert!(matches!(
             account.reserve(charge(1)),
@@ -517,7 +588,7 @@ mod tests {
         let account = account(16, 2, 2);
         let retained = account.reserve(charge(8)).unwrap().retain();
         let panic = std::panic::catch_unwind(|| {
-            let _locked = account.0.lock();
+            let _locked = account.independent().lock();
             panic!("injected private account failure");
         });
         assert!(panic.is_err());
@@ -528,7 +599,7 @@ mod tests {
             account.reserve(charge(1)),
             Err(ResourceCreditErrorV1::Invariant)
         ));
-        account.0.lock().quarantine_anchor = None;
+        account.independent().lock().quarantine_anchor = None;
     }
 
     #[test]

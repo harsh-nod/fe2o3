@@ -1,0 +1,77 @@
+   Compiling typenum v1.20.1
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.1
+   Compiling autocfg v1.5.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+   Compiling linux-raw-sys v0.12.1
+   Compiling memchr v2.8.3
+   Compiling bitflags v2.13.1
+   Compiling itoa v1.0.18
+   Compiling pin-project-lite v0.2.17
+   Compiling futures-core v0.3.34
+   Compiling futures-task v0.3.34
+   Compiling slab v0.4.12
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+   Compiling arrayvec v0.7.8
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host-api)
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling libc v0.2.189
+   Compiling tokio v1.47.1
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+   Compiling futures-util v0.3.34
+   Compiling num-traits v0.2.19
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+   Compiling hybrid-array v0.4.14
+   Compiling rmp v0.8.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling rustix v1.1.4
+   Compiling rmpv v1.3.1
+   Compiling digest v0.11.3
+   Compiling futures-executor v0.3.34
+   Compiling sha2 v0.11.0
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+   Compiling fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 2m 01s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-domain-target-20260926-0XHJJ27l/debug/deps/fe2o3_resource_accounting-6ec1f52d27a69258)
+
+running 10 tests
+test domain::tests::domain_batch_failure_is_atomic_at_each_ancestor_and_members_dispose_independently ... ok
+test domain::tests::domain_bootstrap_is_charged_before_admission_and_never_refunded_by_slot_reuse ... ok
+test domain::tests::domain_checks_every_resource_coordinate_at_each_ancestor ... ok
+test domain::tests::domain_concurrent_siblings_cannot_overbook_the_last_parent_credit ... ok
+test domain::tests::domain_corrupt_child_preflight_poisons_without_issuing_a_domain ... ok
+test domain::tests::domain_quarantine_survives_all_external_handles_and_cannot_reuse_its_node ... ok
+test domain::tests::domain_records_generations_and_depth_reject_before_mutation ... ok
+test domain::tests::domain_siblings_share_ancestors_but_not_leaf_identity ... ok
+test domain::tests::domain_tokens_keep_retired_parents_live_and_clean_reuse_changes_generation ... ok
+test domain::tests::domain_wrong_leaf_and_stale_owner_poison_without_refund ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-domain-target-20260926-0XHJJ27l/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 9 tests
+test async_engine::generated_operation::completion::tests::completion_observer_mints_only_exact_domain_after_original_reply ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::generated_completion_domain_failure_precedes_reservation_and_preserves_exact_owner ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_inputs_bind_exact_domain_records_and_whole_extents ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_read_only_domain_survives_missing_backend_handle_and_ordinary_release ... ok
+test context::tests::allocation_admission_tests::allocation_domain_failed_disposal_retains_parent_credit_and_definite_rejection_refunds ... ok
+test context::tests::allocation_admission_tests::allocation_domain_immutable_attachment_cannot_switch_to_an_unrelated_or_local_budget ... ok
+test context::tests::allocation_admission_tests::allocation_domain_repeated_contexts_do_not_reset_quarantined_parent_usage ... ok
+test context::tests::allocation_admission_tests::allocation_domain_two_contexts_contend_before_backend_entry_and_release_enables_retry ... ok
+test context::generated_issue::tests::journal_tests::reader_tests::generated_marker_root_reference_and_domain_corruption_cannot_release_batch ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1488 filtered out; finished in 0.07s
+

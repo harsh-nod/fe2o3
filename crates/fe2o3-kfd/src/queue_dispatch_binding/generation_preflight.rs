@@ -93,7 +93,7 @@ impl Gfx942FixedDispatchPreallocationV1 {
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
         self.0.ensure_pristine()?;
         if capacity.profile != FixedDispatchCapacityProfileV1::Qualification1024
-            || !capacity.matches(self.0.capacity_profile, self.0.slots.account())
+            || !capacity.matches(self.0.capacity_profile, self.0.slots.account().as_ref())
             || self.0.next_generation != seed.next()?
         {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);

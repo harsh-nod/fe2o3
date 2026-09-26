@@ -2,8 +2,9 @@
 //!
 //! The shared account enforces only supplied vectors. This wrapper preserves
 //! Context/device association without duplicating a ledger or exposing tokens as
-//! native authority. Native cost extraction, parent/global ceilings and aggregate
-//! quarantine remain separate work.
+//! native authority. Optional shared-root children enforce aggregate request
+//! limits; physical-device binding, native costs and whole-process accounting
+//! remain separate work.
 
 use crate::RuntimeDeviceIdV1;
 use fe2o3_resource_accounting::ResourceCreditAccountV1;
@@ -37,6 +38,22 @@ pub(crate) struct RuntimeResourceCreditAccountV1 {
 }
 
 impl RuntimeResourceCreditAccountV1 {
+    pub(crate) fn in_domain(
+        device: RuntimeDeviceIdV1,
+        parent: &ResourceCreditAccountV1,
+        capacity: RuntimeResourceVectorV1,
+        max_reservations: usize,
+    ) -> Result<Self, RuntimeResourceCreditErrorV1> {
+        Ok(Self {
+            device,
+            inner: parent.new_child(capacity, max_reservations)?,
+        })
+    }
+
+    pub(crate) fn is_domain(&self) -> bool {
+        self.inner.root_usage().is_some()
+    }
+
     pub(crate) fn new(
         device: RuntimeDeviceIdV1,
         capacity: RuntimeResourceVectorV1,

@@ -28,6 +28,318 @@ fn allocate(
     context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, bytes, 8)
 }
 
+fn shared_root(bytes: u64, records: usize) -> fe2o3_resource_accounting::ResourceCreditAccountV1 {
+    use fe2o3_resource_accounting::{ResourceCreditAccountV1, resource_domain_bootstrap_bytes_v1};
+    ResourceCreditAccountV1::new_root(
+        RuntimeResourceVectorV1::ZERO
+            .with(K::RequestedAllocationBytes, bytes)
+            .with(K::AllocationRecords, records as u64)
+            .with(
+                K::ControlResidentBytes,
+                resource_domain_bootstrap_bytes_v1(8, records).unwrap(),
+            ),
+        8,
+        records,
+    )
+    .unwrap()
+}
+
+fn in_domain(
+    parent: &fe2o3_resource_accounting::ResourceCreditAccountV1,
+    bytes: u64,
+    records: usize,
+) -> (RuntimeContextV1<MockBackend>, RuntimeDeviceIdV1) {
+    let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+    let device = context.devices()[0].id();
+    context
+        .configure_allocation_admission_in_domain_v1(device, parent, bytes, records)
+        .unwrap();
+    (context, device)
+}
+
+#[test]
+fn allocation_domain_two_contexts_contend_before_backend_entry_and_release_enables_retry() {
+    let root = shared_root(8, 2);
+    let baseline = root.usage();
+    let parent = root
+        .new_child(
+            RuntimeResourceVectorV1::ZERO
+                .with(K::RequestedAllocationBytes, 16)
+                .with(K::AllocationRecords, 2),
+            2,
+        )
+        .unwrap();
+    let (mut a, da) = in_domain(&parent, 16, 2);
+    let (mut b, db) = in_domain(&parent, 16, 2);
+    let first = allocate(&mut a, da, 8).unwrap();
+    let before = [root.usage(), parent.usage()];
+    assert!(matches!(
+        allocate(&mut b, db, 1),
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::Capacity
+        ))
+    ));
+    assert_eq!(b.backend.allocation_calls, 0);
+    assert_eq!([root.usage(), parent.usage()], before);
+    assert_eq!(usage(&b, db).used, RuntimeResourceVectorV1::ZERO);
+    a.release_allocation(first).unwrap();
+    let second = allocate(&mut b, db, 8).unwrap();
+    assert_eq!(b.backend.allocation_calls, 1);
+    b.release_allocation(second).unwrap();
+    assert!(a.cleanup().is_complete() && b.cleanup().is_complete());
+    drop(a);
+    drop(b);
+    drop(parent);
+    assert_eq!(root.usage(), baseline);
+}
+
+#[test]
+fn allocation_domain_immutable_attachment_cannot_switch_to_an_unrelated_or_local_budget() {
+    let root = shared_root(8, 2);
+    let other = shared_root(100, 2);
+    let (mut context, device) = in_domain(&root, 8, 2);
+    let foreign = RuntimeContextV1::open(MockBackend::default())
+        .unwrap()
+        .devices()[0]
+        .id();
+    let before = root.usage();
+    let other_before = other.usage();
+    for target in [device, foreign] {
+        let expected = if target == device {
+            RuntimeValidationErrorV1::ContextReserved
+        } else {
+            RuntimeValidationErrorV1::UnknownDevice
+        };
+        assert!(
+            matches!(context.configure_allocation_admission_in_domain_v1(target, &other, 100, 2), Err(RuntimeErrorV1::Validation(error)) if error == expected)
+        );
+        assert!(
+            matches!(context.configure_allocation_admission_v1(target, 100, 2), Err(RuntimeErrorV1::Validation(error)) if error == expected)
+        );
+    }
+    let allocation = allocate(&mut context, device, 8).unwrap();
+    context.release_allocation(allocation).unwrap();
+    assert!(
+        context
+            .configure_allocation_admission_v1(device, 100, 2)
+            .is_err()
+    );
+    assert_eq!(root.usage(), before);
+    assert_eq!(other.usage(), other_before);
+    assert!(context.cleanup().is_complete());
+}
+
+#[test]
+fn allocation_domain_repeated_contexts_do_not_reset_quarantined_parent_usage() {
+    for failure in [
+        MockMemoryFailure::Quiescent,
+        MockMemoryFailure::Terminal,
+        MockMemoryFailure::Panic,
+    ] {
+        let root = shared_root(8, 2);
+        let (mut previous, device) = in_domain(&root, 8, 2);
+        previous.backend.allocation_failure = failure;
+        let result = catch_unwind(AssertUnwindSafe(|| allocate(&mut previous, device, 8)));
+        if failure == MockMemoryFailure::Panic {
+            assert!(result.is_err());
+        } else {
+            assert!(result.unwrap().is_err());
+        }
+        assert_eq!(root.usage().quarantined_records, 1);
+        assert!(!previous.cleanup().is_complete());
+        drop(previous);
+        let before = root.usage();
+        for _ in 0..4 {
+            let (mut next, device) = in_domain(&root, 8, 2);
+            assert!(allocate(&mut next, device, 1).is_err());
+            assert_eq!(next.backend.allocation_calls, 0);
+            assert!(next.cleanup().is_complete());
+            drop(next);
+            assert_eq!(root.usage(), before);
+        }
+    }
+}
+
+#[test]
+fn allocation_domain_failed_disposal_retains_parent_credit_and_definite_rejection_refunds() {
+    let root = shared_root(8, 2);
+    let baseline = root.usage();
+    let (mut a, da) = in_domain(&root, 8, 2);
+    let (mut b, db) = in_domain(&root, 8, 2);
+    a.backend.allocation_failure = MockMemoryFailure::Rejected;
+    assert!(allocate(&mut a, da, 8).is_err());
+    assert_eq!(root.usage(), baseline);
+    let allocation = allocate(&mut a, da, 8).unwrap();
+    a.backend.release_allocation_failure = MockMemoryFailure::Rejected;
+    assert!(a.release_allocation(allocation).is_err());
+    assert_eq!(root.usage().retained_records, 1);
+    assert!(allocate(&mut b, db, 1).is_err());
+    assert_eq!(b.backend.allocation_calls, 0);
+    a.release_allocation(allocation).unwrap();
+    let allocation = allocate(&mut b, db, 8).unwrap();
+    b.release_allocation(allocation).unwrap();
+    assert_eq!(root.usage(), baseline);
+    assert!(a.cleanup().is_complete() && b.cleanup().is_complete());
+}
+
+#[test]
+fn allocation_domain_every_ancestor_byte_and_record_limit_precedes_backend_entry() {
+    for limiting in 0..3 {
+        for records_only in [false, true] {
+            let root_records = if records_only && limiting == 0 { 1 } else { 2 };
+            let parent_records = if records_only && limiting == 1 {
+                1
+            } else {
+                root_records
+            };
+            let leaf_records = if records_only && limiting == 2 {
+                1
+            } else {
+                root_records
+            };
+            let limit = |level| {
+                if !records_only && limiting == level {
+                    8
+                } else {
+                    64
+                }
+            };
+            let root = shared_root(limit(0), root_records);
+            let parent = root
+                .new_child(
+                    RuntimeResourceVectorV1::ZERO
+                        .with(K::RequestedAllocationBytes, limit(1))
+                        .with(K::AllocationRecords, parent_records as u64),
+                    parent_records,
+                )
+                .unwrap();
+            let (mut context, device) = in_domain(&parent, limit(2), leaf_records);
+            let allocation = allocate(&mut context, device, 8).unwrap();
+            let before = (root.usage(), parent.usage(), usage(&context, device));
+            assert!(matches!(
+                allocate(&mut context, device, 1),
+                Err(RuntimeErrorV1::Validation(
+                    RuntimeValidationErrorV1::Capacity
+                ))
+            ));
+            assert_eq!(context.backend.allocation_calls, 1);
+            assert_eq!(
+                (root.usage(), parent.usage(), usage(&context, device)),
+                before
+            );
+            context.release_allocation(allocation).unwrap();
+            assert!(context.cleanup().is_complete());
+        }
+    }
+}
+
+#[test]
+fn allocation_domain_roster_preflight_is_atomic_and_tokens_share_parent_lifetime() {
+    let root = shared_root(8, 2);
+    let (mut context, device) = in_domain(&root, 16, 2);
+    let before = root.usage();
+    assert!(
+        context
+            .allocation_admission
+            .prepare_roster(device, &[4, 5])
+            .is_err()
+    );
+    assert_eq!(root.usage(), before);
+    assert_eq!(context.backend.allocation_calls, 0);
+    let members = context
+        .allocation_admission
+        .prepare_roster(device, &[3, 5])
+        .unwrap()
+        .unwrap();
+    assert_eq!(root.usage().reserved_records, 2);
+    assert_eq!(root.usage().used.get(K::RequestedAllocationBytes), 8);
+    assert!(allocate(&mut context, device, 1).is_err());
+    assert_eq!(context.backend.allocation_calls, 0);
+    drop(members);
+    assert_eq!(root.usage(), before);
+    let allocation = allocate(&mut context, device, 8).unwrap();
+    context.release_allocation(allocation).unwrap();
+    assert!(context.cleanup().is_complete());
+}
+
+#[test]
+fn allocation_domain_failed_attachment_preserves_parent_and_allows_valid_retry() {
+    use fe2o3_resource_accounting::{ResourceCreditAccountV1, resource_domain_bootstrap_bytes_v1};
+    for case in 0..3 {
+        let capacity = RuntimeResourceVectorV1::ZERO
+            .with(K::RequestedAllocationBytes, 8)
+            .with(K::AllocationRecords, 2);
+        let parent = match case {
+            0 => ResourceCreditAccountV1::new(capacity, 2).unwrap(),
+            1 => ResourceCreditAccountV1::new_root(
+                capacity.with(
+                    K::ControlResidentBytes,
+                    resource_domain_bootstrap_bytes_v1(1, 2).unwrap(),
+                ),
+                1,
+                2,
+            )
+            .unwrap(),
+            _ => shared_root(8, 2)
+                .new_child(capacity, 2)
+                .unwrap()
+                .new_child(capacity, 2)
+                .unwrap(),
+        };
+        let before = (parent.usage(), parent.root_usage());
+        let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        let device = context.devices()[0].id();
+        assert!(matches!(
+            context.configure_allocation_admission_in_domain_v1(device, &parent, 8, 2),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::Capacity
+            ))
+        ));
+        assert!(
+            context
+                .allocation_admission_usage_v1(device)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!((parent.usage(), parent.root_usage()), before);
+        assert_eq!(context.backend.allocation_calls, 0);
+        let valid = shared_root(8, 2);
+        context
+            .configure_allocation_admission_in_domain_v1(device, &valid, 8, 2)
+            .unwrap();
+        let allocation = allocate(&mut context, device, 8).unwrap();
+        context.release_allocation(allocation).unwrap();
+        assert!(context.cleanup().is_complete());
+    }
+}
+
+#[test]
+fn allocation_domain_terminal_or_panicking_disposal_keeps_replacement_context_blocked() {
+    for failure in [MockMemoryFailure::Terminal, MockMemoryFailure::Panic] {
+        let root = shared_root(8, 2);
+        let (mut context, device) = in_domain(&root, 8, 2);
+        let allocation = allocate(&mut context, device, 8).unwrap();
+        context.backend.release_allocation_failure = failure;
+        let result = catch_unwind(AssertUnwindSafe(|| context.release_allocation(allocation)));
+        if failure == MockMemoryFailure::Panic {
+            assert!(result.is_err());
+        } else {
+            assert!(matches!(
+                result.unwrap(),
+                Err(RuntimeErrorV1::BackendTerminal(_))
+            ));
+        }
+        assert_eq!(root.usage().quarantined_records, 1);
+        drop(context);
+        let before = root.usage();
+        let (mut next, device) = in_domain(&root, 8, 2);
+        assert!(allocate(&mut next, device, 1).is_err());
+        assert_eq!(next.backend.allocation_calls, 0);
+        assert_eq!(root.usage(), before);
+        assert!(next.cleanup().is_complete());
+    }
+}
+
 #[test]
 fn allocation_credit_vector_rejection_is_atomic_and_precedes_backend_entry() {
     let (mut context, device) = configured(64, 2);

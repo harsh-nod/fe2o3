@@ -107,7 +107,7 @@ impl DispatchGenerationOwnerV1 {
         PristineDispatchContinuationV1 {
             next_generation: self.next_generation,
             capacity_profile: self.capacity_profile,
-            account: self.slots.account().cloned(),
+            account: self.slots.account(),
         }
     }
 }

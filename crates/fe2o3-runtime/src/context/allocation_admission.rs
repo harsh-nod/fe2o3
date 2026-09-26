@@ -160,7 +160,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         if let Some(account) = self.allocation_admission.accounts.get(&device) {
             let usage = account.usage();
-            if usage.poisoned
+            if account.is_domain()
+                || usage.poisoned
                 || usage.used != RuntimeResourceVectorV1::ZERO
                 || usage.reserved_records != 0
                 || usage.retained_records != 0
@@ -179,6 +180,53 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .with(RuntimeResourceKindV1::AllocationRecords, records);
         let account = RuntimeResourceCreditAccountV1::new(device, capacity, allocation_records)
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        self.allocation_admission.accounts.insert(device, account);
+        Ok(())
+    }
+
+    /// Attaches request admission to one immutable child of a shared accounting
+    /// domain. All participating Contexts consume the same ancestor byte/record
+    /// limits before backend entry, including charges quarantined by destroyed
+    /// Contexts. This attachment cannot subsequently be replaced by local limits
+    /// or another root, even after all allocations have been disposed.
+    ///
+    /// The parent must come from `ResourceCreditAccountV1::new_root` or its child.
+    /// It is an accounting domain, not physical-device identity or native
+    /// authority. This accounts requested bytes/records only, not earlier Context
+    /// bootstrap, native backing, registry/output-box storage or all process
+    /// memory. Other Context devices remain unconfigured unless explicitly attached.
+    pub fn configure_allocation_admission_in_domain_v1(
+        &mut self,
+        device: RuntimeDeviceIdV1,
+        parent: &fe2o3_resource_accounting::ResourceCreditAccountV1,
+        requested_bytes: u64,
+        allocation_records: usize,
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
+        self.require_live()?;
+        self.device(device)?;
+        if self.allocation_admission.accounts.contains_key(&device)
+            || self
+                .allocations
+                .values()
+                .any(|record| record.device == device)
+        {
+            return Err(RuntimeValidationErrorV1::ContextReserved.into());
+        }
+        self.allocation_admission
+            .accounts
+            .try_reserve(1)
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        let records =
+            u64::try_from(allocation_records).map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        let capacity = RuntimeResourceVectorV1::ZERO
+            .with(
+                RuntimeResourceKindV1::RequestedAllocationBytes,
+                requested_bytes,
+            )
+            .with(RuntimeResourceKindV1::AllocationRecords, records);
+        let account =
+            RuntimeResourceCreditAccountV1::in_domain(device, parent, capacity, allocation_records)
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
         self.allocation_admission.accounts.insert(device, account);
         Ok(())
     }

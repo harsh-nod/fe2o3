@@ -1,0 +1,48 @@
+   Compiling spin v0.12.3
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Finished `test` profile [unoptimized] target(s) in 13.18s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-domain-target-20260926-0XHJJ27l/debug/deps/fe2o3_resource_accounting-6ec1f52d27a69258)
+
+running 38 tests
+test batch::tests::complete_owner_interval_is_checked_before_generation_assignment ... ok
+test batch::tests::batch_uses_existing_account_records_and_independent_tokens ... ok
+test batch::tests::complete_record_roster_must_be_available_before_any_member_is_admitted ... ok
+test batch::tests::cross_member_arithmetic_overflow_has_no_partial_debit ... ok
+test batch::tests::duplicate_or_invalid_free_slots_poison_without_issuing_any_token ... ok
+test batch::tests::equal_capacity_accounts_cannot_exchange_batch_member_credits ... ok
+test batch::tests::late_member_capacity_and_final_dimension_failure_leave_all_state_unchanged ... ok
+test batch::tests::corrupt_record_counters_poison_without_debit_or_owner_advance ... ok
+test batch::tests::occupied_slot_in_free_roster_cannot_overwrite_an_existing_owner ... ok
+test batch::tests::quarantined_member_keeps_only_its_charge_after_sibling_disposal ... ok
+test domain::tests::domain_batch_failure_is_atomic_at_each_ancestor_and_members_dispose_independently ... ok
+test batch::tests::zero_cost_members_still_consume_independent_owner_records ... ok
+test domain::tests::domain_bootstrap_is_charged_before_admission_and_never_refunded_by_slot_reuse ... ok
+test batch::tests::concurrent_batches_conserve_complete_rosters ... ok
+test domain::tests::domain_records_generations_and_depth_reject_before_mutation ... ok
+test domain::tests::domain_siblings_share_ancestors_but_not_leaf_identity ... ok
+test domain::tests::domain_tokens_keep_retired_parents_live_and_clean_reuse_changes_generation ... ok
+test domain::tests::domain_quarantine_survives_all_external_handles_and_cannot_reuse_its_node ... ok
+test domain::tests::domain_wrong_leaf_and_stale_owner_poison_without_refund ... ok
+test host_table::tests::allocation_failure_and_initializer_unwind_refund_reservation ... ok
+test host_table::tests::budget_rejection_precedes_allocation_and_initialization ... ok
+test host_table::tests::checked_layout_rejects_empty_zst_and_overflow ... ok
+test batch::tests::concurrent_scalar_and_batch_admission_share_one_ledger_and_owner_arena ... ok
+test domain::tests::domain_checks_every_resource_coordinate_at_each_ancestor ... ok
+test host_table::tests::independent_clones_are_charged_until_after_disposal ... ok
+test domain::tests::domain_concurrent_siblings_cannot_overbook_the_last_parent_credit ... ok
+test host_table::tests::destructor_observes_live_charge_and_panic_quarantines_it ... ok
+test host_table::tests::record_exhaustion_rejects_without_initialization ... ok
+test tests::account_configuration_has_a_fixed_record_bound ... ok
+test tests::abandoned_retained_token_preserves_charge_after_all_external_handles_drop ... ok
+test tests::account_identity_is_bound_in_the_token_not_chosen_during_release ... ok
+test tests::bounded_record_and_generation_exhaustion_are_failure_atomic ... ok
+test tests::complete_vector_rejection_changes_neither_usage_nor_record_identity ... ok
+test tests::unissued_drop_and_definite_rejection_refund_exactly_once ... ok
+test tests::poisoned_account_cannot_refund_or_admit_more_custody ... ok
+test tests::slot_reuse_changes_owner_and_stale_release_never_refunds ... ok
+test batch::tests::invalid_member_count_is_atomic_but_corrupt_zero_owner_poisons ... ok
+test tests::concurrent_complete_vector_admission_preserves_conservation ... ok
+
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
