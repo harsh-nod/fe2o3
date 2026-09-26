@@ -30,6 +30,16 @@ The next packet layer is integrated but not yet typechecked or executed:
   and one strict V2 import per root retain the real arenas and proof owners.
 - Borrowed-policy staging reuses the existing admission engine without cloning
   the accepted policy. Ordinary V1 paths retain their original behavior.
+- Producer hooks retain that original policy and optionally capture the real
+  CPU frame, staging commitments and formula signature during the existing
+  replay. Replacement compares both charged owners before dropping the old one.
+  Complete roster borrows finish the original source-phase postchecks first.
+
+Producer hooks add 15 unexecuted component tests. Conditional roots now retain
+an inline policy header, and their existing type-sized scratch charge grows;
+conditional/fixed6 storage thresholds are therefore not claimed unchanged.
+Non-capturing replay performs no new CPU encoding or proof work. Ordinary routes
+and all resource caps are unchanged. Packet assembly and attachment are pending.
 
 The consumer supports a complete conditional root roster, not mixed ordinary or
 UnitLocal roots. Existing per-root single-output and CPU-control-flow limits
