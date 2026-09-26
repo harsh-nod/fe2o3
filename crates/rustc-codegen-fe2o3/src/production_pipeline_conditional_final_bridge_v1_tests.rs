@@ -7,11 +7,110 @@ use fe2o3_kernel_opt::{
 
 #[test]
 fn conditional_bridge_actual_chain_history_and_text_both_targets() {
+    use crate::production_ranked_projection_v1::with_backend_checked_output_policy6_owned_with_storage_limit_v1;
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        // History's configured ceiling applies to the original optimizer ledger,
+        // not a replacement budget created after the prefix has been constructed.
+        with_backend_checked_output_policy6_owned_with_storage_limit_v1(
+            profile,
+            fe2o3_kernel_opt::MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1,
+            |owner, budget| {
+                assert_eq!(
+                    budget.storage_limit(),
+                    fe2o3_kernel_opt::MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1
+                );
+                assert!(budget.work() > 0);
+                let account = budget.work_ledger_identity_v1();
+                let address = std::ptr::from_mut(budget);
+                let floor = budget.storage();
+                let denials = (budget.failed_work(), budget.failed_storage());
+                let limits = Limits {
+                    refinement: fe2o3_kernel_analysis::CanonicalKirLoopLimitsV1::default(),
+                    forwarding:
+                        fe2o3_kernel_analysis::CanonicalKirCrossBlockForwardingLimitsV1::default(),
+                };
+                let chain =
+                    FinalChain::prepare(owner.bound(), owner.checked_output(), limits, budget)
+                        .unwrap();
+                chain.check_owned(budget).unwrap();
+                let wire = encode_refined_forwarding_history_v1(
+                    chain.inputs(owner.bound(), owner.checked_output()),
+                    budget,
+                )
+                .unwrap();
+                budget
+                    .reserve_storage(wire.storage().retained_storage())
+                    .unwrap();
+                let frame =
+                    read_refined_forwarding_history_v1(wire.canonical_bytes(), budget).unwrap();
+                budget
+                    .reserve_storage(frame.storage().retained_storage())
+                    .unwrap();
+                assert_eq!(frame.limits(), limits);
+                assert_eq!(
+                    frame.graph_bytes(Role::B),
+                    owner.bound().canonical().canonical_bytes()
+                );
+                assert_eq!(
+                    frame.graph_bytes(Role::I),
+                    owner.output().canonical().canonical_bytes()
+                );
+                assert_eq!(
+                    frame.graph_bytes(Role::F),
+                    chain.output().canonical().canonical_bytes()
+                );
+                let decoded = materialize_refined_forwarding_history_v1(&frame, budget).unwrap();
+                budget
+                    .reserve_storage(decoded.storage().retained_storage())
+                    .unwrap();
+                let checked = decoded.check_semantics(budget).unwrap();
+                budget
+                    .reserve_storage(checked.storage().retained_storage())
+                    .unwrap();
+                assert_eq!(
+                    checked.output().canonical().identity(),
+                    chain.output().canonical().identity()
+                );
+                let text_floor = budget.storage();
+                let (text, text_storage) = emit_prefix(chain.output(), profile, budget).unwrap();
+                assert_eq!(budget.storage(), text_floor + text_storage);
+                assert!(text.contains(profile.device_target().split(':').next().unwrap()));
+                assert!(!text.contains(".fe2o3.kd."));
+                assert!(budget.work_ledger_identity_v1() == account);
+                // All owners/views die before releasing only this component delta.
+                drop(text);
+                budget.release_storage(text_storage).unwrap();
+                drop(checked);
+                drop(decoded);
+                drop(frame);
+                drop(wire);
+                drop(chain);
+                budget.release_storage(budget.storage() - floor).unwrap();
+                assert_eq!(budget.storage(), floor);
+                assert_eq!((budget.failed_work(), budget.failed_storage()), denials);
+                assert!(budget.work_ledger_identity_v1() == account);
+                assert_eq!(std::ptr::from_mut(budget), address);
+            },
+        );
+    }
+}
+
+#[test]
+fn conditional_bridge_history_rejects_canonical_phase_budget_before_debits() {
     use crate::production_ranked_projection_v1::with_backend_checked_output_policy6_owned_v1;
     for profile in [Profile::Gfx942, Profile::Gfx950] {
         with_backend_checked_output_policy6_owned_v1(profile, |owner, budget| {
+            assert_eq!(
+                budget.storage_limit(),
+                crate::production_canonical_phase_policy_v1::STORAGE_LIMIT
+            );
+            assert!(
+                budget.storage_limit()
+                    > fe2o3_kernel_opt::MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1
+            );
             let floor = budget.storage();
             let account = budget.work_ledger_identity_v1();
+            let address = std::ptr::from_mut(budget);
             let limits = Limits {
                 refinement: fe2o3_kernel_analysis::CanonicalKirLoopLimitsV1::default(),
                 forwarding:
@@ -20,56 +119,32 @@ fn conditional_bridge_actual_chain_history_and_text_both_targets() {
             let chain =
                 FinalChain::prepare(owner.bound(), owner.checked_output(), limits, budget).unwrap();
             chain.check_owned(budget).unwrap();
-            let wire = encode_refined_forwarding_history_v1(
-                chain.inputs(owner.bound(), owner.checked_output()),
-                budget,
-            )
-            .unwrap();
-            budget
-                .reserve_storage(wire.storage().retained_storage())
-                .unwrap();
-            let frame = read_refined_forwarding_history_v1(wire.canonical_bytes(), budget).unwrap();
-            budget
-                .reserve_storage(frame.storage().retained_storage())
-                .unwrap();
-            assert_eq!(frame.limits(), limits);
-            assert_eq!(
-                frame.graph_bytes(Role::B),
-                owner.bound().canonical().canonical_bytes()
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
             );
+            assert!(matches!(
+                encode_refined_forwarding_history_v1(
+                    chain.inputs(owner.bound(), owner.checked_output()),
+                    budget,
+                ),
+                Err(fe2o3_kernel_opt::RefinedForwardingHistoryWireErrorV1::Limit)
+            ));
             assert_eq!(
-                frame.graph_bytes(Role::I),
-                owner.output().canonical().canonical_bytes()
+                (
+                    budget.work(),
+                    budget.storage(),
+                    budget.peak_storage(),
+                    budget.failed_work(),
+                    budget.failed_storage(),
+                ),
+                before
             );
-            assert_eq!(
-                frame.graph_bytes(Role::F),
-                chain.output().canonical().canonical_bytes()
-            );
-            let decoded = materialize_refined_forwarding_history_v1(&frame, budget).unwrap();
-            budget
-                .reserve_storage(decoded.storage().retained_storage())
-                .unwrap();
-            let checked = decoded.check_semantics(budget).unwrap();
-            budget
-                .reserve_storage(checked.storage().retained_storage())
-                .unwrap();
-            assert_eq!(
-                checked.output().canonical().identity(),
-                chain.output().canonical().identity()
-            );
-            let text_floor = budget.storage();
-            let (text, text_storage) = emit_prefix(chain.output(), profile, budget).unwrap();
-            assert_eq!(budget.storage(), text_floor + text_storage);
-            assert!(text.contains(profile.device_target().split(':').next().unwrap()));
-            assert!(!text.contains(".fe2o3.kd."));
             assert!(budget.work_ledger_identity_v1() == account);
-            // All owners/views die before releasing only this component delta.
-            drop(text);
-            budget.release_storage(text_storage).unwrap();
-            drop(checked);
-            drop(decoded);
-            drop(frame);
-            drop(wire);
+            assert_eq!(std::ptr::from_mut(budget), address);
             drop(chain);
             budget.release_storage(budget.storage() - floor).unwrap();
         });

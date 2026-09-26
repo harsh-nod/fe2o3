@@ -499,7 +499,13 @@ impl rustc_driver::Callbacks for Callbacks {
         );
         let work_limit =
             usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap();
-        let storage_limit = crate::production_canonical_phase_policy_v1::STORAGE_LIMIT;
+        // F serializes the complete native history on this original account;
+        // fixed6 and early resource controls retain their original limits.
+        let storage_limit = if self.mode == "f" || self.mode.starts_with("late-") {
+            fe2o3_compiler_ffi::MAX_INERT_REFINED_FORWARDING_STORAGE_V1
+        } else {
+            crate::production_canonical_phase_policy_v1::STORAGE_LIMIT
+        };
         let mut work = Work::new(if self.mode == "work" { 0 } else { work_limit });
         let mut budget = Budget::new(
             &mut work,

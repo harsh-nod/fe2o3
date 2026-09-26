@@ -39,6 +39,7 @@ pub(crate) use tests::{
     with_backend_checked_output_policy3_roster_v1, with_backend_checked_output_policy3_v1,
     with_backend_checked_output_policy4_owned_v1, with_backend_checked_output_policy4_v1,
     with_backend_checked_output_policy5_owned_v1, with_backend_checked_output_policy6_owned_v1,
+    with_backend_checked_output_policy6_owned_with_storage_limit_v1,
     with_backend_checked_output_policy6_roster_v1, with_backend_erased_bound_v1,
     with_backend_erased_output_policy5_owned_v1, with_backend_erased_output_policy6_owned_v1,
     with_backend_erased_roster_v1, with_backend_forwarding_erased_prefix_v1,
