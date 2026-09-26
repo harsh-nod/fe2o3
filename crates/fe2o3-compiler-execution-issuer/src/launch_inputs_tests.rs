@@ -1,8 +1,6 @@
 use super::*;
 use ed25519_dalek::SigningKey;
 use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_ISSUER_POLICY_WORK_V2 as POLICY_WORK,
-    COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_WORK_V2 as MANIFEST_WORK,
     CompilerExecutionClientProcessIdentityV1 as Client,
     CompilerExecutionExternalAnchorServiceIdentityV1 as Service,
     CompilerExecutionIssuerMeasurementV1 as Measurement,
@@ -20,8 +18,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Inputs = CompilerExecutionIssuerLaunchInputsV2;
-type InputError = CompilerExecutionIssuerLaunchInputErrorV2;
 const TOTAL_WORK: usize = ENTRY_WORK
     + 2 * PolicyCapability::IO_WORK
     + 2 * LaunchCapability::IO_WORK
@@ -82,6 +78,35 @@ fn sealed(bytes: &[u8]) -> File {
 fn sources(mode: &str) -> (File, File) {
     let p = policy(if mode == "consistent-other" { 8 } else { 7 });
     let m = manifest(&p);
+    if matches!(mode, "other-policy" | "other-manifest" | "other-pair") {
+        let mut w = Work::new(1_000_000);
+        let mut b = Budget::new(&mut w, 1_000_000);
+        let (other, charge) = OtherPolicy::new(
+            p.generation(),
+            p.executable(),
+            p.runtime(),
+            *p.verifying_key(),
+            *p.external_anchor_verifying_key(),
+            &mut b,
+        )
+        .unwrap();
+        b.reserve_storage(charge.additional_storage()).unwrap();
+        let (other_manifest, charge) =
+            OtherManifest::new(m.client(), m.external_anchor_service(), &other, &mut b).unwrap();
+        b.reserve_storage(charge.additional_storage()).unwrap();
+        return (
+            sealed(if mode == "other-manifest" {
+                p.canonical_bytes()
+            } else {
+                other.canonical_bytes()
+            }),
+            sealed(if mode == "other-policy" {
+                m.canonical_bytes()
+            } else {
+                other_manifest.canonical_bytes()
+            }),
+        );
+    }
     let old = LegacyPolicy::new(
         7,
         p.executable(),
@@ -147,11 +172,18 @@ fn exact_native_reader_meter_and_failure_boundaries() {
                 )))
             )),
             1 => {
-                assert!(matches!(result, Err(InputError::Capability(CapabilityError::Policy(
-                    fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV2::Resource(Resource::Storage(_))
-                ))) | Err(InputError::Capability(CapabilityError::Launch(ManifestError::Resource(Resource::Storage(_)))))
-                    | Err(InputError::Capability(CapabilityError::Resource(Resource::Storage(_))))
-                    | Err(InputError::Manifest(ManifestError::Resource(Resource::Storage(_))))));
+                assert!(matches!(
+                    result,
+                    Err(InputError::Capability(PolicyDecodeError(
+                        PolicyError::Resource(Resource::Storage(_))
+                    ))) | Err(InputError::Capability(LaunchDecodeError(
+                        ManifestError::Resource(Resource::Storage(_))
+                    ))) | Err(InputError::Capability(CapabilityError::Resource(
+                        Resource::Storage(_)
+                    ))) | Err(InputError::Manifest(ManifestError::Resource(
+                        Resource::Storage(_)
+                    )))
+                ));
                 assert_eq!(b.failed_storage(), Some(peak));
             }
             2 => assert!(matches!(
@@ -169,11 +201,44 @@ fn exact_native_reader_meter_and_failure_boundaries() {
 }
 
 #[test]
+fn admission_and_revalidation_keep_original_ledger_and_full_output_charge() {
+    let (p, m) = sources("valid");
+    borrowable(&p);
+    borrowable(&m);
+    let recheck_work =
+        ENTRY_WORK + PolicyCapability::IO_WORK + LaunchCapability::IO_WORK + MANIFEST_WORK;
+    let mut w = Work::new(TOTAL_WORK + recheck_work);
+    let mut b = Budget::new(&mut w, 1_000_000);
+    let floor = Inputs::INPUT_STORAGE + 19;
+    b.reserve_storage(floor).unwrap();
+    let ledger = b.work_ledger_identity_v1();
+    let (inputs, charge) = Inputs::read_at(p.as_raw_fd(), m.as_raw_fd(), &mut b).unwrap();
+    let retained = inputs.policy.retained_storage() + inputs.launch.retained_storage();
+    assert_eq!(inputs.retained_storage(), retained);
+    assert_eq!(charge.additional_storage(), retained);
+    assert_eq!(b.storage(), floor);
+    b.reserve_storage(charge.additional_storage()).unwrap();
+    inputs.revalidate(&mut b).unwrap();
+    assert_eq!(b.storage(), floor + retained);
+    assert_eq!(b.work(), TOTAL_WORK + recheck_work);
+    assert!(b.work_ledger_identity_v1() == ledger);
+    drop(inputs);
+    b.release_storage(retained).unwrap();
+    assert_eq!(b.storage(), floor);
+    drop((p, m));
+    b.release_storage(Inputs::INPUT_STORAGE).unwrap();
+    assert_eq!(b.storage(), 19);
+}
+
+#[test]
 fn native_consumer_refuses_mixed_families_and_wrong_policy_without_fallback() {
     for mode in [
         "wrong-policy",
         "legacy-manifest",
         "legacy-policy",
+        "other-policy",
+        "other-manifest",
+        "other-pair",
         "corrupt",
     ] {
         let (p, m) = sources(mode);
@@ -182,13 +247,34 @@ fn native_consumer_refuses_mixed_families_and_wrong_policy_without_fallback() {
         let mut w = Work::new(TOTAL_WORK);
         let mut b = Budget::new(&mut w, 1_000_000);
         b.reserve_storage(Inputs::INPUT_STORAGE).unwrap();
+        let ledger = b.work_ledger_identity_v1();
         let error = Inputs::read_at(p.as_raw_fd(), m.as_raw_fd(), &mut b).unwrap_err();
-        if matches!(mode, "wrong-policy" | "legacy-manifest") {
-            assert!(matches!(error, InputError::PolicyMismatch));
-        } else {
-            assert!(matches!(error, InputError::Capability(_)));
+        match mode {
+            "wrong-policy" | "legacy-manifest" | "other-manifest" => {
+                assert!(matches!(error, InputError::PolicyMismatch));
+                assert_eq!(b.work(), TOTAL_WORK);
+            }
+            "legacy-policy" | "other-policy" | "other-pair" => {
+                let source = error.source().unwrap();
+                assert!(source.is::<CapabilityError>());
+                assert!(source.source().unwrap().is::<PolicyError>());
+                assert!(matches!(
+                    error,
+                    InputError::Capability(PolicyDecodeError(PolicyError::Framing(_)))
+                ));
+                assert_eq!(
+                    b.work(),
+                    ENTRY_WORK + PolicyCapability::IO_WORK + POLICY_WORK
+                );
+            }
+            "corrupt" => assert!(matches!(
+                error,
+                InputError::Capability(LaunchDecodeError(ManifestError::Framing(_)))
+            )),
+            _ => unreachable!(),
         }
         assert_eq!(b.storage(), Inputs::INPUT_STORAGE);
+        assert!(b.work_ledger_identity_v1() == ledger);
     }
 }
 
@@ -204,8 +290,11 @@ fn retained_inputs_survive_source_closure_and_revalidate_at_exact_boundaries() {
     drop((p, m));
     let work = ENTRY_WORK + PolicyCapability::IO_WORK + LaunchCapability::IO_WORK + MANIFEST_WORK;
     let floor = inputs.retained_storage();
-    let peak=floor+Inputs::FRAME_STORAGE+PolicyCapability::IO_STORAGE.max(LaunchCapability::IO_STORAGE)
-        .max(fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_STORAGE_V2);
+    let peak = floor
+        + Inputs::FRAME_STORAGE
+        + PolicyCapability::IO_STORAGE
+            .max(LaunchCapability::IO_STORAGE)
+            .max(MANIFEST_STORAGE);
     for mode in 0..4 {
         let mut w = Work::new(work - usize::from(mode == 0));
         let mut b = Budget::new(&mut w, peak - usize::from(mode == 1));
@@ -275,10 +364,15 @@ fn fixed_native_slots_are_admitted_after_a_real_process_exec() {
         "wrong-policy",
         "legacy-manifest",
         "legacy-policy",
+        "other-policy",
+        "other-manifest",
+        "other-pair",
         "corrupt",
         "short-work",
         "short-storage",
         "cloexec",
+        "policy-mode-change",
+        "manifest-mode-change",
     ] {
         let (p, m) = sources(mode);
         let p = rustix::io::fcntl_dupfd_cloexec(&p, 32).unwrap();
@@ -287,7 +381,7 @@ fn fixed_native_slots_are_admitted_after_a_real_process_exec() {
         command
             .args([
                 "--exact",
-                "launch_inputs_v2::tests::inherited_slot_child",
+                CHILD_TEST,
                 "--ignored",
                 "--nocapture",
                 "--test-threads=1",
@@ -338,6 +432,7 @@ fn fixed_native_slots_are_admitted_after_a_real_process_exec() {
 #[test]
 #[ignore = "isolated fixed-slot subprocess helper; exercised by the parent test"]
 fn inherited_slot_child() {
+    assert_eq!((POLICY_FD, LAUNCH_FD), (6, 8));
     let mode = std::env::var("FE2O3_TEST_NATIVE_LAUNCH_CASE").unwrap();
     for fd in [POLICY_FD, LAUNCH_FD] {
         // SAFETY: F_GETFD checks a scalar descriptor without taking ownership.
@@ -380,7 +475,7 @@ fn inherited_slot_child() {
             Inputs::INPUT_STORAGE
                 + Inputs::FRAME_STORAGE
                 + PolicyCapability::IO_STORAGE
-                + fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_ISSUER_POLICY_STORAGE_V2
+                + POLICY_STORAGE
                 - 1
         } else {
             1_000_000
@@ -388,19 +483,36 @@ fn inherited_slot_child() {
     );
     b.reserve_storage(Inputs::INPUT_STORAGE).unwrap();
     let result = Inputs::from_inherited(&mut b);
-    if matches!(mode.as_str(), "valid" | "consistent-other") {
+    if matches!(
+        mode.as_str(),
+        "valid" | "consistent-other" | "policy-mode-change" | "manifest-mode-change"
+    ) {
         let (inputs, charge) = result.unwrap();
         b.reserve_storage(charge.additional_storage()).unwrap();
+        let generation = if mode == "consistent-other" { 8 } else { 7 };
         assert_eq!(
             inputs.policy().canonical_bytes(),
-            policy(if mode == "valid" { 7 } else { 8 }).canonical_bytes()
+            policy(generation).canonical_bytes()
         );
         assert_eq!(
             inputs.manifest().canonical_bytes(),
-            manifest(&policy(if mode == "valid" { 7 } else { 8 })).canonical_bytes()
+            manifest(&policy(generation)).canonical_bytes()
         );
         assert_eq!(references(), 4);
         inputs.revalidate(&mut b).unwrap();
+        if matches!(mode.as_str(), "policy-mode-change" | "manifest-mode-change") {
+            let changed = if mode == "policy-mode-change" { p } else { m };
+            rustix::fs::fchmod(changed, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR).unwrap();
+            let before = b.storage();
+            assert!(matches!(
+                inputs.revalidate(&mut b),
+                Err(InputError::Capability(CapabilityError::Rejected(_)))
+            ));
+            assert_eq!(b.storage(), before);
+            assert_eq!(references(), 4);
+            rustix::fs::fchmod(changed, rustix::fs::Mode::RUSR).unwrap();
+            inputs.revalidate(&mut b).unwrap();
+        }
         let retained = inputs.retained_storage();
         drop(inputs);
         b.release_storage(retained).unwrap();
