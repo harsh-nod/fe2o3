@@ -61,6 +61,22 @@ fn immutable_local_array_candidates_v1(
         .collect()
 }
 
+fn fixed_guard_operand_scan_v1(
+    proof: &mut SemanticAssertProofsV1<'_>,
+    operand: &SemanticOperandV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if proof.resources.is_strict() {
+        let projections = match operand {
+            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+                place.projections().len()
+            }
+            SemanticOperandV1::Constant(_) => 0,
+        };
+        proof.resources.extra_work(projections)?;
+    }
+    Ok(())
+}
+
 fn authenticate_fixed_array_guard_v1(
     proof: &mut SemanticAssertProofsV1<'_>,
     guard: usize,
@@ -75,8 +91,10 @@ fn authenticate_fixed_array_guard_v1(
         )
     };
     proof.charge(1)?;
+    fixed_guard_operand_scan_v1(proof, index)?;
     let index_local = simple_operand_local(index).ok_or_else(refuse)?;
     let index_slot = index_local.index() as usize;
+    fixed_guard_operand_scan_v1(proof, condition)?;
     let condition_local = simple_operand_local(condition).ok_or_else(refuse)?;
     let condition_slot = condition_local.index() as usize;
     let bits = unsigned_index_bits_v1(proof.types, index.ty()).ok_or_else(refuse)?;
@@ -123,10 +141,29 @@ fn authenticate_fixed_array_guard_v1(
     else {
         return Err(refuse());
     };
-    if !matches!(assignment.value().kind(), SemanticRvalueKindV1::Binary {
-        operation: SemanticBinaryOpV1::LessThan, left, right,
-    } if left == index && right == bound)
-    {
+    let exact_comparison = if proof.resources.is_strict() {
+        match assignment.value().kind() {
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::LessThan,
+                left,
+                right,
+            } => {
+                proof.resources.charge_operand_comparison(left, index)?;
+                if left != index {
+                    false
+                } else {
+                    proof.resources.charge_operand_comparison(right, bound)?;
+                    right == bound
+                }
+            }
+            _ => false,
+        }
+    } else {
+        matches!(assignment.value().kind(), SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan, left, right,
+        } if left == index && right == bound)
+    };
+    if !exact_comparison {
         return Err(refuse());
     }
     if proof.definition_counts.get(index_slot) == Some(&0) && declaration.role().is_entry_argument()

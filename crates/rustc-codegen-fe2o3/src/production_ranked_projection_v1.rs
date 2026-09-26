@@ -60,6 +60,11 @@ mod local_use_frames;
 #[cfg(test)]
 #[path = "production_ranked_projection_v1/bf16_local_use_source_oracle_v1_tests.rs"]
 mod local_use_source_oracle;
+// Retained bounds-source DATA, not completed checks or an actual factory loan.
+#[allow(dead_code)]
+mod root_bounds_extent_preparation_v1;
+#[allow(dead_code)]
+mod root_bounds_source_scan_v1;
 #[allow(dead_code)]
 mod root_local_contracts_v1;
 // Source-use DATA and paid site components, not a complete nominal stream.
@@ -4742,95 +4747,14 @@ fn project_rust_bounds_checks_with_ordinary_v1(
     let mut definitions = vec![BoundsLocalDefinitionV1::default(); function.locals().len()];
     let mut argument_count = first_argument;
     let mut predecessors = vec![Vec::new(); function.blocks().len()];
-    for (block_index, block) in function.blocks().iter().enumerate() {
-        for statement in block.statements() {
-            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                continue;
-            };
-            if !assignment.destination().projections().is_empty() {
-                continue;
-            }
-            let definition = definitions
-                .get_mut(assignment.destination().local().index() as usize)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a Rust bounds-check definition outside the semantic local table",
-                ))?;
-            definition.count = definition.count.saturating_add(1);
-            definition.value = Some(assignment.value());
-            definition.length_source = match assignment.value().kind() {
-                SemanticRvalueKindV1::Length(place) => Some(
-                    if place.projections().iter().any(|projection| {
-                        matches!(projection.kind(), SemanticProjectionKindV1::Field(_))
-                    }) {
-                        ProjectedBoundsExtentSourceV1::CanonicalSlice
-                    } else {
-                        ProjectedBoundsExtentSourceV1::Slice(place.local())
-                    },
-                ),
-                SemanticRvalueKindV1::Unary {
-                    operation: SemanticUnaryOpV1::PointerMetadata,
-                    operand,
-                } => match operand {
-                    SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
-                        Some(if place.projections().is_empty() {
-                            ProjectedBoundsExtentSourceV1::Slice(place.local())
-                        } else {
-                            ProjectedBoundsExtentSourceV1::CanonicalSlice
-                        })
-                    }
-                    SemanticOperandV1::Constant(_) => None,
-                },
-                _ => None,
-            };
-        }
-        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
-            && let Some(destination) = call.destination()
-            && destination.place().projections().is_empty()
-        {
-            let definition = definitions
-                .get_mut(destination.place().local().index() as usize)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a Rust bounds-check call result outside the semantic local table",
-                ))?;
-            definition.count = definition.count.saturating_add(1);
-            definition.length_source = None;
-            definition.value = None;
-        }
-        block
-            .terminator()
-            .kind()
-            .try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
-                let target = edge.target().index() as usize;
-                let target_predecessors = predecessors.get_mut(target).ok_or(
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "a Rust bounds-check CFG edge outside the semantic block table",
-                    ),
-                )?;
-                target_predecessors.push(block_index);
-                Ok(())
-            })?;
-    }
+    root_bounds_source_scan_v1::scan_legacy_v1(function, &mut definitions, &mut predecessors)?;
 
-    if !ordinary_indices.is_empty() && ordinary_indices.len() != function.locals().len() {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "ordinary intrinsic index facts do not match the semantic local table",
-        ));
-    }
-    let mut local_values = if known_indices.is_empty() {
-        vec![None; function.locals().len()]
-    } else {
-        if known_indices.len() != function.locals().len() {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "intrinsic index facts do not match the semantic local table",
-            ));
-        }
-        known_indices
-            .iter()
-            .map(|index| index.map(|index| index.value))
-            .collect()
-    };
-    // Separate MIR `Len` temporaries for one stable slice describe one ranked extent.
-    let mut slice_extents = vec![None; function.locals().len()];
+    let (mut local_values, mut slice_extents) =
+        root_bounds_source_scan_v1::initial_values_legacy_v1(
+            function,
+            known_indices,
+            ordinary_indices,
+        )?;
     let mut checks = Vec::new();
     let mut fixed_proofs = None;
     for (block_index, block) in function.blocks().iter().enumerate() {
@@ -24488,6 +24412,8 @@ mod tests {
     }
     include!("production_ranked_projection_v1/projection_02_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");
+    include!("production_ranked_projection_v1/root_bounds_source_scan_v1_tests.rs");
+    include!("production_ranked_projection_v1/root_bounds_extent_preparation_v1_tests.rs");
     include!("production_ranked_projection_v1/aggregate_value_projection_v2_tests.rs");
     mod gfx942_inline_value_projection_v30_tests {
         use super::*;
@@ -24499,6 +24425,7 @@ mod tests {
     include!("production_ranked_projection_v1/write_only_value_projection_v2_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");
     include!("production_ranked_projection_v1/dynamic_local_array_tests.rs");
+    include!("production_ranked_projection_v1/fixed_guard_preparation_v1_tests.rs");
     include!("production_ranked_projection_v1/slice_extent_projection_v1_tests.rs");
     include!("production_ranked_projection_v1/projection_05_tests.rs");
     include!("production_ranked_projection_v1/projection_06_tests.rs");

@@ -533,3 +533,480 @@ pub(super) fn analyze_assertion_fixed_probe_for_test_v1(
     drop(proof);
     Ok((result, logical_work))
 }
+
+// Eager fixed-guard COMPONENT only. The B2b lazy joint allocator/proof session
+// remains separate: no B0/B1 reborrow or raw mutable proof/resource is exposed.
+type FixedGuardLedgerV1 = (
+    usize,
+    fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+);
+type FixedGuardDataV1 = (SemanticLocalIdV1, u64);
+type FixedGuardErrorV1 = ProductionRankedProjectionErrorV1;
+#[derive(Clone, Copy)]
+struct FixedGuardInputsV1<'a, 'r> {
+    types: &'a [SemanticTypeDeclV1],
+    function: &'a SemanticFunctionDeclV1,
+    graph: &'a ProjectedLoopCfgV1,
+    rich: &'a super::bf16_nominal_source_preparation_v1::RichNominalSourceTablesV1<'r>,
+}
+pub(super) struct PreparedFixedGuardSessionV1<'a> {
+    proof: SemanticAssertProofsV1<'a>,
+    original_ledger: FixedGuardLedgerV1,
+    failed: bool,
+}
+fn fixed_source_refusal_v1() -> FixedGuardErrorV1 {
+    FixedGuardErrorV1::Unsupported(
+        "prepared fixed guard query differs from its original source loan",
+    )
+}
+fn same_fixed_slice_v1<T>(left: &[T], right: &[T]) -> bool {
+    std::ptr::eq(left.as_ptr(), right.as_ptr()) && left.len() == right.len()
+}
+impl PreparedFixedGuardSessionV1<'_> {
+    fn require_inputs(
+        &mut self,
+        input: FixedGuardInputsV1<'_, '_>,
+    ) -> Result<(), FixedGuardErrorV1> {
+        self.proof.resources.extra_work(1)?;
+        let rich = input.rich;
+        if !std::ptr::eq(self.proof.function, input.function)
+            || !same_fixed_slice_v1(self.proof.types, input.types)
+            || !std::ptr::eq(&*self.proof.graph, input.graph)
+            || self.proof.graph.entry != input.function.entry().index() as usize
+            || !std::ptr::eq(input.function, rich.function())
+            || !rich.belongs_to_original_ledger_v1(self.original_ledger)
+            || !same_fixed_slice_v1(&self.proof.definition_counts, rich.scalar_counts())
+            || !same_fixed_slice_v1(&self.proof.block_definitions, rich.scalar_blocks())
+            || !same_fixed_slice_v1(&self.proof.address_escaped, rich.address_escaped())
+            || !same_fixed_slice_v1(&self.proof.assignments, rich.scalar_assignments())
+        {
+            return Err(fixed_source_refusal_v1());
+        }
+        Ok(())
+    }
+    fn query_inputs(
+        &mut self,
+        input: FixedGuardInputsV1<'_, '_>,
+        guard: usize,
+    ) -> Result<FixedGuardDataV1, FixedGuardErrorV1> {
+        if self.failed || self.proof.resources.is_denied() {
+            self.failed = true;
+            return Err(assertion_resource_accounting_v1());
+        }
+        let result = self
+            .require_inputs(input)
+            .and_then(|()| authenticate_selected_fixed_guard_v1(&mut self.proof, guard));
+        if result.is_err() {
+            self.failed = true;
+        }
+        if self.proof.resources.is_denied() {
+            self.failed = true;
+            if result.is_ok() {
+                return Err(assertion_resource_accounting_v1());
+            }
+        }
+        result
+    }
+    /// Returns the old helper's data only. Unique success predecessor/entry
+    /// checks still belong AFTER authentication in the surrounding bounds loop.
+    pub(super) fn authenticate(
+        &mut self,
+        view: &NominalRootCfgSourceV1<'_>,
+        guard: usize,
+    ) -> Result<FixedGuardDataV1, FixedGuardErrorV1> {
+        self.query_inputs(
+            FixedGuardInputsV1 {
+                types: view.types(),
+                function: view.function(),
+                graph: view.graph(),
+                rich: view.source_tables().rich(),
+            },
+            guard,
+        )
+    }
+}
+fn new_fixed_guard_session_v1<'a>(
+    input: FixedGuardInputsV1<'a, '_>,
+    resources: &'a mut PreparationResourcesV1<'_, '_>,
+) -> Result<PreparedFixedGuardSessionV1<'a>, FixedGuardErrorV1> {
+    // Capture only immutable equality data before creating the ONE exclusive
+    // strict handle. No new adapter, Budget or owned-counter authority is made.
+    let ledger = resources.original_ledger_v1();
+    let mut strict = AssertionResourcesV1::strict(resources)?;
+    reserve_fixed_guard_frames_v1(&mut strict)?;
+    strict.extra_work(1)?;
+    let ledger = ledger.ok_or_else(assertion_resource_accounting_v1)?;
+    if !std::ptr::eq(input.function, input.rich.function())
+        || !input.rich.belongs_to_original_ledger_v1(ledger)
+    {
+        return Err(fixed_source_refusal_v1());
+    }
+    reserve_assertion_evaluator_frames_v1(&mut strict)?;
+    let proof = SemanticAssertProofsV1::new_borrowed_assertion_tables_v1(
+        input.types,
+        input.function,
+        input.graph,
+        input.rich.scalar_counts(),
+        input.rich.scalar_blocks(),
+        input.rich.address_escaped(),
+        input.rich.scalar_assignments(),
+        strict,
+    )?;
+    Ok(PreparedFixedGuardSessionV1 {
+        proof,
+        original_ledger: ledger,
+        failed: false,
+    })
+}
+pub(super) fn prepare_fixed_guard_session_v1<'a>(
+    view: &'a NominalRootCfgSourceV1<'_>,
+    resources: &'a mut PreparationResourcesV1<'_, '_>,
+) -> Result<PreparedFixedGuardSessionV1<'a>, FixedGuardErrorV1> {
+    new_fixed_guard_session_v1(
+        FixedGuardInputsV1 {
+            types: view.types(),
+            function: view.function(),
+            graph: view.graph(),
+            rich: view.source_tables().rich(),
+        },
+        resources,
+    )
+}
+fn authenticate_selected_fixed_guard_v1(
+    proof: &mut SemanticAssertProofsV1<'_>,
+    guard: usize,
+) -> Result<FixedGuardDataV1, FixedGuardErrorV1> {
+    // Read only the actual source. No detached condition/index/bound parameters.
+    let function = proof.function;
+    let block = function
+        .blocks()
+        .get(guard)
+        .ok_or(FixedGuardErrorV1::Unsupported(
+            "prepared fixed guard coordinate is outside its original function",
+        ))?;
+    let SemanticTerminatorKindV1::Assert {
+        condition,
+        expected,
+        message: SemanticAssertMessageV1::BoundsCheck { length, index },
+        target,
+        unwind,
+    } = block.terminator().kind()
+    else {
+        return Err(FixedGuardErrorV1::Unsupported(
+            "prepared fixed guard query requires a source BoundsCheck Assert",
+        ));
+    };
+    if !*expected || !matches!(unwind, SemanticUnwindActionV1::Unreachable) {
+        return Err(FixedGuardErrorV1::Incomplete(
+            "a Rust bounds check without the canonical success/unreachable shape",
+        ));
+    }
+    authenticate_fixed_array_guard_v1(
+        proof,
+        guard,
+        target.target().index() as usize,
+        condition,
+        index,
+        length,
+    )
+}
+
+// These are additional fixed-helper vertices, not an allowance hidden in the
+// old general assertion roster. Existing dominance/cache/queue callees retain
+// their separately admitted full evaluator roster and primitive contracts.
+fn reserve_fixed_guard_frames_v1<'a>(
+    resources: &mut AssertionResourcesV1<'a>,
+) -> Result<(), FixedGuardErrorV1> {
+    use std::mem::size_of;
+    // prepare_fixed_guard_session_v1: source-loan factory entry/transfer.
+    resources.reserve_frame::<PreparedFixedGuardSessionV1<'a>>(size_of::<(
+        &NominalRootCfgSourceV1<'_>,
+        &mut PreparationResourcesV1<'_, '_>,
+        FixedGuardInputsV1<'_, '_>,
+    )>())?;
+    // new_fixed_guard_session_v1: own arguments, strict handle, copied identity
+    // and the borrowed proof constructor result coexist here.
+    resources.reserve_frame::<PreparedFixedGuardSessionV1<'a>>(size_of::<(
+        FixedGuardInputsV1<'_, '_>,
+        &mut PreparationResourcesV1<'_, '_>,
+        Option<FixedGuardLedgerV1>,
+        AssertionResourcesV1<'_>,
+        FixedGuardLedgerV1,
+        Result<SemanticAssertProofsV1<'_>, FixedGuardErrorV1>,
+    )>())?;
+    // PreparedFixedGuardSession::authenticate.
+    resources.reserve_frame::<FixedGuardDataV1>(size_of::<(
+        &mut PreparedFixedGuardSessionV1<'_>,
+        &NominalRootCfgSourceV1<'_>,
+        usize,
+        FixedGuardInputsV1<'_, '_>,
+    )>())?;
+    // query_inputs, including its retained result and closed continuation capture.
+    resources.reserve_frame::<FixedGuardDataV1>(size_of::<(
+        &mut PreparedFixedGuardSessionV1<'_>,
+        FixedGuardInputsV1<'_, '_>,
+        usize,
+        Result<FixedGuardDataV1, FixedGuardErrorV1>,
+        &mut SemanticAssertProofsV1<'_>,
+        bool,
+    )>())?;
+    // require_inputs: every loan stays live through exact slice comparisons.
+    resources.reserve_frame::<()>(size_of::<(
+        &mut PreparedFixedGuardSessionV1<'_>,
+        FixedGuardInputsV1<'_, '_>,
+        &super::bf16_nominal_source_preparation_v1::RichNominalSourceTablesV1<'_>,
+        FixedGuardLedgerV1,
+        usize,
+        bool,
+    )>())?;
+    // same_fixed_slice: widest borrowed slice representation is two words;
+    // pointer/length scalars are explicit, never row payload copies.
+    resources.reserve_frame::<bool>(size_of::<(
+        &[Option<ScalarAssignmentSiteV1>],
+        &[Option<ScalarAssignmentSiteV1>],
+        *const Option<ScalarAssignmentSiteV1>,
+        *const Option<ScalarAssignmentSiteV1>,
+        usize,
+        usize,
+        bool,
+    )>())?;
+    // authenticate_selected_fixed_guard_v1: source Assert selector.
+    resources.reserve_frame::<FixedGuardDataV1>(size_of::<(
+        &mut SemanticAssertProofsV1<'_>,
+        usize,
+        &SemanticFunctionDeclV1,
+        Option<&fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1>,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1,
+        &SemanticTerminatorKindV1,
+        &SemanticAssertMessageV1,
+        &SemanticOperandV1,
+        &bool,
+        &SemanticOperandV1,
+        &SemanticOperandV1,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticControlFlowEdgeV1,
+        &SemanticUnwindActionV1,
+        usize,
+    )>())?;
+    // authenticate_fixed_array_guard_v1: original live scalar/type/assignment
+    // and exact-comparison state, plus all six input arguments.
+    resources.reserve_frame::<FixedGuardDataV1>(size_of::<(
+        &mut SemanticAssertProofsV1<'_>,
+        usize,
+        usize,
+        &SemanticOperandV1,
+        &SemanticOperandV1,
+        &SemanticOperandV1,
+        Option<SemanticLocalIdV1>,
+        SemanticLocalIdV1,
+        usize,
+        Option<SemanticLocalIdV1>,
+        SemanticLocalIdV1,
+        usize,
+        Option<u16>,
+        u16,
+        Option<&fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1>,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1,
+        SemanticTypeIdV1,
+        SemanticTypeIdV1,
+        Option<&bool>,
+        Option<&bool>,
+        Option<&u8>,
+        Option<&SemanticTypeDeclV1>,
+        Option<&SemanticTypeShapeV1>,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticConstantV1,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticScalarValueV1,
+        u8,
+        u16,
+        u128,
+        u128,
+        u64,
+        Result<u64, std::num::TryFromIntError>,
+        Option<&Option<ScalarAssignmentSiteV1>>,
+        Option<Option<ScalarAssignmentSiteV1>>,
+        Option<ScalarAssignmentSiteV1>,
+        ScalarAssignmentSiteV1,
+        &SemanticStatementKindV1,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1,
+        &SemanticRvalueKindV1,
+        &SemanticOperandV1,
+        &SemanticOperandV1,
+        bool,
+        Option<&u8>,
+        Option<&Option<ScalarAssignmentSiteV1>>,
+        Option<Option<ScalarAssignmentSiteV1>>,
+        Option<ScalarAssignmentSiteV1>,
+        ScalarAssignmentSiteV1,
+        Result<bool, FixedGuardErrorV1>,
+        Result<bool, FixedGuardErrorV1>,
+    )>())?;
+    // unsigned_index_bits_v1.
+    resources.reserve_frame::<Option<u16>>(size_of::<(
+        &[SemanticTypeDeclV1],
+        SemanticTypeIdV1,
+        usize,
+        Option<&SemanticTypeDeclV1>,
+        &SemanticTypeDeclV1,
+        &SemanticTypeShapeV1,
+        &u16,
+        bool,
+    )>())?;
+    // fixed_guard_operand_scan_v1 paid precharge before original operand helper.
+    resources.reserve_frame::<()>(size_of::<(
+        &mut SemanticAssertProofsV1<'_>,
+        &SemanticOperandV1,
+        &SemanticPlaceV1,
+        usize,
+    )>())?;
+    // simple_operand_local.
+    resources.reserve_frame::<Option<SemanticLocalIdV1>>(size_of::<(
+        &SemanticOperandV1,
+        Option<&SemanticPlaceV1>,
+        &SemanticPlaceV1,
+        SemanticLocalIdV1,
+        bool,
+    )>())?;
+    // raw_operand_place.
+    resources.reserve_frame::<Option<&SemanticPlaceV1>>(size_of::<(
+        &SemanticOperandV1,
+        &SemanticPlaceV1,
+    )>())?;
+    // transparent_operand_place retains its own operand and raw return.
+    resources.reserve_frame::<Option<&SemanticPlaceV1>>(size_of::<(
+        &SemanticOperandV1,
+        Option<&SemanticPlaceV1>,
+        &SemanticPlaceV1,
+    )>())?;
+    // transparent_place's complete scan/predicate iterator state.
+    resources.reserve_frame::<Option<&SemanticPlaceV1>>(size_of::<(
+        &SemanticPlaceV1,
+        &[fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1],
+        std::slice::Iter<'static, fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1>,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1,
+        SemanticProjectionKindV1,
+        bool,
+        Option<&SemanticPlaceV1>,
+    )>())?;
+    // fixed_source_refusal_v1 and fixed helper's closed refusal construction.
+    resources.reserve_frame::<FixedGuardErrorV1>(size_of::<(&'static str, FixedGuardErrorV1)>())?;
+    resources.reserve_frame::<FixedGuardErrorV1>(size_of::<(&'static str, FixedGuardErrorV1)>())?;
+    // This nonrecursive roster and each reserve_frame Result transfer.
+    resources.reserve_frame::<()>(size_of::<(
+        &mut AssertionResourcesV1<'_>,
+        usize,
+        Result<(), FixedGuardErrorV1>,
+    )>())?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn fixed_guard_session_for_test_v1<'a>(
+    types: &'a [SemanticTypeDeclV1],
+    function: &'a SemanticFunctionDeclV1,
+    graph: &'a ProjectedLoopCfgV1,
+    rich: &'a super::bf16_nominal_source_preparation_v1::RichNominalSourceTablesV1<'_>,
+    resources: &'a mut PreparationResourcesV1<'_, '_>,
+) -> Result<PreparedFixedGuardSessionV1<'a>, FixedGuardErrorV1> {
+    {
+        let mut entry = AssertionResourcesV1::strict(resources)?;
+        entry.reserve_frame::<PreparedFixedGuardSessionV1<'a>>(std::mem::size_of::<(
+            &[SemanticTypeDeclV1],
+            &SemanticFunctionDeclV1,
+            &ProjectedLoopCfgV1,
+            &super::bf16_nominal_source_preparation_v1::RichNominalSourceTablesV1<'_>,
+            &mut PreparationResourcesV1<'_, '_>,
+            FixedGuardInputsV1<'_, '_>,
+        )>())?;
+    }
+    new_fixed_guard_session_v1(
+        FixedGuardInputsV1 {
+            types,
+            function,
+            graph,
+            rich,
+        },
+        resources,
+    )
+}
+#[cfg(test)]
+impl PreparedFixedGuardSessionV1<'_> {
+    pub(super) fn query_for_test_v1(
+        &mut self,
+        types: &[SemanticTypeDeclV1],
+        function: &SemanticFunctionDeclV1,
+        graph: &ProjectedLoopCfgV1,
+        rich: &super::bf16_nominal_source_preparation_v1::RichNominalSourceTablesV1<'_>,
+        guard: usize,
+    ) -> Result<FixedGuardDataV1, FixedGuardErrorV1> {
+        if let Err(error) =
+            self.proof
+                .resources
+                .reserve_frame::<FixedGuardDataV1>(std::mem::size_of::<(
+                    &mut PreparedFixedGuardSessionV1<'_>,
+                    &[SemanticTypeDeclV1],
+                    &SemanticFunctionDeclV1,
+                    &ProjectedLoopCfgV1,
+                    &super::bf16_nominal_source_preparation_v1::RichNominalSourceTablesV1<'_>,
+                    usize,
+                    FixedGuardInputsV1<'_, '_>,
+                )>())
+        {
+            self.failed = true;
+            return Err(error);
+        }
+        self.query_inputs(
+            FixedGuardInputsV1 {
+                types,
+                function,
+                graph,
+                rich,
+            },
+            guard,
+        )
+    }
+    pub(super) fn state_for_test_v1(&self) -> (usize, bool, usize) {
+        (self.proof.work, self.failed, self.proof.dominance.len())
+    }
+}
+/// Raw inventory fixtures ONLY; no manufactured NominalRootCfgSource or authority.
+/// This probes the same selected-source helper and frames for hostility that
+/// an admitted source's syntax/type checks can otherwise reject before entry.
+#[cfg(test)]
+pub(super) fn fixed_guard_raw_probe_for_test_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    graph: &ProjectedLoopCfgV1,
+    inventory: &AssertionDefinitionInventoryV1,
+    guard: usize,
+    resources: &mut PreparationResourcesV1<'_, '_>,
+) -> Result<(FixedGuardDataV1, usize), FixedGuardErrorV1> {
+    let mut strict = AssertionResourcesV1::strict(resources)?;
+    strict.reserve_frame::<(FixedGuardDataV1, usize)>(std::mem::size_of::<(
+        &[SemanticTypeDeclV1],
+        &SemanticFunctionDeclV1,
+        &ProjectedLoopCfgV1,
+        &AssertionDefinitionInventoryV1,
+        usize,
+        &mut PreparationResourcesV1<'_, '_>,
+        AssertionResourcesV1<'_>,
+        Result<SemanticAssertProofsV1<'_>, FixedGuardErrorV1>,
+    )>())?;
+    reserve_fixed_guard_frames_v1(&mut strict)?;
+    reserve_assertion_evaluator_frames_v1(&mut strict)?;
+    let mut proof = SemanticAssertProofsV1::new_borrowed_assertion_tables_v1(
+        types,
+        function,
+        graph,
+        &inventory.counts,
+        &inventory.blocks,
+        &inventory.address_escaped,
+        &inventory.assignments,
+        strict,
+    )?;
+    let result = authenticate_selected_fixed_guard_v1(&mut proof, guard)?;
+    if proof.resources.is_denied() {
+        return Err(assertion_resource_accounting_v1());
+    }
+    let work = proof.work;
+    drop(proof);
+    Ok((result, work))
+}

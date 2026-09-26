@@ -5,6 +5,18 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Source-bound bounds components — 2026-09-26
+
+The [bounds component checkpoint](bf16-bounds-components-qualification-20260926.md)
+adds shared source scanning, extent preparation and source-selected fixed-array
+guard sessions. All 85 new component controls passed; full regression passed
+331 model and 2,865 backend tests (189 ignored), builds and 83 retained JavaScript
+controls. All 38 normal observation bodies and 52 artifacts remain unchanged.
+Authentic argument-producer continuation, lazy joint proof/resource ownership
+and actual bounds-factory admission remain unfinished. Private debugger history
+and current-consumer checks passed, but full native execution/capture is pending.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Actual source-use observers and lifetime accounting — 2026-09-26
 
 The [actual-source checkpoint](bf16-actual-source-use-qualification-20260926.md)
