@@ -4,6 +4,11 @@ This is the native contract prerequisite for Context pending-producer reads,
 not their admission or A1/A2 acceptance. It adds an explicit backend SPI without
 changing legacy peer-copy, ordered-copy or Worker contracts.
 
+The implementation details below describe the native XGMI backend. The separate
+[cooperative router profile](runtime-directed-cooperative-peer-v1.md) implements
+the same SPI with staged child SDMA, embedded provenance and selected-owner
+error attribution; it does not use XGMI batching or provisional roots.
+
 ## Exact Identity
 
 `RuntimeDirectedScalarPeerCopyBackendV1` accepts an untrusted

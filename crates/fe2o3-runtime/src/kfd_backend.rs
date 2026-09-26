@@ -93,6 +93,7 @@ mod compute_dispatch;
 mod compute_state;
 mod cooperative_sdma;
 use cooperative_sdma::CooperativeSdmaLeafV1;
+mod cooperative_directed;
 mod native_reconcile;
 use native_reconcile::NativeReconciliationV1;
 mod scale_capacity;
@@ -7149,6 +7150,7 @@ enum CooperativeCopyPhaseV1 {
 
 #[derive(Debug)]
 struct CooperativeCopySubmissionV1 {
+    directed: Option<cooperative_directed::Root>,
     stream: u64,
     prior_stream_submission: Option<u64>,
     source: RoutedHandleV1,
@@ -8715,6 +8717,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     ) -> Result<Option<u64>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let mut current = submission;
         for _ in 0..MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
+            self.check_directed_if_present_v1(current)?;
             let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = self.submissions.get(&current)
             else {
                 return Ok(None);
@@ -8785,9 +8788,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     ///
     /// Submission and public observers never drive these leaves. Authoritative
     /// DeviceLocal backing uses private child SDMA copies in 64-KiB chunks;
-    /// scratch and DMA custody survive every Pending observation. Native-dirty
-    /// reconciliation still uses the synchronous child host-transfer fallback,
-    /// so this is not the directed SPI's strict no-wait progress contract.
+    /// scratch and DMA custody survive every Pending observation. This ordinary
+    /// entry point also propagates a failed ancestor through its selected path.
     fn progress_cooperative_copy(
         &mut self,
         submission: u64,
@@ -8798,7 +8800,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         if let Some(oldest) = self.oldest_pending_cooperative_dependency(submission)?
             && oldest != submission
         {
-            if let Err(failure) = self.progress_cooperative_copy(oldest) {
+            if let Err(failure) = self.progress_cooperative_copy_step_v1(oldest) {
                 if matches!(failure, RuntimeBackendFailureV1::Quiescent(_)) {
                     // Settle the complete selected path, including intermediate
                     // copies that would otherwise be stranded behind a failed tail.
@@ -8808,6 +8810,46 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
             return Ok(BackendPollV1::Pending);
         }
+        self.progress_cooperative_copy_step_v1(submission)
+    }
+
+    fn progress_cooperative_copy_step_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.check_directed_if_present_v1(submission)?;
+        let endpoint = match self.submissions.get(&submission) {
+            Some(RoutedSubmissionV1::CooperativeCopy(copy)) => match copy.phase {
+                CooperativeCopyPhaseV1::Read => Some(copy.source.child),
+                CooperativeCopyPhaseV1::Write => Some(copy.destination.child),
+                _ => None,
+            },
+            _ => None,
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.progress_cooperative_copy_step_inner_v1(submission)
+        }));
+        match result {
+            Ok(result @ Err(RuntimeBackendFailureV1::Terminal(_))) => {
+                self.terminal = true;
+                result
+            }
+            Ok(result) => result,
+            Err(payload) => {
+                self.terminal = true;
+                sdma_host_write::resume_sdma_owner_panic_v1(payload, || {
+                    if let Some(child) = endpoint {
+                        self.children[child].poison_terminal_v1();
+                    }
+                })
+            }
+        }
+    }
+
+    fn progress_cooperative_copy_step_inner_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let phase = match self.submissions.get(&submission).ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -9016,6 +9058,25 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         dependencies: &[u64],
         require_distinct_devices: bool,
     ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.submit_cooperative_copy_profile_v1(
+            stream,
+            source,
+            destination,
+            dependencies,
+            require_distinct_devices,
+            None,
+        )
+    }
+
+    fn submit_cooperative_copy_profile_v1(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+        require_distinct_devices: bool,
+        mut directed: Option<cooperative_directed::Root>,
+    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
         self.require_submission_capacity_v1()?;
         let stream_route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
@@ -9075,6 +9136,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         }
         let len = usize::try_from(source.byte_len)
             .map_err(|_| KfdRuntimeBackendV1::capacity("copy staging size overflow"))?;
+        if directed.is_none() {
+            self.admit_directed_owner_capacity_v1([source_route, destination_route], false)?;
+        }
         let stream_tail = self.cooperative_stream_tails.get(&stream).copied();
         let mut dependency_submissions = Vec::new();
         dependency_submissions
@@ -9130,7 +9194,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         for dependency in &dependency_submissions {
             if let Some(RoutedSubmissionV1::CooperativeCopy(copy)) =
                 self.submissions.get(dependency)
-                && !copy.is_quiescent()
+                && (!copy.is_quiescent() || directed.is_some())
             {
                 dependency_depth = dependency_depth.max(
                     copy.dependency_depth.checked_add(1).ok_or_else(|| {
@@ -9154,7 +9218,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                         || matches!(
                             self.submissions.get(owner),
                             Some(RoutedSubmissionV1::CooperativeCopy(copy))
-                                if copy.stream == stream
+                                if copy.stream == stream || directed.as_ref().is_some_and(|root| root.shares_read_source(copy, source_route))
                         )
                 })
             });
@@ -9167,7 +9231,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                         || matches!(
                             self.submissions.get(owner),
                             Some(RoutedSubmissionV1::CooperativeCopy(copy))
-                                if copy.stream == stream
+                                if copy.stream == stream || directed.as_ref().is_some_and(|root| root.shares_read_source(copy, destination_route))
                         )
                 })
             });
@@ -9179,7 +9243,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         }
 
         for route in [source_route, destination_route] {
-            if !self.cooperative_native_custody_is_ordered_v1(route, stream, &dependency_set) {
+            if !self.cooperative_native_custody_is_ordered_v1(
+                route,
+                stream,
+                &dependency_set,
+                directed.as_ref(),
+            ) {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::Busy,
                     "cooperative copy allocation has unrelated native custody",
@@ -9313,6 +9382,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         })?;
         let id = self.next_id()?;
 
+        if let Some(root) = &mut directed {
+            root.submission = id;
+            root.depth = dependency_depth;
+            root.prior_stream_submission = stream_tail;
+        }
+
         if let Some(owners) = self.cooperative_allocation_owners.get_mut(&source_route) {
             owners.push(id);
         } else {
@@ -9357,6 +9432,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             RoutedSubmissionV1::CooperativeCopy(Box::write(
                 copy_shell,
                 CooperativeCopySubmissionV1 {
+                    directed,
                     stream,
                     prior_stream_submission: stream_tail,
                     source: source_route,
@@ -12117,6 +12193,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         submission: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        self.check_directed_if_present_v1(submission)?;
         let (native_route, native_stream, cooperative_stream, cooperative_quiescent) =
             match self.submissions.get(&submission).ok_or_else(|| {
                 KfdRuntimeBackendV1::rejected(
@@ -13346,6 +13423,7 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         submission: u64,
     ) -> Result<crate::BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        self.check_directed_if_present_v1(submission)?;
         let native_route = match self.submissions.get(&submission).ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -13504,6 +13582,7 @@ mod retained_release_tests;
 
 #[cfg(test)]
 mod tests {
+    mod cooperative_directed_tests;
     mod cooperative_sdma_tests;
     #[cfg(feature = "hardware-diagnostic")]
     mod directional_wait_diagnostic_tests;

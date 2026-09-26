@@ -48,11 +48,10 @@ formal-refinement, native-correctness or performance result.
 
 ## Pending Composition Work
 
-1. Add an explicit directed-copy contract to the multi-device router, which
-   currently exposes only ordinary cooperative copies. Finish resumable
-   native-dirty preparation on top of the authoritative-backing child SDMA leaves
-   described below. Then admit directed peer parents with their existing
-   success-gated state, preserving one graph-wide depth bound. Ordinary pending
+1. Build pending peer-to-compute admission on the now-implemented
+   [directed router profile](runtime-directed-cooperative-peer-v1.md) and resumable
+   native-dirty preparation described below. Admit directed peer parents with
+   their existing success-gated state, preserving one graph-wide depth bound. Ordinary pending
    peers need an explicit compatible completion contract before admission, not
    a relaxed flag check.
 2. Check each original Read binding against the exact peer destination interval
@@ -135,9 +134,10 @@ fault/panic and compute Pending guards. It does not manufacture DeviceLocal
 recycled readback authority. Native execution and positive composed-account
 qualification remain required.
 
-This removes the identified cooperative mapped-host reconciliation fallback,
-but is not yet an implementation or qualification of the directed-copy SPI.
+This removes the identified cooperative mapped-host reconciliation fallback.
+The subsequent [directed profile](runtime-directed-cooperative-peer-v1.md)
+adds the router SPI and retains exact ordered provenance through settlement.
 Allocation, copy-on-write and driver calls do not establish a hard latency
-bound. The directed scheduler's version/depth contract, pending peer-to-compute
+bound. Pending peer-to-compute
 admission, mixed-kind formal refinement and matched hardware measurements
 remain open.

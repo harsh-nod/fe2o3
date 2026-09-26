@@ -392,6 +392,141 @@ fn progress_leaf_v1(
 }
 
 impl KfdMultiDeviceRuntimeBackendV1 {
+    /// Select only a concrete private owner already past dependency gating.
+    /// This is one-hop resource progress, never a new dependency or recursive poll.
+    pub(super) fn directed_private_blocker_v1(
+        &mut self,
+        selected: u64,
+    ) -> Result<Option<u64>, Failure> {
+        let RoutedSubmissionV1::CooperativeCopy(copy) = &self.submissions[&selected] else {
+            unreachable!()
+        };
+        if !matches!(
+            copy.phase,
+            CooperativeCopyPhaseV1::Read | CooperativeCopyPhaseV1::Write
+        ) || copy.directed.is_none()
+            || copy.sdma_leaf.as_ref().is_some_and(|leaf| {
+                !matches!(leaf.step, LeafStepV1::Submit | LeafStepV1::Reconcile)
+                    || leaf.reconciliation.is_some()
+            })
+        {
+            return Ok(None);
+        }
+        let reading = copy.phase == CooperativeCopyPhaseV1::Read;
+        let endpoint = if reading {
+            copy.source
+        } else {
+            copy.destination
+        };
+        let child = &self.children[endpoint.child];
+        let reconciliation = child.native_reconciliation_blocker_v1(endpoint.local);
+        let custody = child.allocation_custody.get(&endpoint.local);
+        let dma = if reading && reconciliation.is_none() {
+            if let Some(custody) = custody {
+                if custody.owners.len() != 1
+                    || custody.owners[0].kind != RuntimeAllocationCustodyKindV1::Sdma
+                {
+                    return Err(self.directed_corruption_v1());
+                }
+                Some(custody.owners[0])
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if reconciliation.is_none() && dma.is_none() {
+            return Ok(None);
+        }
+        let target = reconciliation.map_or(endpoint, |(_, allocation, _)| RoutedHandleV1 {
+            child: endpoint.child,
+            local: allocation,
+        });
+        let Some(owners) = self.cooperative_allocation_owners.get(&target) else {
+            return Err(self.directed_corruption_v1());
+        };
+        // An unrelated legacy-only roster has no directed progress contract.
+        if owners.len() > MAX_RUNTIME_ALLOCATION_CUSTODY_OWNERS_V1 {
+            return Ok(None);
+        }
+        let mut blocker = None;
+        for id in owners {
+            let Some(RoutedSubmissionV1::CooperativeCopy(other)) = self.submissions.get(id) else {
+                continue;
+            };
+            let Some(leaf) = &other.sdma_leaf else {
+                continue;
+            };
+            // Private IDs are child-local, unlike outer submission handles.
+            if leaf.endpoint.child != target.child {
+                continue;
+            }
+            let matches_owner = reconciliation.map_or_else(
+                || leaf.submission == dma.map(|owner| owner.submission),
+                |(root, _, _)| leaf.reconciliation == Some(root),
+            );
+            if !matches_owner {
+                continue;
+            }
+            if other.directed.is_none() {
+                return Ok(None);
+            }
+            if !self.directed_identity_is_intact_v1(*id) || leaf.endpoint != target {
+                return Err(self.directed_corruption_v1());
+            }
+            let owns = if let Some((root, _, scratch)) = reconciliation {
+                leaf.reconciliation == Some(root)
+                    && leaf.allocation == Some(scratch)
+                    && leaf.step == LeafStepV1::Reconcile
+                    && match other.phase {
+                        CooperativeCopyPhaseV1::Read => other.source == target,
+                        CooperativeCopyPhaseV1::Write => other.destination == target,
+                        _ => false,
+                    }
+            } else {
+                other.phase == CooperativeCopyPhaseV1::Read
+                    && copy
+                        .directed
+                        .as_ref()
+                        .unwrap()
+                        .shares_read_source(other, endpoint)
+                    && leaf.step == LeafStepV1::Observe
+                    && leaf.submission.is_some_and(|submission| {
+                        dma.is_some_and(|owner| Some(owner.stream) == leaf.stream)
+                            && child.active_sdma.get(&submission).is_some_and(|active| {
+                                active.id == submission
+                                    && Some(active.stream) == leaf.stream
+                                    && active.source == endpoint.local
+                                    && Some(active.destination) == leaf.allocation
+                                    && active.source_offset
+                                        == other.source_region.byte_offset
+                                            + other.byte_cursor as u64
+                                    && active.destination_offset == 0
+                                    && active.byte_len
+                                        == (other.staging.len() - other.byte_cursor)
+                                            .min(COOPERATIVE_COPY_CHUNK_BYTES_V1)
+                                            as u64
+                                    && active.dependencies.is_empty()
+                                    && child.allocations.get(&active.source).is_some_and(|record| {
+                                        record.kind == RuntimeMemoryKindV1::DeviceLocal
+                                    })
+                                    && child.allocations.get(&active.destination).is_some_and(
+                                        |record| record.kind == RuntimeMemoryKindV1::HostVisible,
+                                    )
+                            })
+                    })
+            };
+            if !owns || blocker.is_some() {
+                return Err(self.directed_corruption_v1());
+            }
+            blocker = Some(*id);
+        }
+        let Some(id) = blocker else {
+            return Err(self.directed_corruption_v1());
+        };
+        Ok((id != selected).then_some(id))
+    }
+
     pub(super) fn fail_cooperative_dependency_path_v1(
         &mut self,
         requested: u64,
@@ -683,6 +818,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         route: RoutedHandleV1,
         stream: u64,
         dependencies: &HashSet<u64>,
+        directed: Option<&cooperative_directed::Root>,
     ) -> bool {
         let Some(custody) = self.children[route.child]
             .allocation_custody
@@ -695,7 +831,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 && self.cooperative_allocation_owners.get(&route).is_some_and(|parents| {
                     parents.iter().any(|parent| {
                         matches!(self.submissions.get(parent), Some(RoutedSubmissionV1::CooperativeCopy(copy))
-                            if (copy.stream == stream || dependencies.contains(parent))
+                            if (copy.stream == stream || dependencies.contains(parent)
+                                || directed.is_some_and(|root| root.shares_read_source(copy, route)))
                                 && copy.sdma_leaf.as_ref().is_some_and(|leaf| {
                                     leaf.endpoint == route && leaf.submission == Some(owner.submission)
                                         && leaf.stream == Some(owner.stream)

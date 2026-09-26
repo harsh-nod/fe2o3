@@ -113,6 +113,30 @@ impl KfdRuntimeBackendV1 {
             .any(|root| root.allocation == allocation)
     }
 
+    pub(super) fn native_reconciliation_blocker_v1(
+        &self,
+        allocation: u64,
+    ) -> Option<(u64, u64, u64)> {
+        let extent = self.allocations.get(&allocation)?.native_dirty.first()?;
+        self.native_reconciliations
+            .iter()
+            .flatten()
+            .find_map(|root| {
+                let conflict = root.allocation == allocation
+                    || root.pinned_lanes.iter().enumerate().any(|(lane, pinned)| {
+                        *pinned
+                            && (lane == extent.compute_lane
+                                || self.recycled_on_lane_v1(lane).is_some_and(|dispatch| {
+                                    dispatch
+                                        .descriptors
+                                        .iter()
+                                        .any(|descriptor| descriptor.allocation == allocation)
+                                }))
+                    });
+                conflict.then_some((root.id, root.allocation, root.scratch))
+            })
+    }
+
     pub(super) fn native_reconciliation_pins_lane_v1(&self, lane: usize) -> bool {
         self.native_reconciliations
             .iter()
