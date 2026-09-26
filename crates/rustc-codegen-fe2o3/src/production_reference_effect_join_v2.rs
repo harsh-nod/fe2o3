@@ -17,7 +17,8 @@ use fe2o3_pliron::{
     ProductionRankedValueV1, ProductionReferenceOutputSiteV2, ProductionReferenceProofV2,
     ProductionRefinementStagingPolicyV2, ProductionSemanticExpressionV2,
     ProductionSemanticScalarTypeV2, ProductionSessionLimitsV1,
-    compile_ranked_kernel_for_lowering_v1, stage_ranked_kernel_with_policy_checked_refinement_v2,
+    compile_ranked_kernel_for_lowering_v1,
+    stage_ranked_kernel_with_borrowed_policy_checked_refinement_v2,
 };
 #[cfg(test)]
 use fe2o3_pliron::{
@@ -283,26 +284,43 @@ impl CompilerOwnedBoundReferenceEffectV2 {
     pub(crate) fn into_staged(
         self,
     ) -> Result<CompilerOwnedStagedReferenceEffectV2, ProductionReferenceEffectJoinErrorV2> {
+        let (staged, policy) = self.into_staged_with_policy_v2()?;
+        drop(policy);
+        Ok(staged)
+    }
+
+    fn into_staged_with_policy_v2(
+        self,
+    ) -> Result<
+        (
+            CompilerOwnedStagedReferenceEffectV2,
+            ProductionRefinementStagingPolicyV2,
+        ),
+        ProductionReferenceEffectJoinErrorV2,
+    > {
         let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V2, self.kernel)
             .map_err(|error| {
                 ProductionReferenceEffectJoinErrorV2::Construction(format!("{error:?}"))
             })?;
-        let construction = stage_ranked_kernel_with_policy_checked_refinement_v2(
+        let construction = stage_ranked_kernel_with_borrowed_policy_checked_refinement_v2(
             construction,
             self.imported_proofs,
-            self.policy,
+            &self.policy,
         )
         .map_err(|error| {
             ProductionReferenceEffectJoinErrorV2::Compile(Box::new(
                 ProductionRankedCompileErrorV2::Proof(error),
             ))
         })?;
-        Ok(CompilerOwnedStagedReferenceEffectV2 {
-            construction,
-            signed_receipts: self.signed_receipts,
-            runtime: self.runtime,
-            pending_cpu_bounds: self.pending_cpu_bounds,
-        })
+        Ok((
+            CompilerOwnedStagedReferenceEffectV2 {
+                construction,
+                signed_receipts: self.signed_receipts,
+                runtime: self.runtime,
+                pending_cpu_bounds: self.pending_cpu_bounds,
+            },
+            self.policy,
+        ))
     }
 }
 

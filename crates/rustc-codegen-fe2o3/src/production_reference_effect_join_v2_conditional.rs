@@ -32,10 +32,27 @@ pub(crate) struct ConditionalReferenceRootV1 {
     input: ProductionConditionalRootInputV1,
     _runtime: FunctionalRefinementVerusRuntimeLeaseV1,
     _receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
+    effect_policy: ProductionRefinementStagingPolicyV2,
     proof: fe2o3_verifier::RetainedProductionConditionalFormulaV2,
     contract: Option<RetainedConditionalContractV1>,
+    transport: Option<conditional_source_v1::ConditionalReplayTransportV2>,
     _cpu_bounds_require_host: Option<u32>,
 }
+
+/// Borrows original owners only. These policies are producer-owned acceptance
+/// inputs, not authority conveyed by the future packet's keys or signatures.
+pub(crate) struct ConditionalProducerInputsV2<'a> {
+    pub(crate) input: &'a ProductionConditionalRootInputV1,
+    pub(crate) effect_receipts: &'a [InertFunctionalRefinementReceiptSignatureV2],
+    pub(crate) effect_policy: &'a ProductionRefinementStagingPolicyV2,
+    pub(crate) formula_policy: &'a fe2o3_functional_proof::FunctionalRefinementImportPolicyV2,
+    pub(crate) transport: &'a conditional_source_v1::ConditionalReplayTransportV2,
+    pub(crate) contract: &'a RetainedConditionalContractV1,
+}
+
+// The already-created policy tree is moved, not cloned or newly allocated.
+// Its historical node allocation is outside the existing budget model.
+const POLICY_STORAGE_V2: usize = std::mem::size_of::<ProductionRefinementStagingPolicyV2>();
 
 pub(crate) enum ReferenceRootV1 {
     // Projection scratch must be dropped before adopting a conditional arena.
@@ -94,6 +111,17 @@ impl ConditionalReferenceRootV1 {
         &self.input
     }
 
+    pub(crate) fn producer_inputs_v2(&self) -> Option<ConditionalProducerInputsV2<'_>> {
+        Some(ConditionalProducerInputsV2 {
+            input: &self.input,
+            effect_receipts: &self._receipts,
+            effect_policy: &self.effect_policy,
+            formula_policy: self.proof.import_policy_v2(),
+            transport: self.transport.as_ref()?,
+            contract: self.contract.as_ref()?,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn report(&self) -> fe2o3_verifier::ProductionConditionalFormulaReportV2 {
         self.proof.report()
@@ -103,6 +131,14 @@ impl ConditionalReferenceRootV1 {
         self.input
             .retained_storage_v1()?
             .checked_add(self.proof.retained_storage_v2())
+            .and_then(|n| n.checked_add(POLICY_STORAGE_V2))
+            .and_then(|n| {
+                n.checked_add(
+                    self.transport
+                        .as_ref()
+                        .map_or(0, |t| t.retained_storage_v2()),
+                )
+            })
             .and_then(|n| {
                 n.checked_add(
                     self.contract
@@ -121,6 +157,7 @@ impl ConditionalReferenceRootV1 {
         source: &ProductionPreRankedKirOwnerV1,
         reference: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1,
         budget: &mut Budget<'_>,
+        capture_transport: bool,
         consume: impl FnOnce(
             &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
             &fe2o3_verifier::ProductionConditionalFormulaExecutionV2,
@@ -131,6 +168,8 @@ impl ConditionalReferenceRootV1 {
             input,
             proof,
             contract,
+            transport,
+            effect_policy,
             _runtime,
             _receipts,
             _cpu_bounds_require_host,
@@ -159,7 +198,14 @@ impl ConditionalReferenceRootV1 {
                         budget
                             .reserve_storage(encoded.retained_storage_v1())
                             .map_err(failure)?;
-                        Ok::<_, Error>(encoded)
+                        let captured = if capture_transport {
+                            Some(conditional_source_v1::capture_replayed_cpu_formula_v2(
+                                request, reference, root, execution, budget,
+                            )?)
+                        } else {
+                            None
+                        };
+                        Ok::<_, Error>((encoded, captured))
                     },
                 )
             },
@@ -174,16 +220,24 @@ impl ConditionalReferenceRootV1 {
                 // The consumer result is nested inside CPU/formula replay.
                 // On any error, owners die before the terminal original phase
                 // releases their reservations, including late postcheck failures.
-                let encoded = result??;
-                let encoded = encoded
-                    .finish_replay_v1(contract, transferred, floor, budget)
-                    .map_err(failure)?;
+                let (encoded, captured) = result??;
+                let (encoded, transport) = finish_replayed_transport_v2(
+                    encoded,
+                    contract,
+                    captured,
+                    transport,
+                    transferred,
+                    floor,
+                    budget,
+                )?;
                 #[cfg(test)]
                 observation::replay_accepted(root, &proof, &encoded, budget);
                 Ok(Self {
                     input,
                     proof,
                     contract: Some(encoded),
+                    transport,
+                    effect_policy,
                     _runtime,
                     _receipts,
                     _cpu_bounds_require_host,
@@ -196,6 +250,56 @@ impl ConditionalReferenceRootV1 {
             }
         }
     }
+}
+
+/// Inert storage transfer only; the root calls this after all replay postchecks.
+pub(crate) fn finish_replayed_transport_v2(
+    encoded: RetainedConditionalContractV1,
+    previous_contract: Option<RetainedConditionalContractV1>,
+    captured: Option<conditional_source_v1::ConditionalReplayTransportV2>,
+    previous_transport: Option<conditional_source_v1::ConditionalReplayTransportV2>,
+    transferred: usize,
+    floor: usize,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        RetainedConditionalContractV1,
+        Option<conditional_source_v1::ConditionalReplayTransportV2>,
+    ),
+    Error,
+> {
+    let old_transport = previous_transport
+        .as_ref()
+        .map_or(0, |t| t.retained_storage_v2());
+    let old_contract = previous_contract
+        .as_ref()
+        .map_or(0, |c| c.retained_storage_v1());
+    if floor
+        .checked_sub(old_contract)
+        .and_then(|n| n.checked_sub(old_transport))
+        .is_none()
+    {
+        return Err(failure(Resource::Accounting));
+    }
+    if let (Some(captured), Some(previous)) = (&captured, &previous_transport) {
+        captured.require_same_v2(previous, budget)?;
+    }
+    let capture_storage = captured.as_ref().map_or(0, |t| t.retained_storage_v2());
+    let contract_floor = floor
+        .checked_add(capture_storage)
+        .ok_or_else(|| failure(Resource::Arithmetic))?;
+    let encoded = encoded
+        .finish_replay_v1(previous_contract, transferred, contract_floor, budget)
+        .map_err(failure)?;
+    let transport = match captured {
+        Some(captured) => {
+            drop(previous_transport);
+            budget.release_storage(old_transport).map_err(failure)?;
+            Some(captured)
+        }
+        None => previous_transport,
+    };
+    Ok((encoded, transport))
 }
 
 fn failure(error: impl fmt::Display) -> Error {
@@ -221,12 +325,14 @@ pub(crate) fn continue_reference_v1<'a>(
     let timeout = request.proof_timeout_seconds;
     let bound = request.prove_and_bind()?;
     let site = selected_site(&bound.kernel, budget)?;
+    let (staged, effect_policy) = bound.into_staged_with_policy_v2()?;
+    budget.reserve_storage(POLICY_STORAGE_V2).map_err(failure)?;
     let CompilerOwnedStagedReferenceEffectV2 {
         construction,
         signed_receipts,
         runtime,
         pending_cpu_bounds,
-    } = bound.into_staged()?;
+    } = staged;
     let mut session =
         ProductionPlironSessionV1::new_ranked_v1(ProductionSessionLimitsV1::default())
             .map_err(|error| Error::Construction(format!("{error:?}")))?;
@@ -303,8 +409,10 @@ pub(crate) fn continue_reference_v1<'a>(
             input,
             _runtime: runtime,
             _receipts: signed_receipts,
+            effect_policy,
             proof,
             contract: None,
+            transport: None,
             _cpu_bounds_require_host: pending_cpu_bounds,
         }),
         source,

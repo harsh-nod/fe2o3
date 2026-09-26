@@ -105,8 +105,45 @@ impl ProductionRankedSemanticProgramV1 {
     /// the same owning phase. Failure destroys the consumed roster. This neither
     /// admits formal memory nor changes the existing typed target refusal.
     pub(crate) fn replay_conditional_roots_v1(
+        self,
+        references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+        consume: impl FnMut(
+            u32,
+            &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+            &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
+            &fe2o3_verifier::ProductionConditionalFormulaExecutionV2,
+            &mut Budget<'_>,
+        ) -> Result<
+            crate::production_pipeline::conditional_generated_fields_v1::RetainedConditionalContractV1,
+            crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2,
+        >,
+    ) -> Result<Self, Error> {
+        self.replay_conditional_roots_impl_v2(references, false, consume)
+    }
+
+    /// Opt-in producer preparation, using the same replay and target callback.
+    /// No packet, independent consumer, final F or launch authority is installed.
+    pub(crate) fn replay_conditional_roots_with_transport_v2(
+        self,
+        references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+        consume: impl FnMut(
+            u32,
+            &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+            &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
+            &fe2o3_verifier::ProductionConditionalFormulaExecutionV2,
+            &mut Budget<'_>,
+        ) -> Result<
+            crate::production_pipeline::conditional_generated_fields_v1::RetainedConditionalContractV1,
+            crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2,
+        >,
+    ) -> Result<Self, Error> {
+        self.replay_conditional_roots_impl_v2(references, true, consume)
+    }
+
+    fn replay_conditional_roots_impl_v2(
         mut self,
         references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+        capture_transport: bool,
         mut consume: impl FnMut(
             u32,
             &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
@@ -193,6 +230,7 @@ impl ProductionRankedSemanticProgramV1 {
                                     source,
                                     reference,
                                     budget,
+                                    capture_transport,
                                     |request, execution, budget| {
                                         consume(semantic_root, source, request, execution, budget)
                                     },
@@ -221,6 +259,64 @@ impl ProductionRankedSemanticProgramV1 {
             "conditional replay has no conditional roots",
         ))?;
         Ok(self)
+    }
+
+    /// A future packet producer borrows the complete retained roster with the
+    /// original account. The phase postcheck precedes return of any side result.
+    pub(crate) fn with_conditional_producer_inputs_v2<R>(
+        mut self,
+        consume: impl FnOnce(
+            &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+            &[ProductionRankedRootProgramV1],
+            &mut Budget<'_>,
+        ) -> Result<R, Error>,
+    ) -> Result<(Self, R), Error> {
+        let result = self.phase.with_budget(|budget| {
+            let floor = budget.storage();
+            budget
+                .charge_work(self.roots.len())
+                .map_err(Error::ConditionalResource)?;
+            if self.roots.is_empty()
+                || self
+                    .roots
+                    .iter()
+                    .any(|root| root.conditional_producer_inputs_v2().is_none())
+            {
+                return Err(Error::RosterMetadata(
+                    "conditional transport roster is incomplete",
+                ));
+            }
+            let result = consume(&self.materialized, &self.roots, budget);
+            if budget.storage() < floor {
+                drop(result);
+                return Err(Error::ConditionalResource(Resource::Accounting));
+            }
+            result
+        })?;
+        Ok((self, result))
+    }
+}
+
+impl ProductionRankedRootProgramV1 {
+    pub(crate) fn logical_name(&self) -> &str {
+        &self.logical_name
+    }
+
+    pub(crate) fn semantic_u32_induction(
+        &self,
+    ) -> &fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1 {
+        &self.semantic_u32_induction
+    }
+
+    pub(crate) fn conditional_producer_inputs_v2(
+        &self,
+    ) -> Option<
+        crate::production_reference_effect_join_v2::conditional::ConditionalProducerInputsV2<'_>,
+    > {
+        match &self.verification {
+            ReferenceRootV1::Conditional(root) => root.producer_inputs_v2(),
+            ReferenceRootV1::Ordinary { .. } | ReferenceRootV1::Pending(_) => None,
+        }
     }
 }
 

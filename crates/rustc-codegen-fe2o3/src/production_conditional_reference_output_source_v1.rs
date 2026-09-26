@@ -5,6 +5,7 @@ use super::*;
 use crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1 as Binding;
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
 use fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1 as Request;
+use fe2o3_verifier::NativeCompilerStagingCommitmentV1 as Staging;
 use fe2o3_verifier::conditional_reference_v1 as portable;
 use fe2o3_verifier::portable_reference_v1::ReferenceReplayInputV1;
 use fe2o3_verifier::portable_reference_v1::codec::{NativeCpuAssociationV1, NativeCpuInputV1};
@@ -12,6 +13,204 @@ use fe2o3_verifier::portable_reference_v1::codec::{NativeCpuAssociationV1, Nativ
 use portable::{ConditionalReferenceInputV1, SourceBoundCpuCorrespondenceV1};
 
 type Error = ProductionReferenceEffectJoinErrorV2;
+
+/// Inert, move-only bytes captured from a genuine replay, never proof authority.
+/// The owning projection phase keeps the reservation until this owner drops.
+pub(crate) struct ConditionalReplayTransportV2 {
+    cpu_input: Vec<u8>,
+    staging: Vec<Staging>,
+    formula_receipt: InertFunctionalRefinementReceiptSignatureV2,
+}
+
+impl ConditionalReplayTransportV2 {
+    pub(crate) fn cpu_input_v1(&self) -> &[u8] {
+        &self.cpu_input
+    }
+
+    pub(crate) fn formula_receipt_v2(&self) -> &InertFunctionalRefinementReceiptSignatureV2 {
+        &self.formula_receipt
+    }
+
+    pub(crate) fn staging_commitments_v1(&self) -> &[Staging] {
+        &self.staging
+    }
+
+    pub(crate) fn retained_storage_v2(&self) -> usize {
+        // Construction bounds capacity by the existing CPU frame limit.
+        std::mem::size_of::<Self>()
+            + self.cpu_input.capacity()
+            + self.staging.capacity() * std::mem::size_of::<Staging>()
+    }
+
+    pub(crate) fn require_same_v2(
+        &self,
+        previous: &Self,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), Error> {
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        let work = self
+            .cpu_input
+            .len()
+            .checked_add(std::mem::size_of::<
+                InertFunctionalRefinementReceiptSignatureV2,
+            >())
+            .and_then(|n| {
+                n.checked_add(
+                    self.staging
+                        .len()
+                        .checked_mul(std::mem::size_of::<Staging>())?,
+                )
+            })
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| capture_error(Resource::Arithmetic))?;
+        budget.charge_work(work).map_err(capture_error)?;
+        if self.cpu_input != previous.cpu_input
+            || self.staging != previous.staging
+            || self.formula_receipt != previous.formula_receipt
+        {
+            return Err(Error::UnsupportedReference(
+                "conditional replay transport changed",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn capture_error(error: impl fmt::Display) -> Error {
+    Error::ProofExecution(error.to_string())
+}
+
+// This copier carries no receipt admission. Its only production caller supplies
+// the live execution's signature after comparing the complete B1 commitment.
+pub(crate) fn copy_inert_transport_v2(
+    cpu_input: &[u8],
+    staging: impl ExactSizeIterator<Item = Staging>,
+    formula_receipt: InertFunctionalRefinementReceiptSignatureV2,
+    budget: &mut Budget<'_>,
+) -> Result<ConditionalReplayTransportV2, Error> {
+    use crate::production_ranked_projection_v1::guarded_source_progress_v1::resources;
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    use fe2o3_verifier::portable_reference_v1::codec::MAX_NATIVE_CPU_INPUT_BYTES_V1;
+    resources::owned(
+        budget,
+        0,
+        capture_error,
+        || Error::UnsupportedReference("conditional transport copy panicked"),
+        |budget| {
+            let count = staging.len();
+            let payload = count
+                .checked_mul(std::mem::size_of::<Staging>())
+                .and_then(|n| n.checked_add(cpu_input.len()))
+                .ok_or_else(|| capture_error(Resource::Arithmetic))?;
+            if payload > MAX_NATIVE_CPU_INPUT_BYTES_V1 {
+                return Err(Error::UnsupportedReference("conditional CPU frame limit"));
+            }
+            let retained = payload
+                .checked_add(std::mem::size_of::<ConditionalReplayTransportV2>())
+                .ok_or_else(|| capture_error(Resource::Arithmetic))?;
+            budget
+                .charge_work(
+                    retained
+                        .checked_add(count)
+                        .ok_or_else(|| capture_error(Resource::Arithmetic))?,
+                )
+                .map_err(capture_error)?;
+            budget.reserve_storage(retained).map_err(capture_error)?;
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(cpu_input.len())
+                .map_err(|_| capture_error(Resource::Allocation))?;
+            if bytes.capacity() != cpu_input.len() {
+                return Err(capture_error(Resource::Allocation));
+            }
+            bytes.extend_from_slice(cpu_input);
+            let mut rows = Vec::new();
+            rows.try_reserve_exact(count)
+                .map_err(|_| capture_error(Resource::Allocation))?;
+            if rows.capacity() != count {
+                return Err(capture_error(Resource::Allocation));
+            }
+            for row in staging {
+                if rows.len() == count {
+                    return Err(capture_error(Resource::Accounting));
+                }
+                rows.push(row);
+            }
+            if rows.len() != count {
+                return Err(capture_error(Resource::Accounting));
+            }
+            Ok((
+                ConditionalReplayTransportV2 {
+                    cpu_input: bytes,
+                    staging: rows,
+                    formula_receipt,
+                },
+                retained,
+            ))
+        },
+    )
+}
+
+fn staging_commitment_v2(
+    row: &fe2o3_pliron::ProductionPolicyCheckedRefinementStagingV2,
+) -> Staging {
+    let toolchain = row.toolchain();
+    Staging {
+        receipt: *row.receipt_identity().digest().as_bytes(),
+        effect: *row
+            .binding()
+            .normalized_obligation_effect_ir_hash()
+            .as_bytes(),
+        signer: *row.signer_identity().as_bytes(),
+        execution: *row.execution_identity().as_bytes(),
+        toolchain: [
+            *toolchain.verus_executable().as_bytes(),
+            *toolchain.verus_configuration().as_bytes(),
+            *toolchain.solver_executable().as_bytes(),
+            *toolchain.solver_configuration().as_bytes(),
+            *toolchain.runtime_closure().as_bytes(),
+        ],
+    }
+}
+
+pub(crate) fn capture_replayed_cpu_formula_v2(
+    request: &Request<'_>,
+    binding: &Binding,
+    semantic_root: u32,
+    execution: &fe2o3_verifier::ProductionConditionalFormulaExecutionV2,
+    budget: &mut Budget<'_>,
+) -> Result<ConditionalReplayTransportV2, Error> {
+    fe2o3_verifier::portable_reference_v1::codec::with_encoded_native_cpu_input_v1(
+        native_cpu_input_v1(request, binding, semantic_root),
+        budget,
+        |bytes, commitment, budget| {
+            budget.charge_work(32).map_err(capture_error)?;
+            if execution.report().cpu_input_commitment().as_bytes() != &commitment {
+                return Err(Error::UnsupportedReference(
+                    "conditional CPU capture commitment",
+                ));
+            }
+            let wire = execution
+                .signed_receipt_wire()
+                .try_into()
+                .map_err(|_| Error::UnsupportedReference("conditional formula signature extent"))?;
+            copy_inert_transport_v2(
+                bytes,
+                request
+                    .pliron_input()
+                    .retained_policy_checked_refinement_staging()
+                    .iter()
+                    .map(staging_commitment_v2),
+                InertFunctionalRefinementReceiptSignatureV2::from_untrusted_parts(
+                    wire,
+                    *execution.receipt_verifying_key(),
+                ),
+                budget,
+            )
+        },
+    )
+    .map_err(capture_error)?
+}
 
 #[cfg(test)]
 #[path = "production_conditional_cpu_read_premises_v1.rs"]
@@ -141,3 +340,7 @@ pub(crate) mod composition_tests;
 #[cfg(test)]
 #[path = "production_conditional_formula_genuine_v2_tests.rs"]
 pub(crate) mod formula_v2_tests;
+
+#[cfg(test)]
+#[path = "production_conditional_reference_transport_v2_tests.rs"]
+mod transport_tests;
