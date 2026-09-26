@@ -14,7 +14,7 @@ const encode=v=>Buffer.from(JSON.stringify(v,null,2)+'\n');
 function fixture(){
  const data=new Map(PATHS.map(p=>[p,Buffer.from('inert source-shaped fixture '+p+'\n')]));
  const value={schema:'fe2o3-gfx950-one-stop-controller-source-v2',license:'MIT OR Apache-2.0',
-  runtime_profile:'unbound',rust_files:20,files:PATHS.map(p=>({path:p,bytes:data.get(p).length,sha256:hash(data.get(p))}))};
+  runtime_profile:'unbound',rust_files:21,files:PATHS.map(p=>({path:p,bytes:data.get(p).length,sha256:hash(data.get(p))}))};
  return {data,value};
 }
 function diskFixture(t){
@@ -26,7 +26,7 @@ function diskFixture(t){
  return{...f,root};
 }
 test('checked-in selected package bytes verify without runtime claims',()=>{
- const r=readPackage(packageRoot);assert.equal(r.files,24);assert(r.bytes>0&&r.bytes<TOTAL_CAP);
+ const r=readPackage(packageRoot);assert.equal(r.files,25);assert(r.bytes>0&&r.bytes<TOTAL_CAP);
  for(const key of ['complete_tree_verified','source_authenticated','built_binary_verified','startup_qualified','native_authority'])assert.equal(r[key],false);
  assert.equal(r.processes_started,0);assert.equal(r.runtime_profile,'unbound');
 });
@@ -46,7 +46,7 @@ test('separate unpublished workspace and fixed binary do not join parent workspa
  const lock=fs.readFileSync(packageRoot+'/Cargo.lock','utf8');assert(lock.includes('name = "fe2o3-private-one-stop-protocol"'));
 });
 test('selected source roster has exact project and dual license leaves',()=>{
- assert.equal(PATHS.filter(p=>p.endsWith('.rs')).length,20);
+ assert.equal(PATHS.filter(p=>p.endsWith('.rs')).length,21);
  assert(PATHS.includes('LICENSE-MIT'));assert(PATHS.includes('LICENSE-APACHE'));
  assert(!PATHS.some(p=>/\.(inc|cc|h)$/.test(p)));
  assert.equal(manifest(fs.readFileSync(packageRoot+'/source-manifest.json')).license,'MIT OR Apache-2.0');
@@ -77,7 +77,7 @@ test('malformed hashes and missing fields refuse before callback',()=>{
  }
 });
 test('changed payload or byte length cannot match the source pins',()=>{
- const f=fixture();assert.equal(verifyPayload(manifest(encode(f.value)),p=>f.data.get(p)).files,24);
+ const f=fixture();assert.equal(verifyPayload(manifest(encode(f.value)),p=>f.data.get(p)).files,25);
  const p=PATHS[0];for(const b of [Buffer.from('changed'),Buffer.alloc(f.data.get(p).length,0)]){
   const data=new Map(f.data);data.set(p,b);assert.throws(()=>verifyPayload(f.value,n=>data.get(n)));
  }
@@ -95,7 +95,7 @@ test('manifest encoding denies duplicate keys trailing values and excessive byte
  }
 });
 test('inert temporary selected-file package reads without execution',t=>{
- const f=diskFixture(t);assert.equal(readPackage(f.root).files,24);
+ const f=diskFixture(t);assert.equal(readPackage(f.root).files,25);
 });
 test('noncanonical relative and symlink package roots refuse',t=>{
  const f=diskFixture(t),alias=f.root+'-alias';fs.symlinkSync(f.root,alias);t.after(()=>fs.unlinkSync(alias));
@@ -157,4 +157,37 @@ test('unavailable values remain typed and no published runtime binding exists',(
  const b=JSON.parse(fs.readFileSync(packageRoot+'/runtime-bindings.json','utf8'));
  assert.deepEqual(Object.keys(b).sort(),['controller','debugger','family','native_attempt','startup','target'].sort());
  for(const value of Object.values(b))assert.equal(value,null);
+});
+
+test('setup diagnostics preserve the first failure without becoming runtime binding',()=>{
+ const wire=fs.readFileSync(packageRoot+'/native/wire.rs','utf8');
+ const main=fs.readFileSync(packageRoot+'/native/main.rs','utf8');
+ const start=wire.indexOf('if let Err(refusal) = setup {');
+ const stop=wire.indexOf('        Ok(result)',start);
+ assert(start>=0&&stop>start);
+ const failure=wire.slice(start,stop);
+ assert(failure.indexOf('let diagnostic = trace.freeze(result.sent);')>=0);
+ assert(failure.indexOf('let diagnostic = trace.freeze(result.sent);')<failure.indexOf('let cleanup = result.teardown();'));
+ assert(main.includes('e.refusal, e.cleanup, e.diagnostic'));
+ assert(!failure.includes('eof =')&&!failure.includes('may_have_inferior ='));
+});
+test('diagnostics leaf has fixed setup stages and no acquisition interface',()=>{
+ const text=fs.readFileSync(packageRoot+'/native/setup_diagnostic.rs','utf8');
+ for(const stage of ['ExecutableLink','ExecutableMetadata','ExecutableRecheck','ScopeMember','Cmdline'])
+  assert(text.includes(stage));
+ assert(text.includes('ChildWaitObservation::Unobserved'));
+ assert(text.includes('initial_stamp: None'));
+ assert(text.includes('readers_started: 0'));
+ assert(!text.includes('std::process')&&!text.includes('std::fs'));
+ assert(!text.includes('Command::')&&!text.includes('process.env'));
+});
+test('old count or omitted diagnostic source refuses before any payload read',()=>{
+ for(const change of [
+  v=>v.rust_files=20,
+  v=>v.files=v.files.filter(row=>row.path!=='native/setup_diagnostic.rs')
+ ]){
+  const f=fixture();change(f.value);let reads=0;
+  assert.throws(()=>verifyPayload(f.value,()=>{reads++;return Buffer.alloc(0)}));
+  assert.equal(reads,0);
+ }
 });

@@ -5,6 +5,15 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Physical debugger startup diagnostics — 2026-09-26
+
+The [new debugger checkpoint](physical-debugger-setup-diagnostics-20260926.md)
+records a failed private setup attempt with independently verified family
+cleanup, then qualifies a disabled diagnostic successor: 25 Node and 97 Rust
+tests, strict Clippy and build passed. The exact old failing identity check
+remains unknown; no physical capture succeeded and no diagnostic retry ran.
+Public runtime bindings remain disabled. Broad accepted exits remain **6/18**.
+
 ## Genuine dense propagation and borrowed ranked candidate — 2026-09-26
 
 The [new C2/C4 and proxy checkpoint](bf16-helper-dense-proxy-qualification-20260926.md)

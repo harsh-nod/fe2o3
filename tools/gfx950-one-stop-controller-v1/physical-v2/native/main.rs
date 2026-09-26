@@ -10,6 +10,7 @@ mod parent;
 mod profile;
 mod publication;
 mod scope;
+mod setup_diagnostic;
 mod streams;
 mod wire;
 use std::process::ExitCode;
@@ -36,8 +37,8 @@ fn main() -> ExitCode {
         Ok(v) => v,
         Err(e) => {
             eprintln!(
-                "one-stop debugger setup refused: {:?}; known cleanup={:?}; no whole-family claim",
-                e.refusal, e.cleanup
+                "one-stop debugger setup refused: {:?}; known cleanup={:?}; diagnostic={}; no whole-family claim",
+                e.refusal, e.cleanup, e.diagnostic
             );
             return ExitCode::FAILURE;
         }

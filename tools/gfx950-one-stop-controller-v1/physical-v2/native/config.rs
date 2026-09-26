@@ -3,6 +3,7 @@ use super::{
     clock::Clock,
     parent,
     profile::{self, Pin, Profile},
+    setup_diagnostic::{SetupStage, SetupTrace},
 };
 use fe2o3_private_one_stop_protocol::Refusal;
 use sha2::{Digest, Sha256};
@@ -155,18 +156,26 @@ impl PinnedFile {
         clock.check()
     }
     pub(super) fn matches_proc_executable(&self, path: &Path) -> Result<(), Refusal> {
-        if fs::read_link(path).ok().as_ref() != Some(&self.path) {
-            return Err(Refusal::Changed);
-        }
-        let m = fs::metadata(path).map_err(|_| Refusal::Changed)?;
-        if !m.is_file()
-            || m.dev() != self.stamp.device
-            || m.ino() != self.stamp.inode
-            || m.len() != self.stamp.bytes
-        {
-            return Err(Refusal::Changed);
-        }
-        self.recheck()
+        self.matches_proc_executable_diagnosed(path, &mut SetupTrace::new())
+    }
+    pub(super) fn matches_proc_executable_diagnosed(
+        &self,
+        path: &Path,
+        trace: &mut SetupTrace,
+    ) -> Result<(), Refusal> {
+        trace.require(SetupStage::ExecutableLink, || {
+            Ok(fs::read_link(path).ok().as_ref() == Some(&self.path))
+        })?;
+        let m = trace.step(SetupStage::ExecutableMetadata, || {
+            fs::metadata(path).map_err(|_| Refusal::Changed)
+        })?;
+        trace.require(SetupStage::ExecutableMetadata, || {
+            Ok(m.is_file()
+                && m.dev() == self.stamp.device
+                && m.ino() == self.stamp.inode
+                && m.len() == self.stamp.bytes)
+        })?;
+        trace.step(SetupStage::ExecutableRecheck, || self.recheck())
     }
 }
 // Reserve the maximum observed parent file before expected-file accounting.

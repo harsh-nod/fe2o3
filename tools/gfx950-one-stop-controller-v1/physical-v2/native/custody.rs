@@ -1,5 +1,6 @@
 //! Launch-derived pidfd custody. No caller PID, attach, or address constructor.
 use super::config::{PinnedFile, decimal};
+use super::setup_diagnostic::{SetupStage, SetupTrace};
 use fe2o3_private_one_stop_protocol::Refusal;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
@@ -7,6 +8,7 @@ use std::fs;
 use std::io::Read;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::Child;
 
@@ -244,32 +246,65 @@ pub(super) struct DebuggerChild {
     fd: OwnedFd,
 }
 impl DebuggerChild {
-    pub(super) fn observe(child: &mut Child, executable: &PinnedFile) -> Result<Self, Refusal> {
-        if child.try_wait().map_err(|_| Refusal::Process)?.is_some() {
+    pub(super) fn observe(
+        child: &mut Child,
+        executable: &PinnedFile,
+        trace: &mut SetupTrace,
+    ) -> Result<Self, Refusal> {
+        let status = trace.step(SetupStage::InitialChildWait, || {
+            child.try_wait().map_err(|_| Refusal::Process)
+        })?;
+        trace.waited(status.map(ExitStatusExt::into_raw));
+        if status.is_some() {
             return Err(Refusal::Exit);
         }
-        let before = current(child.id(), std::process::id())?;
-        let pid = i32::try_from(child.id())
-            .ok()
-            .and_then(Pid::from_raw)
-            .ok_or(Refusal::Process)?;
-        let fd = pidfd_open(pid, PidfdFlags::empty()).map_err(|_| Refusal::Process)?;
+        let before = trace.step(SetupStage::InitialChildStamp, || {
+            current(child.id(), std::process::id())
+        })?;
+        trace.stamp(before.pid, before.parent, before.start);
+        let pid = trace.step(SetupStage::PidConversion, || {
+            i32::try_from(child.id())
+                .ok()
+                .and_then(Pid::from_raw)
+                .ok_or(Refusal::Process)
+        })?;
+        let fd = trace.step(SetupStage::PidfdOpen, || {
+            pidfd_open(pid, PidfdFlags::empty()).map_err(|_| Refusal::Process)
+        })?;
         let value = Self { stamp: before, fd };
-        value.check(child, executable)?;
+        value.check_diagnosed(child, executable, trace)?;
         Ok(value)
     }
     pub(super) fn check(&self, child: &mut Child, executable: &PinnedFile) -> Result<(), Refusal> {
-        if child.id() != self.stamp.pid
-            || child.try_wait().map_err(|_| Refusal::Process)?.is_some()
-            || exited(&self.fd)?
-            || current(self.stamp.pid, self.stamp.parent)? != self.stamp
-        {
+        self.check_diagnosed(child, executable, &mut SetupTrace::new())
+    }
+    fn check_diagnosed(
+        &self,
+        child: &mut Child,
+        executable: &PinnedFile,
+        trace: &mut SetupTrace,
+    ) -> Result<(), Refusal> {
+        // Same short-circuit observation order as the original compound predicate.
+        trace.require(SetupStage::ChildId, || Ok(child.id() == self.stamp.pid))?;
+        let status = trace.step(SetupStage::ChildWaitBeforeIdentity, || {
+            child.try_wait().map_err(|_| Refusal::Process)
+        })?;
+        trace.waited(status.map(ExitStatusExt::into_raw));
+        if status.is_some() {
             return Err(Refusal::Changed);
         }
-        executable.matches_proc_executable(Path::new(&format!("/proc/{}/exe", self.stamp.pid)))?;
-        if exited(&self.fd)? || current(self.stamp.pid, self.stamp.parent)? != self.stamp {
-            return Err(Refusal::Changed);
-        }
+        trace.require(SetupStage::PidfdBeforeIdentity, || Ok(!exited(&self.fd)?))?;
+        trace.require(SetupStage::ChildStampBeforeIdentity, || {
+            Ok(current(self.stamp.pid, self.stamp.parent)? == self.stamp)
+        })?;
+        executable.matches_proc_executable_diagnosed(
+            Path::new(&format!("/proc/{}/exe", self.stamp.pid)),
+            trace,
+        )?;
+        trace.require(SetupStage::PidfdAfterIdentity, || Ok(!exited(&self.fd)?))?;
+        trace.require(SetupStage::ChildStampAfterIdentity, || {
+            Ok(current(self.stamp.pid, self.stamp.parent)? == self.stamp)
+        })?;
         Ok(())
     }
     pub(super) fn stamp(&self) -> Stamp {

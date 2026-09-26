@@ -2,7 +2,7 @@
   "schema": "fe2o3-gfx950-one-stop-controller-source-v2",
   "license": "MIT OR Apache-2.0",
   "runtime_profile": "unbound",
-  "rust_files": 20,
+  "rust_files": 21,
   "files": [
     {
       "path": "Cargo.lock",
@@ -46,18 +46,18 @@
     },
     {
       "path": "native/config.rs",
-      "bytes": 14559,
-      "sha256": "fed56a8f76f3bcb951168eea7272d7a03a2fd1747c1256c6a2b7f6c8d5b05d4b"
+      "bytes": 15004,
+      "sha256": "18f9a081d1589270d68cb24566b89976befc386199aaa030f9a0219e4d0b8364"
     },
     {
       "path": "native/custody.rs",
-      "bytes": 11341,
-      "sha256": "0da919a5511648152f2fdb14a3f46338d7c6d2550f687a494e62c43c02645b15"
+      "bytes": 12730,
+      "sha256": "d8821fe65367491f0977649bbc5500ed94cb2e022ec387c8c61bbfc0a45a0717"
     },
     {
       "path": "native/main.rs",
-      "bytes": 2297,
-      "sha256": "5b109c1856a5a2690aaac423cfca8d829b621e50627df54b5a7b6d1a51e09b90"
+      "bytes": 2348,
+      "sha256": "efb12668c706d3ca548d367bb0ad20aa0f648a8c5f1f2b307d07a5c51e07cd7a"
     },
     {
       "path": "native/parent.rs",
@@ -80,14 +80,19 @@
       "sha256": "8a41c2798c6b72f6fc207d37026da70c268485bb37aaecd3b4ba8329cb28df6d"
     },
     {
+      "path": "native/setup_diagnostic.rs",
+      "bytes": 10787,
+      "sha256": "31c9c709c18c205c2f023198e6274d07bfc40fa605223dc736c71e801027877e"
+    },
+    {
       "path": "native/streams.rs",
       "bytes": 5155,
       "sha256": "f957af59a9d075037e5fb409a8cbb522400c07f1046c163e8948e006d449be9d"
     },
     {
       "path": "native/wire.rs",
-      "bytes": 23628,
-      "sha256": "4e05d4898a4b7d7120d739db5d0fad87e8170f591d1430bd0c9d3f048bc2be51"
+      "bytes": 25212,
+      "sha256": "113d55df10177e49cd81f8bfea4e8a4edd3ae0d2ccfbf3da9650ce78a8b7b6e8"
     },
     {
       "path": "physical_snapshot_v2.rs",
