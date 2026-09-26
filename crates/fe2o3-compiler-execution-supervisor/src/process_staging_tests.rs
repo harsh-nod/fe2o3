@@ -3,6 +3,68 @@ use super::*;
 use rustix::fs::{MemfdFlags, SeekFrom, fcntl_getfl, fstat, memfd_create, seek};
 use rustix::io::{FdFlags, fcntl_dupfd_cloexec, fcntl_getfd, read};
 use rustix::pipe::{PipeFlags, pipe_with};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+const EOF_CASE_ENV: &str = "FE2O3_PROCESS_STAGING_EOF_CASE";
+const EOF_REPORT_ENV: &str = "FE2O3_PROCESS_STAGING_EOF_REPORT";
+
+struct EofChild(Option<Child>);
+
+impl Drop for EofChild {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn isolated_eof_case(name: &str, run: impl FnOnce()) {
+    if let Some(selected) = std::env::var_os(EOF_CASE_ENV) {
+        assert_eq!(selected, std::ffi::OsStr::new(name));
+        let report = std::env::var_os(EOF_REPORT_ENV).expect("isolated EOF completion path");
+        run();
+        std::fs::write(report, name).unwrap();
+        return;
+    }
+
+    // CLOEXEC writers may survive a concurrent test's fork until its exec. Create
+    // all probes only after re-exec in a single-test process that never forks.
+    let report = tempfile::NamedTempFile::new().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut child = EofChild(Some(
+        Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(format!("process_staging::tests::{name}"))
+            .args(["--nocapture", "--test-threads=1"])
+            .env(EOF_CASE_ENV, name)
+            .env(EOF_REPORT_ENV, report.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap(),
+    ));
+    let status = loop {
+        assert!(
+            Instant::now() < deadline,
+            "isolated EOF case timed out: {name}"
+        );
+        if let Some(status) = child.0.as_mut().unwrap().try_wait().unwrap() {
+            drop(child.0.take());
+            break status;
+        }
+        // Poll only helper completion, never retry an EOF assertion.
+        std::thread::yield_now();
+    };
+    assert!(
+        status.success(),
+        "isolated EOF case failed: {name}: {status}"
+    );
+    // An incorrect exact filter must not silently succeed with zero tests.
+    assert_eq!(std::fs::read(report.path()).unwrap(), name.as_bytes());
+}
 
 struct Fixture {
     launcher: File,
@@ -181,7 +243,8 @@ fn cleanup_probes() -> [(OwnedFd, OwnedFd); 18] {
 }
 
 fn assert_probes_closed(probes: [(OwnedFd, OwnedFd); 18]) {
-    // EOF proves every staged writer closed; unrelated descriptor reuse cannot affect it.
+    // In the isolated process, EOF proves every staged writer closed. Neither
+    // unrelated descriptor reuse nor a concurrent harness fork can affect it.
     for (index, (reader, writer)) in probes.into_iter().enumerate() {
         drop(writer);
         assert_eq!(
@@ -194,63 +257,73 @@ fn assert_probes_closed(probes: [(OwnedFd, OwnedFd); 18]) {
 
 #[test]
 fn every_duplication_failure_closes_partial_staging_and_preserves_borrowed_inputs() {
-    let fixture = Fixture::new();
-    for (fail_at, operation) in DUPLICATION_OPERATIONS.into_iter().enumerate() {
-        let probes = cleanup_probes();
-        let mut calls = 0;
-        let result = StagedLaunchV1::new_with_duplicate(
-            fixture.input(),
-            &fixture.profile_ready.1,
-            &fixture.gate.0,
-            &fixture.exec_status.1,
-            |_, floor| {
-                let index = calls;
-                calls += 1;
-                if index == fail_at {
-                    return Err(Errno::MFILE);
-                }
-                fcntl_dupfd_cloexec(&probes[index].1, floor)
-            },
-        );
-        assert_eq!(
-            result.err(),
-            Some(StagedLaunchErrorV1::Io {
-                operation,
-                source: Errno::MFILE,
-            }),
-        );
-        assert_eq!(
-            calls,
-            fail_at + 1,
-            "duplication must stop at the first error"
-        );
-        assert_probes_closed(probes);
-        fixture.assert_originals_live();
-    }
+    isolated_eof_case(
+        "every_duplication_failure_closes_partial_staging_and_preserves_borrowed_inputs",
+        || {
+            let fixture = Fixture::new();
+            for (fail_at, operation) in DUPLICATION_OPERATIONS.into_iter().enumerate() {
+                let probes = cleanup_probes();
+                let mut calls = 0;
+                let result = StagedLaunchV1::new_with_duplicate(
+                    fixture.input(),
+                    &fixture.profile_ready.1,
+                    &fixture.gate.0,
+                    &fixture.exec_status.1,
+                    |_, floor| {
+                        let index = calls;
+                        calls += 1;
+                        if index == fail_at {
+                            return Err(Errno::MFILE);
+                        }
+                        fcntl_dupfd_cloexec(&probes[index].1, floor)
+                    },
+                );
+                assert_eq!(
+                    result.err(),
+                    Some(StagedLaunchErrorV1::Io {
+                        operation,
+                        source: Errno::MFILE,
+                    }),
+                );
+                assert_eq!(
+                    calls,
+                    fail_at + 1,
+                    "duplication must stop at the first error"
+                );
+                assert_probes_closed(probes);
+                fixture.assert_originals_live();
+            }
+        },
+    );
 }
 
 #[test]
 fn dropping_completed_staging_closes_all_eighteen_duplicates() {
-    let fixture = Fixture::new();
-    let probes = cleanup_probes();
-    let mut calls = 0;
-    let staged = StagedLaunchV1::new_with_duplicate(
-        fixture.input(),
-        &fixture.profile_ready.1,
-        &fixture.gate.0,
-        &fixture.exec_status.1,
-        |_, floor| {
-            let index = calls;
-            calls += 1;
-            fcntl_dupfd_cloexec(&probes[index].1, floor)
+    isolated_eof_case(
+        "dropping_completed_staging_closes_all_eighteen_duplicates",
+        || {
+            let fixture = Fixture::new();
+            let probes = cleanup_probes();
+            let mut calls = 0;
+            let staged = StagedLaunchV1::new_with_duplicate(
+                fixture.input(),
+                &fixture.profile_ready.1,
+                &fixture.gate.0,
+                &fixture.exec_status.1,
+                |_, floor| {
+                    let index = calls;
+                    calls += 1;
+                    fcntl_dupfd_cloexec(&probes[index].1, floor)
+                },
+            )
+            .unwrap();
+            assert_eq!(calls, 18);
+            for (reader, _) in &probes {
+                assert_eq!(read(reader, &mut [0_u8]), Err(Errno::AGAIN));
+            }
+            drop(staged);
+            assert_probes_closed(probes);
+            fixture.assert_originals_live();
         },
-    )
-    .unwrap();
-    assert_eq!(calls, 18);
-    for (reader, _) in &probes {
-        assert_eq!(read(reader, &mut [0_u8]), Err(Errno::AGAIN));
-    }
-    drop(staged);
-    assert_probes_closed(probes);
-    fixture.assert_originals_live();
+    );
 }
