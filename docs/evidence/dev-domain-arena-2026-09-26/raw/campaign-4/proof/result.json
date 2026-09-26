@@ -1,0 +1,12 @@
+{
+  "status": "passed",
+  "obligations_per_unit": {
+    "planner": 19,
+    "arena": 21
+  },
+  "positive_runs": 2,
+  "logical_mutations": 31,
+  "source_manifest_sha256": "7d623ac3fac1aaa9addd901fcaac58494da034025f602e84a3f4d08c6ebeefc0",
+  "proof_unit_runs": 66,
+  "scope": "shared planner/vector and immutable arena lookup/path/fact extraction; not mutable ledger/lock/native refinement"
+}

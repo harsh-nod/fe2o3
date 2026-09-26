@@ -1,0 +1,9 @@
+positive-before: classified
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/screen_arena.py", line 31, in <module>
+    checker.classify(code, log, negative=changed is not None, obligations=21)
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-resource-domain.py", line 155, in classify
+    need(all(re.fullmatch(allowed, error) for error in errors), 'no unrelated negative errors')
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-resource-domain.py", line 49, in need
+    raise ValueError(message)
+ValueError: no unrelated negative errors

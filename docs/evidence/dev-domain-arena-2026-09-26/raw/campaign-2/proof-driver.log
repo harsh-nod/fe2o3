@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-2/controller-source/crates/fe2o3-runtime-model/verus/check-resource-domain.py", line 302, in <module>
+    main()
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-2/controller-source/crates/fe2o3-runtime-model/verus/check-resource-domain.py", line 291, in main
+    classify(code, log, negative=changed is not None)
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-2/controller-source/crates/fe2o3-runtime-model/verus/check-resource-domain.py", line 152, in classify
+    need(all(re.fullmatch(allowed, error) for error in errors), 'no unrelated negative errors')
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-2/controller-source/crates/fe2o3-runtime-model/verus/check-resource-domain.py", line 47, in need
+    raise ValueError(message)
+ValueError: no unrelated negative errors

@@ -1,0 +1,28 @@
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-wrong-summary/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:203:59
+    |
+203 |                 assert forall|d: int| 0 <= d < 19 implies total.counts@[d] == sum(charges@, charges.len() as int, d) by {
+    |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-wrong-summary/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:93:1
+   |
+93 | / fn domain_path_v1(nodes: &[Option<Node>], profile: usize, leaf: Key)
+94 | |     -> (result: Option<([Key; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1], usize)>)
+   | |__________________________________________________________________________^
+
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-wrong-summary/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:142:28
+    |
+142 |                     assert(at(nodes@, path@[i]).key == path@[i]);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-wrong-summary/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:143:28
+    |
+143 |                     assert(at(nodes@, path@[j]).key == path@[j]);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 29 verified, 2 errors
+error: aborting due to 3 previous errors
+

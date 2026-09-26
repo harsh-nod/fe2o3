@@ -1,0 +1,15 @@
+e668544e55774fcbee46eb2c51bbb413a5ab0ec9
+codex/r65-runtime-drain-versions
+origin	https://github.com/harsh-nod/fe2o3.git (fetch)
+origin	https://github.com/harsh-nod/fe2o3.git (push)
+upstream	https://github.com/powderluv/fe2o3.git (fetch)
+upstream	https://github.com/powderluv/fe2o3.git (push)
+rustc 1.96.0-nightly (55e86c996 2026-04-02)
+binary: rustc
+commit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9
+commit-date: 2026-04-02
+host: x86_64-unknown-linux-gnu
+release: 1.96.0-nightly
+LLVM version: 22.1.2
+cargo 1.96.0-nightly (888f67534 2026-03-30)
+Linux XSJHARMENON01 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux

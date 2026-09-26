@@ -1,0 +1,15 @@
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-skip-used-commit/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:225:20
+    |
+225 |             assert(plan.next_used@ == before_plan.next_used@.update(level as int - 1, next));
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-skip-used-commit/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:142:28
+    |
+142 |                     assert(at(nodes@, path@[i]).key == path@[i]);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 29 verified, 2 errors
+error: aborting due to 2 previous errors
+

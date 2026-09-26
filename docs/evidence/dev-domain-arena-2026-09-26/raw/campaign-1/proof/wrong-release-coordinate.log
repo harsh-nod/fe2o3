@@ -1,0 +1,46 @@
+note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-wrong-release-coordinate/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:34:13
+   |
+34 |               while $index < R67_RESOURCE_DIMENSIONS_V1
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-wrong-release-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:61:5
+   |
+61 | /     resource_vector_release_body_v1!(verus_exec_expr, used, charge, next, d, [
+62 | |         invariant
+63 | |             0 <= d <= 19,
+64 | |             forall|i: int| 0 <= i < d ==> next.counts@[i] == used.counts@[i] - charge.counts@[i],
+65 | |             forall|i: int| 0 <= i < d ==> charge.counts@[i] <= used.counts@[i],
+66 | |         decreases 19 - d,
+67 | |     ])
+   | |______- in this macro invocation
+   |
+   = note: this note originates in the macro `resource_vector_release_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-wrong-release-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:57:9
+   |
+57 |         result.is_some() == (forall|d: int| 0 <= d < 19 ==> charge.counts@[d] <= used.counts@[d]),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-wrong-release-coordinate/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:39:29
+   |
+39 |                     None => return None,
+   |                             ----------- at this exit
+
+error: invariant not satisfied at end of loop body
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-wrong-release-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:64:13
+   |
+64 |             forall|i: int| 0 <= i < d ==> next.counts@[i] == used.counts@[i] - charge.counts@[i],
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function body check: Resource limit (rlimit) exceeded; consider rerunning with --profile for more details
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-wrong-release-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:93:1
+   |
+93 | / fn domain_path_v1(nodes: &[Option<Node>], profile: usize, leaf: Key)
+94 | |     -> (result: Option<([Key; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1], usize)>)
+   | |__________________________________________________________________________^
+
+verification results:: 29 verified, 2 errors
+error: aborting due to 3 previous errors
+

@@ -1,0 +1,48 @@
+warning: unused macro definition: `resource_vector_reserve_body_v1`
+ --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-fact-node/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:6:14
+  |
+6 | macro_rules! resource_vector_reserve_body_v1 {
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_macros)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused macro definition: `resource_vector_release_body_v1`
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-fact-node/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:28:14
+   |
+28 | macro_rules! resource_vector_release_body_v1 {
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-fact-node/crates/fe2o3-runtime-model/verus/../../fe2o3-resource-accounting/src/domain/arena_bodies.rs:57:13
+    |
+ 57 |               while $index < $depth
+    |               ^^^^^^^^^^^^^^
+    |
+   ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-fact-node/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:215:5
+    |
+215 | /     resource_domain_facts_body_v1!(verus_exec_expr, nodes, path, depth, facts, index, [
+216 | |         proof {
+217 | |             assert forall|i: int| 0 <= i < 4 implies empty_fact(facts@[i]) by {
+218 | |                 assert(facts@[i].counts@ =~= seq![0usize, 0usize, 0usize]);
+...   |
+228 | |         decreases depth - index,
+229 | |     ], [])
+    | |__________- in this macro invocation
+    |
+    = note: this note originates in the macro `resource_domain_facts_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: invariant not satisfied at end of loop body
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-fact-node/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:225:13
+    |
+225 |             forall|i: int| 0 <= i < index ==> live(nodes@, path@[i]),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: invariant not satisfied at end of loop body
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-fact-node/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:226:13
+    |
+226 |             forall|i: int| 0 <= i < index ==> facts@[i] == fact_of(at(nodes@, path@[i])),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+verification results:: 20 verified, 1 errors
+error: aborting due to 2 previous errors; 2 warnings emitted
+

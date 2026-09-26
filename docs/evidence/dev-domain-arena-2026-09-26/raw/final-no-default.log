@@ -1,0 +1,16 @@
+    Checking fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+   Compiling rustix v1.1.4
+    Checking fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+    Checking fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+    Checking fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+    Checking fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host-api)
+    Checking fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Checking fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+    Checking fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+    Checking fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+    Checking fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+    Checking fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+    Checking fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `dev` profile [unoptimized] target(s) in 23.28s

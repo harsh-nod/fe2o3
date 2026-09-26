@@ -1,0 +1,15 @@
+error: invariant not satisfied at end of loop body
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-skip-reserved-advance/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:183:13
+    |
+183 |             forall|i: int| 0 <= i < level ==> plan.next_reserved@[i] == facts@[i].counts@[0] + charges.len(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-skip-reserved-advance/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:142:28
+    |
+142 |                     assert(at(nodes@, path@[i]).key == path@[i]);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 29 verified, 2 errors
+error: aborting due to 2 previous errors
+

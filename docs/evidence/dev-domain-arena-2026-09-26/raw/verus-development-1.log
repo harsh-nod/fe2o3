@@ -1,0 +1,75 @@
+warning: use of deprecated method `vstd::prelude::OptionAdditionalFns::get_Some_0`: get_Variant is deprecated - use `->` or `matches` instead: https://verus-lang.github.io/verus/guide/datatypes_enum.html
+ --> crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:5:35
+  |
+5 |         && nodes[key.slot as int].get_Some_0().key == key
+  |                                   ^^^^^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `vstd::prelude::OptionAdditionalFns::get_Some_0`: get_Variant is deprecated - use `->` or `matches` instead: https://verus-lang.github.io/verus/guide/datatypes_enum.html
+ --> crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:9:28
+  |
+9 |     nodes[key.slot as int].get_Some_0()
+  |                            ^^^^^^^^^^
+
+error: postcondition not satisfied
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:87:9
+   |
+87 |           result.is_some() == live(nodes@, key),
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: crates/fe2o3-runtime-model/verus/../../fe2o3-resource-accounting/src/domain/arena_bodies.rs:3:36
+   |
+ 3 |       ($nodes:ident, $key:ident) => {{
+   |  ____________________________________-
+ 4 | |         if $key.slot >= $nodes.len() { return None; }
+ 5 | |         match &$nodes[$key.slot] {
+ 6 | |             Some(node) => if node.key == $key { Some(node) } else { None },
+...  |
+ 9 | |     }};
+   | |_____- at the end of the function body
+
+note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:93:1
+   |
+93 | / fn domain_path_v1(nodes: &[Option<Node>], profile: usize, leaf: Key)
+94 | |     -> (result: Option<([Key; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1], usize)>)
+   | |__________________________________________________________________________^
+
+error: postcondition not satisfied
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:96:9
+   |
+96 |         result.is_some() == accepted(nodes@, profile, leaf),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: crates/fe2o3-runtime-model/verus/../../fe2o3-resource-accounting/src/domain/arena_bodies.rs:36:44
+   |
+36 |             if $path[$depth - 1] != ROOT { return None; }
+   |                                            ----------- at this exit
+
+error: postcondition not satisfied
+  --> crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:96:9
+   |
+96 |           result.is_some() == accepted(nodes@, profile, leaf),
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: crates/fe2o3-runtime-model/verus/../../fe2o3-resource-accounting/src/domain/arena_bodies.rs:15:18
+   |
+15 |           $syntax!({
+   |  __________________-
+16 | |             if $profile != MAX_RESOURCE_DOMAIN_DEPTH_V1 && $profile != MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1 {
+17 | |                 return None;
+...  |
+38 | |             Some(($path, $depth))
+39 | |         })
+   | |_________- at the end of the function body
+
+error: invariant not satisfied before loop
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:175:13
+    |
+175 |             forall|i: int| index <= i < 4 ==> empty_fact(facts@[i]),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+verification results:: 28 verified, 3 errors
+error: aborting due to 4 previous errors; 2 warnings emitted
+

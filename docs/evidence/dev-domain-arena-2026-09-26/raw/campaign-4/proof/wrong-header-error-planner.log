@@ -1,0 +1,40 @@
+note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-header-error/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:152:1
+    |
+152 | / fn r75_resource_domain_reserve_v1(
+153 | |     facts: &[R75ResourceDomainFactsV1; 4], depth: usize, profile: usize,
+154 | |     charges: &[R67ResourceVectorV1], owner: u64,
+155 | | ) -> (result: Result<R75ResourceDomainPlanV1, R75ResourceDomainErrorV1>)
+    | |_______________________________________________________________________^
+
+error: postcondition not satisfied
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-header-error/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:157:9
+    |
+157 |           Err(error) => first_error(facts@, depth, profile, charges@, owner) == Some(error),
+    |           ^^^^^^^^^^ failed this postcondition
+    |
+   ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-header-error/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:55:18
+    |
+ 55 |           $syntax!({
+    |  __________________-
+ 56 | |             if ($profile != 3 && $profile != 4) || $depth == 0 || $depth > $profile {
+ 57 | |                 return Err(R75ResourceDomainErrorV1::Invariant);
+...   |
+104 | |             Ok($plan)
+105 | |         })
+    | |_________- at the end of the function body
+
+error: postcondition not satisfied
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-header-error/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:157:9
+    |
+157 |         Err(error) => first_error(facts@, depth, profile, charges@, owner) == Some(error),
+    |         ^^^^^^^^^^ failed this postcondition
+    |
+   ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-header-error/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:59:30
+    |
+ 59 |             if $owner == 0 { return Err(R75ResourceDomainErrorV1::GenerationExhausted); }
+    |                              --------------------------------------------------------- at this exit
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 2 previous errors
+

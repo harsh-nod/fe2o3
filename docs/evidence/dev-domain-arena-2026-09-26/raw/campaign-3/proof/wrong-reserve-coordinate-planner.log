@@ -1,0 +1,44 @@
+note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-wrong-reserve-coordinate/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:12:13
+   |
+12 |               while $index < R67_RESOURCE_DIMENSIONS_V1
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-wrong-reserve-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:41:5
+   |
+41 | /     resource_vector_reserve_body_v1!(verus_exec_expr, used, charge, capacity, next, d, [
+42 | |         invariant
+43 | |             0 <= d <= 19,
+44 | |             forall|i: int| 0 <= i < d ==> next.counts@[i] == used.counts@[i] + charge.counts@[i],
+45 | |             forall|i: int| 0 <= i < d ==> next.counts@[i] <= capacity.counts@[i],
+46 | |         decreases 19 - d,
+47 | |     ])
+   | |______- in this macro invocation
+   |
+   = note: this note originates in the macro `resource_vector_reserve_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-wrong-reserve-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:37:9
+   |
+37 |         result.is_some() == (forall|d: int| 0 <= d < 19 ==> used.counts@[d] + charge.counts@[d] <= capacity.counts@[d]),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-wrong-reserve-coordinate/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:17:29
+   |
+17 |                     None => return None,
+   |                             ----------- at this exit
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-wrong-reserve-coordinate/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:37:9
+   |
+37 |         result.is_some() == (forall|d: int| 0 <= d < 19 ==> used.counts@[d] + charge.counts@[d] <= capacity.counts@[d]),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-wrong-reserve-coordinate/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:19:55
+   |
+19 |                 if value > $capacity.counts[$index] { return None; }
+   |                                                       ----------- at this exit
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 2 previous errors
+

@@ -1,0 +1,41 @@
+note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-reverse-ancestors/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:67:13
+    |
+ 67 |               while $level < $depth
+    |               ^^^^^^^^^^^^^^
+    |
+   ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-reverse-ancestors/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:173:5
+    |
+173 | /     resource_domain_path_body_v1!(verus_exec_expr, facts, depth, profile, charges, owner, plan, total, level, next, [
+174 | |         invariant
+175 | |             profile == 3 || profile == 4, 0 < depth <= profile, owner > 0,
+176 | |             0 <= level <= depth,
+...   |
+236 | |     ])
+    | |______- in this macro invocation
+    |
+    = note: this note originates in the macro `resource_domain_path_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: postcondition not satisfied
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-reverse-ancestors/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:157:9
+    |
+157 |         Err(error) => first_error(facts@, depth, profile, charges@, owner) == Some(error),
+    |         ^^^^^^^^^^ failed this postcondition
+    |
+   ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-reverse-ancestors/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:73:55
+    |
+ 73 |                     Err(error) => { $($record_error)* return Err(error); },
+    |                                                       ----------------- at this exit
+
+error: precondition not satisfied
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-reverse-ancestors/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:187:17
+    |
+146 |         level_error(facts[level], charges, owner).is_some(),
+    |         --------------------------------------------------- failed precondition
+...
+187 |         proof { first_failure(facts@, depth, profile, charges@, owner, level as int); }
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 2 previous errors
+

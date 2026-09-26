@@ -1,0 +1,52 @@
+note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-zero-parent-charge/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:67:13
+    |
+ 67 |               while $level < $depth
+    |               ^^^^^^^^^^^^^^
+    |
+   ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-zero-parent-charge/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:177:5
+    |
+177 | /     resource_domain_path_body_v1!(verus_exec_expr, facts, depth, profile, charges, owner, plan, total, level, next, [
+178 | |         invariant
+179 | |             profile == 3 || profile == 4, 0 < depth <= profile, owner > 0,
+180 | |             0 <= level <= depth,
+...   |
+240 | |     ])
+    | |______- in this macro invocation
+    |
+    = note: this note originates in the macro `resource_domain_path_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: invariant not satisfied at end of loop body
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-zero-parent-charge/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:182:13
+    |
+182 |             forall|i: int| 0 <= i < level ==> level_error(facts@[i], charges@, owner).is_none(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-zero-parent-charge/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:213:20
+    |
+213 |             assert(!fits(facts@[level as int].used, charges@, facts@[level as int].capacity));
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-zero-parent-charge/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:93:1
+   |
+93 | / fn domain_path_v1(nodes: &[Option<Node>], profile: usize, leaf: Key)
+94 | |     -> (result: Option<([Key; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1], usize)>)
+   | |__________________________________________________________________________^
+
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-zero-parent-charge/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:142:28
+    |
+142 |                     assert(at(nodes@, path@[i]).key == path@[i]);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-zero-parent-charge/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:143:28
+    |
+143 |                     assert(at(nodes@, path@[j]).key == path@[j]);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 29 verified, 2 errors
+error: aborting due to 4 previous errors
+

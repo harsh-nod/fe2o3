@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest immutable-domain-arena development (2026-09-26): production lookup,
+ancestry traversal and planner-fact extraction now share exact bodies with
+Verus. The [development packet](evidence/dev-domain-arena-2026-09-26/README.md)
+records an authenticated two-unit campaign: planner 19/0 and arena 21/0 in
+both bracket positives, 31 logically rejected mutations with unaffected units
+passing, and nine passing controller calibrations. These are 66 unit runs, not
+40 distinct obligations. Four new Rust test groups include 432,180 independent
+old/new traversal comparisons. Broad libraries report 1,034 model, 63 accounting,
+1,321 KFD and 1,476 runtime passes with the same four socket-related failures;
+69 selected construction tests, 104 doctests and static checks pass. Coverage
+groups overlap, and this is not full CPU qualification. Mutable ledger/token
+conservation, retirement, mutex and whole admission/commit composition remain
+unproved. Logical/native request-leaf composition and exact allocation-credit
+association are next integration work. MI300X resolution still fails; no new
+performance result or accepted milestone is claimed.
+
 Latest domain-planner development (2026-09-26): production all-ancestor
 reservation now scans the charge roster once and reuses its accepted total for
 parent checks. Rust and Verus compile the same planner/vector bodies. The

@@ -1,0 +1,14 @@
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-record-error/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:78:9
+   |
+78 |         Ok((reserved, next_owner)) => {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-4/proof/sources-wrong-record-error/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:19:28
+   |
+19 |         if $count > free { return Err(R75ResourceDomainErrorV1::Capacity); }
+   |                            ---------------------------------------------- at this exit
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 1 previous error
+

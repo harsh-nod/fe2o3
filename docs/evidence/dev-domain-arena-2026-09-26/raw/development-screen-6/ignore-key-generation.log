@@ -1,0 +1,41 @@
+warning: unused macro definition: `resource_vector_reserve_body_v1`
+ --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/development-screen-6/sources-ignore-key-generation/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:6:14
+  |
+6 | macro_rules! resource_vector_reserve_body_v1 {
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_macros)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused macro definition: `resource_vector_release_body_v1`
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/development-screen-6/sources-ignore-key-generation/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:28:14
+   |
+28 | macro_rules! resource_vector_release_body_v1 {
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: postcondition not satisfied
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/development-screen-6/sources-ignore-key-generation/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:117:9
+    |
+117 |           result.is_some() == live(nodes@, key),
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+    |
+   ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/development-screen-6/sources-ignore-key-generation/crates/fe2o3-runtime-model/verus/../../fe2o3-resource-accounting/src/domain/arena_bodies.rs:3:36
+    |
+  3 |       ($nodes:ident, $key:ident) => {{
+    |  ____________________________________-
+  4 | |         if $key.slot >= $nodes.len() { return None; }
+  5 | |         match &$nodes[$key.slot] {
+  6 | |             Some(node) => if node.key.slot == $key.slot { Some(node) } else { None },
+...   |
+  9 | |     }};
+    | |_____- at the end of the function body
+
+error: function body check: Resource limit (rlimit) exceeded; consider rerunning with --profile for more details
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/development-screen-6/sources-ignore-key-generation/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:123:1
+    |
+123 | / fn domain_path_v1(nodes: &[Option<Node>], profile: usize, leaf: Key)
+124 | |     -> (result: Option<([Key; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1], usize)>)
+    | |__________________________________________________________________________^
+
+verification results:: 18 verified, 2 errors
+error: aborting due to 2 previous errors; 2 warnings emitted
+

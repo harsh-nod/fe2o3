@@ -1,0 +1,56 @@
+note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> docs/evidence/dev-domain-arena-2026-09-26/raw/sources-development-release-coordinate-3/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:34:13
+   |
+34 |               while $index < R67_RESOURCE_DIMENSIONS_V1
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+  ::: docs/evidence/dev-domain-arena-2026-09-26/raw/sources-development-release-coordinate-3/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:61:5
+   |
+61 | /     resource_vector_release_body_v1!(verus_exec_expr, used, charge, next, d, [
+62 | |         invariant
+63 | |             0 <= d <= 19,
+64 | |             forall|i: int| 0 <= i < d ==> next.counts@[i] == used.counts@[i] - charge.counts@[i],
+65 | |             forall|i: int| 0 <= i < d ==> charge.counts@[i] <= used.counts@[i],
+66 | |         decreases 19 - d,
+67 | |     ])
+   | |______- in this macro invocation
+   |
+   = note: this note originates in the macro `resource_vector_release_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: postcondition not satisfied
+  --> docs/evidence/dev-domain-arena-2026-09-26/raw/sources-development-release-coordinate-3/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:57:9
+   |
+57 |         result.is_some() == (forall|d: int| 0 <= d < 19 ==> charge.counts@[d] <= used.counts@[d]),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: docs/evidence/dev-domain-arena-2026-09-26/raw/sources-development-release-coordinate-3/crates/fe2o3-runtime-model/verus/../src/resource_vector_bodies.rs:39:29
+   |
+39 |                     None => return None,
+   |                             ----------- at this exit
+
+error: invariant not satisfied at end of loop body
+  --> docs/evidence/dev-domain-arena-2026-09-26/raw/sources-development-release-coordinate-3/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:64:13
+   |
+64 |             forall|i: int| 0 <= i < d ==> next.counts@[i] == used.counts@[i] - charge.counts@[i],
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: postcondition not satisfied
+   --> docs/evidence/dev-domain-arena-2026-09-26/raw/sources-development-release-coordinate-3/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:111:13
+    |
+111 |               None => true,
+    |               ^^^^ failed this postcondition
+    |
+   ::: docs/evidence/dev-domain-arena-2026-09-26/raw/sources-development-release-coordinate-3/crates/fe2o3-runtime-model/verus/../../fe2o3-resource-accounting/src/domain/arena_bodies.rs:15:18
+    |
+ 15 |           $syntax!({
+    |  __________________-
+ 16 | |             if $profile != MAX_RESOURCE_DOMAIN_DEPTH_V1 && $profile != MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1 {
+ 17 | |                 return None;
+...   |
+ 38 | |             Some(($path, $depth))
+ 39 | |         })
+    | |_________- at the end of the function body
+
+verification results:: 30 verified, 2 errors
+error: aborting due to 3 previous errors
+

@@ -1,0 +1,4 @@
+initial_source_closing_recheck_exit=1
+final_source_recheck_exit=0
+test_binary_recheck_exit=0
+final_source_precleanup_exit=0

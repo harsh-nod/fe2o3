@@ -1,0 +1,67 @@
+note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-retained-count/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:79:1
+   |
+79 | / fn resource_domain_records_v1(facts: R75ResourceDomainFactsV1, count: usize, owner: u64)
+80 | |     -> (result: Result<(usize, u64), R75ResourceDomainErrorV1>)
+   | |______________________________________________________________^
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-retained-count/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:82:9
+   |
+82 |         Ok((reserved, next_owner)) => {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-retained-count/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:23:21
+   |
+23 |             None => return Err(R75ResourceDomainErrorV1::GenerationExhausted),
+   |                     --------------------------------------------------------- at this exit
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-retained-count/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:82:9
+   |
+82 |           Ok((reserved, next_owner)) => {
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-retained-count/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:3:52
+   |
+ 3 |       ($facts:ident, $count:ident, $owner:ident) => {{
+   |  ____________________________________________________-
+ 4 | |         let occupied = match $facts.counts[0].checked_add(0) {
+ 5 | |             Some(value) => value,
+ 6 | |             None => return Err(R75ResourceDomainErrorV1::Invariant),
+...  |
+25 | |         Ok(($facts.counts[0] + $count, next_owner))
+26 | |     }};
+   | |_____- at the end of the function body
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-retained-count/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:82:9
+   |
+82 |         Ok((reserved, next_owner)) => {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-retained-count/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:20:26
+   |
+20 |         if $owner == 0 { return Err(R75ResourceDomainErrorV1::GenerationExhausted); }
+   |                          --------------------------------------------------------- at this exit
+
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-retained-count/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:82:9
+   |
+82 |         Ok((reserved, next_owner)) => {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-retained-count/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:17:13
+   |
+17 |             return Err(R75ResourceDomainErrorV1::InvalidMemberCount);
+   |             -------------------------------------------------------- at this exit
+
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-retained-count/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:142:28
+    |
+142 |                     assert(at(nodes@, path@[i]).key == path@[i]);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 29 verified, 2 errors
+error: aborting due to 5 previous errors
+

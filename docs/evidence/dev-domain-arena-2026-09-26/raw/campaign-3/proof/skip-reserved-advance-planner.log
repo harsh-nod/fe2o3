@@ -1,0 +1,9 @@
+error: invariant not satisfied at end of loop body
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-3/proof/sources-skip-reserved-advance/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:179:13
+    |
+179 |             forall|i: int| 0 <= i < level ==> plan.next_reserved@[i] == facts@[i].counts@[0] + charges.len(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+verification results:: 18 verified, 1 errors
+error: aborting due to 1 previous error
+

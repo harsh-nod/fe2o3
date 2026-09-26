@@ -1,0 +1,27 @@
+error: postcondition not satisfied
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-last-member/crates/fe2o3-runtime-model/verus/r75_resource_domain_v1.rs:99:9
+   |
+99 |           Ok(next) => {
+   |           ^^^^^^^^ failed this postcondition
+   |
+  ::: /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-last-member/crates/fe2o3-runtime-model/verus/../src/r75_resource_domain_bodies.rs:32:18
+   |
+32 |           $syntax!({
+   |  __________________-
+33 | |             let mut $next = $used;
+34 | |             let mut $member = 0usize;
+35 | |             while $member < $charges.len() - 1
+...  |
+45 | |             Ok($next)
+46 | |         })
+   | |_________- at the end of the function body
+
+error: assertion failed
+   --> /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-domain-arena-2026-09-26/raw/campaign-1/proof/sources-omit-last-member/crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:142:28
+    |
+142 |                     assert(at(nodes@, path@[i]).key == path@[i]);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+verification results:: 29 verified, 2 errors
+error: aborting due to 2 previous errors
+

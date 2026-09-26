@@ -1,0 +1,20 @@
+error: postcondition not satisfied
+   --> crates/fe2o3-runtime-model/verus/r75_resource_domain_arena_v1.rs:111:13
+    |
+111 |               None => true,
+    |               ^^^^ failed this postcondition
+    |
+   ::: crates/fe2o3-runtime-model/verus/../../fe2o3-resource-accounting/src/domain/arena_bodies.rs:15:18
+    |
+ 15 |           $syntax!({
+    |  __________________-
+ 16 | |             if $profile != MAX_RESOURCE_DOMAIN_DEPTH_V1 && $profile != MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1 {
+ 17 | |                 return None;
+...   |
+ 38 | |             Some(($path, $depth))
+ 39 | |         })
+    | |_________- at the end of the function body
+
+verification results:: 31 verified, 1 errors
+error: aborting due to 1 previous error
+

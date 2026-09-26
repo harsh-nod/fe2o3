@@ -1,0 +1,18 @@
+[package]
+name = "fe2o3-resource-accounting"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded transactional resource credit ownership for fe2o3 adapters."
+publish = false
+
+[lib]
+name = "fe2o3_resource_accounting"
+
+[dependencies]
+fe2o3-runtime-model.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

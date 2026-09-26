@@ -1,0 +1,255 @@
+#![no_std]
+#![forbid(unsafe_code)]
+
+//! Pure Rust executable model for issue #137 runtime lifecycles.
+//!
+//! The model performs no I/O and grants no KFD, DRM, load, dispatch, completion,
+//! or proof authority. It is the finite state-machine carrier that future Verus
+//! specifications and syscall refinement layers can relate to concrete runtime
+//! execution.
+//!
+//! All identities, observations, and transitions are intentionally constructible
+//! by model clients. Therefore no value from this crate is runtime evidence.
+//! Production adapters must seal identity and quiescence witnesses and prove a
+//! refinement from their concrete operations before consuming modeled states.
+
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
+
+mod async_queue;
+mod closed_execution;
+mod context_producer_reads;
+mod context_read_leases;
+mod context_version_journal;
+mod device_identity;
+mod device_local;
+mod device_projection;
+mod identity;
+mod kernel_semantics;
+mod memory_lifecycle;
+mod memory_pool;
+mod model;
+mod multi_device;
+mod queue_lifecycle;
+mod r11_runtime_semantics;
+mod r12_native_concurrency;
+mod r13_logical_scheduler;
+mod r14_async_observer;
+mod r16_worker_semantic_boundary;
+mod r17_persistent_native_allocation;
+mod r18_persistent_local_sdma_adapter;
+mod r19_directional_persistent_local_sdma_adapter;
+mod r20_runtime_facade_directional_chunking;
+mod r21_runtime_scripted_failure_seam;
+mod r22_batched_directional_persistent_sdma_windows;
+mod r23_same_device_d2d_persistent_sdma_windows;
+mod r24_portable_progress;
+mod r25_persistent_compute_storage_bridge;
+mod r28_persistent_hot_currentness_scope;
+mod r30_bound_host_content_certificate;
+mod r31_single_packet_window_refinement;
+mod r32_directional_sdma_currentness_handoff;
+mod r33_fused_synchronous_directional_sdma;
+mod r34_fused_asynchronous_directional_sdma;
+mod r35_fused_retained_control_replay;
+mod r36_fused_completion_poll_recycle;
+mod r37_typed_native_sdma_wait_activation;
+mod r38_bounded_persistent_compute_wait_recycle;
+mod r39_scoped_persistent_sdma_wait_policy;
+mod r40_gfx942_striped_sdma_aggregate;
+mod r41_persistent_striped_sdma_aggregate;
+mod r42_compute_event_signal_custody;
+mod r44_live_foundation_invariant_certificate;
+mod r45_compute_dependency_publisher;
+mod r46_gfx942_striped_sdma_tail_wait;
+mod r48_retryable_striped_sdma_tail_wait;
+mod r51_native_compute_dependency_lifecycle;
+mod r56_two_native_sdma_mux;
+mod r57_three_binding_compute;
+mod r60_ordinary_fixed_dispatch_pipeline;
+mod r61_owner_async_custody;
+mod r62_operation_control;
+mod r63_graph_reservation;
+mod r64_payload_budget;
+mod r65_graph_versions;
+mod r66_compute_sdma_coexistence;
+mod r67_resource_credits;
+mod r68_device_backing_credits;
+mod r69_host_capture;
+mod r70_resource_batch;
+mod r71_device_pool;
+mod r72_host_visible_backing_credits;
+mod r73_generated_result_storage;
+mod r74_ordered_peer_copy;
+mod r75_resource_domain;
+mod r9_native_evidence;
+mod typed_async;
+
+pub use async_queue::*;
+pub use closed_execution::*;
+pub use context_producer_reads::*;
+pub use context_read_leases::*;
+pub use context_version_journal::*;
+pub use device_identity::*;
+pub use device_local::*;
+pub use device_projection::*;
+pub use identity::*;
+pub use kernel_semantics::*;
+pub use memory_lifecycle::*;
+pub use memory_pool::*;
+pub use model::*;
+pub use multi_device::*;
+pub use queue_lifecycle::*;
+pub use r9_native_evidence::*;
+pub use r11_runtime_semantics::*;
+pub use r12_native_concurrency::*;
+pub use r13_logical_scheduler::*;
+pub use r14_async_observer::*;
+pub use r16_worker_semantic_boundary::*;
+pub use r17_persistent_native_allocation::*;
+pub use r18_persistent_local_sdma_adapter::*;
+pub use r19_directional_persistent_local_sdma_adapter::*;
+pub use r20_runtime_facade_directional_chunking::*;
+pub use r21_runtime_scripted_failure_seam::*;
+pub use r22_batched_directional_persistent_sdma_windows::*;
+pub use r23_same_device_d2d_persistent_sdma_windows::*;
+pub use r24_portable_progress::*;
+pub use r25_persistent_compute_storage_bridge::*;
+pub use r28_persistent_hot_currentness_scope::*;
+pub use r30_bound_host_content_certificate::*;
+pub use r31_single_packet_window_refinement::*;
+pub use r32_directional_sdma_currentness_handoff::*;
+pub use r33_fused_synchronous_directional_sdma::*;
+pub use r34_fused_asynchronous_directional_sdma::*;
+pub use r35_fused_retained_control_replay::*;
+pub use r36_fused_completion_poll_recycle::*;
+pub use r37_typed_native_sdma_wait_activation::*;
+pub use r38_bounded_persistent_compute_wait_recycle::*;
+pub use r39_scoped_persistent_sdma_wait_policy::*;
+pub use r40_gfx942_striped_sdma_aggregate::*;
+pub use r41_persistent_striped_sdma_aggregate::*;
+pub use r42_compute_event_signal_custody::*;
+pub use r44_live_foundation_invariant_certificate::*;
+pub use r45_compute_dependency_publisher::*;
+pub use r46_gfx942_striped_sdma_tail_wait::*;
+pub use r48_retryable_striped_sdma_tail_wait::*;
+pub use r51_native_compute_dependency_lifecycle::*;
+pub use r56_two_native_sdma_mux::*;
+pub use r57_three_binding_compute::*;
+pub use r60_ordinary_fixed_dispatch_pipeline::*;
+pub use r61_owner_async_custody::*;
+pub use r62_operation_control::*;
+pub use r63_graph_reservation::*;
+pub use r64_payload_budget::*;
+pub use r65_graph_versions::*;
+pub use r66_compute_sdma_coexistence::*;
+pub use r67_resource_credits::*;
+pub use r68_device_backing_credits::*;
+pub use r69_host_capture::*;
+pub use r70_resource_batch::*;
+pub use r71_device_pool::*;
+pub use r72_host_visible_backing_credits::*;
+pub use r73_generated_result_storage::*;
+pub use r74_ordered_peer_copy::*;
+pub use r75_resource_domain::*;
+pub use typed_async::*;
+
+#[cfg(test)]
+mod async_queue_tests;
+#[cfg(test)]
+mod closed_execution_tests;
+#[cfg(test)]
+mod device_identity_tests;
+#[cfg(test)]
+mod device_local_tests;
+#[cfg(test)]
+mod device_projection_tests;
+#[cfg(test)]
+mod kernel_semantics_tests;
+#[cfg(test)]
+mod memory_lifecycle_tests;
+#[cfg(test)]
+mod memory_pool_tests;
+#[cfg(test)]
+mod multi_device_tests;
+#[cfg(test)]
+mod queue_lifecycle_tests;
+#[cfg(test)]
+mod r11_runtime_semantics_tests;
+#[cfg(test)]
+mod r12_native_concurrency_tests;
+#[cfg(test)]
+mod r13_logical_scheduler_tests;
+#[cfg(test)]
+mod r14_async_observer_tests;
+#[cfg(test)]
+mod r16_worker_semantic_boundary_tests;
+#[cfg(test)]
+mod r17_persistent_native_allocation_tests;
+#[cfg(test)]
+mod r18_persistent_local_sdma_adapter_tests;
+#[cfg(test)]
+mod r19_directional_persistent_local_sdma_adapter_tests;
+#[cfg(test)]
+mod r20_runtime_facade_directional_chunking_tests;
+#[cfg(test)]
+mod r21_runtime_scripted_failure_seam_tests;
+#[cfg(test)]
+mod r22_batched_directional_persistent_sdma_windows_tests;
+#[cfg(test)]
+mod r23_same_device_d2d_persistent_sdma_windows_tests;
+#[cfg(test)]
+mod r24_portable_progress_tests;
+#[cfg(test)]
+mod r25_persistent_compute_storage_bridge_tests;
+#[cfg(test)]
+mod r28_persistent_hot_currentness_scope_tests;
+#[cfg(test)]
+mod r30_bound_host_content_certificate_tests;
+#[cfg(test)]
+mod r31_single_packet_window_refinement_tests;
+#[cfg(test)]
+mod r32_directional_sdma_currentness_handoff_tests;
+#[cfg(test)]
+mod r33_fused_synchronous_directional_sdma_tests;
+#[cfg(test)]
+mod r34_fused_asynchronous_directional_sdma_tests;
+#[cfg(test)]
+mod r35_fused_retained_control_replay_tests;
+#[cfg(test)]
+mod r36_fused_completion_poll_recycle_tests;
+#[cfg(test)]
+mod r37_typed_native_sdma_wait_activation_tests;
+#[cfg(test)]
+mod r38_bounded_persistent_compute_wait_recycle_tests;
+#[cfg(test)]
+mod r39_scoped_persistent_sdma_wait_policy_tests;
+#[cfg(test)]
+mod r40_gfx942_striped_sdma_aggregate_tests;
+#[cfg(test)]
+mod r41_persistent_striped_sdma_aggregate_tests;
+#[cfg(test)]
+mod r42_compute_event_signal_custody_tests;
+#[cfg(test)]
+mod r44_live_foundation_invariant_certificate_tests;
+#[cfg(test)]
+mod r45_compute_dependency_publisher_tests;
+#[cfg(test)]
+mod r46_gfx942_striped_sdma_tail_wait_tests;
+#[cfg(test)]
+mod r48_retryable_striped_sdma_tail_wait_tests;
+#[cfg(test)]
+mod r51_native_compute_dependency_lifecycle_tests;
+#[cfg(test)]
+mod r56_two_native_sdma_mux_tests;
+#[cfg(test)]
+mod r57_three_binding_compute_tests;
+#[cfg(test)]
+mod r60_ordinary_fixed_dispatch_pipeline_tests;
+#[cfg(test)]
+mod r9_native_evidence_tests;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod typed_async_tests;

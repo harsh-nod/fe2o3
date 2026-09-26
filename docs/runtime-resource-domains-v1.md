@@ -147,3 +147,23 @@ selected execution boundaries without promoting them to universal theorems.
 The paired CPU microbenchmark measures only the pure planner, not account
 admission, native execution or HIP/HSA performance. Full MEM-DOM qualification
 and the other hierarchy obligations above remain open.
+
+The [immutable arena evidence](evidence/dev-domain-arena-2026-09-26/README.md)
+extends refinement to production's exact slice-based lookup, ancestry traversal
+and planner-fact extraction. No converted shadow arena or runtime uniqueness
+scan is introduced. Success and rejection are complete over arbitrary arenas;
+successful paths have exact keys/generations, leaf-to-root parent edges, distinct
+occupied slots, bounded depth and unchanged ROOT padding. Fact extraction
+preserves every selected planning field and zero inactive entries. A proved
+implication derives graph properties from the executable path's exact result
+contract, without assuming them.
+
+The authenticated campaign runs both the 19-obligation planner and 21-obligation
+arena units for two bracket positives and each of 31 semantic mutations. All
+66 unit runs classify correctly, and nine controller calibrations pass. Shared
+declaration obligations overlap, so the counts are not additive properties.
+Four new Rust test groups include 432,180 old/new traversal comparisons and
+selected production rejection snapshots. The broader library run retains the
+same four socket failures; no native or matched performance result is added.
+Mutable ledger conservation, token/record correspondence, retirement, mutex and
+whole admission/commit composition remain separate open proof obligations.
