@@ -115,3 +115,7 @@ crate::compiler_execution_signing_key_native::signing_key_capability!(
 #[cfg(test)]
 #[path = "compiler_execution_signing_key_v3_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compiler_execution_signing_key_v3_operations_tests.rs"]
+mod operations_tests;
