@@ -12,9 +12,10 @@ V1 owners. The state-file format and observation wire remain unchanged.
 peer I/O and scheduling implementation as V1, using the original resource ledger.
 The dedicated native V2/V3 inherited daemon entrypoints now compose these APIs
 with native process/namespace admission, measured sealed executable admission and
-lifecycle custody. The protected helper and root coordinator still consume V1
-owners; they do not yet launch the native daemon. Successful protected startup
-and trusted parent provenance remain unvalidated. Neither these APIs nor their
+lifecycle custody. Dedicated native provisioning helpers now reissue native keys,
+open-or-initialize state and exec the matching native daemon. The root coordinator
+still launches the V1 helper; its native migration is outstanding. Successful
+protected startup and trusted parent provenance remain unvalidated. Neither these APIs nor their
 tests complete M0-M7, prove kernel semantics, or qualify another end-to-end GPU
 kernel.
 
@@ -180,7 +181,15 @@ parent device/inode identity. It rechecks the root-owned parent and canonical
 root-owned lock file, including their required metadata and the shared
 nonblocking lock. Drop only closes
 descriptors, never explicitly unlocks a shared open-file description. There is no
-public V1 upgrade, descriptor accessor or unmetered native operation.
+public V1 upgrade, borrowed descriptor accessor or unmetered native operation.
+Metered `try_clone_for_transfer` returns a controlled File sharing the owner's
+open-file description. Reserve its full 16-byte charge on the tested x86-64 layout.
+`validate_transfer` checks the exact canonical inode, parent, metadata and flags,
+then acquires/rechecks the nonblocking shared lock. It does not prove that an
+arbitrary candidate shares the original open-file description: an independent
+reopen can acquire its own shared lock. Both operations cost 65544 work units.
+Exported aliases are trusted transfer inputs, not safe for adversarial mutation of
+flags or locks; drop only closes them.
 
 Prepay the family's exported `STARTUP_INPUT_STORAGE` before entry (768 bytes on
 the tested x86-64 layout). Every supplied slot is consumed/closed on return,
@@ -199,8 +208,67 @@ logical accounting, not RSS, syscall latency or idle-service lifetime bounds.
 The dedicated `fe2o3-external-anchor-service-v2` and `-v3` binaries create one
 finite process ledger (work `1 << 40`, storage `1 << 30`). The static-image script
 accepts explicit `v1`, `v2` or `v3`; omission preserves the existing V1 build. There
-is no ambient family selector or native-to-V1 fallback. Existing helper and
-coordinator callers remain V1 until their actual authority and descriptor
-contracts are migrated together. See the
+is no ambient family selector or native-to-V1 fallback. The root coordinator
+still launches V1. See the
 [startup checkpoint](evidence/conditional-native-anchor-startup-20260926.md) for
-validation evidence and the remaining integration boundary.
+the initial daemon evidence and the following section for native helper integration.
+
+## Native Provisioning Helper
+
+`run_inherited_external_anchor_provisioning_helper_v2/v3` are unsafe, single-use
+dedicated-process entrypoints with the same exclusive raw-slot and no-other-I/O
+ownership requirements as daemon startup. Success replaces the process; every
+return is terminal failure. Unrelated descriptors and standard streams close.
+
+| Slot | Transferred Input |
+| --- | --- |
+| 3 | Connected root-parent bootstrap |
+| 4 | Durable-state root |
+| 5 | Measured sealed daemon image |
+| 6 | Root-owned lifecycle lease |
+| 202 | Actual same-family policy |
+| 220 | Actual same-family supervisor deployment |
+| 221 | Actual same-family anchor deployment |
+| 222 | ROOT-owned native key template |
+| 223 | Actual same-family provisioning context |
+
+Invocation and process/namespace checks precede descriptor-owning admission. The
+complete source table is checked before duplication. Actual policy, supervisor,
+deployment and provisioning owners are admitted under their same-family contexts;
+current nonroot credentials must match. The running helper is measured against
+provisioning, the bootstrap must be an unnamed nonblocking UNIX seqpacket whose
+peer is the exact root parent, and the daemon is measured against deployment.
+Only then is the key template reissued to native service-owned custody. No raw
+key is extracted and no V1 authority owner is admitted.
+
+The helper opens or initializes state through the same native durable engine.
+Malformed existing state still refuses. It retains the state lock, original
+native owners and lifecycle lease while staging full File transfers above the
+fixed table. Context, key, lease, image and profile checks run on those exact
+transfers both before and after readiness send. Terminal exec inherits only the
+daemon table `3/4/5/202/220/221/222` and an empty environment. Shared mechanical
+descriptor/bootstrap/exec code preserves the legacy V1 path without introducing
+a second persistence engine or a public test-provider interface.
+
+Readiness is the existing 16-byte record plus one SCM_RIGHTS endpoint, **not**
+proof that exec or daemon admission succeeded. Late refusal can follow genesis
+creation or readiness delivery. Reopen and recover, never reset state or assume
+rollback. The coordinator must still validate the readiness transfer, exec EOF,
+live pidfd and protected endpoint identity before treating the service as ready.
+
+Prepay the family's `NATIVE_EXTERNAL_ANCHOR_HELPER_INPUT_STORAGE` (134218656
+bytes on the tested x86-64 layout). It conservatively includes the maximum
+128-MiB incoming daemon image before its measurement is available. Intake and
+staging separately reserve the overlap while two full charged images coexist.
+Outer helper work is 401704 and its frame is 65536 bytes; nested native operations
+charge the original ledger additionally. Mechanical I/O makes bounded single
+attempts. Errors and unwinds close all inputs/private aliases, restore entry
+storage and preserve work, peaks and denials; retire the original input charge
+after return. Quotas are logical, not RSS, latency or syscall-duration bounds.
+
+Dedicated helper V2/V3 binaries use one finite process ledger (work `1 << 40`,
+storage `1 << 31`). The helper static-build script accepts `v1`, `v2` or `v3`,
+defaulting to V1. Rootless tests validate refusal, restart and actual exec to a
+minimal test image, not the production protected daemon. See the
+[helper checkpoint](evidence/conditional-native-anchor-helper-20260926.md) for
+exact passing/failing checks and remaining coordinator/compiler/GPU gates.

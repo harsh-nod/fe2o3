@@ -180,15 +180,17 @@ admission returns full custody, and signing returns the full observation charge.
 Scopes preserve prior work, peak and first-denial history. These are logical
 quotas, not timing, generated-stack or RSS bounds.
 
-The protected coordinator and provisioning helper still need to consume these
-native owners; their current path uses V1 owners and raw keys. The
+The protected root coordinator still launches the V1 provisioning path. The
 [native durable service](compiler-execution-native-anchor-state.md) retains the
 native key and persists before signing through the shared state engine. Its peer
 loop uses shared transport/scheduling with original-ledger accounting. Dedicated
 native V2/V3 inherited entrypoints now compose that loop with process, namespace,
-running-image and lifecycle admission. They are not yet launched by the protected
-helper/coordinator, and successful protected startup remains unvalidated. See the
-[startup checkpoint](evidence/conditional-native-anchor-startup-20260926.md).
+running-image and lifecycle admission. Dedicated native V2/V3 helpers now compose
+actual same-family context admission, measured helper/daemon images, native key
+reissue, open-or-initialize, metered transfers and terminal native-daemon exec.
+They preserve key custody without extracting V1 raw keys. Native root-coordinator
+launch integration and successful protected startup remain unvalidated. See the
+[helper checkpoint](evidence/conditional-native-anchor-helper-20260926.md).
 Passing local tests does not establish protected startup
 or production compiler integration. See the
 [anchor provisioning checkpoint](evidence/conditional-native-anchor-provisioning-20260926.md)
