@@ -24,7 +24,19 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest completion-planner and teardown development (2026-09-26): the signed
+Latest async bounded-settlement development (2026-09-26): ordinary async drivers
+now retain a producer quiescence diagnostic and continue bounded progress while
+the exact requested submission remains Pending. A depth-256 regression covers
+16 journal/policy/observer combinations, including dropped observers, Stop and
+unrelated Context quarantine. The old driver fails the intended retention check;
+the fix completes local propagation without another backend call. The
+[development packet](evidence/dev-async-bounded-settlement-2026-09-26/README.md)
+records 1,526 broad runtime passes, three unchanged socket-permission failures,
+28 ignores, and passing strict Clippy, minimal checking and formatting. This is
+CPU behavior evidence, not new driver/Context formal refinement, native behavior
+or matched performance. Accepted milestones and A1/A2/parity remain unchanged.
+
+Earlier completion-planner and teardown development (2026-09-26): the signed
 shared-body campaign completes 35 phases, with three 53/0 full positives and
 25 clean logical mutation rejections. It preserves source/tool continuity and
 all failed attempts; the early-yield guard form remains unqualified, while its
