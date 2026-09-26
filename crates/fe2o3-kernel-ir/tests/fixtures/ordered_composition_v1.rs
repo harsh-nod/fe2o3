@@ -38,7 +38,7 @@ pub fn region(
     statement: u8,
     steps: u8,
 ) -> Operation {
-    let registers = if caller % 2 == 0 {
+    let registers = if caller.is_multiple_of(2) {
         Gfx942OrderedProgramRegistersV1::new(32, 33, [34, 35, 36])
     } else {
         Gfx942OrderedProgramRegistersV1::new(63, 0, [62, 17, 1])

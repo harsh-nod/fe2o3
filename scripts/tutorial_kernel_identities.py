@@ -920,10 +920,14 @@ def validate_kernel_inventory(
     return {
         "inventoryComplete": complete, "requiredPairCount": len(kernels) if complete else None,
         "knownKernelIdentityCount": len(kernels), "displayItemCount": len(displays),
+        "knownVariantObligationCount": variant_count,
+        "pendingVariantCount": variant_count - source_bound_variants,
         "sourceBoundVariantCount": source_bound_variants, "sourceBoundPairCount": source_bound_pairs,
         "variantBindingStatus": ("pending" if not source_bound_variants else
                                  "source-bound" if source_bound_variants == variant_count else "partial"),
         "pendingDisplayItemCount": pending_displays, "negativeCaseCount": len(negative_refs),
+        "unregisteredDisplayItemCount": sum(
+            row["classification"] == "kernel" and not row["kernelIds"] for row in displays),
         "runtimeCensusValidated": runtime_inventory is not None,
         "unresolvedBindings": unresolved, "kernelIdentities": kernels,
         "negativeCases": negative_refs, "displayItems": displays,

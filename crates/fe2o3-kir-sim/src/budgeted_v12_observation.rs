@@ -6,8 +6,11 @@ use fe2o3_kernel_ir::{
 };
 use std::{error::Error, fmt};
 
+#[path = "budgeted_v12_bf16_call_observation_v1.rs"]
+mod bf16_call;
 #[path = "budgeted_v12_observation_profile.rs"]
 mod profile;
+pub use bf16_call::Bf16CallCpuObservationOptionsV1;
 
 /// Two immutable borrows, not source custody or a reconstructible execution permit.
 ///
@@ -167,33 +170,6 @@ impl<S: SimulationDebugSinkV1> SimulationDebugSinkV1 for BoundedDebug<'_, S> {
     // Deliberately no context/lifecycle/physical opt-ins in this finite adapter.
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn unavailable<T>() -> SimulationDebugCollectionV1<T> {
-        SimulationDebugCollectionV1::Unavailable {
-            reason: SimulationDebugUnavailableReasonV1::AllocationFailure,
-            required: 1,
-        }
-    }
-    #[test]
-    fn unavailable_outer_or_nested_snapshot_never_is_complete() {
-        let frames = SimulationDebugCollectionV1::Captured(Vec::new());
-        let memory = SimulationDebugCollectionV1::Captured(Vec::new());
-        assert!(complete_checkpoint(&frames, &memory));
-        assert!(!complete_checkpoint(&unavailable(), &memory));
-        assert!(!complete_checkpoint(&frames, &unavailable()));
-        let nested = SimulationDebugCollectionV1::Captured(vec![SimulationDebugFrameV1 {
-            depth: 0,
-            function_ordinal: 0,
-            block: fe2o3_kernel_ir::BlockId(0),
-            next_operation: Some(0),
-            values: unavailable(),
-        }]);
-        assert!(!complete_checkpoint(&nested, &memory));
-    }
-}
-
 impl AdmittedSimulationModuleV1 {
     /// Observes the actual immutable V12 graph with the ordinary CPU executor.
     ///
@@ -277,5 +253,32 @@ impl AdmittedSimulationModuleV1 {
             }
             observed
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn unavailable<T>() -> SimulationDebugCollectionV1<T> {
+        SimulationDebugCollectionV1::Unavailable {
+            reason: SimulationDebugUnavailableReasonV1::AllocationFailure,
+            required: 1,
+        }
+    }
+    #[test]
+    fn unavailable_outer_or_nested_snapshot_never_is_complete() {
+        let frames = SimulationDebugCollectionV1::Captured(Vec::new());
+        let memory = SimulationDebugCollectionV1::Captured(Vec::new());
+        assert!(complete_checkpoint(&frames, &memory));
+        assert!(!complete_checkpoint(&unavailable(), &memory));
+        assert!(!complete_checkpoint(&frames, &unavailable()));
+        let nested = SimulationDebugCollectionV1::Captured(vec![SimulationDebugFrameV1 {
+            depth: 0,
+            function_ordinal: 0,
+            block: fe2o3_kernel_ir::BlockId(0),
+            next_operation: Some(0),
+            values: unavailable(),
+        }]);
+        assert!(!complete_checkpoint(&nested, &memory));
     }
 }

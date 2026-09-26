@@ -5,6 +5,16 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Closed BF16 helper-call CPU observation — 2026-09-26
+
+The [two-frame CPU checkpoint](bf16-helper-call-cpu-qualification-20260926.md)
+adds bounded observation of an actual canonical helper call and four-component
+return. Ten new tests and 24 focused compatibility tests passed; the broader
+regression passed 753 test executions, strict simulator Clippy and diff checks.
+Genuine Rust helper emission/numerical execution, normal continuation and
+hardware remain separate, unfinished qualifications. Accepted broad exits
+remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Genuine BF16 helper source transport — 2026-09-25
 
 The [helper-source checkpoint](bf16-helper-source-qualification-20260925.md)
