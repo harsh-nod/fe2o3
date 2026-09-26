@@ -384,11 +384,10 @@ unsafe fn child_exec(
         if normalize_signal_state() != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 1);
         }
-        if arm_parent_death(expected_parent) != 0 {
-            child_fail(staged.exec_status_writer.as_raw_fd(), 2);
-        }
-        if establish_profile(credentials, cap_last_cap) != 0 {
-            child_fail(staged.exec_status_writer.as_raw_fd(), 3);
+        if let Err(stage) = establish_guarded_profile(expected_parent, || {
+            establish_profile(credentials, cap_last_cap)
+        }) {
+            child_fail(staged.exec_status_writer.as_raw_fd(), stage);
         }
         let ready = PROTECTED_SERVICE_PROFILE_READY_V1;
         if libc::write(
@@ -498,6 +497,25 @@ unsafe fn arm_parent_death(expected_parent: i32) -> c_int {
         return -1;
     }
     0
+}
+
+unsafe fn establish_guarded_profile(
+    expected_parent: i32,
+    establish: impl FnOnce() -> c_int,
+) -> Result<(), u8> {
+    // SAFETY: scalar post-clone checks; the private production callback uses direct syscalls.
+    if unsafe { arm_parent_death(expected_parent) } != 0 {
+        return Err(2);
+    }
+    if establish() != 0 {
+        return Err(3);
+    }
+    // Changing effective/filesystem IDs clears PDEATHSIG. Re-arm and check the
+    // exact parent again before readiness; the old pre-transition guard is not enough.
+    if unsafe { arm_parent_death(expected_parent) } != 0 {
+        return Err(2);
+    }
+    Ok(())
 }
 
 unsafe fn establish_profile(
@@ -658,3 +676,7 @@ unsafe fn child_fail(exec_status: RawFd, stage: u8) -> ! {
         libc::_exit(126)
     }
 }
+
+#[cfg(test)]
+#[path = "profile_transition_tests.rs"]
+mod profile_tests;
