@@ -30,6 +30,11 @@ pub(super) use bf16_nominal_recipe_resources_genuine_v1_tests::{
     nominal_recipe_resources_controls_for_test_v1, observe_nominal_recipe_resources_for_test_v1,
 };
 
+#[cfg(test)]
+pub(super) use bf16_nominal_recipe_resources_v1::{
+    nominal_initial_graph_controls_for_test_v1, observe_nominal_initial_graph_for_test_v1,
+};
+
 use super::bf16_nominal_call_routing_v1::NominalCallVisitorV1;
 #[cfg(test)]
 use super::ranked_projection_source_v1::with_projection_source_budget_v1;

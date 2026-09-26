@@ -1,0 +1,69 @@
+{
+  "schema": "disabled-physical-v3-actual-helper-extraction-v1",
+  "prefix": "// SPDX-License-Identifier: GPL-3.0-or-later\n// Exact old owner-binding and proposed real helper/commit bodies.\n",
+  "owner_core": {
+    "source": "gdb/amd-dbgapi-owned-one-stop-v1.h",
+    "bytes": 33678,
+    "sha256": "33e7cf2390da8cfca2b55d91568a6cda2d20c0e359484d04741cde9e1c5d1bce"
+  },
+  "ref_ptr": {
+    "source": "gdbsupport/gdb_ref_ptr.h",
+    "bytes": 5508,
+    "sha256": "349c4fc1a63bb4b66ba3df4ee7a61f4c80a018d41c8e05a56f7ddbbe2c801232"
+  },
+  "parts": [
+    {
+      "source": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+      "lines": [
+        16,
+        18
+      ],
+      "bytes": 105,
+      "sha256": "b1f04fc42af9b43819c8f103ab3242bc10129a0be90afb87db275c0a6d54ac0e"
+    },
+    {
+      "source": "gdb/amd-dbgapi-one-stop-native-owner-v1.inc",
+      "lines": [
+        6,
+        43
+      ],
+      "bytes": 1955,
+      "sha256": "b6945f6f4cf0e45572e21c5730c5a8d045135f636a6206a03b12ca903a22dae1"
+    },
+    {
+      "source": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
+      "start": "void native_adapter::entry_maintenance_current () {",
+      "end": "void native_adapter::infrun_begin (",
+      "bytes": 4055,
+      "sha256": "e48b909b3226f60a8d623fb6414220bd25f8327d60227ffa0e2c1c1ca6e111a3"
+    },
+    {
+      "source": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
+      "start": "void native_adapter::before_generic_commit () {",
+      "end": "void native_adapter::before_finish_step (",
+      "bytes": 2347,
+      "sha256": "8cc9d858942d9e3f81b8d72b68b750254ca275b642adfc3a00422f5c5d39a100"
+    }
+  ],
+  "private_fixture": {
+    "bytes": 14937,
+    "sha256": "7c76af7de74e85c3af6ac10c3d6c0d4674d8720ddd1cefa04035af711ff43278"
+  },
+  "include_only_transforms": [
+    {
+      "before": "#include \"owner-core.h\"",
+      "after": "#include \"amd-dbgapi-owned-one-stop-v1.h\""
+    },
+    {
+      "before": "#include \"actual-binding-bodies.inc\"",
+      "after": "#include \"actual-maintenance-bodies.inc\""
+    }
+  ],
+  "mocked_dependencies": [
+    "GDB target/inferior/thread object implementations",
+    "registry and list iteration",
+    "target reference close policy side effects",
+    "resume/commit effects and output"
+  ],
+  "actual_native_execution": false
+}

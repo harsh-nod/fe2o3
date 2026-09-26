@@ -1,0 +1,239 @@
+--- a/gdb/amd-dbgapi-one-stop-native-events-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-events-v1.inc
+@@ -5,6 +5,7 @@
+ void native_adapter::callback_begin (amd_dbgapi_inferior_info &actual,breakpoint *bp,
+                                     amd_dbgapi_breakpoint_id_t id,thread_info *thread) {
+   if (!selected ()) return;
++  retire_entry_maintenance ();
+   require (&actual==&info () && thread==m_host && thread==inferior_thread ()
+            && m_path==path::none && m_callback_progress==callback_progress::none
+            && bp!=nullptr && bp->pspace==m_inferior->pspace
+@@ -61,6 +62,7 @@
+ void native_adapter::runtime_ack (amd_dbgapi_inferior_info &actual,amd_dbgapi_event_id_t event,
+                                  amd_dbgapi_runtime_state_t state,amd_dbgapi_status_t status) {
+   if (!selected ()) return;
++  retire_entry_maintenance ();
+   require (&actual==&info () && actual.runtime_state==state
+            && m_path==path::none && m_callback_progress==callback_progress::none,
+            failure::owner_changed);
+@@ -102,6 +104,7 @@
+ }
+ void native_adapter::after_host_or_gpu_stop (thread_info *thread) {
+   if (!selected ()) return;
++  retire_entry_maintenance ();
+   if (m_owner.state ()==phase::lifecycle_disappeared && thread==nullptr) return;
+   // Lifecycle disappearance is not a claim that the separate MI exit was normal.
+   require (thread!=nullptr && thread==inferior_thread (),failure::stop_changed);
+@@ -167,6 +170,7 @@
+ }
+ void native_adapter::disappearing (inferior *actual) {
+   if (!selected () || m_owner.invalid ()) return;
++  retire_entry_maintenance ();
+   // exit_inferior clears threads before this observer, but has not cleared PID.
+   // Retained strong references prevent address reuse; do not pretend a live
+   // stopped host thread still exists or query target memory here.
+@@ -184,9 +188,9 @@
+   flush ();
+ }
+ void native_adapter::invalidate (failure why) {
+-  if (selected ()) { m_snapshot.revoke (snapshot_issue::owner_changed); m_owner.poison (why); }
++  if (selected ()) { m_snapshot.revoke (snapshot_issue::owner_changed); m_owner.poison (why); retire_entry_maintenance (); }
+ }
+ void native_adapter::native_unwind () noexcept {
+-  if (selected ()) { m_snapshot.revoke (snapshot_issue::native_error); m_owner.poison (failure::native_result); }
++  if (selected ()) { m_snapshot.revoke (snapshot_issue::native_error); m_owner.poison (failure::native_result); retire_entry_maintenance (); }
+ }
+ } // namespace amd_owned_one_stop_v1
+--- a/gdb/amd-dbgapi-one-stop-native-io-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-io-v1.inc
+@@ -9,6 +9,7 @@
+ [[noreturn]] void native_adapter::reject (failure why) {
+   m_snapshot.revoke (snapshot_issue::owner_changed);
+   m_owner.poison (why);
++  retire_entry_maintenance ();
+   error (_("fixed owned one-stop native relation refused (%u)"),
+          static_cast<unsigned> (m_owner.why ()));
+ }
+--- a/gdb/amd-dbgapi-one-stop-native-resume-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-resume-v1.inc
+@@ -2,6 +2,73 @@
+    The generic fence runs before dcache invalidation and top_target()->resume.
+    The selected path consumes native state BEFORE any host or wave resume. */
+ namespace amd_owned_one_stop_v1 {
++void native_adapter::entry_maintenance_current () {
++  debit (counter::work,128); // Fixed added checks; roster debits remain separate.
++  require (m_inferior!=nullptr && m_inferior_ref.get ()==m_inferior
++           && current_inferior ()==m_inferior && m_host!=nullptr
++           && m_host_ref.get ()==m_host && m_entry_process_ref.get ()!=nullptr
++           && m_entry_top_ref.get ()!=nullptr,failure::owner_changed);
++  auto *const proc=m_inferior->process_target ();
++  auto *const top=m_inferior->top_target ();
++  require (proc!=nullptr && proc==m_entry_process_ref.get ()
++           && proc==get_native_target () && top==m_entry_top_ref.get ()
++           && m_inferior->target_is_pushed (proc)
++           && m_inferior->target_is_pushed (top)
++           && (top==proc || (top->stratum ()==thread_stratum
++                            && m_inferior->find_target_beneath (top)==proc)),
++           failure::owner_changed);
++  require (m_owner.check_owner (current_identity ()),failure::owner_changed);
++  require (m_owner.state ()==phase::host_running && !m_owner.m_runtime
++           && !m_owner.m_callback && info ().runtime_state==AMD_DBGAPI_RUNTIME_STATE_UNLOADED
++           && !m_inferior->target_is_pushed (&the_amd_dbgapi_target)
++           && !m_command_continue && !m_exit_requested && !m_infrun_origin
++           && m_callback_progress==callback_progress::none
++           && m_gpu_thread==nullptr && m_gpu_thread_ref.get ()==nullptr,
++           failure::commit);
++  require (m_host->state==THREAD_RUNNING && m_host->executing () && m_host->resumed ()
++           && !m_host->has_pending_waitstatus () && proc->threads_executing
++           && proc->commit_resumed_state && !proc->has_resumed_with_pending_wait_status (),
++           failure::commit);
++  std::size_t host=0,gpu=0; thread_roster (host,gpu);
++  require (host==1 && gpu==0,failure::resume_scope);
++}
++void native_adapter::retain_entry_commit_targets () {
++  debit (counter::work,32); // Retention/scalar setup before any commit effect.
++  require (m_entry_epoch==entry_epoch::unused && !m_entry_maintenance_inflight
++           && m_entry_process_ref.get ()==nullptr && m_entry_top_ref.get ()==nullptr
++           && m_inferior!=nullptr && m_inferior_ref.get ()==m_inferior
++           && current_inferior ()==m_inferior,failure::commit);
++  auto *const proc=m_inferior->process_target ();
++  auto *const top=m_inferior->top_target ();
++  require (proc!=nullptr && top!=nullptr && proc==get_native_target ()
++           && m_inferior->target_is_pushed (proc)
++           && m_inferior->target_is_pushed (top),failure::owner_changed);
++  // Same real ref policy used by target_detach; no raw-pointer permit.
++  m_entry_process_ref=target_ops_ref::new_reference (proc);
++  m_entry_top_ref=target_ops_ref::new_reference (top);
++  m_entry_epoch=entry_epoch::entry_commit; // Never re-armed from serialized state.
++  entry_maintenance_current ();
++}
++void native_adapter::retire_entry_maintenance () noexcept {
++  if (m_entry_epoch==entry_epoch::unused || m_entry_epoch==entry_epoch::retired) return;
++  if (!m_owner.invalid ()) m_owner.debit (counter::work,32);
++  if (m_entry_maintenance_inflight
++      || (m_entry_epoch==entry_epoch::entry_commit && m_generic_commit))
++    m_owner.poison (failure::commit); // Reentry cannot acquire a resume permit.
++  m_entry_epoch=entry_epoch::retired; // Monotonic; no reset/reselection.
++  // Never drop the last ref or run target close from this noexcept path.
++  // During an effect, or after ownership/stack drift, retain the bounded refs
++  // through debugger teardown. They grant no authority once retired/poisoned.
++  if (!m_entry_maintenance_inflight && !m_generic_commit
++      && m_inferior!=nullptr && m_inferior_ref.get ()==m_inferior
++      && current_inferior ()==m_inferior && m_entry_process_ref.get ()!=nullptr
++      && m_entry_top_ref.get ()!=nullptr
++      && m_inferior->target_is_pushed (m_entry_process_ref.get ())
++      && m_inferior->target_is_pushed (m_entry_top_ref.get ())) {
++    m_entry_top_ref.reset (nullptr);
++    m_entry_process_ref.reset (nullptr);
++  }
++}
+ void native_adapter::infrun_begin (thread_info *thread,ptid_t scope,bool step,gdb_signal signal,
+                                   bool trap,bool inline_step,bool software,bool user_step) {
+   if (!selected ()) return;
+@@ -15,6 +82,7 @@
+ void native_adapter::infrun_end () noexcept { m_infrun_origin=false; }
+ void native_adapter::before_generic_resume (ptid_t scope,int step,gdb_signal signal) {
+   if (!selected ()) return;
++  retire_entry_maintenance ();
+   require (m_infrun_origin && m_path==path::none && !m_generic_returned
+            && !m_generic_commit && m_infrun_scope==scope && m_infrun_step==(step!=0)
+            && m_infrun_signal==signal && signal==GDB_SIGNAL_0
+@@ -98,8 +166,17 @@
+ }
+ void native_adapter::before_generic_commit () {
+   if (!selected ()) return;
++  if (m_path==path::none) {
++    require (m_entry_epoch==entry_epoch::armed && !m_entry_maintenance_inflight
++             && !m_generic_returned && !m_generic_commit
++             && !m_amd_body_returned && !m_amd_commit_returned,failure::commit);
++    entry_maintenance_current ();
++    m_entry_maintenance_inflight=true; // Consume before the one existing commit.
++    return; // No target_resume credit, owner phase change, ACK, or output.
++  }
+   require (m_path!=path::none && m_generic_returned && !m_generic_commit,
+            failure::commit);
++  if (m_path==path::entry) retain_entry_commit_targets ();
+   if (m_path==path::publication || m_path==path::completion)
+     require (m_owner.commit_started (current_identity ()),failure::commit);
+   m_generic_commit=true; // Before beneath/forward-progress effects.
+@@ -112,15 +189,29 @@
+ }
+ void native_adapter::after_generic_commit () {
+   if (!selected ()) return;
++  if (m_entry_maintenance_inflight) {
++    require (m_entry_epoch==entry_epoch::armed && m_path==path::none
++             && !m_generic_returned && !m_generic_commit
++             && !m_amd_body_returned && !m_amd_commit_returned,failure::commit);
++    entry_maintenance_current ();
++    m_entry_maintenance_inflight=false;
++    return; // Do not repeat an owner transition row or change stop/packet counts.
++  }
+   require (m_generic_commit && m_generic_returned
+            && (m_path==path::entry ? !m_amd_commit_returned : m_amd_commit_returned),
+            failure::commit);
+   if (m_path==path::publication || m_path==path::completion)
+     require (m_owner.commit_returned (),failure::commit);
+   if (m_path==path::callback_continue) m_callback_progress=callback_progress::none;
++  const bool entry=m_path==path::entry;
+   m_path=path::none; m_generic_returned=m_generic_commit=false;
+   m_amd_body_returned=m_amd_commit_returned=false;
+   flush ();
++  if (entry) {
++    require (m_entry_epoch==entry_epoch::entry_commit,failure::commit);
++    entry_maintenance_current ();
++    m_entry_epoch=entry_epoch::armed; // Only after that actual first commit/flush.
++  }
+ }
+ void native_adapter::before_finish_step (thread_info *thread,const target_waitstatus &wait,
+                                         bool had_inline,bool trap_expected,std::uint64_t inline_address) {
+@@ -146,6 +237,7 @@
+ }
+ void native_adapter::mi_input (const char *text) {
+   if (!selected ()) return;
++  retire_entry_maintenance ();
+   m_snapshot.revoke (snapshot_issue::resumed); // EVERY next input, before parsing.
+   m_output.forget (); // Serialized history is never a live value accessor.
+   require (text!=nullptr && current_ui==m_ui && top_level_interpreter ()==m_interpreter,
+--- a/gdb/amd-dbgapi-one-stop-native-v1.h
++++ b/gdb/amd-dbgapi-one-stop-native-v1.h
+@@ -72,6 +72,9 @@
+   void require (bool, failure);
+   void debit (counter, std::uint64_t);
+   void api ();
++  void entry_maintenance_current ();
++  void retain_entry_commit_targets ();
++  void retire_entry_maintenance () noexcept;
+   identity current_identity ();
+   amd_dbgapi_inferior_info &info ();
+   void thread_roster (std::size_t &, std::size_t &);
+@@ -101,6 +104,7 @@
+   void client_scope_failed () noexcept;
+   static constexpr std::uint64_t constant_and_scratch = 4096;
+   static constexpr std::uint64_t snapshot_scalar_scratch = 1024;
++  static constexpr std::uint64_t entry_maintenance_scalar_scratch = 256;
+   static constexpr std::uint64_t logical_storage () noexcept;
+   owner m_owner;
+   physical_snapshot m_snapshot; // Private, same selected-lifetime sizeof reservation.
+@@ -137,6 +141,10 @@
+   bool m_origin_pending = false, m_origin_complete = false;
+   enum class path : std::uint8_t { none,entry,callback_step,callback_continue,publication,completion };
+   enum class callback_progress : std::uint8_t { none,step_ready,step_inflight,continue_ready };
++  enum class entry_epoch : std::uint8_t { unused,entry_commit,armed,retired };
++  target_ops_ref m_entry_process_ref,m_entry_top_ref;
++  entry_epoch m_entry_epoch=entry_epoch::unused;
++  bool m_entry_maintenance_inflight=false;
+   path m_path=path::none;
+   callback_progress m_callback_progress=callback_progress::none;
+   bool m_infrun_origin=false,m_infrun_step=false,m_infrun_inline=false;
+@@ -156,9 +164,10 @@
+      Another256 bytes prepay simultaneous borrowed output pointers/closures,
+      without silently reusing any of those existing reservations. */
+   return sizeof (native_adapter) + constant_and_scratch + snapshot_scalar_scratch
++    + entry_maintenance_scalar_scratch
+     + limits::client_output_bytes + publication_output::scratch_bytes;
+ }
+-static_assert (sizeof (native_adapter) + 4096 + 1024 + limits::client_output_bytes + 256
++static_assert (sizeof (native_adapter) + 4096 + 1024 + 256 + limits::client_output_bytes + 256
+                <= limits::logical_bytes, "all new fixed retained data is prepaid");
+ static_assert (limits::file_requested_bytes == target_file_read_cap
+                && limits::file_rounds == target_file_round_cap,

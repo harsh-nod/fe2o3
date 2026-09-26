@@ -1,0 +1,1162 @@
+{
+  "schema": "fe2o3-rocgdb-one-stop-physical-v3-source-v1",
+  "license": "GPL-3.0-or-later",
+  "upstream": {
+    "repository": "https://github.com/ROCm/ROCgdb",
+    "commit": "48b1d324e389d2ed5e19822d377ff9050770233d"
+  },
+  "activation_available": false,
+  "capture_available": false,
+  "publication_available": false,
+  "source_checks_are_native_authority": false,
+  "caps": {
+    "file": 524288,
+    "metadata": 65536,
+    "combined_selected_stage": 2195456,
+    "unchanged_parent_v2_selected_stage": 2162688
+  },
+  "predecessor": {
+    "directory": "../physical-v2",
+    "stage": "physical-publication-disabled-v2",
+    "files": [
+      {
+        "path": "source-manifest.json",
+        "bytes": 54363,
+        "sha256": "5ace2d54632c9093cca0f103971b89a7c56965b94e804c73996b71ade0ce2130"
+      },
+      {
+        "path": "tests/source-files.mjs",
+        "bytes": 7802,
+        "sha256": "defe3e66dd4a4cbf424faf6a641f6b12773577fb8c45d63688d2430f7766e490"
+      },
+      {
+        "path": "verify-source.mjs",
+        "bytes": 715,
+        "sha256": "b9671b7362123d1f796fd74f028f76bc446a0bda22d64cf6d67ea9d063f0554a"
+      },
+      {
+        "path": "patches/series",
+        "bytes": 82,
+        "sha256": "f1ec7606f15f72ed57a5b62b7c6f5b8ae17706eee92ad2bb50b649849fb0b8c5"
+      },
+      {
+        "path": "patches/0001-disabled-physical-snapshot.patch",
+        "bytes": 18249,
+        "sha256": "ac00634e846cd440fb75f35ce3d4c09136db91c68f9adf5af364dcd21df726d0"
+      },
+      {
+        "path": "patches/0002-disabled-physical-publication-v2.patch",
+        "bytes": 19403,
+        "sha256": "837b69eba0c7f0ae1c18ba06e401d9be9c53456523b2124be5d2613173fb5754"
+      },
+      {
+        "path": "COPYING",
+        "bytes": 35147,
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      {
+        "path": "LICENSE.md",
+        "bytes": 540,
+        "sha256": "216205d680dd4f56a0778a321bc824b42a347d4c0ad06d9903f532d851d15eb6"
+      }
+    ]
+  },
+  "reused_reader": {
+    "path": "../../rocgdb-runtime-observation-v1/tests/source-files.mjs",
+    "bytes": 6591,
+    "sha256": "65572ec7974fb50f36a5119c10971f792ad8f7b89990d0fbc17907d380b45d80"
+  },
+  "stages": [
+    {
+      "name": "physical-publication-disabled-v2",
+      "files": [
+        {
+          "path": "gdb/amd-dbgapi-one-stop-activation-v1.h",
+          "bytes": 551,
+          "sha256": "43288a3a8c25587531b20dfc4f0800ee29c53c13307679b70275bb35201c31de"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-checkpoint-v1.h",
+          "bytes": 6846,
+          "sha256": "162be356941a00e25b3bd67b8f021a9664f91f0d800fb2f7532504b087021e92"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-locator-v1.h",
+          "bytes": 1620,
+          "sha256": "602385dfa6d0caed55b6661696f8bb0a9e08bf1587d8c473a185378e2ac9d606"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
+          "bytes": 10636,
+          "sha256": "69a01f5792ddc22c3269a103c135f271d7e186c656cff2da86a8fcac6cc187ea"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+          "bytes": 8011,
+          "sha256": "51fa7481a560ad22f96c1a1e9371dbb48302bc7fb57be47bbaec78fc6a4889fc"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-object-v1.inc",
+          "bytes": 7971,
+          "sha256": "c0b584e8bfd0080bd1008e3a9be29568fd6b701298605a44be9588847208d784"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-owner-v1.inc",
+          "bytes": 14619,
+          "sha256": "4501c2ca022ae6baf7a274ffbdedd792598604d67eea443a9380710528882ff8"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-query-v1.inc",
+          "bytes": 12174,
+          "sha256": "715aed7942b1fa4bd4212ec65446eb06ea338a3c16fca5333a26a1c1dd2e1bbd"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
+          "bytes": 13566,
+          "sha256": "8b5abe25c6e5a2db7f15c717702704ffb4005380575e6a826c5c66b1b8599aed"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-snapshot-v1.inc",
+          "bytes": 4673,
+          "sha256": "b7735a56e88c3b092c8e61ac7381258a2b76a4353b1764c1d5b6d8a5b3eaec81"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+          "bytes": 8220,
+          "sha256": "cfad145433fb29159372c65c74d47429e6599c23327aa91c52ab871b15c11ab6"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc",
+          "bytes": 2281,
+          "sha256": "ecc3094c8dc18c30f49f54ce6f266e1b0e63ef8564d4b17a5165bb907d9a8fa6"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-observation-v1.h",
+          "bytes": 1472,
+          "sha256": "f6e83271aa1412a0081100e2e65404fbdf382b0221c09e24c778157a42d70903"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-output-v2.h",
+          "bytes": 1554,
+          "sha256": "a8b6e595ee03f6337ea4dbbe1c2b875ba635ca7c4bebe200d5f2e30204a7a5e7"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-profile-v1.h",
+          "bytes": 2216,
+          "sha256": "4b830fc360ba54112ceb5cbee10ec2146edfb0509fe23983b13449026affb8d0"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-publication-v2.h",
+          "bytes": 7747,
+          "sha256": "be4dfd8996cd457f26b995d723039d596f8393010f5ecf151193d4b8d6bb9893"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-sha256-v1.h",
+          "bytes": 4457,
+          "sha256": "4cbaf6435fa3c3121b795545a5216a7a86edc51411e5524273df336feb7e9176"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-snapshot-v1.h",
+          "bytes": 7593,
+          "sha256": "3012ba42903cf5f0dfa7ba5e077ed939017efc1f2af117843e33594da953b0b7"
+        },
+        {
+          "path": "gdb/amd-dbgapi-owned-one-stop-v1.h",
+          "bytes": 33678,
+          "sha256": "33e7cf2390da8cfca2b55d91568a6cda2d20c0e359484d04741cde9e1c5d1bce"
+        },
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+          "bytes": 9487,
+          "sha256": "223937a42f7e81eb49e5877f9ff722563d78f702fa2c6d616f6bcea67a2854a0"
+        },
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+          "bytes": 8193,
+          "sha256": "4d42b0af5f50ed5a8d260c9734cec0f67d521936d63e17a768053d719288c2ef"
+        },
+        {
+          "path": "gdb/amd-dbgapi-stopped-wave-observation-hooks-v1.inc",
+          "bytes": 3127,
+          "sha256": "b10a322d9e574f4e17ea05cdccc619e9dcb38908cde0d9bf5eb8b732db275f92"
+        },
+        {
+          "path": "gdb/amd-dbgapi-stopped-wave-observation-v1.h",
+          "bytes": 12207,
+          "sha256": "1b3276f5dbf85926ae31498b79d642d134d4921b2fd8416758195fe69714822e"
+        },
+        {
+          "path": "gdb/amd-dbgapi-stopped-wave-query-v1.inc",
+          "bytes": 10992,
+          "sha256": "1492d50bdd554811dc96ac3c989d711ca2e7e5501eaeed9d1c16675bd3e473a8"
+        },
+        {
+          "path": "gdb/amd-dbgapi-target.c",
+          "bytes": 167159,
+          "sha256": "1c31f394522933fcadaeb898a4144cd063ef39dc781de7ca31462014e2cab090"
+        },
+        {
+          "path": "gdb/amd-dbgapi-target.h",
+          "bytes": 5251,
+          "sha256": "eea0fe40f21ddd8b93a8c6127676fc71cfc72fea76be093409545e9682d6bc5f"
+        },
+        {
+          "path": "gdb/amd64-tdep.h",
+          "bytes": 5267,
+          "sha256": "2ac831c7e78b5388dd51a53f8e51c45c29ca08a663ad394a5a02896c3ddeb8fe"
+        },
+        {
+          "path": "gdb/breakpoint.c",
+          "bytes": 461818,
+          "sha256": "ba04b11724dabbf142057775ad553fda9248de7e7b33ffcc71eb2cd17e5ecd8e"
+        },
+        {
+          "path": "gdb/breakpoint.h",
+          "bytes": 78817,
+          "sha256": "e25717511d93494237c589f35e531fe411d5353002aee88c2cbec769a030686f"
+        },
+        {
+          "path": "gdb/gdbthread.h",
+          "bytes": 40990,
+          "sha256": "abd18329c0e6c37a325503334557c52a0062c94b425cf3935a643ff47683e6b2"
+        },
+        {
+          "path": "gdb/inferior.c",
+          "bytes": 32707,
+          "sha256": "7835018395e9c4fa33c973a87a0a75cb8577a22a7bbf3d2f494346ae06a5bc98"
+        },
+        {
+          "path": "gdb/inferior.h",
+          "bytes": 29342,
+          "sha256": "30111dbdde95948264031ac52b1ecb46cae724faa48da3571f8ff7a632c230fc"
+        },
+        {
+          "path": "gdb/infrun.c",
+          "bytes": 365182,
+          "sha256": "6f52f18ac2a786f47596cef88b5e3488b564101e12c5fcf40b8e679c30ea26c0"
+        },
+        {
+          "path": "gdb/interps.c",
+          "bytes": 15234,
+          "sha256": "3b8181779ae068fb78a0dc9f8a0162bd82f95a02380880c574e6ecf427315d7b"
+        },
+        {
+          "path": "gdb/interps.h",
+          "bytes": 14860,
+          "sha256": "41df0fefcb986eda587fda625dcd9f22fabee6f2c6cc6ecd3d29f7c366c66050"
+        },
+        {
+          "path": "gdb/mi/amd-stopped-wave-observation-mi-v1.inc",
+          "bytes": 3447,
+          "sha256": "c0cae133c0cb111e318b94be711a9e59b761f29144a317a115ccfc8e7956769e"
+        },
+        {
+          "path": "gdb/mi/mi-console.c",
+          "bytes": 2892,
+          "sha256": "35381af68d41ae9745a787485842157bfc1e0ab41348cfa8760bda6c7ac6287b"
+        },
+        {
+          "path": "gdb/mi/mi-interp.c",
+          "bytes": 28398,
+          "sha256": "5198f10e49abc9d55a1e06a8225f1856594c4b7d0ece0fefc2391d6c90171e3b"
+        },
+        {
+          "path": "gdb/mi/mi-interp.h",
+          "bytes": 4402,
+          "sha256": "93eb1f87f6c29f2f64e352af8ff74aa0f55b16c9352989d31a9aee65e2e7fd9d"
+        },
+        {
+          "path": "gdb/mi/mi-main.c",
+          "bytes": 77900,
+          "sha256": "07d941cc53f4b4b24282c0ef74a8d1cd4e2fb7bb2ac3668e68b7f0f2445f075c"
+        },
+        {
+          "path": "gdb/mi/mi-out.c",
+          "bytes": 7829,
+          "sha256": "65ed8ebc63c3b14c8df211ca5bed8535695eea6196a3f95b96791c167952582e"
+        },
+        {
+          "path": "gdb/mi/mi-out.h",
+          "bytes": 4940,
+          "sha256": "5f383372d0a537f2b7bf262bf68cb017a650109bd68a054e3e7c96fe487f0531"
+        },
+        {
+          "path": "gdb/minsyms.h",
+          "bytes": 11272,
+          "sha256": "6fe248f7cd5e1e2429040448ba0d06c2cbbfd705c4587ad23d65cf1ea4c7f39c"
+        },
+        {
+          "path": "gdb/observable.h",
+          "bytes": 10616,
+          "sha256": "11e8e82e1addded13aa8be343f4826a3950efe308fc6a9b0d9c7b7fbc7862d90"
+        },
+        {
+          "path": "gdb/pager.h",
+          "bytes": 2994,
+          "sha256": "6bf769811221e4f8ca7909a8752a76dae967af5f5de9c3297f68ec11090f45a2"
+        },
+        {
+          "path": "gdb/posix-hdep.c",
+          "bytes": 2294,
+          "sha256": "952ccaee8a4aa05ddf565fe3b887250fb230b386fc306aa46553467b310e92e5"
+        },
+        {
+          "path": "gdb/process-stratum-target.h",
+          "bytes": 7435,
+          "sha256": "b984c047eaf7b1ce718a11103c7e1601cb6856f871aaddcc17fbe78a30d8047f"
+        },
+        {
+          "path": "gdb/progspace.h",
+          "bytes": 15755,
+          "sha256": "f27e7ed8fbc8041ea7daf3b7e9ac1439a96ef42bd6e35dd3590a85302fec2e97"
+        },
+        {
+          "path": "gdb/regcache.h",
+          "bytes": 19410,
+          "sha256": "743e3f2b87799da13008921f0687ee7e677ece5ab36e7216b22feba53c6db575"
+        },
+        {
+          "path": "gdb/solib-rocm.c",
+          "bytes": 22758,
+          "sha256": "d1d2d1b18cb7829a1a24c3458a264c1811a3589391c9836a6c3556f9fb22a9c4"
+        },
+        {
+          "path": "gdb/symfile.h",
+          "bytes": 14339,
+          "sha256": "744ea5c57b0a09906c12de9111de868ddb376de8321805079132c92bb15aee41"
+        },
+        {
+          "path": "gdb/symtab.h",
+          "bytes": 100009,
+          "sha256": "93e3589ce246b57b156c8f0105527c46d92a60ffa8c5d482ef0c964e13666f48"
+        },
+        {
+          "path": "gdb/target.c",
+          "bytes": 121963,
+          "sha256": "33875a26fba319a0a59e2b04d73e6dedbd1cf8e82702aee4a02246a392fcf4fa"
+        },
+        {
+          "path": "gdb/target.h",
+          "bytes": 108122,
+          "sha256": "202839c0d166ce42dbfc9c7613ba277e5c16553cc99b2e15c7fdf13d4f563110"
+        },
+        {
+          "path": "gdb/ui-file.c",
+          "bytes": 9601,
+          "sha256": "4ec2a02555eba1b3a0f4dcb02cd778cc7483b91c2efe7212076fa844e5d51bf0"
+        },
+        {
+          "path": "gdb/ui-file.h",
+          "bytes": 14329,
+          "sha256": "94370e6deba2aa5292cec2fbedaf784c74b9e88aa79785d5c5a59efafa1d10b1"
+        },
+        {
+          "path": "gdb/ui-out.c",
+          "bytes": 22482,
+          "sha256": "4b9647a09891f9ca3bcdd3430c31b8ae24e7178d638558e8d56e68ee0cbfde89"
+        },
+        {
+          "path": "gdb/ui-out.h",
+          "bytes": 18933,
+          "sha256": "77730d3f02fa82f793ea061ee3091b4837de2400375439fd2ca7eee607ec44e8"
+        },
+        {
+          "path": "gdb/ui.c",
+          "bytes": 5964,
+          "sha256": "f4e35a6491a57d26924a27bc9d0e705f232f310b2afa69fd38a08d9e9584354b"
+        },
+        {
+          "path": "gdb/ui.h",
+          "bytes": 7467,
+          "sha256": "a2c1f7d1c889194ccf5ff4a5935159df0b3f584d3e64fa751fe88ec02410291c"
+        },
+        {
+          "path": "gdb/utils.c",
+          "bytes": 113459,
+          "sha256": "75bccf55f80bef7133960197b5e439bded2f629ffef4cd787ef2094d9276fd35"
+        },
+        {
+          "path": "gdbsupport/gdb_ref_ptr.h",
+          "bytes": 5508,
+          "sha256": "349c4fc1a63bb4b66ba3df4ee7a61f4c80a018d41c8e05a56f7ddbbe2c801232"
+        },
+        {
+          "path": "gdbsupport/refcounted-object.h",
+          "bytes": 2146,
+          "sha256": "fedff6c602fe060d6b55a8add8e9aa0e67b269f87cd9f02c305911dd82ddda51"
+        }
+      ]
+    },
+    {
+      "name": "physical-host-entry-maintenance-disabled-v3",
+      "files": [
+        {
+          "path": "gdb/amd-dbgapi-one-stop-activation-v1.h",
+          "bytes": 551,
+          "sha256": "43288a3a8c25587531b20dfc4f0800ee29c53c13307679b70275bb35201c31de"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-checkpoint-v1.h",
+          "bytes": 6846,
+          "sha256": "162be356941a00e25b3bd67b8f021a9664f91f0d800fb2f7532504b087021e92"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-locator-v1.h",
+          "bytes": 1620,
+          "sha256": "602385dfa6d0caed55b6661696f8bb0a9e08bf1587d8c473a185378e2ac9d606"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
+          "bytes": 10818,
+          "sha256": "414e9696a8781cf9fe704622e4f9ba33ee6db1953d2dbefc216f760095b8a356"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+          "bytes": 8042,
+          "sha256": "da9698e5af0a2d7f6b32b3f25844a037dc0be431cf5636305112cc882ec6f05c"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-object-v1.inc",
+          "bytes": 7971,
+          "sha256": "c0b584e8bfd0080bd1008e3a9be29568fd6b701298605a44be9588847208d784"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-owner-v1.inc",
+          "bytes": 14619,
+          "sha256": "4501c2ca022ae6baf7a274ffbdedd792598604d67eea443a9380710528882ff8"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-query-v1.inc",
+          "bytes": 12174,
+          "sha256": "715aed7942b1fa4bd4212ec65446eb06ea338a3c16fca5333a26a1c1dd2e1bbd"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
+          "bytes": 18839,
+          "sha256": "9607dc58261fc84428c21c67ecc076eea012d4758264bded0dbc4ff39bad1869"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-snapshot-v1.inc",
+          "bytes": 4673,
+          "sha256": "b7735a56e88c3b092c8e61ac7381258a2b76a4353b1764c1d5b6d8a5b3eaec81"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+          "bytes": 8684,
+          "sha256": "9d7ac109653b5ffae0b0ed82cb7c0f110beedbb96380964ede8ce6dc3da867ca"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc",
+          "bytes": 2281,
+          "sha256": "ecc3094c8dc18c30f49f54ce6f266e1b0e63ef8564d4b17a5165bb907d9a8fa6"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-observation-v1.h",
+          "bytes": 1472,
+          "sha256": "f6e83271aa1412a0081100e2e65404fbdf382b0221c09e24c778157a42d70903"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-output-v2.h",
+          "bytes": 1554,
+          "sha256": "a8b6e595ee03f6337ea4dbbe1c2b875ba635ca7c4bebe200d5f2e30204a7a5e7"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-profile-v1.h",
+          "bytes": 2216,
+          "sha256": "4b830fc360ba54112ceb5cbee10ec2146edfb0509fe23983b13449026affb8d0"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-publication-v2.h",
+          "bytes": 7747,
+          "sha256": "be4dfd8996cd457f26b995d723039d596f8393010f5ecf151193d4b8d6bb9893"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-sha256-v1.h",
+          "bytes": 4457,
+          "sha256": "4cbaf6435fa3c3121b795545a5216a7a86edc51411e5524273df336feb7e9176"
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-snapshot-v1.h",
+          "bytes": 7593,
+          "sha256": "3012ba42903cf5f0dfa7ba5e077ed939017efc1f2af117843e33594da953b0b7"
+        },
+        {
+          "path": "gdb/amd-dbgapi-owned-one-stop-v1.h",
+          "bytes": 33678,
+          "sha256": "33e7cf2390da8cfca2b55d91568a6cda2d20c0e359484d04741cde9e1c5d1bce"
+        },
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+          "bytes": 9487,
+          "sha256": "223937a42f7e81eb49e5877f9ff722563d78f702fa2c6d616f6bcea67a2854a0"
+        },
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+          "bytes": 8193,
+          "sha256": "4d42b0af5f50ed5a8d260c9734cec0f67d521936d63e17a768053d719288c2ef"
+        },
+        {
+          "path": "gdb/amd-dbgapi-stopped-wave-observation-hooks-v1.inc",
+          "bytes": 3127,
+          "sha256": "b10a322d9e574f4e17ea05cdccc619e9dcb38908cde0d9bf5eb8b732db275f92"
+        },
+        {
+          "path": "gdb/amd-dbgapi-stopped-wave-observation-v1.h",
+          "bytes": 12207,
+          "sha256": "1b3276f5dbf85926ae31498b79d642d134d4921b2fd8416758195fe69714822e"
+        },
+        {
+          "path": "gdb/amd-dbgapi-stopped-wave-query-v1.inc",
+          "bytes": 10992,
+          "sha256": "1492d50bdd554811dc96ac3c989d711ca2e7e5501eaeed9d1c16675bd3e473a8"
+        },
+        {
+          "path": "gdb/amd-dbgapi-target.c",
+          "bytes": 167159,
+          "sha256": "1c31f394522933fcadaeb898a4144cd063ef39dc781de7ca31462014e2cab090"
+        },
+        {
+          "path": "gdb/amd-dbgapi-target.h",
+          "bytes": 5251,
+          "sha256": "eea0fe40f21ddd8b93a8c6127676fc71cfc72fea76be093409545e9682d6bc5f"
+        },
+        {
+          "path": "gdb/amd64-tdep.h",
+          "bytes": 5267,
+          "sha256": "2ac831c7e78b5388dd51a53f8e51c45c29ca08a663ad394a5a02896c3ddeb8fe"
+        },
+        {
+          "path": "gdb/breakpoint.c",
+          "bytes": 461818,
+          "sha256": "ba04b11724dabbf142057775ad553fda9248de7e7b33ffcc71eb2cd17e5ecd8e"
+        },
+        {
+          "path": "gdb/breakpoint.h",
+          "bytes": 78817,
+          "sha256": "e25717511d93494237c589f35e531fe411d5353002aee88c2cbec769a030686f"
+        },
+        {
+          "path": "gdb/gdbthread.h",
+          "bytes": 40990,
+          "sha256": "abd18329c0e6c37a325503334557c52a0062c94b425cf3935a643ff47683e6b2"
+        },
+        {
+          "path": "gdb/inferior.c",
+          "bytes": 32707,
+          "sha256": "7835018395e9c4fa33c973a87a0a75cb8577a22a7bbf3d2f494346ae06a5bc98"
+        },
+        {
+          "path": "gdb/inferior.h",
+          "bytes": 29342,
+          "sha256": "30111dbdde95948264031ac52b1ecb46cae724faa48da3571f8ff7a632c230fc"
+        },
+        {
+          "path": "gdb/infrun.c",
+          "bytes": 365182,
+          "sha256": "6f52f18ac2a786f47596cef88b5e3488b564101e12c5fcf40b8e679c30ea26c0"
+        },
+        {
+          "path": "gdb/interps.c",
+          "bytes": 15234,
+          "sha256": "3b8181779ae068fb78a0dc9f8a0162bd82f95a02380880c574e6ecf427315d7b"
+        },
+        {
+          "path": "gdb/interps.h",
+          "bytes": 14860,
+          "sha256": "41df0fefcb986eda587fda625dcd9f22fabee6f2c6cc6ecd3d29f7c366c66050"
+        },
+        {
+          "path": "gdb/mi/amd-stopped-wave-observation-mi-v1.inc",
+          "bytes": 3447,
+          "sha256": "c0cae133c0cb111e318b94be711a9e59b761f29144a317a115ccfc8e7956769e"
+        },
+        {
+          "path": "gdb/mi/mi-console.c",
+          "bytes": 2892,
+          "sha256": "35381af68d41ae9745a787485842157bfc1e0ab41348cfa8760bda6c7ac6287b"
+        },
+        {
+          "path": "gdb/mi/mi-interp.c",
+          "bytes": 28398,
+          "sha256": "5198f10e49abc9d55a1e06a8225f1856594c4b7d0ece0fefc2391d6c90171e3b"
+        },
+        {
+          "path": "gdb/mi/mi-interp.h",
+          "bytes": 4402,
+          "sha256": "93eb1f87f6c29f2f64e352af8ff74aa0f55b16c9352989d31a9aee65e2e7fd9d"
+        },
+        {
+          "path": "gdb/mi/mi-main.c",
+          "bytes": 77900,
+          "sha256": "07d941cc53f4b4b24282c0ef74a8d1cd4e2fb7bb2ac3668e68b7f0f2445f075c"
+        },
+        {
+          "path": "gdb/mi/mi-out.c",
+          "bytes": 7829,
+          "sha256": "65ed8ebc63c3b14c8df211ca5bed8535695eea6196a3f95b96791c167952582e"
+        },
+        {
+          "path": "gdb/mi/mi-out.h",
+          "bytes": 4940,
+          "sha256": "5f383372d0a537f2b7bf262bf68cb017a650109bd68a054e3e7c96fe487f0531"
+        },
+        {
+          "path": "gdb/minsyms.h",
+          "bytes": 11272,
+          "sha256": "6fe248f7cd5e1e2429040448ba0d06c2cbbfd705c4587ad23d65cf1ea4c7f39c"
+        },
+        {
+          "path": "gdb/observable.h",
+          "bytes": 10616,
+          "sha256": "11e8e82e1addded13aa8be343f4826a3950efe308fc6a9b0d9c7b7fbc7862d90"
+        },
+        {
+          "path": "gdb/pager.h",
+          "bytes": 2994,
+          "sha256": "6bf769811221e4f8ca7909a8752a76dae967af5f5de9c3297f68ec11090f45a2"
+        },
+        {
+          "path": "gdb/posix-hdep.c",
+          "bytes": 2294,
+          "sha256": "952ccaee8a4aa05ddf565fe3b887250fb230b386fc306aa46553467b310e92e5"
+        },
+        {
+          "path": "gdb/process-stratum-target.h",
+          "bytes": 7435,
+          "sha256": "b984c047eaf7b1ce718a11103c7e1601cb6856f871aaddcc17fbe78a30d8047f"
+        },
+        {
+          "path": "gdb/progspace.h",
+          "bytes": 15755,
+          "sha256": "f27e7ed8fbc8041ea7daf3b7e9ac1439a96ef42bd6e35dd3590a85302fec2e97"
+        },
+        {
+          "path": "gdb/regcache.h",
+          "bytes": 19410,
+          "sha256": "743e3f2b87799da13008921f0687ee7e677ece5ab36e7216b22feba53c6db575"
+        },
+        {
+          "path": "gdb/solib-rocm.c",
+          "bytes": 22758,
+          "sha256": "d1d2d1b18cb7829a1a24c3458a264c1811a3589391c9836a6c3556f9fb22a9c4"
+        },
+        {
+          "path": "gdb/symfile.h",
+          "bytes": 14339,
+          "sha256": "744ea5c57b0a09906c12de9111de868ddb376de8321805079132c92bb15aee41"
+        },
+        {
+          "path": "gdb/symtab.h",
+          "bytes": 100009,
+          "sha256": "93e3589ce246b57b156c8f0105527c46d92a60ffa8c5d482ef0c964e13666f48"
+        },
+        {
+          "path": "gdb/target.c",
+          "bytes": 121963,
+          "sha256": "33875a26fba319a0a59e2b04d73e6dedbd1cf8e82702aee4a02246a392fcf4fa"
+        },
+        {
+          "path": "gdb/target.h",
+          "bytes": 108122,
+          "sha256": "202839c0d166ce42dbfc9c7613ba277e5c16553cc99b2e15c7fdf13d4f563110"
+        },
+        {
+          "path": "gdb/ui-file.c",
+          "bytes": 9601,
+          "sha256": "4ec2a02555eba1b3a0f4dcb02cd778cc7483b91c2efe7212076fa844e5d51bf0"
+        },
+        {
+          "path": "gdb/ui-file.h",
+          "bytes": 14329,
+          "sha256": "94370e6deba2aa5292cec2fbedaf784c74b9e88aa79785d5c5a59efafa1d10b1"
+        },
+        {
+          "path": "gdb/ui-out.c",
+          "bytes": 22482,
+          "sha256": "4b9647a09891f9ca3bcdd3430c31b8ae24e7178d638558e8d56e68ee0cbfde89"
+        },
+        {
+          "path": "gdb/ui-out.h",
+          "bytes": 18933,
+          "sha256": "77730d3f02fa82f793ea061ee3091b4837de2400375439fd2ca7eee607ec44e8"
+        },
+        {
+          "path": "gdb/ui.c",
+          "bytes": 5964,
+          "sha256": "f4e35a6491a57d26924a27bc9d0e705f232f310b2afa69fd38a08d9e9584354b"
+        },
+        {
+          "path": "gdb/ui.h",
+          "bytes": 7467,
+          "sha256": "a2c1f7d1c889194ccf5ff4a5935159df0b3f584d3e64fa751fe88ec02410291c"
+        },
+        {
+          "path": "gdb/utils.c",
+          "bytes": 113459,
+          "sha256": "75bccf55f80bef7133960197b5e439bded2f629ffef4cd787ef2094d9276fd35"
+        },
+        {
+          "path": "gdbsupport/gdb_ref_ptr.h",
+          "bytes": 5508,
+          "sha256": "349c4fc1a63bb4b66ba3df4ee7a61f4c80a018d41c8e05a56f7ddbbe2c801232"
+        },
+        {
+          "path": "gdbsupport/refcounted-object.h",
+          "bytes": 2146,
+          "sha256": "fedff6c602fe060d6b55a8add8e9aa0e67b269f87cd9f02c305911dd82ddda51"
+        }
+      ]
+    }
+  ],
+  "postimages": [
+    {
+      "path": "gdb/amd-dbgapi-one-stop-activation-v1.h",
+      "bytes": 551,
+      "sha256": "43288a3a8c25587531b20dfc4f0800ee29c53c13307679b70275bb35201c31de"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-checkpoint-v1.h",
+      "bytes": 6846,
+      "sha256": "162be356941a00e25b3bd67b8f021a9664f91f0d800fb2f7532504b087021e92"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-locator-v1.h",
+      "bytes": 1620,
+      "sha256": "602385dfa6d0caed55b6661696f8bb0a9e08bf1587d8c473a185378e2ac9d606"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
+      "bytes": 10818,
+      "sha256": "414e9696a8781cf9fe704622e4f9ba33ee6db1953d2dbefc216f760095b8a356"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+      "bytes": 8042,
+      "sha256": "da9698e5af0a2d7f6b32b3f25844a037dc0be431cf5636305112cc882ec6f05c"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-native-object-v1.inc",
+      "bytes": 7971,
+      "sha256": "c0b584e8bfd0080bd1008e3a9be29568fd6b701298605a44be9588847208d784"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-native-owner-v1.inc",
+      "bytes": 14619,
+      "sha256": "4501c2ca022ae6baf7a274ffbdedd792598604d67eea443a9380710528882ff8"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-native-query-v1.inc",
+      "bytes": 12174,
+      "sha256": "715aed7942b1fa4bd4212ec65446eb06ea338a3c16fca5333a26a1c1dd2e1bbd"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
+      "bytes": 18839,
+      "sha256": "9607dc58261fc84428c21c67ecc076eea012d4758264bded0dbc4ff39bad1869"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-native-snapshot-v1.inc",
+      "bytes": 4673,
+      "sha256": "b7735a56e88c3b092c8e61ac7381258a2b76a4353b1764c1d5b6d8a5b3eaec81"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+      "bytes": 8684,
+      "sha256": "9d7ac109653b5ffae0b0ed82cb7c0f110beedbb96380964ede8ce6dc3da867ca"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc",
+      "bytes": 2281,
+      "sha256": "ecc3094c8dc18c30f49f54ce6f266e1b0e63ef8564d4b17a5165bb907d9a8fa6"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-observation-v1.h",
+      "bytes": 1472,
+      "sha256": "f6e83271aa1412a0081100e2e65404fbdf382b0221c09e24c778157a42d70903"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-output-v2.h",
+      "bytes": 1554,
+      "sha256": "a8b6e595ee03f6337ea4dbbe1c2b875ba635ca7c4bebe200d5f2e30204a7a5e7"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-profile-v1.h",
+      "bytes": 2216,
+      "sha256": "4b830fc360ba54112ceb5cbee10ec2146edfb0509fe23983b13449026affb8d0"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-publication-v2.h",
+      "bytes": 7747,
+      "sha256": "be4dfd8996cd457f26b995d723039d596f8393010f5ecf151193d4b8d6bb9893"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-sha256-v1.h",
+      "bytes": 4457,
+      "sha256": "4cbaf6435fa3c3121b795545a5216a7a86edc51411e5524273df336feb7e9176"
+    },
+    {
+      "path": "gdb/amd-dbgapi-one-stop-snapshot-v1.h",
+      "bytes": 7593,
+      "sha256": "3012ba42903cf5f0dfa7ba5e077ed939017efc1f2af117843e33594da953b0b7"
+    },
+    {
+      "path": "gdb/amd-dbgapi-owned-one-stop-v1.h",
+      "bytes": 33678,
+      "sha256": "33e7cf2390da8cfca2b55d91568a6cda2d20c0e359484d04741cde9e1c5d1bce"
+    },
+    {
+      "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+      "bytes": 9487,
+      "sha256": "223937a42f7e81eb49e5877f9ff722563d78f702fa2c6d616f6bcea67a2854a0"
+    },
+    {
+      "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+      "bytes": 8193,
+      "sha256": "4d42b0af5f50ed5a8d260c9734cec0f67d521936d63e17a768053d719288c2ef"
+    },
+    {
+      "path": "gdb/amd-dbgapi-stopped-wave-observation-hooks-v1.inc",
+      "bytes": 3127,
+      "sha256": "b10a322d9e574f4e17ea05cdccc619e9dcb38908cde0d9bf5eb8b732db275f92"
+    },
+    {
+      "path": "gdb/amd-dbgapi-stopped-wave-observation-v1.h",
+      "bytes": 12207,
+      "sha256": "1b3276f5dbf85926ae31498b79d642d134d4921b2fd8416758195fe69714822e"
+    },
+    {
+      "path": "gdb/amd-dbgapi-stopped-wave-query-v1.inc",
+      "bytes": 10992,
+      "sha256": "1492d50bdd554811dc96ac3c989d711ca2e7e5501eaeed9d1c16675bd3e473a8"
+    },
+    {
+      "path": "gdb/amd-dbgapi-target.c",
+      "bytes": 167159,
+      "sha256": "1c31f394522933fcadaeb898a4144cd063ef39dc781de7ca31462014e2cab090"
+    },
+    {
+      "path": "gdb/amd-dbgapi-target.h",
+      "bytes": 5251,
+      "sha256": "eea0fe40f21ddd8b93a8c6127676fc71cfc72fea76be093409545e9682d6bc5f"
+    },
+    {
+      "path": "gdb/amd64-tdep.h",
+      "bytes": 5267,
+      "sha256": "2ac831c7e78b5388dd51a53f8e51c45c29ca08a663ad394a5a02896c3ddeb8fe"
+    },
+    {
+      "path": "gdb/breakpoint.c",
+      "bytes": 461818,
+      "sha256": "ba04b11724dabbf142057775ad553fda9248de7e7b33ffcc71eb2cd17e5ecd8e"
+    },
+    {
+      "path": "gdb/breakpoint.h",
+      "bytes": 78817,
+      "sha256": "e25717511d93494237c589f35e531fe411d5353002aee88c2cbec769a030686f"
+    },
+    {
+      "path": "gdb/gdbthread.h",
+      "bytes": 40990,
+      "sha256": "abd18329c0e6c37a325503334557c52a0062c94b425cf3935a643ff47683e6b2"
+    },
+    {
+      "path": "gdb/inferior.c",
+      "bytes": 32707,
+      "sha256": "7835018395e9c4fa33c973a87a0a75cb8577a22a7bbf3d2f494346ae06a5bc98"
+    },
+    {
+      "path": "gdb/inferior.h",
+      "bytes": 29342,
+      "sha256": "30111dbdde95948264031ac52b1ecb46cae724faa48da3571f8ff7a632c230fc"
+    },
+    {
+      "path": "gdb/infrun.c",
+      "bytes": 365182,
+      "sha256": "6f52f18ac2a786f47596cef88b5e3488b564101e12c5fcf40b8e679c30ea26c0"
+    },
+    {
+      "path": "gdb/interps.c",
+      "bytes": 15234,
+      "sha256": "3b8181779ae068fb78a0dc9f8a0162bd82f95a02380880c574e6ecf427315d7b"
+    },
+    {
+      "path": "gdb/interps.h",
+      "bytes": 14860,
+      "sha256": "41df0fefcb986eda587fda625dcd9f22fabee6f2c6cc6ecd3d29f7c366c66050"
+    },
+    {
+      "path": "gdb/mi/amd-stopped-wave-observation-mi-v1.inc",
+      "bytes": 3447,
+      "sha256": "c0cae133c0cb111e318b94be711a9e59b761f29144a317a115ccfc8e7956769e"
+    },
+    {
+      "path": "gdb/mi/mi-console.c",
+      "bytes": 2892,
+      "sha256": "35381af68d41ae9745a787485842157bfc1e0ab41348cfa8760bda6c7ac6287b"
+    },
+    {
+      "path": "gdb/mi/mi-interp.c",
+      "bytes": 28398,
+      "sha256": "5198f10e49abc9d55a1e06a8225f1856594c4b7d0ece0fefc2391d6c90171e3b"
+    },
+    {
+      "path": "gdb/mi/mi-interp.h",
+      "bytes": 4402,
+      "sha256": "93eb1f87f6c29f2f64e352af8ff74aa0f55b16c9352989d31a9aee65e2e7fd9d"
+    },
+    {
+      "path": "gdb/mi/mi-main.c",
+      "bytes": 77900,
+      "sha256": "07d941cc53f4b4b24282c0ef74a8d1cd4e2fb7bb2ac3668e68b7f0f2445f075c"
+    },
+    {
+      "path": "gdb/mi/mi-out.c",
+      "bytes": 7829,
+      "sha256": "65ed8ebc63c3b14c8df211ca5bed8535695eea6196a3f95b96791c167952582e"
+    },
+    {
+      "path": "gdb/mi/mi-out.h",
+      "bytes": 4940,
+      "sha256": "5f383372d0a537f2b7bf262bf68cb017a650109bd68a054e3e7c96fe487f0531"
+    },
+    {
+      "path": "gdb/minsyms.h",
+      "bytes": 11272,
+      "sha256": "6fe248f7cd5e1e2429040448ba0d06c2cbbfd705c4587ad23d65cf1ea4c7f39c"
+    },
+    {
+      "path": "gdb/observable.h",
+      "bytes": 10616,
+      "sha256": "11e8e82e1addded13aa8be343f4826a3950efe308fc6a9b0d9c7b7fbc7862d90"
+    },
+    {
+      "path": "gdb/pager.h",
+      "bytes": 2994,
+      "sha256": "6bf769811221e4f8ca7909a8752a76dae967af5f5de9c3297f68ec11090f45a2"
+    },
+    {
+      "path": "gdb/posix-hdep.c",
+      "bytes": 2294,
+      "sha256": "952ccaee8a4aa05ddf565fe3b887250fb230b386fc306aa46553467b310e92e5"
+    },
+    {
+      "path": "gdb/process-stratum-target.h",
+      "bytes": 7435,
+      "sha256": "b984c047eaf7b1ce718a11103c7e1601cb6856f871aaddcc17fbe78a30d8047f"
+    },
+    {
+      "path": "gdb/progspace.h",
+      "bytes": 15755,
+      "sha256": "f27e7ed8fbc8041ea7daf3b7e9ac1439a96ef42bd6e35dd3590a85302fec2e97"
+    },
+    {
+      "path": "gdb/regcache.h",
+      "bytes": 19410,
+      "sha256": "743e3f2b87799da13008921f0687ee7e677ece5ab36e7216b22feba53c6db575"
+    },
+    {
+      "path": "gdb/solib-rocm.c",
+      "bytes": 22758,
+      "sha256": "d1d2d1b18cb7829a1a24c3458a264c1811a3589391c9836a6c3556f9fb22a9c4"
+    },
+    {
+      "path": "gdb/symfile.h",
+      "bytes": 14339,
+      "sha256": "744ea5c57b0a09906c12de9111de868ddb376de8321805079132c92bb15aee41"
+    },
+    {
+      "path": "gdb/symtab.h",
+      "bytes": 100009,
+      "sha256": "93e3589ce246b57b156c8f0105527c46d92a60ffa8c5d482ef0c964e13666f48"
+    },
+    {
+      "path": "gdb/target.c",
+      "bytes": 121963,
+      "sha256": "33875a26fba319a0a59e2b04d73e6dedbd1cf8e82702aee4a02246a392fcf4fa"
+    },
+    {
+      "path": "gdb/target.h",
+      "bytes": 108122,
+      "sha256": "202839c0d166ce42dbfc9c7613ba277e5c16553cc99b2e15c7fdf13d4f563110"
+    },
+    {
+      "path": "gdb/ui-file.c",
+      "bytes": 9601,
+      "sha256": "4ec2a02555eba1b3a0f4dcb02cd778cc7483b91c2efe7212076fa844e5d51bf0"
+    },
+    {
+      "path": "gdb/ui-file.h",
+      "bytes": 14329,
+      "sha256": "94370e6deba2aa5292cec2fbedaf784c74b9e88aa79785d5c5a59efafa1d10b1"
+    },
+    {
+      "path": "gdb/ui-out.c",
+      "bytes": 22482,
+      "sha256": "4b9647a09891f9ca3bcdd3430c31b8ae24e7178d638558e8d56e68ee0cbfde89"
+    },
+    {
+      "path": "gdb/ui-out.h",
+      "bytes": 18933,
+      "sha256": "77730d3f02fa82f793ea061ee3091b4837de2400375439fd2ca7eee607ec44e8"
+    },
+    {
+      "path": "gdb/ui.c",
+      "bytes": 5964,
+      "sha256": "f4e35a6491a57d26924a27bc9d0e705f232f310b2afa69fd38a08d9e9584354b"
+    },
+    {
+      "path": "gdb/ui.h",
+      "bytes": 7467,
+      "sha256": "a2c1f7d1c889194ccf5ff4a5935159df0b3f584d3e64fa751fe88ec02410291c"
+    },
+    {
+      "path": "gdb/utils.c",
+      "bytes": 113459,
+      "sha256": "75bccf55f80bef7133960197b5e439bded2f629ffef4cd787ef2094d9276fd35"
+    },
+    {
+      "path": "gdbsupport/gdb_ref_ptr.h",
+      "bytes": 5508,
+      "sha256": "349c4fc1a63bb4b66ba3df4ee7a61f4c80a018d41c8e05a56f7ddbbe2c801232"
+    },
+    {
+      "path": "gdbsupport/refcounted-object.h",
+      "bytes": 2146,
+      "sha256": "fedff6c602fe060d6b55a8add8e9aa0e67b269f87cd9f02c305911dd82ddda51"
+    }
+  ],
+  "patches": [
+    {
+      "path": "patches/0001-disabled-host-entry-maintenance.patch",
+      "bytes": 13114,
+      "sha256": "9390d767fafddc80eb3d2d1013b109f1990564cd496eabf5dcbb2f1c3e9571f9",
+      "changes": [
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
+          "preimage": {
+            "path": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
+            "bytes": 10636,
+            "sha256": "69a01f5792ddc22c3269a103c135f271d7e186c656cff2da86a8fcac6cc187ea"
+          },
+          "postimage": {
+            "path": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
+            "bytes": 10818,
+            "sha256": "414e9696a8781cf9fe704622e4f9ba33ee6db1953d2dbefc216f760095b8a356"
+          }
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+          "preimage": {
+            "path": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+            "bytes": 8011,
+            "sha256": "51fa7481a560ad22f96c1a1e9371dbb48302bc7fb57be47bbaec78fc6a4889fc"
+          },
+          "postimage": {
+            "path": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+            "bytes": 8042,
+            "sha256": "da9698e5af0a2d7f6b32b3f25844a037dc0be431cf5636305112cc882ec6f05c"
+          }
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
+          "preimage": {
+            "path": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
+            "bytes": 13566,
+            "sha256": "8b5abe25c6e5a2db7f15c717702704ffb4005380575e6a826c5c66b1b8599aed"
+          },
+          "postimage": {
+            "path": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
+            "bytes": 18839,
+            "sha256": "9607dc58261fc84428c21c67ecc076eea012d4758264bded0dbc4ff39bad1869"
+          }
+        },
+        {
+          "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+          "preimage": {
+            "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+            "bytes": 8220,
+            "sha256": "cfad145433fb29159372c65c74d47429e6599c23327aa91c52ab871b15c11ab6"
+          },
+          "postimage": {
+            "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+            "bytes": 8684,
+            "sha256": "9d7ac109653b5ffae0b0ed82cb7c0f110beedbb96380964ede8ce6dc3da867ca"
+          }
+        }
+      ]
+    }
+  ],
+  "series": {
+    "path": "patches/series",
+    "bytes": 43,
+    "sha256": "ac9301fb3a2686af3177d428a695a7d0bb7ec18ecb8377be1bd9b51b239f88da"
+  },
+  "standalone": [
+    {
+      "path": "src/amd-dbgapi-one-stop-native-events-v1.inc",
+      "source": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
+      "bytes": 10818,
+      "sha256": "414e9696a8781cf9fe704622e4f9ba33ee6db1953d2dbefc216f760095b8a356"
+    },
+    {
+      "path": "src/amd-dbgapi-one-stop-native-io-v1.inc",
+      "source": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+      "bytes": 8042,
+      "sha256": "da9698e5af0a2d7f6b32b3f25844a037dc0be431cf5636305112cc882ec6f05c"
+    },
+    {
+      "path": "src/amd-dbgapi-one-stop-native-resume-v1.inc",
+      "source": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
+      "bytes": 18839,
+      "sha256": "9607dc58261fc84428c21c67ecc076eea012d4758264bded0dbc4ff39bad1869"
+    },
+    {
+      "path": "src/amd-dbgapi-one-stop-native-v1.h",
+      "source": "gdb/amd-dbgapi-one-stop-native-v1.h",
+      "bytes": 8684,
+      "sha256": "9d7ac109653b5ffae0b0ed82cb7c0f110beedbb96380964ede8ce6dc3da867ca"
+    }
+  ],
+  "copying": {
+    "path": "COPYING",
+    "bytes": 35147,
+    "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+  },
+  "license_notice": {
+    "path": "LICENSE.md",
+    "bytes": 540,
+    "sha256": "216205d680dd4f56a0778a321bc824b42a347d4c0ad06d9903f532d851d15eb6"
+  },
+  "external_api_header": {
+    "path": "amd-dbgapi/amd-dbgapi.h",
+    "bytes": 312312,
+    "sha256": "2d0f9629299ecd8c0e72ff292f127573db499a3ab559ebe40ae66d366bde176a"
+  },
+  "transforms": {
+    "path": "ordinary-transforms.json",
+    "bytes": 21640,
+    "sha256": "d710b18fedc869b51a73a11f58df6c8b13e762e926b0b51cf7fca552e3da6f1c"
+  },
+  "test_payloads": [
+    {
+      "path": "tests/maintenance.cc",
+      "bytes": 14959,
+      "sha256": "ca86bb720f9316360a14f1b6ac8b1b19f049284beecad0bb4613fe97faa46109"
+    },
+    {
+      "path": "tests/actual-maintenance-bodies.inc",
+      "bytes": 8574,
+      "sha256": "b9dbe3a39497b8a503c54bbc10ebbd599891963ff4a49f5989a49a124bc75c1c"
+    },
+    {
+      "path": "tests/helper-extraction.json",
+      "bytes": 2276,
+      "sha256": "054707d5989ee02c7d3dffeb5dc44c8e6148f461b7b544d1e7bf35bab6148877"
+    },
+    {
+      "path": "tests/introspection-fixtures.inc",
+      "bytes": 1438,
+      "sha256": "6342a8dd7775f25c98a4ccc5e2a79f3261d0b0c1ec6a6ac8bc6884edec28536d"
+    }
+  ]
+}

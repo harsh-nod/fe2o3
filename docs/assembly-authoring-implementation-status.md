@@ -5,6 +5,22 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Initial source graph, shared origins and disabled debugger maintenance — 2026-09-26
+
+The [compiler checkpoint](bf16-initial-graph-reference-origin-qualification-20260926.md)
+qualifies the original-ledger initial graph and shared, still-unjoined reference-
+origin preparation: 331 model and 2,598 backend tests, build, five actual Rust
+sessions, 55 comparison controls and 38 normal sessions passed. All 38 normal
+observation bodies and 52 artifacts are unchanged. Actual access-vector binding
+and the complete nominal root recipe remain open.
+
+The [disabled debugger checkpoint](physical-debugger-host-maintenance-qualification-20260926.md)
+adds a separate physical-v3 host-entry maintenance package without changing
+physical-v2. Its relocated actual-helper CPU probe passed 100 groups/481 checks;
+73 Node controls and the parent C++ regressions also passed. No live capture,
+public activation or additional broad exit is claimed. Accepted exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Original-ledger recipe context and debugger failure evidence — 2026-09-26
 
 The [recipe-context checkpoint](bf16-recipe-resource-context-qualification-20260926.md)

@@ -18,6 +18,13 @@ use std::mem::size_of;
 
 type Result<T> = std::result::Result<T, Error>;
 
+#[path = "bf16_nominal_initial_graph_v1.rs"]
+mod initial_graph_v1;
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use initial_graph_v1::{
+    NominalInitialGraphV1, PendingNominalInitialGraphV1,
+};
+
 #[derive(Clone, Copy)]
 struct ReservationState {
     slot: usize,
@@ -104,7 +111,7 @@ fn frame<R, F>() -> Result<usize> {
 }
 
 /// A source-bound *borrower*, not a storage owner, readiness token, or strict
-/// checked-origin constructor. Authenticated capability edges remain absent.
+/// checked-origin constructor. Complete authenticated edge graphs remain absent.
 /// The only mutable Budget borrow is already inside these real canonical facts.
 pub(in crate::production_ranked_projection_v1) struct NominalRecipeResourcesV1<
     'f,
@@ -154,14 +161,14 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
 /// postflight, then refund only its accepted credits. A Copy result would not
 /// prevent an allocation from escaping through a captured slot, so it is not
 /// used as a false ownership guarantee here.
-pub(in crate::production_ranked_projection_v1) fn with_nominal_recipe_resources_v1<R, F>(
-    facts: &mut CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_>,
+pub(in crate::production_ranked_projection_v1) fn with_nominal_recipe_resources_v1<'w, R, F>(
+    facts: &mut CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, 'w>,
     rich: &RichNominalSourceTablesV1<'_>,
     owned: &mut usize,
     inspect: F,
 ) -> Result<R>
 where
-    F: FnOnce(&mut NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_>) -> Result<R>,
+    F: FnOnce(&mut NominalRecipeResourcesV1<'_, '_, '_, '_, '_, 'w>) -> Result<R>,
 {
     if facts.masked.is_some() {
         return Err(Error::Incomplete(
@@ -204,3 +211,8 @@ where
 #[cfg(test)]
 #[path = "bf16_nominal_recipe_resources_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(in crate::production_ranked_projection_v1) use initial_graph_v1::{
+    nominal_initial_graph_controls_for_test_v1, observe_nominal_initial_graph_for_test_v1,
+};

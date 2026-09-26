@@ -53,6 +53,10 @@ mod bf16_nominal_final_candidate_v1;
 mod canonical_assertion_facts_v1;
 mod capability_state_access_v1;
 mod root_checked_references_v1;
+// Paid reference-origin data still lacks its actual guarded-access roster join.
+mod root_initial_capability_graph_v1;
+#[allow(dead_code)]
+mod root_reference_origin_preparation_v1;
 mod tensor_capability_read_v1;
 #[cfg(test)]
 pub(crate) use canonical_assertion_facts_v1::{
@@ -7648,314 +7652,20 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
     let launch_extent = 0;
     let local_definitions = scalar_inventory.counts.clone();
 
-    for (block_index, block) in function.blocks().iter().enumerate() {
-        for (statement_index, statement) in block.statements().iter().enumerate() {
-            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                continue;
-            };
-            if !assignment.destination().projections().is_empty() {
-                continue;
-            }
-            if let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind()
-                && let SemanticAggregateKindV1::EnumVariant(variant) = aggregate.kind()
-                && let [operand] = aggregate.operands()
-                && let Some(source) = transparent_operand_place(operand)
-            {
-                if enum_payload_stores.len() == MAX_PROJECTED_OPERATIONS_V1 {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "single-payload enum stores exceed the charged projection limit",
-                    ));
-                }
-                enum_payload_stores.try_reserve(1).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "single-payload enum store storage cannot be reserved",
-                    )
-                })?;
-                enum_payload_stores.push(PendingEnumPayloadStoreV1 {
-                    carrier: assignment.destination().local().index() as usize,
-                    variant: *variant,
-                    source: source.local().index() as usize,
-                    construction_block: block_index,
-                    statement: statement_index,
-                });
-                continue;
-            }
-            if let SemanticRvalueKindV1::Use(operand) = assignment.value().kind()
-                && let Some(place) = raw_operand_place(operand)
-                && let Some((carrier, variant)) = enum_payload_projection(place)
-            {
-                if enum_payload_loads.len() == MAX_PROJECTED_OPERATIONS_V1 {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "single-payload enum loads exceed the charged projection limit",
-                    ));
-                }
-                enum_payload_loads.try_reserve(1).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "single-payload enum load storage cannot be reserved",
-                    )
-                })?;
-                enum_payload_loads.push(PendingEnumPayloadLoadV1 {
-                    carrier,
-                    variant,
-                    destination: assignment.destination().local().index() as usize,
-                    use_block: block_index,
-                    statement: statement_index,
-                });
-            }
-            let (source, borrowed) = match assignment.value().kind() {
-                SemanticRvalueKindV1::Use(operand) => (transparent_operand_place(operand), false),
-                SemanticRvalueKindV1::Borrow { place, .. }
-                | SemanticRvalueKindV1::AddressOf { place, .. }
-                    if place.projections().is_empty() =>
-                {
-                    (Some(place), true)
-                }
-                _ => (None, false),
-            };
-            let Some(source) = source else {
-                continue;
-            };
-            let source = source.local().index() as usize;
-            let destination = assignment.destination().local().index() as usize;
-            if borrowed {
-                if borrowed_locals.len() == MAX_PROJECTED_OPERATIONS_V1 {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "borrowed capability uses exceed the charged projection limit",
-                    ));
-                }
-                borrowed_locals.try_reserve(1).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "borrowed capability use storage cannot be reserved",
-                    )
-                })?;
-                borrowed_locals.push((source, block_index));
-            }
-            push_capability_edge(
-                &mut edges_by_source,
-                &mut edge_count,
-                source,
-                CapabilityEdgeV1 {
-                    destination,
-                    use_block: block_index,
-                    kind: CapabilityEdgeKindV1::Alias,
-                },
-            )?;
-        }
-
-        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
-            continue;
-        };
-        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
-            callables.get(call.callee().index() as usize)
-        else {
-            continue;
-        };
-        let kind = match operation {
-            SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. }
-            | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. } => {
-                CapabilityEdgeKindV1::Alias
-            }
-            SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
-                index_space, ..
-            } => CapabilityEdgeKindV1::IntoDisjoint {
-                mapping: *index_space,
-            },
-            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
-                output_space,
-                offset,
-                ..
-            }
-            | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
-                output_space,
-                offset,
-                ..
-            } => {
-                let destination = simple_call_destination(call)?;
-                let availability = option_dominance.availability(destination).ok_or(
-                    ProductionRankedProjectionErrorV1::Incomplete(
-                        "a checked shift lacks authenticated Option Some availability",
-                    ),
-                )?;
-                CapabilityEdgeKindV1::CheckedShift {
-                    mapping: *output_space,
-                    offset: *offset,
-                    availability,
-                }
-            }
-            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock {
-                output_space,
-                lanes_per_block,
-                elements_per_lane,
-                ..
-            } => {
-                let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
-                    lanes_per_block: *lanes_per_block,
-                    elements_per_lane: *elements_per_lane,
-                };
-                if *output_space != expected
-                    || *lanes_per_block == 0
-                    || *elements_per_lane == 0
-                    || lanes_per_block.checked_mul(*elements_per_lane).is_none()
-                {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "a malformed blocked mapping reached ranked projection",
-                    ));
-                }
-                if !blocked_mapping_fits_launch_v1(
-                    linear_launch_upper_bound,
-                    *lanes_per_block,
-                    *elements_per_lane,
-                ) {
-                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a multi-lane blocked mapping requires an authenticated finite rank-1 launch extent whose full blocked index range fits u64",
-                    ));
-                }
-                let destination = simple_call_destination(call)?;
-                let availability = option_dominance.availability(destination).ok_or(
-                    ProductionRankedProjectionErrorV1::Incomplete(
-                        "a checked block lacks authenticated Option Some availability",
-                    ),
-                )?;
-                CapabilityEdgeKindV1::CheckedBlock {
-                    mapping: expected,
-                    lanes_per_block: *lanes_per_block,
-                    elements_per_lane: *elements_per_lane,
-                    availability,
-                }
-            }
-            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d {
-                output_space,
-                lanes_per_tile,
-                tile_rows,
-                tile_columns,
-                elements_per_lane,
-                ..
-            } => {
-                let expected = SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
-                    lanes_per_tile: *lanes_per_tile,
-                    tile_rows: *tile_rows,
-                    tile_columns: *tile_columns,
-                    elements_per_lane: *elements_per_lane,
-                };
-                if *output_space != expected
-                    || !tiled_2d_geometry_valid_v1(
-                        *lanes_per_tile,
-                        *tile_rows,
-                        *tile_columns,
-                        *elements_per_lane,
-                    )
-                {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "a malformed tiled-2d mapping reached ranked projection",
-                    ));
-                }
-                let destination = simple_call_destination(call)?;
-                let availability = option_dominance.availability(destination).ok_or(
-                    ProductionRankedProjectionErrorV1::Incomplete(
-                        "a checked tiled-2d witness lacks authenticated Option Some availability",
-                    ),
-                )?;
-                CapabilityEdgeKindV1::CheckedTiled2d {
-                    mapping: expected,
-                    availability,
-                }
-            }
-            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
-                output_space,
-                lanes_per_row,
-                elements_per_lane,
-                ..
-            } => {
-                let expected = SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
-                    lanes_per_row: *lanes_per_row,
-                    elements_per_lane: *elements_per_lane,
-                };
-                if *output_space != expected
-                    || !row_striped_2d_geometry_valid_v1(*lanes_per_row, *elements_per_lane)
-                {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "a malformed row-striped-2d mapping reached ranked projection",
-                    ));
-                }
-                let destination = simple_call_destination(call)?;
-                let availability = option_dominance.availability(destination).ok_or(
-                    ProductionRankedProjectionErrorV1::Incomplete(
-                        "a checked row-striped-2d witness lacks authenticated Option Some availability",
-                    ),
-                )?;
-                CapabilityEdgeKindV1::CheckedRowStriped2d {
-                    mapping: expected,
-                    availability,
-                }
-            }
-            _ => continue,
-        };
-        let destination = simple_call_destination(call)?.index() as usize;
-        let source = call
-            .arguments()
-            .first()
-            .and_then(simple_operand_local)
-            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                "an index capability transform without one exact input local",
-            ))?
-            .index() as usize;
-        push_capability_edge(
-            &mut edges_by_source,
-            &mut edge_count,
-            source,
-            CapabilityEdgeV1 {
-                destination,
-                use_block: block_index,
-                kind,
-            },
-        )?;
-    }
-
-    enum_payload_stores.sort_unstable_by_key(|store| (store.carrier, store.variant));
-    for load in enum_payload_loads.iter().copied() {
-        let key = (load.carrier, load.variant);
-        let first =
-            enum_payload_stores.partition_point(|store| (store.carrier, store.variant) < key);
-        let end =
-            enum_payload_stores.partition_point(|store| (store.carrier, store.variant) <= key);
-        let matches = &enum_payload_stores[first..end];
-        let Some(store) = matches.first() else {
-            continue;
-        };
-        if matches.len() != 1 {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "an enum payload has multiple candidate capability stores",
-            ));
-        }
-        let kind = if store.construction_block == load.use_block && store.statement < load.statement
-        {
-            CapabilityEdgeKindV1::Alias
-        } else {
-            if local_definitions.get(load.carrier).copied() != Some(1) {
-                continue;
-            }
-            let Some(availability) = enum_payload_dominance.availability(
-                SemanticLocalIdV1::from_index(load.carrier as u32),
-                load.variant,
-            ) else {
-                continue;
-            };
-            CapabilityEdgeKindV1::AuthenticatedEnumPayload {
-                construction_block: store.construction_block,
-                availability,
-            }
-        };
-        push_capability_edge(
-            &mut edges_by_source,
-            &mut edge_count,
-            store.source,
-            CapabilityEdgeV1 {
-                destination: load.destination,
-                use_block: load.use_block,
-                kind,
-            },
-        )?;
-    }
+    root_initial_capability_graph_v1::populate_initial_graph_v1(
+        callables,
+        function,
+        linear_launch_upper_bound,
+        &local_definitions,
+        &option_dominance,
+        &enum_payload_dominance,
+        &mut edges_by_source,
+        &mut edge_count,
+        &mut enum_payload_stores,
+        &mut enum_payload_loads,
+        &mut borrowed_locals,
+        &mut bf16_nominal_preparation_resources_v1::PreparationResourcesV1::unmetered(),
+    )?;
 
     let mut index_worklist = VecDeque::new();
     let mut grid_worklist = VecDeque::new();
@@ -22680,183 +22390,18 @@ fn checked_reference_origins(
     option_dominance: &SemanticOptionDominanceV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
 ) -> Result<Vec<Option<CheckedReferenceOriginV1>>, ProductionRankedProjectionErrorV1> {
-    let definitions = local_definition_counts(function);
-    let mut origins = vec![None; function.locals().len()];
-    let mut worklist = VecDeque::new();
-    for block in function.blocks() {
-        for statement in block.statements() {
-            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                continue;
-            };
-            let destination = assignment.destination();
-            if !destination.projections().is_empty()
-                || definitions
-                    .get(destination.local().index() as usize)
-                    .copied()
-                    != Some(1)
-            {
-                continue;
-            }
-            let SemanticRvalueKindV1::Borrow { kind, place } = assignment.value().kind() else {
-                continue;
-            };
-            if !matches!(kind, SemanticBorrowKindV1::Shared)
-                || !place.projections().iter().any(|projection| {
-                    matches!(
-                        projection.kind(),
-                        SemanticProjectionKindV1::Index(_)
-                            | SemanticProjectionKindV1::ConstantIndex { .. }
-                    )
-                })
-            {
-                continue;
-            }
-            let destination = destination.local().index() as usize;
-            origins[destination] = Some(CheckedReferenceOriginV1 {
-                source: CheckedReferenceSourceV1::ProjectedSharedBorrow,
-                availability: None,
-            });
-            worklist.push_back(destination);
-        }
-    }
-
-    let mut access = 0_usize;
-    for block in function.blocks() {
-        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
-            continue;
-        };
-        if !matches!(
-            callables.get(call.callee().index() as usize),
-            Some(SemanticCallableDeclV1::CompilerIntrinsic {
-                operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut { .. }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut { .. }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut { .. },
-                ..
-            })
-        ) {
-            continue;
-        }
-        let destination = simple_call_destination(call)?;
-        if definitions.get(destination.index() as usize).copied() != Some(1) {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a checked disjoint result without one exact definition",
-            ));
-        }
-        let destination = destination.index() as usize;
-        let availability = option_dominance
-            .availability(SemanticLocalIdV1::from_index(destination as u32))
-            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                "a checked disjoint result without exact Option Some availability",
-            ))?;
-        if origins[destination].is_some() {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a checked disjoint result with a conflicting reference origin",
-            ));
-        }
-        origins[destination] = Some(CheckedReferenceOriginV1 {
-            source: CheckedReferenceSourceV1::GuardedAccess(access),
-            availability: Some(CapabilityAvailabilityV1::Option(availability)),
-        });
-        worklist.push_back(destination);
-        access += 1;
-    }
-    if access != guarded_access_count {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "checked disjoint access inventory changed during projection",
-        ));
-    }
-    while let Some(source) = worklist.pop_front() {
-        let Some(origin) = origins[source] else {
-            continue;
-        };
-        let edges =
-            edges_by_source
-                .get(source)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a checked reference source outside the capability graph",
-                ))?;
-        for edge in edges {
-            if !matches!(
-                edge.kind,
-                CapabilityEdgeKindV1::Alias
-                    | CapabilityEdgeKindV1::AuthenticatedOptionPayload
-                    | CapabilityEdgeKindV1::AuthenticatedEnumPayload { .. }
-            ) {
-                continue;
-            }
-            let authorization_block = match edge.kind {
-                CapabilityEdgeKindV1::AuthenticatedEnumPayload {
-                    construction_block, ..
-                } => construction_block,
-                _ => edge.use_block,
-            };
-            if !origin.availability.is_none_or(|availability| {
-                capability_availability_allows(
-                    option_dominance,
-                    enum_payload_dominance,
-                    availability,
-                    SemanticBlockIdV1::from_index(authorization_block as u32),
-                )
-            }) {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a checked reference is transported outside its authenticated payload region",
-                ));
-            }
-            if definitions.get(edge.destination).copied() != Some(1) {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a checked reference destination without one exact definition",
-                ));
-            }
-            let projected = match edge.kind {
-                CapabilityEdgeKindV1::AuthenticatedEnumPayload { availability, .. } => {
-                    CheckedReferenceOriginV1 {
-                        availability: Some(CapabilityAvailabilityV1::EnumPayload(availability)),
-                        ..origin
-                    }
-                }
-                _ => origin,
-            };
-            let slot = origins.get_mut(edge.destination).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "a checked reference destination outside the semantic local table",
-                ),
-            )?;
-            if slot.is_none() {
-                *slot = Some(projected);
-                worklist.push_back(edge.destination);
-            } else if *slot != Some(projected) {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a checked disjoint reference with conflicting origins",
-                ));
-            }
-        }
-    }
-    Ok(origins)
+    root_reference_origin_preparation_v1::checked_reference_origins_legacy_v1(
+        function,
+        callables,
+        guarded_access_count,
+        edges_by_source,
+        option_dominance,
+        enum_payload_dominance,
+    )
 }
 
 fn local_definition_counts(function: &SemanticFunctionDeclV1) -> Vec<u8> {
-    let mut definitions = vec![0_u8; function.locals().len()];
-    let mut record = |place: &SemanticPlaceV1| {
-        if let Some(slot) =
-            local_definition_index(place).and_then(|local| definitions.get_mut(local))
-        {
-            *slot = slot.saturating_add(1);
-        }
-    };
-    for block in function.blocks() {
-        for statement in block.statements() {
-            visit_statement_definition_places(statement.kind(), &mut record);
-        }
-        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
-            && let Some(destination) = call.destination()
-        {
-            record(destination.place());
-        }
-    }
-    definitions
+    root_reference_origin_preparation_v1::local_definition_counts_legacy_v1(function)
 }
 
 fn assertion_definition_inventory(
@@ -25360,6 +24905,8 @@ mod tests {
     include!("production_ranked_projection_v1/canonical_assertion_graph_v1_tests.rs");
     include!("production_ranked_projection_v1/root_recipe_core_v1_tests.rs");
     include!("production_ranked_projection_v1/root_checked_references_v1_tests.rs");
+    include!("production_ranked_projection_v1/root_initial_capability_graph_v1_tests.rs");
+    include!("production_ranked_projection_v1/root_reference_origin_preparation_v1_tests.rs");
 
     mod implicit_capability_capture_v1_tests {
         include!("production_ranked_projection_v1/implicit_capability_capture_v1_tests.rs");
