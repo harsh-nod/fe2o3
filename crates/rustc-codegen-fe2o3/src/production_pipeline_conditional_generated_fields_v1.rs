@@ -50,7 +50,7 @@ pub(super) fn replay_conditional_roots_v1(
     ranked: ProductionRankedSemanticProgramV1,
     bindings: &AuthenticatedProductionBindings,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedVerificationErrorV1> {
-    replay_with_check_v1(ranked, bindings, |_, _| Ok(()))
+    replay_with_check_v1(ranked, bindings, false, |_, _| Ok(()))
 }
 
 /// Direct policy6 only. These immutable owners and their reservations stay on
@@ -63,7 +63,7 @@ pub(super) fn replay_conditional_policy6_roots_v1(
     checked: &fe2o3_kernel_opt::CheckedCanonicalKernelIrOwnerPolicy6V1,
     target: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedVerificationErrorV1> {
-    let result = replay_with_check_v1(ranked, bindings, |request, source| {
+    let result = replay_with_check_v1(ranked, bindings, false, |request, source| {
         checked_output::check(
             request,
             bound,
@@ -91,7 +91,7 @@ pub(super) fn replay_conditional_prefix_for_f_v1(
     chain: &super::checked_output_policy6_v1::conditional_prefix_v1::FinalChain,
     target: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedVerificationErrorV1> {
-    replay_with_check_v1(ranked, bindings, |request, source| {
+    replay_with_check_v1(ranked, bindings, true, |request, source| {
         super::checked_output_policy6_v1::conditional_prefix_v1::check(
             request,
             bound,
@@ -108,14 +108,20 @@ pub(super) fn replay_conditional_prefix_for_f_v1(
 fn replay_with_check_v1(
     ranked: ProductionRankedSemanticProgramV1,
     bindings: &AuthenticatedProductionBindings,
+    capture_transport: bool,
     mut check: impl FnMut(
         &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ) -> Result<(), ProductionReferenceEffectJoinErrorV2>,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedVerificationErrorV1> {
-    let ranked = ranked.replay_conditional_roots_v1(
-        &bindings.reference_effect_bindings,
-        |root, source, request, execution, budget| {
+    let consume =
+        |root,
+         source: &ProductionPreRankedKirOwnerV1,
+         request: &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<
+            '_,
+        >,
+         execution: &fe2o3_verifier::ProductionConditionalFormulaExecutionV2,
+         budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>| {
             // The existing enclosing replay has reimported the genuine receipt;
             // its source/graph/account postchecks still surround this callback.
             check(request, budget)?;
@@ -148,8 +154,15 @@ fn replay_with_check_v1(
             .map_err(|error| {
                 ProductionReferenceEffectJoinErrorV2::ProofExecution(error.to_string())
             })
-        },
-    )?;
+        };
+    let ranked = if capture_transport {
+        ranked.replay_conditional_roots_with_transport_v2(
+            &bindings.reference_effect_bindings,
+            consume,
+        )
+    } else {
+        ranked.replay_conditional_roots_v1(&bindings.reference_effect_bindings, consume)
+    }?;
     // This is later than descriptor, verifier, lower and original-phase
     // postchecks. Test observations do not alter the retained owning program.
     #[cfg(test)]

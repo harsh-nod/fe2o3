@@ -30,6 +30,7 @@ pub(crate) enum RefinedForwardingNativeStageErrorV1 {
     Mismatch(&'static str),
     Worker(Box<worker::RefinedForwardingWorkerErrorV1>),
     BoundedUnroll(loop_unroll_native_v1::LoopUnrollNativeStageErrorV1),
+    ConditionalPacket(Box<crate::production_native_source_lineage_v1::ConditionalPacketErrorV2>),
 }
 impl fmt::Display for RefinedForwardingNativeStageErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -44,6 +45,7 @@ impl std::error::Error for RefinedForwardingNativeStageErrorV1 {
             Self::History(error) => Some(error.as_ref()),
             Self::Worker(error) => Some(error.as_ref()),
             Self::BoundedUnroll(error) => Some(error),
+            Self::ConditionalPacket(error) => Some(error.as_ref()),
             _ => None,
         }
     }
@@ -55,6 +57,15 @@ fn error(value: RefinedForwardingNativeStageErrorV1) -> ProductionPipelineError 
 }
 fn resource(value: Resource) -> ProductionPipelineError {
     error(RefinedForwardingNativeStageErrorV1::Resource(value))
+}
+impl ProductionPipelineError {
+    pub(in crate::production_pipeline) fn conditional_packet_v2(
+        value: crate::production_native_source_lineage_v1::ConditionalPacketErrorV2,
+    ) -> Self {
+        error(RefinedForwardingNativeStageErrorV1::ConditionalPacket(
+            Box::new(value),
+        ))
+    }
 }
 fn mismatch(detail: &'static str) -> ProductionPipelineError {
     error(RefinedForwardingNativeStageErrorV1::Mismatch(detail))
@@ -382,21 +393,17 @@ impl RankedVerifiedProductionCompilation {
         RefinedForwardingNativeProductionCompilationV1,
         RefinedForwardingNativeStorageV1,
     )> {
+        if self.has_direct_conditional_roots_v2() {
+            return Err(self.conditional_finalizer_refusal_v2(
+                fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1 {
+                    refinement: refinement_limits,
+                    forwarding: forwarding_limits,
+                },
+                budget,
+            ));
+        }
         let floor = budget.storage();
         scoped(floor, budget, move |budget| {
-            if self.ranked.has_conditional_roots_v1()
-                && self.ranked.materialized().helper_source_policy_v1()
-                    == fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::RawEmpty
-            {
-                let prefix = self.prepare_conditional_prefix_for_f_v1(
-                    fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1 {
-                        refinement: refinement_limits,
-                        forwarding: forwarding_limits,
-                    },
-                    budget,
-                )?;
-                return Err(prefix.into_finalizer_error_v1(budget));
-            }
             let (prefix, ranked_verification, bindings) = self.prepare_native_prefix_v1(budget)?;
             let (native, receipt) = prepare(
                 prefix,

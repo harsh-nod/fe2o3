@@ -39,7 +39,7 @@ impl<P> PreparedNativeSourceProofPacketV1<P> {
             .and_then(|n| n.checked_add(self.source_packet.capacity()))
             .ok_or(Resource::Arithmetic.into())
     }
-    fn from_parts(parts: packet::NativeSourcePacketPartsV1<P>) -> Result<Self, E> {
+    pub(super) fn from_parts(parts: packet::NativeSourcePacketPartsV1<P>) -> Result<Self, E> {
         let proof_storage = parts
             .retained
             .checked_sub(packet_header::<P>()?)
@@ -59,7 +59,7 @@ impl<P> PreparedNativeSourceProofPacketV1<P> {
     }
 }
 
-fn packet_header<P>() -> Result<usize, E> {
+pub(super) fn packet_header<P>() -> Result<usize, E> {
     size_of::<PreparedNativeSourceProofPacketV1<P>>()
         .checked_sub(size_of::<P>())
         .ok_or(Resource::Accounting.into())

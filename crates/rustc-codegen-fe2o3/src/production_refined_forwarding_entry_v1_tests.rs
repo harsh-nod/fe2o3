@@ -9,6 +9,91 @@ use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use std::cell::Cell;
 
+#[test]
+fn conditional_wire_and_capsule_scopes_preserve_nested_terminal_charges() {
+    use crate::production_native_source_lineage_v1::ConditionalPacketErrorV2 as PacketError;
+    use crate::production_pipeline::ProductionPipelineError;
+    for conditional in [false, true] {
+        for unwind in [false, true] {
+            let mut work = Work::new(100);
+            let mut budget = Budget::new(&mut work, 100);
+            budget.reserve_storage(19).unwrap();
+            let account = budget.work_ledger_identity_v1();
+            let result: R<()> = entry_scope(conditional, &mut budget, |budget| {
+                entry_scope(conditional, budget, |budget| {
+                    budget.reserve_storage(23)?;
+                    budget.charge_work(7)?;
+                    if unwind {
+                        panic!("component-only nested entry unwind");
+                    }
+                    Err(E::Live(ProductionPipelineError::conditional_packet_v2(
+                        PacketError::Resource(Resource::Accounting),
+                    )))
+                })
+            });
+            assert!(if unwind {
+                matches!(result, Err(E::Panicked))
+            } else {
+                matches!(result, Err(E::Live(_)))
+            });
+            assert_eq!(budget.storage(), if conditional { 42 } else { 19 });
+            assert_eq!(budget.work(), 7);
+            assert!(budget.work_ledger_identity_v1() == account);
+        }
+    }
+}
+
+#[test]
+fn conditional_entry_keeps_precondition_order_and_forbids_success_transfer() {
+    let mut work = Work::new(100);
+    let mut budget = Budget::new(&mut work, 100);
+    budget.reserve_storage(19).unwrap();
+    let reached = Cell::new(false);
+    let result: R<()> = entry_scope(true, &mut budget, |_budget| {
+        Err::<(), _>(E::Mismatch("capsule invocation precondition"))?;
+        reached.set(true);
+        Ok(())
+    });
+    assert!(matches!(
+        result,
+        Err(E::Mismatch("capsule invocation precondition"))
+    ));
+    assert!(!reached.get());
+    assert_eq!(budget.work(), 0);
+    assert_eq!(budget.storage(), 19);
+    assert!(matches!(
+        entry_scope(true, &mut budget, |budget| {
+            budget.reserve_storage(23)?;
+            Ok(())
+        }),
+        Err(E::Mismatch(
+            "conditional source cannot produce ordinary wire"
+        ))
+    ));
+    assert_eq!(budget.storage(), 42);
+}
+
+#[test]
+fn conditional_entry_checks_original_floor_and_account_without_refunding() {
+    for foreign in [false, true] {
+        let mut original = Work::new(100);
+        let mut replacement = Work::new(100);
+        let mut budget = Budget::new(&mut original, 100);
+        budget.reserve_storage(19).unwrap();
+        let result: R<()> = entry_scope(true, &mut budget, |budget| {
+            if foreign {
+                *budget = Budget::new(&mut replacement, 100);
+                budget.reserve_storage(42)?;
+            } else {
+                budget.release_storage(1)?;
+            }
+            Err(E::Mismatch("terminal component error"))
+        });
+        assert!(matches!(result, Err(E::Resource(Resource::Accounting))));
+        assert_eq!(budget.storage(), if foreign { 42 } else { 18 });
+    }
+}
+
 impl RefinedForwardingWireErrorV1 {
     pub(crate) fn ranked_entry_test_direct_work_denial_v1(&self) -> Option<[usize; 2]> {
         match self {

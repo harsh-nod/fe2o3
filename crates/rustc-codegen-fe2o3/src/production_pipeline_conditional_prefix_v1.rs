@@ -4,6 +4,9 @@ use super::{
     Budget, DirectPolicy6PreparationV1, Owner, ProductionPipelineError, Profile,
     RankedVerifiedProductionCompilation, Resource, resource,
 };
+use crate::production_native_source_lineage_v1::{
+    PreparedConditionalSourcePacketV2, prepare_retained_native_conditional_source_packet_v2,
+};
 use crate::production_pipeline::checked_output_policy7_v1::scoped;
 use crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1 as RankedError;
 use crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2 as JoinError;
@@ -30,6 +33,7 @@ use std::{
 pub(in crate::production_pipeline) struct ConditionalPrefixForFV1 {
     preparation: DirectPolicy6PreparationV1,
     chain: FinalChain,
+    packet: PreparedConditionalSourcePacketV2,
     retained_floor: usize,
 }
 
@@ -58,7 +62,11 @@ impl RankedVerifiedProductionCompilation {
             // Conservatively include the wrapper; source/bindings retain their
             // inherited bounded domains, not a claim of exact process heap use.
             budget
-                .reserve_storage(size_of::<ConditionalPrefixForFV1>())
+                .reserve_storage(
+                    size_of::<ConditionalPrefixForFV1>()
+                        .checked_sub(size_of::<PreparedConditionalSourcePacketV2>())
+                        .ok_or_else(|| resource(Resource::Arithmetic))?,
+                )
                 .map_err(resource)?;
             let chain = FinalChain::prepare(&bound, &checked, expected_limits, budget)?;
             let ranked = crate::production_pipeline::conditional_generated_fields_v1::replay_conditional_prefix_for_f_v1(
@@ -85,9 +93,29 @@ impl RankedVerifiedProductionCompilation {
         // The enclosing target postcheck must also finish before private custody
         // is installed. Re-reserve the transferred receipt on that same account.
         budget.reserve_storage(retained).map_err(resource)?;
+        // C1 deliberately retains terminal charges on opaque failure. It must
+        // run AFTER the legacy transfer scope, never inside its blanket refund.
+        let DirectPolicy6PreparationV1 {
+            ranked,
+            bindings,
+            bound,
+            checked,
+        } = preparation;
+        let (ranked, packet) = prepare_retained_native_conditional_source_packet_v2(
+            ranked,
+            &bindings.typed_descriptor_roots,
+            budget,
+        )
+        .map_err(ProductionPipelineError::conditional_packet_v2)?;
         let value = ConditionalPrefixForFV1 {
-            preparation,
+            preparation: DirectPolicy6PreparationV1 {
+                ranked,
+                bindings,
+                bound,
+                checked,
+            },
             chain,
+            packet,
             retained_floor: budget.storage(),
         };
         #[cfg(test)]
@@ -107,6 +135,7 @@ impl ConditionalPrefixForFV1 {
         let Self {
             preparation,
             chain: _chain,
+            packet: _packet,
             ..
         } = self;
         let DirectPolicy6PreparationV1 {
@@ -123,6 +152,66 @@ impl ConditionalPrefixForFV1 {
                 "conditional F prefix cannot yield an ordinary receipt",
             )),
         }
+    }
+}
+
+impl RankedVerifiedProductionCompilation {
+    pub(crate) fn has_direct_conditional_roots_v2(&self) -> bool {
+        self.ranked.has_conditional_roots_v1()
+            && self.ranked.materialized().helper_source_policy_v1()
+                == ProductionHelperSourcePolicyV1::RawEmpty
+    }
+
+    pub(crate) fn conditional_finalizer_refusal_v2(
+        self,
+        limits: HistoryLimits,
+        budget: &mut Budget<'_>,
+    ) -> ProductionPipelineError {
+        conditional_refusal(budget, |budget| {
+            let prefix = self.prepare_conditional_prefix_for_f_v1(limits, budget)?;
+            Ok(prefix.into_finalizer_error_v1(budget))
+        })
+    }
+}
+
+// Only a successfully installed packet followed by the unchanged gate can
+// refund. Inner errors/unwind keep terminal charges even if this floor survived.
+fn conditional_refusal<'w>(
+    budget: &mut Budget<'w>,
+    run: impl FnOnce(&mut Budget<'w>) -> Result<ProductionPipelineError, ProductionPipelineError>,
+) -> ProductionPipelineError {
+    let floor = budget.storage();
+    let account = budget.work_ledger_identity_v1();
+    let address = budget as *const Budget<'_> as usize;
+    let result = catch_unwind(AssertUnwindSafe(|| run(budget)));
+    if account != budget.work_ledger_identity_v1()
+        || address != budget as *const Budget<'_> as usize
+        || budget.storage() < floor
+    {
+        return match result {
+            Ok(result) => {
+                drop(result);
+                resource(Resource::Accounting)
+            }
+            Err(payload) => resume_unwind(payload),
+        };
+    }
+    match result {
+        Ok(Ok(error))
+            if matches!(
+                &error,
+                ProductionPipelineError::RankedVerification(
+                    RankedError::ConditionalFinalizerRequired { .. }
+                )
+            ) =>
+        {
+            match budget.release_storage(budget.storage() - floor) {
+                Ok(()) => error,
+                Err(error) => resource(error),
+            }
+        }
+        Ok(Ok(error)) | Ok(Err(error)) => error,
+        Err(payload) => resume_unwind(payload),
     }
 }
 
