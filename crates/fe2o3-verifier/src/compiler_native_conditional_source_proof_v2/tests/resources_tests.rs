@@ -57,7 +57,7 @@ fn original_account_exact_one_short_and_failed_work_history() {
             }
         }
         assert_eq!(budget.storage(), FLOOR);
-        assert_eq!(budget.work_ledger_identity_v1(), ledger);
+        assert!(budget.work_ledger_identity_v1() == ledger);
     }
     budgeted(|b| {
         assert!(b.charge_work(usize::MAX).is_err());
