@@ -1,0 +1,35 @@
+   Compiling spin v0.12.3
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Finished `test` profile [unoptimized] target(s) in 15.08s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-domain-retirement-target-20260926-wjvhhFK2/debug/deps/fe2o3_resource_accounting-6ec1f52d27a69258)
+
+running 2 tests
+test domain::retirement_tests::domain_retirement_handle_drop_rejection_does_not_partially_recycle_children ... FAILED
+test domain::retirement_tests::domain_retirement_late_reap_rejection_preserves_every_ancestor_and_record ... FAILED
+
+failures:
+
+---- domain::retirement_tests::domain_retirement_handle_drop_rejection_does_not_partially_recycle_children stdout ----
+
+thread 'domain::retirement_tests::domain_retirement_handle_drop_rejection_does_not_partially_recycle_children' (101) panicked at crates/fe2o3-resource-accounting/src/domain/retirement_tests.rs:102:9:
+assertion `left == right` failed
+  left: Snapshot { nodes: [Some(NodeSnapshot { key: Key { slot: 0, generation: 1 }, parent: None, capacity: R67ResourceVectorV1 { counts: [0, 100, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, used: R67ResourceVectorV1 { counts: [0, 0, 0, 0, 0, 0, 4912, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, limit: 8, counts: [0, 0, 0], handles: 0, children: 1 }), Some(NodeSnapshot { key: Key { slot: 1, generation: 2 }, parent: Some(Key { slot: 0, generation: 1 }), capacity: R67ResourceVectorV1 { counts: [0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, used: R67ResourceVectorV1 { counts: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, limit: 8, counts: [0, 0, 0], handles: 0, children: 0 }), None, None, None, None, None, None], records: [None, None, None, None, None, None, None, None], free_nodes: [7, 6, 5, 4, 3, 2], free_records: [7, 6, 5, 4, 3, 2, 1, 0], next_node: 4, next_owner: 1 }
+ right: Snapshot { nodes: [Some(NodeSnapshot { key: Key { slot: 0, generation: 1 }, parent: None, capacity: R67ResourceVectorV1 { counts: [0, 100, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, used: R67ResourceVectorV1 { counts: [0, 0, 0, 0, 0, 0, 4912, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, limit: 8, counts: [0, 0, 0], handles: 0, children: 1 }), Some(NodeSnapshot { key: Key { slot: 1, generation: 2 }, parent: Some(Key { slot: 0, generation: 1 }), capacity: R67ResourceVectorV1 { counts: [0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, used: R67ResourceVectorV1 { counts: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, limit: 8, counts: [0, 0, 0], handles: 0, children: 1 }), Some(NodeSnapshot { key: Key { slot: 2, generation: 3 }, parent: Some(Key { slot: 1, generation: 2 }), capacity: R67ResourceVectorV1 { counts: [0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, used: R67ResourceVectorV1 { counts: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, limit: 8, counts: [0, 0, 0], handles: 1, children: 0 }), None, None, None, None, None], records: [None, None, None, None, None, None, None, None], free_nodes: [7, 6, 5, 4, 3], free_records: [7, 6, 5, 4, 3, 2, 1, 0], next_node: 4, next_owner: 1 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- domain::retirement_tests::domain_retirement_late_reap_rejection_preserves_every_ancestor_and_record stdout ----
+
+thread 'domain::retirement_tests::domain_retirement_late_reap_rejection_preserves_every_ancestor_and_record' (102) panicked at crates/fe2o3-resource-accounting/src/domain/retirement_tests.rs:84:9:
+assertion `left == right` failed
+  left: Snapshot { nodes: [Some(NodeSnapshot { key: Key { slot: 0, generation: 1 }, parent: None, capacity: R67ResourceVectorV1 { counts: [0, 100, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, used: R67ResourceVectorV1 { counts: [0, 0, 0, 0, 0, 0, 4912, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, limit: 8, counts: [0, 0, 0], handles: 0, children: 1 }), Some(NodeSnapshot { key: Key { slot: 1, generation: 2 }, parent: Some(Key { slot: 0, generation: 1 }), capacity: R67ResourceVectorV1 { counts: [0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, used: R67ResourceVectorV1 { counts: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, limit: 8, counts: [0, 0, 0], handles: 0, children: 0 }), None, None, None, None, None, None], records: [None, None, None, None, None, None, None, None], free_nodes: [7, 6, 5, 4, 3, 2], free_records: [7, 6, 5, 4, 3, 2, 1, 0], next_node: 4, next_owner: 2 }
+ right: Snapshot { nodes: [Some(NodeSnapshot { key: Key { slot: 0, generation: 1 }, parent: None, capacity: R67ResourceVectorV1 { counts: [0, 100, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, used: R67ResourceVectorV1 { counts: [0, 8, 0, 0, 0, 0, 4912, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, limit: 8, counts: [0, 1, 0], handles: 0, children: 1 }), Some(NodeSnapshot { key: Key { slot: 1, generation: 2 }, parent: Some(Key { slot: 0, generation: 1 }), capacity: R67ResourceVectorV1 { counts: [0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, used: R67ResourceVectorV1 { counts: [0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, limit: 8, counts: [0, 1, 0], handles: 0, children: 1 }), Some(NodeSnapshot { key: Key { slot: 2, generation: 3 }, parent: Some(Key { slot: 1, generation: 2 }), capacity: R67ResourceVectorV1 { counts: [0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, used: R67ResourceVectorV1 { counts: [0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, limit: 8, counts: [0, 1, 0], handles: 0, children: 0 }), None, None, None, None, None], records: [Some((Key { slot: 2, generation: 3 }, 1, R67ResourceVectorV1 { counts: [0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, Retained)), None, None, None, None, None, None, None], free_nodes: [7, 6, 5, 4, 3], free_records: [7, 6, 5, 4, 3, 2, 1], next_node: 4, next_owner: 2 }
+
+
+failures:
+    domain::retirement_tests::domain_retirement_handle_drop_rejection_does_not_partially_recycle_children
+    domain::retirement_tests::domain_retirement_late_reap_rejection_preserves_every_ancestor_and_record
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 52 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-resource-accounting --lib`

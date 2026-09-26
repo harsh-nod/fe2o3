@@ -1,0 +1,62 @@
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Finished `test` profile [unoptimized] target(s) in 6.87s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-domain-retirement-target-20260926-wjvhhFK2/debug/deps/fe2o3_resource_accounting-6ec1f52d27a69258)
+
+running 54 tests
+test batch::tests::equal_capacity_accounts_cannot_exchange_batch_member_credits ... ok
+test batch::tests::corrupt_record_counters_poison_without_debit_or_owner_advance ... ok
+test batch::tests::complete_owner_interval_is_checked_before_generation_assignment ... ok
+test batch::tests::complete_record_roster_must_be_available_before_any_member_is_admitted ... ok
+test batch::tests::duplicate_or_invalid_free_slots_poison_without_issuing_any_token ... ok
+test domain::class_tests::class_domains_preserve_default_depth_and_bound_explicit_profile ... ok
+test batch::tests::batch_uses_existing_account_records_and_independent_tokens ... ok
+test domain::tests::domain_corrupt_child_preflight_poisons_without_issuing_a_domain ... ok
+test domain::retirement_tests::domain_retirement_late_reap_rejection_preserves_every_ancestor_and_record ... ok
+test domain::tests::domain_bootstrap_is_charged_before_admission_and_never_refunded_by_slot_reuse ... ok
+test batch::tests::zero_cost_members_still_consume_independent_owner_records ... ok
+test batch::tests::quarantined_member_keeps_only_its_charge_after_sibling_disposal ... ok
+test domain::class_tests::class_domains_check_every_resource_coordinate_at_all_four_ancestors ... ok
+test domain::tests::domain_concurrent_siblings_cannot_overbook_the_last_parent_credit ... ok
+test domain::class_tests::class_domains_batch_lifetime_reaps_all_ancestors_only_after_final_disposal ... ok
+test domain::class_tests::class_domains_corrupt_cycle_and_profile_overrun_poison_without_refund ... ok
+test batch::tests::cross_member_arithmetic_overflow_has_no_partial_debit ... ok
+test batch::tests::concurrent_batches_conserve_complete_rosters ... ok
+test host_table::tests::budget_rejection_precedes_allocation_and_initialization ... ok
+test domain::retirement_tests::domain_retirement_handle_drop_rejection_does_not_partially_recycle_children ... ok
+test domain::tests::domain_rooted_host_tables_keep_baseline_and_exact_leaf_identity ... ok
+test domain::tests::domain_token_alone_preserves_root_and_final_disposal_releases_it ... ok
+test domain::tests::domain_tokens_keep_retired_parents_live_and_clean_reuse_changes_generation ... ok
+test host_table::tests::checked_layout_rejects_empty_zst_and_overflow ... ok
+test domain::tests::domain_wrong_leaf_and_stale_owner_poison_without_refund ... ok
+test host_table::tests::destructor_observes_live_charge_and_panic_quarantines_it ... ok
+test domain::tests::domain_two_token_only_records_prevent_reap_until_last_disposal ... ok
+test domain::tests::domain_recovered_table_account_outlives_payload_and_preserves_poisoned_clone_behavior ... ok
+test domain::tests::domain_records_generations_and_depth_reject_before_mutation ... ok
+test domain::tests::domain_siblings_share_ancestors_but_not_leaf_identity ... ok
+test host_table::tests::allocation_failure_and_initializer_unwind_refund_reservation ... ok
+test domain::tests::domain_quarantine_survives_all_external_handles_and_cannot_reuse_its_node ... ok
+test domain::tests::domain_corrupt_global_record_totals_poison_before_any_new_member ... ok
+test host_table::tests::independent_clones_are_charged_until_after_disposal ... ok
+test domain::tests::domain_foreign_roots_with_equal_slots_owners_and_limits_remain_independent ... ok
+test domain::class_tests::class_domains_owner_and_node_generations_never_wrap_or_partially_debit ... ok
+test batch::tests::late_member_capacity_and_final_dimension_failure_leave_all_state_unchanged ... ok
+test domain::class_tests::class_domains_scalar_and_batch_rejections_are_atomic_at_all_four_ancestors ... ok
+test batch::tests::invalid_member_count_is_atomic_but_corrupt_zero_owner_poisons ... ok
+test batch::tests::occupied_slot_in_free_roster_cannot_overwrite_an_existing_owner ... ok
+test domain::tests::domain_batch_failure_is_atomic_at_each_ancestor_and_members_dispose_independently ... ok
+test tests::account_configuration_has_a_fixed_record_bound ... ok
+test domain::class_tests::class_domains_siblings_serialize_last_session_credit_and_preserve_quarantine ... ok
+test domain::tests::domain_checks_every_resource_coordinate_at_each_ancestor ... ok
+test tests::abandoned_retained_token_preserves_charge_after_all_external_handles_drop ... ok
+test tests::account_identity_is_bound_in_the_token_not_chosen_during_release ... ok
+test tests::complete_vector_rejection_changes_neither_usage_nor_record_identity ... ok
+test host_table::tests::record_exhaustion_rejects_without_initialization ... ok
+test tests::unissued_drop_and_definite_rejection_refund_exactly_once ... ok
+test tests::bounded_record_and_generation_exhaustion_are_failure_atomic ... ok
+test tests::poisoned_account_cannot_refund_or_admit_more_custody ... ok
+test tests::slot_reuse_changes_owner_and_stale_release_never_refunds ... ok
+test batch::tests::concurrent_scalar_and_batch_admission_share_one_ledger_and_owner_arena ... ok
+test tests::concurrent_complete_vector_admission_preserves_conservation ... ok
+
+test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+

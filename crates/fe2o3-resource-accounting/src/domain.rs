@@ -34,6 +34,12 @@ struct DomainRecord {
     credit: Record,
 }
 
+struct ReapPlan {
+    retired: [Key; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1],
+    len: usize,
+    survivor: Option<(Key, usize)>,
+}
+
 struct State {
     max_depth: usize,
     nodes: Vec<Option<Node>>,
@@ -351,6 +357,11 @@ impl State {
         &self,
         leaf: Key,
     ) -> Result<([Key; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1], usize), ResourceCreditErrorV1> {
+        if self.max_depth != MAX_RESOURCE_DOMAIN_DEPTH_V1
+            && self.max_depth != MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1
+        {
+            return Err(ResourceCreditErrorV1::Invariant);
+        }
         let mut path = [ROOT; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1];
         let mut next = Some(leaf);
         let mut depth = 0;
@@ -381,17 +392,53 @@ impl State {
         }
     }
 
-    fn reap(&mut self, mut key: Key) -> Result<(), ResourceCreditErrorV1> {
-        while key != ROOT {
+    // `path` is validated leaf-to-root ancestry. Release supplies staged usage;
+    // its validated positive old-phase count is removed from every ancestor.
+    fn plan_reap(
+        &self,
+        path: &[Key],
+        leaf_handles: usize,
+        released_usage: Option<&[ResourceVectorV1]>,
+    ) -> Result<ReapPlan, ResourceCreditErrorV1> {
+        let mut plan = ReapPlan {
+            retired: [ROOT; MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1],
+            len: 0,
+            survivor: None,
+        };
+        for (&key, &parent) in path.iter().zip(&path[1..]) {
             let node = self.node(key)?;
-            if node.handles != 0 || node.children != 0 || node.counts != [0; 3] {
+            let handles = if plan.len == 0 {
+                leaf_handles
+            } else {
+                node.handles
+            };
+            let children = node
+                .children
+                .checked_sub(usize::from(plan.len != 0))
+                .ok_or(ResourceCreditErrorV1::Invariant)?;
+            let records_empty = if released_usage.is_some() {
+                self.occupied_records(key)? == 1
+            } else {
+                node.counts == [0; 3]
+            };
+            if handles != 0 || children != 0 || !records_empty {
                 break;
             }
-            if node.used != ResourceVectorV1::ZERO {
+            let used = match released_usage {
+                Some(used) => *used.get(plan.len).ok_or(ResourceCreditErrorV1::Invariant)?,
+                None => node.used,
+            };
+            if used != ResourceVectorV1::ZERO {
                 return Err(ResourceCreditErrorV1::Invariant);
             }
-            let parent = node.parent.ok_or(ResourceCreditErrorV1::Invariant)?;
-            if self.free_nodes.len() >= self.nodes.len() - 1 {
+            let free_after = self
+                .free_nodes
+                .len()
+                .checked_add(plan.len + 1)
+                .ok_or(ResourceCreditErrorV1::Invariant)?;
+            if free_after > self.nodes.len().saturating_sub(1)
+                || free_after > self.free_nodes.capacity()
+            {
                 return Err(ResourceCreditErrorV1::Invariant);
             }
             let children = self
@@ -399,12 +446,24 @@ impl State {
                 .children
                 .checked_sub(1)
                 .ok_or(ResourceCreditErrorV1::Invariant)?;
+            plan.retired[plan.len] = key;
+            plan.len += 1;
+            plan.survivor = Some((parent, children));
+        }
+        Ok(plan)
+    }
+
+    fn commit_reap(&mut self, plan: ReapPlan) {
+        for key in &plan.retired[..plan.len] {
             self.nodes[key.slot] = None;
             self.free_nodes.push(key.slot);
-            self.node_mut(parent)?.children = children;
-            key = parent;
         }
-        Ok(())
+        if let Some((key, children)) = plan.survivor {
+            self.nodes[key.slot]
+                .as_mut()
+                .expect("preflight survivor")
+                .children = children;
+        }
     }
 }
 
@@ -612,9 +671,21 @@ impl Root {
                     node.used
                 };
             }
-            if phase == Phase::Vacant && state.free_records.len() == state.records.len() {
-                return Err(ResourceCreditErrorV1::Invariant);
-            }
+            // Node retirement is part of the same preflight as the refund.
+            let reap = if phase == Phase::Vacant {
+                if state.free_records.len() == state.records.len()
+                    || state.free_records.len() == state.free_records.capacity()
+                {
+                    return Err(ResourceCreditErrorV1::Invariant);
+                }
+                Some(state.plan_reap(
+                    &path[..depth],
+                    state.node(leaf)?.handles,
+                    Some(&used[..depth]),
+                )?)
+            } else {
+                None
+            };
             for (&key, &used) in path[..depth].iter().zip(&used) {
                 let node = state.node_mut(key).expect("preflight transition path");
                 node.used = used;
@@ -628,7 +699,7 @@ impl Root {
             if phase == Phase::Vacant {
                 state.records[slot] = None;
                 state.free_records.push(slot);
-                state.reap(leaf)?;
+                state.commit_reap(reap.expect("preflight vacant retirement"));
             } else {
                 state.records[slot]
                     .as_mut()
@@ -672,12 +743,19 @@ impl Drop for DomainAccount {
             return;
         }
         let result = (|| {
-            let node = state.node_mut(self.key)?;
-            node.handles = node
+            let handles = state
+                .node(self.key)?
                 .handles
                 .checked_sub(1)
                 .ok_or(ResourceCreditErrorV1::Invariant)?;
-            state.reap(self.key)
+            let (path, depth) = state.path(self.key)?;
+            let reap = state.plan_reap(&path[..depth], handles, None)?;
+            state
+                .node_mut(self.key)
+                .expect("preflight dropped handle")
+                .handles = handles;
+            state.commit_reap(reap);
+            Ok::<_, ResourceCreditErrorV1>(())
         })();
         if result.is_err() {
             self.root.poison(&mut state);
@@ -690,3 +768,6 @@ mod tests;
 
 #[cfg(test)]
 mod class_tests;
+
+#[cfg(test)]
+mod retirement_tests;

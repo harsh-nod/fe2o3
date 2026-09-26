@@ -40,6 +40,21 @@ Every member remains independently retainable and disposable; release updates
 its entire ancestor path. Child and ancestor readings are inclusive projections
 of the same global records, not additional physical allocations to sum together.
 
+Refund and final account Drop validate the complete selected leaf-to-root path
+before mutation, including the immutable three/four-level profile. A bounded
+retirement plan projects the pending record refund or handle decrement, checks
+the removable node prefix, parent child-count decrements and both logical and
+actual Vec push headroom, then commits without further fallible cleanup. The
+root is never retired and free nodes are returned in leaf-to-root order. A live
+handle, remaining record or sibling stops node removal. Invalid ancestry above
+that stopping node is still rejected by the initial path validation.
+
+The [retirement development evidence](evidence/dev-domain-retirement-2026-09-26/README.md)
+records a fault-injected bug fixed at this boundary: previously a late reaping
+error could follow a partial refund or node recycle. Detected preflight failure
+now preserves the complete selected state before poisoning. This is not a scan
+of unrelated arena slots or a new formal hierarchy/native correspondence proof.
+
 Quarantine changes the original record phase without new arena storage. One
 existing Arc anchor retains the root and its full bootstrap baseline after
 outside handles disappear. Invariant/mutex poison seals the entire root;

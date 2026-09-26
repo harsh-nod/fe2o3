@@ -1,0 +1,73 @@
+    Finished `test` profile [unoptimized] target(s) in 0.37s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-domain-retirement-target-20260926-wjvhhFK2/debug/deps/fe2o3_kfd-60551c78c3ce1a5d)
+
+running 29 tests
+test resource_domains::native::tests::compound_backing_exact_bootstrap_and_unused_admission_lifetime ... ok
+test resource_domains::native::tests::compound_backing_cross_session_or_foreign_root_class_substitution_rejects ... ok
+test resource_domains::native::tests::compound_backing_physical_parent_is_canonical_and_budgets_immutable ... ok
+test resource_domains::native::tests::compound_backing_second_class_failure_reaps_unpublished_session_and_device ... ok
+test resource_domains::tests::rooted_n1_bootstrap_and_domain_exhaustion_fail_without_partial_registration ... ok
+test resource_domains::tests::rooted_n1_admission_binds_exact_generation_and_identity ... ok
+test resource_domains::tests::rooted_n1_canonical_device_survives_generations_and_full_registry ... ok
+test resource_domains::tests::rooted_n1_conflicting_identity_or_limits_never_registers_an_alias ... ok
+test resource_domains::tests::rooted_n1_distinct_devices_share_root_without_mixing_session_counts ... ok
+test resource_domains::tests::rooted_n1_concurrent_registration_reuses_one_canonical_parent ... ok
+test resource_domains::tests::rooted_n1_new_parent_is_reaped_when_its_session_leaf_cannot_fit ... ok
+test resource_domains::tests::rooted_n1_quarantine_blocks_reopened_session_under_same_device_parent ... ok
+test resource_domains::tests::rooted_n1_unused_admission_retains_then_releases_typed_root ... ok
+test shared_memory::resource_accounting::tests::compound_backing_failed_device_identity_refund_anchors_canonical_registry ... ok
+test shared_memory::host_resource_accounting::tests::rooted_n1_failed_identity_refund_anchors_registry_after_external_root_drop ... ok
+test shared_memory::tests::host_backing::rooted::rooted_n1_native_allocation_obeys_all_ancestor_bytes_and_records_before_effects ... ok
+test shared_memory::tests::host_backing::n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders ... ok
+test shared_memory::tests::host_backing::rooted::rooted_n1_native_owner_retains_registry_and_quarantine_anchors_it ... ok
+test shared_memory::tests::host_backing::rooted::rooted_n1_native_wrong_generation_and_replacement_reject_without_effects ... ok
+test shared_memory::tests::native_backing::compound_backing_clean_disposal_keeps_registry_until_final_owner_drop ... ok
+test shared_memory::tests::host_backing::rooted::rooted_n1_native_disposal_faults_preserve_ancestors_across_session_drop ... ok
+test shared_memory::tests::native_backing::compound_backing_device_byte_and_class_pressure_preserve_host_capacity ... ok
+test shared_memory::tests::native_backing::compound_backing_host_byte_pressure_preserves_independent_device_capacity ... ok
+test shared_memory::tests::native_backing::compound_backing_install_is_atomic_on_identity_configuration_and_currentness_failure ... ok
+test shared_memory::tests::native_backing::compound_backing_mixed_session_records_reject_before_effects_and_refund_for_other_class ... ok
+test shared_memory::tests::native_backing::compound_backing_model_sessions_share_device_pressure_but_not_quarantine_phase ... ok
+test shared_memory::tests::native_backing::compound_backing_per_class_ceiling_does_not_become_combined_usage ... ok
+test shared_memory::tests::native_backing::compound_backing_root_device_and_session_record_limits_cover_both_classes ... ok
+test shared_memory::tests::native_backing::compound_backing_mixed_disposal_error_and_unwind_keep_both_ancestor_charges ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 1589 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-domain-retirement-target-20260926-wjvhhFK2/debug/deps/fe2o3_resource_accounting-6ec1f52d27a69258)
+
+running 12 tests
+test domain::class_tests::class_domains_batch_lifetime_reaps_all_ancestors_only_after_final_disposal ... ok
+test domain::class_tests::class_domains_corrupt_cycle_and_profile_overrun_poison_without_refund ... ok
+test domain::class_tests::class_domains_owner_and_node_generations_never_wrap_or_partially_debit ... ok
+test domain::class_tests::class_domains_check_every_resource_coordinate_at_all_four_ancestors ... ok
+test domain::class_tests::class_domains_preserve_default_depth_and_bound_explicit_profile ... ok
+test domain::class_tests::class_domains_scalar_and_batch_rejections_are_atomic_at_all_four_ancestors ... ok
+test domain::class_tests::class_domains_siblings_serialize_last_session_credit_and_preserve_quarantine ... ok
+test domain::retirement_tests::domain_retirement_drop_validates_ancestry_above_a_live_survivor_before_mutation ... ok
+test domain::retirement_tests::domain_retirement_full_cascade_preserves_root_and_free_stack_order_at_every_depth ... ok
+test domain::retirement_tests::domain_retirement_handle_drop_rejection_does_not_partially_recycle_children ... ok
+test domain::retirement_tests::domain_retirement_late_reap_rejection_preserves_every_ancestor_and_record ... ok
+test domain::retirement_tests::domain_retirement_stops_at_live_handles_siblings_and_remaining_records ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-domain-retirement-target-20260926-wjvhhFK2/debug/deps/fe2o3_runtime-f40ec65f6abc2ea1)
+
+running 13 tests
+test kfd_backend::native_budget::host_backing_tests::compound_backing_consumed_policy_blocks_both_local_budgets_and_fallback ... ok
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_admission_distinguishes_capacity_from_invalid_binding ... ok
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission ... ok
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_consumed_policy_rejects_replacement_and_never_falls_back ... ok
+test kfd_backend::xgmi_budget::tests::compound_backing_xgmi_admits_both_move_only_endpoints_before_vm_acquisition ... ok
+test kfd_backend::xgmi_budget::tests::xgmi_budget_allocation_and_diagnostic_panics_latch_terminal ... ok
+test kfd_backend::xgmi_budget::tests::xgmi_budget_allocation_disposition_preserves_rejection_and_terminal_policy ... ok
+test kfd_backend::xgmi_budget::tests::xgmi_budget_first_acquisition_error_never_opens_peer ... ok
+test kfd_backend::generated_adoption::tests::rooted_n1_generated_startup_rejects_consumed_policy_before_native_acquisition ... ok
+test kfd_backend::xgmi_budget::tests::xgmi_budget_queue_completion_capacity_keeps_creation_root_terminal ... ok
+test kfd_backend::xgmi_budget::tests::xgmi_budget_production_wiring_preserves_defaults_order_and_classified_entry ... ok
+test kfd_backend::xgmi_budget::tests::xgmi_budget_sessions_preserve_argument_order_and_independent_limits ... ok
+test kfd_backend::xgmi_budget::tests::xgmi_budget_second_acquisition_failure_cannot_drop_first_session ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 1494 filtered out; finished in 0.33s
+

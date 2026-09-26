@@ -24,6 +24,20 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest domain-retirement development (2026-09-26): fault injection reproduced
+partial credit refund/node recycling when late node cleanup rejected corrupted
+state. Disposal and account Drop now preflight the complete selected ancestry
+and projected removable prefix before any mutation; commit has no remaining
+fallible cleanup. The [development packet](evidence/dev-domain-retirement-2026-09-26/README.md)
+separates the failing base regressions from final validation: 57 accounting,
+1,321 KFD and 1,476 runtime passes, with the same four socket-related failures.
+All 54 focused tests, 69 selected construction/custody regressions and 77
+doctests pass; these groups overlap. Strict Clippy, no-default-feature checking
+and formatting pass. This is not full CPU qualification, and MI300X access still
+fails at hostname resolution. This closes a production prerequisite for hierarchy
+proofs, not the proofs themselves. Formal/native qualification, memory closure, A1/A2
+and matched performance remain open; accepted checkpoints are unchanged.
+
 Latest compound N1/N2 development (2026-09-26): a separate explicit four-level
 root/device/session/class profile preserves per-class ceilings while enforcing
 combined session records. Both adapters install together; all three runtime
