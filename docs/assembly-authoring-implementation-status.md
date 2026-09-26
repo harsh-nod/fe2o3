@@ -5,6 +5,17 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Complete retained Final effects — 2026-09-26
+
+The [retained-effects checkpoint](bf16-helper-retained-effects-qualification-20260926.md)
+preserves all four source-indexed Final fields on the original ledger, with
+immutable observation after inner source/dense postflights. Qualification passed
+331 model tests, 2,557 backend tests, backend/extractor build, five fresh Rust
+sessions and 28 lossless-comparison controls. Numerical/refusal/storage/peak
+results remain unchanged. Real fixtures prove source-row read presence, not an
+independent allocation-payload oracle. Complete root recipe and normal nominal
+continuation remain open; accepted broad exits stay **6/18**.
+
 ## Shared ordinary root preparation — 2026-09-26
 
 The [shared root-recipe checkpoint](bf16-shared-root-recipe-qualification-20260926.md)

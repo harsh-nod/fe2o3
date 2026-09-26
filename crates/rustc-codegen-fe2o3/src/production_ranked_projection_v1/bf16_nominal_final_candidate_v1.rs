@@ -637,6 +637,14 @@ where
     })
 }
 
+#[path = "bf16_nominal_final_retained_effects_v1.rs"]
+mod retained_effects;
+#[cfg(test)]
+pub(super) use retained_effects::genuine as retained_effects_genuine;
+pub(super) use retained_effects::{
+    NominalFinalRetainedEffectsV1, with_nominal_final_retained_effects_v1,
+};
+
 #[cfg(test)]
 #[path = "bf16_nominal_final_candidate_v1_tests.rs"]
 mod tests;

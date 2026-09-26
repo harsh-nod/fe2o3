@@ -30,6 +30,9 @@ pub(super) fn observe_prepared_dense(
     with_prepared_dense_final(owner, source, inventory, budget, &mut |_, _| Ok(()))?;
     // SAME complete route participates in the existing exact W/P/F probes.
     final_candidate::observe(owner, source, inventory, budget)?;
+    super::bf16_nominal_final_candidate_v1::retained_effects_genuine::observe(
+        owner, source, inventory, budget,
+    )?;
     super::bf16_nominal_source_preparation_v1::observe_rich_source_comparison_for_test_v1(
         owner,
         inventory,
@@ -327,6 +330,13 @@ pub(super) fn inspect_dense_final_controls(
 ) -> Result<()> {
     final_controls::inspect(owner, source, inventory, inventory_storage, budget)?;
     final_candidate::controls(owner, source, inventory, inventory_storage, budget)?;
+    super::bf16_nominal_final_candidate_v1::retained_effects_genuine::controls(
+        owner,
+        source,
+        inventory,
+        inventory_storage,
+        budget,
+    )?;
     super::bf16_nominal_source_preparation_v1::root_source_preparation_controls_for_test_v1(
         owner,
         inventory,
