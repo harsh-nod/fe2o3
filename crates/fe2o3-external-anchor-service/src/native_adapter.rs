@@ -126,6 +126,12 @@ macro_rules! native_anchor {
                 -> Result<([u8; OBSERVATION_BYTES], Storage)> {
                 self.exchange_with_hooks(bytes, d, b, &mut NoopPersistenceHooksV1, || {})
             }
+            // The peer loop prepays the full owner/context and credential-check frame.
+            pub(crate) fn validate_service(&self, d: &Deployment, b: &mut Budget<'_>) -> Result<()> {
+                require_service(d)?;
+                self.key.revalidate(d, b)?;
+                require_service(d)
+            }
             fn exchange_with_hooks(&mut self, bytes: &[u8], d: &Deployment, b: &mut Budget<'_>,
                 hooks: &mut impl PersistenceHooksV1, after_persistence: impl FnOnce())
                 -> Result<([u8; OBSERVATION_BYTES], Storage)> {

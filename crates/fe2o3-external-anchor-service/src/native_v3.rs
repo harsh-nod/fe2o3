@@ -4,7 +4,7 @@ use fe2o3_compiler_execution_protocol::CompilerExecutionExternalAnchorDeployment
 crate::native_adapter::native_anchor!(DurableExternalAnchorV3, "3", "2");
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use DurableExternalAnchorV3 as Anchor;
     use fe2o3_compiler_execution_protocol::{

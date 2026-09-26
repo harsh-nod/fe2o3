@@ -21,7 +21,7 @@ use std::{
 };
 
 const LIMIT: usize = 1_000_000_000;
-fn root() -> tempfile::TempDir {
+pub(crate) fn root() -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
     directory
@@ -34,7 +34,7 @@ fn public(seed: u8) -> [u8; 32] {
 fn measure(seed: u8) -> Measurement {
     Measurement::new([seed; 32], 4096).unwrap()
 }
-fn deployment(axis: u8, b: &mut Budget<'_>) -> Deployment {
+pub(crate) fn deployment(axis: u8, b: &mut Budget<'_>) -> Deployment {
     let uid = rustix::process::geteuid().as_raw();
     let gid = rustix::process::getegid().as_raw();
     assert!(
@@ -78,7 +78,12 @@ fn key(d: &Deployment, seed: u8, b: &mut Budget<'_>) -> Key {
     b.release_storage(32).unwrap();
     key
 }
-fn admit(path: &Path, d: &Deployment, b: &mut Budget<'_>, mode: OpenMode) -> (Anchor, Disposition) {
+pub(crate) fn admit(
+    path: &Path,
+    d: &Deployment,
+    b: &mut Budget<'_>,
+    mode: OpenMode,
+) -> (Anchor, Disposition) {
     let k = key(d, 7, b);
     b.reserve_storage(Anchor::ROOT_STORAGE).unwrap();
     let ((a, disposition), c) =
@@ -86,7 +91,7 @@ fn admit(path: &Path, d: &Deployment, b: &mut Budget<'_>, mode: OpenMode) -> (An
     b.reserve_storage(c.additional_storage()).unwrap();
     (a, disposition)
 }
-fn retire(a: Anchor, b: &mut Budget<'_>) {
+pub(crate) fn retire(a: Anchor, b: &mut Budget<'_>) {
     let n = a.retained_storage();
     drop(a);
     b.release_storage(n).unwrap();
@@ -110,7 +115,7 @@ fn pending(
     }
     .unwrap()
 }
-fn initial(recover: bool) -> PendingAnchorTransitionV1 {
+pub(crate) fn initial(recover: bool) -> PendingAnchorTransitionV1 {
     pending(0, HashChainHeadV1::from_bytes([0; 32]), 9, recover, 7)
 }
 struct Observation {

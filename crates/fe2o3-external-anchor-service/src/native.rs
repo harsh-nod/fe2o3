@@ -1,5 +1,5 @@
 //! Closed native custody adapters over the same durable state engine as V1.
-use crate::ExternalAnchorServiceErrorV1;
+use crate::{ExternalAnchorDaemonErrorV1, ExternalAnchorServiceErrorV1};
 use fe2o3_compiler_closure_capability::CompilerExecutionCapabilityErrorV2;
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1;
 use std::{error::Error, fmt};
@@ -20,6 +20,7 @@ pub enum NativeExternalAnchorErrorV2 {
     Resource(CanonicalKernelIrVerificationResourceErrorV1),
     Capability(CompilerExecutionCapabilityErrorV2),
     State(ExternalAnchorServiceErrorV1),
+    Transport(ExternalAnchorDaemonErrorV1),
     ServiceCredentials,
 }
 impl fmt::Display for NativeExternalAnchorErrorV2 {
@@ -28,6 +29,7 @@ impl fmt::Display for NativeExternalAnchorErrorV2 {
             Self::Resource(e) => e.fmt(f),
             Self::Capability(e) => e.fmt(f),
             Self::State(e) => e.fmt(f),
+            Self::Transport(e) => e.fmt(f),
             Self::ServiceCredentials => {
                 f.write_str("native anchor requires the deployment's exact nonroot UID/GID")
             }
@@ -40,6 +42,7 @@ impl Error for NativeExternalAnchorErrorV2 {
             Self::Resource(e) => Some(e),
             Self::Capability(e) => Some(e),
             Self::State(e) => Some(e),
+            Self::Transport(e) => Some(e),
             Self::ServiceCredentials => None,
         }
     }
@@ -57,6 +60,11 @@ impl From<CompilerExecutionCapabilityErrorV2> for NativeExternalAnchorErrorV2 {
 impl From<ExternalAnchorServiceErrorV1> for NativeExternalAnchorErrorV2 {
     fn from(e: ExternalAnchorServiceErrorV1) -> Self {
         Self::State(e)
+    }
+}
+impl From<ExternalAnchorDaemonErrorV1> for NativeExternalAnchorErrorV2 {
+    fn from(e: ExternalAnchorDaemonErrorV1) -> Self {
+        Self::Transport(e)
     }
 }
 

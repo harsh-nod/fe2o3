@@ -33,14 +33,23 @@ mod durable_core;
 mod entrypoint;
 mod native;
 mod native_adapter;
+mod native_peer;
 mod native_v2;
 mod native_v3;
+#[allow(unsafe_code)]
+mod peer_io;
+mod peer_loop;
 #[allow(unsafe_code)]
 mod service;
 
 pub(crate) use durable_core::DurableAnchorCoreV1;
 
 pub use native::{NativeExternalAnchorErrorV2, NativeExternalAnchorStorageV2};
+pub use native_peer::{
+    NATIVE_EXTERNAL_ANCHOR_PEER_FRAME_STORAGE_V2, NATIVE_EXTERNAL_ANCHOR_PEER_REPORT_STORAGE_V2,
+    NATIVE_EXTERNAL_ANCHOR_PEER_STORAGE_V2, NATIVE_EXTERNAL_ANCHOR_PEER_WORK_V2,
+    serve_connected_peer_v2, serve_connected_peer_v3,
+};
 pub use native_v2::DurableExternalAnchorV2;
 pub use native_v3::DurableExternalAnchorV3;
 

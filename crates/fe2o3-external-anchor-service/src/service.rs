@@ -22,7 +22,7 @@ pub const EXTERNAL_ANCHOR_RESPONSE_TIMEOUT_V1: Duration = Duration::from_secs(30
 /// Terminal report after the sole connected peer closes cleanly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExternalAnchorServiceReportV1 {
-    exchanges: u64,
+    pub(crate) exchanges: u64,
 }
 
 impl ExternalAnchorServiceReportV1 {
@@ -54,7 +54,7 @@ fn serve_connected_peer_with_timeout(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ServiceBoundaryV1 {
+pub(crate) enum ServiceBoundaryV1 {
     BeforeReceive,
     AfterReceive,
     BeforeExchange,
@@ -65,7 +65,7 @@ enum ServiceBoundaryV1 {
 
 impl ServiceBoundaryV1 {
     #[cfg(test)]
-    const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::BeforeReceive,
         Self::AfterReceive,
         Self::BeforeExchange,
@@ -86,11 +86,11 @@ impl ServiceBoundaryV1 {
     }
 }
 
-trait ServiceHooksV1 {
+pub(crate) trait ServiceHooksV1 {
     fn checkpoint(&mut self, boundary: ServiceBoundaryV1) -> io::Result<()>;
 }
 
-struct NoopServiceHooksV1;
+pub(crate) struct NoopServiceHooksV1;
 
 impl ServiceHooksV1 for NoopServiceHooksV1 {
     fn checkpoint(&mut self, _boundary: ServiceBoundaryV1) -> io::Result<()> {
@@ -104,29 +104,41 @@ fn serve_connected_peer_with_hooks<H: ServiceHooksV1>(
     response_timeout: Duration,
     hooks: &mut H,
 ) -> Result<ExternalAnchorServiceReportV1, ExternalAnchorDaemonErrorV1> {
-    if response_timeout.is_zero() {
-        return Err(ExternalAnchorDaemonErrorV1::InvalidResponseTimeout);
+    crate::peer_loop::run(&mut LegacyPeer(anchor), &peer, response_timeout, hooks)
+}
+
+struct LegacyPeer<'a>(&'a mut DurableExternalAnchorV1);
+
+impl crate::peer_loop::PeerSession for LegacyPeer<'_> {
+    type Error = ExternalAnchorDaemonErrorV1;
+    type Observation = [u8; ANCHOR_OBSERVATION_WIRE_LEN_V1];
+
+    fn receive(
+        &mut self,
+        peer: &OwnedFd,
+    ) -> Result<Option<[u8; ANCHOR_CHALLENGE_WIRE_LEN_V1]>, Self::Error> {
+        receive_challenge(peer)
     }
-    let mut exchanges = 0_u64;
-    loop {
-        service_checkpoint(hooks, ServiceBoundaryV1::BeforeReceive)?;
-        let Some(challenge) = receive_challenge(&peer)? else {
-            return Ok(ExternalAnchorServiceReportV1 { exchanges });
-        };
-        service_checkpoint(hooks, ServiceBoundaryV1::AfterReceive)?;
-        service_checkpoint(hooks, ServiceBoundaryV1::BeforeExchange)?;
-        let observation = anchor.exchange(&challenge)?;
-        service_checkpoint(hooks, ServiceBoundaryV1::AfterExchange)?;
-        service_checkpoint(hooks, ServiceBoundaryV1::BeforeSend)?;
-        send_observation(&peer, &observation, response_timeout)?;
-        service_checkpoint(hooks, ServiceBoundaryV1::AfterSend)?;
-        exchanges = exchanges
-            .checked_add(1)
-            .ok_or(ExternalAnchorDaemonErrorV1::ExchangeCountOverflow)?;
+    fn exchange(
+        &mut self,
+        challenge: &[u8; ANCHOR_CHALLENGE_WIRE_LEN_V1],
+    ) -> Result<Self::Observation, Self::Error> {
+        Ok(self.0.exchange(challenge)?)
+    }
+    fn send(
+        &mut self,
+        peer: &OwnedFd,
+        observation: &Self::Observation,
+        timeout: Duration,
+    ) -> Result<(), Self::Error> {
+        send_observation(peer, observation, timeout)
+    }
+    fn retire(&mut self, _observation: Self::Observation) -> Result<(), Self::Error> {
+        Ok(())
     }
 }
 
-fn service_checkpoint<H: ServiceHooksV1>(
+pub(crate) fn service_checkpoint<H: ServiceHooksV1>(
     hooks: &mut H,
     boundary: ServiceBoundaryV1,
 ) -> Result<(), ExternalAnchorDaemonErrorV1> {
