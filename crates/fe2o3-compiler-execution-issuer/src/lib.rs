@@ -4,9 +4,19 @@
 compile_error!("fe2o3-compiler-execution-issuer requires Linux x86-64");
 
 mod launch_inputs_v2;
+mod launch_inputs_v3;
+pub use launch_inputs_v3::{
+    CompilerExecutionIssuerLaunchInputErrorV3, CompilerExecutionIssuerLaunchInputStorageV3,
+    CompilerExecutionIssuerLaunchInputsV3,
+};
 mod native;
+mod native_adapter;
+mod native_v3;
 pub use native::{
     CompilerExecutionIssuerEntrypointErrorV2, run_inherited_compiler_execution_issuer_v2,
+};
+pub use native_v3::{
+    CompilerExecutionIssuerEntrypointErrorV3, run_inherited_compiler_execution_issuer_v3,
 };
 
 // CLOEXEC does not prevent a concurrent fork from briefly retaining a test pipe.

@@ -15,6 +15,9 @@ use crate::{ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmission
 #[path = "compiler_execution_external_anchor_native.rs"]
 mod native;
 pub(crate) use native::NativeAnchor;
+#[path = "compiler_execution_external_anchor_native_v3.rs"]
+mod native_v3;
+pub(crate) use native_v3::NativeAnchor as NativeAnchorV3;
 
 /// Fixed production deadline for one compiler external-anchor request and response.
 pub const COMPILER_EXECUTION_EXTERNAL_ANCHOR_TIMEOUT_V1: Duration = Duration::from_secs(30);

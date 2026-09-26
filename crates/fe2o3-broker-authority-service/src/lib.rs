@@ -161,11 +161,13 @@ pub use compiler_execution_issuer::{
     CurrentStaticIssuerMeasurementsV1, IssuerAdmissionErrorKindV1,
     MAX_COMPILER_EXECUTION_ISSUER_IMAGE_BYTES_V1, PROTECTED_COMPILER_EXECUTION_ISSUER_AUTHORITY_V1,
     ProtectedCompilerExecutionIssuerAdmissionErrorV1,
-    ProtectedCompilerExecutionIssuerAdmissionErrorV2, ProtectedCompilerExecutionIssuerAdmissionV1,
-    ProtectedCompilerExecutionIssuerAdmissionV2, ProtectedCompilerExecutionIssuerServiceErrorV2,
-    ProtectedCompilerExecutionIssuerStorageV2, ProtectedIssuerProcessV1,
-    SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1, current_static_issuer_measurements_v1,
-    sealed_static_issuer_runtime_measurement_v1,
+    ProtectedCompilerExecutionIssuerAdmissionErrorV2,
+    ProtectedCompilerExecutionIssuerAdmissionErrorV3, ProtectedCompilerExecutionIssuerAdmissionV1,
+    ProtectedCompilerExecutionIssuerAdmissionV2, ProtectedCompilerExecutionIssuerAdmissionV3,
+    ProtectedCompilerExecutionIssuerServiceErrorV2, ProtectedCompilerExecutionIssuerServiceErrorV3,
+    ProtectedCompilerExecutionIssuerStorageV2, ProtectedCompilerExecutionIssuerStorageV3,
+    ProtectedIssuerProcessV1, SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1,
+    current_static_issuer_measurements_v1, sealed_static_issuer_runtime_measurement_v1,
 };
 #[cfg(target_os = "linux")]
 pub use compiler_execution_issuer_durable::{

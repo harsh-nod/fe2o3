@@ -60,3 +60,33 @@ Cancel, plus refusal cases; it is not evidence of inherited-entrypoint launch,
 protected compiler-source observation, proof execution, or GPU qualification.
 See the
 [native capability contract](../../docs/compiler-execution-capabilities-v2.md).
+
+## Conditional Native Issuer
+
+`run_inherited_compiler_execution_issuer_v3` uses the same fixed descriptor ABI,
+process hardening, cumulative resource account, packet loop and durable recovery
+state machine with actual V3 policy, signing-key, packet and journal owners.
+`CompilerExecutionIssuerLaunchInputsV3` retains and revalidates both sealed input
+objects; the identity-only manifest must match the independently decoded V3 policy.
+There is no wire sniffing, policy conversion, or fallback to the V1/V2 entrypoints.
+The separate `fe2o3-compiler-execution-issuer-conditional` binary calls this entrypoint;
+it does not change the default executable or trusted deployment.
+
+Prepare and Issue use an independently observed compiler process and retain its
+exact V5 publication lease and consumption token. The published invocation must
+equal the observed invocation before a SubjectV3 is derived. Fresh observation,
+publication-lock and admitted-custody checks surround signing and durable commit.
+Publication and currentness still require the independently signed anchor and
+exact Worker/issuer joins. Readiness alone grants none of those claims.
+
+Both native families use the existing singleton and journal filenames. Conditional
+issuer/Worker records have distinct V4 framing and signature/identity domains;
+their anchor journal is V3. A foreign or mixed-family record is a refusal, never
+an empty directory, an automatic migration, or a reason to start another ledger.
+
+This is issuer-side integration, not a completed production-to-GPU path. A pinned
+sealed-static conditional image, trusted supervisor/launcher wiring, early
+compiler-side custody on the original resource account, the real conditional
+publication continuation, applicable machine-refinement proofs, and target-matched
+end-to-end runs remain required. Component tests do not establish protected
+execution, deployment provenance, machine equivalence, or 47/47 kernel coverage.

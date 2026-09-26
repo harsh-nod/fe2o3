@@ -21,6 +21,9 @@ pub(super) const LEGACY_STATE_FILES: [&str; 4] = [
     "compiler-execution-worker-v1.state",
     "compiler-execution-worker-v1.redo",
 ];
+// Both native subject families use this one namespace and singleton. The
+// selected nominal decoder must reject a foreign record before mutation;
+// adding a second namespace would allow incompatible ledgers to coexist.
 pub(super) const NATIVE_ISSUER_STATE_FILES: [&str; 3] = [
     "compiler-execution-issuer-v3.state",
     "compiler-execution-issuer-v3.redo",

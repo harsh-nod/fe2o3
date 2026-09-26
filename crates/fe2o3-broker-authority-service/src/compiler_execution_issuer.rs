@@ -26,6 +26,17 @@ use zeroize::Zeroize;
 
 #[path = "compiler_execution_issuer_native.rs"]
 mod native;
+#[path = "compiler_execution_issuer_native_adapter.rs"]
+mod native_adapter;
+#[cfg(test)]
+#[path = "compiler_execution_issuer_native_family_tests.rs"]
+mod native_family_tests;
+#[path = "compiler_execution_issuer_native_v3.rs"]
+mod native_v3;
+pub use native_v3::{
+    ProtectedCompilerExecutionIssuerAdmissionErrorV3, ProtectedCompilerExecutionIssuerAdmissionV3,
+    ProtectedCompilerExecutionIssuerServiceErrorV3, ProtectedCompilerExecutionIssuerStorageV3,
+};
 #[path = "compiler_execution_issuer_native_checks.rs"]
 mod native_checks;
 pub use native::{

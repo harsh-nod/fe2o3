@@ -18,4 +18,7 @@ use sha2::{Digest, Sha256};
 use std::mem::size_of;
 
 include!("compiler_execution_worker_ledger_native_body.rs");
-native_worker!(external_anchor_currentness_challenge_native, new_native);
+native_worker!(
+    external_anchor_currentness_challenge_native_v3,
+    new_native_v3
+);

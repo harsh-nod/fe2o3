@@ -17,9 +17,13 @@ fn subject(seed: u8, b: &mut Budget<'_>) -> Subject {
     let floor = b.storage();
     let (v, storage) = b
         .with_prepaid_scope(floor, 8, 8, fixture::SUBJECT_BYTES, |b| {
-            let mut bytes = fixture::subject_wire(2);
+            let mut bytes = fixture::subject_wire(SUBJECT_VERSION);
             bytes[32..48].fill(seed);
-            fixture::seal(&mut bytes, "INERT-COMPILER-EXECUTION-SUBJECT", 2);
+            fixture::seal(
+                &mut bytes,
+                "INERT-COMPILER-EXECUTION-SUBJECT",
+                SUBJECT_VERSION,
+            );
             Subject::decode(&bytes, b)
         })
         .unwrap();
@@ -27,7 +31,7 @@ fn subject(seed: u8, b: &mut Budget<'_>) -> Subject {
     b.reserve_storage(storage.retained_storage()).unwrap();
     v
 }
-fn issued(
+pub(super) fn issued(
     ledger: &mut Ledger,
     p: &Policy,
     key: &Key,
@@ -60,7 +64,10 @@ fn observation(c: &AnchorChallengeV1, position: AnchorPositionV1) -> AnchorTrans
     )
     .unwrap()
 }
-fn proposed(c: &AnchorChallengeV1, _: &mut Budget<'_>) -> Result<AnchorTransitionReceiptV1> {
+pub(super) fn proposed(
+    c: &AnchorChallengeV1,
+    _: &mut Budget<'_>,
+) -> Result<AnchorTransitionReceiptV1> {
     Ok(observation(c, AnchorPositionV1::Proposed))
 }
 fn snapshot(root: &std::path::Path) -> Vec<(std::ffi::OsString, Vec<u8>, u64, i64, i64)> {
@@ -128,11 +135,7 @@ fn native_worker_publication_replay_second_sequence_and_currentness() {
             &mut b,
         )
         .unwrap();
-        assert!(
-            attestation
-                .verify_native(&p, &carriage, [81; 32], &mut b)
-                .is_ok()
-        );
+        assert!(verify_test_current(&attestation, &p, &carriage, [81; 32], &mut b).is_ok());
         assert_eq!(ledger.record.sequence, u64::from(seed) + 1);
     }
     drop(ledger);
@@ -286,7 +289,6 @@ fn native_worker_anchor_send_receive_loss_reuses_exact_persisted_challenge() {
 
 #[test]
 fn native_worker_incomplete_publication_cannot_recover_or_attest_ack_carriage() {
-    use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV2 as Carriage;
     // Commit 3 is Worker; commit 4 is Published anchor. In both cases the
     // signed issuer still says Issued, not advanced with a persisted Worker ACK.
     for commit in [3, 4] {

@@ -74,9 +74,14 @@ mod supervisor_ready;
 mod worker_anchor_journal;
 mod worker_anchor_journal_codec;
 mod worker_anchor_journal_v2;
+mod worker_anchor_journal_v3;
 pub use worker_anchor_journal_v2::{
     COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V2, CompilerExecutionWorkerAnchorJournalErrorV2,
     CompilerExecutionWorkerAnchorJournalV2,
+};
+pub use worker_anchor_journal_v3::{
+    COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V3, CompilerExecutionWorkerAnchorJournalErrorV3,
+    CompilerExecutionWorkerAnchorJournalV3,
 };
 
 /// Sole production runtime directory for the protected compiler-execution supervisor.

@@ -10,7 +10,6 @@ use fe2o3_artifact_transaction::{
     NoRetainedDurableDirectoryHooksV1 as NoHooks, RetainedDurableDirectoryHooksV1 as Hooks,
     RetainedDurableDirectoryV1 as Directory,
 };
-use fe2o3_compiler_execution_protocol::CompilerExecutionWorkerAnchorJournalV2 as AnchorJournal;
 use std::os::fd::BorrowedFd;
 
 const JOURNAL: JournalNames = JournalNames {
