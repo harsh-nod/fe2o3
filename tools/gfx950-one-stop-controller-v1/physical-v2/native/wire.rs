@@ -416,6 +416,18 @@ impl<'a> NativePeer<'a> {
         self.cleanup = Some(c);
         c
     }
+    // Failure-only, borrowed post-cleanup bytes; no native query or new I/O.
+    pub(super) fn publication_failure_context(&self) -> super::publication::RetainedTransport<'_> {
+        super::publication::RetainedTransport {
+            sent_consumed: self.sent,
+            records_after_cleanup: self.records,
+            eof_after_cleanup: self.eof,
+            closed_after_cleanup: self.closed,
+            stdout: &self.out,
+            stderr: &self.err,
+            commands: &self.commands,
+        }
+    }
     pub(super) fn encode_transcript(&self, out: &mut impl Write) -> Result<(), Refusal> {
         self.clock.check()?;
         out.write_all(b"{").map_err(|_| Refusal::Incomplete)?;

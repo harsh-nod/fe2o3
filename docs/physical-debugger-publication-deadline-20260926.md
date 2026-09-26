@@ -54,10 +54,37 @@ The wrapper retained its original 300-second deadline, 512 MiB read limit and
 40,000-call bound. Actual wrapper debit was 436,028,950 bytes / 7,565 calls.
 Cleanup success is not physical-capture qualification or rollback.
 
-## Next correction
+## Qualified failure-only diagnostic
 
-Retain a small, bounded failure-only diagnostic when normal report publication
-itself fails. It must expose the original error/stage without extending the
-positive execution deadline, accepting partial state, enabling public capture
-or automatically rerunning a target. Source review and deterministic controls
-precede any separately coordinated future native attempt.
+The disabled public controller now preserves a bounded diagnostic when normal
+report publication fails. It records the original fixed refusal/status,
+post-cleanup command/record counts, stream completion and bounded hexadecimal
+suffixes of already-retained stdout, stderr and commands. It does not use an
+unbounded debug rendering of a successful observation.
+
+Formatting uses a fixed 4,096-byte stack buffer (at most 4,097 bytes including
+the line ending), with at most 256 retained bytes from each stream/command
+suffix. Checked growth and a fixed fallback cover formatting failure. Arbitrary
+input bytes are hex-encoded, not interpreted as terminal control sequences.
+
+This failure branch performs no new child reads, process queries, hashing,
+parsing, debugger commands, spawning or teardown. The successful publication
+path, original clocks, cleanup protocol and public-disabled state are unchanged.
+Bounded content is not a guarantee of global stderr write latency.
+
+Qualification passed 58 library and 83 controller Rust tests, 31 public package
+checks and four private source-preservation controls, strict package Clippy,
+build and diff checks. The receipt retained equal before/after source, input
+and tool pins; root independently rehashed its inputs and streams.
+
+CPU receipt: 100,865 bytes, SHA-256
+`9d48d01aa078c9dd555163ac5ca14e66bc72b4f254d57f7672aba59b39ccd3e6`.
+Its source snapshot contained 8,404 files / 120,110,614 bytes, SHA-256
+`baddfdad48a2ce9d716c188029c3e641b2fa73bc95c02c3436f1860cd615a175`.
+This documentation update follows that source qualification.
+
+No new native attempt was made with this change. The original capture remains
+unknown; cleanup success is still distinct from capture qualification. A fresh
+private controller/family, reviewed binding and separately coordinated bounded
+attempt are needed to observe the underlying failure. Milestone exits remain
+6/18; this diagnostic neither accepts partial state nor enables public capture.

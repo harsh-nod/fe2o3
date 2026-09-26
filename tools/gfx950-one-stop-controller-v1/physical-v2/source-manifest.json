@@ -66,8 +66,8 @@
     },
     {
       "path": "native/main.rs",
-      "bytes": 2439,
-      "sha256": "9a474e2b5fefdff62e810962b64b8113e4d176ecf86ff1390ae0053904217832"
+      "bytes": 2522,
+      "sha256": "78b5ed7fb3a29810e34e758840332fc39947c9ae71aca59edfce42fd6ba9f90e"
     },
     {
       "path": "native/parent.rs",
@@ -81,8 +81,8 @@
     },
     {
       "path": "native/publication.rs",
-      "bytes": 3144,
-      "sha256": "9f91a9039f3cd0f73d232e383e9a2d71db82742e495d79bc027dca3e8797883a"
+      "bytes": 18111,
+      "sha256": "1929f1df83f57f2d7db92c44dea12f9db54f3fcba379d46b7b96d976d22c7fb2"
     },
     {
       "path": "native/scope.rs",
@@ -101,8 +101,8 @@
     },
     {
       "path": "native/wire.rs",
-      "bytes": 26735,
-      "sha256": "6253d4da867521323331df4b01023b6d40cfaa7c10d67a6bd938848bee278fb7"
+      "bytes": 27252,
+      "sha256": "8145521181b3f38388ea254826d524826a4c976300620a5e4f9bae30135cf28e"
     },
     {
       "path": "physical_snapshot_v2.rs",

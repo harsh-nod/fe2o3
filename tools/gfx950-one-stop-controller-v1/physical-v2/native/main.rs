@@ -55,9 +55,13 @@ fn main() -> ExitCode {
             Ok(x) => x.cleanup,
             Err((_, c)) => *c,
         };
-        eprintln!(
-            "one-stop raw observation publication refused: {e:?}; retained cleanup={cleanup:?}"
+        let diagnostic = publication::failure_diagnostic(
+            e,
+            &result,
+            cleanup,
+            peer.publication_failure_context(),
         );
+        eprintln!("{diagnostic}");
         return ExitCode::FAILURE;
     }
     if okay {
