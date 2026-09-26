@@ -158,6 +158,18 @@ pub(super) fn prepare(prefix: &Prefix, module: &Module, budget: &mut Budget<'_>)
         native_lowering: lowering.canonical_bytes(),
         final_module_commitment: commitment.canonical_bytes(),
     };
+    finish_carrier(bytes, input, module, budget)
+}
+
+// Framing only. The caller retains the original owners and prepays SCRATCH;
+// keeping this tail separate lets inert fixtures exercise the actual relocation.
+fn finish_carrier(
+    mut bytes: Vec<u8>,
+    input: NativeConditionalMetadataInputV1<'_>,
+    module: &Module,
+    budget: &mut Budget<'_>,
+) -> R<Vec<u8>> {
+    let limit = budget.storage_limit();
     let metadata = NativeConditionalMetadataLayoutV1::new(input).map_err(Error::Metadata)?;
     let capsule = InertProductionSemanticCapsuleLayoutV5::new(metadata.encoded_len(), bytes.len())
         .map_err(Error::Capsule)?;
@@ -211,3 +223,7 @@ pub(super) fn prepare(prefix: &Prefix, module: &Module, budget: &mut Budget<'_>)
     .map_err(Error::Seal)?;
     Ok(bytes)
 }
+
+#[cfg(test)]
+#[path = "production_pipeline_conditional_native_pack_v5_tests.rs"]
+mod tests;
