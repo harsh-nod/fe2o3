@@ -268,8 +268,9 @@ The [conditional issuer checkpoint](evidence/conditional-native-issuer-20260926.
 connects those owners to the same fixed-FD entrypoint, packet loop, durable
 recovery and Worker/anchor state machine, with actual locked V5 observation.
 Distinct record families share one singleton namespace and reject mixed state
-before mutation. Component tests pass, while protected live-service validation
-remains outstanding. Trusted production family selection, early original-account
+before mutation. Focused issuer/durable cases pass; local socket checks fail with
+permission denials, and protected live-service validation remains outstanding.
+Trusted production family selection, early original-account
 client lifetime, conditional publication and machine refinement still need
 integration. No new kernel receives production or GPU credit from these additions.
 
