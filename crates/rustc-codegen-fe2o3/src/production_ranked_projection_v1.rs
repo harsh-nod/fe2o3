@@ -17,6 +17,9 @@ mod helper_source_fixture_v1 {
     ));
 }
 mod analysis_multi_split_v1;
+// N2a is observational only; N2b will consume the nominal candidate.
+#[allow(dead_code)]
+pub(crate) mod bf16_nominal_call_projection_v1;
 mod canonical_assertion_facts_v1;
 #[cfg(test)]
 pub(crate) mod conditional_bound_observation_v1_tests;

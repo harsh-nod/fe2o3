@@ -226,6 +226,9 @@ pub(super) fn inspect(
             .map_err(query_error)?;
         assert_eq!(observed, source.return_permutation());
         assert_eq!(budget.storage(), inventory_floor);
+        crate::production_ranked_projection_v1::bf16_nominal_call_projection_v1::
+            inspect_genuine_for_test_v1(owner, source, &inventory, budget)
+            .map_err(query_error)?;
         inspect_retained_floor_boundaries(
             owner,
             source,

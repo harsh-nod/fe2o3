@@ -5,6 +5,15 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Borrowed helper projection and merged regression — 2026-09-26
+
+The [N2a checkpoint](bf16-helper-ranked-call-qualification-20260926.md) joins
+the checked source-owned call to its independent canonical effect report and
+tensor contract on the original ledger. The merged regression passed 10,393
+test executions with zero failures, including fresh helper and root CPU sessions.
+Normal helper capability/layout/result projection and ranked/formal/LLVM
+continuation remain unfinished; accepted broad exits remain **6/18**.
+
 ## Checked helper query and final debugger startup — 2026-09-26
 
 The [source-owned nominal query](bf16-nominal-helper-query-qualification-20260926.md)
