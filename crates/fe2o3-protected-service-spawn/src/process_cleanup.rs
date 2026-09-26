@@ -1,4 +1,5 @@
-//! Finite cleanup mechanics shared by issuer and root-service child custody.
+//! Finite cleanup mechanics for protected-service child custody.
+//! Currently consumed by issuer launches; native root-service integration is pending.
 //!
 //! The caller supplies exclusive consuming-wait ownership and retains this record
 //! in its existing reserved slot until terminal reaping. This module creates no

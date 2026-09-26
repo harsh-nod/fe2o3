@@ -14,7 +14,8 @@ The dedicated native V2/V3 inherited daemon entrypoints now compose these APIs
 with native process/namespace admission, measured sealed executable admission and
 lifecycle custody. Dedicated native provisioning helpers now reissue native keys,
 open-or-initialize state and exec the matching native daemon. The root coordinator
-still launches the V1 helper; its native migration is outstanding. Successful
+now has native preparation/revalidation, but still launches only the V1 helper;
+native launch and lifetime integration are outstanding. Successful
 protected startup and trusted parent provenance remain unvalidated. Neither these APIs nor their
 tests complete M0-M7, prove kernel semantics, or qualify another end-to-end GPU
 kernel.
@@ -272,3 +273,43 @@ defaulting to V1. Rootless tests validate refusal, restart and actual exec to a
 minimal test image, not the production protected daemon. See the
 [helper checkpoint](evidence/conditional-native-anchor-helper-20260926.md) for
 exact passing/failing checks and remaining coordinator/compiler/GPU gates.
+
+## Native Root Preparation
+
+`PreparedExternalAnchorOccurrenceV2/V3` consume native deployment, provisioning,
+root-owned key template and lifecycle custody, two source images and the state
+root. Both borrow actual same-family policy and supervisor capabilities, not
+just their identity fields. A single closed implementation checks complete
+context binding, seals helper and daemon for the exact service, pins root
+identity/metadata and records the preparing PID. Revalidation repeats context,
+root, key, lease and image checks under exact root credentials.
+
+The public APIs expose no launch method, V1 conversion, raw key, descriptor
+accessor or generic provider. Preparation performs no persistence or process
+creation and grants no compiler or GPU authority. Configuration custody does
+not authenticate provisioning provenance.
+
+`prepare_input_storage` is the full floor for every consumed owner, both full
+source images and the two borrowed contexts. `preparation_quota` includes all
+nested checks and the additional peak while image growth overlaps other scratch.
+Reserve returned `GROWTH_STORAGE` before retaining the result; keep consumed
+input reservations. After dropping the result, retire its full
+`retained_storage`, which excludes borrowed contexts. On consuming failure,
+owned inputs close but their reservations remain for caller retirement.
+
+The local preparation/revalidation charge is 65544 units, excluding nested native
+operations. `ROOT_STORAGE` is 16 bytes on the tested x86-64 layout. Frames and
+envelopes are size-derived. Scopes preserve the original ledger's accepted work,
+peak and first denials and restore entry storage on all exits. These are logical
+quotas, not generated-stack, RSS, instruction-count or time bounds.
+
+Native launch still needs bounded staging, atomic pidfd adoption, readiness/exec
+and endpoint admission, and managed lifetime. The existing funded cleanup pool
+has moved to `fe2o3-protected-service-spawn` without a second pool or fresh ledger;
+issuer APIs retain their old names as aliases. Native issuer launch uses it;
+root-service launch does not yet. Root child setup now rearms and checks the
+parent-death guard after the credential transition, and uses shared bounded gate
+and capability-ceiling readers. The legacy root child still synchronously reaps
+on Drop and is not a native bounded owner. See the
+[root preparation checkpoint](evidence/conditional-native-root-preparation-20260926.md)
+for validation and the remaining integration sequence.

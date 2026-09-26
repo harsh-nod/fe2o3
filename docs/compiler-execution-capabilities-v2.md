@@ -189,7 +189,11 @@ running-image and lifecycle admission. Dedicated native V2/V3 helpers now compos
 actual same-family context admission, measured helper/daemon images, native key
 reissue, open-or-initialize, metered transfers and terminal native-daemon exec.
 They preserve key custody without extracting V1 raw keys. Native root-coordinator
-launch integration and successful protected startup remain unvalidated. See the
+preparation/revalidation now retains actual capabilities, images, root and lease
+on the original ledger. Its native launch method is still absent; launch
+integration and successful protected startup remain unvalidated. See the
+[root preparation checkpoint](evidence/conditional-native-root-preparation-20260926.md)
+and the preceding
 [helper checkpoint](evidence/conditional-native-anchor-helper-20260926.md).
 Passing local tests does not establish protected startup
 or production compiler integration. See the

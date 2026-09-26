@@ -20,7 +20,8 @@ pub use process_reaper::{
     ProtectedServiceCleanupServiceV2,
 };
 
-/// Fixed process-global cleanup capacity shared by native issuer and root-service launches.
+/// Fixed process-global cleanup capacity; native issuer launches consume this pool.
+/// Native root-service launch integration remains outstanding.
 pub const MAX_PROTECTED_SERVICE_PROCESSES_V2: usize = 64;
 
 use std::error::Error;

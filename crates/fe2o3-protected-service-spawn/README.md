@@ -12,12 +12,34 @@ Before reporting profile readiness, the child resets signals, binds
 `PDEATHSIG=SIGKILL` to the exact parent, installs the dedicated UID/GID with no
 supplementary groups, empties and locks all capability paths, sets
 `no_new_privs`, nondumpability, a zero core limit, and umask `077`, and reads
-every property back. The parent must independently validate the child and its
+every property back. Credential transitions clear the parent-death setting, so
+the child rearms it and rechecks the exact parent after installing the profile.
+The parent must independently validate the child and its
 namespaces before sending the one-byte release token. Only then does the child
 install the fixed descriptor table and execute the staged image with one fixed
 argument and an empty environment.
 
-The returned move-only child retains the atomic pidfd and exact reaping
+The V1 returned move-only child retains the atomic pidfd and exact reaping
 ownership. Dropping it kills and synchronously reaps the child. The package
 does not interpret service protocols, manifests, keys, paths, compiler data,
 publication evidence, or GPU authority.
+
+## Native Cleanup
+
+`ProtectedServiceCleanupServiceV2` owns funding for the single process-global
+64-slot cleanup pool. It was moved here from the issuer supervisor; the old
+`ProtectedIssuerCleanup*V2` names are aliases, not a second implementation.
+Native mode excludes the legacy background worker. Each explicit funded turn
+makes at most one pidfd signal and one nonblocking consuming wait per visited
+slot. Pending and quarantined records retain capacity, descriptors and any
+unverified inherited artifact-spawn lease. `ECHILD` never counts as success.
+
+Controller loss preserves the original account and records. Recovery does not
+reset limits or denial history. Native issuer launch already uses this pool;
+native root-service staging, spawning and finite child custody are still missing.
+The V1 root child above has not acquired bounded native Drop semantics.
+
+The shared pre-exec gate reader permits at most 64 attempts, retrying only EINTR.
+Capability-ceiling observation uses a fixed buffer and finite reads. These bound
+logical attempts, not blocking syscall duration. Their inert results grant no
+deployment or execution authority.

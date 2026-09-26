@@ -118,8 +118,9 @@ pub struct ProtectedServiceCleanupReportV2 {
 /// background thread. Drop returns control, not custody: the same account and
 /// records remain in the pool for `recover`. Work limits are never renewed.
 ///
-/// This is policy-neutral cleanup funding shared by issuer and root-service
-/// launches, not deployment authority. Logical quotas do not bound syscall or mutex latency.
+/// This is policy-neutral cleanup funding, not deployment authority. Issuer
+/// launches consume it; native root-service integration is pending. Logical quotas
+/// do not bound syscall or mutex latency.
 ///
 /// ```compile_fail
 /// use fe2o3_protected_service_spawn::ProtectedServiceCleanupServiceV2;
