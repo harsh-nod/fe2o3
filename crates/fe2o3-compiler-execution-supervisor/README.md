@@ -75,7 +75,11 @@ remain open. Four isolated distinct-UID **V2** synthetic consuming cases passed 
 MI350: ready/publication/natural exit, missing EOF, trailing bytes, and
 Drop-before-readiness cleanup through the actual static launcher.
 V3 consuming custody has local deterministic lifecycle and exact-readiness-join
-tests, but no isolated child-launch or protected-runtime execution is credited.
+tests, plus an opt-in distinct-UID consuming fixture using the actual V3 public
+APIs and a separately built synthetic static issuer. The fixture covers
+publication/exit, missing EOF, trailing data and drop-before-readiness cleanup;
+negative cases require the public readiness peer to close without publication.
+No isolated V3 child-launch or protected-runtime execution is credited yet.
 Every nested check uses the caller's ledger. Logical
 work/retained/scratch charges are not wall-time, RSS, kernel-memory or
 generated-stack bounds. See the

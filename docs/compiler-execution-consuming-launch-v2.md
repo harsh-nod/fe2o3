@@ -16,7 +16,8 @@ This is a library lifecycle, not activation of the native production issuer or
 service. All four isolated distinct-UID **V2** synthetic consuming fixtures passed on
 MI350 under Ubuntu 24.04/Linux 6.8.0-124-generic through the actual static launcher.
 V3 has deterministic lifecycle/accounting tests and exact readiness-join tests,
-but no isolated consuming or protected-runtime execution is credited yet.
+plus an opt-in consuming fixture. No isolated V3 consuming or protected-runtime
+execution is credited yet.
 Protected proof execution, GPU qualification, M0-M7 acceptance and 47/47 completion
 are not established by this implementation or its deterministic unit tests.
 
@@ -134,8 +135,19 @@ the public V2 lifecycle with separately measured, sealed static test issuers:
 - Trailing readiness bytes, refused before a ready owner exists.
 - Dropping launched custody before a silent child produces readiness.
 
+The corresponding `native_consuming_test_process::v3::native_consuming_` tests
+exercise V3 through the same coordinator, locked profile, client protocol,
+descriptor witnesses and cleanup assertions. The supervisor, submitter and
+static issuer use genuine V3 owners; private fixture routing is not a conversion
+or production selector. The issuer's family is fixed at compilation, never
+selected from the child's environment or arguments.
+
 Every case checks original-ledger continuity, funded cleanup, descriptor and
 pidfd restoration, terminal reaping and all fixture-role completion packets.
+After negative-case cleanup, the submitter requires exact EOF on its public
+readiness socket. Queued publication and an empty but still-open peer both fail;
+rootless socket-pair tests cover those checks for both families. The silent-drop
+case establishes cleanup before readiness, not completed child input admission.
 The isolated run uses distinct UIDs 65532/65533/65534, one CPU, no network or GPU
 devices, and unconfined container seccomp for clone3. The supervisor and child
 still enforce the exact locked process profile. Container and private scratch
@@ -152,6 +164,22 @@ FE2O3_RUN_NATIVE_CONSUMING_SUPERVISOR_V2_TEST=1 "$SUPERVISOR_TEST_BIN" \
   native_consuming_test_process::native_consuming_ \
   --ignored --nocapture --test-threads=1
 ```
+
+For V3, build a separate set with
+`bash scripts/build-native-ready-fixture.sh DIR v3`. The builder emits distinct
+`native-ready-fixture-v3-*` artifacts and `FE2O3_NATIVE_READY_FIXTURE_V3_*` paths.
+Supply those paths and the same independently measured static launcher in the
+isolated root environment, then select only the V3 coordinator cases:
+
+```sh
+FE2O3_RUN_NATIVE_CONSUMING_SUPERVISOR_V3_TEST=1 "$SUPERVISOR_TEST_BIN" \
+  native_consuming_test_process::v3::native_consuming_ \
+  --ignored --nocapture --test-threads=1
+```
+
+Omitting the builder's family argument preserves V2 behavior. Invalid selectors
+fail before build setup. Building or listing these tests does not establish
+successful isolated execution.
 
 These test issuers never sign, compile requests, create durable state or recover
 a service. Positive fixture stages allow 30 seconds because unoptimized custody
@@ -177,3 +205,5 @@ also pass, but do not establish their combined divergent-thread consuming case.
 Malformed gated-child report and post-clone budget-failure cleanup need additional
 process integration coverage. Neither these fixtures nor their unit tests replace
 protected source/proof, production service/recovery or GPU qualification.
+Cross-family consuming substitutions also need isolated coverage; the existing
+exact-policy-join unit tests are separate evidence, not a substitute for it.
