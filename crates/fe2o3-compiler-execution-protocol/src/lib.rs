@@ -65,6 +65,10 @@ mod service_ready_v3;
 mod service_v2;
 mod service_v3;
 mod supervisor_deployment;
+mod supervisor_deployment_adapter;
+mod supervisor_deployment_codec;
+mod supervisor_deployment_v2;
+mod supervisor_deployment_v3;
 mod supervisor_handoff;
 mod supervisor_handoff_adapter;
 mod supervisor_handoff_codec;
@@ -403,6 +407,22 @@ pub use supervisor_deployment::{
     CompilerExecutionSupervisorDeploymentErrorV1, CompilerExecutionSupervisorDeploymentIdentityV1,
     CompilerExecutionSupervisorDeploymentV1, MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V1,
     MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1,
+};
+pub use supervisor_deployment_v2::{
+    COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V2,
+    COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_STORAGE_V2,
+    COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_WORK_V2, CompilerExecutionSupervisorDeploymentErrorV2,
+    CompilerExecutionSupervisorDeploymentIdentityV2, CompilerExecutionSupervisorDeploymentV2,
+    MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V2,
+    MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V2,
+};
+pub use supervisor_deployment_v3::{
+    COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V3,
+    COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_STORAGE_V3,
+    COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_WORK_V3, CompilerExecutionSupervisorDeploymentErrorV3,
+    CompilerExecutionSupervisorDeploymentIdentityV3, CompilerExecutionSupervisorDeploymentV3,
+    MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V3,
+    MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V3,
 };
 pub use supervisor_handoff::{
     COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1, CompilerExecutionSupervisorHandoffErrorV1,
