@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import sys
@@ -61,6 +62,10 @@ def logical_negative(leaf, status, stdout, stderr, verifier, source_paths):
             return False
         if type(vr["verified"]) is not int or vr["verified"] < 0 or type(vr["errors"]) is not int or vr["errors"] <= 0:
             return False
+        if (status != 1 or result["verus"] != verifier or vr["encountered-error"] is not True
+                or vr["encountered-vir-error"] is not False or vr["is-verifying-entire-crate"] is not False):
+            return False
+        identified = False
         for line in stderr.splitlines():
             diagnostic = json.loads(line, object_pairs_hook=strict_object)
             if not isinstance(diagnostic, dict) or not isinstance(diagnostic.get("message"), str) or not isinstance(diagnostic.get("level"), str):
@@ -68,15 +73,24 @@ def logical_negative(leaf, status, stdout, stderr, verifier, source_paths):
             if (diagnostic.get("$message_type") != "diagnostic" or diagnostic.get("children") != []
                     or diagnostic.get("code") is not None):
                 return False
-            if diagnostic["level"] == "note" and diagnostic["message"] not in leaf.SELECTION_NOTES | ENUMERATION_NOTES:
-                return False
             spans = diagnostic.get("spans", [])
             if not isinstance(spans, list) or any(not isinstance(span, dict) for span in spans):
                 return False
             if any(not isinstance(span.get("file_name"), str) or not Path(span["file_name"]).is_absolute()
                    or type(span.get("is_primary")) is not bool for span in spans):
                 return False
-        return leaf.logical_negative(status, stdout, stderr, verifier, source_paths)
+            message = diagnostic["message"]
+            if diagnostic["level"] == "error" and message in leaf.LOGICAL_ERRORS | {"loop invariant not satisfied"}:
+                if not any(span["is_primary"] and str(Path(span["file_name"]).resolve()) in source_paths for span in spans):
+                    return False
+                identified = True
+            elif diagnostic["level"] == "error" and re.fullmatch(r"aborting due to \d+ previous errors?", message) and not spans:
+                pass
+            elif diagnostic["level"] == "note" and message in leaf.SELECTION_NOTES | ENUMERATION_NOTES:
+                pass
+            else:
+                return False
+        return identified
     except (ValueError, TypeError, KeyError):
         return False
 

@@ -56,6 +56,8 @@ message = {"$message_type": "diagnostic", "level": "error", "message": "assertio
 check = lambda status, stdout, messages: runner["logical_negative"](
     leaf, status, stdout, "\n".join(json.dumps(item) for item in messages), verifier, {path})
 need(check(1, json.dumps(result), [message]))
+need(check(1, json.dumps(result), [dict(message, message="loop invariant not satisfied")]))
+need(not check(1, json.dumps(result), [dict(message, message="loop invariant not satisfied: Resource limit (rlimit) exceeded")]))
 for status in (0, 2, 124, 137, -9):
     need(not check(status, json.dumps(result), [message]))
 for text in ("mismatched types", "Resource limit (rlimit) exceeded", "could not read file", "unexpected token"):
