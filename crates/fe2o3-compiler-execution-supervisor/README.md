@@ -108,6 +108,9 @@ Separate opt-in V2/V3 fixtures now call the public `run_session` entry point for
 success, missing EOF and trailing data. They do not inject production stage hooks:
 the submitter verifies actual publication and asks the original client to stop.
 These new session fixtures are compiled but not yet credited as isolated runs.
+All four V3 static fixture modes now pass build-time ELF checks; none was executed
+for that validation. See the [session/listener evidence checkpoint](../../docs/evidence/conditional-native-listener-20260926.md)
+for exact results and remaining gates.
 
 `ProtectedIssuerServiceV2` and `ProtectedIssuerServiceV3` now consume the actual
 native supervisor plus the fixed-path bound listener. Shared descriptor/path

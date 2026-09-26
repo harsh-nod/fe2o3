@@ -5,6 +5,10 @@ Date: 2026-09-26. Continuation of
 M0-M7 and the 47/47 production-to-safe-GPU-launch matrix remain incomplete.
 This checkpoint grants no protected-proof, numerical-refinement or GPU credit.
 
+Follow-up: [native session/listener checkpoint](conditional-native-listener-20260926.md)
+records the subsequent successful static V3 build and the remaining execution
+gates. The results below describe this earlier checkpoint unchanged.
+
 ## Implementation
 
 Base: `2ffc388a75a2cfed6f8aad7d01735857e25fa585`.
