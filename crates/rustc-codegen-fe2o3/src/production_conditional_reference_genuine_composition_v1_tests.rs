@@ -765,7 +765,7 @@ pub(super) fn on_replay(
     assert_eq!(input.replay.effect_ir_sha256, binding.effect_ir_sha256);
     assert!(std::ptr::eq(
         input.replay.observable_output_writes,
-        binding.observable_output_writes.as_slice()
+        binding.observable_output_writes.as_ref()
     ));
     let (floor, work_before) = (budget.storage(), budget.work());
     let account = budget.work_ledger_identity_v1();
