@@ -1,0 +1,11 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/rebind_tests.rs:129:
+         .find("PreparedDispatchGenerationV1::validate_target")
+         .unwrap();
+     assert!(settlement.contains("Some(continuation) => continuation"));
+-    assert!(settlement.contains(".ensure_preallocated_resume::<N>(&mut root.prepared_generation)?"));
++    assert!(
++        settlement.contains(".ensure_preallocated_resume::<N>(&mut root.prepared_generation)?")
++    );
+     let rooted_continuation = settlement
+         .find("root.continuation = session.unpublished_dispatch.continuation.take()")
+         .unwrap();

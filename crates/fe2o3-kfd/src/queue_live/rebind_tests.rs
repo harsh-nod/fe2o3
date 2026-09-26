@@ -125,7 +125,13 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
         .next()
         .unwrap();
     let rooted_preparation = settlement.find("root.preparation = Some(").unwrap();
-    let preallocated = settlement.find("root.prepared_generation = match").unwrap();
+    let preallocated = settlement
+        .find("PreparedDispatchGenerationV1::validate_target")
+        .unwrap();
+    assert!(settlement.contains("Some(continuation) => continuation"));
+    assert!(
+        settlement.contains(".ensure_preallocated_resume::<N>(&mut root.prepared_generation)?")
+    );
     let rooted_continuation = settlement
         .find("root.continuation = session.unpublished_dispatch.continuation.take()")
         .unwrap();

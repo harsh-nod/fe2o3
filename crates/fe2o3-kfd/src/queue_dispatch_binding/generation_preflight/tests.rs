@@ -227,3 +227,23 @@ fn default_preflight_preserves_late_allocation_and_generation_failure() {
     assert_eq!(owner.slots.len(), 64);
     assert!(owner.slots.account().is_none());
 }
+
+#[test]
+fn scaled_public_preallocation_validates_exact_optional_queue_target() {
+    let account = account(payload(), 1);
+    let capacity = Gfx942FixedDispatchCapacityV1::qualification_1024(account.clone());
+    let mut token = capacity.preallocate_fresh_v1::<1>().unwrap();
+    let usage = account.usage();
+    let key = test_dispatch_queue_v1();
+    assert!(PreparedDispatchGenerationV1::validate_target(&token, None).is_ok());
+    assert!(PreparedDispatchGenerationV1::validate_target(&token, Some(key)).is_err());
+    token = token.map(|token| token.for_queue(key));
+    assert!(PreparedDispatchGenerationV1::validate_target(&token, Some(key)).is_ok());
+    assert!(PreparedDispatchGenerationV1::validate_target(&token, None).is_err());
+    let mut other = key;
+    other.generation.0 += 1;
+    assert!(PreparedDispatchGenerationV1::validate_target(&token, Some(other)).is_err());
+    assert_eq!(account.usage(), usage);
+    drop(token);
+    assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
+}

@@ -24,7 +24,29 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest owned-preflight development (2026-09-26 UTC): the scaled native paths now
+Latest runtime preallocation development (2026-09-26): ordinary scaled publication
+now reserves the actual native epoch table before detach, admitted-device
+consumption or resident DATA movement, then transfers that same token through
+fresh, bootstrap, auxiliary or rebind preparation. Default64 and attached reuse
+skip reservation. Explicit preflight capacity exhaustion no longer terminalizes
+the backend, but an already accepted submission settles Failed; this does not
+establish retryable Context launch admission. Earlier staging effects remain
+possible. Rebind's queue/ledger/generation-bound storage is not execution authority or a
+unique pristine-continuation capability. See the
+[development packet](evidence/dev-runtime-epoch-preflight-2026-09-26/README.md)
+for validation results and their scope: 28 scaled KFD tests, 17 scaled runtime
+tests, 56 rebind tests, 153 dispatch-binding tests and 67 selected construction
+tests pass, with overlapping groups. The full runtime run has 1,448 passing
+tests, the same three socket-inspection EPERM failures and 28 ignores. The KFD
+non-construction subset has 1,293 passes and its existing socket-admission failure;
+296 construction cases are excluded. Strict Clippy, no-default-feature checking,
+formatting and all 74 doctests pass. This is not full CPU qualification; SSH still
+fails at hostname resolution, and no new native/performance result is added.
+Aggregate accounting, scaled refinement,
+native depth/reuse/rebind/async-owner qualification, signed replay and matched
+performance remain open. No accepted checkpoint or A1/A2 status changes.
+
+Earlier owned-preflight development (2026-09-26 UTC): the scaled native paths now
 reserve an actual epoch table before mutable preparation and transfer that same
 allocation without a second debit. Initial/auxiliary callbacks and pristine
 continuation consumption follow reservation. Default64 timing and conservative

@@ -28,6 +28,20 @@ pub(in crate::queue) fn ordinary_recycled_in_memory_v1(
     queue: QueueKeyV1,
     bindings: usize,
 ) -> (DispatchResourceOwnerV1, u64, Vec<RecycledDataExpectationV1>) {
+    ordinary_recycled_with_capacity_in_memory_v1(
+        memory,
+        queue,
+        bindings,
+        &Gfx942FixedDispatchCapacityV1::default(),
+    )
+}
+
+pub(in crate::queue) fn ordinary_recycled_with_capacity_in_memory_v1(
+    memory: &mut Memory,
+    queue: QueueKeyV1,
+    bindings: usize,
+    capacity: &Gfx942FixedDispatchCapacityV1,
+) -> (DispatchResourceOwnerV1, u64, Vec<RecycledDataExpectationV1>) {
     let (programs, packets, mut data) = match bindings {
         1 => (programs(), [packet(2)], memory.roster()),
         3 => {
@@ -53,7 +67,15 @@ pub(in crate::queue) fn ordinary_recycled_in_memory_v1(
         })
         .collect();
     let mut custody = FixedDispatchPreparationCustodyV1::new(packets, data);
-    prepare_public_fixed_dispatch_resources_in_place(memory, &programs, &mut custody).unwrap();
+    let mut prepared = capacity.preallocate_fresh_v1::<1>().unwrap();
+    prepare_public_fixed_dispatch_resources_with_capacity_in_place(
+        memory,
+        &programs,
+        &mut custody,
+        capacity,
+        &mut prepared,
+    )
+    .unwrap();
     let mut owner = custody.take_completed().unwrap();
     assert!(matches!(
         owner.persistent_control,

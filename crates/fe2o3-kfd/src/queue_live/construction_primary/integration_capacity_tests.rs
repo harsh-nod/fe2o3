@@ -86,6 +86,7 @@ fn scaled_auxiliary_preparation_charges_shared_account_before_data_initializatio
     let (capacity, account) = capacity();
     let mut auxiliary =
         AuxiliaryConstructionV1::<1, Fixture>::with_capacity([packet], capacity.clone());
+    auxiliary.prepared_generation = capacity.preallocate_fresh_v1::<1>().unwrap();
     let poison = || {};
     let mut entry = UserptrConstructionEntryV1 {
         stage: None,

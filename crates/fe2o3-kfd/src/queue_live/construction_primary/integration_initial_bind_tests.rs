@@ -51,7 +51,7 @@ fn scaled_initial_binding_preserves_bootstrap_capacity_and_bounds_inputs_before_
     assert_eq!(account.usage().retained_records, 0);
 
     let (programs, [packet, _, _]) = recipe();
-    let root = InitialBindingCustodyV1::new(programs, [packet], |memory: &mut Memory, _| {
+    let mut root = InitialBindingCustodyV1::new(programs, [packet], |memory: &mut Memory, _| {
         assert_eq!(account.usage().retained_records, 1);
         assert!(
             account
@@ -63,6 +63,7 @@ fn scaled_initial_binding_preserves_bootstrap_capacity_and_bounds_inputs_before_
         );
         Ok(memory.host(true))
     });
+    root.prepared_generation = capacity.preallocate_fresh_v1::<1>().unwrap();
     bind_initial_with_v1(&mut parent, root, 1, |_| panic!("valid initial binding")).unwrap();
     parent
         .as_mut()

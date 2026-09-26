@@ -78,11 +78,29 @@ allocation timing. Pre-entry exhaustion avoids new native mutation but does not
 return consumed inputs or establish retryable Context launch admission. In
 particular, auxiliary initializer captures rejected by the epoch-table preflight
 remain deliberately retained, not disposed or returned. Later failures retain
-existing terminal custody, and runtime error classification remains conservative.
-Budgeting must still include
-replacement peaks; recoverable runtime-facing admission, aggregate backing/control/
-slot accounting and formal refinement remain open. See the
+existing terminal custody. See the
 [owned-preflight development packet](evidence/dev-epoch-preflight-2026-09-25/README.md).
+
+The runtime now reserves `Gfx942FixedDispatchPreallocationV1` after the ordinary
+publication path's attached-reuse decision, before recycled detach, admitted-device
+consumption or resident DATA movement. Fresh primary, bootstrap initial binding,
+auxiliary construction and live rebind consume that same allocation without a
+second debit. Default64 and attached reuse require no new reservation. The
+borrowed lane producer selects the exact primary/auxiliary queue without swapping
+or consuming owners. An attached recycled binding requires simultaneous credit
+for its old table and the reserved replacement.
+
+This token conveys vacant storage and credit, not execution authority. Rebind
+tokens bind queue, ledger, profile and next generation, not one unique pristine
+continuation. Handoff revalidates current state; existing native currentness checks
+remain intact. Only `HostAllocationCapacity` from this explicit runtime preflight
+becomes nonterminal `Capacity`. An already accepted submission settles `Failed`,
+not synchronous Context launch rejection or automatic retry. Earlier runtime
+staging can already synchronize allocations or release other-lane caches; this is
+not a side-effect-free public submission guarantee. Aggregate backing/control/slot
+admission, retryable Context admission and scaled formal refinement remain open.
+See the [runtime preallocation packet](evidence/dev-runtime-epoch-preflight-2026-09-26/README.md)
+for exact CPU coverage and outstanding native gates.
 
 CPU tests use production construction/preparation sequencers with simulated
 native operations. Their epoch reservations are not GPU publication receipts.

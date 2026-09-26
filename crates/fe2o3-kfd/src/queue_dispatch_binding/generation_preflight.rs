@@ -26,9 +26,36 @@ impl DispatchGenerationSeedV1 {
     }
 }
 
-pub(in crate::queue) struct PreparedDispatchGenerationV1(DispatchGenerationOwnerV1);
+/// Move-only vacant epoch storage and its metadata credit, not launch authority.
+///
+/// Dropping an unused reservation refunds its debit. Consuming construction APIs
+/// retain handed-off storage under their existing failure-custody rules. Rebind
+/// reservations are bound to a queue, ledger and next generation, but not to one
+/// particular pristine continuation; all current state is revalidated at handoff.
+///
+/// ```compile_fail
+/// fn cannot_duplicate(value: fe2o3_kfd::Gfx942FixedDispatchPreallocationV1) {
+///     let _copy = value.clone();
+/// }
+/// ```
+pub struct Gfx942FixedDispatchPreallocationV1(DispatchGenerationOwnerV1, Option<QueueKeyV1>);
 
-impl PreparedDispatchGenerationV1 {
+impl Gfx942FixedDispatchPreallocationV1 {
+    pub(in crate::queue) fn for_queue(mut self, queue: QueueKeyV1) -> Self {
+        self.1 = Some(queue);
+        self
+    }
+
+    pub(in crate::queue) fn validate_target(
+        slot: &Option<Self>,
+        queue: Option<QueueKeyV1>,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        if slot.as_ref().is_some_and(|prepared| prepared.1 != queue) {
+            return Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration);
+        }
+        Ok(())
+    }
+
     pub(in crate::queue) fn ensure_preallocated<const N: usize>(
         slot: &mut Option<Self>,
         capacity: &Gfx942FixedDispatchCapacityV1,
@@ -56,7 +83,7 @@ impl PreparedDispatchGenerationV1 {
             capacity.profile,
             capacity.account.as_ref(),
         )
-        .map(|owner| Some(Self(owner)))
+        .map(|owner| Some(Self(owner, None)))
     }
 
     fn validate(

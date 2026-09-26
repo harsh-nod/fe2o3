@@ -14977,7 +14977,8 @@ mod tests {
         disarm_scripted_drop_after_inspection_v1(&mut backend);
     }
 
-    fn host_visible_three_binding_launch_v1() -> (KfdRuntimeBackendV1, OwnedComputeLaunchV1) {
+    pub(in crate::kfd_backend) fn host_visible_three_binding_launch_v1()
+    -> (KfdRuntimeBackendV1, OwnedComputeLaunchV1) {
         let mut backend = KfdRuntimeBackendV1::mock();
         let stream = backend.create_stream_v1(7).unwrap();
         let module = backend

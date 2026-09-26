@@ -3,7 +3,7 @@
 use super::*;
 use crate::queue::dispatch_binding::control_release::RetainedControlSnapshotV1 as OwnerSnapshot;
 use crate::queue::dispatch_binding::preparation::{
-    RecycledDataExpectationV1, ordinary_recycled_in_memory_v1,
+    RecycledDataExpectationV1, ordinary_recycled_with_capacity_in_memory_v1,
 };
 use crate::queue::live::recycled_detach::{
     RecycledDetachContextV1, RecycledDetachCustodyV1, RecycledDetachLedgerV1,
@@ -12,6 +12,9 @@ use crate::queue::live::recycled_detach::{
 use crate::shared_memory::{
     CleanupStageV1, ControlReleaseMemorySnapshotV1 as MemorySnapshot, ControlReleasePrefixV1,
 };
+
+#[path = "integration_recycled_preallocation_tests.rs"]
+mod preallocation_cases;
 
 #[derive(Default)]
 struct Ledger {
@@ -201,6 +204,14 @@ fn data_snapshot(data: &[Gfx942FixedDispatchDataV1]) -> Vec<RecycledDataExpectat
 
 impl DetachFixture {
     fn new(ordinal: usize, bindings: usize) -> Self {
+        Self::new_with_capacity(ordinal, bindings, &Gfx942FixedDispatchCapacityV1::default())
+    }
+
+    fn new_with_capacity(
+        ordinal: usize,
+        bindings: usize,
+        capacity: &Gfx942FixedDispatchCapacityV1,
+    ) -> Self {
         let (mut scope, result, _) = prefix_case_with_probe(
             false,
             |_| {},
@@ -239,7 +250,9 @@ impl DetachFixture {
         let (operation, retake) = scope
             .parent
             .with_preparation_custody(|memory| {
-                prepared = Some(ordinary_recycled_in_memory_v1(memory, key, bindings));
+                prepared = Some(ordinary_recycled_with_capacity_in_memory_v1(
+                    memory, key, bindings, capacity,
+                ));
                 Ok(())
             })
             .unwrap();

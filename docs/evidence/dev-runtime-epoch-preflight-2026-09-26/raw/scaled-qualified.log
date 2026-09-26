@@ -1,0 +1,33 @@
+
+running 28 tests
+test queue::dispatch_binding::capacity_tests::recipe_occurrence_exhaustion_refunds_the_allocated_scaled_table ... ok
+test queue::dispatch_binding::capacity_tests::scaled_generation_and_slot_exhaustion_do_not_wrap_or_refund_live_storage ... ok
+test queue::dispatch_binding::capacity_tests::scaled_epoch_table_retains_1024_exact_epochs_and_rejects_1025_atomically ... ok
+test queue::dispatch_binding::capacity_tests::scaled_profile_requires_complete_metadata_credit_and_one_packet_epochs ... ok
+test queue::dispatch_binding::capacity_tests::scaled_replacement_reserves_independent_table_before_changing_predecessor ... ok
+test queue::dispatch_binding::generation_preflight::tests::scaled_preflight_byte_record_and_packet_failures_leave_the_ledger_unchanged ... ok
+test queue::dispatch_binding::generation_preflight::tests::scaled_preflight_checks_all_seeds_and_refunds_unused_storage ... ok
+test queue::dispatch_binding::generation_preflight::tests::scaled_preflight_rejects_wrong_ledger_profile_seed_or_state_without_consumption ... ok
+test queue::dispatch_binding::generation_preflight::tests::scaled_preflight_transfers_the_same_table_without_a_second_charge ... ok
+test queue::dispatch_binding::generation_preflight::tests::scaled_public_preallocation_validates_exact_optional_queue_target ... ok
+test queue::dispatch_binding::capacity_tests::scaled_observation_has_separate_domain_and_full_width_slot_identity ... ok
+test queue::dispatch_binding::pristine_abort::tests::scaled_pristine_continuation_preserves_capacity_account_and_exact_generation ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::scaled_preflight_cases::scaled_auxiliary_post_entry_failures_retain_the_single_table_debit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::preallocation_cases::scaled_attached_preallocation_survives_canceled_history_detach_and_rebind ... ok
+test queue::live::construction_primary::integration_tests::capacity_cases::scaled_auxiliary_preparation_charges_shared_account_before_data_initialization ... ok
+test queue::live::construction_primary::integration_tests::capacity_cases::scaled_auxiliary_rejects_multi_packet_before_initializer ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::scaled_preflight_cases::scaled_auxiliary_preflight_retains_uninvoked_captures_without_parent_mutation ... ok
+test queue::live::construction_primary::integration_tests::capacity_cases::scaled_primary_and_replacement_construct_with_exact_account_and_1024_slots ... ok
+test queue::live::construction_primary::integration_tests::release_cases::initial_bind_cases::scaled_initial_binding_preserves_bootstrap_capacity_and_bounds_inputs_before_effects ... ok
+test queue::live::construction_primary::integration_tests::release_cases::initial_bind_cases::scaled_initial_credit_exhaustion_preserves_parent_before_currentness_and_data ... ok
+test queue::live::rebind_tests::preparation::preallocated::scaled_borrowed_preallocation_selects_exact_lane_without_mutating_parent ... ok
+test queue::live::rebind_tests::preparation::preallocated::scaled_preallocated_detached_and_pristine_rebind_transfer_one_table_through_validation ... ok
+test queue::live::rebind_tests::preparation::preallocated::scaled_preallocated_rebind_rejects_fresh_wrong_queue_and_stale_tokens_before_entry ... ok
+test queue::live::rebind_tests::preparation::scaled_preflight::scaled_rebind_credit_exhaustion_preserves_continuation_and_exact_inputs ... ok
+test queue::live::rebind_tests::preparation::scaled_preflight::scaled_rebind_post_entry_failures_retain_the_preallocated_debit ... ok
+test queue::live::rebind_tests::scaled_pristine_rebind_rejects_equal_budget_wrong_ledger_before_consuming_continuation ... ok
+test queue::live::tests::scaled_persistent_bind_returns_exact_inputs_before_native_preparation ... ok
+test queue::live::construction_primary::integration_tests::release_cases::initial_bind_cases::scaled_initial_post_entry_failures_retain_preallocated_epoch_storage ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 1562 filtered out; finished in 3.08s
+

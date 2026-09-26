@@ -55,9 +55,11 @@ impl ComputeAqlQueueSessionV1 {
         programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
         packets: [Gfx942FixedDispatchPacketV1; N],
         data: Vec<Gfx942FixedDispatchDataV1>,
+        preallocation: Option<Gfx942FixedDispatchPreallocationV1>,
     ) -> SettledLiveRebindV1 {
-        let root =
+        let mut root =
             LiveRebindRootV1::new(programs, packets, data, self.detached_dispatch_generation);
+        root.prepared_generation = preallocation;
         self.settle_fixed_dispatch_rebind_with_v1(
             root,
             |session, programs, preparation, predecessor, continuation, prepared_generation| {
@@ -104,16 +106,21 @@ impl ComputeAqlQueueSessionV1 {
                 session.preflight_fixed_dispatch_rebind_v1::<N>(
                     root.data.as_ref().expect("rooted rebind inputs"),
                 )?;
-                root.prepared_generation = match session.unpublished_dispatch.continuation.as_ref()
-                {
-                    Some(continuation) => continuation.preallocate_resume::<N>()?,
-                    None => PreparedDispatchGenerationV1::preallocate::<N>(
+                PreparedDispatchGenerationV1::validate_target(
+                    &root.prepared_generation,
+                    Some(session.key),
+                )?;
+                match session.unpublished_dispatch.continuation.as_ref() {
+                    Some(continuation) => continuation
+                        .ensure_preallocated_resume::<N>(&mut root.prepared_generation)?,
+                    None => PreparedDispatchGenerationV1::ensure_preallocated::<N>(
+                        &mut root.prepared_generation,
                         &session.dispatch_capacity,
                         DispatchGenerationSeedV1::Detached(
                             root.predecessor.expect("preflighted detached predecessor"),
                         ),
                     )?,
-                };
+                }
                 if session.unpublished_dispatch.is_detached() {
                     root.pristine_entered = true;
                     root.continuation = session.unpublished_dispatch.continuation.take();

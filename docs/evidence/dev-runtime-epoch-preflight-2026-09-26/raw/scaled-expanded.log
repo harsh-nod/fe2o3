@@ -1,0 +1,109 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0308]: mismatched types
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_recycled_preallocation_tests.rs:24:13
+    |
+ 22 |         let account = ResourceCreditAccountV1::new(
+    |                       ---------------------------- arguments to this function are incorrect
+ 23 |             ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, tables * bytes),
+ 24 |             tables,
+    |             ^^^^^^ expected `usize`, found `u64`
+    |
+note: associated function defined here
+   --> crates/fe2o3-resource-accounting/src/lib.rs:197:12
+    |
+197 |     pub fn new(
+    |            ^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+ 24 |             tables.try_into().unwrap(),
+    |                   ++++++++++++++++++++
+
+error[E0369]: binary operation `==` cannot be applied to type `ArrayVec<&shared_memory::Gfx942DeviceMemoryDispatchAuthorityV1, 16>`
+    --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_recycled_preallocation_tests.rs:48:9
+     |
+  48 |         assert_eq!(owner.device_authorities_inline_v1(), authorities);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |         |
+     |         ArrayVec<&shared_memory::Gfx942DeviceMemoryDispatchAuthorityV1, 16>
+     |         ArrayVec<&shared_memory::Gfx942DeviceMemoryDispatchAuthorityV1, 16>
+     |
+note: an implementation of `PartialEq` might be missing for `shared_memory::Gfx942DeviceMemoryDispatchAuthorityV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:1117:1
+     |
+1117 | pub(crate) struct Gfx942DeviceMemoryDispatchAuthorityV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `shared_memory::Gfx942DeviceMemoryDispatchAuthorityV1` with `#[derive(PartialEq)]`
+    -->  crates/fe2o3-kfd/src/shared_memory.rs:1117:1
+     |
+1117 + #[derive(PartialEq)]
+1118 | pub(crate) struct Gfx942DeviceMemoryDispatchAuthorityV1 {
+     |
+
+error[E0277]: `shared_memory::Gfx942DeviceMemoryDispatchAuthorityV1` doesn't implement `std::fmt::Debug`
+    --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_recycled_preallocation_tests.rs:48:9
+     |
+  48 |         assert_eq!(owner.device_authorities_inline_v1(), authorities);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Debug` is not implemented for `shared_memory::Gfx942DeviceMemoryDispatchAuthorityV1`
+     |
+     = note: add `#[derive(Debug)]` to `shared_memory::Gfx942DeviceMemoryDispatchAuthorityV1` or manually `impl std::fmt::Debug for shared_memory::Gfx942DeviceMemoryDispatchAuthorityV1`
+help: the trait `std::fmt::Debug` is implemented for `ArrayVec<T, CAP>`
+    --> /home/harsh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrayvec-0.7.8/src/arrayvec.rs:1256:1
+     |
+1256 | impl<T, const CAP: usize> fmt::Debug for ArrayVec<T, CAP> where T: fmt::Debug {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider annotating `shared_memory::Gfx942DeviceMemoryDispatchAuthorityV1` with `#[derive(Debug)]`
+    -->  crates/fe2o3-kfd/src/shared_memory.rs:1117:1
+     |
+1117 + #[derive(Debug)]
+1118 | pub(crate) struct Gfx942DeviceMemoryDispatchAuthorityV1 {
+     |
+
+error[E0599]: no associated function or constant named `default_64` found for struct `queue::dispatch_binding::Gfx942FixedDispatchCapacityV1` in the current scope
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_recycled_detach_tests.rs:210:45
+    |
+210 |             &Gfx942FixedDispatchCapacityV1::default_64(),
+    |                                             ^^^^^^^^^^ associated function or constant not found in `queue::dispatch_binding::Gfx942FixedDispatchCapacityV1`
+    |
+   ::: crates/fe2o3-kfd/src/queue_dispatch_binding.rs:107:1
+    |
+107 | pub struct Gfx942FixedDispatchCapacityV1 {
+    | ---------------------------------------- associated function or constant `default_64` not found for this struct
+    |
+note: if you're trying to build a new `queue::dispatch_binding::Gfx942FixedDispatchCapacityV1`, consider using `queue::dispatch_binding::Gfx942FixedDispatchCapacityV1::qualification_1024` which returns `queue::dispatch_binding::Gfx942FixedDispatchCapacityV1`
+   --> crates/fe2o3-kfd/src/queue_dispatch_binding.rs:127:5
+    |
+127 |     pub fn qualification_1024(account: ResourceCreditAccountV1) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is an associated function `default` with a similar name
+    |
+210 -             &Gfx942FixedDispatchCapacityV1::default_64(),
+210 +             &Gfx942FixedDispatchCapacityV1::default(),
+    |
+
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error[E0599]: no associated function or constant named `default_64` found for struct `queue::dispatch_binding::Gfx942FixedDispatchCapacityV1` in the current scope
+   --> crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:35:41
+    |
+ 35 |         &Gfx942FixedDispatchCapacityV1::default_64(),
+    |                                         ^^^^^^^^^^ associated function or constant not found in `queue::dispatch_binding::Gfx942FixedDispatchCapacityV1`
+    |
+   ::: crates/fe2o3-kfd/src/queue_dispatch_binding.rs:107:1
+    |
+107 | pub struct Gfx942FixedDispatchCapacityV1 {
+    | ---------------------------------------- associated function or constant `default_64` not found for this struct
+    |
+note: if you're trying to build a new `queue::dispatch_binding::Gfx942FixedDispatchCapacityV1`, consider using `queue::dispatch_binding::Gfx942FixedDispatchCapacityV1::qualification_1024` which returns `queue::dispatch_binding::Gfx942FixedDispatchCapacityV1`
+   --> crates/fe2o3-kfd/src/queue_dispatch_binding.rs:127:5
+    |
+127 |     pub fn qualification_1024(account: ResourceCreditAccountV1) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is an associated function `default` with a similar name
+    |
+ 35 -         &Gfx942FixedDispatchCapacityV1::default_64(),
+ 35 +         &Gfx942FixedDispatchCapacityV1::default(),
+    |
+
+Some errors have detailed explanations: E0277, E0308, E0369, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `fe2o3-kfd` (lib test) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...

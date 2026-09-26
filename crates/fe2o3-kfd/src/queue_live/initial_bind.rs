@@ -117,7 +117,9 @@ where
         root.data.try_reserve_exact(data_count).map_err(|_| {
             ComputeAqlQueueSessionErrorV1::Contract("initial dispatch data roster allocation")
         })?;
-        root.prepared_generation = PreparedDispatchGenerationV1::preallocate::<N>(
+        PreparedDispatchGenerationV1::validate_target(&root.prepared_generation, None)?;
+        PreparedDispatchGenerationV1::ensure_preallocated::<N>(
+            &mut root.prepared_generation,
             &capacity,
             DispatchGenerationSeedV1::Fresh,
         )?;
@@ -281,7 +283,27 @@ impl ComputeAqlQueueSessionV1 {
         )
             -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1>,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        let root = InitialBindingCustodyV1::new(programs, packets, initialize);
+        self.bind_initial_fixed_dispatch_with_preallocation_v1(
+            programs, packets, data_count, None, initialize,
+        )
+    }
+
+    /// Initial binding with optional fresh epoch storage already reserved by
+    /// the caller. The storage and initializer enter the existing custody root.
+    pub fn bind_initial_fixed_dispatch_with_preallocation_v1<const N: usize>(
+        &mut self,
+        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
+        packets: [Gfx942FixedDispatchPacketV1; N],
+        data_count: usize,
+        preallocation: Option<Gfx942FixedDispatchPreallocationV1>,
+        initialize: impl FnMut(
+            &mut SharedGttMemorySessionV1,
+            usize,
+        )
+            -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1>,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        let mut root = InitialBindingCustodyV1::new(programs, packets, initialize);
+        root.prepared_generation = preallocation;
         bind_initial_with_v1(&mut &mut *self, root, data_count, core::mem::forget)
     }
 }

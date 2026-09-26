@@ -16,8 +16,9 @@ pub(crate) use preparation::FixedDispatchPreparationCustodyV1;
 
 #[path = "queue_dispatch_binding/generation_preflight.rs"]
 mod generation_preflight;
+pub use generation_preflight::Gfx942FixedDispatchPreallocationV1;
 pub(in crate::queue) use generation_preflight::{
-    DispatchGenerationSeedV1, PreparedDispatchGenerationV1,
+    DispatchGenerationSeedV1, Gfx942FixedDispatchPreallocationV1 as PreparedDispatchGenerationV1,
 };
 
 #[path = "queue_dispatch_binding/pristine_abort.rs"]
@@ -109,6 +110,16 @@ pub struct Gfx942FixedDispatchCapacityV1 {
 }
 
 impl Gfx942FixedDispatchCapacityV1 {
+    /// Reserves the actual scaled table before a caller consumes native inputs.
+    /// Default64 returns `None`, preserving its existing allocation timing.
+    /// This fresh reservation can serve primary, initial or auxiliary binding,
+    /// but not an existing lane's rebind.
+    pub fn preallocate_fresh_v1<const N: usize>(
+        &self,
+    ) -> Result<Option<Gfx942FixedDispatchPreallocationV1>, Gfx942DispatchBindingErrorV1> {
+        PreparedDispatchGenerationV1::preallocate::<N>(self, DispatchGenerationSeedV1::Fresh)
+    }
+
     /// Opts into the one-packet, 1024-epoch qualification profile. Admission
     /// charges ControlResidentBytes before allocating each epoch table.
     /// Requires `scale-qualification`; aggregate/native qualification is separate.

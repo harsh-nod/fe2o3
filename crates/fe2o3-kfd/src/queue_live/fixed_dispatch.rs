@@ -75,6 +75,22 @@ impl SharedGttMemorySessionV1 {
         data: Vec<Gfx942FixedDispatchDataV1>,
         capacity: Gfx942FixedDispatchCapacityV1,
     ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_compute_aql_queue_with_preallocated_fixed_dispatch_v1(
+            ring_bytes, programs, packets, data, capacity, None,
+        )
+    }
+
+    /// Consumes optional fresh epoch storage into the construction custody root.
+    /// A rejected consuming call retains its inputs; this is not a retry API.
+    pub fn create_compute_aql_queue_with_preallocated_fixed_dispatch_v1<const N: usize>(
+        self,
+        ring_bytes: u32,
+        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
+        packets: [Gfx942FixedDispatchPacketV1; N],
+        data: Vec<Gfx942FixedDispatchDataV1>,
+        capacity: Gfx942FixedDispatchCapacityV1,
+        preallocation: Option<Gfx942FixedDispatchPreallocationV1>,
+    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
         let mut root = PrimaryQueueConstructionV1::new(
             self,
             (
@@ -83,11 +99,13 @@ impl SharedGttMemorySessionV1 {
             ),
         );
         root.dispatch_capacity = capacity;
+        root.prepared_generation = preallocation;
         let mut root = root.run(|root, entry| {
             root.dispatch_capacity.validate_batch::<N>()?;
             validate_fixed_batch_ring::<N>(ring_bytes)?;
-            root.prepared_generation = PreparedDispatchGenerationV1::preallocate::<N>(
-                &root.dispatch_capacity, DispatchGenerationSeedV1::Fresh,
+            PreparedDispatchGenerationV1::validate_target(&root.prepared_generation, None)?;
+            PreparedDispatchGenerationV1::ensure_preallocated::<N>(
+                &mut root.prepared_generation, &root.dispatch_capacity, DispatchGenerationSeedV1::Fresh,
             )?;
             let memory = root.memory.as_mut().expect("construction memory");
             let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
@@ -3985,7 +4003,19 @@ impl ComputeAqlQueueSessionV1 {
         packets: [Gfx942FixedDispatchPacketV1; N],
         data: Vec<Gfx942FixedDispatchDataV1>,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        let settled = self.bind_fixed_dispatch_settled_v1(programs, packets, data);
+        self.bind_fixed_dispatch_with_preallocation_v1(programs, packets, data, None)
+    }
+
+    /// Binds using optional queue-bound vacant storage. Consumed inputs retain
+    /// the ordinary rebind failure-custody contract, including on rejection.
+    pub fn bind_fixed_dispatch_with_preallocation_v1<const N: usize>(
+        &mut self,
+        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
+        packets: [Gfx942FixedDispatchPacketV1; N],
+        data: Vec<Gfx942FixedDispatchDataV1>,
+        preallocation: Option<Gfx942FixedDispatchPreallocationV1>,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        let settled = self.bind_fixed_dispatch_settled_v1(programs, packets, data, preallocation);
         if settled.transport {
             self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }

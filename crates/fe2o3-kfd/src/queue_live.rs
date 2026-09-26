@@ -3,6 +3,8 @@
 use core::fmt;
 #[path = "queue_live/auxiliary_release.rs"]
 mod auxiliary_release;
+#[path = "queue_live/epoch_preflight.rs"]
+mod epoch_preflight;
 #[path = "queue_live/primary_release.rs"]
 mod primary_release;
 pub use primary_release::PrimaryQueueReleaseCustodyV1;
@@ -4424,9 +4426,21 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
         packets: [Gfx942FixedDispatchPacketV1; N],
         data: Vec<Gfx942FixedDispatchDataV1>,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        let settled = self
-            .session
-            .bind_fixed_dispatch_settled_v1(programs, packets, data);
+        self.bind_fixed_dispatch_with_preallocation_v1(programs, packets, data, None)
+    }
+
+    /// Uses caller-owned queue-bound epoch storage without a second allocation.
+    /// Rejection retains consumed inputs under the ordinary rebind contract.
+    pub fn bind_fixed_dispatch_with_preallocation_v1<const N: usize>(
+        &mut self,
+        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
+        packets: [Gfx942FixedDispatchPacketV1; N],
+        data: Vec<Gfx942FixedDispatchDataV1>,
+        preallocation: Option<Gfx942FixedDispatchPreallocationV1>,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        let settled =
+            self.session
+                .bind_fixed_dispatch_settled_v1(programs, packets, data, preallocation);
         *self.terminal_transport |= settled.transport;
         settled.into_result()
     }
@@ -6165,6 +6179,30 @@ impl ComputeAqlQueueSessionV1 {
             ComputeAqlQueueSessionErrorV1,
         >,
     ) -> Result<ComputeAqlQueueLaneV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_auxiliary_compute_lane_with_preallocated_fixed_dispatch_v1(
+            ring_bytes,
+            programs,
+            packets,
+            None,
+            prepare_data,
+        )
+    }
+
+    /// Creates an auxiliary recipe with optional fresh reserved epoch storage.
+    /// The token is metadata capacity only; normal lane admission still applies.
+    pub fn create_auxiliary_compute_lane_with_preallocated_fixed_dispatch_v1<const N: usize>(
+        &mut self,
+        ring_bytes: u32,
+        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
+        packets: [Gfx942FixedDispatchPacketV1; N],
+        preallocation: Option<Gfx942FixedDispatchPreallocationV1>,
+        prepare_data: impl FnOnce(
+            &mut SharedGttMemorySessionV1,
+        ) -> Result<
+            Vec<Gfx942FixedDispatchDataV1>,
+            ComputeAqlQueueSessionErrorV1,
+        >,
+    ) -> Result<ComputeAqlQueueLaneV1, ComputeAqlQueueSessionErrorV1> {
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
         }
@@ -6195,6 +6233,7 @@ impl ComputeAqlQueueSessionV1 {
             programs,
             packets,
             slot,
+            preallocation,
             prepare_data,
         )
     }

@@ -10,9 +10,10 @@ pub(crate) use tests::{PreparationOwnerRefsV1, PrimaryPreparationSnapshotV1};
 #[cfg(test)]
 pub(in crate::queue) use tests::{
     RecycledDataExpectationV1, control_release_fixture_v1, ordinary_recycled_in_memory_v1,
-    persistent_cancel_control_in_memory_v1, recycle_and_detach_persistent_fixture_v1,
-    single_persistent_control_fixture_v1, single_persistent_control_in_memory_v1,
-    three_persistent_control_fixture_v1, three_persistent_control_in_memory_v1,
+    ordinary_recycled_with_capacity_in_memory_v1, persistent_cancel_control_in_memory_v1,
+    recycle_and_detach_persistent_fixture_v1, single_persistent_control_fixture_v1,
+    single_persistent_control_in_memory_v1, three_persistent_control_fixture_v1,
+    three_persistent_control_in_memory_v1,
 };
 
 use super::*;

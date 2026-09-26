@@ -1,6 +1,9 @@
 use super::super::tests::pipelined_active_for_test_v1;
 use super::*;
 
+#[path = "tests/preallocation.rs"]
+mod preallocation;
+
 fn account(bytes: u64, records: usize) -> ResourceCreditAccountV1 {
     ResourceCreditAccountV1::new(
         ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, bytes),
@@ -113,7 +116,7 @@ fn scaled_capacity_is_forwarded_at_both_native_startup_sites() {
         ),
         (
             include_str!("../compute_dispatch.rs"),
-            ".create_compute_aql_queue_with_fixed_dispatch_and_capacity_v1(",
+            ".create_compute_aql_queue_with_preallocated_fixed_dispatch_v1(",
         ),
     ] {
         let call = source

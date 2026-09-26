@@ -56,6 +56,20 @@ impl PristineDispatchContinuationV1 {
         )
     }
 
+    pub(in crate::queue) fn ensure_preallocated_resume<const N: usize>(
+        &self,
+        prepared: &mut Option<PreparedDispatchGenerationV1>,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        PreparedDispatchGenerationV1::ensure_preallocated::<N>(
+            prepared,
+            &Gfx942FixedDispatchCapacityV1 {
+                profile: self.capacity_profile,
+                account: self.account.clone(),
+            },
+            DispatchGenerationSeedV1::Pristine(self.next_generation),
+        )
+    }
+
     fn resume_preallocated(
         &self,
         prepared: &mut Option<PreparedDispatchGenerationV1>,

@@ -931,9 +931,19 @@ rebinding now reserve a real epoch table before preparation entry and transfer
 that same owner without a second debit. Initial/auxiliary callbacks and pristine
 continuation consumption follow reservation; Default64 timing is unchanged.
 Consuming rejection still retains inputs, so this does not establish public
-retryable admission or change runtime terminal classification. The
+retryable admission. The
 [development packet](evidence/dev-epoch-preflight-2026-09-25/README.md) separates
 CPU validation from the remaining native, aggregate-admission and proof gates.
+Runtime-owned preflight integration (2026-09-26) now reserves before ordinary
+publication detaches recycled storage or consumes the device/resident DATA, and
+hands the same token to fresh, bootstrap, auxiliary or rebind preparation.
+Attached reuse and Default64 skip the reservation. Only explicit preflight host
+capacity exhaustion is nonterminal; already accepted submissions settle Failed
+with logical retains released. This is not retryable Context launch admission.
+Rebind's queue-bound storage is not execution or unique pristine-continuation authority;
+handoff and native currentness checks remain. The
+[runtime packet](evidence/dev-runtime-epoch-preflight-2026-09-26/README.md) keeps
+CPU fixture evidence distinct from remaining scaled/native qualification.
 The scale-only ignored retained-depth canary now inspects all original native
 receipts, exact runtime/profile joins, separate runtime/native saturation
 rejections and the ten-to-two-to-zero metadata ledger lifecycle. Its

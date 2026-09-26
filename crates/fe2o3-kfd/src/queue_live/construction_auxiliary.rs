@@ -117,7 +117,7 @@ impl ComputeAqlQueueSessionV1 {
 
 pub(super) struct AuxiliaryConstructionV1<const N: usize, E: PrimaryEnvironmentV1 = Platform> {
     dispatch_capacity: Gfx942FixedDispatchCapacityV1,
-    prepared_generation: Option<PreparedDispatchGenerationV1>,
+    pub(super) prepared_generation: Option<PreparedDispatchGenerationV1>,
     #[cfg(test)]
     pub(super) preparation_fault: Option<(
         crate::queue::dispatch_binding::preparation::PreparationStageV1,
@@ -192,6 +192,7 @@ impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
     }
 
     fn preallocate_generation(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        PreparedDispatchGenerationV1::validate_target(&self.prepared_generation, None)?;
         PreparedDispatchGenerationV1::ensure_preallocated::<N>(
             &mut self.prepared_generation,
             &self.dispatch_capacity,
@@ -474,17 +475,19 @@ pub(super) fn construct_auxiliary_compute_lane_v1<const N: usize>(
     programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
     packets: [Gfx942FixedDispatchPacketV1; N],
     slot: PreparedAuxiliaryComputeLaneSlotV1,
+    preallocation: Option<Gfx942FixedDispatchPreallocationV1>,
     prepare_data: impl FnOnce(
         &mut SharedGttMemorySessionV1,
     )
         -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1>,
 ) -> Result<ComputeAqlQueueLaneV1, ComputeAqlQueueSessionErrorV1> {
     let dispatch_capacity = parent.dispatch_capacity.clone();
-    let scope = Box::new(AuxiliaryConstructionScopeV1 {
+    let mut scope = Box::new(AuxiliaryConstructionScopeV1 {
         parent,
         construction: AuxiliaryConstructionV1::with_capacity(packets, dispatch_capacity),
         terminal_parent: None,
     });
+    scope.construction.prepared_generation = preallocation;
     let scope = run_auxiliary_construction_with_v1(
         scope,
         ring_bytes,

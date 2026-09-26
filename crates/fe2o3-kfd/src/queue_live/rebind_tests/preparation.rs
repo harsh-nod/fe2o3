@@ -11,6 +11,8 @@ use crate::queue::live::rebind::LiveRebindRootV1;
 use crate::shared_memory::{PreparationMemoryFixtureV1 as Memory, SharedMemorySessionPhaseV1};
 use fe2o3_aql::AqlDispatchGeometryV1;
 
+#[path = "preparation/preallocated.rs"]
+mod preallocated;
 #[path = "preparation/pristine.rs"]
 mod pristine;
 #[path = "preparation/scaled_preflight.rs"]

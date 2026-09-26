@@ -2928,6 +2928,7 @@ impl KfdRuntimeBackendV1 {
                 &data,
             )
         });
+        let preallocation = self.preallocate_native_binding_v1(reuse_attached)?;
         if self.recycled_dispatch.is_some() && !reuse_attached {
             self.detach_recycled_dispatch()?;
         }
@@ -3023,12 +3024,13 @@ impl KfdRuntimeBackendV1 {
                     })
                     .map_err(|detail| self.terminal_error(detail))?;
                 let queue = memory
-                    .create_compute_aql_queue_with_fixed_dispatch_and_capacity_v1(
+                    .create_compute_aql_queue_with_preallocated_fixed_dispatch_v1(
                         KFD_RUNTIME_RING_BYTES_V1,
                         programs,
                         [packet],
                         native_data,
                         self.dispatch_capacity.native().clone(),
+                        preallocation,
                     )
                     .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
                 let primary_lane = queue.primary_compute_lane_v1();
@@ -3044,10 +3046,11 @@ impl KfdRuntimeBackendV1 {
                 let count = data.len();
                 let queue = self.queue.as_mut().expect("bootstrap KFD queue exists");
                 queue
-                    .bind_initial_fixed_dispatch_v1(
+                    .bind_initial_fixed_dispatch_with_preallocation_v1(
                         programs,
                         [packet],
                         count,
+                        preallocation,
                         move |memory, index| {
                             materialize_initial_data_item_v1(memory, &data[index], index, signature)
                                 .map_err(|detail| {
@@ -3077,10 +3080,11 @@ impl KfdRuntimeBackendV1 {
                     .queue
                     .as_mut()
                     .expect("shared KFD queue owner exists")
-                    .create_auxiliary_compute_lane_with_fixed_dispatch(
+                    .create_auxiliary_compute_lane_with_preallocated_fixed_dispatch_v1(
                         KFD_RUNTIME_RING_BYTES_V1,
                         programs,
                         [packet],
+                        preallocation,
                         |memory| {
                             materialize_initial_data_v1(memory, data, signature).map_err(|detail| {
                                 materialization_error = Some(detail);
@@ -3154,7 +3158,7 @@ impl KfdRuntimeBackendV1 {
                             };
                             native_data.and_then(|native_data| {
                                 queue
-                                    .bind_fixed_dispatch(programs, [packet], native_data)
+                                    .bind_fixed_dispatch_with_preallocation_v1(programs, [packet], native_data, preallocation)
                                     .map_err(|error| format!("KFD dispatch rebind: {error}"))
                             })
                         })

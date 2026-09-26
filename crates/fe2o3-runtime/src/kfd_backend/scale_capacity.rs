@@ -39,6 +39,39 @@ impl RuntimeDispatchCapacityV1 {
     }
 }
 
+impl KfdRuntimeBackendV1 {
+    pub(super) fn preallocate_native_binding_v1(
+        &mut self,
+        reuse_attached: bool,
+    ) -> Result<
+        Option<fe2o3_kfd::Gfx942FixedDispatchPreallocationV1>,
+        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+    > {
+        if !self.dispatch_capacity.is_scaled() || reuse_attached {
+            return Ok(None);
+        }
+        let result = match self.native_compute_lanes[self.selected_compute_lane] {
+            Some(lane) => match self.queue.as_ref() {
+                Some(queue) => queue.preallocate_next_fixed_dispatch_v1::<1>(lane),
+                None => {
+                    return Err(self.terminal_error("native binding preflight has no queue owner"));
+                }
+            },
+            None => self
+                .dispatch_capacity
+                .native()
+                .preallocate_fresh_v1::<1>()
+                .map_err(fe2o3_kfd::ComputeAqlQueueSessionErrorV1::DispatchBinding),
+        };
+        result.map_err(|error| match error {
+            fe2o3_kfd::ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                fe2o3_kfd::Gfx942DispatchBindingErrorV1::HostAllocationCapacity { .. },
+            ) => Self::capacity(format!("KFD epoch storage preflight: {error}")),
+            error => self.terminal_error(format!("KFD epoch storage preflight: {error}")),
+        })
+    }
+}
+
 pub(super) struct RuntimeDispatchStateV1 {
     pub(super) capacity: RuntimeDispatchCapacityV1,
     pub(super) primary: RuntimeComputePipelineV1,
