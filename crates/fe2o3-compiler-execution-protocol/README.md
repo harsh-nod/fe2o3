@@ -37,6 +37,20 @@ V1 wire codec, not admitted V1 owners. A decoded frame is inert: private-channel
 provenance, live process custody and production issuer integration remain separate
 obligations. See the [native lifecycle](../../docs/compiler-execution-consuming-launch-v2.md).
 
+`CompilerExecutionSupervisorDeploymentV2` and `V3` provide distinct 184-byte
+native deployment records. Construction, decoding and matching are metered on the
+original ledger; decoding requires the complete supplied native policy identity.
+They bind dedicated supervisor/anchor credentials and exact supervisor/launcher
+measurements without converting V1 owners. They remain inert configuration:
+sealed transport, independent trusted-parent pinning and native production
+deployment are separate obligations. The existing V1 format is unchanged.
+Native `CompilerExecutionSupervisorReadyV2` and `V3` add distinct 88-byte
+bootstrap records for those deployments. Their metered decoder requires the
+expected child PID and actual same-family deployment together. A rehashed foreign
+deployment identity or changed PID still fails that contextual check. Neither
+construction nor decoding establishes private-channel provenance, actual service
+admission or pidfd liveness; the deployed root coordinator still uses V1.
+
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,
 current-record verification, and bounded service packet records. The sole

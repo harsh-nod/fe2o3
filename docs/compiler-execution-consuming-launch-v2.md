@@ -237,6 +237,28 @@ accepted prefixes and first denials across calls. The caller keeps exclusive
 cleanup control and must explicitly drain/shut down; returning a completed batch
 does not prove terminal cleanup, and neither account is silently renewed.
 
+## Native Deployment Records
+
+Native `CompilerExecutionSupervisorDeploymentV2` and `V3` are distinct, inert
+184-byte configuration records. Their identities bind exact supervisor/launcher
+measurements, dedicated service and anchor credentials, and the complete native
+policy identity. Native decoding requires that actual same-family policy on the
+original budget; V1 records are not upgraded. Independently pinning the trusted
+configuration and admitting its transport remain provisioning obligations.
+
+`CompilerExecutionSupervisorReadyV2` and `V3` are distinct 88-byte bootstrap
+records. Creation borrows the deployment; decoding requires the expected child
+PID and that exact native deployment as well as canonical framing. Every working
+operation is prepaid, restores entry storage and returns an explicit full owner
+charge. Rehashing an altered PID or substituting a deployment cannot satisfy the
+original contextual join. A sender can still construct matching public bytes:
+these records do not establish root-parent provenance, a private bootstrap pipe,
+child liveness, actual service admission, recovery, or compiler execution.
+
+The deployed root coordinator, inherited service entry point and anchor
+configuration still use V1. These native record APIs are dependencies of that
+migration, not an activated replacement or another production authority path.
+
 ## Remaining Production Work
 
 The deployed issuer and service still use the previous family. Native inherited

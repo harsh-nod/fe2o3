@@ -75,6 +75,10 @@ mod supervisor_handoff_codec;
 mod supervisor_handoff_v2;
 mod supervisor_handoff_v3;
 mod supervisor_ready;
+mod supervisor_ready_native_adapter;
+mod supervisor_ready_native_codec;
+mod supervisor_ready_v2;
+mod supervisor_ready_v3;
 mod worker_anchor_journal;
 mod worker_anchor_journal_codec;
 mod worker_anchor_journal_v2;
@@ -443,6 +447,16 @@ pub use supervisor_handoff_v3::{
 pub use supervisor_ready::{
     COMPILER_EXECUTION_SUPERVISOR_READY_BYTES_V1, CompilerExecutionSupervisorReadyErrorV1,
     CompilerExecutionSupervisorReadyIdentityV1, CompilerExecutionSupervisorReadyV1,
+};
+pub use supervisor_ready_v2::{
+    COMPILER_EXECUTION_SUPERVISOR_READY_BYTES_V2, COMPILER_EXECUTION_SUPERVISOR_READY_STORAGE_V2,
+    COMPILER_EXECUTION_SUPERVISOR_READY_WORK_V2, CompilerExecutionSupervisorReadyErrorV2,
+    CompilerExecutionSupervisorReadyIdentityV2, CompilerExecutionSupervisorReadyV2,
+};
+pub use supervisor_ready_v3::{
+    COMPILER_EXECUTION_SUPERVISOR_READY_BYTES_V3, COMPILER_EXECUTION_SUPERVISOR_READY_STORAGE_V3,
+    COMPILER_EXECUTION_SUPERVISOR_READY_WORK_V3, CompilerExecutionSupervisorReadyErrorV3,
+    CompilerExecutionSupervisorReadyIdentityV3, CompilerExecutionSupervisorReadyV3,
 };
 pub use worker_anchor_journal::{
     COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1, CompilerExecutionWorkerAnchorJournalErrorV1,
