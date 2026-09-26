@@ -5,6 +5,11 @@ It is not 47/47 completion. All [#272](https://github.com/harsh-nod/fe2o3/issues
 milestones remain open. Conditional production compilation still refuses before
 native output, publication, load and safe GPU launch.
 
+Latest local checkpoint: `9bf3bdded` passed 606 filtered library tests and all
+269 documentation tests across the backend, verifier, lowerer and AMD model.
+The 35 ignored library tests are not execution evidence. The earlier unfiltered
+library timeout remains unresolved; this is not a passing full-workspace run.
+
 ## Integrated Boundaries
 
 The live backend now executes and retains one CPU-bound formula V2, then projects
@@ -80,6 +85,12 @@ call/completion/installation state tracks the outer composition, not an internal
 strict-import count. Two observation component tests passed at `1a4a02120`; the
 genuine protected child has not executed.
 
+V5 now explicitly checks original Rust layout evidence for every argument using
+the existing physical-layout validator. This closes the all-slice case skipped
+by the nominal-only packing gate. Missing evidence and valid-but-wrong donor
+layouts reject; the separate usize/isize evidence convention is preserved.
+Ordinary V3 behavior and resource charges are unchanged.
+
 The consumer supports a complete conditional root roster, not mixed ordinary or
 UnitLocal roots. Existing per-root single-output and CPU-control-flow limits
 remain. Registration origin and launch max_grid are external facts. Declared
@@ -111,8 +122,11 @@ hidden GPUs and the unchanged resource limits.
 | `7648f5e31` | all four packages' documentation tests | 264 compile-fail and 5 positive tests passed; none ignored |
 | `2ddfdc4fc` | unfiltered library tests, all four packages | timed out at the unchanged 1,200-second limit; AMD model completed 225 passed/3 ignored, lowerer incomplete, verifier/backend not reached |
 | `1a4a02120` | production-bridge conditional library suite | 463 passed, 15 failed, 30 ignored; not a passing run |
-| `1a4a02120` | legacy nominal library regression filter | 121 passed, 5 protected-source tests ignored; new conditional-descriptor tests explicitly excluded |
+| `1a4a02120` | legacy nominal library regression filter | 121 passed, 5 actual-source tests ignored; new conditional-descriptor tests explicitly excluded |
 | `1a4a02120` | all four packages' documentation tests | 264 compile-fail and 5 positive tests passed; none ignored |
+| `45ad533b9` | corrected conditional library suite | 485 passed, 30 ignored, zero failures |
+| `9bf3bdded` | conditional/nominal and targeted shared-fixture library regressions | 606 passed, 35 ignored, zero failures; no nominal exclusion |
+| `9bf3bdded` | all four packages' documentation tests | 264 compile-fail and 5 positive tests passed; none ignored |
 
 The shell harness uses fake Cargo/ROCm controls, not actual tutorial compilation
 or hardware. Filtered and ignored tests receive no execution credit. These local
@@ -143,11 +157,25 @@ role rejected by V12, and the history fixture configured the generic 2 GiB ceili
 instead of the native history ceiling of 256 MiB. Corrections preserve the
 negative cases, existing production limits and original resource account. The
 native ceiling is selected before source/optimizer work, never by replacing an
-account after work has begun. These corrections require a fresh test run; the
-failed run remains part of the evidence. Its log SHA256 is
+account after work has begun. All 15 failures are resolved in the passing
+`45ad533b9` run. The failed run remains part of the evidence. Its log SHA256 is
 `b3f3d02e51b33e6146eadb2cf3acab548572d0f380275cb9a77b6465e1ddb294`.
 The later documentation log SHA256 is
 `8524c8d5da762702fe46f8b11d8595f10c7eeb993e92c1d7bebfc4b4f7002d34`.
+
+The expanded `9bf3bdded` run comprises 31 AMD-model, 171 lowerer, 150 verifier
+and 254 backend passes. It includes all nine targeted default-fixture regressions
+and the nominal tests without the earlier exclusion. Filters overlap; counts
+must not be added to earlier runs. The protected child's assertions now preserve
+the typed cause, bridge state and resource snapshot on failure, but that child
+has not executed. Log SHA256s, in order, for corrected conditional tests, expanded
+regressions and latest documentation tests:
+
+```text
+581b3177d50e8394b8de03529ead0dcce908ebbed3afd6ac9365c747e20fc2ba
+551a943c0e61242e7f9f40cce5f086144d85ce27e2f0f0ee3fd9914877247ce9
+bd7a751f5145ea21f0654fa59ad23aaa669d8567ed3aa0ccc4ff87d520ff75f8
+```
 
 Earlier failed runs are preserved. The merged lockfile required matching pending
 manifest contract digests and the dependent curriculum/inventory snapshots; no
@@ -197,5 +225,8 @@ Genuine multi-root packet and source/CPU/contract/final-history success, full-ch
 resource negatives and protected execution of the new production wiring remain
 required, followed by native-machine custody,
 publication, generated host admission and the complete tutorial hardware matrix.
+The conditional native handoff and restart-recovery continuation are still
+implementation work, not merely unexecuted tests. Existing ordinary capsule
+schemas cannot be reinterpreted as conditional authority.
 Shared-IEEE source proof is not LLVM/ISA arithmetic or a transcendental error-bound
 proof. Neither clean analysis nor V5 bytes bypass the existing authority gate.
