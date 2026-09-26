@@ -6,6 +6,9 @@ for issue #272. M0-M7 and the 47/47 production-to-safe-GPU-launch matrix remain
 incomplete. This checkpoint grants no protected-proof, numerical-refinement,
 listener-to-issuer execution or GPU credit.
 
+Follow-up: [native controller and provisioning checkpoint](conditional-native-provisioning-20260926.md)
+adds finite dispatch, native deployment/bootstrap records and guarded key reissue.
+
 ## Implementation
 
 Base: `756c481c7bc8dc9976a19e2669c5fa364ac9bece`.
