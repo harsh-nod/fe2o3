@@ -65,10 +65,16 @@ def logical_negative(leaf, status, stdout, stderr, verifier, source_paths):
             diagnostic = json.loads(line, object_pairs_hook=strict_object)
             if not isinstance(diagnostic, dict) or not isinstance(diagnostic.get("message"), str) or not isinstance(diagnostic.get("level"), str):
                 return False
+            if (diagnostic.get("$message_type") != "diagnostic" or diagnostic.get("children") != []
+                    or diagnostic.get("code") is not None):
+                return False
+            if diagnostic["level"] == "note" and diagnostic["message"] not in leaf.SELECTION_NOTES | ENUMERATION_NOTES:
+                return False
             spans = diagnostic.get("spans", [])
             if not isinstance(spans, list) or any(not isinstance(span, dict) for span in spans):
                 return False
-            if any(not isinstance(span.get("file_name"), str) or type(span.get("is_primary")) is not bool for span in spans):
+            if any(not isinstance(span.get("file_name"), str) or not Path(span["file_name"]).is_absolute()
+                   or type(span.get("is_primary")) is not bool for span in spans):
                 return False
         return leaf.logical_negative(status, stdout, stderr, verifier, source_paths)
     except (ValueError, TypeError, KeyError):
@@ -92,9 +98,10 @@ def proof_positive(status, stdout, stderr, verifier, expected, source_paths):
             spans = diagnostic.get("spans")
             if not isinstance(spans, list) or not spans or any(not isinstance(span, dict) for span in spans):
                 return False
-            if any(not isinstance(span.get("file_name"), str) or type(span.get("is_primary")) is not bool for span in spans):
+            if any(not isinstance(span.get("file_name"), str) or not Path(span["file_name"]).is_absolute()
+                   or type(span.get("is_primary")) is not bool for span in spans):
                 return False
-            if not any(span["is_primary"] and span["file_name"] in source_paths for span in spans):
+            if not any(span["is_primary"] and str(Path(span["file_name"]).resolve()) in source_paths for span in spans):
                 return False
         return True
     except (ValueError, TypeError, KeyError):

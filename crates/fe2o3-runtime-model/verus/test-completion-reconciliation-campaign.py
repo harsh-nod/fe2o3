@@ -51,7 +51,8 @@ result = {"verus": verifier, "verification-results": {
     "encountered-error": True, "encountered-vir-error": False,
     "is-verifying-entire-crate": False, "errors": 1, "verified": 1,
 }}
-message = {"level": "error", "message": "assertion failed", "spans": [{"is_primary": True, "file_name": path}]}
+message = {"$message_type": "diagnostic", "level": "error", "message": "assertion failed", "code": None,
+           "children": [], "spans": [{"is_primary": True, "file_name": path}]}
 check = lambda status, stdout, messages: runner["logical_negative"](
     leaf, status, stdout, "\n".join(json.dumps(item) for item in messages), verifier, {path})
 need(check(1, json.dumps(result), [message]))
@@ -108,4 +109,13 @@ need(not positive_check(0, json.dumps(success).replace('"errors": 0', '"errors":
 for malformed in ("not JSON", "[]", "null"):
     need(not positive_check(0, malformed, []))
 need(not positive_check(0, json.dumps(success), [None]))
+include_path = "/snapshot/verus/../../snapshot/context_completion_reconciliation_planner_v1.rs"
+need(positive_check(0, json.dumps(success), [dict(note, spans=[{"file_name": include_path, "is_primary": True}])]))
+need(check(1, json.dumps(result), [dict(message, spans=[{"file_name": include_path, "is_primary": True}])]))
+for classifier, data in ((positive_check, success), (check, result)):
+    status = 0 if classifier is positive_check else 1
+    base = note if classifier is positive_check else message
+    need(not classifier(status, json.dumps(data), [dict(base, children=[dict(message, message="Resource limit (rlimit) exceeded")])]))
+    need(not classifier(status, json.dumps(data), [dict(base, spans=[{"file_name": "relative.rs", "is_primary": True}])]))
+need(not check(1, json.dumps(result), [message, dict(note, message=note["message"] + "; Resource limit (rlimit) exceeded")]))
 print("PASS: production planner campaign calibration (8 groups)")
