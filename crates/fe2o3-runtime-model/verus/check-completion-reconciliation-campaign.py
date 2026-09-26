@@ -36,6 +36,42 @@ def inherited():
     return module
 
 
+def strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        need(key not in result, "duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def logical_negative(leaf, status, stdout, stderr, verifier, source_paths):
+    # This pinned release omits `success` for negative results. Do not coerce
+    # malformed success values or guess a schema from the positive result shape.
+    try:
+        result = json.loads(stdout, object_pairs_hook=strict_object)
+        if not isinstance(result, dict) or not isinstance(result.get("verus"), dict):
+            return False
+        vr = result.get("verification-results")
+        if not isinstance(vr, dict) or set(vr) != {
+            "encountered-error", "encountered-vir-error", "verified", "errors", "is-verifying-entire-crate"
+        }:
+            return False
+        if type(vr["verified"]) is not int or vr["verified"] < 0 or type(vr["errors"]) is not int or vr["errors"] <= 0:
+            return False
+        for line in stderr.splitlines():
+            diagnostic = json.loads(line, object_pairs_hook=strict_object)
+            if not isinstance(diagnostic, dict) or not isinstance(diagnostic.get("message"), str) or not isinstance(diagnostic.get("level"), str):
+                return False
+            spans = diagnostic.get("spans", [])
+            if not isinstance(spans, list) or any(not isinstance(span, dict) for span in spans):
+                return False
+            if any(not isinstance(span.get("file_name"), str) or type(span.get("is_primary")) is not bool for span in spans):
+                return False
+        return leaf.logical_negative(status, stdout, stderr, verifier, source_paths)
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
 def mutations(body):
     """Each mutation changes only executable production tokens, not proof hooks."""
     cases = {}
@@ -109,7 +145,7 @@ def main():
     out = args.output
     need(out.is_absolute() and out.resolve() == out and not out.exists(), "new canonical output")
     need(not out.is_relative_to(ROOT) and not ROOT.is_relative_to(out), "output outside repository")
-    need(args.verus.is_absolute() and args.verus.is_file() and not args.verus.is_symlink(), "ordinary absolute verifier")
+    need(args.verus.is_absolute() and args.verus.resolve() == args.verus and args.verus.is_file(), "ordinary canonical verifier")
     os.chdir(ROOT)
     leaf = inherited()
     prior = leaf.load("planner_campaign_sources", ROOT / leaf.PRIOR, leaf.PRIOR_SHA)
@@ -204,7 +240,7 @@ def main():
         need({p for p in expected if measured[p] != expected[p]} == {str(path)}, "one changed source")
         prior.save(out / (name + "-mutation.json"), dict(path=str(path), selector=focus, inputs=measured))
         paths = {str((mutated / path).resolve()) for path in FILES}
-        phase(name, proof(mutated, focus), lambda s, o, e: leaf.logical_negative(s, o, e, prior.VERIFIER, paths))
+        phase(name, proof(mutated, focus), lambda s, o, e: logical_negative(leaf, s, o, e, prior.VERIFIER, paths))
         need(leaf.tree(mutated) == measured, "mutant continuity")
     phase("proof-after", proof(ROOT), positive)
     phase("closure-after", closure, closure_ok)

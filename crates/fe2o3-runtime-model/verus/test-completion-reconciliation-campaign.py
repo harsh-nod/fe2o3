@@ -2,6 +2,7 @@
 """Controller calibration; these synthetic cases are not solver evidence."""
 
 from collections import Counter
+import copy
 import json
 from pathlib import Path
 import re
@@ -48,11 +49,11 @@ verifier = {"version": "calibration-only"}
 path = "/snapshot/context_completion_reconciliation_planner_v1.rs"
 result = {"verus": verifier, "verification-results": {
     "encountered-error": True, "encountered-vir-error": False,
-    "is-verifying-entire-crate": False, "errors": 1, "success": False,
+    "is-verifying-entire-crate": False, "errors": 1, "verified": 1,
 }}
 message = {"level": "error", "message": "assertion failed", "spans": [{"is_primary": True, "file_name": path}]}
-check = lambda status, stdout, messages: leaf.logical_negative(
-    status, stdout, "\n".join(json.dumps(item) for item in messages), verifier, {path})
+check = lambda status, stdout, messages: runner["logical_negative"](
+    leaf, status, stdout, "\n".join(json.dumps(item) for item in messages), verifier, {path})
 need(check(1, json.dumps(result), [message]))
 for status in (0, 2, 124, 137, -9):
     need(not check(status, json.dumps(result), [message]))
@@ -61,4 +62,23 @@ for text in ("mismatched types", "Resource limit (rlimit) exceeded", "could not 
 need(not check(1, "not JSON", [message]))
 need(not check(1, json.dumps(result), [dict(message, spans=[{"is_primary": True, "file_name": "/unauthorized.rs"}])]))
 need(not check(1, json.dumps(result), [message, {"level": "warning", "message": "unreachable pattern"}]))
+for value in (True, False, None, 0, 1, "false", [], {}):
+    malformed = copy.deepcopy(result)
+    malformed["verification-results"]["success"] = value
+    need(not check(1, json.dumps(malformed), [message]))
+for key in result["verification-results"]:
+    malformed = copy.deepcopy(result)
+    del malformed["verification-results"][key]
+    need(not check(1, json.dumps(malformed), [message]))
+for key, values in (("verified", (True, -1, "1", None)), ("errors", (True, 0, -1, "1", None))):
+    for value in values:
+        malformed = copy.deepcopy(result)
+        malformed["verification-results"][key] = value
+        need(not check(1, json.dumps(malformed), [message]))
+for value in ([], None, 0, "object"):
+    need(not check(1, json.dumps(value), [message]))
+    need(not check(1, json.dumps(dict(result, **{"verification-results": value})), [message]))
+    need(not check(1, json.dumps(result), [value]))
+need(not check(1, json.dumps(result).replace('"errors": 1', '"errors": 0, "errors": 1'), [message]))
+need(not check(1, json.dumps(result), [dict(message, spans=[None])]))
 print("PASS: production planner campaign calibration (6 groups)")
