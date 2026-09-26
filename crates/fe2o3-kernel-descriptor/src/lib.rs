@@ -8,9 +8,13 @@ pub const RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1: &str =
     "rustc-codegen-fe2o3-production-v3";
 
 pub mod conditional_invocation;
+mod conditional_invocation_codec;
 mod conditional_invocation_codec_v1;
+mod conditional_invocation_codec_v2;
 mod conditional_invocation_rows_v1;
+mod conditional_invocation_schema;
 mod conditional_invocation_v1;
+mod conditional_invocation_v2;
 mod conditional_invocation_validate_v1;
 mod conditional_v4;
 mod decode;
