@@ -1,6 +1,8 @@
 # Conditional Native Handoff Checkpoint
 
 This continues [CPU-bound conditional integration](cpu-bound-conditional-integration-20260926.md).
+The later [execution custody checkpoint](conditional-execution-custody-20260926.md)
+records V3 sealed policy/key and anchor/currentness component integration.
 All [#272](https://github.com/harsh-nod/fe2o3/issues/272) milestones M0-M7 remain
 open. This is not 47/47 completion, protected compiler execution, machine-level
 equivalence, or safe GPU launch. No new protected or hardware run was completed.

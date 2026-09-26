@@ -255,6 +255,12 @@ publication. It cannot reuse the ordinary V4/SubjectV2 family as authority;
 protected acquisition, parent intake, Worker/finalizer and safe launch remain
 required integration work.
 
+The [conditional execution custody checkpoint](evidence/conditional-execution-custody-20260926.md)
+adds nominal V3 sealed policy/key custody and exact anchor/currentness joins.
+These share existing implementations but do not activate production V3 custody;
+trusted profile selection and the original-account client lifetime remain explicit
+integration dependencies.
+
 The [native Worker adapter](../crates/fe2o3-hsaco-finalize/README.md#native-sourcef-worker-integration)
 now borrows the locked recovered token for preflight and consumes that exact
 occurrence through the existing candidate/replay engine. Its separate identity
