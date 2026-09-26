@@ -4,13 +4,8 @@ use super::*;
 use crate::resource_credits::{
     RuntimeResourceCreditAccountV1, RuntimeResourceCreditErrorV1, RuntimeResourceCreditUsageV1,
     RuntimeResourceKindV1, RuntimeResourceVectorV1, RuntimeRetainedResourceCreditsV1,
+    request_charge,
 };
-
-fn request_charge(bytes: u64) -> RuntimeResourceVectorV1 {
-    RuntimeResourceVectorV1::ZERO
-        .with(RuntimeResourceKindV1::RequestedAllocationBytes, bytes)
-        .with(RuntimeResourceKindV1::AllocationRecords, 1)
-}
 
 #[derive(Default)]
 pub(super) struct ContextAllocationAdmissionV1 {
@@ -21,6 +16,71 @@ pub(super) struct ContextAllocationAdmissionV1 {
 }
 
 impl ContextAllocationAdmissionV1 {
+    pub(super) fn from_profile(
+        devices: &[RuntimeDeviceV1],
+        profile: RuntimeAllocationAdmissionProfileV1,
+    ) -> Result<Self, RuntimeValidationErrorV1> {
+        let RuntimeAllocationAdmissionProfileV1::Required(entries) = profile else {
+            return Ok(Self::default());
+        };
+        if entries.len() != devices.len() || entries.len() > MAX_RUNTIME_DEVICES_V1 {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+        }
+        let mut admission = Self::default();
+        admission
+            .accounts
+            .try_reserve(entries.len())
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        for entry in entries {
+            let device = devices
+                .iter()
+                .find(|device| device.backend_device == entry.backend_device_v1())
+                .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
+            if admission.accounts.contains_key(&device.id)
+                || admission.accounts.values().any(|account| {
+                    account.composed_admission().is_some_and(|installed| {
+                        installed.account().shares_account_with_v1(entry.account())
+                    })
+                })
+                || !entry.is_live()
+            {
+                return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+            }
+            admission.accounts.insert(
+                device.id,
+                RuntimeResourceCreditAccountV1::composed(device.id, entry),
+            );
+        }
+        Ok(admission)
+    }
+
+    pub(super) fn witness<'a>(
+        &'a self,
+        device: RuntimeDeviceIdV1,
+        credits: Option<&'a RuntimeRetainedResourceCreditsV1>,
+        bytes: u64,
+    ) -> Result<Option<RuntimeAllocationRequestWitnessV1<'a>>, RuntimeValidationErrorV1> {
+        let Some(account) = self.accounts.get(&device) else {
+            return Ok(None);
+        };
+        let Some(admission) = account.composed_admission() else {
+            return Ok(None);
+        };
+        let Some(credits) = credits else {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+        };
+        if !admission.is_live()
+            || !account.matches_retained_charge_v1(device, credits, request_charge(bytes))
+        {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+        }
+        let RuntimeRetainedResourceCreditsV1::Composed(credit) = credits else {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+        };
+        Ok(Some(RuntimeAllocationRequestWitnessV1::new(
+            device, admission, credit, bytes,
+        )))
+    }
     #[cfg(test)]
     pub(in crate::context) fn swap_retained_for_test_v1(
         &mut self,
@@ -51,7 +111,7 @@ impl ContextAllocationAdmissionV1 {
         device: RuntimeDeviceIdV1,
         bytes: &[u64],
     ) -> Result<
-        Option<Box<[crate::resource_credits::RuntimeResourceReservationV1]>>,
+        Option<crate::resource_credits::RuntimeResourceReservationsV1>,
         RuntimeResourceCreditErrorV1,
     > {
         let Some(account) = self.accounts.get(&device) else {
@@ -60,12 +120,7 @@ impl ContextAllocationAdmissionV1 {
         self.retained
             .try_reserve(bytes.len())
             .map_err(|_| RuntimeResourceCreditErrorV1::AllocationFailed)?;
-        let mut charges = Vec::new();
-        charges
-            .try_reserve_exact(bytes.len())
-            .map_err(|_| RuntimeResourceCreditErrorV1::AllocationFailed)?;
-        charges.extend(bytes.iter().copied().map(request_charge));
-        account.reserve_batch(&charges).map(Some)
+        account.reserve_requests(bytes).map(Some)
     }
 
     pub(super) fn retained_records(&self) -> usize {

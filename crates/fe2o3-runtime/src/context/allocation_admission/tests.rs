@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn required_empty_roster_does_not_mean_legacy() {
+    let context = RuntimeContextV1::open(crate::KfdRuntimeBackendV1::mock()).unwrap();
+    assert!(matches!(
+        ContextAllocationAdmissionV1::from_profile(
+            context.devices(),
+            RuntimeAllocationAdmissionProfileV1::Required(Vec::new())
+        ),
+        Err(RuntimeValidationErrorV1::InvalidBackendDescription)
+    ));
+    assert!(
+        ContextAllocationAdmissionV1::from_profile(
+            context.devices(),
+            RuntimeAllocationAdmissionProfileV1::Legacy
+        )
+        .unwrap()
+        .accounts
+        .is_empty()
+    );
+}
+
+#[test]
 fn retained_charge_context_presence_exact_extent_and_device_brand() {
     let device = RuntimeDeviceIdV1::new(1, 1);
     let other = RuntimeDeviceIdV1::new(1, 2);

@@ -2,21 +2,24 @@
 
 use super::*;
 use fe2o3_kfd::{
-    Gfx942DeviceBackingUsageV1, Gfx942DevicePoolUsageV1, Gfx942HostBackingAdmissionV1,
-    Gfx942HostBackingRootV1, Gfx942HostPoolLimitsV1, Gfx942HostPoolUsageV1,
-    Gfx942HostVisibleBackingUsageV1, Gfx942NativeBackingAdmissionV1,
-    Gfx942NativeBackingDeviceBudgetV1, Gfx942NativeBackingRootV1,
+    Gfx942ComposedBackingAdmissionV1, Gfx942ComposedBackingDeviceBudgetV1,
+    Gfx942ComposedBackingRootV1, Gfx942ComposedBackingSessionBudgetV1, Gfx942DeviceBackingUsageV1,
+    Gfx942DevicePoolUsageV1, Gfx942HostBackingAdmissionV1, Gfx942HostBackingRootV1,
+    Gfx942HostPoolLimitsV1, Gfx942HostPoolUsageV1, Gfx942HostVisibleBackingUsageV1,
+    Gfx942NativeBackingAdmissionV1, Gfx942NativeBackingDeviceBudgetV1, Gfx942NativeBackingRootV1,
     Gfx942NativeBackingSessionBudgetV1,
 };
 
 pub(super) enum RootedBackingV1 {
     Host(Option<Gfx942HostBackingAdmissionV1>),
     Native(Option<Gfx942NativeBackingAdmissionV1>),
+    Composed(Option<Gfx942ComposedBackingAdmissionV1>),
 }
 
 pub(super) enum BackingAdmissionV1 {
     Host(Gfx942HostBackingAdmissionV1),
     Native(Gfx942NativeBackingAdmissionV1),
+    Composed(Gfx942ComposedBackingAdmissionV1),
 }
 
 #[cfg(test)]
@@ -46,6 +49,59 @@ mod host_backing_tests;
 mod host_pool_tests;
 
 impl KfdRuntimeBackendV1 {
+    /// Opens the mandatory Context-request/N1/N2 profile. Logical allocation
+    /// requires Context witnesses; direct witness-free allocation is rejected.
+    pub fn open_default_with_composed_backing_root_v1<A>(
+        device_unique_id: u64,
+        authority: A,
+        root: &Gfx942ComposedBackingRootV1,
+        device_budget: Gfx942ComposedBackingDeviceBudgetV1,
+        session_budget: Gfx942ComposedBackingSessionBudgetV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1>
+    where
+        A: KfdRuntimeLaunchAuthorityV1 + 'static,
+    {
+        Self::from_checked_device_with_composed_backing_root_v1(
+            Self::open_checked_device_v1(device_unique_id)?,
+            authority,
+            root,
+            device_budget,
+            session_budget,
+        )
+    }
+
+    pub fn from_checked_device_with_composed_backing_root_v1<A>(
+        device: CheckedGfx942XnackMinusDevice,
+        authority: A,
+        root: &Gfx942ComposedBackingRootV1,
+        device_budget: Gfx942ComposedBackingDeviceBudgetV1,
+        session_budget: Gfx942ComposedBackingSessionBudgetV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1>
+    where
+        A: KfdRuntimeLaunchAuthorityV1 + 'static,
+    {
+        let admission = root
+            .admit_session_v1(&device, device_budget, session_budget)
+            .map_err(rooted_host_backing_admission_error_v1)?;
+        let binding = crate::RuntimeAllocationDeviceAdmissionV1::for_checked_device_v1(
+            device.observation().unique_id(),
+            &device,
+            admission.request_account_v1().clone(),
+        )
+        .map_err(rooted_host_backing_admission_error_v1)?;
+        let mut backend = Self::from_checked_device(device, authority);
+        backend.host_visible_backing_budget = Some(session_budget.host_budget());
+        backend.device_backing_budget = Some(session_budget.device_budget());
+        backend.rooted_backing = Some(RootedBackingV1::Composed(Some(admission)));
+        backend.composed_request_binding = Some(binding);
+        Ok(backend)
+    }
+
+    pub(super) fn requires_request_witness_v1(&self) -> bool {
+        self.composed_request_binding.is_some()
+            || matches!(self.rooted_backing, Some(RootedBackingV1::Composed(_)))
+    }
+
     /// Opens a backend requiring root-issued ordinary coherent GTT admission.
     /// Native owners retain this same root; uncertain disposal anchors it with
     /// its canonical registry. Reuse the root across participating backends.
@@ -135,6 +191,11 @@ impl KfdRuntimeBackendV1 {
     pub(super) fn take_rooted_backing_v1(
         &mut self,
     ) -> Result<Option<BackingAdmissionV1>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if self.composed_request_binding.is_some()
+            != matches!(self.rooted_backing, Some(RootedBackingV1::Composed(_)))
+        {
+            return Err(self.terminal_error("composed request and native policy mismatch"));
+        }
         let valid = match (&self.rooted_backing, self.admitted_device.as_ref()) {
             (None, _) => return Ok(None),
             (Some(RootedBackingV1::Host(Some(admission))), Some(device)) => {
@@ -145,6 +206,20 @@ impl KfdRuntimeBackendV1 {
                 admission.matches_device_v1(device)
                     && Some(admission.budget_v1().host_budget()) == self.host_visible_backing_budget
                     && Some(admission.budget_v1().device_budget()) == self.device_backing_budget
+            }
+            (Some(RootedBackingV1::Composed(Some(admission))), Some(device)) => {
+                admission.matches_device_v1(device)
+                    && Some(admission.budget_v1().host_budget()) == self.host_visible_backing_budget
+                    && Some(admission.budget_v1().device_budget()) == self.device_backing_budget
+                    && self
+                        .composed_request_binding
+                        .as_ref()
+                        .is_some_and(|binding| {
+                            binding.matches_checked(self.description.backend_device, device)
+                                && binding
+                                    .account()
+                                    .shares_account_with_v1(admission.request_account_v1())
+                        })
             }
             _ => false,
         };
@@ -158,6 +233,9 @@ impl KfdRuntimeBackendV1 {
                 }
                 RootedBackingV1::Native(pending) => {
                     BackingAdmissionV1::Native(pending.take().expect("validated admission"))
+                }
+                RootedBackingV1::Composed(pending) => {
+                    BackingAdmissionV1::Composed(pending.take().expect("validated admission"))
                 }
             },
         ))
@@ -293,8 +371,10 @@ impl KfdRuntimeBackendV1 {
         budget: Gfx942DeviceBackingBudgetV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_pristine_native_resource_configuration_v1()?;
-        if matches!(self.rooted_backing, Some(RootedBackingV1::Native(_)))
-            || self.device_backing_budget.is_some()
+        if matches!(
+            self.rooted_backing,
+            Some(RootedBackingV1::Native(_) | RootedBackingV1::Composed(_))
+        ) || self.device_backing_budget.is_some()
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,

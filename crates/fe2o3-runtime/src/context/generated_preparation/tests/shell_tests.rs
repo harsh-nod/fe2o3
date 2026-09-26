@@ -23,6 +23,37 @@ struct Snapshot {
     journal: Option<RuntimeContextJournalUsageV1>,
 }
 
+#[test]
+fn generated_plan_rejects_swapped_request_credits_before_adoption() {
+    let mut fixture = Fixture::new(Some((60, 3)));
+    fixture.install().unwrap();
+    let plan = fixture
+        .context
+        .generated_plan_for_hold_v1(&fixture.hold)
+        .unwrap();
+    let first = plan.members[0].unwrap();
+    let second = plan.members[1].unwrap();
+    assert_ne!(first.description.byte_len, second.description.byte_len);
+    let before = fixture.snapshot();
+    fixture
+        .context
+        .allocation_admission
+        .swap_retained_for_test_v1(first.logical, second.logical);
+    assert!(matches!(
+        fixture.context.generated_plan_for_hold_v1(&fixture.hold),
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::InvalidBackendDescription
+        ))
+    ));
+    assert_eq!(fixture.snapshot(), before);
+    fixture
+        .context
+        .allocation_admission
+        .swap_retained_for_test_v1(first.logical, second.logical);
+    fixture.retire();
+    assert!(fixture.context.cleanup().is_complete());
+}
+
 impl Fixture {
     fn new(limits: Option<(u64, usize)>) -> Self {
         Self::new_with_journal(limits, None)

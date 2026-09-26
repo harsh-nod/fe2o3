@@ -1,0 +1,14 @@
+check	exit
+overlay-final	0
+overlay-negative-control	101
+overlay-body-digest-restored	0
+overlay-unchanged-production-and-fixture-check	0
+overlay-sources-after-test	0
+production-driver	1
+production-source-digest-after-gates	0
+production-source-roster-after-gates	0
+overlay-final-binary-digest-check	0
+production-final-binary-digest-check	0
+overlay-copy-removal-and-absence	0
+production-target-removal-and-absence	0
+mi300x-hostname	255

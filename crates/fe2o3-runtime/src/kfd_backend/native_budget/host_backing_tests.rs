@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn multi_device_composition_cannot_erase_required_request_policy() {
+    let mut required = KfdRuntimeBackendV1::mock();
+    required.rooted_backing = Some(RootedBackingV1::Composed(None));
+    let result =
+        KfdMultiDeviceRuntimeBackendV1::from_backends(vec![required, KfdRuntimeBackendV1::mock()]);
+    assert!(
+        matches!(result, Err(error) if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported)
+    );
+}
+
+#[test]
+fn composed_policy_without_binding_rejects_legacy_allocation_and_startup() {
+    let mut backend = KfdRuntimeBackendV1::mock();
+    backend.rooted_backing = Some(RootedBackingV1::Composed(None));
+    let next = backend.next_handle;
+    assert!(backend.allocation_admission_profile_v1().is_err());
+    assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+    assert_busy(backend.configure_device_backing_budget_v1(device_budget()));
+    assert!(matches!(
+        backend.allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 16, 4),
+        Err(RuntimeBackendFailureV1::Rejected(error))
+            if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
+    ));
+    assert!(matches!(
+        backend.allocate_with_outcome_v1(7, RuntimeMemoryKindV1::DeviceLocal, 16, 4),
+        Err(RuntimeBackendFailureV1::Rejected(error))
+            if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
+    ));
+    assert_eq!(backend.next_handle, next);
+    assert!(backend.allocations.is_empty());
+    assert_eq!(backend.staged_context_bytes, 0);
+    assert!(matches!(
+        backend.take_rooted_backing_v1(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(backend.terminal);
+    assert!(backend.queue.is_none());
+    assert!(backend.terminal_memory.is_none());
+    core::mem::forget(backend); // Resource-free terminal mock; Drop would abort.
+}
+
+#[test]
 fn compound_backing_consumed_policy_blocks_both_local_budgets_and_fallback() {
     let mut backend = KfdRuntimeBackendV1::mock();
     backend.rooted_backing = Some(RootedBackingV1::Native(None));
@@ -120,6 +162,14 @@ fn rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission() {
         assert!(
             body[take..compound]
                 .contains("Some(native_budget::BackingAdmissionV1::Native(admission))=>")
+        );
+        let composed = body
+            .find(&native.replace("rooted_host", "composed"))
+            .unwrap();
+        assert!(take < composed);
+        assert!(
+            body[take..composed]
+                .contains("Some(native_budget::BackingAdmissionV1::Composed(admission))=>")
         );
         let native = body.find(native).unwrap();
         assert!(admission < take && take < native);

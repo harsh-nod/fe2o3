@@ -35,13 +35,43 @@ pub(crate) struct GeneratedShellPlanV1 {
     next_handle: u64,
 }
 
+/// One-use authentication for committing this exact inert plan.
+pub(crate) struct GeneratedShellCommitPlanV1 {
+    plan: GeneratedShellPlanV1,
+    request_bound: bool,
+}
+
+impl GeneratedShellCommitPlanV1 {
+    pub(crate) fn plan(&self) -> &GeneratedShellPlanV1 {
+        &self.plan
+    }
+}
+
 pub(super) struct GeneratedShellRecordV1 {
     pub(super) plan: GeneratedShellPlanV1,
+    request_bound: bool,
     pub(super) source_identity: Arc<()>,
     // This state owns only inert control. Native construction requires a distinct
     // rooted phase and must disable metadata-only disposal before its first effect.
     pub(super) control: Option<Gfx942FixedDispatchPacketV1>,
     pub(super) native: Option<super::generated_adoption::GeneratedNativeAdoptionV1>,
+}
+
+#[cfg(all(test, feature = "hardware-qualification"))]
+impl GeneratedShellRecordV1 {
+    pub(super) fn legacy_native_fixture(
+        plan: GeneratedShellPlanV1,
+        source_identity: Arc<()>,
+        control: Gfx942FixedDispatchPacketV1,
+    ) -> Self {
+        Self {
+            plan,
+            request_bound: false,
+            source_identity,
+            control: Some(control),
+            native: None,
+        }
+    }
 }
 
 impl KfdRuntimeBackendV1 {
@@ -150,12 +180,58 @@ impl KfdRuntimeBackendV1 {
         Ok(plan)
     }
 
+    pub(crate) fn bind_generated_shell_requests_v1(
+        &self,
+        plan: GeneratedShellPlanV1,
+        witnesses: [Option<crate::RuntimeAllocationRequestWitnessV1<'_>>;
+            GFX942_MAX_FIXED_DISPATCH_DATA_V1],
+    ) -> Result<GeneratedShellCommitPlanV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_live()?;
+        let required = self.requires_request_witness_v1();
+        let valid = plan.count > 0
+            && plan.count <= witnesses.len()
+            && self.next_handle == plan.key
+            && witnesses[plan.count..].iter().all(Option::is_none)
+            && plan.members[..plan.count]
+                .iter()
+                .enumerate()
+                .all(|(ordinal, member)| {
+                    let Some(member) = member else {
+                        return false;
+                    };
+                    match (&self.composed_request_binding, &witnesses[ordinal]) {
+                        (Some(binding), Some(witness)) => {
+                            binding.backend_device_v1() == plan.binding.backend_device
+                                && binding.model() == plan.binding.native_device
+                                && witness.device_v1() == plan.binding.device
+                                && witness.matches_v1(binding, member.description.byte_len)
+                        }
+                        (None, None) => !required,
+                        _ => false,
+                    }
+                });
+        if !valid {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "generated roster lacks exact request witnesses",
+            ));
+        }
+        Ok(GeneratedShellCommitPlanV1 {
+            plan,
+            request_bound: required,
+        })
+    }
+
     pub(crate) fn commit_generated_shells_v1<E>(
         &mut self,
-        plan: GeneratedShellPlanV1,
+        authenticated: GeneratedShellCommitPlanV1,
         source: &mut RuntimeGfx942GeneratedSourceMutV1<'_, E>,
         roster: &GeneratedHostRosterV1,
     ) {
+        let GeneratedShellCommitPlanV1 {
+            plan,
+            request_bound,
+        } = authenticated;
         assert_eq!(self.next_handle, plan.key, "preflighted handle range");
         assert!(
             source.matches_roster(roster),
@@ -169,6 +245,7 @@ impl KfdRuntimeBackendV1 {
             plan.key,
             GeneratedShellRecordV1 {
                 plan,
+                request_bound,
                 source_identity: Arc::clone(&roster.source_identity),
                 control: None,
                 native: None,
@@ -228,10 +305,9 @@ impl KfdRuntimeBackendV1 {
             && plan.count <= GFX942_MAX_FIXED_DISPATCH_DATA_V1
             && plan.key.checked_add(1 + plan.count as u64) == Some(plan.next_handle)
             && plan.members[plan.count..].iter().all(Option::is_none)
-            && self
-                .generated_shells
-                .get(&plan.key)
-                .is_some_and(|record| record.plan == *plan)
+            && self.generated_shells.get(&plan.key).is_some_and(|record| {
+                record.plan == *plan && record.request_bound == self.requires_request_witness_v1()
+            })
             && self.allocations.generated_count_for_adoption(plan.key) == plan.count
             && plan.members[..plan.count]
                 .iter()

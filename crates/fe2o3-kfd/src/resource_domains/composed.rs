@@ -376,6 +376,11 @@ impl Drop for RequestInner {
 pub struct Gfx942RequestAccountV1(Arc<RequestInner>);
 
 impl Gfx942RequestAccountV1 {
+    /// Exact typed request-leaf identity, not merely a shared root or device.
+    pub fn shares_account_with_v1(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
     pub(crate) fn is_session_live_v1(&self) -> bool {
         let usage = self.session_usage_v1();
         !usage.poisoned && usage.quarantined_records == 0

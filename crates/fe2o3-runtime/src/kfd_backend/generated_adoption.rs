@@ -152,6 +152,17 @@ impl KfdRuntimeBackendV1 {
         buffers: &[crate::Gfx942KfdDispatchBufferV1],
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
+        if self.requires_request_witness_v1()
+            && self
+                .composed_request_binding
+                .as_ref()
+                .is_none_or(|binding| !binding.is_live())
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "generated request session is unavailable",
+            ));
+        }
         self.preflight_generated_lane_v1()?;
         if !self.validate_generated_shell_records_v1(plan)
             || !self.generated_shells.get(&plan.key).is_some_and(|record| {
@@ -270,6 +281,9 @@ impl KfdRuntimeBackendV1 {
                     ),
                 Some(native_budget::BackingAdmissionV1::Native(admission)) => device
                     .acquire_shared_gtt_memory_session_with_rooted_native_backing_v1(admission),
+                Some(native_budget::BackingAdmissionV1::Composed(admission)) => {
+                    device.acquire_shared_gtt_memory_session_with_composed_backing_v1(admission)
+                }
                 None => device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
                     self.device_backing_budget,
                     self.host_visible_backing_budget,

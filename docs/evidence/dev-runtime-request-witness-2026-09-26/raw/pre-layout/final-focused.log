@@ -1,0 +1,135 @@
+   Compiling typenum v1.20.1
+   Compiling cpufeatures v0.3.1
+   Compiling cfg-if v1.0.4
+   Compiling spin v0.12.3
+   Compiling rustix v1.1.4
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+   Compiling bitflags v2.13.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling pin-project-lite v0.2.17
+   Compiling memchr v2.8.3
+   Compiling itoa v1.0.18
+   Compiling arrayvec v0.7.8
+   Compiling futures-core v0.3.34
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+   Compiling futures-task v0.3.34
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+   Compiling zeroize v1.9.0
+   Compiling slab v0.4.12
+   Compiling fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host-api)
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling libc v0.2.189
+   Compiling num-traits v0.2.19
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+   Compiling tokio v1.47.1
+   Compiling futures-util v0.3.34
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+   Compiling rmp v0.8.15
+   Compiling hybrid-array v0.4.14
+   Compiling rmpv v1.3.1
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling futures-executor v0.3.34
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+   Compiling fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 1m 50s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-request-witness-target-20260926-eraWmoHU/debug/deps/fe2o3_kfd-60551c78c3ce1a5d)
+
+running 15 tests
+test resource_domains::composed::tests::composed_request_account_identity_distinguishes_siblings_and_roots ... ok
+test resource_domains::composed::tests::composed_request_batch_is_atomic_and_pending_members_keep_registry ... ok
+test resource_domains::composed::tests::composed_request_budget_bounds_and_exact_bootstrap ... ok
+test resource_domains::composed::tests::composed_request_canonical_parent_and_all_device_limits_are_immutable ... ok
+test resource_domains::composed::tests::composed_request_cold_reservation_keeps_registry_then_cancels_cleanly ... ok
+test resource_domains::composed::tests::composed_request_class_device_root_and_generic_record_ceilings_apply ... ok
+test resource_domains::composed::tests::composed_request_cold_retained_credit_releases_or_preserves_registry ... ok
+test resource_domains::composed::tests::composed_request_cross_session_root_and_generation_substitutions_reject ... ok
+test resource_domains::composed::tests::composed_request_native_sibling_quarantine_preserves_typed_registry ... ok
+test resource_domains::composed::tests::composed_request_native_intake_rejects_incoherent_parts ... ok
+test resource_domains::composed::tests::composed_request_partial_batch_drop_and_native_bundle_drop_order ... ok
+test resource_domains::composed::tests::composed_request_partial_mint_never_publishes_or_leaks_domains ... ok
+test resource_domains::composed::tests::composed_request_quarantine_retains_ancestor_pressure_without_global_poison ... ok
+test resource_domains::composed::tests::composed_request_three_classes_contend_for_one_combined_record_limit ... ok
+test resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 1629 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-request-witness-target-20260926-eraWmoHU/debug/deps/fe2o3_resource_accounting-6ec1f52d27a69258)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 70 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-request-witness-target-20260926-eraWmoHU/debug/deps/fe2o3_runtime-f40ec65f6abc2ea1)
+
+running 49 tests
+test context::allocation_admission::tests::retained_charge_context_presence_exact_extent_and_device_brand ... ok
+test context::allocation_admission::tests::required_empty_roster_does_not_mean_legacy ... ok
+test context::generated_preparation::tests::shell_tests::generated_empty_prefix_stop_requires_the_original_live_hold ... ok
+test context::generated_preparation::tests::shell_tests::generated_journal_capacity_rejection_leaves_entire_roster_and_identity_unchanged ... ok
+test context::generated_preparation::tests::shell_tests::generated_journal_bad_member_never_partially_disposes_a_roster ... ok
+test context::generated_preparation::tests::shell_tests::generated_plan_rejects_swapped_request_credits_before_adoption ... ok
+test context::generated_preparation::tests::shell_tests::generated_journal_enrolls_and_retires_the_complete_roster_with_original_ids ... ok
+test context::generated_preparation::tests::shell_tests::generated_readiness_requires_exact_empty_hold_without_changing_credits ... ok
+test context::generated_preparation::tests::shell_tests::generated_shell_only_stop_disposes_credits_before_releasing_hold ... ok
+test context::generated_preparation::tests::shell_tests::shell_batch_drop_returns_all_unissued_reservations ... ok
+test context::generated_preparation::tests::shell_tests::shell_context_identity_exhaustion_is_atomic_and_adjacent_range_succeeds ... ok
+test context::generated_preparation::tests::shell_tests::shell_credit_exhaustion_rejects_the_whole_roster_without_transfer ... ok
+test context::generated_preparation::tests::shell_tests::shell_foreign_and_stale_holds_cannot_change_current_ownership ... ok
+test context::generated_preparation::tests::shell_tests::shell_late_context_roster_mismatch_preserves_control_and_all_credits ... ok
+test context::generated_preparation::tests::shell_tests::shell_pure_ingress_rejects_before_mutable_carrier_callback ... ok
+test context::generated_preparation::tests::shell_tests::shell_retirement_preserves_unrelated_ordinary_bytes_and_credits ... ok
+test context::generated_preparation::tests::shell_tests::shell_registration_retains_exact_roster_and_refunds_only_after_retirement ... ok
+test context::tests::allocation_outcome_tests::allocation_panic_before_settled_outcome_keeps_credit_and_original_payload ... ok
+test context::tests::allocation_outcome_tests::allocation_settlement_preserves_diagnostic_identity_neighbors_and_exact_credit_vector ... ok
+test context::tests::allocation_outcome_tests::async_tests::actual_launch_preserves_boxed_submit_errors_and_unwind_identity_without_handles ... ok
+test context::tests::allocation_outcome_tests::async_tests::allocation_and_host_write_panics_quarantine_other_active_writers ... ok
+test context::tests::allocation_outcome_tests::async_tests::cleanup_failure_preserves_boxed_error_and_retained_unknown_writers ... ok
+test context::generated_preparation::tests::shell_tests::shell_source_substitution_preserves_both_control_owners ... ok
+test context::tests::allocation_outcome_tests::async_tests::effectful_neighbor_calls_quarantine_pending_writers_on_terminal_or_panic ... ok
+test context::tests::allocation_outcome_tests::async_tests::secondary_settlement_failure_cannot_replace_quiescent_backend_diagnostic ... ok
+test context::tests::allocation_outcome_tests::async_tests::observation_failure_matrix_preserves_diagnostics_and_exact_neighbor_credits ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::cleanup_resumes_partial_rosters_without_releasing_successful_members_twice ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::final_unknown_disposal_bookkeeping_failure_retains_all_success_receipts ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::final_unknown_disposal_preserves_reused_backend_handle_and_new_allocation_credits ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::unknown_disposal_keeps_independent_device_credit_accounts_separate ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::post_model_credit_failure_keeps_finalizing_root_visible_and_terminal ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::unknown_disposal_rejects_missing_or_substituted_custody_before_backend_entry ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::unknown_roster_release_failure_preserves_partial_receipts_and_boxed_diagnostics ... ok
+test context::tests::allocation_outcome_tests::journal_settled_no_owner_refunds_without_replacing_diagnostic_or_panic_payload ... ok
+test context::tests::allocation_outcome_tests::writer_tests::ambiguous_partial_writes_preserve_payload_neighbors_and_unknown_ownership ... ok
+test context::tests::allocation_outcome_tests::writer_tests::disabled_journal_preserves_write_ids_and_legacy_panic_behavior ... ok
+test context::tests::allocation_outcome_tests::writer_tests::disabled_journal_with_inconsistent_allocation_reference_seals_before_backend_write ... ok
+test context::tests::allocation_outcome_tests::writer_tests::empty_unknown_writer_prevents_false_complete_cleanup_or_backend_return ... ok
+test context::tests::allocation_outcome_tests::writer_tests::invalid_write_range_foreign_id_and_exhausted_id_reject_before_writer_or_backend ... ok
+test context::tests::allocation_outcome_tests::writer_tests::pending_host_write_blocks_its_disposal_but_cleanup_continues_unrelated_allocations ... ok
+test context::tests::allocation_outcome_tests::writer_tests::synchronous_writes_burn_genuine_ids_and_epochs_but_rejections_preserve_lineage ... ok
+test context::tests::allocation_outcome_tests::writer_tests::terminal_or_panicking_unknown_disposal_retains_custody_and_blocks_retries ... ok
+test context::tests::allocation_outcome_tests::writer_tests::unknown_disposal_retries_retain_exact_handles_and_credits_until_success ... ok
+test context::tests::allocation_outcome_tests::writer_tests::unknown_writer_capacity_returns_only_after_confirmed_disposal ... ok
+test context::tests::allocation_outcome_tests::writer_tests::unsupported_unknown_rosters_keep_all_members_while_cleanup_releases_unrelated_ids ... ok
+test kfd_backend::native_budget::host_backing_tests::composed_policy_without_binding_rejects_legacy_allocation_and_startup ... ok
+test kfd_backend::native_budget::host_backing_tests::multi_device_composition_cannot_erase_required_request_policy ... ok
+test kfd_backend::native_budget::host_backing_tests::rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission ... ok
+test context::tests::allocation_outcome_tests::disposal_tests::unknown_roster_disposal_joins_all_orders_outcomes_and_metadata_lifetimes ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 1468 filtered out; finished in 0.14s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-request-witness-target-20260926-eraWmoHU/debug/deps/fe2o3_runtime_model-ecfbec6a415a8132)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1053 filtered out; finished in 0.00s
+

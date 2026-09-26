@@ -114,12 +114,11 @@ fn install_roster(
     // admission. No TestAuthority is used for these native calls.
     backend.generated_shells.insert(
         plan.key,
-        generated_shells::GeneratedShellRecordV1 {
+        generated_shells::GeneratedShellRecordV1::legacy_native_fixture(
             plan,
-            source_identity: Arc::clone(&roster.source_identity),
-            control: Some(packet),
-            native: None,
-        },
+            Arc::clone(&roster.source_identity),
+            packet,
+        ),
     );
     backend.next_handle = plan.key + 1 + plan.count as u64;
     for member in plan.members.iter().flatten() {

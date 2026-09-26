@@ -2,22 +2,94 @@
 //!
 //! The shared account enforces only supplied vectors. This wrapper preserves
 //! Context/device association without duplicating a ledger or exposing tokens as
-//! native authority. Optional shared-root children enforce aggregate request
-//! limits; physical-device binding, native costs and whole-process accounting
-//! remain separate work.
+//! native authority. General accounts retain the optional request profile;
+//! composed accounts preserve a KFD-minted request leaf and its root custody.
+//! Native backing costs are charged by sibling adapters, not by this wrapper.
+//! Neither profile measures whole-process memory.
 
 use crate::RuntimeDeviceIdV1;
-use fe2o3_resource_accounting::ResourceCreditAccountV1;
+use fe2o3_resource_accounting::{
+    ResourceCreditAccountV1, ResourceReservationV1, RetainedResourceCreditsV1,
+};
 
 pub use fe2o3_resource_accounting::{
     MAX_RESOURCE_CREDIT_RECORDS_V1 as MAX_RUNTIME_RESOURCE_CREDIT_RECORDS_V1,
     ResourceCreditErrorV1 as RuntimeResourceCreditErrorV1, ResourceKindV1 as RuntimeResourceKindV1,
     ResourceVectorV1 as RuntimeResourceVectorV1,
 };
-pub(crate) use fe2o3_resource_accounting::{
-    ResourceReservationV1 as RuntimeResourceReservationV1,
-    RetainedResourceCreditsV1 as RuntimeRetainedResourceCreditsV1,
-};
+pub(crate) enum RuntimeResourceReservationV1 {
+    General(ResourceReservationV1),
+    Composed(fe2o3_kfd::Gfx942RequestReservationV1),
+}
+
+impl RuntimeResourceReservationV1 {
+    pub(crate) fn retain(self) -> RuntimeRetainedResourceCreditsV1 {
+        match self {
+            Self::General(credit) => RuntimeRetainedResourceCreditsV1::General(credit.retain()),
+            Self::Composed(credit) => RuntimeRetainedResourceCreditsV1::Composed(credit.retain()),
+        }
+    }
+}
+
+pub(crate) enum RuntimeRetainedResourceCreditsV1 {
+    General(RetainedResourceCreditsV1),
+    Composed(fe2o3_kfd::Gfx942RetainedRequestV1),
+}
+
+impl RuntimeRetainedResourceCreditsV1 {
+    pub(crate) fn release_after_rejection(self) -> Result<(), RuntimeResourceCreditErrorV1> {
+        match self {
+            Self::General(credit) => credit.release_after_rejection(),
+            Self::Composed(credit) => credit.release_after_rejection(),
+        }
+    }
+
+    pub(crate) fn release_after_disposal(self) -> Result<(), RuntimeResourceCreditErrorV1> {
+        match self {
+            Self::General(credit) => credit.release_after_disposal(),
+            Self::Composed(credit) => credit.release_after_disposal(),
+        }
+    }
+
+    pub(crate) fn quarantine(self) {
+        match self {
+            Self::General(credit) => credit.quarantine(),
+            Self::Composed(credit) => credit.quarantine(),
+        }
+    }
+}
+
+pub(crate) enum RuntimeResourceReservationsV1 {
+    General(std::vec::IntoIter<ResourceReservationV1>),
+    Composed(fe2o3_kfd::Gfx942RequestReservationsV1),
+}
+
+impl Iterator for RuntimeResourceReservationsV1 {
+    type Item = RuntimeResourceReservationV1;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::General(credits) => credits.next().map(RuntimeResourceReservationV1::General),
+            Self::Composed(credits) => credits.next().map(RuntimeResourceReservationV1::Composed),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::General(credits) => credits.size_hint(),
+            Self::Composed(credits) => credits.size_hint(),
+        }
+    }
+}
+
+impl ExactSizeIterator for RuntimeResourceReservationsV1 {}
+impl std::iter::FusedIterator for RuntimeResourceReservationsV1 {}
+
+pub(crate) fn request_charge(bytes: u64) -> RuntimeResourceVectorV1 {
+    RuntimeResourceVectorV1::ZERO
+        .with(RuntimeResourceKindV1::RequestedAllocationBytes, bytes)
+        .with(RuntimeResourceKindV1::AllocationRecords, 1)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeResourceCreditUsageV1 {
@@ -34,17 +106,57 @@ pub struct RuntimeResourceCreditUsageV1 {
 #[derive(Clone)]
 pub(crate) struct RuntimeResourceCreditAccountV1 {
     device: RuntimeDeviceIdV1,
-    inner: ResourceCreditAccountV1,
+    inner: RuntimeResourceCreditAccountInnerV1,
+}
+
+#[derive(Clone)]
+enum RuntimeResourceCreditAccountInnerV1 {
+    General(ResourceCreditAccountV1),
+    Composed(Box<crate::RuntimeAllocationDeviceAdmissionV1>),
 }
 
 impl RuntimeResourceCreditAccountV1 {
+    pub(crate) fn composed(
+        device: RuntimeDeviceIdV1,
+        admission: crate::RuntimeAllocationDeviceAdmissionV1,
+    ) -> Self {
+        Self {
+            device,
+            inner: RuntimeResourceCreditAccountInnerV1::Composed(Box::new(admission)),
+        }
+    }
+
+    pub(crate) fn composed_admission(&self) -> Option<&crate::RuntimeAllocationDeviceAdmissionV1> {
+        match &self.inner {
+            RuntimeResourceCreditAccountInnerV1::Composed(admission) => Some(admission),
+            RuntimeResourceCreditAccountInnerV1::General(_) => None,
+        }
+    }
+
     pub(crate) fn matches_retained_charge_v1(
         &self,
         device: RuntimeDeviceIdV1,
         credits: &RuntimeRetainedResourceCreditsV1,
         expected: RuntimeResourceVectorV1,
     ) -> bool {
-        self.device == device && self.inner.matches_retained_charge_v1(credits, expected)
+        self.device == device
+            && match (&self.inner, credits) {
+                (
+                    RuntimeResourceCreditAccountInnerV1::General(account),
+                    RuntimeRetainedResourceCreditsV1::General(credits),
+                ) => account.matches_retained_charge_v1(credits, expected),
+                (
+                    RuntimeResourceCreditAccountInnerV1::Composed(admission),
+                    RuntimeRetainedResourceCreditsV1::Composed(credits),
+                ) => {
+                    let bytes = expected.get(RuntimeResourceKindV1::RequestedAllocationBytes);
+                    expected == request_charge(bytes)
+                        && admission
+                            .account()
+                            .matches_retained_charge_v1(credits, bytes)
+                }
+                _ => false,
+            }
     }
 
     pub(crate) fn in_domain(
@@ -55,12 +167,17 @@ impl RuntimeResourceCreditAccountV1 {
     ) -> Result<Self, RuntimeResourceCreditErrorV1> {
         Ok(Self {
             device,
-            inner: parent.new_child(capacity, max_reservations)?,
+            inner: RuntimeResourceCreditAccountInnerV1::General(
+                parent.new_child(capacity, max_reservations)?,
+            ),
         })
     }
 
     pub(crate) fn is_domain(&self) -> bool {
-        self.inner.root_usage().is_some()
+        match &self.inner {
+            RuntimeResourceCreditAccountInnerV1::General(account) => account.root_usage().is_some(),
+            RuntimeResourceCreditAccountInnerV1::Composed(_) => true,
+        }
     }
 
     pub(crate) fn new(
@@ -70,12 +187,20 @@ impl RuntimeResourceCreditAccountV1 {
     ) -> Result<Self, RuntimeResourceCreditErrorV1> {
         Ok(Self {
             device,
-            inner: ResourceCreditAccountV1::new(capacity, max_reservations)?,
+            inner: RuntimeResourceCreditAccountInnerV1::General(ResourceCreditAccountV1::new(
+                capacity,
+                max_reservations,
+            )?),
         })
     }
 
     pub(crate) fn usage(&self) -> RuntimeResourceCreditUsageV1 {
-        let usage = self.inner.usage();
+        let usage = match &self.inner {
+            RuntimeResourceCreditAccountInnerV1::General(account) => account.usage(),
+            RuntimeResourceCreditAccountInnerV1::Composed(admission) => {
+                admission.account().usage_v1()
+            }
+        };
         RuntimeResourceCreditUsageV1 {
             device: self.device,
             capacity: usage.capacity,
@@ -92,14 +217,48 @@ impl RuntimeResourceCreditAccountV1 {
         &self,
         charge: RuntimeResourceVectorV1,
     ) -> Result<RuntimeResourceReservationV1, RuntimeResourceCreditErrorV1> {
-        self.inner.reserve(charge)
+        match &self.inner {
+            RuntimeResourceCreditAccountInnerV1::General(account) => account
+                .reserve(charge)
+                .map(RuntimeResourceReservationV1::General),
+            RuntimeResourceCreditAccountInnerV1::Composed(admission) => {
+                let bytes = charge.get(RuntimeResourceKindV1::RequestedAllocationBytes);
+                if charge != request_charge(bytes) || !admission.is_live() {
+                    return Err(RuntimeResourceCreditErrorV1::Invariant);
+                }
+                admission
+                    .account()
+                    .reserve_v1(bytes)
+                    .map(RuntimeResourceReservationV1::Composed)
+            }
+        }
     }
 
-    pub(crate) fn reserve_batch(
+    pub(crate) fn reserve_requests(
         &self,
-        charges: &[RuntimeResourceVectorV1],
-    ) -> Result<Box<[RuntimeResourceReservationV1]>, RuntimeResourceCreditErrorV1> {
-        self.inner.reserve_batch(charges)
+        bytes: &[u64],
+    ) -> Result<RuntimeResourceReservationsV1, RuntimeResourceCreditErrorV1> {
+        match &self.inner {
+            RuntimeResourceCreditAccountInnerV1::General(account) => {
+                let mut charges = Vec::new();
+                charges
+                    .try_reserve_exact(bytes.len())
+                    .map_err(|_| RuntimeResourceCreditErrorV1::AllocationFailed)?;
+                charges.extend(bytes.iter().copied().map(request_charge));
+                account.reserve_batch(&charges).map(|credits| {
+                    RuntimeResourceReservationsV1::General(credits.into_vec().into_iter())
+                })
+            }
+            RuntimeResourceCreditAccountInnerV1::Composed(admission) => {
+                if !admission.is_live() {
+                    return Err(RuntimeResourceCreditErrorV1::Invariant);
+                }
+                admission
+                    .account()
+                    .reserve_batch_v1(bytes)
+                    .map(RuntimeResourceReservationsV1::Composed)
+            }
+        }
     }
 }
 
@@ -107,6 +266,15 @@ impl RuntimeResourceCreditAccountV1 {
 mod tests {
     use super::*;
     use RuntimeResourceKindV1 as K;
+
+    #[test]
+    fn request_account_variants_keep_legacy_metadata_compact() {
+        assert!(
+            core::mem::size_of::<RuntimeResourceCreditAccountInnerV1>()
+                <= core::mem::size_of::<ResourceCreditAccountV1>()
+                    + core::mem::align_of::<ResourceCreditAccountV1>()
+        );
+    }
 
     fn charge(bytes: u64) -> RuntimeResourceVectorV1 {
         RuntimeResourceVectorV1::ZERO

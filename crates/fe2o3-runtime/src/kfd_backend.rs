@@ -84,6 +84,7 @@ use crate::{
     RuntimeProducerAwareLaunchBackendV1,
 };
 
+mod allocation_request;
 mod allocation_table;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
@@ -1278,6 +1279,7 @@ pub struct KfdRuntimeBackendV1 {
     device_backing_budget: Option<Gfx942DeviceBackingBudgetV1>,
     host_visible_backing_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
     rooted_backing: Option<native_budget::RootedBackingV1>,
+    composed_request_binding: Option<crate::RuntimeAllocationDeviceAdmissionV1>,
     host_pool_limits: Option<fe2o3_kfd::Gfx942HostPoolLimitsV1>,
     device_pool_limits: Option<Gfx942DevicePoolLimitsV1>,
     staged_context_bytes: u64,
@@ -1727,6 +1729,7 @@ impl KfdRuntimeBackendV1 {
             device_backing_budget: None,
             host_visible_backing_budget: None,
             rooted_backing: None,
+            composed_request_binding: None,
             device_pool_limits: None,
             host_pool_limits: None,
             staged_context_bytes: 0,
@@ -3205,6 +3208,12 @@ impl KfdRuntimeBackendV1 {
                     ),
                 Some(native_budget::BackingAdmissionV1::Native(admission)) => device
                     .create_compute_aql_queue_with_rooted_native_backing_v1(
+                        KFD_RUNTIME_RING_BYTES_V1,
+                        admission,
+                        self.dispatch_capacity.native().clone(),
+                    ),
+                Some(native_budget::BackingAdmissionV1::Composed(admission)) => device
+                    .create_compute_aql_queue_with_composed_backing_v1(
                         KFD_RUNTIME_RING_BYTES_V1,
                         admission,
                         self.dispatch_capacity.native().clone(),
@@ -6098,6 +6107,38 @@ impl KfdRuntimeBackendV1 {
 impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
     type Error = KfdRuntimeBackendErrorV1;
 
+    fn allocation_admission_profile_v1(
+        &self,
+    ) -> Result<crate::RuntimeAllocationAdmissionProfileV1, RuntimeBackendFailureV1<Self::Error>>
+    {
+        self.require_live()?;
+        match &self.composed_request_binding {
+            None if self.requires_request_witness_v1() => Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "missing mandatory request binding",
+            )),
+            None => Ok(crate::RuntimeAllocationAdmissionProfileV1::Legacy),
+            Some(binding) => {
+                if binding.backend_device_v1() != self.description.backend_device
+                    || !binding.is_live()
+                {
+                    return Err(Self::rejected(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        "invalid composed request binding",
+                    ));
+                }
+                let mut entries = Vec::new();
+                entries
+                    .try_reserve_exact(1)
+                    .map_err(|_| Self::capacity("request admission roster"))?;
+                entries.push(binding.clone());
+                Ok(crate::RuntimeAllocationAdmissionProfileV1::Required(
+                    entries,
+                ))
+            }
+        }
+    }
+
     fn capture_coherent_host_range_v1(
         &mut self,
         request: crate::BackendHostCaptureV1<'_>,
@@ -6225,142 +6266,37 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         alignment: u64,
     ) -> Result<RuntimeBackendAllocationOutcomeV1<Self::Error>, RuntimeBackendFailureV1<Self::Error>>
     {
-        self.require_live()?;
-        self.require_device(device)?;
-        if kind == RuntimeMemoryKindV1::DeviceLocal {
-            self.require_default_dispatch_capacity_v1()?;
-        }
-        if byte_len == 0 || alignment == 0 || !alignment.is_power_of_two() {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                "allocation length and power-of-two alignment must be nonzero",
-            ));
-        }
-        if kind == RuntimeMemoryKindV1::DeviceLocal && alignment > HOST_VISIBLE_MEMORY_PAGE_BYTES_V1
-        {
+        if self.requires_request_witness_v1() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
-                "device-local KFD allocation alignment exceeds 4096 bytes",
+                "composed allocation requires a Context request witness",
             ));
         }
-        if kind == RuntimeMemoryKindV1::HostVisible && alignment > HOST_VISIBLE_MEMORY_PAGE_BYTES_V1
-        {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::Unsupported,
-                "host-visible KFD allocation alignment exceeds the admitted page alignment",
-            ));
-        }
-        if byte_len > self.staging_budgets.max_allocation_bytes {
-            return Err(Self::capacity(
-                "allocation exceeds the direct-KFD per-allocation staging budget",
-            ));
-        }
-        let next_staged_context_bytes = self
-            .staged_context_bytes
-            .checked_add(byte_len)
-            .filter(|total| *total <= self.staging_budgets.max_context_bytes)
-            .ok_or_else(|| {
-                Self::capacity("allocation exceeds the direct-KFD context staging budget")
-            })?;
-        let len = usize::try_from(byte_len)
-            .map_err(|_| Self::capacity("allocation does not fit host staging address space"))?;
-        self.allocations
-            .try_reserve(1)
-            .map_err(|_| Self::capacity("KFD allocation-table growth failed"))?;
-        let bytes = try_zeroed_staging_v1(len)?;
-        let id = self.next_id()?;
-        let sdma_storage = if self.native_available {
-            let ready_before = self.sdma_allocation_ready_v1();
-            self.ensure_sdma_queue_v1()?;
-            let buffer = match self.allocate_sdma_owner_v1(
-                kind,
-                len,
-                alignment,
-                ready_before,
-                "KFD persistent SDMA allocation",
-            ) {
-                Ok(buffer) => buffer,
-                // This helper reports cold Quiescent only after the lower typed
-                // RetryableCapacity disposition established settled empty custody.
-                // Queue creation and later initialization failures cannot mint it.
-                Err(RuntimeBackendFailureV1::Quiescent(error)) if !ready_before => {
-                    return Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error));
-                }
-                Err(failure) => return Err(failure),
-            };
-            match kind {
-                RuntimeMemoryKindV1::HostVisible => {
-                    let buffer = self.initialize_sdma_host_v1(
-                        buffer,
-                        &bytes,
-                        "KFD persistent host allocation initialization",
-                    )?;
-                    KfdRuntimeSdmaStorageV1::Host(buffer)
-                }
-                RuntimeMemoryKindV1::DeviceLocal => KfdRuntimeSdmaStorageV1::Device(Box::new(
-                    self.promote_sdma_buffer_v1(buffer)
-                        .map_err(Self::after_possible_host_mutation)?,
-                )),
-            }
+        self.allocate_request_backing_v1(device, kind, byte_len, alignment)
+    }
+
+    fn allocate_with_request_v1(
+        &mut self,
+        device: u64,
+        kind: RuntimeMemoryKindV1,
+        byte_len: u64,
+        alignment: u64,
+        witness: crate::RuntimeAllocationRequestWitnessV1<'_>,
+    ) -> crate::RuntimeRequestAllocationResultV1<Self::Error> {
+        let valid = self
+            .composed_request_binding
+            .as_ref()
+            .is_some_and(|binding| {
+                binding.backend_device_v1() == device && witness.matches_v1(binding, byte_len)
+            });
+        crate::RuntimeRequestAllocationResultV1::Outcome(if valid {
+            self.allocate_request_backing_v1(device, kind, byte_len, alignment)
         } else {
-            KfdRuntimeSdmaStorageV1::Synthetic
-        };
-        let sdma_initialized = !self.native_available || kind == RuntimeMemoryKindV1::HostVisible;
-        self.allocations.insert(
-            id,
-            AllocationRecordV1 {
-                device,
-                kind,
-                alignment,
-                bytes: bytes.into(),
-                content_sha256: None,
-                last_full_host_write: None,
-                native_dirty: Vec::new(),
-                sdma_storage,
-                sdma_backed: self.native_available,
-                sdma_initialized,
-                sdma_shadow_dirty: false,
-                #[cfg(test)]
-                scripted_three_binding_replay: false,
-            },
-        );
-        self.staged_context_bytes = next_staged_context_bytes;
-        if self.native_available && kind == RuntimeMemoryKindV1::DeviceLocal {
-            if let Err(failure) = self.zero_sdma_range_v1(id, byte_len) {
-                if matches!(failure, RuntimeBackendFailureV1::Terminal(_)) {
-                    return Err(failure);
-                }
-                if let Err(cleanup) = self.discard_hidden_sdma_allocation_v1(id) {
-                    return match cleanup {
-                        failure @ RuntimeBackendFailureV1::Terminal(_) => Err(failure),
-                        RuntimeBackendFailureV1::Rejected(_)
-                        | RuntimeBackendFailureV1::Quiescent(_) => Err(self.terminal_error(
-                            "hidden KFD allocation cleanup retained unreachable native custody",
-                        )),
-                    };
-                }
-                return Err(Self::after_possible_host_mutation(failure));
-            }
-            self.allocations
-                .get_mut(&id)
-                .expect("initialized device allocation remains indexed")
-                .sdma_initialized = true;
-        }
-        let allocation = self.profile_resource_v1(KfdProfileResourceKindV1::Allocation, id);
-        self.observe_profile_v1(allocation.map(|allocation| {
-            KfdRuntimeProfileEventKindV1::AllocationCreated {
-                allocation,
-                memory_kind: match kind {
-                    RuntimeMemoryKindV1::HostVisible => KfdProfileMemoryKindV1::HostVisible,
-                    RuntimeMemoryKindV1::DeviceLocal => {
-                        KfdProfileMemoryKindV1::DeviceLocalHostStaged
-                    }
-                },
-                byte_len,
-                alignment,
-            }
-        }));
-        Ok(RuntimeBackendAllocationOutcomeV1::Allocated(id))
+            Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "missing or mismatched composed request witness",
+            ))
+        })
     }
 
     fn release_allocation_v1(
@@ -8178,6 +8114,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             )
         })?;
         for (index, child) in children.iter().enumerate() {
+            if child.requires_request_witness_v1() {
+                return Err(KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "multi-device composed request forwarding is not implemented",
+                ));
+            }
             if device_children
                 .insert(child.description.backend_device, index)
                 .is_some()

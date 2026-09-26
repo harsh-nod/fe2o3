@@ -1,0 +1,14 @@
+--- a/crates/fe2o3-runtime/src/context/allocation_admission.rs
++++ b/crates/fe2o3-runtime/src/context/allocation_admission.rs
+@@ -37,11 +37,6 @@
+                 .find(|device| device.backend_device == entry.backend_device_v1())
+                 .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
+             if admission.accounts.contains_key(&device.id)
+-                || admission.accounts.values().any(|account| {
+-                    account.composed_admission().is_some_and(|installed| {
+-                        installed.account().shares_account_with_v1(entry.account())
+-                    })
+-                })
+                 || !entry.is_live()
+             {
+                 return Err(RuntimeValidationErrorV1::InvalidBackendDescription);

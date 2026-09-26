@@ -20,6 +20,8 @@ include!("context/completion_settlement_body.rs");
 mod graph;
 pub(crate) use graph::*;
 mod allocation_admission;
+mod allocation_witness;
+pub use allocation_witness::*;
 mod drain;
 mod drain_capture;
 mod generated_issue;
@@ -527,6 +529,15 @@ pub trait RuntimeBackendV1 {
         &mut self,
     ) -> Result<Vec<BackendDeviceDescriptionV1>, RuntimeBackendFailureV1<Self::Error>>;
 
+    /// Returns the complete immutable request-account roster for the enumerated
+    /// devices. Required backends retain their policy after native startup and
+    /// reject witness-free logical allocation, including after Context shutdown.
+    fn allocation_admission_profile_v1(
+        &self,
+    ) -> Result<RuntimeAllocationAdmissionProfileV1, RuntimeBackendFailureV1<Self::Error>> {
+        Ok(RuntimeAllocationAdmissionProfileV1::Legacy)
+    }
+
     fn create_stream_v1(
         &mut self,
         device: u64,
@@ -565,6 +576,19 @@ pub trait RuntimeBackendV1 {
     {
         self.allocate_v1(device, kind, byte_len, alignment)
             .map(RuntimeBackendAllocationOutcomeV1::Allocated)
+    }
+
+    /// Authenticates the exact retained request before any allocation effects.
+    /// The default fails closed without invoking either legacy allocation entry.
+    fn allocate_with_request_v1(
+        &mut self,
+        _device: u64,
+        _kind: RuntimeMemoryKindV1,
+        _byte_len: u64,
+        _alignment: u64,
+        _witness: RuntimeAllocationRequestWitnessV1<'_>,
+    ) -> RuntimeRequestAllocationResultV1<Self::Error> {
+        RuntimeRequestAllocationResultV1::Unsupported
     }
 
     fn release_allocation_v1(
@@ -1255,7 +1279,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     generation.checked_add(1)
                 })
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
-            let devices = descriptions
+            let devices: Vec<_> = descriptions
                 .into_iter()
                 .enumerate()
                 .map(|(index, device)| RuntimeDeviceV1 {
@@ -1267,15 +1291,21 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     capabilities: device.capabilities,
                 })
                 .collect();
+            let allocation_admission = ContextAllocationAdmissionV1::from_profile(
+                &devices,
+                backend
+                    .allocation_admission_profile_v1()
+                    .map_err(map_backend_error)?,
+            )?;
             let versions = journal
                 .map(|(allocations, writers)| {
                     ContextVersionsV1::new(context_generation, allocations, writers)
                         .map_err(|_| RuntimeValidationErrorV1::Capacity)
                 })
                 .transpose()?;
-            Ok((context_generation, devices, versions))
+            Ok((context_generation, devices, versions, allocation_admission))
         })();
-        let (context_generation, devices, versions) = match initialization {
+        let (context_generation, devices, versions, allocation_admission) = match initialization {
             Ok(initialized) => initialized,
             Err(error) => return Err(RuntimeContextOpenFailureV1 { backend, error }),
         };
@@ -1287,7 +1317,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             backend_streams: HashSet::new(),
             allocations: HashMap::new(),
             backend_allocations: HashSet::new(),
-            allocation_admission: ContextAllocationAdmissionV1::default(),
+            allocation_admission,
             versions,
             modules: HashMap::new(),
             backend_modules: HashSet::new(),
@@ -2036,14 +2066,29 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 self.dispose_journal_provisional_v1(enrollment);
                 if error == crate::RuntimeResourceCreditErrorV1::Invariant {
                     self.quarantine_submission_writers_v1();
+                    return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
                 }
                 return Err(RuntimeValidationErrorV1::Capacity.into());
             }
         };
+        let allocate = |backend: &mut B, admission: &ContextAllocationAdmissionV1| {
+            let witness = admission.witness(device, credits.as_ref(), byte_len)?;
+            Ok::<_, RuntimeValidationErrorV1>(match witness {
+                Some(witness) => backend.allocate_with_request_v1(
+                    backend_device,
+                    kind,
+                    byte_len,
+                    alignment,
+                    witness,
+                ),
+                None => RuntimeRequestAllocationResultV1::Outcome(
+                    backend.allocate_with_outcome_v1(backend_device, kind, byte_len, alignment),
+                ),
+            })
+        };
         let result = if credits.is_some() || self.versions.is_some() {
             match catch_unwind(AssertUnwindSafe(|| {
-                self.backend
-                    .allocate_with_outcome_v1(backend_device, kind, byte_len, alignment)
+                allocate(&mut self.backend, &self.allocation_admission)
             })) {
                 Ok(result) => result,
                 Err(payload) => {
@@ -2053,8 +2098,25 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 }
             }
         } else {
-            self.backend
-                .allocate_with_outcome_v1(backend_device, kind, byte_len, alignment)
+            allocate(&mut self.backend, &self.allocation_admission)
+        };
+        let result = match result {
+            Err(error) => {
+                self.quarantine_submission_writers_v1();
+                drop(credits);
+                return Err(error.into());
+            }
+            Ok(RuntimeRequestAllocationResultV1::Unsupported) => {
+                if let Some(credits) = credits
+                    && let Err(error) = credits.release_after_rejection()
+                {
+                    self.quarantine_submission_writers_v1();
+                    panic!("allocation credit invariant after unsupported witness: {error:?}");
+                }
+                self.dispose_journal_provisional_v1(enrollment);
+                return Err(RuntimeValidationErrorV1::Unsupported.into());
+            }
+            Ok(RuntimeRequestAllocationResultV1::Outcome(result)) => result,
         };
         let backend_allocation = match result {
             Ok(RuntimeBackendAllocationOutcomeV1::Allocated(handle)) => handle,

@@ -99,9 +99,11 @@ same-GPU multi-Context concurrency.
 
 Compound account creation does not reserve the complete VM/queue/bootstrap
 allocation roster before effects. It is not an R70 cross-class native creation
-transaction. Logical Context request accounts, executable/kernarg/AQL/userptr
-profiles, image and scaled-table accounts, complete bootstrap/terminal headroom,
-batch output and other metadata still require integration. Independent roots
+transaction. Logical Context request accounts are separate from the native-only
+profile; the composed single-device integration is described below.
+Executable/kernarg/AQL/userptr profiles, image and scaled-table accounts, complete
+bootstrap/terminal headroom, batch output and other metadata still require
+integration. Independent roots
 and legacy constructors remain available, so this is not a process-global cap.
 
 R67/R70 reuse does not prove exact ancestor traversal, canonical registration,
@@ -139,9 +141,10 @@ uses FakeBackend and queue-foundation/pool fixtures plus constructor source
 checks. It does not qualify Linux intake, actual shutdown, hardware behavior or
 formal adapter composition. These constructors charge native backing without
 inventing logical requests; they do not enforce a per-allocation witness.
-Context must adopt the existing typed request account, since another child
-would exceed the four-level hierarchy. Runtime constructors, mandatory
-Context/backend witness transport and ordered composed XGMI intake remain open.
+Context now adopts the existing typed request account, since another child
+would exceed the four-level hierarchy. The single-device Runtime constructors
+and mandatory Context/backend witness transport are implemented as described
+below. Ordered composed XGMI intake remains open.
 
 New composed device/session budgets must directly describe requested, host and
 device byte ceilings plus an explicit combined-record ceiling. Do not reinterpret
@@ -164,11 +167,14 @@ request charges. Capacity failures before effects remain distinct from binding,
 generation or accounting-invariant failures; ambiguity must not refund custody.
 Generic ledger quarantine retains ancestor pressure without globally poisoning
 spare-capacity siblings; native session sealing must be enforced by its consumer.
-The mandatory witness interfaces and native qualification remain unimplemented.
+The mandatory single-device witness interfaces are implemented. Native and
+formal composition qualification remain open.
 
-### Next Runtime Integration Gates
+### Single-Device Runtime Integration
 
-These are outstanding implementation requirements, not enabled capabilities:
+The [Runtime witness packet](evidence/dev-runtime-request-witness-2026-09-26/README.md)
+qualifies CPU accounting/Context behavior and distinguishes isolated fixtures
+from shipped native authority. The following interfaces are implemented:
 
 - `resource_credits.rs`: preserve typed KFD request accounts, reservations and
   retained credits in private variants, including an owning batch iterator.
@@ -191,12 +197,40 @@ These are outstanding implementation requirements, not enabled capabilities:
   backend returned by shutdown. Worker protocols without witness transport
   cannot advertise the profile.
 - Generated shells are logical requests. Finish structural preflight, atomically
-  retain their whole request roster and authenticate exact order/cardinality,
+  reserve their whole request roster, then retain and authenticate exact order/cardinality,
   device/account/extent before committing identities, journal or backend tables.
   A private witness-bound plan must reject unbound materialization. Later DATA
   adoption charges N1/N2, not a second request. Shell-only and adopted retirement
   must each release the original request exactly once after disposal.
+The complete roster also rejects two backend keys sharing the exact request
+leaf. Witness creation checks the private Context-device brand; backend matching
+checks the independently retained exact leaf, full model admission and extent.
+The backend keeps its mandatory policy after consuming native admission and
+after Context shutdown. Missing or inconsistent native/request policy seals
+startup rather than falling back to local accounting.
+
+Generated registration retains the whole request roster before commit. Clean
+pre-commit binder/journal rejection refunds it. A panic quarantines retained
+custody; this is not atomic rollback under corrupt accounting. A move-only
+authenticated plan gates metadata commit. Its stored marker is registration
+evidence, not ongoing native-layer authentication of individual Context tokens.
+The Context rechecks exact credits before generated adoption/issue/retirement.
+Later native DATA backing reuses those logical requests without charging them
+again. Session-health checks are snapshots, not concurrent quarantine exclusion.
+
+### Remaining Integration Gates
+
 - Ordered XGMI and multi-device forwarding need complete account rosters and
   per-selected-endpoint witness checks before outer IDs or native effects.
   Both XGMI admissions precede either VM. Swapped endpoints, wrong routes and
   supplied witnesses for a legacy endpoint must reject, not silently fall back.
+- Multi-device construction currently rejects required-profile children. Native
+  XGMI remains native-only/legacy. Neither is a composed request-profile path.
+- Worker proxies do not transport borrowed request witnesses. Wrapping a
+  composed backend fails closed at witness-free server allocation; this is an
+  unsupported composition, not transparent profile transport.
+- Real checked-device constructor replay, all three native startup orders,
+  generated DATA adoption/disposal, pool reuse, failure injection and shutdown
+  still require native qualification. CPU fixtures cannot establish these.
+- Production Context/backend/ledger composition refinement, concurrent sealing,
+  complete memory closure and matched HIP/HSA performance remain unproved.

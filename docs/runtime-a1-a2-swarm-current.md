@@ -24,7 +24,23 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest composed native-intake development (2026-09-26): lower KFD memory and
+Latest Runtime request-witness development (2026-09-26): the single-device KFD
+composed profile now installs its complete typed request roster into Context.
+Ordinary allocations require a private borrowed witness; generated shell commit
+requires a move-only authenticated plan. Legacy direct allocation cannot bypass
+the policy, including after Context shutdown. Context checks exact request
+custody again at the generated pre-adoption/retirement boundary. See the
+[development packet](evidence/dev-runtime-request-witness-2026-09-26/README.md)
+for CPU gates, isolated accounting fixtures, mutation checks and limitations.
+It records 14 composed fixture groups, 65 production focused passes, 69 selected
+construction passes, 108 doctests and passing static checks. Broad libraries
+report 3,938 passes with the same four socket-related failures; coverage overlaps
+and this is not full CPU qualification.
+Multi-device/XGMI and Worker witness forwarding, formal composition, native
+startup/adoption/shutdown replay and matched HIP/HSA performance remain open.
+No accepted milestone or full-parity claim changes.
+
+Earlier composed native-intake development (2026-09-26): lower KFD memory and
 compute-queue constructors now consume the entire request/N1/N2 admission,
 install all accounts together, retain typed custody and observe selected-session
 quarantine. Healthy retained/reserved requests remain admissible. The

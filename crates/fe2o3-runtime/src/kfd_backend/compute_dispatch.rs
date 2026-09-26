@@ -3020,6 +3020,9 @@ impl KfdRuntimeBackendV1 {
                         ),
                     Some(native_budget::BackingAdmissionV1::Native(admission)) => device
                         .acquire_shared_gtt_memory_session_with_rooted_native_backing_v1(admission),
+                    Some(native_budget::BackingAdmissionV1::Composed(admission)) => {
+                        device.acquire_shared_gtt_memory_session_with_composed_backing_v1(admission)
+                    }
                     None => device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
                         self.device_backing_budget,
                         self.host_visible_backing_budget,

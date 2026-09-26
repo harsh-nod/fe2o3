@@ -57,6 +57,20 @@ fn admission(root: &Gfx942ComposedBackingRootV1) -> Gfx942ComposedBackingAdmissi
         .unwrap()
 }
 
+#[test]
+fn composed_request_account_identity_distinguishes_siblings_and_roots() {
+    let root = root();
+    let first = admission(&root);
+    let sibling = admission(&root);
+    let other_root = Gfx942ComposedBackingRootV1::new(root_capacity(65536, 32), 2, 24, 40).unwrap();
+    let foreign = admission(&other_root);
+    let account = first.request_account_v1();
+    assert!(account.shares_account_with_v1(&account.clone()));
+    assert!(!account.shares_account_with_v1(sibling.request_account_v1()));
+    assert!(!account.shares_account_with_v1(foreign.request_account_v1()));
+    assert_eq!(account.usage_v1().used, ResourceVectorV1::ZERO);
+}
+
 pub(crate) fn observer(
     root: &Gfx942ComposedBackingRootV1,
 ) -> impl Fn() -> Option<ResourceCreditUsageV1> + use<> {

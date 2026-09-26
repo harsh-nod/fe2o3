@@ -40,10 +40,14 @@ impl Fixture {
 
     fn install(&mut self) -> GeneratedShellPlanV1 {
         let plan = self.prepare().unwrap();
+        let bound = self
+            .backend
+            .bind_generated_shell_requests_v1(plan, core::array::from_fn(|_| None))
+            .unwrap();
         let mut source =
             RuntimeGfx942GeneratedSourceMutV1::new(&mut self.storage, &self.hsaco, &self.authority);
         self.backend
-            .commit_generated_shells_v1(plan, &mut source, &self.roster);
+            .commit_generated_shells_v1(bound, &mut source, &self.roster);
         plan
     }
 

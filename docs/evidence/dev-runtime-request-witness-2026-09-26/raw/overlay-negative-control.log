@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-witness-qualification-20260926-rC5vYIrI/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 2m 07s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 1 test
+test context::allocation_admission::tests::qualification::qualification_complete_roster_rejects_aliases_and_preserves_device_order ... FAILED
+
+failures:
+
+---- context::allocation_admission::tests::qualification::qualification_complete_roster_rejects_aliases_and_preserves_device_order stdout ----
+
+thread 'context::allocation_admission::tests::qualification::qualification_complete_roster_rejects_aliases_and_preserves_device_order' (62) panicked at crates/fe2o3-runtime/src/context/allocation_admission/tests/qualification.rs:21:9:
+assertion failed: matches!(ContextAllocationAdmissionV1::from_profile(&devices,
+    RuntimeAllocationAdmissionProfileV1::Required(roster)),
+    Err(RuntimeValidationErrorV1::InvalidBackendDescription))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context::allocation_admission::tests::qualification::qualification_complete_roster_rejects_aliases_and_preserves_device_order
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1530 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

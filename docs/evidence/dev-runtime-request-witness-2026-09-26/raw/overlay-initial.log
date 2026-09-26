@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-witness-qualification-20260926-rC5vYIrI/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-witness-qualification-20260926-rC5vYIrI/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 1m 07s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 13 tests
+test context::allocation_admission::tests::qualification::qualification_complete_roster_rejects_aliases_and_preserves_device_order ... ok
+test context::allocation_admission::tests::qualification::qualification_kfd_context_retains_refunds_and_preserves_policy_after_shutdown ... ok
+test context::allocation_admission::tests::qualification::qualification_session_quarantine_blocks_profile_and_new_witnesses ... ok
+test context::allocation_admission::tests::qualification::qualification_witness_rejects_wrong_context_brand_leaf_and_extent ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_install_retire_has_exact_request_custody ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_bind_rejection_refunds_before_metadata_or_source_transfer ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_journal_unwind_quarantines_entire_uncommitted_roster ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_journal_rejection_after_bind_refunds_unissued_requests ... ok
+test context::tests::allocation_outcome_tests::qualification::qualification_default_request_hook_never_calls_legacy_allocation ... ok
+test context::tests::qualification::qualification_context_outcomes_preserve_settlement_and_quarantine ... ok
+test context::tests::qualification::qualification_open_returns_original_backend_on_alias_roster ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_native_boundary_rejects_swapped_request_extents ... ok
+test kfd_backend::generated_shells::tests::qualification::qualification_generated_binder_rejects_missing_extent_order_leaf_brand_and_tail ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 1517 filtered out; finished in 0.06s
+

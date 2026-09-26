@@ -18,7 +18,10 @@ pub(super) fn shells() -> (KfdRuntimeBackendV1, GeneratedShellPlanV1) {
     let plan = backend
         .prepare_generated_shells_v1(binding, &roster, &logical)
         .unwrap();
-    backend.commit_generated_shells_v1(plan, &mut source, &roster);
+    let bound = backend
+        .bind_generated_shell_requests_v1(plan, core::array::from_fn(|_| None))
+        .unwrap();
+    backend.commit_generated_shells_v1(bound, &mut source, &roster);
     (backend, plan)
 }
 
