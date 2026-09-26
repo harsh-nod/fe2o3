@@ -1241,12 +1241,16 @@ impl<B: RuntimeBackendV1> RuntimeContextShutdownFailureV1<B> {
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    /// Opens without a version journal. Backend initialization unwind retains
+    /// the backend until process exit and propagates the original panic.
+    /// Ordinary errors retain the legacy behavior of dropping the backend;
+    /// use `open_with_version_journal_v1` to recover it on returned failure.
     pub fn open(backend: B) -> Result<Self, RuntimeErrorV1<B::Error>> {
         Self::open_configured_v1(backend, None).map_err(|failure| failure.error)
     }
 
     fn open_configured_v1(
-        mut backend: B,
+        backend: B,
         journal: Option<(usize, usize)>,
     ) -> Result<Self, RuntimeContextOpenFailureV1<B>> {
         if journal.is_some_and(|(allocations, writers)| {
@@ -1258,6 +1262,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 error: RuntimeValidationErrorV1::Capacity.into(),
             });
         }
+        // A backend hook may panic after acquiring native custody. Do not run
+        // its destructor before the caller's initializer-panic boundary.
+        let mut backend = core::mem::ManuallyDrop::new(backend);
         let initialization = (|| {
             let descriptions = backend.enumerate_devices_v1().map_err(map_backend_error)?;
             if descriptions.len() > MAX_RUNTIME_DEVICES_V1 {
@@ -1309,10 +1316,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         })();
         let (context_generation, devices, versions, allocation_admission) = match initialization {
             Ok(initialized) => initialized,
-            Err(error) => return Err(RuntimeContextOpenFailureV1 { backend, error }),
+            Err(error) => {
+                return Err(RuntimeContextOpenFailureV1 {
+                    error,
+                    backend: core::mem::ManuallyDrop::into_inner(backend),
+                });
+            }
         };
         Ok(Self {
-            backend,
             context_generation,
             devices,
             streams: HashMap::new(),
@@ -1338,6 +1349,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             terminal: false,
             graph_reservation: None,
             graph_issue_closed: false,
+            // Keep extraction last: earlier field initialization must still
+            // retain the backend if it unwinds.
+            backend: core::mem::ManuallyDrop::into_inner(backend),
         })
     }
 
@@ -3817,6 +3831,7 @@ mod tests {
     mod allocation_outcome_tests;
     mod async_journal_tests;
     mod completion_settlement_tests;
+    mod construction_custody_tests;
     mod copy_source_lease_tests;
     mod kernel_read_lease_tests;
     mod peer_batch_tests;

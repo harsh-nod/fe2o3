@@ -34,8 +34,9 @@ impl<B: RuntimeBackendV1> RuntimeWorkerRequestOwnerV1<B> {
     /// Admits the complete backend roster, returning the original backend on
     /// failure. Legacy or empty profiles are unsupported. Existing allocations
     /// are not adopted; construct this owner before accepting worker requests.
-    /// Constructor panic has Context's existing unwind/Drop behavior, not the
-    /// retained-owner recovery guarantee of a serving call.
+    /// Context initialization unwind retains the backend until process exit
+    /// and propagates the original panic. No recoverable owner is returned.
+    /// The caller remains responsible for custody of returned failures.
     pub fn open(backend: B) -> Result<Self, RuntimeContextOpenFailureV1<B>> {
         let context = RuntimeContextV1::open_configured_v1(backend, None)?;
         if !context.allocation_admission.is_required() {

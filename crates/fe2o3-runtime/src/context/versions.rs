@@ -38,6 +38,9 @@ pub struct RuntimeContextJournalUsageV1 {
 
 /// Failed construction returns the still-owning backend without cleanup.
 /// Enumeration may already have run; this is not a pristine-state guarantee.
+/// Dropping this failure drops its backend; use `into_parts` to keep custody.
+/// Initialization unwind instead retains the backend until process exit and
+/// propagates the original panic; it does not return this value.
 #[must_use = "construction failure retains the original backend"]
 pub struct RuntimeContextOpenFailureV1<B: RuntimeBackendV1> {
     pub(super) backend: B,
@@ -297,6 +300,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// The default `open` path has no journal exclusion. Launch preparation still
     /// retains original Read allocation identities for revalidation at issue;
     /// its bounded metadata allocation can return Capacity before submission.
+    ///
+    /// Returned errors preserve the original backend without cleanup. A panic
+    /// during initialization retains it until process exit and propagates the
+    /// original payload; no recovery or native quiescence is established.
     pub fn open_with_version_journal_v1(
         backend: B,
         allocation_capacity: usize,

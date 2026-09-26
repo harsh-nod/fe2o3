@@ -141,8 +141,10 @@ pub struct RuntimeAsyncCurrentThreadOwnedEngineV1<
 impl<B: RuntimeBackendV1 + RuntimeFlushBackendV1 + RuntimeOwnedShutdownBackendV1 + 'static>
     RuntimeAsyncCurrentThreadOwnedEngineV1<B>
 {
-    /// The factory may borrow local, non-Send values. It retains responsibility
-    /// for partial construction and panic custody until returning a full Context.
+    /// The factory may borrow local, non-Send values. Context constructors retain
+    /// their accepted backend on initialization unwind. The factory remains
+    /// responsible for resources outside that boundary, returned errors, and a
+    /// complete Context until it returns it to this owner.
     pub fn new_with_progress<F, E>(
         factory: F,
         config: RuntimeAsyncEngineConfigV1,

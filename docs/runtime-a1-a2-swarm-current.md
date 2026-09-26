@@ -24,7 +24,19 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest Worker V3 application development (2026-09-26): a one-shot current-thread
+Latest Context construction-custody development (2026-09-26): Context now retains
+its accepted backend until process exit if initialization unwinds, preserving the
+original panic instead of first running a potentially destructive native Drop.
+Ordinary retaining-API errors return the backend, successful construction moves
+it once, and legacy `open` still drops it on ordinary error. Six focused CPU
+groups cover exact payload/owner/token retention, returned failures, successful
+transfer, non-Send async factories and an abort-on-Drop subprocess. The
+[development packet](evidence/dev-context-construction-custody-2026-09-26/README.md)
+records the failing baseline, scope and qualification. This is not native
+cleanup, factory-wide unwind protection, formal correspondence or measured
+performance. Accepted milestones, A1/A2 and parity remain unchanged.
+
+Earlier Worker V3 application development (2026-09-26): a one-shot current-thread
 helper now composes authenticated startup, generated-only KFD, journal Context,
 generated preparation/reservation/activation, selected typed outputs, stream
 disposal, drain and explicit shutdown. Its public signature requires the refining

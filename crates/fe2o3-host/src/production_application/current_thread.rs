@@ -75,6 +75,8 @@ pub enum ProductionWorkerV3ApplicationStageV1 {
 /// Failure before an owned Context exists. Context construction can already
 /// have called the backend, so that failure retains the backend until process
 /// exit rather than invoking its destructor as though initialization were pure.
+/// Context initialization unwind also retains the backend, but is reported by
+/// the outer owner's `InitializerPanicked`, not by this returned-error enum.
 #[derive(Debug)]
 pub enum ProductionWorkerV3RuntimeInitializationErrorV1 {
     Backend(KfdRuntimeBackendErrorV1),
@@ -168,6 +170,8 @@ impl<R, VE> ProductionWorkerV3CurrentThreadReportV1<R, VE> {
 /// cleanup retains custody until process exit. The report preserves the primary
 /// failure and exact shutdown disposition. Panics in caller-owned destructors
 /// follow the lower APIs' unwind contract and do not produce a normal report.
+/// Context initialization unwind retains its backend until process exit and
+/// reports `InitializerPanicked`; no owned-shutdown report exists at that stage.
 ///
 /// ```no_run
 /// use fe2o3_host::*;

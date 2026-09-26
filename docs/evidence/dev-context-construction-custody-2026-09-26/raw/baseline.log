@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-84865fc0c8221886)
+
+running 1 test
+
+thread 'context::tests::construction_custody_tests::constructor_panics_retain_backend_credits_and_original_payload' (19) panicked at crates/fe2o3-runtime/src/context/tests/construction_custody_tests.rs:167:9:
+assertion `left == right` failed: backend dropped
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test context::tests::construction_custody_tests::constructor_panics_retain_backend_credits_and_original_payload ... FAILED
+
+failures:
+
+failures:
+    context::tests::construction_custody_tests::constructor_panics_retain_backend_credits_and_original_payload
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1421 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

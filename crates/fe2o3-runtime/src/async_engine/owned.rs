@@ -281,8 +281,10 @@ pub struct RuntimeAsyncOwnedShutdownV1<E> {
 /// its owner thread. Failed cleanup or an adapter panic retains the entire
 /// context until process exit; it cannot be recovered on the caller thread.
 /// Command panics also seal the context because a callback may have reached an
-/// adapter before unwinding. The factory remains responsible for cleanup and
-/// panic custody until it successfully returns its complete context.
+/// adapter before unwinding. Context constructors retain their accepted backend
+/// on initialization unwind. The factory remains responsible for resources
+/// outside that boundary, returned errors, and a complete context until it
+/// successfully returns it to this owner.
 /// Use an isolated process when that terminal retention policy is required to
 /// be reclaimable. This API does not grant device or executable authority.
 ///
