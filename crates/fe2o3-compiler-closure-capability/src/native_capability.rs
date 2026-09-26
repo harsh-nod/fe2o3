@@ -4,7 +4,9 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationErrorV2, CompilerExecutionAttestationErrorV3,
     CompilerExecutionClientProfileErrorV2, CompilerExecutionClientProfileErrorV3,
     CompilerExecutionExternalAnchorDeploymentErrorV2,
-    CompilerExecutionExternalAnchorDeploymentErrorV3, CompilerExecutionNativeJournalErrorV3,
+    CompilerExecutionExternalAnchorDeploymentErrorV3,
+    CompilerExecutionExternalAnchorProvisioningErrorV2,
+    CompilerExecutionExternalAnchorProvisioningErrorV3, CompilerExecutionNativeJournalErrorV3,
     CompilerExecutionServiceLaunchManifestErrorV2, CompilerExecutionServiceLaunchManifestErrorV3,
     CompilerExecutionSupervisorDeploymentErrorV2, CompilerExecutionSupervisorDeploymentErrorV3,
 };
@@ -45,6 +47,8 @@ pub enum CompilerExecutionCapabilityErrorV2 {
     DeploymentV3(CompilerExecutionSupervisorDeploymentErrorV3),
     ExternalAnchorDeployment(CompilerExecutionExternalAnchorDeploymentErrorV2),
     ExternalAnchorDeploymentV3(CompilerExecutionExternalAnchorDeploymentErrorV3),
+    ExternalAnchorProvisioning(CompilerExecutionExternalAnchorProvisioningErrorV2),
+    ExternalAnchorProvisioningV3(CompilerExecutionExternalAnchorProvisioningErrorV3),
     Io { operation: &'static str, errno: i32 },
     Rejected(&'static str),
 }
@@ -142,6 +146,8 @@ impl fmt::Display for CompilerExecutionCapabilityErrorV2 {
             Self::DeploymentV3(e) => e.fmt(f),
             Self::ExternalAnchorDeployment(e) => e.fmt(f),
             Self::ExternalAnchorDeploymentV3(e) => e.fmt(f),
+            Self::ExternalAnchorProvisioning(e) => e.fmt(f),
+            Self::ExternalAnchorProvisioningV3(e) => e.fmt(f),
             Self::Io { operation, errno } => {
                 write!(f, "native capability {operation}: errno {errno}")
             }
@@ -164,8 +170,25 @@ impl Error for CompilerExecutionCapabilityErrorV2 {
             Self::DeploymentV3(e) => Some(e),
             Self::ExternalAnchorDeployment(e) => Some(e),
             Self::ExternalAnchorDeploymentV3(e) => Some(e),
+            Self::ExternalAnchorProvisioning(e) => Some(e),
+            Self::ExternalAnchorProvisioningV3(e) => Some(e),
             Self::Io { .. } | Self::Rejected(_) => None,
         }
+    }
+}
+
+impl From<CompilerExecutionExternalAnchorProvisioningErrorV2>
+    for CompilerExecutionCapabilityErrorV2
+{
+    fn from(e: CompilerExecutionExternalAnchorProvisioningErrorV2) -> Self {
+        Self::ExternalAnchorProvisioning(e)
+    }
+}
+impl From<CompilerExecutionExternalAnchorProvisioningErrorV3>
+    for CompilerExecutionCapabilityErrorV2
+{
+    fn from(e: CompilerExecutionExternalAnchorProvisioningErrorV3) -> Self {
+        Self::ExternalAnchorProvisioningV3(e)
     }
 }
 

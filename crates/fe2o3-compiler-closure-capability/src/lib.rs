@@ -26,6 +26,9 @@ mod compiler_execution_external_anchor_deployment_native;
 mod compiler_execution_external_anchor_deployment_v2;
 mod compiler_execution_external_anchor_deployment_v3;
 mod compiler_execution_external_anchor_provisioning;
+mod compiler_execution_external_anchor_provisioning_native;
+mod compiler_execution_external_anchor_provisioning_v2;
+mod compiler_execution_external_anchor_provisioning_v3;
 mod compiler_execution_external_anchor_signing_key;
 mod compiler_execution_external_anchor_signing_key_native;
 mod compiler_execution_external_anchor_signing_key_v2;
@@ -65,6 +68,8 @@ pub use compiler_execution_external_anchor_provisioning::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_FD_V1,
     CompilerExecutionExternalAnchorProvisioningCapabilityV1,
 };
+pub use compiler_execution_external_anchor_provisioning_v2::CompilerExecutionExternalAnchorProvisioningCapabilityV2;
+pub use compiler_execution_external_anchor_provisioning_v3::CompilerExecutionExternalAnchorProvisioningCapabilityV3;
 pub use compiler_execution_external_anchor_signing_key::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
     CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
