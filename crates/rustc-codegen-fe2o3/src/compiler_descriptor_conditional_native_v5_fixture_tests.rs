@@ -37,9 +37,15 @@ fn scalar(
 fn types(unit: SemanticTypeDeclV1) -> Vec<SemanticTypeDeclV1> {
     use SemanticBackendReprV1 as Repr;
     use SemanticTypeShapeV1 as Shape;
-    let pointer = scalar(
+    let reference_pointer = scalar(
         SemanticBackendPrimitiveV1::pointer(0, 8, 8),
         1,
+        u64::MAX.into(),
+    );
+    // Raw pointer fields admit null; a reference's non-null niche is not theirs.
+    let raw_pointer = scalar(
+        SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+        0,
         u64::MAX.into(),
     );
     let word = scalar(
@@ -51,7 +57,7 @@ fn types(unit: SemanticTypeDeclV1) -> Vec<SemanticTypeDeclV1> {
         SemanticTypeLayoutV1::new_with_backend_repr(
             Some(16),
             8,
-            Repr::scalar_pair(pointer, word),
+            Repr::scalar_pair(reference_pointer, word),
             false,
         )
         .unwrap()
@@ -135,7 +141,7 @@ fn types(unit: SemanticTypeDeclV1) -> Vec<SemanticTypeDeclV1> {
             SemanticTypeLayoutV1::aggregate_with_backend_repr(
                 Some(16),
                 8,
-                Repr::scalar_pair(pointer, word),
+                Repr::scalar_pair(raw_pointer, word),
                 false,
                 SemanticAggregateLayoutV1::new(vec![0, 8], vec![]).unwrap(),
             )
@@ -150,8 +156,13 @@ fn types(unit: SemanticTypeDeclV1) -> Vec<SemanticTypeDeclV1> {
         ),
         declaration(
             15,
-            SemanticTypeLayoutV1::new_with_backend_repr(Some(8), 8, Repr::scalar(pointer), false)
-                .unwrap(),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(8),
+                8,
+                Repr::scalar(raw_pointer),
+                false,
+            )
+            .unwrap(),
             Shape::Pointer(
                 SemanticPointerTypeV1::new_with_kind(
                     ty(1),
@@ -201,13 +212,6 @@ pub(super) fn source(count: usize) -> Semantic {
         Some(4),
     )
     .unwrap();
-    let output_attrs = SemanticAbiValueAttributesV1::new(
-        SemanticAbiRegularAttributesV1::new(false, None, true, false, false, true),
-        SemanticAbiExtensionV1::None,
-        0,
-        None,
-    )
-    .unwrap();
     let functions = (0..count)
         .map(|i| {
             let abi = SemanticFunctionAbiV1::from_rustc(
@@ -224,11 +228,7 @@ pub(super) fn source(count: usize) -> Semantic {
                         SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
                             t,
                             SemanticAbiPassModeV1::Pair {
-                                first: if t == ty(4) {
-                                    output_attrs
-                                } else {
-                                    shared_attrs
-                                },
+                                first: if t == ty(4) { attrs } else { shared_attrs },
                                 second: attrs,
                             },
                         ))
@@ -307,6 +307,59 @@ pub(super) fn source(count: usize) -> Semantic {
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())
     .unwrap()
+}
+
+#[test]
+fn conditional_descriptor_v5_fixture_distinguishes_raw_and_reference_validity() {
+    let source = source(1);
+    for (index, start) in [(3, 1), (4, 0), (5, 0)] {
+        let first = match *source.types()[index].layout().backend_repr() {
+            SemanticBackendReprV1::Scalar(first)
+            | SemanticBackendReprV1::ScalarPair { first, .. } => first,
+            other => panic!("unexpected fixture representation: {other:?}"),
+        };
+        assert_eq!(
+            first.valid_range(),
+            Some(SemanticScalarValidityRangeV1::new(start, u64::MAX.into())),
+        );
+    }
+
+    // Recreate the original bad raw-pointer leaf. Admission must reject it,
+    // not just report a later descriptor/contract mismatch.
+    let mut types = source.types().to_vec();
+    let raw = &types[5];
+    types[5] = SemanticTypeDeclV1::new(
+        raw.identity(),
+        raw.layout_identity(),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(8),
+            8,
+            SemanticBackendReprV1::scalar(scalar(
+                SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                1,
+                u64::MAX.into(),
+            )),
+            false,
+        )
+        .unwrap(),
+        raw.shape().clone(),
+    )
+    .with_rustc_abi_properties(raw.abi_properties());
+    let invalid = InertSemanticMirRequestV1::new(
+        source.target(),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        source.functions().to_vec(),
+        source.roots().to_vec(),
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default());
+    assert!(matches!(
+        invalid,
+        Err(SemanticMirErrorV1::InvalidTypeLayout)
+    ));
 }
 
 fn layout(output: bool) -> RustLayoutEvidenceV1 {

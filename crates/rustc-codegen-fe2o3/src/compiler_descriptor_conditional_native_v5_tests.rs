@@ -176,14 +176,26 @@ fn conditional_descriptor_v5_component_binding_source_and_count_substitutions() 
 }
 
 #[test]
+fn conditional_descriptor_v5_component_missing_original_nominal_layout_is_required() {
+    let mut model = Model::new(1, Profile::Gfx942);
+    let _baseline = model.bytes();
+    let mut arguments = model.roots[0].arguments.as_slice().to_vec();
+    arguments[0].layout = None;
+    model.roots[0].arguments = crate::collector::TypedArgumentListV1::new(arguments).unwrap();
+    assert!(
+        model.run(LIMIT, LIMIT).0.is_err(),
+        "accepted missing original layout evidence"
+    );
+}
+
+#[test]
 fn conditional_descriptor_v5_component_original_nominal_layout_is_required() {
     use crate::{collector::TypedArgumentListV1, compiler_descriptor::AccessMode};
     use fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdentityV1;
-    for mutation in 0..9 {
+    for mutation in 1..9 {
         let mut model = Model::new(1, Profile::Gfx942);
         let mut arguments = model.roots[0].arguments.as_slice().to_vec();
         match mutation {
-            0 => arguments[0].layout = None,
             1 => arguments[1].offset += 8,
             2 => arguments[0].source_size = 8,
             3 => arguments[0].source_alignment = 4,
