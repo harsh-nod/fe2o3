@@ -17,7 +17,9 @@ use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 
 mod compiler_execution_client_profile;
+mod compiler_execution_client_profile_native;
 mod compiler_execution_client_profile_v2;
+mod compiler_execution_client_profile_v3;
 mod compiler_execution_external_anchor_deployment;
 mod compiler_execution_external_anchor_provisioning;
 mod compiler_execution_external_anchor_signing_key;
@@ -39,6 +41,7 @@ mod trusted_profile_tree;
 
 pub use compiler_execution_client_profile::CompilerExecutionClientProfileCapabilityV1;
 pub use compiler_execution_client_profile_v2::CompilerExecutionClientProfileCapabilityV2;
+pub use compiler_execution_client_profile_v3::CompilerExecutionClientProfileCapabilityV3;
 pub use compiler_execution_external_anchor_deployment::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
     CompilerExecutionExternalAnchorDeploymentCapabilityV1,

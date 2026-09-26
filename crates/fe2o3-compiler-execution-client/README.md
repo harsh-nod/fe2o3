@@ -2,10 +2,13 @@
 
 ## Diagnostic Native Client
 
-`CompilerExecutionClientV2` consumes a connected unnamed `SOCK_SEQPACKET` peer
+`CompilerExecutionClientV2` and `CompilerExecutionClientV3` consume a connected unnamed `SOCK_SEQPACKET` peer
 and exclusively borrows the original canonical resource budget. It supports
 native receipt acquisition, journal-stage recovery, and fresh-challenge
-currentness authentication without converting native owners or retrying V1.
+currentness authentication using actual owners from their own family. Neither
+retries V1 or the other native family. The V3 client joins conditional SubjectV3
+records and uses `verify_native_v3` for currentness; the identity-only
+current-record V3 wire is unchanged. Both share one private exchange body.
 Transport, randomness attempts, protocol work and retained storage use that
 same ledger. Inputs must be prepaid; successful admission transfers the peer's
 charge, which is released when the terminal session closes. On admission
@@ -17,6 +20,10 @@ Signed fixture transcripts do not prove protected signing-key custody, live
 compiler observation, durable commit-before-publication, independently
 administered anchors, or safe GPU launch. The shipping production route remains
 V1 until those native service integrations are validated.
+
+The terminal client retains an exclusive budget borrow. Early compiler admission
+still needs an original-account peer/deadline owner that can coexist with later
+compiler work; this API does not solve that production lifetime dependency.
 
 ## Production V1 Client
 

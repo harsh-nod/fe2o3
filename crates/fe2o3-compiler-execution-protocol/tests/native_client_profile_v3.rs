@@ -9,14 +9,11 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationStorageV3 as Charge,
     CompilerExecutionClientProfileErrorV1 as Framing,
     CompilerExecutionClientProfileErrorV2 as ErrorV2,
-    CompilerExecutionClientProfileErrorV3 as Error,
-    CompilerExecutionClientProfileV1 as ProfileV1,
-    CompilerExecutionClientProfileV2 as ProfileV2,
-    CompilerExecutionClientProfileV3 as Profile,
+    CompilerExecutionClientProfileErrorV3 as Error, CompilerExecutionClientProfileV1 as ProfileV1,
+    CompilerExecutionClientProfileV2 as ProfileV2, CompilerExecutionClientProfileV3 as Profile,
     CompilerExecutionExternalAnchorServiceIdentityV1 as Service,
     CompilerExecutionIssuerMeasurementV1 as Measurement,
-    CompilerExecutionIssuerPolicyV1 as PolicyV1,
-    CompilerExecutionIssuerPolicyV2 as PolicyV2,
+    CompilerExecutionIssuerPolicyV1 as PolicyV1, CompilerExecutionIssuerPolicyV2 as PolicyV2,
     CompilerExecutionIssuerPolicyV3 as Policy,
 };
 use fe2o3_kernel_ir::{
@@ -28,7 +25,9 @@ use sha2::{Digest, Sha256};
 use std::{error::Error as _, mem::size_of};
 
 fn key(seed: u8) -> [u8; 32] {
-    SigningKey::from_bytes(&[seed; 32]).verifying_key().to_bytes()
+    SigningKey::from_bytes(&[seed; 32])
+        .verifying_key()
+        .to_bytes()
 }
 fn service() -> Service {
     Service::new(6001, 7001).unwrap()
@@ -99,7 +98,10 @@ fn actual_v3_roundtrip_preserves_original_ledger_and_full_delta_charges() {
     let policy_identity = policy.identity();
     let (profile, delta) = Profile::new(1234, 5678, service(), policy, &mut budget).unwrap();
     assert_eq!(budget.storage(), 19 + inherited);
-    assert_eq!(inherited + delta.additional_storage(), profile.retained_storage());
+    assert_eq!(
+        inherited + delta.additional_storage(),
+        profile.retained_storage()
+    );
     budget.reserve_storage(delta.additional_storage()).unwrap();
     assert_eq!(BYTES, 280);
     assert_eq!(profile.canonical_bytes(), &wire());
@@ -108,11 +110,20 @@ fn actual_v3_roundtrip_preserves_original_ledger_and_full_delta_charges() {
     assert_eq!(actual_policy.generation(), 7);
     assert_eq!(actual_policy.verifying_key(), &key(0x51));
     assert_eq!(actual_policy.external_anchor_verifying_key(), &key(0x52));
-    assert_eq!((profile.supervisor_uid(), profile.supervisor_gid()), (1234, 5678));
+    assert_eq!(
+        (profile.supervisor_uid(), profile.supervisor_gid()),
+        (1234, 5678)
+    );
     assert_eq!(profile.external_anchor_service(), service());
-    assert!(profile.identity().matches_canonical_bytes(profile.canonical_bytes(), &mut budget).unwrap());
+    assert!(
+        profile
+            .identity()
+            .matches_canonical_bytes(profile.canonical_bytes(), &mut budget)
+            .unwrap()
+    );
     let floor = budget.storage();
-    let (decoded, full): (Profile, Charge) = Profile::decode(profile.canonical_bytes(), &mut budget).unwrap();
+    let (decoded, full): (Profile, Charge) =
+        Profile::decode(profile.canonical_bytes(), &mut budget).unwrap();
     assert_eq!(decoded, profile);
     assert_eq!(budget.storage(), floor);
     assert_eq!(full.additional_storage(), decoded.retained_storage());
@@ -134,11 +145,19 @@ fn families_reject_each_other_and_rehashed_mixed_nested_policies() {
         7,
         Measurement::new([0x61; 32], 12345).unwrap(),
         Measurement::new([0x62; 32], 67890).unwrap(),
-        key(0x51), key(0x52),
-    ).unwrap();
+        key(0x51),
+        key(0x52),
+    )
+    .unwrap();
     let (v2_policy, charge) = PolicyV2::new(
-        7, old_policy.executable(), old_policy.runtime(), key(0x51), key(0x52), &mut budget,
-    ).unwrap();
+        7,
+        old_policy.executable(),
+        old_policy.runtime(),
+        key(0x51),
+        key(0x52),
+        &mut budget,
+    )
+    .unwrap();
     budget.reserve_storage(charge.additional_storage()).unwrap();
     let (v2, delta) = ProfileV2::new(1234, 5678, service(), v2_policy, &mut budget).unwrap();
     budget.reserve_storage(delta.additional_storage()).unwrap();
@@ -146,20 +165,41 @@ fn families_reject_each_other_and_rehashed_mixed_nested_policies() {
     let (v3, charge) = Profile::decode(&wire(), &mut budget).unwrap();
     budget.reserve_storage(charge.additional_storage()).unwrap();
     for older in [v1.canonical_bytes(), v2.canonical_bytes()] {
-        assert!(matches!(Profile::decode(older, &mut budget), Err(Error::Framing(Framing::Magic))));
-        assert!(!v3.identity().matches_canonical_bytes(older, &mut budget).unwrap());
+        assert!(matches!(
+            Profile::decode(older, &mut budget),
+            Err(Error::Framing(Framing::Magic))
+        ));
+        assert!(
+            !v3.identity()
+                .matches_canonical_bytes(older, &mut budget)
+                .unwrap()
+        );
         let mut mixed = wire();
         mixed[32..248].copy_from_slice(&older[32..248]);
         rehash_profile(&mut mixed, DOMAIN);
         let error = Profile::decode(&mixed, &mut budget).unwrap_err();
-        assert!(matches!(&error, Error::Policy(PolicyError::Framing(PolicyFraming::InvalidMagic(_)))));
+        assert!(matches!(
+            &error,
+            Error::Policy(PolicyError::Framing(PolicyFraming::InvalidMagic(_)))
+        ));
         assert!(error.source().unwrap().is::<PolicyError>());
     }
     assert!(matches!(ProfileV1::decode(&wire()), Err(Framing::Magic)));
-    assert!(matches!(ProfileV2::decode(&wire(), &mut budget), Err(ErrorV2::Framing(Framing::Magic))));
+    assert!(matches!(
+        ProfileV2::decode(&wire(), &mut budget),
+        Err(ErrorV2::Framing(Framing::Magic))
+    ));
     for (older, domain, family) in [
-        (v1.canonical_bytes(), &b"FE2O3/COMPILER-EXECUTION-CLIENT-PROFILE/V1\0"[..], 1),
-        (v2.canonical_bytes(), &b"FE2O3/COMPILER-EXECUTION-CLIENT-PROFILE/V2\0"[..], 2),
+        (
+            v1.canonical_bytes(),
+            &b"FE2O3/COMPILER-EXECUTION-CLIENT-PROFILE/V1\0"[..],
+            1,
+        ),
+        (
+            v2.canonical_bytes(),
+            &b"FE2O3/COMPILER-EXECUTION-CLIENT-PROFILE/V2\0"[..],
+            2,
+        ),
     ] {
         let mut mixed = *older;
         mixed[32..248].copy_from_slice(&wire()[32..248]);
@@ -167,12 +207,21 @@ fn families_reject_each_other_and_rehashed_mixed_nested_policies() {
         if family == 1 {
             assert!(matches!(ProfileV1::decode(&mixed), Err(Framing::Policy(_))));
         } else {
-            assert!(matches!(ProfileV2::decode(&mixed, &mut budget), Err(ErrorV2::Policy(_))));
+            assert!(matches!(
+                ProfileV2::decode(&mixed, &mut budget),
+                Err(ErrorV2::Policy(_))
+            ));
         }
     }
     let mut wrong_domain = wire();
-    rehash_profile(&mut wrong_domain, b"FE2O3/COMPILER-EXECUTION-CLIENT-PROFILE/V2\0");
-    assert!(matches!(Profile::decode(&wrong_domain, &mut budget), Err(Error::Framing(Framing::Identity))));
+    rehash_profile(
+        &mut wrong_domain,
+        b"FE2O3/COMPILER-EXECUTION-CLIENT-PROFILE/V2\0",
+    );
+    assert!(matches!(
+        Profile::decode(&wrong_domain, &mut budget),
+        Err(Error::Framing(Framing::Identity))
+    ));
 }
 
 #[test]
@@ -189,13 +238,25 @@ fn framing_credentials_nested_policy_and_hash_keep_diagnostic_order() {
         Err(Error::Framing(Framing::InvalidSupervisorUid))
     ));
     bytes[16..20].copy_from_slice(&1234_u32.to_le_bytes());
-    assert!(matches!(Profile::decode(&bytes, &mut budget), Err(Error::Policy(_))));
+    assert!(matches!(
+        Profile::decode(&bytes, &mut budget),
+        Err(Error::Policy(_))
+    ));
     bytes[32] ^= 1;
-    assert!(matches!(Profile::decode(&bytes, &mut budget), Err(Error::Framing(Framing::Identity))));
+    assert!(matches!(
+        Profile::decode(&bytes, &mut budget),
+        Err(Error::Framing(Framing::Identity))
+    ));
     bytes[8..10].copy_from_slice(&2_u16.to_le_bytes());
-    assert!(matches!(Profile::decode(&bytes, &mut budget), Err(Error::Framing(Framing::Version(2)))));
+    assert!(matches!(
+        Profile::decode(&bytes, &mut budget),
+        Err(Error::Framing(Framing::Version(2)))
+    ));
     bytes[0] ^= 1;
-    assert!(matches!(Profile::decode(&bytes, &mut budget), Err(Error::Framing(Framing::Magic))));
+    assert!(matches!(
+        Profile::decode(&bytes, &mut budget),
+        Err(Error::Framing(Framing::Magic))
+    ));
     assert_eq!(budget.storage(), BYTES);
 }
 
@@ -208,7 +269,11 @@ fn decoding_and_identity_checks_require_exact_prepaid_quotas() {
     for identity_only in [false, true] {
         for case in 0..6 {
             let floor = if case == 1 { BYTES - 1 } else { BYTES };
-            let work_limit = match case { 0 => 7, 2 => WORK - 1, _ => WORK };
+            let work_limit = match case {
+                0 => 7,
+                2 => WORK - 1,
+                _ => WORK,
+            };
             let limit = floor + STORAGE - usize::from(case == 3);
             let mut work = Work::new(work_limit);
             let mut budget = Budget::new(&mut work, limit);
@@ -216,9 +281,12 @@ fn decoding_and_identity_checks_require_exact_prepaid_quotas() {
             let ledger = budget.work_ledger_identity_v1();
             let bytes = if case == 5 { [0; BYTES] } else { wire() };
             let result = if identity_only {
-                profile.identity().matches_canonical_bytes(&bytes, &mut budget).map(|value| {
-                    assert_eq!(value, case != 5);
-                })
+                profile
+                    .identity()
+                    .matches_canonical_bytes(&bytes, &mut budget)
+                    .map(|value| {
+                        assert_eq!(value, case != 5);
+                    })
             } else {
                 Profile::decode(&bytes, &mut budget).map(|(decoded, charge)| {
                     assert_eq!(charge.additional_storage(), decoded.retained_storage());
@@ -226,8 +294,18 @@ fn decoding_and_identity_checks_require_exact_prepaid_quotas() {
             };
             assert!(budget.work_ledger_identity_v1() == ledger);
             assert_eq!(budget.storage(), floor);
-            assert_eq!(budget.work(), match case { 0 => 0, 1 | 2 => 8, _ => WORK });
-            assert_eq!(budget.peak_storage(), floor + if case >= 4 { STORAGE } else { 0 });
+            assert_eq!(
+                budget.work(),
+                match case {
+                    0 => 0,
+                    1 | 2 => 8,
+                    _ => WORK,
+                }
+            );
+            assert_eq!(
+                budget.peak_storage(),
+                floor + if case >= 4 { STORAGE } else { 0 }
+            );
             match case {
                 0 | 2 => assert!(matches!(result, Err(Error::Resource(Resource::Work(_))))),
                 1 => assert!(matches!(result, Err(Error::Resource(Resource::Accounting)))),
@@ -235,7 +313,9 @@ fn decoding_and_identity_checks_require_exact_prepaid_quotas() {
                     assert!(matches!(result, Err(Error::Resource(Resource::Storage(_)))));
                     assert_eq!(budget.failed_storage(), Some(floor + STORAGE));
                 }
-                5 if !identity_only => assert!(matches!(result, Err(Error::Framing(Framing::Magic)))),
+                5 if !identity_only => {
+                    assert!(matches!(result, Err(Error::Framing(Framing::Magic))))
+                }
                 _ => result.unwrap(),
             }
         }
@@ -257,15 +337,24 @@ fn construction_retains_consumed_floor_and_cannot_restart_the_ledger() {
         let uid = if case == 3 { 0 } else { 1234 };
         let result = Profile::new(uid, 5678, service(), policy, &mut budget);
         assert_eq!(budget.storage(), floor);
-        assert_eq!(budget.work(), POLICY_WORK + if case == 0 || case == 2 { 8 } else { WORK });
+        assert_eq!(
+            budget.work(),
+            POLICY_WORK + if case == 0 || case == 2 { 8 } else { WORK }
+        );
         match case {
             0 => assert!(matches!(result, Err(Error::Resource(Resource::Work(_))))),
             1 => assert!(matches!(result, Err(Error::Resource(Resource::Storage(_))))),
             2 => assert!(matches!(result, Err(Error::Resource(Resource::Accounting)))),
-            3 => assert!(matches!(result, Err(Error::Framing(Framing::InvalidSupervisorUid)))),
+            3 => assert!(matches!(
+                result,
+                Err(Error::Framing(Framing::InvalidSupervisorUid))
+            )),
             _ => {
                 let (profile, delta) = result.unwrap();
-                assert_eq!(inherited + delta.additional_storage(), profile.retained_storage());
+                assert_eq!(
+                    inherited + delta.additional_storage(),
+                    profile.retained_storage()
+                );
             }
         }
         budget.release_storage(floor).unwrap();
@@ -288,7 +377,10 @@ fn malformed_lengths_and_single_byte_mutations_never_admit() {
     for offset in 0..BYTES {
         let mut bytes = wire();
         bytes[offset] ^= 1;
-        assert!(Profile::decode(&bytes, &mut budget).is_err(), "byte {offset}");
+        assert!(
+            Profile::decode(&bytes, &mut budget).is_err(),
+            "byte {offset}"
+        );
         assert_eq!(budget.storage(), BYTES);
     }
 }
@@ -299,9 +391,14 @@ fn v2_layout_quotas_and_v3_aggregate_costs_remain_fixed() {
     assert_eq!(COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V2, 280);
     assert_eq!(COMPILER_EXECUTION_CLIENT_PROFILE_WORK_V2, 24072);
     let retained_v2 = size_of::<ProfileV2>() + size_of::<CompilerExecutionAttestationStorageV2>();
-    assert_eq!(COMPILER_EXECUTION_CLIENT_PROFILE_STORAGE_V2,
-        COMPILER_EXECUTION_ISSUER_POLICY_STORAGE_V2 + 4 * retained_v2 + 4 * 280
-            + 2 * size_of::<Sha256>() + 4096);
+    assert_eq!(
+        COMPILER_EXECUTION_CLIENT_PROFILE_STORAGE_V2,
+        COMPILER_EXECUTION_ISSUER_POLICY_STORAGE_V2
+            + 4 * retained_v2
+            + 4 * 280
+            + 2 * size_of::<Sha256>()
+            + 4096
+    );
     assert_eq!(size_of::<Profile>(), size_of::<ProfileV2>());
     assert_eq!(WORK, POLICY_WORK + 32 * BYTES);
     assert_eq!(WORK, COMPILER_EXECUTION_CLIENT_PROFILE_WORK_V2);

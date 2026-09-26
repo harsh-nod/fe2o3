@@ -15,8 +15,10 @@ mod attestation_request_v2;
 mod attestation_request_v3;
 mod attestation_resources;
 mod client_profile;
+mod client_profile_adapter;
 mod client_profile_codec;
 mod client_profile_v2;
+mod client_profile_v3;
 mod current_record_native_adapter;
 mod current_record_verification;
 mod external_anchor_deployment;
@@ -178,6 +180,12 @@ pub use client_profile_v2::{
     COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V2, COMPILER_EXECUTION_CLIENT_PROFILE_STORAGE_V2,
     COMPILER_EXECUTION_CLIENT_PROFILE_WORK_V2, CompilerExecutionClientProfileErrorV2,
     CompilerExecutionClientProfileIdentityV2, CompilerExecutionClientProfileV2,
+};
+pub use client_profile_v3::{
+    COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V3, COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V3,
+    COMPILER_EXECUTION_CLIENT_PROFILE_STORAGE_V3, COMPILER_EXECUTION_CLIENT_PROFILE_WORK_V3,
+    CompilerExecutionClientProfileErrorV3, CompilerExecutionClientProfileIdentityV3,
+    CompilerExecutionClientProfileV3,
 };
 pub use current_record_verification::{
     COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V3,
