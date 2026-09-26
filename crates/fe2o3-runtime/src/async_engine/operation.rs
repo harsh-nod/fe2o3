@@ -382,6 +382,7 @@ struct Operation<B: RuntimeBackendV1, A, P> {
     event_reply: Option<event::EventReplyV1<B::Error>>,
     rejected_observations: u64,
     last_rejected_observation: Option<B::Error>,
+    deferred_quiescent_observation: Option<B::Error>,
     control: Option<RuntimeAsyncOperationControlV1>,
     progress: core::marker::PhantomData<fn() -> P>,
 }
@@ -466,12 +467,31 @@ impl<B: RuntimeBackendV1, A, P: OperationProgressV1<B, A>> EngineOperationV1<B>
             self.event_reply.take().unwrap().complete(Ok(result));
             return false;
         }
-        let observation = match P::observe(context, submission) {
+        let mut observation = match P::observe(context, submission) {
             Ok(_) => context
                 .query_submission(submission)
                 .map_err(RuntimeErrorV1::from),
             Err(error) => Err(error),
         };
+        if matches!(observation, Err(RuntimeErrorV1::BackendQuiescent(_)))
+            && !context.is_terminal()
+            && context.query_submission(submission) == Ok(RuntimeCompletionStatusV1::Pending)
+        {
+            // The diagnostic may belong to a producer. Bounded reconciliation
+            // must finish the requested submission before this driver retires.
+            let Err(RuntimeErrorV1::BackendQuiescent(error)) = observation else {
+                unreachable!("matched quiescent observation");
+            };
+            self.deferred_quiescent_observation.get_or_insert(error);
+            return false;
+        }
+        if matches!(
+            observation,
+            Ok(RuntimeCompletionStatusV1::QuiescentWithoutResult)
+        ) && let Some(error) = self.deferred_quiescent_observation.take()
+        {
+            observation = Err(RuntimeErrorV1::BackendQuiescent(error));
+        }
         match classify_completion_v1(&observation) {
             CompletionClassV1::Pending => false,
             CompletionClassV1::Rejected if context.is_terminal() => {

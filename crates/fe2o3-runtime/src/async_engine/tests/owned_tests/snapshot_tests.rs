@@ -46,6 +46,17 @@ impl Harness {
     }
 
     fn with_journal(budget: usize, channel: usize, peer_devices: bool, journal: bool) -> Self {
+        Self::with_journal_limits(budget, channel, peer_devices, journal, 16, 8)
+    }
+
+    fn with_journal_limits(
+        budget: usize,
+        channel: usize,
+        peer_devices: bool,
+        journal: bool,
+        capacity: usize,
+        writers: usize,
+    ) -> Self {
         let state = Arc::new(Mutex::new(MockState {
             peer_devices,
             ..MockState::default()
@@ -54,7 +65,7 @@ impl Harness {
             state: state.clone(),
         };
         let mut context = if journal {
-            RuntimeContextV1::open_with_version_journal_v1(backend, 16, 8).unwrap()
+            RuntimeContextV1::open_with_version_journal_v1(backend, capacity, writers).unwrap()
         } else {
             RuntimeContextV1::open(backend).unwrap()
         };

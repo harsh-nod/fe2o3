@@ -64,6 +64,7 @@ impl<B: RuntimeBackendV1 + 'static, A: 'static, P: OperationProgressV1<B, A>>
             event_reply: self.event_reply.take(),
             rejected_observations: 0,
             last_rejected_observation: None,
+            deferred_quiescent_observation: None,
             control: self.control.take(),
             progress: core::marker::PhantomData,
         })
