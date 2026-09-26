@@ -20,6 +20,8 @@ pub use schema::CompilerModuleHandoffErrorV5;
 use schema::{Schema, payload_storage};
 #[path = "compiler_module_handoff_v5_admission.rs"]
 mod admission;
+#[path = "compiler_execution_receipt_transport_v3.rs"]
+pub(crate) mod receipt_transport_v3;
 use admission::consume;
 pub use admission::{CompilerModuleHandoffAdmissionCauseV5, CompilerModuleHandoffAdmissionErrorV5};
 type Error = CompilerModuleHandoffErrorV5;

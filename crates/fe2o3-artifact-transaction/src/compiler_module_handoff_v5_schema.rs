@@ -96,7 +96,7 @@ impl HandoffSchema for Schema {
     const DECODE_WORKING_SET_FIXED_BYTES: usize = METADATA;
     const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES_V5 + METADATA;
     const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
-    const COMMITTED_SIDECAR_ENTRY: Option<&'static str> = None;
+    const COMMITTED_SIDECAR_ENTRY: Option<&'static str> = Some(receipt_transport_v3::ENTRY);
     const ALL_SLOTS: &'static [Self::Slot] = &[CompilerModuleHandoffSlotV5::Production];
 
     fn default_slot() -> Self::Slot {

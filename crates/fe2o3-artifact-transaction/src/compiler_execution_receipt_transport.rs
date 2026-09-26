@@ -4,6 +4,8 @@ use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
 
 #[path = "compiler_execution_receipt_envelope.rs"]
 pub(super) mod envelope;
+#[path = "compiler_execution_receipt_native.rs"]
+pub(super) mod native;
 
 pub(super) struct Coordinates<S: currentness::Schema> {
     pub attempt: BuildAttempt,
