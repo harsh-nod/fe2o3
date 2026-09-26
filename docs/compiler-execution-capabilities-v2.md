@@ -184,7 +184,8 @@ The protected coordinator, provisioning helper and inherited service entry point
 still need to consume these native owners. Current helper/service startup uses
 V1 owners and raw keys. The [native durable service](compiler-execution-native-anchor-state.md)
 now retains the native key and persists before signing through the shared state
-engine; its peer-loop and startup integration remain open.
+engine. Its native peer loop now uses shared transport/scheduling with original-ledger
+accounting; protected startup integration remains open.
 Passing local tests does not establish protected startup
 or production compiler integration. See the
 [anchor provisioning checkpoint](evidence/conditional-native-anchor-provisioning-20260926.md)

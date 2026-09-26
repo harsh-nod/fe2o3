@@ -8,8 +8,10 @@ support initialization, strict reopen, atomic open-or-initialize, and signed
 challenge exchange. They do not export keys or descriptors and do not upgrade
 V1 owners. The state-file format and observation wire remain unchanged.
 
-These are direct service operations, not activated protected startup. The peer
-loop, helper and daemon entrypoints still consume V1 owners. Trusted deployment
+`serve_connected_peer_v2/v3` now drive those native owners through the same
+peer I/O and scheduling implementation as V1, using the original resource ledger.
+These are direct service operations, not activated protected startup. The helper
+and inherited daemon entrypoints still consume V1 owners. Trusted deployment
 provenance, executable measurement, lifecycle custody and process admission must
 be established separately. Neither these APIs nor their tests complete M0-M7,
 prove kernel semantics, or qualify any additional end-to-end GPU kernel.
@@ -87,3 +89,53 @@ Quotas are logical accounting, not syscall-time, generated-stack or RSS bounds.
 
 See the [validation checkpoint](evidence/conditional-native-durable-anchor-20260926.md)
 for source attribution, test failures, evidence hashes and remaining integration.
+
+## Native Peer Loop
+
+Each public native serving function borrows the anchor and actual same-family
+deployment, consumes one prepaid peer descriptor, and uses the original caller
+ledger. It revalidates key/deployment custody and exact service credentials before
+transport validation. Public callers cannot supply a signer, persistence engine
+or transport implementation, or convert a V1 owner into native authority.
+
+The shared schedule is receive, durable exchange, send, retire response, increment
+the checked exchange counter. V1 preserves its existing unmetered I/O behavior.
+Native serving charges before every validation, poll, receive and send attempt,
+including retries. The packet and response formats remain 184 and 288 bytes;
+ancillary data and noncanonical packet lengths still reject. A response is
+reserved immediately after exchange and remains charged through sending. Errors
+and unwinds restore entry storage without refunding work or erasing history.
+
+The input floor is `A + D + NATIVE_EXTERNAL_ANCHOR_PEER_STORAGE_V2`. The fixed
+`NATIVE_EXTERNAL_ANCHOR_PEER_FRAME_STORAGE_V2` covers live packet/control staging;
+peak additionally includes nested anchor/key scratch or the retained response.
+The consumed descriptor closes on return/error/unwind. Its old reservation stays
+for caller cleanup. Success returns the **full**, unreserved
+`NATIVE_EXTERNAL_ANCHOR_PEER_REPORT_STORAGE_V2`, independent of that descriptor's
+charge. Reserve the report charge before retention and retire it after drop.
+The report is an inert V1 exchange counter, not an admitted V1 owner.
+
+On Linux, logical work is:
+
+| Stage | Charge |
+| --- | ---: |
+| Outer entry/frame | 31496 |
+| Initial native key revalidation | 68360 |
+| Endpoint validation | 13064 |
+| Each poll attempt | 1032 |
+| Each receive attempt | 6920 |
+| Each durable exchange | 378656 |
+| Each send attempt | 10248 |
+
+With one successful poll per I/O, no retries, and EOF observed by a receive,
+`n` exchanges cost `120872 + n * 397888`. Quotas bound logical attempts, **not**
+idle poll time, syscall latency, filesystem durability or total service lifetime.
+The existing 30-second response-publication timeout is unchanged.
+
+Failure after persistence may leave a commit with no delivered response. Reopen
+and recover/retry, never roll back or recreate state. Failure after send may mean
+the peer already received the response. Peer shape and native custody are not
+protected peer-identity, lifecycle or process-profile admission; startup callers
+must establish those separately. No protected startup or compiler/GPU authority
+is granted by this API or its tests. See the
+[peer validation checkpoint](evidence/conditional-native-anchor-peer-20260926.md).
