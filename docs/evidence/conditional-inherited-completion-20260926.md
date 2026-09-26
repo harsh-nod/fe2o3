@@ -7,6 +7,9 @@ All [#272](https://github.com/harsh-nod/fe2o3/issues/272) milestones M0-M7
 remain open. This is client integration, not protected backend activation,
 machine refinement, GPU validation, or 47/47 completion.
 
+The [device-scope checkpoint](conditional-device-scope-20260926.md) records the
+subsequent compiler ownership refactor and nominal V3 supervisor admission.
+
 ## Implemented
 
 Native V2 and V3 clients can now consume fixed inherited FD 195 on their
