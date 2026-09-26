@@ -59,8 +59,11 @@ type Output = (
     ReplayedNativeConditionalSourceV2,
     NativeConditionalSourceStorageV2,
 );
+// Closed-route peak: transfer + HEADER + history + coordinates + either roster
+// query or final relation. The two leaf scopes never overlap; temporary() pays
+// only its requested payload, so all five Account headers must be prepaid here.
 const HEADER: usize = size_of::<Inputs<'static, 'static, 'static>>()
-    + 4 * size_of::<account::Account>()
+    + 5 * size_of::<account::Account>()
     + size_of::<Result<Output, Error>>();
 
 /// One checked history, one N/B relation and one B1/lower/V2 import per root.

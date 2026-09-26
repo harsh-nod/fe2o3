@@ -110,6 +110,71 @@ fn conditional_final_component_exact_limits_and_denial_history() {
 }
 
 #[test]
+fn conditional_final_component_five_live_accounts_have_independent_peak_threshold() {
+    use fe2o3_amdgcn_model::ReplayedNativeV12TextDescriptorRelationV5;
+    use fe2o3_kernel_descriptor::DESCRIPTOR_QUERY_STORAGE_V5;
+
+    // Independent of HEADER: these are the five simultaneously live guards in
+    // the explicit nesting below, not five sequential uses of one temporary.
+    let required_header = size_of::<Inputs<'static, 'static, 'static>>()
+        + size_of::<Result<Output, Error>>()
+        + size_of::<[account::Account; 5]>();
+    assert_eq!(HEADER, required_header);
+    // Inert receipt extents model history/coordinate storage; no proof or
+    // history owner is constructed. The two real leaf header sizes are disjoint.
+    const HISTORY: usize = 17;
+    const COORDINATES: usize = 23;
+    for leaf in [
+        DESCRIPTOR_QUERY_STORAGE_V5,
+        size_of::<ReplayedNativeV12TextDescriptorRelationV5<'_, '_, '_, '_, '_>>(),
+    ] {
+        assert!(leaf >= size_of::<account::Account>());
+        let peak = FLOOR + required_header + HISTORY + COORDINATES + leaf;
+        for short in [0, 1, size_of::<account::Account>()] {
+            let mut work = Work::new(usize::MAX);
+            let mut b = Budget::new(&mut work, peak - short);
+            b.reserve_storage(FLOOR).unwrap();
+            b.charge_work(7).unwrap();
+            let ledger = b.work_ledger_identity_v1();
+            let reached_leaf = Cell::new(false);
+            let result = account::transfer(&mut b, |b| {
+                account::temporary(b, HEADER, |b| {
+                    account::temporary(b, HISTORY, |b| {
+                        account::temporary(b, COORDINATES, |b| {
+                            account::temporary(b, leaf, |b| {
+                                reached_leaf.set(true);
+                                assert_eq!(b.storage(), peak);
+                                Ok(())
+                            })
+                        })
+                    })?;
+                    Ok(((), NativeConditionalSourceStorageV2(0)))
+                })
+            });
+            if short == 0 {
+                result.unwrap();
+                assert!(reached_leaf.get());
+                assert_eq!(b.peak_storage(), peak);
+                assert_eq!(b.storage(), FLOOR);
+                assert!(b.failed_storage().is_none());
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(Error(Cause::Resource(Resource::Storage(_))))
+                ));
+                assert!(!reached_leaf.get());
+                assert!(b.failed_storage().is_some());
+                // Earlier live reservations stay terminal after the last reserve
+                // fails; neither enclosing success nor wholesale refund occurs.
+                assert_eq!(b.storage(), FLOOR + required_header + HISTORY + COORDINATES);
+            }
+            assert_eq!(b.work(), 7 + 8 + 4);
+            assert!(b.work_ledger_identity_v1() == ledger);
+        }
+    }
+}
+
+#[test]
 fn conditional_final_component_rejection_and_unwind_never_refund() {
     for unwind in [false, true] {
         budgeted(|b| {
