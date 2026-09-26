@@ -847,6 +847,13 @@ fn actual_prepared_conditional_reference_composition_both_targets() {
     );
 }
 
+#[test]
+#[ignore = "prepared genuine V2 retained/imported formula controls; protected runtime, no Cargo or GPU"]
+fn actual_prepared_conditional_formula_v2_both_targets() {
+    use crate::production_reference_effect_join_v2::conditional_source_v1::formula_v2_tests;
+    run_prepared_source(formula_v2_tests::CHILD, false);
+}
+
 fn run_prepared_source(child_selector: &str, composition: bool) {
     let root = PathBuf::from(env::var_os(INPUTS).expect("prepared Vecadd inputs"));
     let results = PathBuf::from(env::var_os(RESULTS).expect("fresh Vecadd results root"));
@@ -969,6 +976,34 @@ fn run_prepared_source(child_selector: &str, composition: bool) {
                 1
             );
             row["composition"] = value;
+        }
+        // A separate opt-in sidecar; all existing reports and runner fields stay exact.
+        use crate::production_reference_effect_join_v2::conditional_source_v1::formula_v2_tests;
+        if child_selector == formula_v2_tests::CHILD {
+            let value = serde_json::from_slice(
+                &read_bounded(&output.join("FormulaV2.json"), TEXT_CAP).unwrap(),
+            )
+            .unwrap();
+            formula_v2_tests::check_report(&value);
+            assert_eq!(
+                value["statement"],
+                row["report"]["detail"]["conditional_formula"]["statement"]
+            );
+            assert_eq!(
+                value["semantic_root"],
+                row["report"]["detail"]["retained_proof_events"]["events"][0]["Retained"]["root"]
+            );
+            let text = std::str::from_utf8(&stdout).unwrap();
+            assert_eq!(
+                text.matches(&format!("test {child_selector} ... ok"))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                text.matches("test result: ok. 1 passed; 0 failed; 0 ignored;")
+                    .count(),
+                1
+            );
         }
         reports.push(row);
     }

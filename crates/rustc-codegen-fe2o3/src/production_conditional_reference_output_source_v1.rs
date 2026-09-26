@@ -97,6 +97,8 @@ pub(crate) fn replay_source_bound_cpu_formula_v2<R>(
 ) -> Result<R, Error> {
     #[cfg(test)]
     composition_tests::on_replay(request, binding, semantic_root, budget);
+    #[cfg(test)]
+    formula_v2_tests::on_replay(retained, request, binding, semantic_root, budget);
     retained
         .with_replayed_request_v2(
             request,
@@ -135,3 +137,7 @@ pub(crate) fn subjects(binding: &Binding) -> Result<FunctionalRefinementSubjects
 #[cfg(test)]
 #[path = "production_conditional_reference_genuine_composition_v1_tests.rs"]
 pub(crate) mod composition_tests;
+
+#[cfg(test)]
+#[path = "production_conditional_formula_genuine_v2_tests.rs"]
+pub(crate) mod formula_v2_tests;

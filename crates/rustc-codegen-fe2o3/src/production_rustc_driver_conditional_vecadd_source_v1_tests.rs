@@ -681,6 +681,27 @@ fn conditional_reference_composition_source_child() {
     eprintln!("CONDITIONAL REFERENCE COMPOSITION: {report}");
 }
 
+#[test]
+#[ignore = "prepared genuine V2 reimport child; actual source, retained proof and admitted runtime only"]
+fn conditional_formula_v2_source_child() {
+    use crate::production_reference_effect_join_v2::conditional_source_v1::formula_v2_tests;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let report = formula_v2_tests::observe(conditional_vecadd_source_child);
+    let result = PathBuf::from(env::var_os(CHILD_RESULT).expect("existing child result path"));
+    let bytes = serde_json::to_vec(&report).unwrap();
+    assert!(bytes.len() <= 1024 * 1024);
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(result.parent().unwrap().join("FormulaV2.json"))
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
+    eprintln!("CONDITIONAL FORMULA V2: {report}");
+}
+
 fn run(cases: &[Case], target: &str, stages: &[Stage]) {
     let workspace = workspace();
     let scratch = crate::test_temp_dir::TestTempDir::create("fe2o3-conditional-vecadd");
