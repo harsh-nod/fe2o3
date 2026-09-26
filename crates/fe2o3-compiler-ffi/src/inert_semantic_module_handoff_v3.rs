@@ -30,9 +30,19 @@ const OUTER_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-SEMANTIC-COMPILER-MODULE-H
 #[path = "inert_semantic_module_handoff_v4.rs"]
 pub(crate) mod native_v4;
 
+#[path = "inert_semantic_module_handoff_v5.rs"]
+pub(crate) mod native_v5;
+
+#[path = "inert_semantic_module_handoff_native.rs"]
+mod native;
+
 #[cfg(test)]
 #[path = "inert_semantic_module_handoff_v4_tests.rs"]
 mod native_v4_tests;
+
+#[cfg(test)]
+#[path = "inert_semantic_module_handoff_v5_tests.rs"]
+mod native_v5_tests;
 
 // Layout and limits are shared; schema choice is explicit, never a decode retry.
 struct WireSchema {
@@ -295,19 +305,14 @@ pub fn preflight_inert_semantic_compiler_module_handoff_v3(
     if !module_handoff_identity.matches(module_handoff_bytes) {
         return Err(InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffIdentityMismatch);
     }
-    if capsule.target() != module_handoff.target() {
-        return Err(InertSemanticCompilerModuleHandoffErrorV3::TargetMismatch);
-    }
-    let final_commitment = InertFinalCompilerModuleCommitmentV3::decode(
+    native::target_commitment(
+        capsule.target(),
         capsule
             .receipts()
             .final_compiler_module_commitment()
             .canonical_preimage(),
-    )
-    .map_err(InertSemanticCompilerModuleHandoffErrorV3::FinalCommitment)?;
-    if !final_commitment.matches_handoff(module_handoff) {
-        return Err(InertSemanticCompilerModuleHandoffErrorV3::FinalCommitmentMismatch);
-    }
+        module_handoff,
+    )?;
     let exact_outer_bytes = exact_outer_len(capsule_bytes.len(), module_handoff_bytes.len())?;
 
     Ok(InertSemanticCompilerModuleHandoffPreflightV3 {

@@ -73,6 +73,7 @@ pub use final_compiler_module_commitment_v3::{
 };
 pub use inert_refined_forwarding_output_v1::*;
 pub use inert_semantic_module_handoff_v3::native_v4::*;
+pub use inert_semantic_module_handoff_v3::native_v5::*;
 pub use inert_semantic_module_handoff_v3::{
     INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3, INERT_COMPILER_MODULE_PAIR_BINDING_MAGIC_V3,
     INERT_COMPILER_MODULE_PAIR_BINDING_VERSION_V3,
