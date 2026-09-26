@@ -52,6 +52,7 @@ mod process_staging;
 mod program_v2;
 mod program_v3;
 mod provisioning;
+mod provisioning_v2;
 mod root_checks;
 mod shared_adapter;
 pub use program_v2::{
@@ -140,6 +141,10 @@ pub use process_reaper::{
 pub use provisioning::{
     ProtectedIssuerServiceDeploymentInputsV1, ProtectedIssuerServiceProvisioningErrorV1,
     ProvisionedProtectedIssuerServiceInputsV1,
+};
+pub use provisioning_v2::{
+    ProtectedIssuerServiceProvisioningErrorV2, ProtectedIssuerServiceProvisioningStorageV2,
+    ProvisionedProtectedIssuerServiceInputsV2,
 };
 pub use session::{
     ProtectedIssuerSessionErrorV1, ProtectedIssuerSessionTimeoutErrorV1,
