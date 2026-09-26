@@ -55,7 +55,7 @@ authority or proof of real GPU cleanup. No native operation, protected Worker
 application transaction, injected KFD hook, or formal correspondence is tested.
 
 The initial build accidentally used an incomplete `--exact` filter and selected
-zero tests (`raw/test-build-initial.log`); it is not a passing qualification.
+zero tests (`raw/test-build-initial.log.gz`); it is not a passing qualification.
 The corrected exact baseline selected one test and failed at the intended
 `backend dropped` assertion, observing one Drop rather than zero
 (`raw/baseline.log`). `raw/baseline-source-sha256.txt` records that source.
@@ -69,8 +69,8 @@ Library tests run serially. Counts overlap and are not additive.
 
 | Gate | Result | Log |
 | --- | --- | --- |
-| Focused constructor regressions | 6 passed | `raw/focused.log` |
-| Unfiltered all-features runtime library | 1,523 passed, 3 failed, 28 ignored | `raw/runtime-all-features.log` |
+| Focused constructor regressions | 6 passed | `raw/focused.log.gz` |
+| Unfiltered all-features runtime library | 1,523 passed, 3 failed, 28 ignored | `raw/runtime-all-features.log.gz` |
 | Runtime and host doctests | 80 passed (52 runtime, 28 host) | `raw/doctests.log` |
 | Strict all-features/all-targets runtime and host Clippy | Passed with `-D warnings` | `raw/clippy.log` |
 | Runtime and host no-default-features check | Passed | `raw/minimal-check.log` |
@@ -89,6 +89,13 @@ ownership transitions, extraction order, fixture scope and documentation. The
 source manifest identifies tested source, not an authenticated Verus/native
 receipt. Toolchain details are in `raw/toolchain.txt` and `raw/cargo-version.txt`.
 
+The final staged audit initially found trailing whitespace and blank EOF lines
+in verbatim test/SSH logs, not source. `raw/initial-staged-whitespace.log.gz`
+retains that diagnostic. The affected logs are now deterministic gzip archives,
+preserving their exact bytes without introducing textual whitespace violations.
+The passing pre-stage source check is not evidence that the initial staged
+packet passed; the corrected packet is checked separately at delivery.
+
 ## Reproduction
 
 Prefix each Cargo command with the environment above:
@@ -106,7 +113,7 @@ sha256sum -c docs/evidence/dev-context-construction-custody-2026-09-26/raw/sourc
 
 ## External Gates
 
-MI300X still fails hostname resolution (`raw/mi300x-connectivity.log`); no remote
+MI300X still fails hostname resolution (`raw/mi300x-connectivity.log.gz`); no remote
 job or file was created. The pre-existing owner-inspection packet is untouched.
 No new Verus, native or matched HIP/HSA performance campaign is claimed.
 Production providers/refinement artifacts, native fault qualification and the
