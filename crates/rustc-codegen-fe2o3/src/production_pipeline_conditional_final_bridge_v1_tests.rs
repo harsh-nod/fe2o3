@@ -252,14 +252,18 @@ fn conditional_bridge_opaque_refusal_is_terminal_at_outer_f_entry() {
         let error = Error::Resource(Resource::Accounting);
         assert!(error.source().is_none());
         let result = catch_unwind(AssertUnwindSafe(|| {
-            super::super::conditional_refusal(&mut budget, |budget| {
-                budget.reserve_storage(23).unwrap();
-                budget.charge_work(7).unwrap();
-                if unwind {
-                    panic!("inert final bridge unwind");
-                }
-                Err(ProductionPipelineError::conditional_final_bridge_v1(error))
-            })
+            super::super::conditional_refusal(
+                &mut budget,
+                |budget| {
+                    budget.reserve_storage(23).unwrap();
+                    budget.charge_work(7).unwrap();
+                    if unwind {
+                        panic!("inert final bridge unwind");
+                    }
+                    Err(ProductionPipelineError::conditional_final_bridge_v1(error))
+                },
+                |error, _| error,
+            )
         }));
         assert_eq!(result.is_err(), unwind);
         assert_eq!(budget.storage(), 42);

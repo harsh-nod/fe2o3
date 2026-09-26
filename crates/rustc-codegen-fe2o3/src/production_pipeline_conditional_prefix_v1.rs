@@ -127,7 +127,7 @@ impl RankedVerifiedProductionCompilation {
 impl ConditionalPrefixForFV1 {
     pub(in crate::production_pipeline) fn into_finalizer_error_v1(
         self,
-        budget: &mut Budget<'_>,
+        budget: &Budget<'_>,
     ) -> ProductionPipelineError {
         if budget.storage() < self.retained_floor {
             return resource(Resource::Accounting);
@@ -193,32 +193,40 @@ impl RankedVerifiedProductionCompilation {
         limits: HistoryLimits,
         budget: &mut Budget<'_>,
     ) -> ProductionPipelineError {
-        conditional_refusal(budget, |budget| {
-            let prefix = self.prepare_conditional_prefix_for_f_v1(limits, budget)?;
-            if prefix
-                .preparation
-                .bindings
-                .transaction
-                .compiler_custody
-                .is_extraction_only()
-            {
-                // Source/F fixtures do not possess protected compiler custody.
-                return Ok(prefix.into_finalizer_error_v1(budget));
-            }
-            let native = bridge::native::prepare(prefix, budget).map_err(|error| {
-                ProductionPipelineError::conditional_final_bridge_v1(bridge::Error::Native(error))
-            })?;
-            Ok(native.into_finalizer_error(budget))
-        })
+        if self
+            .bindings
+            .transaction
+            .compiler_custody
+            .is_extraction_only()
+        {
+            // Source/F fixtures do not possess protected compiler custody.
+            return conditional_refusal(
+                budget,
+                |budget| self.prepare_conditional_prefix_for_f_v1(limits, budget),
+                ConditionalPrefixForFV1::into_finalizer_error_v1,
+            );
+        }
+        conditional_refusal(
+            budget,
+            |budget| {
+                let prefix = self.prepare_conditional_prefix_for_f_v1(limits, budget)?;
+                bridge::native::prepare(prefix, budget).map_err(|error| {
+                    ProductionPipelineError::conditional_final_bridge_v1(bridge::Error::Native(
+                        error,
+                    ))
+                })
+            },
+            bridge::native::Prepared::into_finalizer_error,
+        )
     }
 }
 
-// Only a successfully installed packet followed by the unchanged gate can
-// refund. Inner errors/unwind keep terminal charges even if this floor survived.
-fn conditional_refusal<'w>(
+// Preparation has no external publication effects. Return the original owner
+// only after postchecks; a consuming continuation must run outside this scope.
+fn conditional_preparation<'w, T>(
     budget: &mut Budget<'w>,
-    run: impl FnOnce(&mut Budget<'w>) -> Result<ProductionPipelineError, ProductionPipelineError>,
-) -> ProductionPipelineError {
+    run: impl FnOnce(&mut Budget<'w>) -> Result<T, ProductionPipelineError>,
+) -> Result<T, ProductionPipelineError> {
     let floor = budget.storage();
     let account = budget.work_ledger_identity_v1();
     let address = budget as *const Budget<'_> as usize;
@@ -230,28 +238,41 @@ fn conditional_refusal<'w>(
         return match result {
             Ok(result) => {
                 drop(result);
-                resource(Resource::Accounting)
+                Err(resource(Resource::Accounting))
             }
             Err(payload) => resume_unwind(payload),
         };
     }
     match result {
-        Ok(Ok(error))
-            if matches!(
-                &error,
-                ProductionPipelineError::RankedVerification(
-                    RankedError::ConditionalFinalizerRequired { .. }
-                )
-            ) =>
-        {
-            match budget.release_storage(budget.storage() - floor) {
-                Ok(()) => error,
-                Err(error) => resource(error),
-            }
-        }
-        Ok(Ok(error)) | Ok(Err(error)) => error,
+        Ok(result) => result,
         Err(payload) => resume_unwind(payload),
     }
+}
+
+// Only a successfully prepared owner followed by the unchanged gate can refund.
+// Refusal borrows the account read-only; preparation errors/unwind stay charged.
+fn conditional_refusal<'w, T>(
+    budget: &mut Budget<'w>,
+    prepare: impl FnOnce(&mut Budget<'w>) -> Result<T, ProductionPipelineError>,
+    refuse: impl FnOnce(T, &Budget<'w>) -> ProductionPipelineError,
+) -> ProductionPipelineError {
+    let floor = budget.storage();
+    let owner = match conditional_preparation(budget, prepare) {
+        Ok(owner) => owner,
+        Err(error) => return error,
+    };
+    let error = refuse(owner, budget);
+    if matches!(
+        &error,
+        ProductionPipelineError::RankedVerification(
+            RankedError::ConditionalFinalizerRequired { .. }
+        )
+    ) {
+        if let Err(error) = budget.release_storage(budget.storage() - floor) {
+            return resource(error);
+        }
+    }
+    error
 }
 
 fn join_error(error: impl fmt::Display) -> ProductionPipelineError {

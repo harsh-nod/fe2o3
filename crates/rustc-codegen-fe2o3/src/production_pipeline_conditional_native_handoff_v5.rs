@@ -59,7 +59,7 @@ pub(in crate::production_pipeline) struct Prepared {
 impl Prepared {
     pub(in crate::production_pipeline) fn into_finalizer_error(
         self,
-        budget: &mut Budget<'_>,
+        budget: &Budget<'_>,
     ) -> ProductionPipelineError {
         if budget.storage() < self.retained_floor {
             return super::super::resource(Resource::Accounting);

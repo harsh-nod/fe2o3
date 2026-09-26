@@ -8,6 +8,8 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+#[path = "production_pipeline_conditional_preparation_tests.rs"]
+mod preparation_tests;
 #[path = "production_pipeline_conditional_final_results_v1.rs"]
 mod results;
 #[path = "production_pipeline_conditional_final_results_v1_tests.rs"]
@@ -249,16 +251,20 @@ fn conditional_packet_terminal_error_and_unwind_are_not_refunded_by_f_entry() {
         budget.reserve_storage(19).unwrap();
         let account = budget.work_ledger_identity_v1();
         let result = catch_unwind(AssertUnwindSafe(|| {
-            conditional_refusal(&mut budget, |budget| {
-                budget.reserve_storage(23).map_err(resource)?;
-                budget.charge_work(7).map_err(resource)?;
-                if unwind {
-                    panic!("component terminal failure");
-                }
-                Err(ProductionPipelineError::conditional_packet_v2(
-                    PacketError::Resource(Resource::Accounting),
-                ))
-            })
+            conditional_refusal(
+                &mut budget,
+                |budget| {
+                    budget.reserve_storage(23).map_err(resource)?;
+                    budget.charge_work(7).map_err(resource)?;
+                    if unwind {
+                        panic!("component terminal failure");
+                    }
+                    Err(ProductionPipelineError::conditional_packet_v2(
+                        PacketError::Resource(Resource::Accounting),
+                    ))
+                },
+                |error, _| error,
+            )
         }));
         assert_eq!(result.is_err(), unwind);
         assert_eq!(budget.storage(), 42);
@@ -276,23 +282,27 @@ fn conditional_packet_refusal_scope_releases_only_completed_gate_and_checks_acco
         let mut foreign = Work::new(100);
         let mut budget = Budget::new(&mut work, 100);
         budget.reserve_storage(19).unwrap();
-        let error = conditional_refusal(&mut budget, |budget| {
-            budget.reserve_storage(23).map_err(resource)?;
-            let gate = ProductionPipelineError::RankedVerification(
-                RankedError::ConditionalFinalizerRequired { root: 0 },
-            );
-            if mode == 1 {
-                return Err(gate);
-            }
-            if mode == 2 {
-                budget.release_storage(24).map_err(resource)?;
-            }
-            if mode == 3 {
-                *budget = Budget::new(&mut foreign, 100);
-                budget.reserve_storage(42).map_err(resource)?;
-            }
-            Ok(gate)
-        });
+        let error = conditional_refusal(
+            &mut budget,
+            |budget| {
+                budget.reserve_storage(23).map_err(resource)?;
+                let gate = ProductionPipelineError::RankedVerification(
+                    RankedError::ConditionalFinalizerRequired { root: 0 },
+                );
+                if mode == 1 {
+                    return Err(gate);
+                }
+                if mode == 2 {
+                    budget.release_storage(24).map_err(resource)?;
+                }
+                if mode == 3 {
+                    *budget = Budget::new(&mut foreign, 100);
+                    budget.reserve_storage(42).map_err(resource)?;
+                }
+                Ok(gate)
+            },
+            |error, _| error,
+        );
         if mode < 2 {
             assert!(matches!(
                 error,
