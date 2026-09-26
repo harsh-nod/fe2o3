@@ -19,6 +19,9 @@ LEAF_SHA = "3cf248a9d642713ea738f58b882c7ccd7c38d8b5ccc6cbfbe3dfe246b03f412c"
 TEST = V / "test-completion-reconciliation-campaign.py"
 FILES = [BODY] + [V / ("context_completion_reconciliation" + suffix + "_v1.rs")
                   for suffix in ("", "_graph", "_validation", "_effects", "_path", "_leaf", "_planner")]
+ENUMERATION_NOTES = {prefix + ": not all errors may have been reported; rerun with a higher value for "
+                     "--multiple-errors to find other potential errors in this function"
+                     for prefix in ("function body check", "while loop")}
 
 
 def need(value, message):
@@ -68,6 +71,32 @@ def logical_negative(leaf, status, stdout, stderr, verifier, source_paths):
             if any(not isinstance(span.get("file_name"), str) or type(span.get("is_primary")) is not bool for span in spans):
                 return False
         return leaf.logical_negative(status, stdout, stderr, verifier, source_paths)
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
+def proof_positive(status, stdout, stderr, verifier, expected, source_paths):
+    try:
+        result = json.loads(stdout, object_pairs_hook=strict_object)
+        if status != 0 or not isinstance(result, dict):
+            return False
+        if (json.dumps(result.get("verification-results"), sort_keys=True) != json.dumps(expected, sort_keys=True)
+                or json.dumps(result.get("verus"), sort_keys=True) != json.dumps(verifier, sort_keys=True)):
+            return False
+        for line in stderr.splitlines():
+            diagnostic = json.loads(line, object_pairs_hook=strict_object)
+            if (not isinstance(diagnostic, dict) or diagnostic.get("$message_type") != "diagnostic"
+                    or diagnostic.get("level") != "note" or diagnostic.get("message") not in ENUMERATION_NOTES
+                    or diagnostic.get("code") is not None or diagnostic.get("children") != []):
+                return False
+            spans = diagnostic.get("spans")
+            if not isinstance(spans, list) or not spans or any(not isinstance(span, dict) for span in spans):
+                return False
+            if any(not isinstance(span.get("file_name"), str) or type(span.get("is_primary")) is not bool for span in spans):
+                return False
+            if not any(span["is_primary"] and span["file_name"] in source_paths for span in spans):
+                return False
+        return True
     except (ValueError, TypeError, KeyError):
         return False
 
@@ -189,12 +218,9 @@ def main():
              "source continuity after " + name)
         need(passed, "failed phase: " + name)
 
-    def positive(status, stdout, stderr):
-        if status != 0 or stderr:
-            return False
-        result = json.loads(stdout)
-        return (json.dumps(result.get("verification-results"), sort_keys=True) == json.dumps(leaf.PROOF_RESULT, sort_keys=True)
-                and json.dumps(result.get("verus"), sort_keys=True) == json.dumps(prior.VERIFIER, sort_keys=True))
+    def positive(root):
+        paths = {str((root / path).resolve()) for path in FILES}
+        return lambda s, o, e: proof_positive(s, o, e, prior.VERIFIER, leaf.PROOF_RESULT, paths)
 
     def proof(root, focus=None):
         return proof_command(root, args.verus, focus)
@@ -212,7 +238,7 @@ def main():
     phase("inherited-classifier-tests", [sys.executable, "-I", "-B", str(ROOT / LEAF.with_name("test-run.py"))],
           exact("PASS: leaf outcome negative classifier (12 groups)\n"))
     phase("campaign-tests", [sys.executable, "-I", "-B", str(ROOT / TEST)],
-          exact("PASS: production planner campaign calibration (7 groups)\n"))
+          exact("PASS: production planner campaign calibration (8 groups)\n"))
     phase("source-tests", [sys.executable, "-I", "-B", str(ROOT / V / "test-completion-reconciliation-source.py")],
           exact("PASS: completion planner source calibration (8 groups)\n"))
     phase("source-body", [sys.executable, "-I", "-B", str(ROOT / V / "check-completion-reconciliation-source.py"),
@@ -221,7 +247,7 @@ def main():
                str(ROOT / V / "pins/VERUS_CLOSURE_MANIFEST")]
     closure_ok = exact("PASS: pinned Verus release closure matched at this measurement (190 files, 129019839 bytes)\n")
     phase("closure-before", closure, closure_ok)
-    phase("proof-before", proof(ROOT), positive)
+    phase("proof-before", proof(ROOT), positive(ROOT))
     relocated = out / "relocated-source"
     expected = {str(path): before["inputs"][str(path)] for path in FILES}
     for path in FILES:
@@ -230,7 +256,7 @@ def main():
         shutil.copyfile(ROOT / path, destination)
     need(leaf.tree(relocated) == expected, "exact signed relocation")
     prior.save(out / "relocated-inputs.json", expected)
-    phase("relocated-proof", proof(relocated), positive)
+    phase("relocated-proof", proof(relocated), positive(relocated))
     need(leaf.tree(relocated) == expected, "relocated source unchanged")
     body = (ROOT / BODY).read_text()
     roster = [(name, BODY, data, "*plan_completion_step_v1*") for name, data in mutations(body).items()]
@@ -249,7 +275,7 @@ def main():
         paths = {str((mutated / path).resolve()) for path in FILES}
         phase(name, proof(mutated, focus), lambda s, o, e: logical_negative(leaf, s, o, e, prior.VERIFIER, paths))
         need(leaf.tree(mutated) == measured, "mutant continuity")
-    phase("proof-after", proof(ROOT), positive)
+    phase("proof-after", proof(ROOT), positive(ROOT))
     phase("closure-after", closure, closure_ok)
     prior.clean_source()
     after = dict(commit=prior.git("rev-parse", "HEAD").decode().strip(), inputs=prior.snapshot())

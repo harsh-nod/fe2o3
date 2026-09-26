@@ -91,4 +91,21 @@ need(positive[:7] == ["/usr/bin/timeout", "--foreground", "--signal=TERM", "--ki
 need(positive[positive.index("--multiple-errors") + 1] == "0" and positive.count("--multiple-errors") == 1)
 need("--no-cheating" in positive and "--rlimit" not in positive and "--smt-option" not in positive)
 need(positive[-1] == str(root / runner["FILES"][1]))
-print("PASS: production planner campaign calibration (7 groups)")
+success = {"verus": verifier, "verification-results": leaf.PROOF_RESULT}
+note = dict(message, **{"$message_type": "diagnostic", "level": "note", "message": sorted(runner["ENUMERATION_NOTES"])[0],
+                       "code": None, "children": []})
+positive_check = lambda status, result, notes: runner["proof_positive"](
+    status, result, "\n".join(json.dumps(item) for item in notes), verifier, leaf.PROOF_RESULT, {path})
+need(positive_check(0, json.dumps(success), []))
+need(positive_check(0, json.dumps(success), [note]))
+for field, values in (("level", ("warning", "error")), ("message", ("unrecognized note", "Resource limit (rlimit) exceeded")),
+                      ("children", ([message], None)), ("spans", ([], [None], [{"file_name": "/foreign.rs", "is_primary": True}]))):
+    for value in values:
+        need(not positive_check(0, json.dumps(success), [dict(note, **{field: value})]))
+need(not positive_check(1, json.dumps(success), [note]))
+need(not positive_check(0, json.dumps(result), [note]))
+need(not positive_check(0, json.dumps(success).replace('"errors": 0', '"errors": 1, "errors": 0'), []))
+for malformed in ("not JSON", "[]", "null"):
+    need(not positive_check(0, malformed, []))
+need(not positive_check(0, json.dumps(success), [None]))
+print("PASS: production planner campaign calibration (8 groups)")
