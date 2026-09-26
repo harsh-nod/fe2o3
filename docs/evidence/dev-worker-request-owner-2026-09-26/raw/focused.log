@@ -1,0 +1,83 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 1m 16s
+     Running unittests src/lib.rs (/tmp/fe2o3-worker-request-20260926-target/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 75 tests
+test async_engine::tests::progress_handle_and_worker_v4_v5_paths_are_send_compatible ... ok
+test async_engine::tests::worker_panic_wakes_registered_futures_as_stopped ... ok
+test async_engine::tests::event_poll_and_progress_flush_share_one_worker_thread ... ok
+test authorized_execution::tests::exact_worker_v3_runtime_bindings_are_required ... ok
+test worker::request_admission::tests::request_owner_classification_never_downgrades_sealed_validation ... ok
+test worker::request_admission::tests::request_owner_open_rejects_legacy_and_returns_backend ... ok
+test worker::request_admission::tests::request_owner_scope_preserves_unscoped_dispatch_and_checks_every_owned_handle ... ok
+test worker::tests::allocation_outcome_tests::allocation_dispatchers_erase_settlement_authority_to_legacy_quiescence ... ok
+test kfd_backend::tests::worker_v3_generated_only_profile_denies_generic_compute_before_encoding ... ok
+test worker::tests::allocation_outcome_tests::v4_allocation_quiescence_keeps_context_credit_quarantined_over_child_process ... ok
+test worker::tests::allocation_outcome_tests::v1_allocation_quiescence_keeps_context_credit_quarantined_over_child_process ... ok
+test worker::tests::allocation_outcome_tests::v5_allocation_quiescence_keeps_context_credit_quarantined_over_child_process ... ok
+test worker::tests::async_progress_v4_worker_flush_completes_deferred_event ... ok
+test worker::tests::async_progress_v4_worker_deadline_seals_registration_event_and_context ... ok
+test worker::tests::async_progress_v5_worker_flush_completes_deferred_atomic_event ... ok
+test worker::tests::async_progress_v5_worker_terminal_and_eof_seal_every_observer ... ok
+test worker::tests::blocked_request_write_obeys_absolute_deadline_and_reaps_the_worker ... ok
+test worker::tests::canonical_codec_and_dispatcher_cover_every_backend_operation ... ok
+test worker::tests::canonical_codec_preserves_backend_failure_classes ... ok
+test worker::tests::canonical_v1_server_accepts_an_admitted_immediate_progress_backend ... ok
+test worker::tests::decoded_terminal_failure_seals_the_worker_backend ... ok
+test worker::tests::canonical_byte_response_limit_fits_the_frame_exactly ... ok
+test worker::tests::delayed_worker_request_transit_cannot_extend_wait_deadline ... ok
+test worker::tests::expired_worker_wait_is_pending_without_publishing_a_request ... ok
+test worker::tests::delayed_worker_response_cannot_extend_wait_deadline ... ok
+test worker::tests::non_worker_is_rejected_during_handshake ... ok
+test worker::tests::older_dispatchers_reject_newer_extensions_and_v4_rejects_malformed_flush ... ok
+test worker::tests::oversized_and_truncated_frames_fail_closed ... ok
+test worker::tests::failed_worker_shutdown_disconnects_full_response_channel ... ok
+test worker::tests::server_emits_handshake_processes_requests_and_stops_on_empty_frame ... ok
+test worker::tests::response_shape_mismatch_seals_the_worker_backend ... ok
+test worker::tests::terminal_worker_drop_disconnects_full_response_channel ... ok
+test worker::tests::terminal_worker_shutdown_disconnects_full_response_channel ... ok
+test worker::tests::v1_backend_rejects_v4_handshake ... ok
+test worker::tests::v4_additive_codec_and_dispatcher_preserve_bounds_and_failure_classes ... ok
+test worker::tests::v4_additive_dispatcher_rejects_trailing_and_malformed_requests ... ok
+test worker::tests::v4_and_v5_server_bounds_preserve_native_xgmi_hosting ... ok
+test worker::tests::v1_empty_codec_request_seals_child_before_any_later_request ... ok
+test worker::tests::v4_backend_exposes_portable_flush_through_runtime_context ... ok
+test worker::tests::v4_backend_flushes_and_shuts_down_over_child_process ... ok
+test worker::tests::v4_backend_interoperates_with_pinned_pre_semantic_profile ... ok
+test worker::tests::v4_backend_preserves_additive_surfaces_over_child_process ... ok
+test worker::tests::v4_backend_server_dispatches_flush_after_exact_handshake ... ok
+test worker::tests::v4_decoded_terminal_flush_failure_reaps_and_seals_the_worker ... ok
+test worker::tests::v4_empty_codec_request_seals_child_before_any_later_request ... ok
+test worker::tests::v4_flush_codec_is_bounded_and_preserves_failure_classes ... ok
+test worker::tests::v4_backend_rejects_v1_v5_and_unknown_version_handshakes ... ok
+test worker::tests::v4_invalid_request_deadline_reaps_and_seals_the_worker ... ok
+test worker::tests::v4_quiescent_copy_marker_preserves_proxy_and_exact_release_over_three_child_cycles ... ok
+test worker::tests::v4_server_emits_only_the_v4_handshake ... ok
+test worker::tests::v4_flush_deadline_failure_reaps_and_seals_the_worker ... ok
+test worker::tests::v4_terminal_capability_response_reaps_and_preserves_fail_closed_cache ... ok
+test worker::tests::v4_zero_async_copy_handle_reaps_and_seals_the_worker ... ok
+test worker::tests::v5_backend_carries_exact_semantic_contracts_and_failure_classes_over_child_process ... ok
+test worker::tests::v5_backend_rejects_wrong_or_invalid_semantics_before_child_custody ... ok
+test worker::tests::v5_backend_server_dispatches_semantics_after_exact_handshake ... ok
+test worker::tests::v5_empty_semantic_request_seals_child_before_any_later_request ... ok
+test worker::tests::v5_in_place_server_does_not_treat_truncated_eof_as_clean_shutdown ... ok
+test worker::tests::v5_in_place_server_rejects_every_truncated_frame_header ... ok
+test worker::tests::v5_in_place_server_rejects_oversized_declared_frame ... ok
+test worker::tests::v5_in_place_server_rejects_truncated_frame_payload ... ok
+test worker::tests::v5_in_place_server_returns_backend_only_after_canonical_shutdown_frame ... ok
+test worker::tests::v5_backend_rejects_v1_v4_malformed_and_unknown_handshakes ... ok
+test worker::tests::v5_malformed_semantic_response_reaps_and_seals_child ... ok
+test worker::tests::v5_semantic_codec_preserves_exact_contracts_and_failure_classes ... ok
+test worker::tests::v5_semantic_dispatch_rejects_malformed_contracts_before_backend_custody ... ok
+test worker::tests::v5_quiescent_copy_marker_preserves_semantic_proxy_and_release_over_three_child_cycles ... ok
+test worker::tests::v5_server_emits_only_the_v5_handshake ... ok
+test worker::tests::worker_backend_codec_drives_context_and_cleanup_over_child_process ... ok
+test worker::tests::worker_drop_disconnects_full_response_channel ... ok
+test worker::tests::v5_semantic_response_timeout_reaps_and_seals_child ... ok
+test worker::tests::worker_shutdown_rejects_deadline_overflow ... ok
+test worker::tests::worker_shutdown_disconnects_full_response_channel ... ok
+test worker::tests::worker_termination_disconnects_full_response_channel ... ok
+test worker::tests::worker_wait_reserves_response_grace_inside_parent_deadline ... ok
+
+test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 1464 filtered out; finished in 1.48s
+

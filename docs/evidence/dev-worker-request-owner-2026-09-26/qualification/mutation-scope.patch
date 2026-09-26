@@ -1,0 +1,11 @@
+--- a/crates/fe2o3-runtime/src/worker/request_admission.rs
++++ b/crates/fe2o3-runtime/src/worker/request_admission.rs
+@@ -214,7 +214,7 @@
+             encode_unit_response_v1(classify(owner.is_terminal_v1(), result))
+         }
+         _ => owner.dispatch_backend_v1(request, |backend, request, owns| {
+-            dispatch(backend, request, Some(owns))
++            dispatch(backend, request, None)
+         }),
+     }
+ }

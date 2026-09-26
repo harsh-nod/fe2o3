@@ -24,7 +24,21 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest composed XGMI request development (2026-09-26): the separate native
+Latest Worker request-owner development (2026-09-26): explicit V1/V4/V5 serving
+APIs now retain a private Context with a complete Required request roster.
+Witnesses are minted in the worker; handles are indexed before response writing.
+All memory-reference families check ownership before backend entry, and terminal,
+protocol, I/O or panic loss quarantines local custody. The
+[development packet](evidence/dev-worker-request-owner-2026-09-26/README.md)
+records 75 focused production passes, 52 doctests, strict static checks and
+25 isolated typed-account groups. Broad Runtime tests report 1,508 passes,
+three known socket-environment failures and 28 ignores. Counts overlap.
+This is server-local accounting with scripted native outcomes, not cross-process
+shared-root authority, Worker V3 application refinement, native qualification
+or measured performance. Deployment/native replay, formal composition and
+matched HIP/HSA performance remain open. Accepted milestones and A1/A2 are unchanged.
+
+Earlier composed XGMI request development (2026-09-26): the separate native
 two-endpoint backend now accepts complete request/N1/N2 admissions in original
 endpoint order, authenticates selected request witnesses before allocation
 effects, and retains mandatory policy through clean shutdown. The
@@ -34,7 +48,7 @@ records 191 focused production passes, 50 doctests, strict static checks and
 intended assertions. Broad Runtime tests report 1,505 passes, three known
 socket-environment failures and 28 ignores. Counts overlap. The CPU adapter
 does not execute checked-device admission, successful public constructors,
-the actual native trait path or native shutdown. Worker transport, native
+the actual native trait path or native shutdown. At that checkpoint Worker transport, native
 replay, formal composition and matched HIP/HSA performance remain open.
 No accepted milestone, A1/A2 status or parity claim changes.
 

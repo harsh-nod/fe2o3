@@ -1,0 +1,11 @@
+--- a/crates/fe2o3-runtime/src/worker/request_admission.rs
++++ b/crates/fe2o3-runtime/src/worker/request_admission.rs
+@@ -6,6 +6,8 @@
+ use crate::{RuntimeErrorV1, RuntimeWorkerRequestOwnerV1};
+ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+ 
++#[cfg(test)]
++mod qualification;
+ /// Serves V1 with persistent server-local request accounting. The immediate
+ /// progress bound is unchanged; composed KFD backends must use V4 or V5.
+ ///

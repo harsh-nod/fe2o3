@@ -1,0 +1,12 @@
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/admission-tests.rs: OK
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/binder-tests.rs: OK
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/default-tests.rs: OK
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/files.tsv: OK
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/generated-tests.rs: OK
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/kfd-account.rs: OK
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/kfd-runtime.rs: OK
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/mock-tests.rs: OK
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/overlay-files.list: OK
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/overlay.patch: OK
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/runtime-binding.rs: OK
+docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/versions.rs: OK

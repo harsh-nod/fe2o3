@@ -1,0 +1,99 @@
+   Compiling fe2o3-runtime v0.1.0 (/tmp/fe2o3-worker-request-20260926-source/crates/fe2o3-runtime)
+warning: method `quarantine_all` is never used
+  --> crates/fe2o3-runtime/src/context/allocation_admission.rs:39:19
+   |
+18 | impl ContextAllocationAdmissionV1 {
+   | --------------------------------- method in this implementation
+...
+39 |     pub(super) fn quarantine_all(&mut self) {
+   |                   ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fe2o3-runtime` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 57.19s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 25 tests
+test context::allocation_admission::tests::qualification::qualification_complete_roster_rejects_aliases_and_preserves_device_order ... ok
+test context::allocation_admission::tests::qualification::qualification_cold_context_and_returned_backend_preserve_root_custody ... ok
+test context::allocation_admission::tests::qualification::qualification_session_quarantine_blocks_profile_and_new_witnesses ... ok
+test context::allocation_admission::tests::qualification::qualification_kfd_context_retains_refunds_and_preserves_policy_after_shutdown ... ok
+test context::allocation_admission::tests::qualification::qualification_witness_rejects_wrong_context_brand_leaf_and_extent ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_bind_rejection_refunds_before_metadata_or_source_transfer ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_install_retire_has_exact_request_custody ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_journal_rejection_after_bind_refunds_unissued_requests ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_journal_unwind_quarantines_entire_uncommitted_roster ... ok
+test context::tests::allocation_outcome_tests::qualification::qualification_default_request_hook_never_calls_legacy_allocation ... ok
+test context::tests::qualification::qualification_context_outcomes_preserve_settlement_and_quarantine ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_pre_adoption_and_retirement_reject_swapped_request_extents ... ok
+test context::tests::qualification::qualification_open_returns_original_backend_on_alias_roster ... ok
+test worker::request_admission::qualification::qualification_worker_all_memory_references_require_owned_allocation_before_dispatch ... ok
+test worker::request_admission::qualification::qualification_worker_all_versions_use_context_witnesses_and_frozen_enumeration ... ok
+test worker::request_admission::qualification::qualification_worker_allocation_outcomes_preserve_local_settlement_and_wire_tags ... FAILED
+test worker::request_admission::qualification::qualification_worker_capacity_and_unknown_requests_have_no_backend_effects ... ok
+test worker::request_admission::qualification::qualification_worker_duplicate_success_retains_both_context_records ... FAILED
+test worker::request_admission::qualification::qualification_worker_framing_loss_seals_all_existing_request_custody ... ok
+test worker::request_admission::qualification::qualification_worker_lost_release_response_refunds_only_confirmed_disposal ... FAILED
+test worker::request_admission::qualification::qualification_worker_panic_and_direct_terminal_preserve_all_custody ... FAILED
+test worker::request_admission::qualification::qualification_worker_release_retry_removes_credit_only_after_confirmed_disposal ... FAILED
+test worker::request_admission::qualification::qualification_worker_required_roster_rejection_returns_original_backend ... ok
+test worker::request_admission::qualification::qualification_worker_response_loss_never_refunds_allocation_or_replays_backend ... FAILED
+test kfd_backend::generated_shells::tests::qualification::qualification_generated_binder_rejects_missing_extent_order_leaf_brand_and_tail ... ok
+
+failures:
+
+---- worker::request_admission::qualification::qualification_worker_allocation_outcomes_preserve_local_settlement_and_wire_tags stdout ----
+
+thread 'worker::request_admission::qualification::qualification_worker_allocation_outcomes_preserve_local_settlement_and_wire_tags' (80) panicked at crates/fe2o3-runtime/src/worker/request_admission/qualification.rs:370:13:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- worker::request_admission::qualification::qualification_worker_duplicate_success_retains_both_context_records stdout ----
+
+thread 'worker::request_admission::qualification::qualification_worker_duplicate_success_retains_both_context_records' (82) panicked at crates/fe2o3-runtime/src/worker/request_admission/qualification.rs:575:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- worker::request_admission::qualification::qualification_worker_lost_release_response_refunds_only_confirmed_disposal stdout ----
+
+thread 'worker::request_admission::qualification::qualification_worker_lost_release_response_refunds_only_confirmed_disposal' (84) panicked at crates/fe2o3-runtime/src/worker/request_admission/qualification.rs:489:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- worker::request_admission::qualification::qualification_worker_panic_and_direct_terminal_preserve_all_custody stdout ----
+
+thread 'worker::request_admission::qualification::qualification_worker_panic_and_direct_terminal_preserve_all_custody' (85) panicked at crates/fe2o3-runtime/src/worker/request_admission/qualification.rs:557:9:
+assertion `left == right` failed
+  left: 1
+ right: 2
+
+---- worker::request_admission::qualification::qualification_worker_release_retry_removes_credit_only_after_confirmed_disposal stdout ----
+
+thread 'worker::request_admission::qualification::qualification_worker_release_retry_removes_credit_only_after_confirmed_disposal' (86) panicked at crates/fe2o3-runtime/src/worker/request_admission/qualification.rs:408:17:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- worker::request_admission::qualification::qualification_worker_response_loss_never_refunds_allocation_or_replays_backend stdout ----
+
+thread 'worker::request_admission::qualification::qualification_worker_response_loss_never_refunds_allocation_or_replays_backend' (88) panicked at crates/fe2o3-runtime/src/worker/request_admission/qualification.rs:458:13:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+
+failures:
+    worker::request_admission::qualification::qualification_worker_allocation_outcomes_preserve_local_settlement_and_wire_tags
+    worker::request_admission::qualification::qualification_worker_duplicate_success_retains_both_context_records
+    worker::request_admission::qualification::qualification_worker_lost_release_response_refunds_only_confirmed_disposal
+    worker::request_admission::qualification::qualification_worker_panic_and_direct_terminal_preserve_all_custody
+    worker::request_admission::qualification::qualification_worker_release_retry_removes_credit_only_after_confirmed_disposal
+    worker::request_admission::qualification::qualification_worker_response_loss_never_refunds_allocation_or_replays_backend
+
+test result: FAILED. 19 passed; 6 failed; 0 ignored; 0 measured; 1539 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

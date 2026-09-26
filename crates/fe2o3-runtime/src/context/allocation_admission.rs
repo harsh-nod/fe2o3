@@ -16,6 +16,35 @@ pub(super) struct ContextAllocationAdmissionV1 {
 }
 
 impl ContextAllocationAdmissionV1 {
+    pub(super) fn is_required(&self) -> bool {
+        !self.accounts.is_empty()
+            && self
+                .accounts
+                .values()
+                .all(|account| account.composed_admission().is_some())
+    }
+
+    pub(super) fn has_local_retained(&self) -> bool {
+        !self.retained.is_empty()
+    }
+
+    pub(super) fn required_sessions_are_live(&self) -> bool {
+        self.accounts.values().all(|account| {
+            account
+                .composed_admission()
+                .is_none_or(|entry| entry.is_live())
+        })
+    }
+
+    pub(super) fn quarantine_all(&mut self) {
+        for (_, credit) in self.retained.drain() {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| credit.quarantine())) {
+                // Sealing must preserve the original operation/transport panic.
+                core::mem::forget(payload);
+            }
+        }
+    }
+
     pub(super) fn from_profile(
         devices: &[RuntimeDeviceV1],
         profile: RuntimeAllocationAdmissionProfileV1,

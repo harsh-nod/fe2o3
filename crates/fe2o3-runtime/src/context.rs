@@ -22,6 +22,8 @@ pub(crate) use graph::*;
 mod allocation_admission;
 mod allocation_witness;
 pub use allocation_witness::*;
+mod worker_admission;
+pub use worker_admission::RuntimeWorkerRequestOwnerV1;
 mod drain;
 mod drain_capture;
 mod generated_issue;

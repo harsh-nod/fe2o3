@@ -1,0 +1,12 @@
+2a56ea742d3c8858a6a1e8f35fa3cd9761de5b73bfee9c2a5f4ddac7eab8f156  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/admission-tests.rs
+ebfee1f113566d9abd052692c56f2ce7a1338da10e9ad0d62f531e11bff35fc5  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/binder-tests.rs
+296651efea830fc555a89022c548c804f80520739689f69909016489ce62f7e5  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/default-tests.rs
+d4669090b9ecdc16215dc84d2ad4f0e37822544b1038db35e30b2973c946af02  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/files.tsv
+8df0abb8ba4e01ce3c660870be7cb2148b21bc2a71804878d87ff1812fab7e48  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/generated-tests.rs
+58fce9402666770e96cd996c4721c99188b7cdb120046ca0b81bb7853ac7b89a  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/kfd-account.rs
+889a2c25ea309d094ce4a71a38aebfdcc83c1ec11840b465a03d498d94f51763  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/kfd-runtime.rs
+a05fc27a3b2feefabf711d00d44316dab70866b7a16fc85341921d67355b825f  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/mock-tests.rs
+e02794436c2937e6ab84d0bdddba459954a4fdc9735a96efaca545b4c7883fba  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/overlay-files.list
+4f0cf5b549f82ca12d1f2a8fb5cb73e7ee14a7ff007207e838a39b08b20e2b11  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/overlay.patch
+7ae6ea5cb4ddd1151eecc003110c0eaa312834d58cd92652c41ce764697f64f3  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/runtime-binding.rs
+aea01167802e9c0605d80b75f08a61b4d28595997b64a904df3dfb4014a94c44  docs/evidence/dev-runtime-request-witness-2026-09-26/qualification/versions.rs

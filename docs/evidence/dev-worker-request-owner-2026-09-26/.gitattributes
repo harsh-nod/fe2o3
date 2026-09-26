@@ -1,0 +1,4 @@
+# Preserve captured output and unified-diff context byte for byte.
+raw/** -whitespace
+initial/** -whitespace
+qualification/*.patch -whitespace

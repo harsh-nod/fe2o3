@@ -279,14 +279,48 @@ real native trait path, peer mapping, shutdown or kernel/copy engines. Source
 wiring checks do not replace those execution gates. No new formal refinement
 or matched performance result is claimed.
 
+### Worker Server-Local Request Ownership
+
+The [Worker request-owner packet](evidence/dev-worker-request-owner-2026-09-26/README.md)
+adds `RuntimeWorkerRequestOwnerV1` and opt-in `serve_runtime_request_owner_v1`,
+`v4` and `v5` entry points. A private real Context validates the complete Required
+roster and owns allocation credits. Its existing allocate/release state machine
+mints borrowed witnesses locally; no ledger account or native authority is sent
+over the wire. A pre-reserved raw-handle index connects wire handles to that
+Context's allocation records without adding a post-native allocation step.
+
+Other worker operations remain backend-owned. After complete decoding, every
+allocation reference in read/write, ordinary launch, peer copy, async copy,
+atomic and collective requests must belong to this owner's index. Enumeration
+uses the admitted immutable roster. Existing unscoped serving APIs and V1/V4/V5
+wire encodings remain unchanged; V1 retains its immediate-progress trait bound.
+
+Success is rooted before response encoding/writing. I/O or protocol failure,
+panic, and terminal responses seal the owner and quarantine all its local
+credits without disposal. Release removes its index entry only after Context
+confirms disposal, even when the successful response is later lost. Backend
+transfer requires empty local records and healthy Required sessions, not zero
+aggregate usage from other healthy account holders. Empty shutdown frames do
+not imply disposal, native shutdown or quiescence. Directly dispatched streams,
+modules and submissions are not inventoried by the private allocation Context.
+
+Generic quiescence still quarantines locally. Allocation-specific settled-no-owner
+can refund locally but keeps the same generic Quiescent wire tag; client-side
+credit remains conservative. This does not transport a parent Context witness,
+join host/worker roots, add replay epochs, or establish Worker V3 compiler authority.
+The owning constructor preserves existing Context panic/Drop behavior, while
+serving borrows an externally retained owner and preserves it across unwind.
+
 ### Remaining Integration Gates
 
 - Composed XGMI and multi-device checked construction, partial-admission cleanup,
   selected-endpoint forwarding and native startup/shutdown require hardware
   qualification. CPU policy and structural checks are not native acceptance.
-- Worker proxies do not transport borrowed request witnesses. Wrapping a
-  composed backend fails closed at witness-free server allocation; this is an
-  unsupported composition, not transparent profile transport.
+- Worker proxies still do not transport borrowed request witnesses. The explicit
+  request-owner servers support a worker-local Required ledger, not transparent
+  parent-profile transport. Old unwrapped servers still fail closed. Deployment,
+  native child-process failure replay, cross-process authority and Worker V3
+  compiler/application refinement remain open.
 - Real checked-device constructor replay, all three native startup orders,
   generated DATA adoption/disposal, pool reuse, failure injection and shutdown
   still require native qualification. CPU fixtures cannot establish these.
