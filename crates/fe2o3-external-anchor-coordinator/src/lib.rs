@@ -4,6 +4,17 @@
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 compile_error!("fe2o3-external-anchor-coordinator requires Linux x86-64");
 
+mod native;
+mod native_adapter;
+mod native_v2;
+mod native_v3;
+pub use native::{
+    ExternalAnchorPreparationErrorV2, ExternalAnchorPreparationFailureV2,
+    ExternalAnchorPreparationQuotaV2, ExternalAnchorPreparationStorageV2,
+};
+pub use native_v2::PreparedExternalAnchorOccurrenceV2;
+pub use native_v3::PreparedExternalAnchorOccurrenceV3;
+
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
@@ -49,7 +60,6 @@ use fe2o3_protected_static_executable::{
     ProtectedStaticExecutableErrorV1, ProtectedStaticExecutableMeasurementV1,
     ProtectedStaticExecutableOwnerV1, ProtectedStaticExecutableV1,
 };
-use rustix::fs::{FileType, OFlags};
 use rustix::net::{
     AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SocketFlags,
     SocketType, recv, recvmsg, socketpair,
@@ -563,31 +573,9 @@ fn validate_state_root(
     root: &File,
     service: CompilerExecutionExternalAnchorServiceIdentityV1,
 ) -> Result<StateRootSnapshotV1, ExternalAnchorCoordinatorErrorV1> {
-    let descriptor_flags = rustix::io::fcntl_getfd(root)
-        .map_err(|source| io_error("inspect anchor state-root descriptor", source.into()))?;
-    let status = rustix::fs::fcntl_getfl(root)
-        .map_err(|source| io_error("inspect anchor state-root status", source.into()))?;
-    let stat = rustix::fs::fstat(root)
-        .map_err(|source| io_error("inspect anchor state root", source.into()))?;
-    let forbidden = OFlags::APPEND | OFlags::ASYNC | OFlags::DIRECT | OFlags::PATH;
-    if !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC)
-        || status & OFlags::ACCMODE != OFlags::RDONLY
-        || status.intersects(forbidden)
-        || FileType::from_raw_mode(stat.st_mode) != FileType::Directory
-        || stat.st_mode & 0o7777 != STATE_ROOT_MODE_V1
-        || stat.st_uid != service.uid()
-        || stat.st_gid != service.gid()
-        || stat.st_nlink == 0
-    {
-        return Err(ExternalAnchorCoordinatorErrorV1::InvalidStateRoot);
-    }
-    Ok(StateRootSnapshotV1 {
-        device: stat.st_dev,
-        inode: stat.st_ino,
-        mode: stat.st_mode,
-        uid: stat.st_uid,
-        gid: stat.st_gid,
-        links: stat.st_nlink,
+    native::state_root(root, service).map_err(|error| match error {
+        native::RootError::Invalid => ExternalAnchorCoordinatorErrorV1::InvalidStateRoot,
+        native::RootError::Io(operation, source) => io_error(operation, source.into()),
     })
 }
 
@@ -1241,7 +1229,7 @@ mod tests {
             .unwrap()
     }
 
-    fn static_pause_elf() -> Vec<u8> {
+    pub(crate) fn static_pause_elf() -> Vec<u8> {
         const HEADER: usize = 64;
         const PROGRAM: usize = 56;
         const PROGRAMS: usize = 4;
