@@ -3,6 +3,7 @@ use super::*;
 use crate::compiler_descriptor::checked_output_policy3_v1::refined_forwarding_v1::{
     FinalOwnerV1, RefinedForwardingDescriptorErrorV1, validate_final_descriptor_evidence_v1,
 };
+use crate::production_pipeline::checked_output_policy6_v1::conditional_prefix_v1::bridge;
 use fe2o3_kernel_analysis::CanonicalKirCrossBlockForwardingLimitsV1 as ForwardingLimits;
 use fe2o3_lower_mir_kernel::{
     ProductionCrossBlockForwardingOriginV1 as FinalOrigin,
@@ -31,9 +32,7 @@ pub(crate) enum RefinedForwardingNativeStageErrorV1 {
     Worker(Box<worker::RefinedForwardingWorkerErrorV1>),
     BoundedUnroll(loop_unroll_native_v1::LoopUnrollNativeStageErrorV1),
     ConditionalPacket(Box<crate::production_native_source_lineage_v1::ConditionalPacketErrorV2>),
-    ConditionalFinalBridge(
-        Box<super::checked_output_policy6_v1::conditional_prefix_v1::bridge::Error>,
-    ),
+    ConditionalFinalBridge(Box<bridge::Error>),
 }
 impl fmt::Display for RefinedForwardingNativeStageErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -64,7 +63,7 @@ fn resource(value: Resource) -> ProductionPipelineError {
 }
 impl ProductionPipelineError {
     pub(in crate::production_pipeline) fn conditional_final_bridge_v1(
-        value: super::checked_output_policy6_v1::conditional_prefix_v1::bridge::Error,
+        value: bridge::Error,
     ) -> Self {
         error(RefinedForwardingNativeStageErrorV1::ConditionalFinalBridge(
             Box::new(value),

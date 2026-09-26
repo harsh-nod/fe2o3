@@ -75,7 +75,7 @@ impl fmt::Display for Error {
         let (stage, cause): (&str, &dyn fmt::Display) = match self {
             Self::Resource(e) => ("resource", e),
             Self::Packet(e) => ("packet", e),
-            Self::Context(e) => ("context", e),
+            Self::Context(e) => return write!(f, "conditional F/V5 producer context: {e:?}"),
             Self::Contract(e) => ("contract", e),
             Self::History(e) => ("history", e),
             Self::Catalog(e) => ("catalog", e),

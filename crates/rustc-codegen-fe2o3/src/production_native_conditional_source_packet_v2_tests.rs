@@ -77,6 +77,7 @@ fn conditional_packet_selected_consumer_typed_late_errors_and_unwind_are_termina
     for mode in 0..4 {
         let mut work = Work::new(100);
         let mut foreign = Work::new(100);
+        let foreign_budget = Budget::new(&mut foreign, 100);
         let mut budget = Budget::new(&mut work, 100);
         budget.reserve_storage(FLOOR).unwrap();
         let drops = Rc::new(Cell::new(0));
@@ -94,7 +95,7 @@ fn conditional_packet_selected_consumer_typed_late_errors_and_unwind_are_termina
                             budget.release_storage(24)?;
                         }
                         _ => {
-                            *budget = Budget::new(&mut foreign, 100);
+                            *budget = foreign_budget;
                             budget.reserve_storage(FLOOR + 23)?;
                         }
                     }

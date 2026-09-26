@@ -70,7 +70,7 @@ impl Model {
         b.charge_work(PRIOR).unwrap();
         let ledger = b.work_ledger_identity_v1();
         let result = self.encode(&mut b);
-        assert_eq!(b.work_ledger_identity_v1(), ledger);
+        assert!(b.work_ledger_identity_v1() == ledger);
         (
             result,
             b.work(),

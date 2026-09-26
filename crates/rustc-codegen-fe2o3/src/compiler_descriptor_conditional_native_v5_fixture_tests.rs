@@ -6,7 +6,7 @@ use crate::compiler_descriptor::{AccessMode, ScalarTypeV1, TypedDescriptorArgume
 use fe2o3_artifacts::*;
 use fe2o3_kernel_ir::{
     AccessMode as KirAccess, AddressSpace, BasicBlock, BlockId, Function, Kernel, LaunchDomain,
-    LaunchExtent, Signature, Terminator, ValueId, WorkgroupSize,
+    LaunchExtent, ScalarType, Signature, Terminator, ValueId, WorkgroupSize,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use reserved_fe2o3_symbols::KernelBindingIdV1;
