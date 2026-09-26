@@ -24,6 +24,19 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest peer-producer composition development (2026-09-26): Context accepts
+logically successful, quiescent scalar peer copies as typed-launch producers.
+The KFD multi-device router retains completed cooperative parents independently
+of public events, without fabricating native completion records. Tests preserve
+exact identity, destination, retired ancestry and the common depth limit. The
+[development packet](evidence/dev-peer-producer-launch-2026-09-26/README.md)
+records 83 focused passes, 1,536 broad runtime passes, three existing
+socket-permission failures, 28 broad ignores, 52 doctests and passing strict
+static checks. Pending peer-to-compute remains unsupported; the unchanged finite
+projection does not cover the new mixed-kind edges. Native XGMI composition,
+native replay and matched performance remain open. This is CPU behavior
+evidence; accepted milestones, A1/A2 and HIP/HSA parity are unchanged.
+
 Latest threaded release development (2026-09-26): the actual feature-enabled
 VecAdd release benchmark now passes the unchanged strict policy under an
 explicit musl static-PIE profile; the GNU candidate remains rejected for exactly
