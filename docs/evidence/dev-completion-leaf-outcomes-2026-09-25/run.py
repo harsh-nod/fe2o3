@@ -61,7 +61,7 @@ def tree(path):
             for p in sorted(path.rglob("*")) if p.is_file()}
 
 
-def logical_negative(status, stdout, stderr, verifier):
+def logical_negative(status, stdout, stderr, verifier, source_paths):
     if status != 1:
         return False
     try:
@@ -80,7 +80,7 @@ def logical_negative(status, stdout, stderr, verifier):
         message = diagnostic.get("message", "")
         if diagnostic.get("level") == "error" and message in LOGICAL_ERRORS:
             spans = diagnostic.get("spans", [])
-            if not any(span.get("is_primary") and "completion_reconciliation" in span.get("file_name", "") for span in spans):
+            if not any(span.get("is_primary") and str(Path(span.get("file_name", "")).resolve()) in source_paths for span in spans):
                 return False
             identified = True
         elif diagnostic.get("level") == "error" and re.fullmatch(r"aborting due to \d+ previous errors?", message):
@@ -92,6 +92,31 @@ def logical_negative(status, stdout, stderr, verifier):
         else:
             return False
     return identified
+
+
+def bind_signed_blobs(prior, before):
+    # Hash raw Git blob bytes, without index flags or clean/eol filters.
+    need(prior.git("rev-parse", "--show-object-format") == b"sha1\n", "expected Git object format")
+    entries = prior.git("ls-tree", "-r", "-z", "--full-tree", before["commit"], "--", *prior.INPUTS)
+    bound = {}
+    for entry in entries.split(b"\0"):
+        if not entry:
+            continue
+        header, raw_path = entry.split(b"\t", 1)
+        mode, kind, oid = header.split()
+        path = os.fsdecode(raw_path)
+        need(mode in (b"100644", b"100755") and kind == b"blob", "ordinary signed blob")
+        need(path not in bound and path in before["inputs"], "exact signed input membership")
+        source_path = ROOT / path
+        need(source_path.is_file() and not source_path.is_symlink(), "ordinary measured input")
+        raw = source_path.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        need(digest == before["inputs"][path], "signed-binding source continuity")
+        need(hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest() == oid.decode(),
+             "measured bytes differ from signed blob: " + path)
+        bound[path] = dict(git_blob=oid.decode(), sha256=digest)
+    need(bound.keys() == before["inputs"].keys(), "complete signed input set")
+    return bound
 
 
 def main():
@@ -157,6 +182,7 @@ def main():
           "-c", "gpg.ssh.program=/usr/bin/ssh-keygen", "-c", "gpg.ssh.allowedSignersFile=" + str(signer),
           "verify-commit", before["commit"]], lambda s, o, e: s == 0 and not o and e == prior.SIGNATURE, source.TOOL_ENV)
     prior.signature_tool()
+    prior.save(out / "signed-inputs.json", bind_signed_blobs(prior, before))
     phase("runner-tests", [sys.executable, "-I", "-B", str(Path(__file__).with_name("test-run.py"))],
           lambda s, o, e: s == 0 and not e and o == "PASS: leaf outcome negative classifier (10 groups)\n")
     phase("source-tests", [sys.executable, "-I", "-B", str(ROOT / V / "test-completion-reconciliation-source.py")],
@@ -188,7 +214,8 @@ def main():
         need(measured.keys() == expected.keys(), "exact mutant input set")
         need({p for p in expected if measured[p] != expected[p]} == {str(path)}, "one changed input")
         prior.save(out / (name + "-mutation.json"), dict(path=str(path), old=old, new=new, inputs=measured))
-        phase(name, proof(mutated, focus), lambda s, o, e: logical_negative(s, o, e, prior.VERIFIER))
+        source_paths = {str((mutated / path).resolve()) for path in expected}
+        phase(name, proof(mutated, focus), lambda s, o, e: logical_negative(s, o, e, prior.VERIFIER, source_paths))
         need(tree(mutated) == measured, "unchanged mutant: " + name)
     phase("proof-after", proof(ROOT), positive)
     phase("closure-after", closure, closure_ok)

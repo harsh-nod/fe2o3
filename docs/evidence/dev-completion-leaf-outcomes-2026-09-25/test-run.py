@@ -7,6 +7,7 @@ import runpy
 
 check = runpy.run_path(str(Path(__file__).with_name("run.py")))["logical_negative"]
 verifier = {"version": "calibration-only"}
+source_paths = {"/snapshot/context_completion_reconciliation_leaf_v1.rs"}
 base = {"verus": verifier, "verification-results": {
     "encountered-error": True, "encountered-vir-error": False,
     "is-verifying-entire-crate": False, "errors": 1, "verified": 1,
@@ -23,13 +24,13 @@ def require(value):
 
 def accepted(status=1, result=base, messages=None):
     return check(status, json.dumps(result), "\n".join(json.dumps(m) for m in (
-        [diagnostic] if messages is None else messages)), verifier)
+        [diagnostic] if messages is None else messages)), verifier, source_paths)
 
 
 require(accepted())
 for status in (0, 2, 124, 137, -9):
     require(not accepted(status=status))
-require(not check(1, "not JSON", json.dumps(diagnostic), verifier))
+require(not check(1, "not JSON", json.dumps(diagnostic), verifier, source_paths))
 for message in ("mismatched types", "unexpected token", "Resource limit (rlimit) exceeded"):
     require(not accepted(messages=[dict(diagnostic, message=message)]))
 require(not accepted(messages=[diagnostic, {"level": "warning", "message": "unused variable"}]))
