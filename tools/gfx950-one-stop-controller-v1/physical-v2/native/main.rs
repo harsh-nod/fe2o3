@@ -3,6 +3,7 @@
 #![deny(unsafe_code, unsafe_op_in_unsafe_fn)]
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_endian = "little")))]
 compile_error!("fixed reviewed Linux x86_64 little-endian controller only");
+mod argv_readiness;
 mod clock;
 mod config;
 mod custody;

@@ -5,6 +5,15 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Bounded initial debugger readiness — 2026-09-26
+
+The [readiness checkpoint](physical-debugger-initial-argv-readiness-20260926.md)
+reproduces transient empty command-line reads using harmless CPU-only children
+and adds a bounded initial-setup wait on the same owned debugger. All 129 Rust
+tests, 31 Node controls, strict package Clippy and build passed. Later identity
+checks and cleanup remain unchanged. Public activation stays disabled; a fresh
+private native capture is still required. Broad accepted exits stay **6/18**.
+
 ## Original-meter assertion helper prerequisite — 2026-09-26
 
 The [assertion helper checkpoint](bf16-helper-assertion-resources-qualification-20260926.md)

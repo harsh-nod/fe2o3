@@ -15,6 +15,7 @@ export const PATHS=Object.freeze([
   "async_stop_tests.rs",
   "controller.rs",
   "lib.rs",
+  "native/argv_readiness.rs",
   "native/clock.rs",
   "native/config.rs",
   "native/custody.rs",
@@ -53,7 +54,7 @@ export function manifest(bytes){
 function requireManifest(value){
  keys(value,['schema','license','runtime_profile','rust_files','files']);
  if(value.schema!=='fe2o3-gfx950-one-stop-controller-source-v2'
-  ||value.license!=='MIT OR Apache-2.0'||value.runtime_profile!=='unbound'||value.rust_files!==22
+  ||value.license!=='MIT OR Apache-2.0'||value.runtime_profile!=='unbound'||value.rust_files!==23
   ||!Array.isArray(value.files)||value.files.length!==PATHS.length)fail('manifest domain');
  let total=0;
  for(let i=0;i<PATHS.length;i++){

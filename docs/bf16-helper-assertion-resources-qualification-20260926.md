@@ -56,3 +56,22 @@ The existing bounds-check decision convention is not a standalone proof:
 canonical bounds/access matching, root memory/effect projection, ranked
 correspondence, formal/target/LLVM continuation and ordinary production
 admission remain required. Public debugger activation is unchanged.
+
+## Additional lint exploration and fixture correction
+
+A subsequent strict whole-backend Clippy experiment failed on existing
+dependency diagnostics before reaching this code. A scoped `--no-deps`
+experiment also found existing backend warnings and one new warning in the
+intentional adversarial `CopyOnly` test fixture. That fixture implements
+`Clone` by panicking to ensure the tested helper uses `Copy`, not `Clone`.
+A narrowly scoped test-only Clippy allowance documents that intent; no runtime
+or helper interface changed.
+
+After the annotation, all 18 helper tests passed again. Receipt: 37,056 bytes,
+SHA-256 `746ba5bed3a49b9103305da58b0d84e3f9444ff6a1884e0f559c93130449bd92`.
+The scoped strict lint rerun still failed on existing backend diagnostics,
+with none naming the new assertion helper modules. Its failed receipt is
+21,939 bytes, SHA-256
+`5e4fdc641b7e7a733877dd250cc6ab2f77e336a0d1efc4da1c858f7b93c4f9af`.
+This is not a claim of a clean whole-backend strict lint gate; all failed
+receipts and diagnostic streams remain retained.

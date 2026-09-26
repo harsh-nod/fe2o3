@@ -22,6 +22,10 @@ pub(super) enum SetupStage {
     ChildStampAfterIdentity,
     ScopeMember,
     Cmdline,
+    CmdlineReadyBefore,
+    CmdlineReadyAfter,
+    CmdlineReadyYield,
+    CmdlineReadyLimit,
     TakeStdin,
     TakeStdout,
     TakeStderr,
@@ -47,6 +51,10 @@ pub(super) struct SetupDiagnostic {
     readers_started: u8,
     cmdline_bytes: Option<usize>,
     cmdline_equal: Option<bool>,
+    cmdline_attempts: u8,
+    cmdline_empty: u8,
+    cmdline_identity_checks: u8,
+    cmdline_yields: u8,
     sent_commands: u64,
 }
 impl fmt::Display for SetupDiagnostic {
@@ -55,7 +63,7 @@ impl fmt::Display for SetupDiagnostic {
         // No paths, environment, raw process strings or caller-controlled text.
         write!(
             f,
-            "stage={:?},child_pid={:?},initial_stamp={:?},child_wait={:?},debugger_custody_acquired={},readers_started={},cmdline_bytes={:?},cmdline_equal={:?},sent_commands={}",
+            "stage={:?},child_pid={:?},initial_stamp={:?},child_wait={:?},debugger_custody_acquired={},readers_started={},cmdline_bytes={:?},cmdline_equal={:?},cmdline_attempts={},cmdline_empty={},cmdline_identity_checks={},cmdline_yields={},sent_commands={}",
             self.stage,
             self.child_pid,
             self.initial_stamp,
@@ -64,6 +72,10 @@ impl fmt::Display for SetupDiagnostic {
             self.readers_started,
             self.cmdline_bytes,
             self.cmdline_equal,
+            self.cmdline_attempts,
+            self.cmdline_empty,
+            self.cmdline_identity_checks,
+            self.cmdline_yields,
             self.sent_commands,
         )
     }
@@ -81,6 +93,10 @@ impl SetupTrace {
             readers_started: 0,
             cmdline_bytes: None,
             cmdline_equal: None,
+            cmdline_attempts: 0,
+            cmdline_empty: 0,
+            cmdline_identity_checks: 0,
+            cmdline_yields: 0,
             sent_commands: 0,
         })
     }
@@ -128,6 +144,19 @@ impl SetupTrace {
         self.0.cmdline_bytes = Some(bytes);
         self.0.cmdline_equal = Some(equal);
     }
+    // Fixed-width observation counts only. The initial helper enforces its caps.
+    pub(super) fn readiness_attempt(&mut self) {
+        self.0.cmdline_attempts = self.0.cmdline_attempts.saturating_add(1);
+    }
+    pub(super) fn readiness_empty(&mut self) {
+        self.0.cmdline_empty = self.0.cmdline_empty.saturating_add(1);
+    }
+    pub(super) fn readiness_identity(&mut self) {
+        self.0.cmdline_identity_checks = self.0.cmdline_identity_checks.saturating_add(1);
+    }
+    pub(super) fn readiness_yield(&mut self) {
+        self.0.cmdline_yields = self.0.cmdline_yields.saturating_add(1);
+    }
     pub(super) fn freeze(&self, sent_commands: u64) -> SetupDiagnostic {
         let mut result = self.0;
         result.sent_commands = sent_commands;
@@ -139,7 +168,7 @@ impl SetupTrace {
 mod tests {
     use super::*;
 
-    const STAGES: [SetupStage; 24] = [
+    const STAGES: [SetupStage; 28] = [
         SetupStage::Precheck,
         SetupStage::SpawnClock,
         SetupStage::Spawn,
@@ -158,6 +187,10 @@ mod tests {
         SetupStage::ChildStampAfterIdentity,
         SetupStage::ScopeMember,
         SetupStage::Cmdline,
+        SetupStage::CmdlineReadyBefore,
+        SetupStage::CmdlineReadyAfter,
+        SetupStage::CmdlineReadyYield,
+        SetupStage::CmdlineReadyLimit,
         SetupStage::TakeStdin,
         SetupStage::TakeStdout,
         SetupStage::TakeStderr,
@@ -310,6 +343,10 @@ mod tests {
             trace.stdout_reader_started();
             trace.stderr_reader_started();
             trace.cmdline(usize::MAX, false);
+            trace.0.cmdline_attempts = u8::MAX;
+            trace.0.cmdline_empty = u8::MAX;
+            trace.0.cmdline_identity_checks = u8::MAX;
+            trace.0.cmdline_yields = u8::MAX;
             let raw = trace.freeze(u64::MAX).to_string();
             assert!(raw.len() < 1024);
             assert!(!raw.contains('\n') && !raw.contains('\r'));

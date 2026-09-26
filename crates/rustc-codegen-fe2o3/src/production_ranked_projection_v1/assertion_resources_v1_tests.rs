@@ -518,6 +518,10 @@ fn frames_include_full_generic_result_error_and_checked_arithmetic() {
 fn copy_array_does_not_call_custom_clone_and_checks_arithmetic_before_allocation() {
     #[derive(Copy)]
     struct CopyOnly(u32);
+    #[allow(
+        clippy::non_canonical_clone_impl,
+        reason = "adversarial fixture verifies Copy initialization never invokes Clone"
+    )]
     impl Clone for CopyOnly {
         fn clone(&self) -> Self {
             panic!("Copy initialization must not invoke Clone");

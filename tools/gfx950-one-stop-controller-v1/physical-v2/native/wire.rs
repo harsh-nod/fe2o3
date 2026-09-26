@@ -1,5 +1,6 @@
 //! Launch-owned real transport. No CLI PID, arbitrary MI input or retry route.
 use super::{
+    argv_readiness,
     clock::{self, Clock},
     config::{self, Options},
     custody::{self, DebuggerChild, LaunchedInferior},
@@ -107,6 +108,32 @@ pub(super) struct NativePeer<'a> {
     closed: bool,
     cleanup: Option<Cleanup>,
 }
+struct InitialArgv<'a> {
+    child: &'a mut Child,
+    debugger: &'a DebuggerChild,
+    executable: &'a config::PinnedFile,
+    scope: &'a Scope,
+    clock: Clock,
+}
+impl argv_readiness::Source for InitialArgv<'_> {
+    fn clock(&mut self) -> Result<(), Refusal> {
+        self.clock.check()
+    }
+    fn identity(&mut self) -> Result<(), Refusal> {
+        self.scope.current(self.clock)?;
+        self.debugger.check(self.child, self.executable)?;
+        self.scope.member(self.child.id())
+    }
+    fn read_cmdline(&mut self) -> Result<Vec<u8>, Refusal> {
+        custody::read_bounded(
+            format!("/proc/{}/cmdline", self.child.id()),
+            argv_readiness::MAX_CMDLINE,
+        )
+    }
+    fn yield_once(&mut self) {
+        thread::yield_now();
+    }
+}
 impl<'a> NativePeer<'a> {
     // Fixed inline failure samples avoid allocation after an owned child exists.
     #[allow(
@@ -204,16 +231,17 @@ impl<'a> NativePeer<'a> {
             trace.step(SetupStage::ScopeMember, || {
                 result.scope.member(result.child.id())
             })?;
-            let actual_argv = trace.step(SetupStage::Cmdline, || {
-                custody::read_bounded(format!("/proc/{}/cmdline", result.child.id()), 2048)
-            })?;
-            let same_argv = actual_argv == result.argv;
-            trace.cmdline(actual_argv.len(), same_argv);
-            if !same_argv {
-                return Err(Refusal::Changed);
-            }
-            // Match the original temporary's lifetime: do not retain another argv buffer.
-            drop(actual_argv);
+            argv_readiness::initial(
+                &mut InitialArgv {
+                    child: &mut result.child,
+                    debugger: result.debugger.as_ref().ok_or(Refusal::Process)?,
+                    executable: &options.debugger,
+                    scope: &result.scope,
+                    clock: result.clock,
+                },
+                &result.argv,
+                &mut trace,
+            )?;
             result.input = Some(trace.step(SetupStage::TakeStdin, || {
                 result.child.stdin.take().ok_or(Refusal::Incomplete)
             })?);
