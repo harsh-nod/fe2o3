@@ -25,6 +25,10 @@ pub use admission::{CompilerModuleHandoffAdmissionCauseV5, CompilerModuleHandoff
 type Error = CompilerModuleHandoffErrorV5;
 type Result<T> = std::result::Result<T, Error>;
 
+#[cfg(test)]
+#[path = "compiler_module_handoff_v5_tests.rs"]
+pub(crate) mod tests;
+
 pub const MAX_COMPILER_MODULE_HANDOFF_BYTES_V5: usize =
     fe2o3_compiler_ffi::MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V5;
 /// Same logical replay cap as native semantic admission, not an enlarged limit.
