@@ -1,9 +1,5 @@
 //! Conditional source-through-F content only; no final/nominal/native authority.
 #![allow(
-    dead_code,
-    reason = "private content-only composition awaiting outer integration"
-)]
-#![allow(
     clippy::result_large_err,
     clippy::large_enum_variant,
     reason = "typed terminal errors without an uncharged allocation"
@@ -38,20 +34,27 @@ mod account;
 mod error;
 #[path = "compiler_native_conditional_final_v2/roster.rs"]
 mod roster;
-pub(crate) use error::NativeConditionalFinalErrorV2;
+pub use error::NativeConditionalFinalErrorV2;
 use error::{Cause, NativeConditionalFinalErrorV2 as Error};
 
 /// All backing is caller-owned and prepaid on the original consumer ledger.
 /// Limits and profile are independently accepted, never copied from transport.
 /// Neither these inputs nor their content agreement authenticates source origin,
 /// original nominal/context custody, registration or launch restrictions.
-pub(crate) struct NativeConditionalFinalInputsV2<'a, 'frame, 'wire> {
+pub struct NativeConditionalFinalInputsV2<'a, 'frame, 'wire> {
+    /// Independently materialized complete history from the actual retained chain.
     pub decoded_history: &'a DecodedHistory<'frame, 'wire>,
+    /// Original caller limits, not values selected from the transported history.
     pub expected_limits: Limits,
+    /// Exact paid contract catalog for final F.
     pub final_catalog: &'a Catalog,
+    /// Exact canonical final graph bytes, retained separately or borrowed from F.
     pub published_output_bytes: &'a [u8],
+    /// Independently accepted target profile.
     pub profile: Profile,
+    /// Paid V5 table borrowing its complete canonical source bytes.
     pub descriptors: &'a DeviceDescriptorTableV5<'wire>,
+    /// Complete canonical LLVM with its exact V5 descriptor suffix.
     pub final_llvm: &'a str,
 }
 type Inputs<'a, 'frame, 'wire> = NativeConditionalFinalInputsV2<'a, 'frame, 'wire>;
@@ -70,7 +73,9 @@ const HEADER: usize = size_of::<Inputs<'static, 'static, 'static>>()
 /// Returns only existing C1 source content custody with UNRESERVED storage.
 /// The caller still owns decoded actual F; no F/nominal/launch owner is minted.
 /// All errors (including overriding postchecks) are terminal for refund purposes.
-pub(crate) fn validate_native_conditional_source_through_f_v2(
+/// Producer custody, original nominal/context identity, registration and launch
+/// restrictions remain mandatory enclosing obligations, not content authority.
+pub fn validate_native_conditional_source_through_f_v2(
     packet_bytes: &[u8],
     accepted: &[NativeConditionalRootPolicyV2<'_>],
     inputs: Inputs<'_, '_, '_>,

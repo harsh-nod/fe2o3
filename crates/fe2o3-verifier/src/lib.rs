@@ -52,6 +52,10 @@ mod retained_functional_refinement_runtime_v1;
 mod static_view_proof;
 
 pub mod compiler_native_conditional_source_proof_v2;
+pub use compiler_native_conditional_source_proof_v2::final_replay::{
+    NativeConditionalFinalErrorV2, NativeConditionalFinalInputsV2,
+    validate_native_conditional_source_through_f_v2,
+};
 pub use compiler_native_conditional_source_proof_v2::{
     NativeConditionalRootPolicyV2, NativeConditionalSourceProofErrorV2,
     NativeConditionalSourceStorageV2, ReplayedNativeConditionalSourceV2,

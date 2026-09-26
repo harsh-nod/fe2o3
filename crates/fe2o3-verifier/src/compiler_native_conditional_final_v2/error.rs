@@ -10,7 +10,7 @@ use std::fmt;
 /// Opaque terminal error, even when an enclosing postcheck overrides a callback.
 /// Deliberately does not expose a source chain to ordinary refund classifiers.
 #[derive(Debug)]
-pub(crate) struct NativeConditionalFinalErrorV2(pub(super) Cause);
+pub struct NativeConditionalFinalErrorV2(pub(super) Cause);
 
 #[derive(Debug)]
 pub(super) enum Cause {
