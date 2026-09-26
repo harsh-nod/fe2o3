@@ -33,6 +33,12 @@ fn run_submitter(control: std::os::fd::OwnedFd, consuming: Option<ConsumingCase>
         let (request, []) =
             receive_packet::<0>(&control, Instant::now() + Duration::from_secs(40)).unwrap();
         if request == frame(b"STOP", 0) {
+            if consuming.is_some_and(|case| case != ConsumingCase::Ready) {
+                // STOP follows supervisor cleanup and release of all control witnesses.
+                assert_no_publication_after_cleanup(
+                    held_control.as_ref().expect("consuming handoff was sent"),
+                );
+            }
             break;
         }
         if &request[..4] == b"ANC2" {
@@ -180,4 +186,35 @@ fn run_submitter(control: std::os::fd::OwnedFd, consuming: Option<ConsumingCase>
             .success()
     );
     send_packet(&control, &frame(b"DONE", pid), &[]).unwrap();
+}
+
+fn assert_no_publication_after_cleanup(control: &std::os::fd::OwnedFd) {
+    let mut byte = [0_u8; 1];
+    assert_eq!(
+        rustix::net::recv(control, &mut byte, rustix::net::RecvFlags::DONTWAIT),
+        Ok((0, 0)),
+        "negative consuming readiness must close without publication"
+    );
+}
+
+#[test]
+fn consuming_nonpublication_accepts_closed_empty_peer() {
+    let (control, peer) = pair();
+    drop(peer);
+    assert_no_publication_after_cleanup(&control);
+}
+
+#[test]
+fn consuming_nonpublication_rejects_queued_data_after_close() {
+    let (control, peer) = pair();
+    send_packet(&peer, &[0xa5; READY_BYTES], &[]).unwrap();
+    drop(peer);
+    assert!(std::panic::catch_unwind(|| assert_no_publication_after_cleanup(&control)).is_err());
+}
+
+#[test]
+fn consuming_nonpublication_rejects_still_open_empty_peer() {
+    let (control, peer) = pair();
+    assert!(std::panic::catch_unwind(|| assert_no_publication_after_cleanup(&control)).is_err());
+    drop(peer);
 }
