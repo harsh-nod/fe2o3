@@ -1399,4 +1399,142 @@ mod invocation_index_preparation_controls {
     }
 
     // FROZEN-ASSIGN-END
+    // New actual-namespace component controls use the existing inert fixture and
+    // frozen ordinary oracle, not an invented source owner or ready constructor.
+    #[test]
+    fn actual_namespace_index_component_preserves_nonzero_prefix_and_all_frozen_rows() {
+        let (function, calls) = fixture(&[1]);
+        let definitions = local_definition_counts(&function);
+        let escaped = vec![false; function.locals().len()];
+        let options = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
+        let enums =
+            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
+        let edges = graph(&function);
+        let input = Inputs {
+            function: &function,
+            calls: &calls,
+            definitions: &definitions,
+            escaped: &escaped,
+            options: &options,
+            enums: &enums,
+            edges: &edges,
+        };
+        let prior = ProductionRankedOperationV1::IndexConstant {
+            result: ProductionRankedValueIdV1::new(80),
+            value: 17,
+        };
+        let mut expected = State::new(function.locals().len());
+        expected.operations.push(prior.clone());
+        expected.next_value = 81;
+        frozen_seed(&input, &mut expected).unwrap();
+        frozen_propagate(&input, &mut expected).unwrap();
+        let mut operations = vec![prior];
+        let mut next = 81;
+        let mut rows = RootInvocationIndexStorageV1::empty();
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        budget.reserve_storage(1024).unwrap();
+        let identity = budget.work_ledger_identity_v1();
+        let mut owned = 0;
+        prepare_root_namespace_indices_v1(
+            &calls,
+            &function,
+            &definitions,
+            &escaped,
+            &options,
+            &enums,
+            &edges,
+            4,
+            &mut rows,
+            &mut operations,
+            &mut next,
+            &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+        )
+        .unwrap();
+        assert_eq!(operations, expected.operations);
+        assert_eq!(next, expected.next_value);
+        assert_eq!(rows.indices, expected.indices);
+        assert_eq!(format!("{:?}", rows.grids), format!("{:?}", expected.grids));
+        assert_eq!(
+            format!("{:?}", rows.predicates),
+            format!("{:?}", expected.predicates)
+        );
+        assert_eq!(rows.index_fifo, vec![1, 2, 3, 4, 5]);
+        assert_eq!(rows.index_cursor, 5);
+        assert_eq!(rows.processed_edges, expected.processed);
+        assert!(rows.grid_fifo.is_empty());
+        assert!(budget.work_ledger_identity_v1() == identity);
+        assert!(budget.storage() >= 1024 + owned);
+        drop(rows);
+        drop(operations);
+        budget.release_storage(owned).unwrap();
+        assert_eq!(budget.storage(), 1024);
+    }
+    #[test]
+    fn actual_namespace_component_count_mismatch_occupies_without_reseeding_or_emitting() {
+        let (function, calls) = fixture(&[1]);
+        let definitions = local_definition_counts(&function);
+        let escaped = vec![false; function.locals().len()];
+        let options = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
+        let enums =
+            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
+        let edges = graph(&function);
+        let mut operations = vec![ProductionRankedOperationV1::IndexConstant {
+            result: ProductionRankedValueIdV1::new(80),
+            value: 17,
+        }];
+        let mut next = 81;
+        let mut rows = RootInvocationIndexStorageV1::empty();
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        let mut owned = 0;
+        let wrong = prepare_root_namespace_indices_v1(
+            &calls,
+            &function,
+            &definitions,
+            &escaped,
+            &options,
+            &enums,
+            &edges,
+            5,
+            &mut rows,
+            &mut operations,
+            &mut next,
+            &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+        );
+        assert!(matches!(
+            wrong,
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "actual complete graph edge storage/count differs"
+            ))
+        ));
+        assert_eq!(operations.len(), 1);
+        assert_eq!(next, 81);
+        assert!(rows.indices.is_empty());
+        let retry = prepare_root_namespace_indices_v1(
+            &calls,
+            &function,
+            &definitions,
+            &escaped,
+            &options,
+            &enums,
+            &edges,
+            4,
+            &mut rows,
+            &mut operations,
+            &mut next,
+            &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+        );
+        assert!(matches!(
+            retry,
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "actual root index preparation cannot be replaced or retried"
+            ))
+        ));
+        assert_eq!(operations.len(), 1);
+        assert_eq!(next, 81);
+        drop(rows);
+        drop(operations);
+        budget.release_storage(owned).unwrap();
+    }
 }

@@ -777,3 +777,6 @@ pub(super) fn with_canonical_assertions_budget_v1<T>(
     let source = RankedProjectionSourceV1::from_legacy(materialized)?;
     with_canonical_assertions_source_budget_v1(&source, budget, body)
 }
+
+#[cfg(test)]
+pub(crate) use bf16_nominal_recipe_resources_v1::observe_actual_root_prefix_indices_for_test_v1;

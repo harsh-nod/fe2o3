@@ -379,3 +379,6 @@ mod genuine;
 pub(in crate::production_ranked_projection_v1) use genuine::{
     nominal_initial_graph_controls_for_test_v1, observe_nominal_initial_graph_for_test_v1,
 };
+
+#[cfg(test)]
+pub(in crate::production_ranked_projection_v1) use genuine::check_source_rows_for_prefix_for_test_v1;

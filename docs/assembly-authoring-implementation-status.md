@@ -5,6 +5,18 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Actual retained-input root prefix and indices — 2026-09-26
+
+The [actual-prefix checkpoint](bf16-actual-root-prefix-indices-qualification-20260926.md)
+connects actual retained inputs, entry-prefix operations and invocation indices
+in one private pending assembly and value-ID namespace. Qualification passed
+331 model and 2,631 backend tests, build, five fresh Rust sessions, 88 comparison
+controls, cumulative/direct lossless comparisons and 38 ordinary sessions.
+All 38 ordinary observation bodies and 52 artifacts are unchanged. Actual
+nonempty references, guarded accesses and the complete nominal recipe remain
+open; normal nominal-helper admission is still refused. Accepted broad exits
+remain **M1/V1/V2/U1/U2/U3 (6/18)**. No new GPU or debugger capture is claimed.
+
 ## Shared invocation-index preparation — 2026-09-26
 
 The [index-preparation checkpoint](bf16-shared-invocation-index-qualification-20260926.md)

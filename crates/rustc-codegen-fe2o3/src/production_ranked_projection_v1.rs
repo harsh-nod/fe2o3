@@ -54,6 +54,7 @@ mod canonical_assertion_facts_v1;
 mod capability_state_access_v1;
 mod root_checked_references_v1;
 // Paid reference-origin data still lacks its actual guarded-access roster join.
+mod root_entry_prefix_preparation_v1;
 mod root_initial_capability_graph_v1;
 mod root_invocation_index_preparation_v1;
 #[cfg(test)]
@@ -40650,3 +40651,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) use canonical_assertion_facts_v1::observe_actual_root_prefix_indices_for_test_v1;

@@ -3901,6 +3901,87 @@ fn consume_prepared_with_budget_v29<M>(
     })
 }
 
+// Source-qualified test checkpoint only. Ordinary consumer above is unchanged.
+#[cfg(test)]
+fn consume_prepared_with_actual_inputs_for_test_v1<M, F>(
+    prepared: PreparedSsaMaterializationV29,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    owned_frame: &mut usize,
+    use_root: impl for<'a> FnMut(
+        fe2o3_lower_mir_kernel::ProductionCheckedContextRootV29<'a>,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    )
+        -> Result<(), fe2o3_lower_mir_kernel::ProductionContextRootErrorV29>,
+    consume: F,
+) -> Result<PreparedMaterializationV29<M>, Box<ProductionPipelineError>>
+where
+    F: FnOnce(
+        fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+        &crate::collector::RetainedContextEntriesV29,
+        &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
+        &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        &mut usize,
+    ) -> Result<M, ProductionPipelineError>,
+{
+    // This header-only debit belongs to the outer genuine phase; its physical
+    // closure/borrow frames are gone before that phase refunds it. No payload
+    // or retained input is cloned, reconstructed or newly claimed by this debit.
+    let frame = std::mem::size_of::<F>()
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(4096))
+        .and_then(|n| {
+            std::mem::size_of::<Result<M, ProductionPipelineError>>()
+                .checked_mul(2)
+                .and_then(|result| n.checked_add(result))
+        })
+        .ok_or_else(|| {
+            materialization_resource_error_v29(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+            )
+        })?;
+    let total = owned_frame.checked_add(frame).ok_or_else(|| {
+        materialization_resource_error_v29(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+        )
+    })?;
+    budget
+        .charge_work(frame)
+        .map_err(materialization_resource_error_v29)?;
+    budget
+        .reserve_storage(frame)
+        .map_err(materialization_resource_error_v29)?;
+    *owned_frame = total;
+    let PreparedSsaMaterializationV29 {
+        semantic_ssa,
+        ranked_roots,
+        launch,
+        bindings,
+    } = prepared;
+    context_handoff_v29::check_context_handoff_v29(
+        &bindings.context_entries,
+        &semantic_ssa,
+        &launch,
+        budget,
+        use_root,
+    )?;
+    let materialized = consume(
+        semantic_ssa,
+        launch,
+        &bindings.context_entries,
+        &ranked_roots,
+        &bindings.reference_effect_bindings,
+        budget,
+        owned_frame,
+    )?;
+    Ok(PreparedMaterializationV29 {
+        materialized,
+        ranked_roots,
+        bindings,
+    })
+}
+
 impl MaterializedNeutralProductionCompilation {
     fn verify_general_kernel_checks(
         self,
@@ -4261,9 +4342,10 @@ mod tests {
             "semantic SSA, ranked verification, and lowering typestates are out of order",
         );
         let projection = include_str!("production_ranked_projection_v1.rs");
-        assert!(projection.contains(
-            "include!(\"production_ranked_projection_v1/root_recipe_core_v1.rs\");"
-        ));
+        assert!(
+            projection
+                .contains("include!(\"production_ranked_projection_v1/root_recipe_core_v1.rs\");")
+        );
         assert!(projection.contains("verify_prepared_ranked_root_recipe_v1("));
         let recipe = include_str!("production_ranked_projection_v1/root_recipe_core_v1.rs");
         assert!(recipe.contains("prepare_reference_effect_request_v2"));
@@ -4591,3 +4673,74 @@ pub(crate) use physical_global_copy_target_v21::AuthenticatedPhysicalGlobalCopyT
 
 mod physical_lds_exchange_target_v22;
 pub(crate) use physical_lds_exchange_target_v22::AuthenticatedPhysicalLdsExchangeTargetModuleV22;
+
+/// Borrowed actual prepared-input custody. Fields and construction belong only
+/// to this pipeline module; projection siblings cannot substitute equal clones.
+/// Non-Clone, no readiness, no owned proof token, no mutable inputs or budget.
+pub(crate) struct ActualRetainedRankedInputsV1<'a> {
+    owner: &'a fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    inputs: &'a [crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
+    bindings: &'a crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+}
+impl ActualRetainedRankedInputsV1<'_> {
+    pub(crate) fn belongs_to(
+        &self,
+        owner: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    ) -> bool {
+        std::ptr::eq(self.owner, owner)
+    }
+    pub(crate) fn inputs(
+        &self,
+    ) -> &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1] {
+        self.inputs
+    }
+    pub(crate) fn bindings(
+        &self,
+    ) -> &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1 {
+        self.bindings
+    }
+}
+/// The sole constructor is called after the actual prepared SSA/launch become
+/// the retained owner inside the genuine richer-consumer callback. HRTB prevents
+/// this view or its borrows from escaping as R. Credits stay in the outer phase.
+#[cfg(test)]
+fn with_actual_retained_ranked_inputs_for_test_v1<R, F>(
+    owner: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    inputs: &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
+    bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    owned_frame: &mut usize,
+    inspect: F,
+) -> Result<R, fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>
+where
+    F: for<'a> FnOnce(
+        ActualRetainedRankedInputsV1<'a>,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<R, fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>,
+{
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    let mut frame = 4096usize;
+    for amount in [
+        std::mem::size_of::<ActualRetainedRankedInputsV1<'static>>(),
+        std::mem::size_of::<F>()
+            .checked_mul(2)
+            .ok_or(Resource::Arithmetic)?,
+        std::mem::size_of::<Result<R, fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>>()
+            .checked_mul(2)
+            .ok_or(Resource::Arithmetic)?,
+    ] {
+        frame = frame.checked_add(amount).ok_or(Resource::Arithmetic)?;
+    }
+    let total = owned_frame.checked_add(frame).ok_or(Resource::Arithmetic)?;
+    budget.charge_work(frame)?;
+    budget.reserve_storage(frame)?;
+    *owned_frame = total;
+    inspect(
+        ActualRetainedRankedInputsV1 {
+            owner,
+            inputs,
+            bindings,
+        },
+        budget,
+    )
+}

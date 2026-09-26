@@ -71,41 +71,15 @@ fn with_prepared_ranked_root_recipe_v1<'s, T, F: ProjectedAssertionFactsV1>(
         ));
     }
     let constants = constant_locals(function)?;
-    let mut entry_operations = vec![ranked_execution_layout_v1(source_root.layout())];
-    let mut next_value = 0_u32;
-    let reserved_reference_values = if reference_bindings.as_slice().is_empty() {
-        None
-    } else {
-        let output_ranks =
-            crate::production_reference_effect_join_v2::reserved_reference_output_ranks_v2(
-                reference_bindings,
-            )?;
-        let count = crate::production_reference_effect_join_v2::reserved_reference_value_count_v2(
-            reference_bindings,
-        )?;
-        let mut values = Vec::with_capacity(count);
-        for rank in output_ranks {
-            for _ in 0..3 {
-                let result = next_value_id(&mut next_value)?;
-                values.push(result);
-                entry_operations
-                    .push(ProductionRankedOperationV1::SemanticConstant { result, value: 0 });
-            }
-            for axis in 0..rank {
-                let symbol = u32::try_from(axis).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "reference-effect logical point rank does not fit the semantic symbol domain",
-                    )
-                })?;
-                let result = next_value_id(&mut next_value)?;
-                values.push(result);
-                entry_operations
-                    .push(ProductionRankedOperationV1::SemanticSymbol { result, symbol });
-            }
-        }
-        debug_assert_eq!(values.len(), count);
-        Some(values)
-    };
+    let root_entry_prefix_preparation_v1::RootEntryPrefixV1 {
+        mut entry_operations,
+        mut next_value,
+        reserved_reference_values,
+        ..
+    } = root_entry_prefix_preparation_v1::prepare_root_entry_prefix_legacy_v1(
+        source_root,
+        reference_bindings,
+    )?;
     let mut incomplete = None;
     let mut projected_views = ProjectedViewsV1::new(function.locals().len(), Some(assertion_facts))
         .with_scalar_private_singletons(singletons)

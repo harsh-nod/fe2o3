@@ -175,6 +175,7 @@ fn inspect_retained_floor_boundaries(
 pub(super) fn inspect(
     owner: &ProductionPreRankedKirOwnerV1,
     source: &CheckedBf16CallInstanceV1<'_>,
+    actual_inputs: &crate::production_pipeline::ActualRetainedRankedInputsV1<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<(), Error> {
     let entry = budget.storage();
@@ -234,6 +235,14 @@ pub(super) fn inspect(
             source,
             &inventory,
             storage.retained_storage(),
+            budget,
+        )
+        .map_err(query_error)?;
+        crate::production_ranked_projection_v1::observe_actual_root_prefix_indices_for_test_v1(
+            owner,
+            source,
+            &inventory,
+            actual_inputs,
             budget,
         )
         .map_err(query_error)?;

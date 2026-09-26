@@ -801,3 +801,141 @@ pub(super) fn prepare_unjoined_invocation_indices_v1(
     pending.completed = true; // DATA completion only; no source/readiness view.
     Ok(())
 }
+
+// Joined root-namespace component storage. It owns NO independent operations or
+// SSA counter: the sole surrounding root assembly lends those exact fields.
+pub(super) struct RootInvocationIndexStorageV1 {
+    pub(super) indices: Vec<Option<ProjectedDisjointIndexV1>>,
+    pub(super) grids: Vec<Option<ProjectedGridLeaderV1>>,
+    pub(super) predicates: Vec<Option<GuardPredicateV1>>,
+    pub(super) index_fifo: Vec<usize>,
+    pub(super) index_cursor: usize,
+    pub(super) grid_fifo: Vec<usize>,
+    pub(super) grid_cursor: usize,
+    pub(super) processed_edges: usize,
+    started: bool,
+}
+impl RootInvocationIndexStorageV1 {
+    pub(super) const fn empty() -> Self {
+        Self {
+            indices: Vec::new(),
+            grids: Vec::new(),
+            predicates: Vec::new(),
+            index_fifo: Vec::new(),
+            index_cursor: 0,
+            grid_fifo: Vec::new(),
+            grid_cursor: 0,
+            processed_edges: 0,
+            started: false,
+        }
+    }
+}
+
+/// Invoked inside the actual root/context/complete-graph loan. Raw inputs grant
+/// no authority here; the factory joins them and retains every physical field
+/// through outer postflights. NEVER use the unjoined constructor then relocate IDs.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepare_root_namespace_indices_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    definitions: &[u8],
+    address_escaped: &[bool],
+    option_dominance: &SemanticOptionDominanceV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+    edges: &[Vec<CapabilityEdgeV1>],
+    expected_edges: usize,
+    rows: &mut RootInvocationIndexStorageV1,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    resources: &mut PreparationResourcesV1<'_, '_>,
+) -> Result<()> {
+    if !resources.is_metered() || resources.has_denial() {
+        return Err(resource(Resource::Accounting));
+    }
+    resources.work(64)?;
+    if rows.started {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "actual root index preparation cannot be replaced or retried",
+        ));
+    }
+    let frame = 8192usize
+        .checked_add(size_of::<RootInvocationIndexStorageV1>())
+        .ok_or_else(|| resource(Resource::Arithmetic))?;
+    resources.work(frame)?;
+    resources.reserve_storage(frame)?;
+    rows.started = true;
+    let edges_count = narrow_input_edges_v1(
+        function,
+        callables,
+        definitions,
+        address_escaped,
+        edges,
+        resources,
+    )?;
+    if edges_count != expected_edges {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "actual complete graph edge storage/count differs",
+        ));
+    }
+    let locals = function.locals().len();
+    resources.work(locals)?;
+    resources.reserve(&mut rows.indices, locals)?;
+    rows.indices.resize(locals, None);
+    resources.work(locals)?;
+    resources.reserve(&mut rows.grids, locals)?;
+    rows.grids.resize(locals, None);
+    resources.work(locals)?;
+    resources.reserve(&mut rows.predicates, locals)?;
+    rows.predicates.resize_with(locals, || None);
+    seed_invocation_values_v1(
+        callables,
+        function,
+        definitions,
+        address_escaped,
+        option_dominance,
+        &mut rows.indices,
+        &mut rows.grids,
+        &mut rows.predicates,
+        &mut IndexQueueV1::Paid {
+            values: &mut rows.index_fifo,
+            cursor: &mut rows.index_cursor,
+        },
+        &mut IndexQueueV1::Paid {
+            values: &mut rows.grid_fifo,
+            cursor: &mut rows.grid_cursor,
+        },
+        0,
+        operations,
+        next_value,
+        None,
+        resources,
+    )?;
+    propagate_index_values_v1(
+        definitions,
+        address_escaped,
+        option_dominance,
+        enum_payload_dominance,
+        edges,
+        &mut rows.indices,
+        &rows.grids,
+        &mut rows.predicates,
+        &mut IndexQueueV1::Paid {
+            values: &mut rows.index_fifo,
+            cursor: &mut rows.index_cursor,
+        },
+        &mut rows.processed_edges,
+        operations,
+        next_value,
+        None,
+        resources,
+    )?;
+    if rows.processed_edges > expected_edges {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "capability worklist exceeded its charged def-use edges",
+        ));
+    }
+    if resources.has_denial() {
+        return Err(resource(Resource::Accounting));
+    }
+    Ok(())
+}

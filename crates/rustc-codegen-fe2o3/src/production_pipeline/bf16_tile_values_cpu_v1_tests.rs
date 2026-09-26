@@ -54,9 +54,15 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                 // Unlike materialize_prepared_with_budget_v29 this custody core
                 // adds NO output reservation. The nominal receipt is reserved
                 // exactly once below; preexisting occurrences are separate.
-                let result = consume_prepared_with_budget_v29(
-                    prepared, budget, |_, _| Ok(()),
-                    |mut semantic_ssa, launch, _, budget| {
+                // Fixed Cell owner is covered by the richer 4096-byte allowance;
+                // captured reference is included in the exact size_of<F> debit.
+                let consume_input_frame = Cell::new(None);
+                let mut actual_input_frame = 0usize;
+                let result = consume_prepared_with_actual_inputs_for_test_v1(
+                    prepared, budget, &mut actual_input_frame, |_, _| Ok(()),
+                    |mut semantic_ssa, launch, _, ranked_inputs, reference_bindings, budget, frame_owned| {
+                        // First accepted debit, before materialization or view.
+                        assert!(consume_input_frame.replace(Some(*frame_owned)).is_none());
                         if semantic_ssa.occurrence_storage().is_some() {
                             return Err(unavailable("BF16 helper CPU occurrences were not fresh"));
                         }
@@ -93,7 +99,12 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                                     {
                                         return Err(Error::Unavailable("genuine source/emission owner join"));
                                     }
-                                    nominal_call_query::inspect(&owner, relation, budget)?;
+                                    with_actual_retained_ranked_inputs_for_test_v1(
+                                        &owner, ranked_inputs, reference_bindings, budget, frame_owned,
+                                        |actual_inputs, budget| nominal_call_query::inspect(
+                                            &owner, relation, &actual_inputs, budget,
+                                        ),
+                                    )?;
                                     source_seed.with_relation(relation, budget, |source, budget| {
                                         inspect(source, &emission, budget)
                                     })
@@ -128,6 +139,29 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                         budget.release_storage(bytes).map_err(materialization_resource_error_v29)?;
                     }
                 }
+                // All richer handoff callback/borrow frames have ended. The
+                // returned owner keeps its separately reserved payload receipts.
+                if budget.work_ledger_identity_v1() != ledger
+                    || budget.storage() < protected.checked_add(actual_input_frame)
+                        .ok_or_else(|| materialization_resource_error_v29(Resource::Arithmetic))?
+                {
+                    drop(result);
+                    return Err(Box::new(materialization_resource_error_v29(Resource::Accounting)));
+                }
+                // Both accepted frame debits charge exactly their byte counts.
+                // Callbacks have ended and original custody was checked above.
+                if let Some(consume) = consume_input_frame.get() {
+                    let view = actual_input_frame.checked_sub(consume)
+                        .ok_or_else(|| materialization_resource_error_v29(Resource::Accounting))?;
+                    eprintln!("fe2o3-root-prefix-handoff-v1 work={} storage={} consume={} view={}",
+                        actual_input_frame, actual_input_frame, consume, view);
+                } else {
+                    // Pre-callback failure keeps its original error and has no
+                    // completed actual-handoff observation.
+                    assert!(result.is_err());
+                }
+                drop(consume_input_frame);
+                budget.release_storage(actual_input_frame).map_err(materialization_resource_error_v29)?;
                 drop(source_seed);
                 if budget.work_ledger_identity_v1() != ledger || budget.storage() < protected {
                     drop(result);

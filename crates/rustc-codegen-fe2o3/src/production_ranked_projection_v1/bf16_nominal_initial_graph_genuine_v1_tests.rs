@@ -1214,3 +1214,15 @@ fn complete_profile_oracle_rejects_missing_extra_reordered_and_late_payload_edge
     let extra = vec![vec![first, second, late], vec![], vec![]];
     assert!(require_exhausted_row(&extra[0], 2).is_err());
 }
+
+// Reuse the independent original-source rescan, not production graph population,
+// inside a later SAME graph loan. The caller owns paid cursor storage OUTER.
+pub(in crate::production_ranked_projection_v1) fn check_source_rows_for_prefix_for_test_v1(
+    view: &NominalCompleteForProfileGraphV1<'_>,
+    rich: &RichNominalSourceTablesV1<'_>,
+    checked: &CheckedBf16NominalCallV1<'_>,
+    context: &mut NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_>,
+    cursors: &mut [usize],
+) -> Result<()> {
+    observe_view(view, rich, checked, context, cursors, false).map(|_| ())
+}
