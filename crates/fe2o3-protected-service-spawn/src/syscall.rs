@@ -106,12 +106,12 @@ struct LinuxRlimit64V1 {
 }
 
 struct StagedBindingV1 {
-    source: OwnedFd,
+    source: File,
     destination: RawFd,
 }
 
 pub(crate) struct StagedProtectedServiceExecV1 {
-    executable: OwnedFd,
+    executable: File,
     bindings: Vec<StagedBindingV1>,
     profile_ready_writer: OwnedFd,
     gate_reader: OwnedFd,
@@ -127,11 +127,14 @@ impl StagedProtectedServiceExecV1 {
         exec_status_writer: BorrowedFd<'_>,
     ) -> io::Result<Self> {
         let mut next = PROTECTED_SERVICE_STAGED_DESCRIPTOR_FLOOR_V1;
-        let executable = duplicate_above(executable.as_fd(), &mut next)?;
-        let mut staged_bindings = Vec::with_capacity(bindings.len());
+        let executable = File::from(duplicate_above(executable.as_fd(), &mut next)?);
+        let mut staged_bindings = Vec::new();
+        staged_bindings
+            .try_reserve_exact(bindings.len())
+            .map_err(|_| io::Error::from_raw_os_error(libc::ENOMEM))?;
         for binding in bindings {
             staged_bindings.push(StagedBindingV1 {
-                source: duplicate_above(binding.source, &mut next)?,
+                source: File::from(duplicate_above(binding.source, &mut next)?),
                 destination: binding.destination,
             });
         }
@@ -147,6 +150,20 @@ impl StagedProtectedServiceExecV1 {
     pub(crate) fn descriptor_count(&self) -> usize {
         self.bindings.len()
     }
+
+    pub(crate) fn executable(&self) -> &File {
+        &self.executable
+    }
+
+    pub(crate) fn binding(&self, destination: RawFd) -> Option<&File> {
+        self.bindings
+            .iter()
+            .find(|b| b.destination == destination)
+            .map(|b| &b.source)
+    }
+
+    pub(crate) const TABLE_STORAGE: usize = crate::MAX_PROTECTED_SERVICE_DESCRIPTOR_BINDINGS_V1
+        * std::mem::size_of::<StagedBindingV1>();
 }
 
 fn duplicate_above(source: BorrowedFd<'_>, next: &mut RawFd) -> io::Result<OwnedFd> {
@@ -164,6 +181,38 @@ pub(crate) fn spawn(
     cap_last_cap: u32,
     expected_parent: rustix::process::Pid,
 ) -> io::Result<RootOwnedProtectedServiceChildV1> {
+    let (pid, pidfd) =
+        clone_child(staged, credentials, cap_last_cap, expected_parent).map_err(io::Error::from)?;
+    let Some(pidfd) = pidfd else {
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        reap_pid(pid);
+        return Err(io::Error::from_raw_os_error(libc::EBADFD));
+    };
+    let flags = match rustix::io::fcntl_getfd(&pidfd) {
+        Ok(flags) => flags,
+        Err(source) => {
+            terminate_and_reap(pid, &pidfd);
+            return Err(source.into());
+        }
+    };
+    if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
+        terminate_and_reap(pid, &pidfd);
+        return Err(io::Error::from_raw_os_error(libc::EPERM));
+    }
+    Ok(RootOwnedProtectedServiceChildV1 {
+        pid,
+        pidfd: Some(pidfd),
+    })
+}
+
+// No fallible parent operations follow successful clone: the caller must adopt
+// the complete result with its pre-clone cleanup slot and spawn lease immediately.
+pub(crate) fn clone_child(
+    staged: &StagedProtectedServiceExecV1,
+    credentials: ProtectedServiceCredentialProfileV1,
+    cap_last_cap: u32,
+    expected_parent: rustix::process::Pid,
+) -> rustix::io::Result<(rustix::process::Pid, Option<OwnedFd>)> {
     let mut pidfd_raw = -1_i32;
     let arguments = CloneArgsV1 {
         flags: CLONE_PIDFD | CLONE_CLEAR_SIGHAND,
@@ -188,7 +237,8 @@ pub(crate) fn spawn(
         )
     };
     if result < 0 {
-        return Err(io::Error::last_os_error());
+        // SAFETY: failed direct syscall set this thread's errno.
+        return Err(unsafe { rustix::io::Errno::from_raw_os_error(*libc::__errno_location()) });
     }
     if result == 0 {
         // SAFETY: this is the direct post-clone child; child_exec always execs or exits.
@@ -201,32 +251,15 @@ pub(crate) fn spawn(
             )
         }
     }
-    let raw_pid =
-        i32::try_from(result).map_err(|_| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
-    let pid = rustix::process::Pid::from_raw(raw_pid)
-        .ok_or_else(|| io::Error::from_raw_os_error(libc::ESRCH))?;
-    if pidfd_raw < 0 {
-        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
-        reap_pid(pid);
-        return Err(io::Error::from_raw_os_error(libc::EBADFD));
-    }
-    // SAFETY: successful CLONE_PIDFD installed one fresh descriptor in pidfd_raw.
-    let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd_raw) };
-    let flags = match rustix::io::fcntl_getfd(&pidfd) {
-        Ok(flags) => flags,
-        Err(source) => {
-            terminate_and_reap(pid, &pidfd);
-            return Err(source.into());
-        }
+    let raw_pid = i32::try_from(result).unwrap_or_else(|_| std::process::abort());
+    let pid = rustix::process::Pid::from_raw(raw_pid).unwrap_or_else(|| std::process::abort());
+    let pidfd = if pidfd_raw < 0 {
+        None
+    } else {
+        // SAFETY: successful CLONE_PIDFD installed one newly owned descriptor.
+        Some(unsafe { OwnedFd::from_raw_fd(pidfd_raw) })
     };
-    if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
-        terminate_and_reap(pid, &pidfd);
-        return Err(io::Error::from_raw_os_error(libc::EPERM));
-    }
-    Ok(RootOwnedProtectedServiceChildV1 {
-        pid,
-        pidfd: Some(pidfd),
-    })
+    Ok((pid, pidfd))
 }
 
 pub(crate) struct RootOwnedProtectedServiceChildV1 {
