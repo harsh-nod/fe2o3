@@ -123,14 +123,25 @@ fn v2_commitment_rejects_every_full_identity_field_on_both_subjects() {
 #[test]
 fn v2_does_not_accept_the_legacy_digest_omission_as_equal_cpu_content() {
     let mut fixture = Fixture::new();
-    let expected = commitment(fixture.input());
+    commitment(fixture.input());
     let legacy = fixture.ir.canonical_sha256_v1();
     fixture.ir.observable_output_effects[0].value =
         ReferenceValueV1::Use(ReferenceOperandV1::Constant(constant(0x3f80_0000)));
     assert_eq!(fixture.ir.canonical_sha256_v1(), legacy);
-    // B1 transports value even where the legacy hash does not. This remains
-    // inert content; B2 would additionally reject the incoherent replay claim.
-    rejects(expected, fixture.input());
+    // B1 checks occurrence values against their assignments before lending a
+    // commitment, even when the legacy digest cannot distinguish the mutation.
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    budget.reserve_storage(31).unwrap();
+    let account = budget.work_ledger_identity_v1();
+    assert!(matches!(
+        with_encoded_native_cpu_input_v1(fixture.input(), &mut budget, |_, _, _| {
+            panic!("incoherent output exposed")
+        }),
+        Err(NativeCpuCodecErrorV1::Wire("effect assignment value"))
+    ));
+    assert_eq!(budget.storage(), 31);
+    assert!(budget.work_ledger_identity_v1() == account);
 }
 
 #[test]
