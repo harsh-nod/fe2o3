@@ -47,6 +47,9 @@ mod bf16_nominal_layout_return_v1;
 // Borrowed recipe candidate only: no Final, access or normal admission.
 #[allow(dead_code)]
 mod bf16_nominal_ranked_proxy_v1;
+// Source-owned postflight candidate only; no complete recipe or admission.
+#[allow(dead_code)]
+mod bf16_nominal_final_candidate_v1;
 mod canonical_assertion_facts_v1;
 mod capability_state_access_v1;
 mod tensor_capability_read_v1;

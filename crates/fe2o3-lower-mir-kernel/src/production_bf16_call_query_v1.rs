@@ -162,6 +162,24 @@ fn bf16_call_query_scope_v1<'w, R: Copy + 'static>(
     result
 }
 
+// Shared exact retained-floor calculation. The legacy query preserves its
+// original call order and the inventory's fourteen charged header visits.
+fn bf16_nominal_retained_floor_v1(
+    owner: &ProductionPreRankedKirOwnerV1,
+    inventory: &CanonicalKirInventoryV1<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Bf16CallQueryResultV1<usize> {
+    Ok(argument_sum_v1(&[
+        owner.retained_analysis_storage_v1(),
+        owner.helper_memory.capture.preexisting_storage(),
+        inventory
+            .retained_storage_v1(budget)
+            .map_err(bf16_query_inventory_error_v1)?,
+    ])?)
+}
+
+include!("production_bf16_nominal_entry_resources_v1.rs");
+
 impl ProductionPreRankedKirOwnerV1 {
     /// Inspect the one closed nominal helper call from this exact owner and
     /// inventory. The actual borrowed source call is required: a cloned but
@@ -217,13 +235,7 @@ impl ProductionPreRankedKirOwnerV1 {
             let relation = self.helper_memory.bf16_nominal.as_deref().ok_or(
                 Bf16NominalCallQueryErrorV1::Unavailable("sealed nominal relation absent"),
             )?;
-            let retained = argument_sum_v1(&[
-                self.retained_analysis_storage_v1(),
-                self.helper_memory.capture.preexisting_storage(),
-                inventory
-                    .retained_storage_v1(budget)
-                    .map_err(bf16_query_inventory_error_v1)?,
-            ])?;
+            let retained = bf16_nominal_retained_floor_v1(self, inventory, budget)?;
             let incoming = budget
                 .storage()
                 .checked_sub(bf16_call_query_scratch_v1::<R>()?)

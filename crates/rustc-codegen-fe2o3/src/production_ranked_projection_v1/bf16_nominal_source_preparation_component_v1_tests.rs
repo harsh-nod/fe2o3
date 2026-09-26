@@ -388,4 +388,5 @@ mod nominal_preparation_component_tests {
         assert_eq!(long.0 - short.0, 2 * (64 - 1));
         assert_eq!(long.1, short.1, "projection spine remains borrowed source");
     }
+    include!("bf16_nominal_rich_source_preparation_v1_tests.rs");
 }

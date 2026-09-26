@@ -5,6 +5,17 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Postflight helper candidate and retained preparation — 2026-09-26
+
+The [postflight preparation checkpoint](bf16-helper-postflight-preparation-qualification-20260926.md)
+adds strict original-entry resource accounting, a source-rejoined candidate
+exposed after all preparation/facts/dense postflights, and retained scalar and
+allocation provenance. Qualification passed 1,861 lowerer tests, 2,446 backend
+tests and five fresh Rust source sessions. Results, masks, refusals and storage
+match the preceding checkpoint; failed R9 evidence and its exact test-only
+refund correction are retained. Complete root/ranked/formal/LLVM continuation
+is still pending. Broad accepted exits remain **6/18**.
+
 ## Physical debugger startup diagnostics — 2026-09-26
 
 The [new debugger checkpoint](physical-debugger-setup-diagnostics-20260926.md)

@@ -56,11 +56,40 @@ struct PreparedSourceV1 {
     allocations: Vec<Option<AllocationContractV1>>,
     constants: Vec<Option<u64>>,
 }
+struct RetainedPreparationTablesV1 {
+    scalar: AssertionDefinitionInventoryV1,
+    provenance: LocalProvenanceV1,
+}
+
+#[path = "bf16_nominal_rich_source_preparation_v1.rs"]
+mod rich_source_preparation_v1;
+#[allow(unused_imports)]
+pub(super) use rich_source_preparation_v1::{
+    RichNominalSourceTablesV1, with_nominal_rich_source_preparation_v1,
+};
+#[cfg(test)]
+pub(super) use rich_source_preparation_v1::{
+    measure_preparation_core_for_test_v1, observe_rich_source_comparison_for_test_v1,
+    rich_frame_for_test_v1, with_rich_tables_for_test_v1,
+};
+
 fn prepare(
     callables: &[SemanticCallableDeclV1],
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     resources: &mut PreparationResourcesV1<'_, '_>,
+) -> std::result::Result<PreparedSourceV1, ProductionRankedProjectionErrorV1> {
+    // Legacy C2 drops the same tables at the same algorithm boundary and keeps
+    // the exact existing charges/header. The optional retention is private.
+    prepare_with_retained(callables, types, function, resources, None)
+}
+
+fn prepare_with_retained(
+    callables: &[SemanticCallableDeclV1],
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    resources: &mut PreparationResourcesV1<'_, '_>,
+    retained: Option<&mut Option<RetainedPreparationTablesV1>>,
 ) -> std::result::Result<PreparedSourceV1, ProductionRankedProjectionErrorV1> {
     // The existing retired-intrinsic guard makes two finite roster scans.
     resources.work(
@@ -92,9 +121,14 @@ fn prepare(
         resources,
     )?;
     let constants = constant_locals_with_resources_v1(function, resources)?;
-    // Their reservations deliberately stay owned through the entire callback.
-    drop(provenance);
-    drop(scalar);
+    // Both APIs own the same accepted reservations through their callback.
+    // The old C2 path keeps its former drop point and unchanged meter sequence.
+    if let Some(retained) = retained {
+        *retained = Some(RetainedPreparationTablesV1 { scalar, provenance });
+    } else {
+        drop(provenance);
+        drop(scalar);
+    }
     Ok(PreparedSourceV1 {
         dominance,
         allocations,

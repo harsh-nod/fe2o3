@@ -28,6 +28,17 @@ pub(super) fn observe_prepared_dense(
 ) -> Result<()> {
     let entry = budget.storage();
     with_prepared_dense_final(owner, source, inventory, budget, &mut |_, _| Ok(()))?;
+    // SAME complete route participates in the existing exact W/P/F probes.
+    final_candidate::observe(owner, source, inventory, budget)?;
+    super::bf16_nominal_source_preparation_v1::observe_rich_source_comparison_for_test_v1(
+        owner,
+        inventory,
+        source.root(),
+        source.root(),
+        source.call_block(),
+        source.source_call(),
+        budget,
+    )?;
     assert_eq!(budget.storage(), entry);
     Ok(())
 }
@@ -256,6 +267,9 @@ fn observe_exact_final_rows(
     Ok(())
 }
 
+#[path = "bf16_nominal_final_candidate_genuine_v1_tests.rs"]
+mod final_candidate;
+
 #[path = "bf16_nominal_dense_final_genuine_v1_tests.rs"]
 mod final_controls;
 
@@ -266,5 +280,6 @@ pub(super) fn inspect_dense_final_controls(
     inventory_storage: usize,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
-    final_controls::inspect(owner, source, inventory, inventory_storage, budget)
+    final_controls::inspect(owner, source, inventory, inventory_storage, budget)?;
+    final_candidate::controls(owner, source, inventory, inventory_storage, budget)
 }
