@@ -1,0 +1,12 @@
+
+running 7 tests
+test qualification_gfx942_mixed_duration_v1::tests::complete_images_match_independent_modular_geometric_sum_oracle ... ok
+test qualification_gfx942_mixed_duration_v1::tests::exact_gate_rejects_allocation_and_stale_content_changes ... ok
+test qualification_gfx942_mixed_duration_v1::tests::exact_gate_rejects_binding_and_abi_changes ... ok
+test qualification_gfx942_mixed_duration_v1::tests::exact_gate_rejects_geometry_kernarg_and_semantic_changes ... ok
+test qualification_gfx942_mixed_duration_v1::tests::logarithmic_oracle_matches_direct_short_recurrences ... ok
+test qualification_gfx942_mixed_duration_v1::tests::exact_pair_admits_both_objects_and_no_cross_profile_tuple ... ok
+test qualification_gfx942_mixed_duration_v1::tests::output_validation_checks_every_byte_and_both_guards ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1439 filtered out; finished in 0.02s
+

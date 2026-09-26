@@ -1,0 +1,36 @@
+    Checking typenum v1.20.1
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.1
+    Checking fe2o3-target-spec v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-target-spec)
+    Checking fe2o3-amd-target v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-amd-target)
+    Checking serde_core v1.0.229
+    Checking hybrid-array v0.4.14
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking spin v0.12.3
+    Checking bitflags v2.13.1
+    Checking linux-raw-sys v0.12.1
+    Checking fe2o3-runtime-model v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-runtime-model)
+    Checking rustix v1.1.4
+    Checking fe2o3-hsaco v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-hsaco)
+    Checking zmij v1.0.23
+    Checking itoa v1.0.18
+    Checking memchr v2.8.3
+    Checking fe2o3-amdhsa-loader v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-amdhsa-loader)
+    Checking serde v1.0.229
+    Checking serde_json v1.0.151
+    Checking fe2o3-resource-accounting v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-resource-accounting)
+    Checking libc v0.2.189
+    Checking arrayvec v0.7.8
+    Checking fe2o3-drm-uapi v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-drm-uapi)
+    Checking fe2o3-kfd-uapi v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-kfd-uapi)
+    Checking zeroize v1.9.0
+    Checking fe2o3-aql v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-aql)
+    Checking fe2o3-profiler-protocol v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-profiler-protocol)
+    Checking fe2o3-kfd v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-kfd)
+    Checking fe2o3-completion v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-completion)
+    Checking fe2o3-host-api v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-host-api)
+    Checking fe2o3-runtime v0.1.0 (/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/source/crates/fe2o3-runtime)
+    Finished `dev` profile [unoptimized] target(s) in 38.21s

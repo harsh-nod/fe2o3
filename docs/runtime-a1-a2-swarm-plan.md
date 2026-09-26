@@ -874,7 +874,12 @@ native-roster diagnosis still needs an idle window.
 
 ### SCALE-1: Admitted Short/Long Qualification Profiles
 
-**Ready for profile design now.** Add separately reviewed qualification artifacts
+**CPU-qualified development; native correctness remains open.** The
+[2026-09-25 packet](evidence/dev-mixed-duration-2026-09-25/README.md) implements
+two exact bounded-work profiles and full-output independent oracles. The first
+native attempt stopped during upload, before any GPU test. The remaining gate
+is genuine native correctness followed by the distinct scheduling campaign.
+Keep separately reviewed qualification artifacts
 and gates with bounded geometry, small disjoint storage footprints, exact ABI and
 effects, deterministic independent oracles and authenticated build identities.
 Do not widen existing R26/R60 fixed-profile gates or relabel fixtures as general
@@ -895,6 +900,15 @@ ring headroom, signal capacity and aggregate memory limits before promotion.
 Widen private `u8` slot identities and audit all consumers; raising the constant
 alone is insufficient. No new queues are assumed necessary by the initial design.
 
+The CPU-qualified mixed-duration artifacts use ReadWrite bindings, which the
+current early-publication gate deliberately excludes. They are not the capacity
+workload. Review the existing HostVisible vecadd Read/Read/Write profile for this
+cell: identical recipe within each lane, disjoint allocations between lanes.
+Do not weaken the ReadWrite gate to manufacture depth. The existing completion
+arena has 8,192 signals; ring headroom, exact slot identities, profile-specific
+occurrence encoding and aggregate backing still require admission. Frontier-only
+receipt inspection is insufficient: count every retained pipeline epoch too.
+
 Acceptance: checked generation arithmetic, exact reservations/rollback,
 wraparound and stale-slot rejection, signal-reader retention and no reuse before
 retirement. The hardware gate requires at least 2,048 simultaneously
@@ -911,6 +925,13 @@ example and signed runner/checker. Precommit the
 depths, memory ceiling, deadlines and resource-reuse count. Exercise later-short
 completion before earlier-long completion, exact operation/native identities,
 dropped and timed-out observers, backpressure and successful cleanup.
+
+The two-operation mixed-duration canary is implemented and CPU-compiled, but not
+yet native-qualified. Add distinct observer-timeout, dropped-observer and bounded
+command-saturation cells; command backpressure is not native-slot saturation.
+Keep external process-group deadlines because owner shutdown/Drop may block
+beyond a per-future observer deadline. None of these small cells substitutes for
+the separately measured 2,048-native-epoch roster.
 
 Report accepted/queued, native-published, unresolved and retired counts
 separately, including peak occupancy per native resource. The current restricted

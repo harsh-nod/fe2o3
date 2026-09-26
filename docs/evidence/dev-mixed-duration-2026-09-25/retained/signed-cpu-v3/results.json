@@ -1,0 +1,100 @@
+{
+  "clippy": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "default": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "doctests": {
+    "counts": [
+      [
+        4,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        42,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "fixture-rebuild": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "format": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "gnu": {
+    "counts": [
+      [
+        1423,
+        0,
+        24,
+        0,
+        0
+      ]
+    ],
+    "passed": true,
+    "sha256": "4d748bd280c0c1bf6d1f66e0270f15057ae124c49fa970c9f112beba66fda506",
+    "status": 0
+  },
+  "gnu-build": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "long-disassembly": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "musl": {
+    "counts": [
+      [
+        1423,
+        0,
+        24,
+        0,
+        0
+      ]
+    ],
+    "passed": true,
+    "sha256": "4e1b0379696d97443f0b75baae900b0a5b204afeba27c87712ed2927b08e400e",
+    "status": 0
+  },
+  "musl-build": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "runner-tests": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "rustc": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "short-disassembly": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  }
+}

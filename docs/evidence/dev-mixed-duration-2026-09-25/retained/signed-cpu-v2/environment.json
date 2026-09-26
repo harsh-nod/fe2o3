@@ -1,0 +1,15 @@
+{
+  "CARGO_BUILD_JOBS": "2",
+  "CARGO_HOME": "/dev/shm/fe2o3-mixed-duration-cold-v2-20260925-EJqXyU7y/cargo-home",
+  "CARGO_INCREMENTAL": "0",
+  "CARGO_PROFILE_DEV_DEBUG": "0",
+  "CARGO_PROFILE_TEST_DEBUG": "0",
+  "CARGO_TARGET_DIR": "/dev/shm/fe2o3-mixed-duration-cold-v2-20260925-EJqXyU7y/build",
+  "CARGO_TERM_COLOR": "never",
+  "GIT_CONFIG_GLOBAL": "/dev/null",
+  "GIT_CONFIG_NOSYSTEM": "1",
+  "HOME": "/home/harsh",
+  "LC_ALL": "C",
+  "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+  "USER": "harsh"
+}

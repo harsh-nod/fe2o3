@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest mixed-duration development (2026-09-25): the
+[short/long CPU packet](evidence/dev-mixed-duration-2026-09-25/README.md)
+adds separately admitted fixed-work objects, independent full-byte oracles and
+two compiled native correctness/async-owner canaries. Signed `ca1edd1423` passes
+1,423 runtime tests per GNU/musl target, all 46 doctests, strict Clippy, formatting
+and byte-identical object rebuilds; 24 hardware-only tests remain ignored per
+target. All 227 original scratch artifacts are retained and replayed.
+The [native attempt](evidence/dev-mixed-duration-native-2026-09-25/README.md)
+was interrupted during upload: no native test launched. Its cleanup command
+reports exact staging removal, but independent remote absence is unverified.
+Original build mounts became unavailable after the execution-context change;
+no local build-tree removal is claimed. SCALE-1 native correctness, SCALE-2
+ordering/depth, physical overlap and matched performance remain open. The
+two-operation ReadWrite profile is not a high-depth pipeline profile. A1/A2 and
+the broader accepted lane checkpoints are unchanged.
+
 Latest leaf-outcome proof development (2026-09-25): the
 [exact leaf outcome packet](evidence/dev-completion-leaf-outcomes-2026-09-25/README.md)
 passes all fourteen phases from signed `7185cc6fb`. Opening, relocated and closing

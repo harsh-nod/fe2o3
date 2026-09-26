@@ -1,0 +1,11 @@
+{
+  "command": [
+    "bash",
+    "crates/fe2o3-runtime/fixtures/trusted-gfx942-mixed-duration-v1/build-and-verify.sh"
+  ],
+  "started_ns": 1790394428060025852,
+  "process_group": 1982409,
+  "group_absent": true,
+  "finished_ns": 1790394429608034562,
+  "status": 0
+}

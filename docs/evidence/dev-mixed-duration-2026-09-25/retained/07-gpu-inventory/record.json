@@ -1,0 +1,24 @@
+{
+  "command": [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=2",
+    "mi300x",
+    "rocm-smi",
+    "--showuse",
+    "--showmemuse",
+    "--showuniqueid",
+    "--showpids"
+  ],
+  "started_ns": 1790395105580528731,
+  "process_group": 2111724,
+  "group_absent": true,
+  "finished_ns": 1790395111171024835,
+  "status": 0
+}

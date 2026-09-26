@@ -1,0 +1,32 @@
+{
+  "fixture-rebuild": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "long-disassembly": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "runner-tests": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "rustc": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "short-disassembly": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "signature": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  }
+}

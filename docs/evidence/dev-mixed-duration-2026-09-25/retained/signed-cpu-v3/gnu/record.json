@@ -1,0 +1,11 @@
+{
+  "command": [
+    "/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/build/debug/deps/fe2o3_runtime-47b18d551c529e90",
+    "--test-threads=2"
+  ],
+  "started_ns": 1790396051401301341,
+  "process_group": 2298796,
+  "group_absent": true,
+  "finished_ns": 1790396090204766540,
+  "status": 0
+}

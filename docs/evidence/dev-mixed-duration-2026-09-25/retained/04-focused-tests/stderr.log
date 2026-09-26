@@ -1,0 +1,38 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error[E0277]: `?` couldn't convert the error: `context::RuntimeBackendFailureV1<kfd_backend::KfdRuntimeBackendErrorV1>: std::error::Error` is not satisfied
+   --> crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/mixed_duration.rs:92:14
+    |
+ 90 |               backend.configure_host_visible_backing_budget_v1(
+    |  _____________________-
+ 91 | |                 Gfx942HostVisibleBackingBudgetV1::new(64 * 1024 * 1024, 128).unwrap(),
+ 92 | |             )?;
+    | |             -^ the trait `std::error::Error` is not implemented for `context::RuntimeBackendFailureV1<kfd_backend::KfdRuntimeBackendErrorV1>`
+    | |_____________|
+    |               this has type `Result<_, context::RuntimeBackendFailureV1<kfd_backend::KfdRuntimeBackendErrorV1>>`
+    |
+note: `context::RuntimeBackendFailureV1<kfd_backend::KfdRuntimeBackendErrorV1>` needs to implement `std::error::Error`
+   --> crates/fe2o3-runtime/src/context.rs:448:1
+    |
+448 | pub enum RuntimeBackendFailureV1<E> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = note: required for `Box<dyn std::error::Error + std::marker::Send + Sync>` to implement `From<context::RuntimeBackendFailureV1<kfd_backend::KfdRuntimeBackendErrorV1>>`
+
+error[E0277]: `?` couldn't convert the error: `context::RuntimeBackendFailureV1<kfd_backend::KfdRuntimeBackendErrorV1>: std::error::Error` is not satisfied
+   --> crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/mixed_duration.rs:94:95
+    |
+ 94 |                 .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x78; 32], 128).unwrap())?;
+    |                  -----------------------------------------------------------------------------^ the trait `std::error::Error` is not implemented for `context::RuntimeBackendFailureV1<kfd_backend::KfdRuntimeBackendErrorV1>`
+    |                  |
+    |                  this has type `Result<_, context::RuntimeBackendFailureV1<kfd_backend::KfdRuntimeBackendErrorV1>>`
+    |
+note: `context::RuntimeBackendFailureV1<kfd_backend::KfdRuntimeBackendErrorV1>` needs to implement `std::error::Error`
+   --> crates/fe2o3-runtime/src/context.rs:448:1
+    |
+448 | pub enum RuntimeBackendFailureV1<E> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = note: required for `Box<dyn std::error::Error + std::marker::Send + Sync>` to implement `From<context::RuntimeBackendFailureV1<kfd_backend::KfdRuntimeBackendErrorV1>>`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `fe2o3-runtime` (lib test) due to 2 previous errors

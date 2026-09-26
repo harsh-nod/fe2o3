@@ -1,0 +1,7 @@
+{
+  "/opt/rocm/llvm/bin/clang": "5c1d565a505c004aedf425b6c3b7c5199e09fd5207ef3f7d31d0ba00774a8f28",
+  "/opt/rocm/llvm/bin/ld.lld": "d088c46031665db7985be41360fcf3f8e80e2536fa608b7a3d64223fd13cfebb",
+  "/opt/rocm/llvm/bin/llvm-objdump": "c894b7482effe9c285b5d0a355ec6484d7675dcfaffcb1ca30a6d08b393441cb",
+  "/usr/bin/git": "2a8c18fbf43da9f692d75474c72bea9dfd796c260b0f3dfe456376abc3bbd668",
+  "/usr/bin/ssh-keygen": "5175ddce2146fc8a03ab8e1ef25a1b0382dd3cb209484f7ae11ac782171c0d04"
+}

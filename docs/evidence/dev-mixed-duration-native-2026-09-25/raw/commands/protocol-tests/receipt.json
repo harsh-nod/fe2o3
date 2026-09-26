@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/test_protocol.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/payload"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790396930798352884,
+  "group_absent": true,
+  "pid": 2464265,
+  "started_ns": 1790396929574388622,
+  "stderr_sha256": "b706c6c13f56da51fff95e75d70d4cb359cef5dcaf6d5ebebe097713c6d9f586",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 120
+}

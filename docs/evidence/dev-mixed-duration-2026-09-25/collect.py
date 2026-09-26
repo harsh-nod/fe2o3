@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Retain this exact development scratch tree before removing owned build trees."""
 import hashlib
+import argparse
 import json
 import os
 from pathlib import Path
@@ -68,12 +69,18 @@ def no_groups(records):
 
 def main():
     need(sys.flags.isolated and sys.flags.dont_write_bytecode and not sys.flags.optimize, "use python3 -I -B")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--retain-only", action="store_true",
+                        help="retain and replay CPU evidence without claiming build-tree or process cleanup")
+    args = parser.parse_args()
     need(shutil.rmtree.avoids_symlink_attacks, "descriptor-relative cleanup")
     verify = runpy.run_path(str(HERE / "verify.py"))["verify"]
     verified = verify(SCRATCH / "signed-cpu-v3")
     records = [json.loads(path.read_text()) for path in SCRATCH.rglob("record.json")]
-    no_groups(records)
-    before = {str(root): inventory(root) for root in [SCRATCH, *TARGETS]}
+    if not args.retain_only:
+        no_groups(records)
+    roots = [SCRATCH] if args.retain_only else [SCRATCH, *TARGETS]
+    before = {str(root): inventory(root) for root in roots}
     need(not any("link" in row for row in before[str(SCRATCH)].values()), "scratch contains no links")
     destination = HERE / "retained"
     need(not destination.exists(), "fresh retained tree")
@@ -84,6 +91,14 @@ def main():
     need(original_files == retained_files, "byte-exact full scratch retention")
     need(verify(destination / "signed-cpu-v3") == verified, "independent retained replay")
     save(HERE / "retention.json", dict(files=retained_files, verification=verified, records=len(records)))
+    if args.retain_only:
+        need(inventory(SCRATCH) == before[str(SCRATCH)], "unchanged retained scratch")
+        save(HERE / "cleanup-pending.json", dict(
+            cleanup_attempted=False, owned_scratch=str(SCRATCH), original_build_targets=[str(root) for root in TARGETS],
+            reason="Execution context changed; original build mounts and host process namespace are not available.",
+            remote_scope="Native campaign and remote cleanup are recorded in the separate native packet."))
+        print(json.dumps(dict(retained_files=len(retained_files), verification=verified, cleanup_attempted=False), sort_keys=True))
+        return
     save(HERE / "cleanup-before.json", before)
     no_groups(records)
     need({str(root): inventory(root) for root in [SCRATCH, *TARGETS]} == before, "immediate owned-tree continuity")

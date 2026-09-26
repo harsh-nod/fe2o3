@@ -1,0 +1,12 @@
+{
+  "cleanup_attempted": false,
+  "original_build_targets": [
+    "/dev/shm/fe2o3-mixed-duration-target-20260925-NohI5JUH",
+    "/dev/shm/fe2o3-mixed-duration-cold-20260925-sXxJH5mI",
+    "/dev/shm/fe2o3-mixed-duration-cold-v2-20260925-EJqXyU7y",
+    "/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S"
+  ],
+  "owned_scratch": "/home/harsh/.codex-tmp/fe2o3-mixed-duration-20260925-Fi4yH01q",
+  "reason": "Execution context changed; original build mounts and host process namespace are not available.",
+  "remote_scope": "Native campaign and remote cleanup are recorded in the separate native packet."
+}

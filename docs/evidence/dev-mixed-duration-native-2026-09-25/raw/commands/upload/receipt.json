@@ -1,0 +1,43 @@
+{
+  "command": [
+    "scp",
+    "-q",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "--",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/payload/base.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/payload/native-base.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/payload/native.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/payload/observer.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/payload/oracle.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/payload/protocol-base.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/payload/protocol.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/payload/recorder.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/payload/runtime-tests",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/payload/topology.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-duration-native-2026-09-25/raw/binding.json",
+    "mi300x:/home/harsh/fe2o3-mixed-duration-20260925.153f809f9d250cd9/"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": "RuntimeError: interrupted by signal 15",
+  "exit": 1,
+  "finished_ns": 1790397046666620779,
+  "group_absent": true,
+  "pid": 2464354,
+  "started_ns": 1790396932627779208,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 180
+}

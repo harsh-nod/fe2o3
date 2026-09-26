@@ -1,0 +1,20 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "qualification_gfx942_mixed_duration_v1",
+    "--",
+    "--test-threads=2"
+  ],
+  "started_ns": 1790393619960816704,
+  "process_group": 1815146,
+  "group_absent": true,
+  "finished_ns": 1790393737561963479,
+  "status": 0
+}

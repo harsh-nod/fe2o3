@@ -1,0 +1,23 @@
+{
+  "command": [
+    "/usr/bin/git",
+    "--no-replace-objects",
+    "archive",
+    "--format=tar.gz",
+    "--output=/home/harsh/.codex-tmp/fe2o3-mixed-duration-20260925-Fi4yH01q/signed-cpu-v3/source.tar.gz",
+    "ca1edd1423b6f094c75bc363b6d6f02004f1fa0e",
+    "crates",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "examples",
+    "tests",
+    "docs/evidence/dev-mixed-duration-2026-09-25/run.py",
+    "docs/evidence/dev-mixed-duration-2026-09-25/test_run.py"
+  ],
+  "started_ns": 1790395866415632763,
+  "process_group": 2262035,
+  "group_absent": true,
+  "finished_ns": 1790395870838706850,
+  "status": 0
+}

@@ -1,0 +1,13 @@
+{
+  "attempted": false,
+  "collected": false,
+  "created": true,
+  "exclusive_reservation": false,
+  "failures": [
+    "RuntimeError('upload failed')",
+    "collection: BrokenPipeError(32, 'Broken pipe')",
+    "cleanup: BrokenPipeError(32, 'Broken pipe')"
+  ],
+  "owned_cleanup": false,
+  "performance_acceptance": false
+}

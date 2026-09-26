@@ -1,0 +1,21 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "--message-format=json",
+    "--",
+    "--test-threads=2"
+  ],
+  "started_ns": 1790394436222098932,
+  "process_group": 1983441,
+  "exception": "CampaignInterrupted",
+  "group_absent": true,
+  "finished_ns": 1790394515795170862,
+  "status": -9
+}

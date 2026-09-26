@@ -1,0 +1,2 @@
+{"bytes_per_image": 384, "images": {"initial.bin": "cdb49c8eed243a788a597813cab39e59c02722ab8fa343ca2b3bbcc971230f31", "long.expected.bin": "0a470113eb70341f3735ec1c393ddc409ab5d52de69ca103619d935a3f475528", "short.expected.bin": "9e82dba5c0bef645eed9ecc5e818a93e0c7d13c71650e22d8f8d19739ff2dddf"}, "mode": "check", "status": "PASS"}
+PASS: byte-identical fixed-work gfx942 fixture pair

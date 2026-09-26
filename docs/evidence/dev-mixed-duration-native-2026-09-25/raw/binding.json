@@ -1,0 +1,47 @@
+{
+  "commit": "ca1edd1423b6f094c75bc363b6d6f02004f1fa0e",
+  "cpu_elf": {
+    "bytes": 71099144,
+    "gzip_sha256": "600887b78fbd4918e2e8d71e97212df393f2250521aa34613e2fbecba9fc815b",
+    "path": "/dev/shm/fe2o3-mixed-duration-cold-v3-20260925-TpDW4R1S/build/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-afaad0775e07e3e7",
+    "sha256": "4e1b0379696d97443f0b75baae900b0a5b204afeba27c87712ed2927b08e400e"
+  },
+  "cpu_qualification": {
+    "command_count": 17,
+    "commit": "ca1edd1423b6f094c75bc363b6d6f02004f1fa0e",
+    "gnu_passed": 1423,
+    "hardware_ignored_per_platform": 24,
+    "musl_passed": 1423,
+    "native_executed": false,
+    "source_inputs": 5978
+  },
+  "device": [
+    1,
+    "0000:26:00.0",
+    "0xab83d2ffef0d3cdf"
+  ],
+  "order": [
+    [
+      "profiles",
+      "kfd_backend::retained_release_tests::mixed_duration::native_mixed_duration_profiles_preserve_full_output_and_refund_backing"
+    ],
+    [
+      "owner",
+      "kfd_backend::retained_release_tests::mixed_duration::native_owned_later_short_completes_while_earlier_long_signal_is_pending"
+    ]
+  ],
+  "outer_seconds": 1800,
+  "payload": {
+    "base.py": "df740a80c83c94af02f7e7dfb1203dcf7c1eafbde0010e41219e4aac40b34bb7",
+    "native-base.py": "19cfa66a24ecf30d028673ca4d1110cf36f2b51b1bf47734c4c9365e687709a4",
+    "native.py": "43a25c40c7a119c16063398eb23b421f7679cb41d56d1426e6bf835b4eb6dc13",
+    "observer.py": "5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51",
+    "oracle.py": "67846f1e7332f04f0dcafcefa4da5bfad5a769501dbb62b900053be675830625",
+    "protocol-base.py": "384cf35d5f3471c4fe0b2228e39963f647383fbbb63e2475d64d643be2d40be1",
+    "protocol.py": "c78a5a7f59e6aa31f43b5414cc8e36b1f9beddafd8bd4eab2ddcd2b4883ab73e",
+    "recorder.py": "3960b587fb80c45af05f8c906ef7067ccc8b3a28d4ad161e8ff7a10ccd4f354c",
+    "runtime-tests": "4e1b0379696d97443f0b75baae900b0a5b204afeba27c87712ed2927b08e400e",
+    "topology.py": "f16f8415badc3b44b72b840fe1c3191afc8dea4b577548e45b020f9b99768714"
+  },
+  "purpose": "correctness-and-observed-order-not-performance"
+}

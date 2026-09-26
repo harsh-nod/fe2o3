@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/opt/rocm/llvm/bin/llvm-objdump",
+    "--disassemble",
+    "--mcpu=gfx942",
+    "crates/fe2o3-runtime/fixtures/trusted-gfx942-mixed-duration-v1/short.hsaco"
+  ],
+  "started_ns": 1790395882131293331,
+  "process_group": 2264420,
+  "group_absent": true,
+  "finished_ns": 1790395882142493617,
+  "status": 0
+}

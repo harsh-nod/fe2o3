@@ -1,0 +1,42 @@
+{
+  "clippy": {
+    "counts": [],
+    "passed": false,
+    "status": 101
+  },
+  "default": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "doctests": {
+    "counts": [
+      [
+        4,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        42,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "replay-tests": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "runner-tests": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  }
+}

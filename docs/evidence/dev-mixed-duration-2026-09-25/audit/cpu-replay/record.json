@@ -1,0 +1,13 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "docs/evidence/dev-mixed-duration-2026-09-25/verify.py"
+  ],
+  "started_ns": 1790397560721143402,
+  "process_group": 8,
+  "group_absent": true,
+  "finished_ns": 1790397563622139274,
+  "status": 0
+}

@@ -1,0 +1,17 @@
+{
+  "command": [
+    "git",
+    "--no-replace-objects",
+    "-c",
+    "gpg.format=ssh",
+    "-c",
+    "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-mixed-duration-20260925-Fi4yH01q/signed-cpu-v1/allowed-signers",
+    "verify-commit",
+    "7c4b4a2c2b73644f688d7f8961988364e17d1532"
+  ],
+  "started_ns": 1790394422151768675,
+  "process_group": 1975297,
+  "group_absent": true,
+  "finished_ns": 1790394422266123293,
+  "status": 0
+}

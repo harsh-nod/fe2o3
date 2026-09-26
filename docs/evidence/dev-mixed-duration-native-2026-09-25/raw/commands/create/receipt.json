@@ -1,0 +1,32 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I -B - create '{\"binding_sha256\":\"c3985e92848242cb780de3e18026400620aa49193f4c2c7472ee70700439e0d9\",\"commit\":\"ca1edd1423b6f094c75bc363b6d6f02004f1fa0e\",\"path\":\"/home/harsh/fe2o3-mixed-duration-20260925.153f809f9d250cd9\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790396932624692633,
+  "group_absent": true,
+  "pid": 2464280,
+  "started_ns": 1790396931142619786,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": "a3f48ff611fd0d7328d3cda2db2be7d4f7ddcd22bf2b919d0b0f4be6707cb659",
+  "stdout_sha256": "c987a35bf9beb48ff879bfb0053bebf4e41018df6397614c12edb4ad5875e40a",
+  "timeout_seconds": 120
+}
