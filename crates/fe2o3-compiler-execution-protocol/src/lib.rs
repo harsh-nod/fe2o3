@@ -22,6 +22,10 @@ mod client_profile_v3;
 mod current_record_native_adapter;
 mod current_record_verification;
 mod external_anchor_deployment;
+mod external_anchor_deployment_adapter;
+mod external_anchor_deployment_codec;
+mod external_anchor_deployment_v2;
+mod external_anchor_deployment_v3;
 mod external_anchor_provisioning;
 mod external_anchor_service;
 mod external_anchor_transaction;
@@ -220,6 +224,24 @@ pub use external_anchor_deployment::{
     CompilerExecutionExternalAnchorDeploymentIdentityV1,
     CompilerExecutionExternalAnchorDeploymentV1,
     MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1,
+};
+pub use external_anchor_deployment_v2::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_BYTES_V2,
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_STORAGE_V2,
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_WORK_V2,
+    CompilerExecutionExternalAnchorDeploymentErrorV2,
+    CompilerExecutionExternalAnchorDeploymentIdentityV2,
+    CompilerExecutionExternalAnchorDeploymentV2,
+    MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V2,
+};
+pub use external_anchor_deployment_v3::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_BYTES_V3,
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_STORAGE_V3,
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_WORK_V3,
+    CompilerExecutionExternalAnchorDeploymentErrorV3,
+    CompilerExecutionExternalAnchorDeploymentIdentityV3,
+    CompilerExecutionExternalAnchorDeploymentV3,
+    MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V3,
 };
 pub use external_anchor_provisioning::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_BYTES_V1,

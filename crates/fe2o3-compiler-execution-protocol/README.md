@@ -51,6 +51,63 @@ deployment identity or changed PID still fails that contextual check. Neither
 construction nor decoding establishes private-channel provenance, actual service
 admission or pidfd liveness; the deployed root coordinator still uses V1.
 
+`CompilerExecutionExternalAnchorDeploymentV2` and `V3` add move-only native
+external-anchor configuration with Copy nominal identities. Their distinct
+168-byte records use magic `F2O3CEA2`/`F2O3CEA3`, version 2/3, and SHA-256 domains
+`FE2O3/COMPILER-EXECUTION-EXTERNAL-ANCHOR-DEPLOYMENT/V2\0` and `.../V3\0`.
+The shared private codec uses this little-endian transcript:
+
+| Bytes | Content |
+| --- | --- |
+| 0..8 | Family magic |
+| 8..10 | Family version |
+| 10..12, 16..24 | Reserved zeroes |
+| 12..16 | Total length, 168 |
+| 24..28, 28..32 | Exact anchor UID and GID |
+| 32..64 | Exact policy external-anchor Ed25519 key |
+| 64..96 | Complete same-family supervisor deployment identity |
+| 96..128, 128..136 | Executable SHA-256 and nonzero byte length, at most 128 MiB |
+| 136..168 | SHA-256(domain, LE64(136), bytes[0..136]) |
+
+Both `new(supervisor, policy, executable, budget)` and
+`decode(bytes, supervisor, policy, budget)` require the actual same-family
+supervisor and policy owners. Every working operation calls the supervisor's
+metered `matches_policy` on the original ledger before processing the anchor
+record. Decoding also requires exact supervisor identity, anchor credentials
+and policy anchor key equality. A resealed foreign identity, mismatched policy,
+substituted key or substituted credential cannot satisfy that context. Equality
+to the already validated native policy key avoids repeated curve validation;
+hostile keys cannot produce a public owner. The V1 implementation is unchanged.
+
+`matches_supervisor_and_policy` checks that complete context;
+`matches_supervisor_policy_and_executable` additionally compares both executable
+digest and length. Identity `matches_canonical_bytes` likewise requires both
+actual owners and returns false for malformed bytes or mismatched context.
+These are configuration checks. Neither public construction nor canonical
+decoding establishes trusted provisioning origin, process custody, live service
+admission or signing/launch authority. A caller must independently pin and measure
+the intended executable; changing and resealing a valid executable measurement
+describes different inert configuration. Sealed capability transport and
+production coordinator integration are separate work.
+
+Each working operation consumes the exported fixed `..._WORK_V2/V3` total of
+11,280 logical units: 5,384 outer units plus the supervisor comparison's 5,896.
+The exported `..._STORAGE_V2/V3` is the total additional logical peak, including
+both nested frames. The outer scope charges 8 entry units, checks the combined
+borrowed-owner floor, prepays its remaining work and scratch, then enters the
+supervisor check on the same Budget. Thus a nested refusal preserves accepted
+outer work and peak. Keep the full supervisor, policy and any borrowed wire owner
+prepaid; owner matching additionally requires the full anchor owner. Fixed-size
+wire decoding requires at least 168 input bytes, while wrong lengths require no
+wire floor and are not scanned. Checked arithmetic and scoped cleanup preserve
+entry storage, cumulative work, peak and first-denial history on every outcome.
+Successful construction/decoding return the full unreserved
+`size_of::<(Deployment, Storage)>()` charge: reserve it before retaining the
+result and release `retained_storage()` only after dropping that owner. Accessors
+are unmetered stored-value reads. These quotas do not bound allocator behavior,
+generated stack size or RSS. Shared integration cases cover both families and
+compile-fail API examples cover nominal isolation and missing context/budget.
+
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,
 current-record verification, and bounded service packet records. The sole
