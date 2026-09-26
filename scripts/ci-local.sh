@@ -36,6 +36,8 @@ readonly RUNTIME_PURE_RUST_POLICY="${REPO_ROOT}/scripts/runtime-pure-rust-policy
 readonly SIM_RUNTIME_NO_GPU_POLICY="${REPO_ROOT}/scripts/sim-runtime-no-gpu-policy.json"
 readonly VIRTUAL_RUNTIME_NO_GPU_POLICY="${REPO_ROOT}/scripts/virtual-runtime-no-gpu-policy.json"
 readonly RUNTIME_PURE_RUST_AUDIT_TESTS="${REPO_ROOT}/scripts/tests/runtime_pure_rust_audit.py"
+readonly RUNTIME_THREADED_RELEASE="${REPO_ROOT}/scripts/runtime_threaded_release.py"
+readonly RUNTIME_THREADED_RELEASE_TESTS="${REPO_ROOT}/scripts/tests/runtime_threaded_release.py"
 readonly RUNTIME_IDENTITY_ORACLE_TESTS="${REPO_ROOT}/scripts/tests/runtime_identity_oracle.py"
 readonly RUNTIME_IDENTITY_ORACLE="${REPO_ROOT}/scripts/runtime-identity-oracle.sh"
 readonly RUNTIME_PURE_RUST_TARGET_DIR="${DEFAULT_CARGO_TARGET_ROOT}/runtime-pure-rust-policy"
@@ -157,6 +159,7 @@ Commands:
   hygiene-delta <base> <head>  Validate changed production source hygiene
   standalone-locks  Validate every tracked standalone Cargo lockfile
   runtime-policy  Validate the pure-Rust runtime dependency and ELF auditor
+  runtime-threaded-release  Qualify feature-enabled VecAdd release ELF without GPU work
   runtime-identity-oracle  Measure MI300X identity against isolated rocminfo; explicit opt-in
   shard-policy    Validate the codegen integration shard assignment
   rustc-codegen-shard <id>  Run one codegen integration shard
@@ -802,6 +805,13 @@ run_standalone_lockfiles() {
   STANDALONE_LOCKFILES_CHECKED=1
 }
 
+run_runtime_threaded_release_policy() {
+  run_step runtime-threaded-release-tests \
+    python3 "${RUNTIME_THREADED_RELEASE_TESTS}"
+  run_step runtime-threaded-release-qualification \
+    python3 "${RUNTIME_THREADED_RELEASE}" --output-root "${LOG_DIR}/runtime-threaded-release"
+}
+
 run_runtime_pure_rust_policy() {
   run_step runtime-pure-rust-audit-tests \
     env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_PURE_RUST_AUDIT_TESTS}"
@@ -898,6 +908,7 @@ run_runtime_pure_rust_policy() {
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
       --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-compute-aql-queue-policy"
+  run_runtime_threaded_release_policy
 }
 
 run_runtime_identity_oracle() {
@@ -1463,6 +1474,13 @@ main() {
       ;;
     standalone-locks) run_standalone_lockfiles ;;
     runtime-policy) run_runtime_pure_rust_policy ;;
+    runtime-threaded-release)
+      if (($# != 1)); then
+        printf '%s\n' 'runtime-threaded-release accepts no arguments' >&2
+        return 2
+      fi
+      run_runtime_threaded_release_policy
+      ;;
     runtime-identity-oracle) run_runtime_identity_oracle ;;
     shard-policy) run_shard_policy ;;
     rustc-codegen-shard)

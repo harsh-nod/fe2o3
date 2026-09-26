@@ -779,6 +779,8 @@ assert_step_count source-isa-characteristic-matrix-v2 0 \
 for core_step in \
   workspace-dependency-policy-tests \
   workspace-dependency-policy \
+  runtime-threaded-release-tests \
+  runtime-threaded-release-qualification \
   example-manifest \
   bounded-moe-docs \
   rustc-codegen-shard-policy \
@@ -837,6 +839,14 @@ for core_step in \
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
 done
+assert_equals \
+  "python3 ${RUNTIME_THREADED_RELEASE_TESTS}" \
+  "$(step_command runtime-threaded-release-tests)" \
+  'generic core did not run threaded release calibration'
+assert_equals \
+  "python3 ${RUNTIME_THREADED_RELEASE} --output-root ${LOG_DIR}/runtime-threaded-release" \
+  "$(step_command runtime-threaded-release-qualification)" \
+  'generic core did not qualify the actual threaded release benchmark'
 assert_equals \
   "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3" \
   "$(step_command cargo-fe2o3-tests)" \
