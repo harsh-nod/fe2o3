@@ -3430,11 +3430,15 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         self,
     ) -> Result<TargetLoweredProductionCompilation, ProductionPipelineError> {
         let admitted = self.import_semantic_mir()?;
-        admitted
+        let ranked = admitted
             .construct_semantic_middle_end()?
             .construct_semantic_ssa()?
             .materialize_target_neutral()?
-            .verify_general_kernel_checks()?
+            .verify_general_kernel_checks()?;
+        if ranked.has_direct_conditional_roots_v2() {
+            return Err(ranked.conditional_production_finalizer_refusal_v5());
+        }
+        ranked
             .attach_target_neutral_checks()?
             .admit_formal_memory()?
             .lower_production_target()

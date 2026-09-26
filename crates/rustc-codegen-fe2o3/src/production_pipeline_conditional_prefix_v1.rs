@@ -1,4 +1,4 @@
-//! Private conditional source-through-F custody at the production F entry only.
+//! Conditional source-through-F custody shared by the normal and private entries.
 //! No ordinary receipt, native artifact or launch authority is created.
 use super::{
     Budget, DirectPolicy6PreparationV1, Owner, ProductionPipelineError, Profile,
@@ -157,6 +157,31 @@ impl ConditionalPrefixForFV1 {
 }
 
 impl RankedVerifiedProductionCompilation {
+    pub(in crate::production_pipeline) fn conditional_production_finalizer_refusal_v5(
+        self,
+    ) -> ProductionPipelineError {
+        let Ok(work_limit) =
+            usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
+        else {
+            return resource(Resource::Arithmetic);
+        };
+        // Start the target phase before Direct6/B/optimizer work. The retained
+        // source owner keeps its separate original account; neither is reset.
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(work_limit);
+        let mut budget = Budget::new(
+            &mut work,
+            fe2o3_compiler_lineage::MAX_NATIVE_CONDITIONAL_STORAGE_V1,
+        );
+        self.conditional_finalizer_refusal_v2(
+            HistoryLimits {
+                refinement: fe2o3_kernel_analysis::CanonicalKirLoopLimitsV1::default(),
+                forwarding:
+                    fe2o3_kernel_analysis::CanonicalKirCrossBlockForwardingLimitsV1::default(),
+            },
+            &mut budget,
+        )
+    }
+
     pub(crate) fn has_direct_conditional_roots_v2(&self) -> bool {
         self.ranked.has_conditional_roots_v1()
             && self.ranked.materialized().helper_source_policy_v1()

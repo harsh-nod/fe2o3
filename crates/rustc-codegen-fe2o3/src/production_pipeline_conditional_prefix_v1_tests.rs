@@ -28,6 +28,49 @@ const PROFILE: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_TARGET";
 const MODE: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_MODE";
 const RESULT: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_RESULT";
 
+#[test]
+fn conditional_normal_entry_reaches_f_before_ordinary_attachment() {
+    // Source wiring only, not protected compiler or proof execution evidence.
+    let source = include_str!("production_pipeline.rs");
+    let normal = source
+        .split_once("pub(crate) fn lower_production_target(")
+        .unwrap()
+        .1
+        .split_once("pub(crate) fn export_simulation_bundle_v1(")
+        .unwrap()
+        .0;
+    let verify = normal.find(".verify_general_kernel_checks()?").unwrap();
+    let branch = normal
+        .find("if ranked.has_direct_conditional_roots_v2()")
+        .unwrap();
+    let refusal = normal
+        .find("return Err(ranked.conditional_production_finalizer_refusal_v5());")
+        .unwrap();
+    let attach = normal.find(".attach_target_neutral_checks()?").unwrap();
+    assert!(verify < branch && branch < refusal && refusal < attach);
+
+    let prefix = include_str!("production_pipeline_conditional_prefix_v1.rs");
+    let entry = prefix
+        .split_once("fn conditional_production_finalizer_refusal_v5(")
+        .unwrap()
+        .1
+        .split_once("pub(crate) fn has_direct_conditional_roots_v2(")
+        .unwrap()
+        .0;
+    assert_eq!(entry.matches("WorkBudgetV1::new(").count(), 1);
+    assert_eq!(entry.matches("Budget::new(").count(), 1);
+    let ceiling = entry.find("MAX_NATIVE_CONDITIONAL_STORAGE_V1").unwrap();
+    let continuation = entry
+        .find("self.conditional_finalizer_refusal_v2(")
+        .unwrap();
+    assert!(ceiling < continuation);
+    assert!(entry.contains("production_canonical_phase_policy_v1::WORK_LIMIT"));
+    assert!(entry.contains("CanonicalKirLoopLimitsV1::default()"));
+    assert!(entry.contains("CanonicalKirCrossBlockForwardingLimitsV1::default()"));
+    assert!(!entry.contains("reserve_storage"));
+    assert!(!entry.contains("release_storage"));
+}
+
 // This records the outer call/return/install only, not internal import counts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BridgeVisit {
