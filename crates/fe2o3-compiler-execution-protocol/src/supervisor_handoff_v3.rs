@@ -1,10 +1,10 @@
 //! Metered native ownership over the shared, identity-only supervisor handoff.
 use crate::{
     CompilerExecutionClientProcessIdentityV1 as Client,
-    CompilerExecutionServiceLaunchManifestV2 as Launch,
+    CompilerExecutionServiceLaunchManifestV3 as Launch,
     CompilerExecutionSupervisorHandoffErrorV1 as Framing,
     CompilerExecutionSupervisorHandoffIdentityV1 as Identity,
-    attestation_resources::{self as resources, CompilerExecutionAttestationStorageV2 as Storage},
+    attestation_resources::{self as resources, CompilerExecutionAttestationStorageV3 as Storage},
     launch_manifest_codec, supervisor_handoff_codec as codec,
 };
 use fe2o3_kernel_ir::{
@@ -27,17 +27,17 @@ use std::{error::Error, fmt, mem::size_of};
 /// launch is dropped but its reservation remains for the caller to release.
 ///
 /// ```compile_fail
-/// use fe2o3_compiler_execution_protocol::CompilerExecutionSupervisorHandoffV2;
-/// fn duplicate(value: CompilerExecutionSupervisorHandoffV2) { let _ = value.clone(); }
+/// use fe2o3_compiler_execution_protocol::CompilerExecutionSupervisorHandoffV3;
+/// fn duplicate(value: CompilerExecutionSupervisorHandoffV3) { let _ = value.clone(); }
 /// ```
 /// ```compile_fail
 /// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorHandoffV1,
-///     CompilerExecutionSupervisorHandoffV2};
+///     CompilerExecutionSupervisorHandoffV3};
 /// fn legacy(_: &CompilerExecutionSupervisorHandoffV1) {}
-/// fn mix(value: &CompilerExecutionSupervisorHandoffV2) { legacy(value); }
+/// fn mix(value: &CompilerExecutionSupervisorHandoffV3) { legacy(value); }
 /// ```
 /// ```compile_fail
-/// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorHandoffV2 as Handoff,
+/// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorHandoffV3 as Handoff,
 ///     CompilerExecutionServiceLaunchManifestV1 as Launch,
 ///     CompilerExecutionClientProcessIdentityV1 as Client};
 /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
@@ -46,8 +46,8 @@ use std::{error::Error, fmt, mem::size_of};
 /// }
 /// ```
 /// ```compile_fail
-/// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorHandoffV2 as Handoff,
-///     CompilerExecutionServiceLaunchManifestV2 as Launch,
+/// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorHandoffV3 as Handoff,
+///     CompilerExecutionServiceLaunchManifestV3 as Launch,
 ///     CompilerExecutionClientProcessIdentityV1 as Client};
 /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
 /// fn reuse(client: Client, launch: Launch, budget: &mut Budget<'_>) {
@@ -56,19 +56,31 @@ use std::{error::Error, fmt, mem::size_of};
 /// }
 /// ```
 /// ```compile_fail
-/// use fe2o3_compiler_execution_protocol::CompilerExecutionSupervisorHandoffV2 as Handoff;
+/// use fe2o3_compiler_execution_protocol::CompilerExecutionSupervisorHandoffV3 as Handoff;
 /// fn unmetered(bytes: &[u8]) { let _ = Handoff::decode(bytes); }
 /// ```
+/// ```compile_fail
+/// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorHandoffV3 as Handoff,
+///     CompilerExecutionServiceLaunchManifestV2 as Launch,
+///     CompilerExecutionClientProcessIdentityV1 as Client};
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+/// fn mix(c: Client, m: Launch, b: &mut Budget<'_>) { let _ = Handoff::new(c, m, b); }
+/// ```
+/// ```compile_fail
+/// use fe2o3_compiler_execution_protocol::{CompilerExecutionSupervisorHandoffV2 as V2,
+///     CompilerExecutionSupervisorHandoffV3 as V3};
+/// fn downgrade(owner: V3) -> V2 { owner.into() }
+/// ```
 #[derive(Eq, PartialEq)]
-pub struct CompilerExecutionSupervisorHandoffV2 {
+pub struct CompilerExecutionSupervisorHandoffV3 {
     frame: codec::Frame,
     launch_manifest: Launch,
 }
 
 crate::supervisor_handoff_adapter::supervisor_handoff_adapter!(
-    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V2,
-    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_WORK_V2,
-    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_STORAGE_V2,
-    CompilerExecutionSupervisorHandoffV2,
-    CompilerExecutionSupervisorHandoffErrorV2
+    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V3,
+    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_WORK_V3,
+    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_STORAGE_V3,
+    CompilerExecutionSupervisorHandoffV3,
+    CompilerExecutionSupervisorHandoffErrorV3
 );
