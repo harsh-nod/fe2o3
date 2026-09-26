@@ -250,12 +250,12 @@ fn v2_funded_foreign_account_never_returns_success_or_refunds_either_account() {
     for scope in [Scope::Scratch, Scope::Retained] {
         for unwind in [false, true] {
             let mut ledger = ledger(1000, 1000);
-            let foreign = Box::leak(Box::new(Work::new(1000)));
             let drops = Cell::new(0);
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 ledger.with_budget(|budget| {
                     let result = catch_unwind(AssertUnwindSafe(|| {
                         scope.run(budget, 20, |budget| {
+                            let foreign = Box::leak(Box::new(Work::new(1000)));
                             *budget = Budget::new(foreign, 1000);
                             budget.reserve_storage(FLOOR + 20)?;
                             budget.charge_work(11)?;
