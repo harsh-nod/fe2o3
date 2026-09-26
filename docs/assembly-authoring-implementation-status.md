@@ -5,6 +5,17 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Genuine helper routing and caller/result prerequisites — 2026-09-26
+
+The [new routing checkpoint](bf16-helper-routing-capability-qualification-20260926.md)
+qualifies the genuine same-owner pending route, resource-boundary controls and
+fresh Identity/Swap01 CPU observations. Shared caller authentication and
+function-qualified return mapping pass the 2,381-test backend suite; all
+79 tutorial-manifest tests also pass after correcting a stale CI snapshot.
+C2 source-derived propagation and N3 ranked/formal/LLVM continuation remain
+unfinished. C1/C3 synthetic controls are not a genuine combined admission.
+Accepted broad exits remain **6/18**.
+
 ## Borrowed helper projection and merged regression — 2026-09-26
 
 The [N2a checkpoint](bf16-helper-ranked-call-qualification-20260926.md) joins

@@ -1,6 +1,16 @@
 //! One lexical, phase-local graph analysis for ranked assertion decisions.
 //! Source/ranked allocations retain their existing separate limits.
 
+#[path = "bf16_nominal_facts_observation_v1.rs"]
+mod bf16_nominal_facts_observation_v1;
+#[allow(unused_imports)]
+pub(super) use bf16_nominal_facts_observation_v1::with_nominal_canonical_facts_observation_v1;
+#[cfg(test)]
+pub(crate) use bf16_nominal_facts_observation_v1::{
+    inspect_foreign_nominal_facts_refusal_for_test_v1, inspect_nominal_routing_genuine_for_test_v1,
+};
+
+use super::bf16_nominal_call_routing_v1::NominalCallVisitorV1;
 #[cfg(test)]
 use super::ranked_projection_source_v1::with_projection_source_budget_v1;
 use super::{
@@ -35,6 +45,7 @@ pub(crate) enum CanonicalAssertionErrorV1 {
     CallEffects(fe2o3_kernel_analysis::CanonicalKirCallEffectErrorV1),
     MaskedAssertion(fe2o3_lower_mir_kernel::ProductionSemanticMaskedShiftQueryErrorV1),
     GuardedProgress(Box<fe2o3_lower_mir_kernel::ProductionScalarSsaEmissionErrorV1>),
+    NominalCall(fe2o3_lower_mir_kernel::Bf16NominalCallQueryErrorV1),
     Binding(&'static str),
 }
 impl fmt::Display for CanonicalAssertionErrorV1 {
@@ -49,6 +60,7 @@ impl fmt::Display for CanonicalAssertionErrorV1 {
             Self::CallEffects(error) => error.fmt(f),
             Self::MaskedAssertion(error) => error.fmt(f),
             Self::GuardedProgress(error) => error.fmt(f),
+            Self::NominalCall(error) => error.fmt(f),
             Self::Binding(detail) => f.write_str(detail),
         }
     }
@@ -65,6 +77,7 @@ impl Error for CanonicalAssertionErrorV1 {
             Self::CallEffects(error) => Some(error),
             Self::MaskedAssertion(error) => Some(error),
             Self::GuardedProgress(error) => Some(error.as_ref()),
+            Self::NominalCall(error) => Some(error),
             Self::Binding(_) => None,
         }
     }
@@ -149,6 +162,18 @@ pub(super) trait ProjectedAssertionFactsV1 {
         _successor: SemanticBlockIdV1,
     ) -> Result<bool, ProjectionError> {
         Ok(false)
+    }
+
+    fn with_nominal_call_v1(
+        &mut self,
+        _block: usize,
+        _call: &super::SemanticDirectCallV1,
+        _source: super::SemanticSourceProvenanceV1,
+        _visit: &mut NominalCallVisitorV1<'_>,
+    ) -> Result<(), ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "nominal call visitor requires a canonical source owner",
+        ))
     }
 
     fn require_unit_local_call(
@@ -400,6 +425,50 @@ impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '
             ),
             None => Ok(false),
         }
+    }
+
+    fn with_nominal_call_v1(
+        &mut self,
+        block: usize,
+        call: &super::SemanticDirectCallV1,
+        source: super::SemanticSourceProvenanceV1,
+        visit: &mut NominalCallVisitorV1<'_>,
+    ) -> Result<(), ProjectionError> {
+        let source_block = u32::try_from(block).map_err(|_| resource(Resource::Arithmetic))?;
+        let owner = self.owner;
+        let caller = self.semantic_function;
+        super::bf16_nominal_call_projection_v1::with_bf16_nominal_call_projection_v1(
+            owner,
+            self.report.inventory(),
+            self.correspondence_owner,
+            caller,
+            SemanticBlockIdV1::from_index(source_block),
+            call,
+            self.budget,
+            |candidate, budget| {
+                budget.charge_work(2)?;
+                let actual = owner
+                    .semantic_ssa()
+                    .source_semantic()
+                    .functions()
+                    .get(caller.index() as usize)
+                    .and_then(|function| function.blocks().get(block))
+                    .ok_or(
+                        fe2o3_lower_mir_kernel::Bf16NominalCallQueryErrorV1::Unavailable(
+                            "nominal facts source block absent",
+                        ),
+                    )?;
+                if actual.terminator().source() != source {
+                    return Err(
+                        fe2o3_lower_mir_kernel::Bf16NominalCallQueryErrorV1::Unavailable(
+                            "nominal facts source provenance differs",
+                        ),
+                    );
+                }
+                visit(candidate, budget)
+            },
+        )
+        .map_err(super::bf16_nominal_call_routing_v1::query_error)
     }
 
     fn require_unit_local_call(

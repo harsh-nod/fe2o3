@@ -229,6 +229,14 @@ pub(super) fn inspect(
         crate::production_ranked_projection_v1::bf16_nominal_call_projection_v1::
             inspect_genuine_for_test_v1(owner, source, &inventory, budget)
             .map_err(query_error)?;
+        crate::production_ranked_projection_v1::inspect_nominal_routing_genuine_for_test_v1(
+            owner,
+            source,
+            &inventory,
+            storage.retained_storage(),
+            budget,
+        )
+        .map_err(query_error)?;
         inspect_retained_floor_boundaries(
             owner,
             source,
@@ -384,6 +392,9 @@ pub(super) fn inspect(
                 Err(QueryError::Unavailable("foreign canonical inventory"))
             );
             assert!(!entered.get());
+            crate::production_ranked_projection_v1::inspect_foreign_nominal_facts_refusal_for_test_v1(
+                owner, source, &foreign_inventory, budget,
+            ).expect("B4 rejects the actual equal detached-owner inventory");
         }));
         let foreign_failed = match foreign_outcome {
             Ok(()) => false,

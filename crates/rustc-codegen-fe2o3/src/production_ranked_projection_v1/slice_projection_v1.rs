@@ -49,6 +49,21 @@ impl<'a> ProjectedViewsV1<'a> {
         action(facts)
     }
 
+    pub(super) fn with_nominal_call_v1(
+        &mut self,
+        block: usize,
+        call: &SemanticDirectCallV1,
+        source: SemanticSourceProvenanceV1,
+        visit: &mut bf16_nominal_call_routing_v1::NominalCallVisitorV1<'_>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        match self.facts.as_deref_mut() {
+            Some(facts) => facts.with_nominal_call_v1(block, call, source, visit),
+            None => Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "nominal call visitor requires live canonical facts",
+            )),
+        }
+    }
+
     pub(super) fn require_unit_local_call(
         &mut self,
         block: usize,

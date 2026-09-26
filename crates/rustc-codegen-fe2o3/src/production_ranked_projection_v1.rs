@@ -20,7 +20,21 @@ mod analysis_multi_split_v1;
 // N2a is observational only; N2b will consume the nominal candidate.
 #[allow(dead_code)]
 pub(crate) mod bf16_nominal_call_projection_v1;
+// N2b routes only to an explicit N2c-pending refusal; B4 qualification is separate.
+#[allow(dead_code)]
+pub(crate) mod bf16_nominal_call_routing_v1;
+// C1 authenticates caller origins only; nominal access remains pending/refused.
+#[allow(dead_code)]
+mod bf16_nominal_capabilities_v1;
+// C3 is a scoped helper layout/return association, never normal admission.
+#[allow(dead_code)]
+mod bf16_nominal_layout_return_v1;
 mod canonical_assertion_facts_v1;
+mod tensor_capability_read_v1;
+#[cfg(test)]
+pub(crate) use canonical_assertion_facts_v1::{
+    inspect_foreign_nominal_facts_refusal_for_test_v1, inspect_nominal_routing_genuine_for_test_v1,
+};
 #[cfg(test)]
 pub(crate) mod conditional_bound_observation_v1_tests;
 #[cfg(test)]
@@ -2184,6 +2198,8 @@ enum DefinedCallableEmptyEffectDecisionV1 {
     ExactEmptyOnly,
     // Negative-only state: every use still requires its root/call-local join.
     LocalMemoryRequiresCall,
+    // Negative-only nominal route: caller capabilities/layout/results still pending.
+    NominalTensorRequiresCall,
     Rejected,
 }
 
@@ -2192,6 +2208,11 @@ struct DefinedCallableEmptyEffectSummariesV1 {
 }
 
 impl DefinedCallableEmptyEffectSummariesV1 {
+    fn is_nominal_tensor_requires_call(&self, function: SemanticFunctionIdV1) -> bool {
+        self.decisions.get(function.index() as usize)
+            == Some(&DefinedCallableEmptyEffectDecisionV1::NominalTensorRequiresCall)
+    }
+
     fn is_exact_empty(&self, function: SemanticFunctionIdV1) -> bool {
         matches!(
             self.decisions.get(function.index() as usize),
@@ -3114,7 +3135,11 @@ fn derive_defined_callable_empty_effect_summaries_v1(
                     "defined-callable effect-summary dependency accounting underflowed",
                 ),
             )?;
-            if decisions[callee] == DefinedCallableEmptyEffectDecisionV1::Rejected {
+            if matches!(
+                decisions[callee],
+                DefinedCallableEmptyEffectDecisionV1::Rejected
+                    | DefinedCallableEmptyEffectDecisionV1::NominalTensorRequiresCall
+            ) {
                 decisions[caller] = DefinedCallableEmptyEffectDecisionV1::Rejected;
                 pending.push_back(caller);
             } else {
@@ -7401,26 +7426,42 @@ fn authenticate_tensor_instruction_v1(
     rhs_contract: SemanticMfmaOperandContractV1,
     accumulator_contract: SemanticMfmaAccumulatorContractV1,
 ) -> Result<AuthenticatedTensorInstructionV1, &'static str> {
+    authenticate_tensor_instruction_read_v1(
+        call,
+        state,
+        lhs_contract,
+        rhs_contract,
+        accumulator_contract,
+    )
+}
+
+fn authenticate_tensor_instruction_read_v1(
+    call: &SemanticDirectCallV1,
+    state: &(impl tensor_capability_read_v1::CapabilityStateReadV1 + ?Sized),
+    lhs_contract: SemanticMfmaOperandContractV1,
+    rhs_contract: SemanticMfmaOperandContractV1,
+    accumulator_contract: SemanticMfmaAccumulatorContractV1,
+) -> Result<AuthenticatedTensorInstructionV1, &'static str> {
     if call.arguments().len() != 4 {
         return Err("an MFMA call without its exact context and three typed operands");
     }
     let Some(ProjectedCapabilityOriginV1::MatrixContext { root: context_root }) =
-        capability_known_origin_v1(state, &call.arguments()[0])
+        tensor_capability_read_v1::capability_known_origin_read_v1(state, &call.arguments()[0])
     else {
         return Err("an MFMA call without dominating compiler-issued matrix context");
     };
     let Some(ProjectedCapabilityOriginV1::Operand(lhs)) =
-        capability_known_origin_v1(state, &call.arguments()[1])
+        tensor_capability_read_v1::capability_known_origin_read_v1(state, &call.arguments()[1])
     else {
         return Err("an MFMA lhs without one dominating checked typed-load payload");
     };
     let Some(ProjectedCapabilityOriginV1::Operand(rhs)) =
-        capability_known_origin_v1(state, &call.arguments()[2])
+        tensor_capability_read_v1::capability_known_origin_read_v1(state, &call.arguments()[2])
     else {
         return Err("an MFMA rhs without one dominating checked typed-load payload");
     };
     let Some(ProjectedCapabilityOriginV1::Accumulator(accumulator)) =
-        capability_known_origin_v1(state, &call.arguments()[3])
+        tensor_capability_read_v1::capability_known_origin_read_v1(state, &call.arguments()[3])
     else {
         return Err("an MFMA accumulator without dominating zero or compatible prior MFMA");
     };
@@ -7578,13 +7619,7 @@ fn capability_known_origin_v1(
     state: &ProjectedCapabilityStateV1,
     operand: &SemanticOperandV1,
 ) -> Option<ProjectedCapabilityOriginV1> {
-    let local = simple_operand_local(operand)?.index() as usize;
-    match state.get(&local) {
-        Some(ProjectedCapabilityValueV1::Known(origin)) => Some(*origin),
-        Some(ProjectedCapabilityValueV1::ConstructedEnum(_))
-        | Some(ProjectedCapabilityValueV1::Invalid)
-        | None => None,
-    }
+    tensor_capability_read_v1::capability_known_origin_read_v1(state, operand)
 }
 
 fn merge_capability_states_v1(
@@ -23850,12 +23885,19 @@ fn project_direct_call_accesses(
     ) {
         return Ok(());
     }
-    if matches!(
-        callables.get(call.callee().index() as usize),
-        Some(SemanticCallableDeclV1::Defined { function })
-            if !callable_effects.is_exact_empty(*function)
-    ) {
-        projected_views.require_unit_local_call(block_index, call, source)?;
+    if let Some(SemanticCallableDeclV1::Defined { function }) =
+        callables.get(call.callee().index() as usize)
+    {
+        let route = bf16_nominal_call_routing_v1::resolve_defined_call_access_route_v1(
+            callables,
+            callable_effects,
+            *function,
+            block_index,
+            call,
+            source,
+            projected_views,
+        )?;
+        bf16_nominal_call_routing_v1::require_defined_call_access_ready_v1(route)?;
     } else {
         require_bounds_neutral_callable(
             callables,
