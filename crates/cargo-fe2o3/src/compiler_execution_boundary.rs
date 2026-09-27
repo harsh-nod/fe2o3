@@ -3,6 +3,9 @@ use std::fmt;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+#[path = "compiler_execution_boundary_native.rs"]
+pub(crate) mod native;
+
 use fe2o3_compiler_closure_capability::{
     CompilerExecutionClientProfileCapabilityV1, CompilerExecutionPolicyCapabilityV1,
 };
