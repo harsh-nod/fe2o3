@@ -10,6 +10,13 @@ fn native_release_image_is_loader_independent_static_elf() {
     check_image("FE2O3_STATIC_COMPILER_EXECUTION_ISSUER_NATIVE");
 }
 
+#[test]
+#[ignore = "run through scripts/build-static-compiler-execution-issuer.sh --conditional"]
+fn conditional_release_image_is_loader_independent_static_elf() {
+    check_image("FE2O3_STATIC_COMPILER_EXECUTION_ISSUER_CONDITIONAL");
+}
+
+// The common ELF profile does not authenticate an issuer family or prove protected boot.
 fn check_image(variable: &str) {
     let path = std::env::var_os(variable)
         .expect("static compiler-execution issuer image path is required");

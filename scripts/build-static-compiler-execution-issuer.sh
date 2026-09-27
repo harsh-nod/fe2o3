@@ -12,7 +12,11 @@ case "$#:${1-}" in
       target_dir="${FE2O3_STATIC_NATIVE_ISSUER_TARGET_DIR:-${repo_root}/target/static-native-issuer}"
       image_env=FE2O3_STATIC_COMPILER_EXECUTION_ISSUER_NATIVE
       image_test=native_release_image_is_loader_independent_static_elf ;;
-  *) printf 'usage: %s [--native]\n' "$0" >&2; exit 2 ;;
+  1:--conditional) binary=fe2o3-compiler-execution-issuer-conditional
+      target_dir="${FE2O3_STATIC_CONDITIONAL_ISSUER_TARGET_DIR:-${repo_root}/target/static-conditional-issuer}"
+      image_env=FE2O3_STATIC_COMPILER_EXECUTION_ISSUER_CONDITIONAL
+      image_test=conditional_release_image_is_loader_independent_static_elf ;;
+  *) printf 'usage: %s [--native|--conditional]\n' "$0" >&2; exit 2 ;;
 esac
 readonly binary target_dir image_env image_test
 readonly target="x86_64-unknown-linux-musl"

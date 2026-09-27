@@ -26,6 +26,9 @@ use crate::{CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunch
 
 const INVALID_ID: u32 = u32::MAX;
 
+#[path = "native_supervisor_handoff.rs"]
+pub(crate) mod native_v3;
+
 /// Maximum connect-and-transfer bound accepted by the production supervisor client.
 pub const MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1: Duration = Duration::from_secs(120);
 
@@ -757,6 +760,9 @@ impl From<io::Error> for CompilerExecutionHandoffErrorV1 {
 }
 
 #[cfg(test)]
+static RESERVED_CHILD_FD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use std::fs;
     use std::io::IoSliceMut;
@@ -765,7 +771,6 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::process::Command;
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use rustix::net::{
@@ -777,7 +782,6 @@ mod tests {
     use crate::PendingCompilerExecutionChildChannelV1;
 
     static LISTENER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-    static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
 
     struct NamedListener {
         root: PathBuf,

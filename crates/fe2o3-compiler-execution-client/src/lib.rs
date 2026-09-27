@@ -40,6 +40,10 @@ pub use native::{
 pub use native_v3::{
     CompilerExecutionClientErrorV3, CompilerExecutionClientStorageV3, CompilerExecutionClientV3,
 };
+pub use supervisor_handoff::native_v3::{
+    CompilerExecutionHandoffErrorV3, CompilerExecutionHandoffStorageV3,
+    CompilerExecutionSupervisorReadinessV3,
+};
 pub use supervisor_handoff::{
     CompilerExecutionHandoffErrorV1, CompilerExecutionSupervisorCredentialsV1,
     MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1, PendingCompilerExecutionSupervisorV1,

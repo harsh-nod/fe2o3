@@ -75,6 +75,30 @@ fn escape<'b, 'w>(client: Client<'b, 'w>, policy: &Policy, subject: Subject)
 }
 ```
 
+## Native V3 Supervisor Handoff
+
+`CompilerExecutionServiceLaunchV1::handoff_to_supervisor_v3_until` consumes the
+existing child-created descriptor pair, sends a native V3 handoff to the fixed
+supervisor endpoint, and receives one credential-bound V3 readiness packet plus
+EOF. The child-channel V1 suffix versions descriptor construction; this method
+does not admit V1 policy, manifest or readiness records.
+
+Transfer and readiness share one continuously borrowed resource account and one
+absolute deadline. There is no public pending continuation that could outlive
+the account's borrow. Every transport step makes one attempt; EINTR, AGAIN,
+short packets, extra descriptors and trailing packets refuse. Per-message
+credentials distinguish an empty packet from EOF. The returned move-only
+`CompilerExecutionSupervisorReadinessV3` exposes only the manifest and readiness
+records, not descriptors or compiler authority.
+
+Prepay the full profile and `CHILD_LAUNCH_STORAGE`; retain that input reservation
+and add the returned storage growth after success. Both successful and failed
+calls restore entry storage without refunding work or denial history. Child
+preparation/spawning and profile authentication remain caller obligations.
+`HANDOFF_WORK` and `HANDOFF_SCRATCH` bound logical work/storage, not kernel memory,
+OS latency or process RSS. This API is not yet selected by Cargo, client-check or
+the installed deployment, and local fixtures do not establish protected boot.
+
 ## Production V1 Client
 
 This crate owns the bounded Linux `SOCK_SEQPACKET` client state machine for the
