@@ -24,6 +24,17 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Persistent SDMA backing development (2026-09-27 UTC): initialization evidence
+now follows whole-buffer transfers across persistent owners, with exact compute
+cancellation and paired restoration. A caught inline-size regression was fixed
+within the existing ledger allocation. The [packet](evidence/dev-persistent-sdma-backing-2026-09-27/README.md)
+records 228 frozen-source focused passes, 89 doctests, strict static checks and a
+19-phase scalar proof campaign. All-feature runtime results remain 1621 passes,
+three existing socket-permission failures and 28 ignores. The native bridge is
+Checked/CPU-tested, not formally refined. Authenticated post-compute import,
+sealed typed-compute conversion, native gate integration and hardware/performance
+qualification remain open; accepted milestones and parity are unchanged.
+
 Latest pending-peer Context development (2026-09-26): typed producer-aware
 launches accept pending directed peers and mixed native/peer inputs, validating
 every original Read alias and retaining exact writer identity and graph depth.

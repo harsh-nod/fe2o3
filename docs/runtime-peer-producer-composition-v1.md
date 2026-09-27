@@ -136,10 +136,16 @@ batch and window publication also revoke stale destination digests, including
 the raw single-copy API that bypasses request construction. The shared scalar
 arithmetic has a separate Verus root; it is not a native adapter proof.
 
-This fact does not yet survive the persistent-allocation owner bridge. Sequential
-zeroing, multipart uploads and completed compute still need exact owner-bound
-propagation and a sealed quiescent conversion into typed compute input. No new
-public pending-peer launch or initialized-compute constructor is enabled here.
+This fact now survives persistent-allocation promotion, single/window/synchronous
+SDMA, legacy copies and paired same-device transfers through opaque backing.
+Exact never-published compute cancellation preserves it; raw extraction and
+completed raw compute restoration discard it. The backing shares the existing
+ledger allocation, keeping the unchanged inline size limits. See the
+[backing qualification](evidence/dev-persistent-sdma-backing-2026-09-27/README.md).
+
+Authenticated completed-compute import and a sealed quiescent conversion into
+typed compute input remain open. No new public pending-peer launch or
+initialized-compute constructor is enabled here.
 See [coverage qualification](evidence/dev-sdma-initialized-prefix-2026-09-27/README.md)
 for the exact proof, tests, rejected campaign and remaining adapter boundary.
 
