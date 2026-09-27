@@ -501,6 +501,7 @@ mod tests {
                     dependencies: Vec::new(),
                     dependency_cursor: 0,
                     dependency_depth: 0,
+                    peer_access: None,
                     phase: ActiveSdmaPhaseV1::Ready,
                 },
             );

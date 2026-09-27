@@ -22,6 +22,7 @@ enum LeafStepV1 {
 }
 
 pub(super) struct CooperativeSdmaLeafV1 {
+    origin: Option<PeerCopyOriginV1>,
     endpoint: RoutedHandleV1,
     allocation: Option<u64>,
     stream: Option<u64>,
@@ -90,6 +91,9 @@ impl CooperativeSdmaLeafV1 {
         match result {
             Ok(RuntimeBackendAllocationOutcomeV1::Allocated(allocation)) => {
                 self.allocation = Some(allocation);
+                self.origin = self
+                    .origin
+                    .map(|origin| origin.with_scratch(Some(allocation)));
                 Ok(())
             }
             Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error)) => {
@@ -131,10 +135,12 @@ impl CooperativeSdmaLeafV1 {
         } else if let Some(allocation) = self.allocation {
             child.release_allocation_v1(allocation)?;
             self.allocation = None;
+            self.origin = self.origin.map(|origin| origin.with_scratch(None));
             self.refund(child, false)?;
         } else if let Some(stream) = self.stream {
             child.destroy_stream_v1(stream)?;
             self.stream = None;
+            self.origin = self.origin.map(|origin| origin.with_stream(None));
         } else {
             assert!(self.credit.is_none(), "scratch credit outlived its backing");
             return Ok(true);
@@ -181,6 +187,7 @@ fn progress_leaf_v1(
             .create_stream_v1(child.description.backend_device)
             .map(|stream| {
                 leaf.stream = Some(stream);
+                leaf.origin = leaf.origin.map(|origin| origin.with_stream(Some(stream)));
                 leaf.step = if child.allocations[&leaf.endpoint.local]
                     .native_dirty
                     .is_empty()
@@ -202,8 +209,16 @@ fn progress_leaf_v1(
                         LeafProgressV1::Changed
                     });
             }
-            leaf.reconciliation = child
-                .begin_native_reconciliation_v1(leaf.endpoint.local, leaf.allocation.unwrap())?;
+            leaf.reconciliation = if leaf.origin.is_some() {
+                child.begin_native_reconciliation_with_peer_access_v1(
+                    leaf.endpoint.local,
+                    leaf.allocation.unwrap(),
+                    leaf.origin,
+                )?
+            } else {
+                child
+                    .begin_native_reconciliation_v1(leaf.endpoint.local, leaf.allocation.unwrap())?
+            };
             if leaf.reconciliation.is_none() {
                 leaf.step = LeafStepV1::Submit;
             }
@@ -222,17 +237,27 @@ fn progress_leaf_v1(
             }
             if child.allocations[&leaf.endpoint.local].kind == RuntimeMemoryKindV1::HostVisible {
                 if reading {
-                    child.read_allocation_v1(
+                    child.read_cooperative_host_range_v1(
                         leaf.endpoint.local,
                         copy.source_region.byte_offset + start as u64,
                         &mut copy.staging[start..end],
+                        leaf.origin,
                     )?;
                 } else {
-                    child.write_cooperative_host_range_v1(
-                        leaf.endpoint.local,
-                        copy.destination_region.byte_offset + start as u64,
-                        &copy.staging[start..end],
-                    )?;
+                    if leaf.origin.is_some() {
+                        child.write_cooperative_host_range_with_peer_access_v1(
+                            leaf.endpoint.local,
+                            copy.destination_region.byte_offset + start as u64,
+                            &copy.staging[start..end],
+                            leaf.origin,
+                        )?;
+                    } else {
+                        child.write_cooperative_host_range_v1(
+                            leaf.endpoint.local,
+                            copy.destination_region.byte_offset + start as u64,
+                            &copy.staging[start..end],
+                        )?;
+                    }
                 }
                 copy.byte_cursor = end;
                 if end == copy.staging.len() {
@@ -277,7 +302,13 @@ fn progress_leaf_v1(
             } else {
                 (scratch_region, device_region)
             };
-            match child.copy_async_v1(stream, source, destination, &[]) {
+            match child.copy_async_with_peer_access_v1(
+                stream,
+                source,
+                destination,
+                &[],
+                leaf.origin,
+            ) {
                 Ok(submission) => {
                     leaf.submission = Some(submission);
                     leaf.step = LeafStepV1::Observe;
@@ -398,6 +429,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         &mut self,
         selected: u64,
     ) -> Result<Option<u64>, Failure> {
+        let origin = match &self.submissions[&selected] {
+            RoutedSubmissionV1::CooperativeCopy(copy)
+                if matches!(
+                    copy.phase,
+                    CooperativeCopyPhaseV1::Read | CooperativeCopyPhaseV1::Write
+                ) =>
+            {
+                self.peer_copy_origin_v1(selected)?
+            }
+            _ => None,
+        };
         let RoutedSubmissionV1::CooperativeCopy(copy) = &self.submissions[&selected] else {
             unreachable!()
         };
@@ -423,12 +465,21 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let custody = child.allocation_custody.get(&endpoint.local);
         let dma = if reading && reconciliation.is_none() {
             if let Some(custody) = custody {
-                if custody.owners.len() != 1
-                    || custody.owners[0].kind != RuntimeAllocationCustodyKindV1::Sdma
+                let mut owners = custody.owners.iter().copied().filter(|owner| {
+                    !child.peer_access_authorizes_owner_v1(
+                        endpoint.local,
+                        *owner,
+                        origin,
+                        PeerAccessPurposeV1::Copy,
+                    )
+                });
+                let first = owners.next();
+                if first.is_some_and(|owner| owner.kind != RuntimeAllocationCustodyKindV1::Sdma)
+                    || owners.next().is_some()
                 {
                     return Err(self.directed_corruption_v1());
                 }
-                Some(custody.owners[0])
+                first
             } else {
                 None
             }
@@ -592,6 +643,25 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             &mut CooperativeCopySubmissionV1,
         ) -> Result<T, Failure>,
     ) -> Result<T, Failure> {
+        let RoutedSubmissionV1::CooperativeCopy(copy) = &self.submissions[&submission] else {
+            unreachable!()
+        };
+        let leaf = copy.sdma_leaf.as_ref().expect("private leaf is installed");
+        let (origin, endpoint, allocation, stream) =
+            (leaf.origin, leaf.endpoint, leaf.allocation, leaf.stream);
+        let current = self.peer_copy_origin_for_leg_v1(
+            submission,
+            origin.map_or(PeerCopyLegV1::Read, PeerCopyOriginV1::leg),
+        )?;
+        if match (origin, current) {
+            (Some(retained), Some(current)) => {
+                !retained.matches_leaf(current, endpoint, allocation, stream)
+            }
+            (None, None) => false,
+            _ => true,
+        } {
+            return Err(self.directed_corruption_v1());
+        }
         let RoutedSubmissionV1::CooperativeCopy(copy) =
             self.submissions.get_mut(&submission).unwrap()
         else {
@@ -634,6 +704,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         &mut self,
         submission: u64,
     ) -> Result<BackendPollV1, Failure> {
+        let origin = self.peer_copy_origin_v1(submission)?;
         let RoutedSubmissionV1::CooperativeCopy(copy) =
             self.submissions.get_mut(&submission).unwrap()
         else {
@@ -645,6 +716,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "native copy reserved scratch capacity"
             );
             copy.sdma_leaf = Some(CooperativeSdmaLeafV1 {
+                origin,
                 endpoint: if copy.phase == CooperativeCopyPhaseV1::Read {
                     copy.source
                 } else {
@@ -659,6 +731,16 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             });
             self.note_cooperative_progress();
             return Ok(BackendPollV1::Pending);
+        }
+        let leaf = copy.sdma_leaf.as_ref().unwrap();
+        if match (leaf.origin, origin) {
+            (Some(retained), Some(current)) => {
+                !retained.matches_leaf(current, leaf.endpoint, leaf.allocation, leaf.stream)
+            }
+            (None, None) => false,
+            _ => true,
+        } {
+            return Err(self.directed_corruption_v1());
         }
         match self.with_cooperative_leaf_v1(submission, progress_leaf_v1)? {
             LeafProgressV1::Pending => {}

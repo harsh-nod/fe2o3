@@ -18,7 +18,7 @@ BODY = Path("crates/fe2o3-runtime/src/kfd_backend/compute_peer_gate_body.rs")
 PROOF = V / "compute_peer_gate_v1.rs"
 FILES = [BODY, PROOF]
 EXPECTED = {"encountered-error": False, "encountered-vir-error": False,
-            "errors": 0, "is-verifying-entire-crate": True, "success": True, "verified": 10}
+            "errors": 0, "is-verifying-entire-crate": True, "success": True, "verified": 15}
 
 
 def need(value, message):
@@ -61,6 +61,24 @@ def mutations(body):
     add("accept-pending", "$gate.result == PeerComputeResultV1::Succeeded && $native_success", "$gate.result != PeerComputeResultV1::Failed && $native_success", "action")
     add("ignore-native-success", " && $native_success {", " {", "action")
     add("deny-ready", "                PeerComputeActionV1::ContinueNativeChecks\n", "                PeerComputeActionV1::Wait\n", "action")
+    for name, old, new in [
+        ("access-zero-owner", "$query_owner != 0 && ", ""),
+        ("access-zero-consumer", "$query_consumer != 0\n", "true\n"),
+        ("access-foreign-owner", "$gate.owner == $query_owner && ", ""),
+        ("access-foreign-consumer", " && $gate.consumer == $query_consumer\n", "\n"),
+    ]:
+        add(name, old, new, "owns")
+    access = ("$gate.owns($owner, $consumer)\n"
+              "                && ($gate.result != PeerComputeResultV1::Succeeded || !$gate.order_complete)")
+    for name, old, new in [
+        ("access-ignore-identity", "$gate.owns($owner, $consumer)\n", "true\n"),
+        ("access-deny-unresolved", access, "false"),
+        ("access-allow-settled", access, "$gate.owns($owner, $consumer)"),
+        ("access-ignore-order", " || !$gate.order_complete)", ")"),
+        ("access-native-failure-reopens", access, "($gate.native_failed || (" + access + "))"),
+        ("access-native-failure-revokes", access, "(" + access + ") && !$gate.native_failed"),
+    ]:
+        add(name, old, new, "permits_predecessor_access")
     return cases
 
 
@@ -68,7 +86,7 @@ def selection_notes(leaf):
     return types.SimpleNamespace(LOGICAL_ERRORS=leaf.LOGICAL_ERRORS, SELECTION_NOTES={
         "verifying root module (selected functions)",
         *{"verifying root module, function compute_peer_gate_v1::PeerComputeGateV1::" + name + " (selected functions)"
-          for name in ("resolve", "action")},
+          for name in ("resolve", "action", "owns", "permits_predecessor_access")},
     })
 
 

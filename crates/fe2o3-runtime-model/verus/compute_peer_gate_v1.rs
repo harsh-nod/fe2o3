@@ -35,6 +35,11 @@ pub open spec fn resolution_valid(gate: PeerComputeGateV1, owner: u64, consumer:
         && (gate.result != PeerComputeResultV1::Pending ==> gate.result == result)
 }
 
+pub open spec fn predecessor_access(gate: PeerComputeGateV1, owner: u64, consumer: u64) -> bool {
+    exact_owner(gate, owner, consumer)
+        && (gate.result != PeerComputeResultV1::Succeeded || !gate.order_complete)
+}
+
 pub open spec fn continuation_ready(gate: PeerComputeGateV1, consumer: u64, native_success: bool) -> bool {
     exact_owner(gate, gate.owner, consumer) && gate.order_complete && !gate.native_failed
         && gate.result == PeerComputeResultV1::Succeeded && native_success
@@ -46,6 +51,20 @@ pub open spec fn failure_ready(gate: PeerComputeGateV1, consumer: u64, native_or
 }
 
 impl PeerComputeGateV1 {
+    pub fn owns(self, owner: u64, consumer: u64) -> (out: bool)
+        ensures out == exact_owner(self, owner, consumer),
+    {
+        let gate = self;
+        peer_compute_gate_owns_body!(verus_exec_expr, gate, owner, consumer)
+    }
+
+    pub fn permits_predecessor_access(self, owner: u64, consumer: u64) -> (out: bool)
+        ensures out == predecessor_access(self, owner, consumer),
+    {
+        let gate = self;
+        peer_compute_gate_access_body!(verus_exec_expr, gate, owner, consumer)
+    }
+
     pub fn resolve(self, owner: u64, consumer: u64, result: PeerComputeResultV1,
         order_complete: bool) -> (out: Result<Self, ()>)
         ensures out == if resolution_valid(self, owner, consumer, result, order_complete) {
@@ -66,6 +85,35 @@ impl PeerComputeGateV1 {
         let gate = self;
         peer_compute_gate_action_body!(verus_exec_expr, gate, consumer, native_success, native_order)
     }
+}
+
+pub fn access_excludes_publication_witness(gate: PeerComputeGateV1, owner: u64, consumer: u64,
+    native_success: bool, native_order: bool)
+{
+    let allowed = gate.permits_predecessor_access(owner, consumer);
+    let action = gate.action(consumer, native_success, native_order);
+    assert(allowed ==> action != PeerComputeActionV1::ContinueNativeChecks);
+}
+
+pub fn settled_access_stays_revoked_witness(native_failed: bool, result: PeerComputeResultV1,
+    order_complete: bool) -> (out: bool)
+    ensures !out,
+{
+    let gate = PeerComputeGateV1 { owner: 7, consumer: 19, result: PeerComputeResultV1::Succeeded,
+        order_complete: true, native_failed };
+    match gate.resolve(7, 19, result, order_complete) {
+        Ok(updated) => updated.permits_predecessor_access(7, 19),
+        Err(()) => gate.permits_predecessor_access(7, 19),
+    }
+}
+
+pub fn unresolved_access_survives_native_failure_witness(result: PeerComputeResultV1,
+    order_complete: bool) -> (out: bool)
+    requires result != PeerComputeResultV1::Succeeded || !order_complete,
+    ensures out,
+{
+    let gate = PeerComputeGateV1 { owner: 7, consumer: 19, result, order_complete, native_failed: true };
+    gate.permits_predecessor_access(7, 19)
 }
 
 pub fn waiting_witness(native_success: bool, native_order: bool) -> (out: PeerComputeActionV1)

@@ -16,9 +16,13 @@ enum RecycledSourceV1 {
 
 #[derive(Debug)]
 pub(super) struct NativeReconciliationV1 {
+    peer_origin: Option<PeerCopyOriginV1>,
     id: u64,
     pub(super) allocation: u64,
     scratch: u64,
+    scratch_bytes: usize,
+    scratch_backed: bool,
+    allocation_backed: bool,
     extent: NativeDirtyExtentV1,
     descriptor: ResidentDataDescriptorV1,
     source: RecycledSourceV1,
@@ -34,15 +38,68 @@ pub(super) struct ScriptedNativeReconcileV1 {
 }
 
 impl KfdRuntimeBackendV1 {
+    fn cooperative_host_backing_is_intact_v1(record: &AllocationRecordV1) -> bool {
+        record.kind == RuntimeMemoryKindV1::HostVisible
+            && matches!(
+                (&record.sdma_storage, record.sdma_backed),
+                (KfdRuntimeSdmaStorageV1::Host(_), true)
+                    | (KfdRuntimeSdmaStorageV1::Synthetic, false)
+            )
+    }
+
+    fn cooperative_synthetic_backing_is_intact_v1(&self, record: &AllocationRecordV1) -> bool {
+        !self.native_available
+            && !record.sdma_backed
+            && matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::Synthetic)
+    }
+
+    fn reconciliation_scratch_is_exclusive_v1(&self, scratch: u64) -> bool {
+        !self.allocation_custody.contains_key(&scratch)
+            && !self.native_reconciliation_holds_v1(scratch)
+            && self.allocations.get(&scratch).is_some_and(|record| {
+                Self::cooperative_host_backing_is_intact_v1(record)
+                    && !record.bytes.is_empty()
+                    && record.native_dirty.is_empty()
+                    && !record.sdma_shadow_dirty
+                    && Arc::strong_count(&record.bytes) == 1
+            })
+    }
+
     pub(super) fn write_cooperative_host_range_v1(
         &mut self,
         allocation: u64,
         offset: u64,
         bytes: &[u8],
     ) -> Result<(), Failure> {
+        self.write_cooperative_host_range_with_peer_access_v1(allocation, offset, bytes, None)
+    }
+
+    pub(super) fn write_cooperative_host_range_with_peer_access_v1(
+        &mut self,
+        allocation: u64,
+        offset: u64,
+        bytes: &[u8],
+        origin: Option<PeerCopyOriginV1>,
+    ) -> Result<(), Failure> {
         self.require_live()?;
         self.allocations.reject_generated(allocation)?;
-        if self.allocation_is_active(allocation) {
+        if origin.is_some_and(|origin| {
+            !origin.matches_host(
+                self.description.backend_device,
+                allocation,
+                PeerCopyLegV1::Write,
+                offset,
+                bytes.len() as u64,
+            )
+        }) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "private peer host write lost its exact range",
+            ));
+        }
+        if self.native_reconciliation_holds_v1(allocation)
+            || self.peer_access_has_conflict_v1(allocation, origin, PeerAccessPurposeV1::Copy)
+        {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "cooperative host write conflicts with retained allocation custody",
@@ -54,7 +111,8 @@ impl KfdRuntimeBackendV1 {
                 "unknown cooperative host allocation",
             )
         })?;
-        if record.kind != RuntimeMemoryKindV1::HostVisible
+        if !(Self::cooperative_host_backing_is_intact_v1(record)
+            || origin.is_some() && self.cooperative_synthetic_backing_is_intact_v1(record))
             || !record.native_dirty.is_empty()
             || offset
                 .checked_add(bytes.len() as u64)
@@ -95,6 +153,74 @@ impl KfdRuntimeBackendV1 {
                     },
                 ),
         );
+        Ok(())
+    }
+
+    pub(super) fn read_cooperative_host_range_v1(
+        &mut self,
+        allocation: u64,
+        offset: u64,
+        destination: &mut [u8],
+        origin: Option<PeerCopyOriginV1>,
+    ) -> Result<(), Failure> {
+        let Some(origin) = origin else {
+            return self.read_allocation_v1(allocation, offset, destination);
+        };
+        self.require_live()?;
+        self.allocations.reject_generated(allocation)?;
+        if !origin.matches_host(
+            self.description.backend_device,
+            allocation,
+            PeerCopyLegV1::Read,
+            offset,
+            destination.len() as u64,
+        ) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "private peer host read lost its exact range",
+            ));
+        }
+        if self.native_reconciliation_holds_v1(allocation)
+            || self.peer_access_has_conflict_v1(allocation, Some(origin), PeerAccessPurposeV1::Copy)
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "private peer host read conflicts with retained custody",
+            ));
+        }
+        let record = self.allocations.get(&allocation).ok_or_else(|| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown peer host allocation",
+            )
+        })?;
+        if !(Self::cooperative_host_backing_is_intact_v1(record)
+            || self.cooperative_synthetic_backing_is_intact_v1(record))
+            || !record.native_dirty.is_empty()
+            || offset
+                .checked_add(destination.len() as u64)
+                .is_none_or(|end| end > record.bytes.len() as u64)
+        {
+            return Err(self.terminal_error("private peer host read changed reconciled authority"));
+        }
+        if !self
+            .download_sdma_range_v1(allocation, offset, destination)
+            .map_err(Self::after_possible_host_mutation)?
+        {
+            destination.copy_from_slice(
+                &self.allocations[&allocation].bytes
+                    [offset as usize..offset as usize + destination.len()],
+            );
+        }
+        let allocation = self.profile_resource_v1(KfdProfileResourceKindV1::Allocation, allocation);
+        let content = self.profile_host_content_v1(destination, None);
+        self.observe_profile_v1(allocation.zip(content).map(|(allocation, content)| {
+            KfdRuntimeProfileEventKindV1::HostRead {
+                allocation,
+                byte_offset: offset,
+                content,
+            }
+        }));
         Ok(())
     }
 
@@ -202,9 +328,30 @@ impl KfdRuntimeBackendV1 {
         allocation: u64,
         scratch: u64,
     ) -> Result<Option<u64>, Failure> {
+        self.begin_native_reconciliation_with_peer_access_v1(allocation, scratch, None)
+    }
+
+    pub(super) fn begin_native_reconciliation_with_peer_access_v1(
+        &mut self,
+        allocation: u64,
+        scratch: u64,
+        peer_origin: Option<PeerCopyOriginV1>,
+    ) -> Result<Option<u64>, Failure> {
         self.require_live()?;
+        if peer_origin.is_some_and(|origin| {
+            !origin.matches_preparation(self.description.backend_device, allocation, scratch)
+        }) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "private reconciliation lost its exact leaf",
+            ));
+        }
         if self.native_reconciliation_holds_v1(allocation)
-            || self.allocation_custody.contains_key(&allocation)
+            || self.peer_access_has_conflict_v1(
+                allocation,
+                peer_origin,
+                PeerAccessPurposeV1::Reconcile,
+            )
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -249,7 +396,7 @@ impl KfdRuntimeBackendV1 {
         let Some(descriptor) = descriptor else {
             return Err(self.terminal_error("native reconciliation lost its data descriptor"));
         };
-        let valid = record.kind == RuntimeMemoryKindV1::HostVisible
+        let valid = Self::cooperative_host_backing_is_intact_v1(record)
             && descriptor.allocation == allocation
             && descriptor.kind == record.kind
             && descriptor.device_may_have_modified
@@ -264,23 +411,31 @@ impl KfdRuntimeBackendV1 {
                 .checked_add(extent.byte_len)
                 .is_some_and(|end| end <= record.bytes.len() as u64)
             && scratch != allocation
-            && self.allocations.get(&scratch).is_some_and(|record| {
-                record.kind == RuntimeMemoryKindV1::HostVisible
-                    && !record.bytes.is_empty()
-                    && record.native_dirty.is_empty()
-                    && !record.sdma_shadow_dirty
-            });
+            && self.reconciliation_scratch_is_exclusive_v1(scratch)
+            && self
+                .native_reconciliations
+                .iter()
+                .flatten()
+                .all(|root| root.scratch != scratch);
         if !valid {
             return Err(self.terminal_error(
                 "native reconciliation extent or private scratch changed authority",
             ));
         }
+        let allocation_backed = record.sdma_backed;
+        let scratch_record = &self.allocations[&scratch];
+        let (scratch_bytes, scratch_backed) =
+            (scratch_record.bytes.len(), scratch_record.sdma_backed);
         let source = self.capture_recycled_source_v1(lane)?;
         let id = self.next_id()?;
         self.native_reconciliations[lane] = Some(NativeReconciliationV1 {
+            peer_origin,
             id,
             allocation,
             scratch,
+            scratch_bytes,
+            scratch_backed,
+            allocation_backed,
             extent,
             descriptor,
             source,
@@ -292,10 +447,36 @@ impl KfdRuntimeBackendV1 {
 
     fn authenticate_native_reconciliation_v1(&mut self, id: u64) -> Result<(), Failure> {
         let root = self.native_reconciliation_v1(id);
+        if root.peer_origin.is_some_and(|origin| {
+            !origin.matches_preparation(
+                self.description.backend_device,
+                root.allocation,
+                root.scratch,
+            )
+        }) || self.peer_access_has_conflict_v1(
+            root.allocation,
+            root.peer_origin,
+            PeerAccessPurposeV1::Reconcile,
+        ) {
+            return Err(self.terminal_error("retained reconciliation lost predecessor access"));
+        }
         let valid = self
             .allocations
             .get(&root.allocation)
-            .is_some_and(|record| record.native_dirty.contains(&root.extent))
+            .is_some_and(|record| {
+                Self::cooperative_host_backing_is_intact_v1(record)
+                    && record.sdma_backed == root.allocation_backed
+                    && record.native_dirty.contains(&root.extent)
+                    && (root.extent.allocation_offset as u64)
+                        .checked_add(root.extent.byte_len)
+                        .is_some_and(|end| end <= record.bytes.len() as u64)
+            })
+            && self.reconciliation_scratch_is_exclusive_v1(root.scratch)
+            && self.allocations.get(&root.scratch).is_some_and(|record| {
+                record.bytes.len() == root.scratch_bytes
+                    && record.sdma_backed == root.scratch_backed
+            })
+            && root.cursor <= root.extent.byte_len
             && self
                 .recycled_on_lane_v1(root.extent.compute_lane)
                 .and_then(|dispatch| dispatch.descriptors.get(root.extent.data_index))
@@ -394,6 +575,7 @@ impl KfdRuntimeBackendV1 {
         if root.cursor != extent.byte_len {
             return Ok(false);
         }
+        drop(bytes);
         self.authenticate_native_reconciliation_v1(id)?;
         let record = self.allocations.get_mut(&allocation).unwrap();
         let index = record

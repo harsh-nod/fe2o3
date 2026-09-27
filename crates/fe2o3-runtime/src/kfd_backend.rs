@@ -91,6 +91,10 @@ mod multi_allocation;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_peer_gate;
+mod peer_compute_access;
+use peer_compute_access::{
+    PeerAccessPurposeV1, PeerComputePermitsV1, PeerCopyAccessV1, PeerCopyLegV1, PeerCopyOriginV1,
+};
 mod compute_state;
 use compute_peer_gate::{
     PeerComputeActionV1, PeerComputeGateV1, PeerComputeResultV1, PeerComputeStepV1,
@@ -844,6 +848,7 @@ struct CollectedComputeDependenciesV1 {
     explicit_success_dependencies: Box<[u64]>,
     input_admission: ComputeInputAdmissionV1,
     peer_gate: Option<PeerComputeGateV1>,
+    peer_access: PeerComputePermitsV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -877,6 +882,7 @@ struct RuntimeAllocationCustodyV1 {
 
 #[derive(Debug)]
 struct ActiveSdmaCopyV1 {
+    peer_access: Option<PeerCopyAccessV1>,
     id: u64,
     stream: u64,
     prior_stream_submission: Option<u64>,
@@ -3923,6 +3929,12 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         active: ActiveSdmaCopyV1,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if !self.peer_dma_access_is_intact_v1(&active) {
+            self.active_sdma.insert(active.id, active);
+            return Err(
+                self.terminal_error("private peer DMA lost its retained predecessor access")
+            );
+        }
         if self.persistent_compute_is_active_v1()
             && !self.sdma_can_coexist_with_persistent_compute_v1(&active)
         {
@@ -5823,6 +5835,7 @@ impl KfdRuntimeBackendV1 {
             explicit_success_dependencies,
             input_admission,
             peer_gate: None,
+            peer_access: PeerComputePermitsV1::default(),
         })
     }
 
@@ -5836,10 +5849,13 @@ impl KfdRuntimeBackendV1 {
             explicit_success_dependencies,
             input_admission,
             peer_gate,
+            peer_access,
         } = collected;
-        if peer_gate.is_some_and(|gate| {
-            gate.action(self.next_handle, false, false) == PeerComputeActionV1::Invalid
-        }) {
+        if !peer_access.valid_for(peer_gate, self.next_handle, launch.bindings)
+            || peer_gate.is_some_and(|gate| {
+                gate.action(self.next_handle, false, false) == PeerComputeActionV1::Invalid
+            })
+        {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                 "KFD compute peer gate names another consumer",
@@ -6012,6 +6028,7 @@ impl KfdRuntimeBackendV1 {
                 explicit_dependency_cursor: 0,
                 dependency_depth,
                 peer_gate,
+                peer_access,
             },
         );
         if self.pending_compute_can_publish_under_deadline_v1(id) {
@@ -8960,6 +8977,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 Ok(BackendPollV1::Pending)
             }
             CooperativeCopyPhaseV1::Read => {
+                let origin = self.peer_copy_origin_v1(submission)?;
                 let (route, byte_offset, start, end) = {
                     let RoutedSubmissionV1::CooperativeCopy(copy) = &self.submissions[&submission]
                     else {
@@ -8984,10 +9002,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     else {
                         unreachable!()
                     };
-                    children[route.child].read_allocation_v1(
+                    children[route.child].read_cooperative_host_range_v1(
                         route.local,
                         byte_offset,
                         &mut copy.staging[start..end],
+                        origin,
                     )
                 };
                 match result {
@@ -9021,6 +9040,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 }
             }
             CooperativeCopyPhaseV1::Write => {
+                let origin = self.peer_copy_origin_v1(submission)?;
                 let (route, byte_offset, start, end) = {
                     let RoutedSubmissionV1::CooperativeCopy(copy) = &self.submissions[&submission]
                     else {
@@ -9044,11 +9064,20 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     else {
                         unreachable!()
                     };
-                    children[route.child].write_allocation_v1(
-                        route.local,
-                        byte_offset,
-                        &copy.staging[start..end],
-                    )
+                    if origin.is_some() {
+                        children[route.child].write_cooperative_host_range_with_peer_access_v1(
+                            route.local,
+                            byte_offset,
+                            &copy.staging[start..end],
+                            origin,
+                        )
+                    } else {
+                        children[route.child].write_allocation_v1(
+                            route.local,
+                            byte_offset,
+                            &copy.staging[start..end],
+                        )
+                    }
                 };
                 match result {
                     Ok(()) => {
@@ -12540,6 +12569,15 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         let id = self.next_id()?;
         if !peer_producers.is_empty() {
             let child_id = self.children[stream.child].next_handle;
+            collected.peer_access = self.prepare_direct_peer_compute_access_v1(
+                id,
+                RoutedHandleV1 {
+                    child: stream.child,
+                    local: child_id,
+                },
+                &peer_producers,
+                &bindings,
+            )?;
             collected.peer_gate = Some(
                 PeerComputeGateV1::waiting(id, child_id, true)
                     .resolve(id, child_id, PeerComputeResultV1::Succeeded, true)
@@ -12608,7 +12646,29 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
         destination: BackendMemoryRegionV1,
         dependencies: &[u64],
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.copy_async_with_peer_access_v1(stream, source, destination, dependencies, None)
+    }
+}
+
+impl KfdRuntimeBackendV1 {
+    fn copy_async_with_peer_access_v1(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+        peer_origin: Option<PeerCopyOriginV1>,
+    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
+        if peer_origin.is_some_and(|origin| {
+            !dependencies.is_empty()
+                || !origin.matches_dma(self.description.backend_device, stream, source, destination)
+        }) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "private peer DMA origin does not match its exact leaf",
+            ));
+        }
         self.require_no_generated_stream_v1(stream)?;
         self.allocations.reject_generated(source.allocation)?;
         self.allocations.reject_generated(destination.allocation)?;
@@ -12661,6 +12721,14 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                 "native KFD copy range exceeds its persistent allocation",
+            ));
+        }
+        if peer_origin.is_some()
+            && !self.peer_dma_endpoints_are_clean_v1(source.allocation, destination.allocation)
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "private peer DMA requires already reconciled endpoints",
             ));
         }
         let source_kind = self
@@ -12759,7 +12827,7 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
             let Some(custody) = self.allocation_custody.get(&allocation) else {
                 continue;
             };
-            if custody.sole_stream == Some(stream) {
+            if peer_origin.is_none() && custody.sole_stream == Some(stream) {
                 if custody.owner_counts[RuntimeAllocationCustodyKindV1::Compute.index()] != 0 {
                     compute_admission = KfdCopyComputeAdmissionV1::DeferredByDependency;
                 }
@@ -12770,6 +12838,14 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
                 .iter()
                 .filter(|owner| owner.kind == RuntimeAllocationCustodyKindV1::Compute)
             {
+                if self.peer_access_authorizes_owner_v1(
+                    allocation,
+                    *owner,
+                    peer_origin,
+                    PeerAccessPurposeV1::Copy,
+                ) {
+                    continue;
+                }
                 let next = if owner.stream == stream
                     || dependency_submissions.contains(&owner.submission)
                 {
@@ -12894,6 +12970,8 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
             dependencies: dependency_submissions,
             dependency_cursor: 0,
             dependency_depth,
+            peer_access: peer_origin
+                .map(|origin| PeerCopyAccessV1::capture(origin, stream, source, destination)),
             phase: ActiveSdmaPhaseV1::Ready,
         };
         self.retain_active_sdma_stream_v1(stream, id, new_active_sdma_stream);
@@ -22291,6 +22369,7 @@ mod tests {
             explicit_dependency_cursor: 0,
             dependency_depth,
             peer_gate: None,
+            peer_access: PeerComputePermitsV1::default(),
         }
     }
 
@@ -23369,6 +23448,7 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1,
+                peer_access: None,
                 phase: ActiveSdmaPhaseV1::Ready,
             },
         );
@@ -23661,6 +23741,7 @@ mod tests {
             dependencies: Vec::new(),
             dependency_cursor: 0,
             dependency_depth: 1,
+            peer_access: None,
             phase: ActiveSdmaPhaseV1::Ready,
         };
         let mut window_packet_counts = Vec::new();
@@ -23726,6 +23807,7 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
+                peer_access: None,
                 phase: ActiveSdmaPhaseV1::Ready,
             };
             let window = direct_sdma_window_plan_v1(&active).unwrap();
@@ -23765,6 +23847,7 @@ mod tests {
                     dependencies: Vec::new(),
                     dependency_cursor: 0,
                     dependency_depth: 1,
+                    peer_access: None,
                     phase: ActiveSdmaPhaseV1::Ready,
                 };
                 let window = direct_sdma_window_plan_v1(&active).unwrap();
@@ -23853,6 +23936,7 @@ mod tests {
                 dependencies: vec![dependency],
                 dependency_cursor: 1,
                 dependency_depth: 1,
+                peer_access: None,
                 phase: ActiveSdmaPhaseV1::Ready,
             },
         );
@@ -23905,6 +23989,7 @@ mod tests {
                 dependencies: vec![submission],
                 dependency_cursor: 0,
                 dependency_depth: 2,
+                peer_access: None,
                 phase: ActiveSdmaPhaseV1::Ready,
             },
         );
@@ -23958,6 +24043,7 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
+                peer_access: None,
                 phase: ActiveSdmaPhaseV1::Ready,
             },
         );
@@ -26541,6 +26627,7 @@ mod tests {
                 dependencies: vec![40],
                 dependency_cursor: 0,
                 dependency_depth: 1,
+                peer_access: None,
                 phase: ActiveSdmaPhaseV1::Ready,
             },
         );
@@ -27017,6 +27104,7 @@ mod tests {
                 dependencies: vec![40],
                 dependency_cursor: 0,
                 dependency_depth: MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1,
+                peer_access: None,
                 phase: ActiveSdmaPhaseV1::Ready,
             },
         );
@@ -27070,6 +27158,7 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
+                peer_access: None,
                 phase: ActiveSdmaPhaseV1::Ready,
             },
         );
@@ -27248,6 +27337,7 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
+                peer_access: None,
                 phase: ActiveSdmaPhaseV1::Ready,
             },
         );
@@ -27293,6 +27383,7 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
+                peer_access: None,
                 phase: ActiveSdmaPhaseV1::Ready,
             },
         );

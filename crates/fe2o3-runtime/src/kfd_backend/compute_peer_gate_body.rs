@@ -1,4 +1,22 @@
 // Shared executable gate decisions; native ownership and backing checks remain in the adapter.
+macro_rules! peer_compute_gate_owns_body {
+    ($syntax:ident, $gate:ident, $query_owner:ident, $query_consumer:ident) => {
+        $syntax!({
+            $query_owner != 0 && $query_consumer != 0
+                && $gate.owner == $query_owner && $gate.consumer == $query_consumer
+        })
+    };
+}
+
+macro_rules! peer_compute_gate_access_body {
+    ($syntax:ident, $gate:ident, $owner:ident, $consumer:ident) => {
+        $syntax!({
+            $gate.owns($owner, $consumer)
+                && ($gate.result != PeerComputeResultV1::Succeeded || !$gate.order_complete)
+        })
+    };
+}
+
 macro_rules! peer_compute_gate_resolve_body {
     ($syntax:ident, $gate:ident, $owner:ident, $consumer:ident, $result:ident, $ordered:ident) => {
         $syntax!({

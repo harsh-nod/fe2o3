@@ -34,6 +34,16 @@ pub(super) struct PeerComputeGateV1 {
 }
 
 impl PeerComputeGateV1 {
+    pub(super) fn owns(self, owner: u64, consumer: u64) -> bool {
+        let gate = self;
+        peer_compute_gate_owns_body!(gate_rust_expr, gate, owner, consumer)
+    }
+
+    pub(super) fn permits_predecessor_access(self, owner: u64, consumer: u64) -> bool {
+        let gate = self;
+        peer_compute_gate_access_body!(gate_rust_expr, gate, owner, consumer)
+    }
+
     pub(super) fn waiting(owner: u64, consumer: u64, order_complete: bool) -> Self {
         Self {
             owner,
@@ -74,6 +84,51 @@ impl PeerComputeGateV1 {
 
     fn failed(self) -> bool {
         self.native_failed || self.result == PeerComputeResultV1::Failed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_compute_access_gate_exhaustive_identity_and_lifetime() {
+        for result in [
+            PeerComputeResultV1::Pending,
+            PeerComputeResultV1::Succeeded,
+            PeerComputeResultV1::Failed,
+        ] {
+            for order_complete in [false, true] {
+                for native_failed in [false, true] {
+                    let gate = PeerComputeGateV1 {
+                        owner: 7,
+                        consumer: 19,
+                        result,
+                        order_complete,
+                        native_failed,
+                    };
+                    for owner in [0, 7, 8] {
+                        for consumer in [0, 19, 20] {
+                            let exact = owner == 7 && consumer == 19;
+                            let allowed = exact
+                                && (result != PeerComputeResultV1::Succeeded || !order_complete);
+                            assert_eq!(gate.owns(owner, consumer), exact);
+                            assert_eq!(gate.permits_predecessor_access(owner, consumer), allowed);
+                            for native_success in [false, true] {
+                                for native_order in [false, true] {
+                                    if allowed {
+                                        assert_ne!(
+                                            gate.action(consumer, native_success, native_order),
+                                            PeerComputeActionV1::ContinueNativeChecks
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

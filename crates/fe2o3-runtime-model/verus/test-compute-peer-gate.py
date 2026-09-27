@@ -9,11 +9,14 @@ runner = runpy.run_path(str(Path(__file__).with_name("check-compute-peer-gate.py
 need = runner["need"]
 body = (runner["ROOT"] / runner["BODY"]).read_text()
 cases = runner["mutations"](body)
-need(len(cases) == len(set(cases.values())) == 15, "distinct mutation roster")
-need({focus for _, focus in cases.values()} == {"*resolve*", "*action*"}, "exact selected functions")
+need(len(cases) == len(set(cases.values())) == 25, "distinct mutation roster")
+need({focus for _, focus in cases.values()} == {"*resolve*", "*action*", "*owns*", "*permits_predecessor_access*"}, "exact selected functions")
 need(all(text != body and not any(token in text for token in ("assume(", "admit(", "external_body"))
          for text, _ in cases.values()), "executable mutations without proof bypass")
-for changed in (body + body, body.replace("if !$gate.order_complete {", "if false {")):
+for changed in (body + body, body.replace("if !$gate.order_complete {", "if false {"),
+                body.replace("$query_owner != 0 && ", ""),
+                body.replace("$gate.owns($owner, $consumer)\n", "true\n"),
+                body + "\n$query_owner != 0 && "):
     try:
         runner["mutations"](changed)
     except ValueError:

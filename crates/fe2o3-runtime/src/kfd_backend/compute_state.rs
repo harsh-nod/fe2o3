@@ -181,6 +181,7 @@ pub(super) struct PendingComputeSubmissionV1 {
     pub(super) explicit_dependency_cursor: usize,
     pub(super) dependency_depth: usize,
     pub(super) peer_gate: Option<PeerComputeGateV1>,
+    pub(super) peer_access: PeerComputePermitsV1,
 }
 
 #[cfg(test)]

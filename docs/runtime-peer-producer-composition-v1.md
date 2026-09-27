@@ -58,19 +58,50 @@ prefixes before unpublished settlement. Successful gates continue through the
 existing backing and native-order checks; they do not supply initialized bytes.
 Terminal observation or unwind reinstalls the pending owner and seals execution.
 
-The scalar resolve/action bodies are shared with `compute_peer_gate_v1.rs`.
+The scalar resolve/action and ownership/access bodies are shared with
+`compute_peer_gate_v1.rs`.
 Their proof boundary is exact gate identity, monotonic resolution, separate
-input-success/order conditions and sticky failure. Concrete custody maps,
-router ancestry, allocation-access permits and native publication are outside
+input-success/order conditions, sticky failure and predecessor-access expiry.
+Access is revoked after peer success plus completed external ordering, even if
+native failure is subsequently known. Allowed access excludes native publication.
+Concrete custody maps, router ancestry, permit construction, scratch ownership,
+cancellation disposal and native publication refinement are outside
 that proof. Scripted tests exercise retained ownership and three-binding
 persistent continuation; an ordered-successor control reaches the native
 publication attempt but does not execute a native queue.
 
+Private directed-copy origins now capture the exact producer, child, endpoint,
+leg and original interval. The bounded direct-parent permit roster is attached
+to the real pending child compute record and searched by exact key. A copy can
+access an endpoint only when every conflicting compute owner individually
+authorizes it and remains unpublished behind its gate. Public host operations
+and copies never receive this origin. Ordinary copies keep their existing path.
+
+Copy authority is interval-limited; reconciliation authority separately covers
+the captured native dirty extent. Each accepted DMA retains its exact stream,
+scratch and chunk arguments, rechecked before publication along with clean
+native endpoints. Host access validates mapped or explicitly synthetic backing.
+Reconciliation retains scratch size/backing, checks exclusive clean scratch
+before every native read, and preserves exact descriptor/generation authority.
+Common leaf entry authenticates the retained origin for progress and disposal.
+Consumer cancellation removes its access exception without cancelling live
+producer DMA or releasing that DMA's custody.
+
+CPU tests exercise genuine accepted child consumers with multipart directed
+DMA, both host reconciliation endpoints, synthetic host/device storage, public
+access exclusion, consumer cancellation with live DMA and corruption before
+effects. Publication-corruption controls invoke the publication boundary
+directly with an already accepted record; they are not a hardware retry result.
+These tests do not admit pending producers through the public router API or
+execute the consumer kernel.
+
 ## Not Yet Supported
 
 Pending peer-copy-to-compute admission remains rejected by the KFD router. Its
-child compute ledger currently retains bound allocations immediately, which
-would block the cooperative producer supplying those inputs. The ordinary
+child compute ledger retains bound allocations immediately. Private direct-root
+copy access is implemented, but bounded transitive/FIFO ancestry construction,
+router-driven gate resolution and full lifecycle integration remain required
+before opening pending admission. The ordinary
 multi-device router uses host-staged cooperative peer copies, not native XGMI.
 The separate native-XGMI copy backend has not acquired compute support. This
 change adds no Worker protocol, atomic/collective authority, generated-launch
@@ -94,11 +125,9 @@ native-correctness or performance result.
    completed CPU contract checks exact intervals, mixed leases, all completion
    ingresses, failure, cancellation, corruption, slot reuse and the depth limit.
 3. Reuse the child compute ledger's module, kernarg, allocation, stream and
-   cancellation ownership. A private producer bridge is insufficient by itself:
-   retaining the consumer's allocation currently blocks the cooperative copy's
-   public write path. Any internal copy-access exception must authenticate that
-   all conflicting consumers are unpublished and blocked on that exact producer.
-   Public host access must remain rejected. Capture a bounded authenticated
+   cancellation ownership. The implemented private direct-root access bypasses
+   consumer custody only for individually authorized unpublished owners;
+   the cooperative copy's public write path remains blocked. Extend this to a bounded authenticated
    predecessor roster for each bound allocation, including transitive source
    readers and FIFO predecessors; allocation overlap or an ID alone is not proof
    of ancestry. Keep destination-write range authority separate from native

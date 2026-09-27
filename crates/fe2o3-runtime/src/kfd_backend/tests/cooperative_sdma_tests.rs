@@ -1,4 +1,5 @@
 use super::*;
+mod peer_compute_access_tests;
 use crate::{
     BackendDirectedPeerDependencyV1, BackendDirectedPeerRouteV1, BackendDirectedScalarPeerCopyV1,
     BackendDirectedScalarProgressV1, RuntimeDirectedScalarPeerCopyBackendV1,
