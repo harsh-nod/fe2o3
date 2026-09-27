@@ -412,6 +412,39 @@ fn inspect_case(case: usize) {
         20 | 21 => allocations.len(),
         _ => 0,
     };
+    let execution = backend.active.as_ref().unwrap().execution.as_ref().unwrap();
+    if case < 16 {
+        assert!(if three {
+            matches!(
+                execution,
+                ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared { .. }
+            )
+        } else {
+            matches!(
+                execution,
+                ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. }
+            )
+        });
+    } else {
+        let ActiveComputeExecutionV1::PersistentCancelling(root) = execution else {
+            panic!("indexed cancellation phase");
+        };
+        assert!(matches!(
+            root.receipt,
+            super::super::prepared_cancellation::PreparedCancellationReceiptV1::InputsReturned
+        ));
+        for index in 0..3 {
+            if index >= allocations.len() {
+                assert!(root.slots[index].is_none());
+                continue;
+            }
+            let slot = root.slots[index].as_ref().unwrap();
+            assert_eq!(slot.admission.allocation, allocations[index]);
+            assert_eq!(slot.restored, index < restored);
+            assert_eq!(slot.input.is_some(), index >= restored);
+            assert_eq!(slot.shell.is_some(), index >= restored);
+        }
+    }
     for index in 0..allocations.len() {
         if index < restored {
             assert_eq!(after_owners[index].input, before_owners[index].input);
@@ -422,6 +455,17 @@ fn inspect_case(case: usize) {
             );
         } else {
             assert_eq!(after_owners[index], before_owners[index]);
+            let marker = if case == 0 && index == 0 {
+                submission + 1
+            } else if case == 18 && index == allocations.len() - 1 {
+                0
+            } else {
+                submission
+            };
+            assert!(
+                matches!(backend.allocations[&allocations[index]].sdma_storage,
+                KfdRuntimeSdmaStorageV1::ComputeInFlight(actual) if actual == marker)
+            );
         }
     }
     assert_eq!(
