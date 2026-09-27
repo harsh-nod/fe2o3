@@ -6,9 +6,9 @@ sealed images, listener/root inputs, root-bound lifecycle leases and a managed
 anchor on the original resource ledger. Consuming native supervisor launch now
 transfers that complete preparation into ordered child custody before clone.
 Native inherited descriptor admission and anchor-first composition now exist.
-The installed entrypoint still uses V1. Composed startup/cleanup quota queries and
-bounded native activation mechanics now exist; consuming those limits in the
-installed native runner and matching provisioning remain unfinished. These APIs do not
+The installed entrypoint still uses V1. A fixed V3 runner now consumes the
+composed startup/cleanup limits and bounded activation mechanics. Matching
+provisioning and installed-binary migration remain unfinished. These APIs do not
 establish 47/47 safe GPU launch. See the
 [funding checkpoint](../../docs/evidence/conditional-native-startup-funding-20260926.md).
 
@@ -81,12 +81,52 @@ These are root-coordinator logical bounds, not executed-program or RSS limits.
 No phase or tick may renew an account, and finite funding cannot promise reaping.
 The installed runner does not yet consume this plan.
 
-Private native activation mechanics bound command-line and environment reads,
+## Native Runner
+
+`run_inherited_compiler_execution_coordinator_v3` consumes the funding plan in
+one dedicated root process. It has no version selector or fallback. One request
+account and one independent persistent cleanup account cover its entire finite
+schedule: at most 86,400 monitoring attempts and 20 cleanup turns. Each signal
+wait is at most one second; interruptions also consume a turn. The monitoring
+limit is a refusal, not successful shutdown or a renewable lease.
+
+Native activation mechanics bound command-line and environment reads,
 validate all fourteen roles and the main PID, clear the validated environment,
-and meter one-shot readiness and finite termination waits. They are compiled and
-component-tested, not selected by `main.rs`. Native runner integration must change
-provisioning records and protected images together. Genuine root-path failure
-tests and protected boot validation remain required.
+and meter one-shot readiness and finite termination waits. Startup admits the
+inherited V3 graph and launches anchor-first before publishing readiness.
+Every normal return path after cleanup admission cancels foreground service
+custody, then attempts empty-pool shutdown. Pending cleanup receives only the
+funded full-pool scans. Cleanup control is prepaid before side effects, so a
+request-budget failure does not stop scans on the independent cleanup account.
+
+The signal mask is restored only after empty-pool shutdown. Busy, quarantined,
+exhausted or unwinding custody remains charged in the pool; dropping the controller
+does not release it. Every runner return requires dedicated-process termination,
+and the service manager must enforce whole-cgroup termination. This is not a
+guarantee of eventual reaping. Logical request reservations remain until owners
+drop and the outer scope closes; no phase renews either account.
+
+The runner is compiled and control-flow tested, not selected by `main.rs`.
+Installation must change provisioning records, protected images and client
+profiles together. Genuine root-path failure tests and protected boot validation
+remain required.
+
+## Native Provisioning Records
+
+`CompilerExecutionProvisioningBundleV3::new` builds the same-family public record
+graph from borrowed, prepaid measured inputs. It composes the policy, supervisor,
+anchor deployment, anchor provisioning and client profile on the original ledger.
+The profile owns the single policy; the bundle borrows it without cloning.
+Executable roles must have distinct measurements, and all five image lengths
+must satisfy the native root runner's ceilings.
+
+The bundle exposes fixed work/scratch envelopes and a full unreserved return
+charge. Construction restores entry storage while preserving work, peaks and
+first denials. It accepts public keys only, not signing seeds. Inputs are inert:
+this pure constructor does not authenticate measurements, inspect files, publish
+records, or grant authority. The same-host installer and client consumers still
+need migration from V1. See the
+[runner and records checkpoint](../../docs/evidence/conditional-native-runner-provisioning-20260926.md).
 
 ## Existing V1 Deployment
 

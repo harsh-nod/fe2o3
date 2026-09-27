@@ -155,7 +155,7 @@ macro_rules! inherited {
                         root::repeated(monitor_ticks, sum(&[root::TURN_WORK,
                             activation::WAIT_WORK, continuity.work()])?)?,
                         root::repeated(cleanup_turns, root::TURN_WORK + activation::WAIT_WORK)?])?,
-                    request_storage: sum(&[Self::FRAME, activation::ACTIVATION_STORAGE,
+                    request_storage: sum(&[Self::FRAME.max(crate::native_entrypoint::FRAME), activation::ACTIVATION_STORAGE,
                         activation::SIGNALS_STORAGE, crate::native::maximum(&[
                             activation::CAPTURE_SCRATCH, activation::INSTALL_SCRATCH,
                             activation::PUBLISH_SCRATCH, admission.scratch(), launch_peak, lifetime_peak])])?,

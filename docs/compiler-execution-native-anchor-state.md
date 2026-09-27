@@ -449,9 +449,18 @@ image ceilings, using the same executable cost calculation without constructing
 placeholder authority. Bounded native activation mechanics are compiled and
 component-tested but not installed. Startup quota queries now compose launch,
 retained payload, finite monitoring and persistent cleanup funding on independent
-original accounts. Matching V3 provisioning, runner consumption and protected
-validation remain outstanding; see the
+original accounts. A fixed V3 root runner now consumes that plan, prepays cleanup
+control before startup, and cancels then drains within a finite schedule. Only
+empty-pool shutdown permits signal restoration. Control-flow tests cover denial,
+pending cleanup and unwind, not successful protected boot. Installed-binary and
+matching V3 provisioning/client migration, plus protected validation, remain
+outstanding; see the
 [funding checkpoint](evidence/conditional-native-startup-funding-20260926.md).
+A pure V3 provisioning bundle now constructs the matching native record graph
+on one ledger, with a single policy owned by its client profile and all executable
+roles bounded to the root runner's limits. This is not authenticated image
+measurement or durable installation; see the
+[runner and records checkpoint](evidence/conditional-native-runner-provisioning-20260926.md).
 Neither `cancel`, field-drop order, a
 persistent guard nor passing component tests establish successful production
 startup. See the [compiler launch checkpoint](evidence/conditional-native-compiler-launch-20260926.md).

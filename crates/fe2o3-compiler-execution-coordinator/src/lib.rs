@@ -64,16 +64,16 @@ mod entrypoint;
 mod inherited;
 mod lifecycle;
 mod native;
-// Installed activation remains V1 until its provisioning records migrate together.
-#[allow(dead_code)]
 mod native_activation;
 mod native_adapter;
+mod native_entrypoint;
 mod native_inherited;
 mod native_inherited_adapter;
 mod native_inherited_v2;
 mod native_inherited_v3;
 mod native_launch;
 mod native_launch_adapter;
+mod native_provisioning;
 mod native_root_source;
 mod native_trust_adapter;
 mod native_trust_v2;
@@ -90,6 +90,7 @@ pub use native::{
     CompilerExecutionPreparationErrorV2, CompilerExecutionPreparationQuotaV2,
     CompilerExecutionPreparationStorageV2,
 };
+pub use native_entrypoint::run_inherited_compiler_execution_coordinator_v3;
 pub use native_inherited::{
     CompilerExecutionRootAdmissionQuotaV2, CompilerExecutionRootDeploymentErrorV2,
     CompilerExecutionRootStorageV2, CompilerExecutionStartupQuotaV2,
@@ -99,6 +100,10 @@ pub use native_inherited_v3::InheritedCompilerExecutionDeploymentV3;
 pub use native_launch::{
     CompilerExecutionLaunchErrorV2, CompilerExecutionLaunchQuotaV2,
     CompilerExecutionLaunchStorageV2,
+};
+pub use native_provisioning::{
+    CompilerExecutionProvisioningBundleV3, CompilerExecutionProvisioningErrorV3,
+    CompilerExecutionProvisioningInputsV3, CompilerExecutionProvisioningStorageV3,
 };
 pub use native_root_source::RootSourceErrorV2;
 pub use native_trust_adapter::{
