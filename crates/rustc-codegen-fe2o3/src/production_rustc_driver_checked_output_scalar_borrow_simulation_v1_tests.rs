@@ -107,11 +107,20 @@ pub(super) fn require_abi(module: &AdmittedSimulationModuleV1) -> Result<&Kernel
 fn independent_shared_primitive_vectors_preserve_input_not_tuple_field_zero() {
     let rows = shared_scenarios().unwrap();
     assert_eq!(rows.len(), 6);
-    for (row, input) in rows.into_iter().zip([0_u32, 0, 1, u32::MAX, 0x8000_0000, 0x5555_aaaa]) {
+    for (row, input) in rows
+        .into_iter()
+        .zip([0_u32, 0, 1, u32::MAX, 0x8000_0000, 0x5555_aaaa])
+    {
         let bytes = row.expected[0].buffer.bytes();
         assert!(bytes[..GUARD_ELEMENTS * 4].iter().all(|byte| *byte == 0xa5));
-        assert!(bytes[(GUARD_ELEMENTS + row.output_elements) * 4..].iter().all(|byte| *byte == 0x5a));
-        for cell in bytes[GUARD_ELEMENTS * 4..(GUARD_ELEMENTS + row.output_elements) * 4].chunks_exact(4) {
+        assert!(
+            bytes[(GUARD_ELEMENTS + row.output_elements) * 4..]
+                .iter()
+                .all(|byte| *byte == 0x5a)
+        );
+        for cell in
+            bytes[GUARD_ELEMENTS * 4..(GUARD_ELEMENTS + row.output_elements) * 4].chunks_exact(4)
+        {
             assert_eq!(cell, input.to_le_bytes());
             assert_ne!(cell, 23_u32.to_le_bytes());
         }

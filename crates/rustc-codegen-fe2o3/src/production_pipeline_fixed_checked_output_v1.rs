@@ -224,7 +224,10 @@ impl FixedCheckedOutputProductionCompilationV1 {
         match &self.stage {
             Stage::Direct(stage) => {
                 let source = stage.output().source_semantic_kir();
-                (*source.semantic_ssa_identity().as_bytes(), source.semantic_ssa_summary())
+                (
+                    *source.semantic_ssa_identity().as_bytes(),
+                    source.semantic_ssa_summary(),
+                )
             }
             Stage::Erased(stage) => {
                 let source = stage.output().original_source().semantic_ssa();

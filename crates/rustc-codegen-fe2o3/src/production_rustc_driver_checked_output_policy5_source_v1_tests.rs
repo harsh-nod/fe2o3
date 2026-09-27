@@ -45,16 +45,36 @@ pub(super) fn configure_shared_child(command: &mut Command, case: &OrdinarySourc
     shared_primitive::configure_child(command, case);
 }
 
-pub(super) fn check_shared(report: &Path, observation: &Observation, config: SharedPrimitiveConfig) {
+pub(super) fn check_shared(
+    report: &Path,
+    observation: &Observation,
+    config: SharedPrimitiveConfig,
+) {
     let report: Report = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
     assert_eq!(observation.policy, 5);
     assert_eq!(report.output, observation.output_digest);
     assert_ne!(report.source, [0; 32]);
     assert_ne!(report.llvm_digest, [0; 32]);
     assert_eq!((report.store_rows, report.load_rows), (0, 0));
-    assert_eq!((report.before_private_reads, report.after_private_reads, report.llvm_private_reads), (0, 0, 0));
-    assert_eq!((observation.private_reads, observation.private_writes), (0, 0));
-    shared_primitive::check(report.shared_primitive.as_ref().expect("required source observation"), config);
+    assert_eq!(
+        (
+            report.before_private_reads,
+            report.after_private_reads,
+            report.llvm_private_reads
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        (observation.private_reads, observation.private_writes),
+        (0, 0)
+    );
+    shared_primitive::check(
+        report
+            .shared_primitive
+            .as_ref()
+            .expect("required source observation"),
+        config,
+    );
     eprintln!("ordinary Shared primitive production observation: {report:?}");
 }
 
@@ -154,7 +174,8 @@ impl Callbacks for CallbacksV1 {
                 after_private_reads: private_reads(stage.output().module()),
                 llvm_private_reads: 0,
                 llvm_digest: [0; 32],
-                shared_primitive: shared_primitive::requested().map(|config| shared_primitive::observe(&stage, config)),
+                shared_primitive: shared_primitive::requested()
+                    .map(|config| shared_primitive::observe(&stage, config)),
             };
             let module = stage.output().module();
             let semantic = stage.semantic();

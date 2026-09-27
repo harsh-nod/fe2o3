@@ -894,7 +894,9 @@ fn ordinary_rust_source_cases(
             OrdinarySourceCase::ConstantShift(config) => {
                 (!config.dynamic).then_some(simulation::Case::ConstantShift(config.batch))
             }
-            OrdinarySourceCase::SharedPrimitivePolicy5(_) => Some(simulation::Case::SharedPrimitive),
+            OrdinarySourceCase::SharedPrimitivePolicy5(_) => {
+                Some(simulation::Case::SharedPrimitive)
+            }
             OrdinarySourceCase::ScalarBorrowPolicy5
             | OrdinarySourceCase::RetainedScalarBorrowPolicy5
             | OrdinarySourceCase::ScalarBorrowPolicy5Barrier => {
@@ -1031,7 +1033,10 @@ fn ordinary_rust_source_cases(
         }
         if let OrdinarySourceCase::SharedPrimitivePolicy5(config) = case {
             policy5_source::check_shared(&policy5_report, &result, *config);
-            assert_eq!((result.global_reads, result.other_reads, result.other_writes), (0, 0, 0));
+            assert_eq!(
+                (result.global_reads, result.other_reads, result.other_writes),
+                (0, 0, 0)
+            );
             assert!(result.global_writes > 0);
         } else if policy5_case {
             policy5_source::check(
