@@ -354,6 +354,13 @@ includes those borrowed contexts; `launch_quota` includes every finite readiness
 attempt, nested native operation and full overlapping image charge. It is a
 conservative logical envelope, not a time, stack or RSS promise.
 
+Preparation and revalidation now join the lifecycle lease to the actual state
+root. Before the first child, `retain_cleanup_guard` installs a controlled alias
+in the original empty cleanup pool. Launch validates that installed guard against
+the retained lease before staging or spawning. Guard installation and cloning
+charge both original accounts; neither operation replaces custody or resets
+funding. An independently valid but unrelated lease or guard is insufficient.
+
 The helper descriptor table is exactly `3, 4, 5, 6, 202, 220, 221, 222, 223`,
 checked against the inherited helper ABI at compile time. The coordinator checks
 the final helper/daemon Files, lifecycle lock, policy, supervisor, deployment,
@@ -361,7 +368,8 @@ provisioning, signing-key template, pinned root and private bootstrap identity.
 Only then may the shared primitive create the guarded child. Namespace/profile
 observation and input revalidation precede gate release. The same readiness
 engine serves V1 and native callers, with native attempt/liveness charges on
-the original account. It has 120001 attempts per polling phase and 64 gate-write
+the original account. It now lives in the shared spawn crate, with only nominal
+anchor decoding in this coordinator. It has 120001 attempts per polling phase and 64 gate-write
 attempts, plus one shared deadline of at most 120 seconds.
 
 Ready transfer requires the exact canonical record and one CLOEXEC descriptor.
@@ -370,6 +378,13 @@ fallible check; excess rights, unknown control and truncation are rejected with
 cleanup. Even successful I/O must meet the deadline. Exec EOF, continued exact
 child liveness and native protected endpoint admission precede artifact-lease
 confirmation and a managed result.
+
+Terminal status enables `SO_PASSCRED` before receiving, using kernel credentials
+only to distinguish records, including queued empty records, from actual EOF.
+They grant no service identity. An unsupported or denied option refuses without
+a weaker fallback. Live GNU/musl readiness-transfer tests pass, but terminal
+credential tests encounter local EPERM. See the
+[guard and transport checkpoint](evidence/conditional-native-root-launch-transport-20260926.md).
 
 `RootManagedExternalAnchorV2/V3` retain preparation, endpoint admission and child
 custody. Returned launch storage is growth above the consumed prepared owner,
@@ -408,3 +423,9 @@ not a successful native root deployment. Adapter-level post-clone failures and
 unwinds, including child-storage refusal and failure after endpoint receipt,
 still need direct coverage. See the
 [preparation checkpoint](evidence/conditional-native-compiler-preparation-20260926.md).
+
+The consuming supervisor path also needs ordered deferred custody: its complete
+prepared owner, live anchor and both leases must remain retained until the
+supervisor is genuinely terminal. Calling `cancel` or dropping the child field
+first is insufficient when cleanup transfers a pending child to the pool. This
+integration is outstanding; a persistent guard alone does not complete it.

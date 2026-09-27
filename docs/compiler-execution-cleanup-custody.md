@@ -120,6 +120,14 @@ the incoming File, not an existing guard. The caller retires its full input
 charge after return; successful transfer remains charged to the persistent pool.
 The generic cleanup API grants no deployment authority and checks no pathname.
 
+`try_clone_deployment_guard` charges both original ledgers before one CLOEXEC
+duplication at FD 256 or above. The full new File and scratch overlap are charged
+on the request; persistent custody remains on the cleanup account. A controlled
+clone can outlive pool shutdown and must never be explicitly unlocked. Native
+anchor preparation installs its actual root-bound alias before the first child;
+consuming launch validates the installed guard against the actual retained lease.
+The clone itself proves neither deployment identity nor uninterrupted past custody.
+
 Native supervisor startup supplies a duplicate of its actual admitted lifecycle
 lease before any child launch. Controller Drop, late request failure, unwind,
 quarantine and work exhaustion preserve that alias. Verified exec releases only

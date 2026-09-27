@@ -38,6 +38,29 @@ Controller loss preserves the original account and records. Recovery does not
 reset limits or denial history. Native issuer and external-anchor root coordinator
 launches use this pool. The V1 root child above retains its synchronous Drop semantics.
 
+The native pool also retains a close-only deployment guard until confirmed empty
+shutdown. Its metered `try_clone_deployment_guard` transfers a CLOEXEC alias for
+validation against the caller's actual native lifecycle lease. Both original
+ledgers pay before duplication; refusal, unwind and controller recovery retain
+the pool's guard. A clone is not deployment authority and must never be unlocked
+or passed to uncontrolled code.
+
+## Shared Readiness
+
+`launch_io` supplies the one bounded profile/gate/readiness/status scheduler to
+root coordinators. It returns inert bytes and either one or zero descriptor
+rights; family-specific decoding remains in the owning coordinator. Attempt
+charges, finite retries, deadlines and descriptor disposal share one implementation.
+The anchor uses 16 bytes plus one right; native supervisor transport supports
+88 bytes without rights. This is not a completed consuming supervisor launch.
+
+Terminal status enables Linux `SO_PASSCRED` so even a queued empty record has a
+kernel credential marker, while EOF has none. The marker is framing, not identity
+authority. Socket-option refusal fails closed without a hangup-only fallback.
+Local live tests cover readiness transfer and descriptor cleanup; the terminal
+credential tests still encounter sandbox EPERM. Protected startup remains an
+independent validation gate.
+
 The shared pre-exec gate reader permits at most 64 attempts, retrying only EINTR.
 Capability-ceiling observation uses a fixed buffer and finite reads. These bound
 logical attempts, not blocking syscall duration. Their inert results grant no

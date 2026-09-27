@@ -43,6 +43,8 @@ operation. They own native deployment, provisioning, root-owned key template,
 lifecycle lease, measured sealed helper/daemon images and a pinned state root.
 Exact root credentials and the preparing PID are checked. No V1 upgrade, raw
 key/descriptor extractor or provider interface is exposed.
+Preparation and every revalidation join the lifecycle lease to the actual state
+root, rather than accepting two independently valid objects.
 
 Prepay `prepare_input_storage`, including both full source images and borrowed
 contexts, on the original resource ledger. Reserve returned growth before
@@ -52,14 +54,23 @@ closes owned descriptors; the caller then retires full `retained_storage`.
 Quota queries include nested native checks and overlapping image storage; they
 are logical bounds, not RSS or syscall-time guarantees.
 
+Before the first child, call `retain_cleanup_guard` with the same actual contexts
+and the original empty cleanup pool. It transfers a root-bound lease alias into
+persistent cleanup custody. Consuming launch validates a clone of that installed
+guard against the actual lease before spawning; an unrelated valid guard refuses.
+`cleanup_guard_quota` describes request work and extra peak. The cleanup account
+independently funds guard installation and cloning, without renewing its limits.
+
 Launch derives full source charges, stages the exact nine native inputs, and
 validates final Files through the actual native owners before calling the shared
 spawn primitive. The original ledger funds staging, child setup and all readiness
 attempts; the shared cleanup controller funds deferred cleanup. Profile and
 namespace checks gate release. Canonical readiness, exact endpoint transfer,
 exec EOF, live pidfd and native endpoint admission precede a managed result.
-The V1 and native paths share one finite readiness scheduler. Late successful
-reads and unbounded gate retries no longer bypass deadlines.
+The V1 and native paths use the finite readiness scheduler in the shared spawn
+crate; this coordinator keeps only anchor wire decoding. Late successful reads
+and unbounded gate retries cannot bypass deadlines. Terminal record credentials
+distinguish empty records from EOF and grant no service identity authority.
 
 `RootManagedExternalAnchorV2/V3` retain preparation, child and endpoint custody.
 Launch returns growth above the consumed prepared owner; retain its existing
