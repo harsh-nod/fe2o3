@@ -2,11 +2,13 @@
 
 use super::{DeferredReaperV1, EMPTY, ReapSlotV1, ReaperMode, deferred_reaper};
 use crate::MAX_PROTECTED_SERVICE_PROCESSES_V2 as CAPACITY;
+use crate::native_spawn::ProtectedServiceSpawnStorageV2 as Storage;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
+use rustix::io::Errno;
 use std::{error::Error, fmt, fs::File, mem::size_of, sync::atomic::Ordering};
 
 const CONTROL_WORK: usize = 8;
@@ -35,6 +37,8 @@ pub enum ProtectedServiceCleanupErrorV2 {
     AdmissionStopped,
     /// Orderly shutdown requires every slot to be empty.
     Busy,
+    /// The single attempt to duplicate a retained deployment guard failed.
+    GuardIo(Errno),
 }
 use ProtectedServiceCleanupErrorV2 as Failure;
 
@@ -47,6 +51,7 @@ impl fmt::Display for Failure {
             Self::Capacity => f.write_str("cleanup pool is full"),
             Self::AdmissionStopped => f.write_str("cleanup service stopped new admission"),
             Self::Busy => f.write_str("cleanup service retains occupied slots"),
+            Self::GuardIo(error) => write!(f, "clone cleanup deployment guard: {error}"),
         }
     }
 }
@@ -54,6 +59,7 @@ impl Error for Failure {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Resource(error) => Some(error),
+            Self::GuardIo(error) => Some(error),
             _ => None,
         }
     }
@@ -151,6 +157,13 @@ impl Service {
     pub const GUARD_FILE_STORAGE: usize = size_of::<(File, usize)>();
     /// Fixed request and service work (each) to transfer a deployment guard.
     pub const GUARD_WORK: usize = CONTROL_WORK + CAPACITY;
+    /// Fixed work on EACH original ledger for a guard clone, including one
+    /// duplication, close-only result cleanup and bounded controller checks.
+    pub const GUARD_CLONE_WORK: usize = CONTROL_WORK + 2 * (1024 + 64) + 256;
+    /// Request scratch above entry storage; the full output GUARD_FILE_STORAGE
+    /// is also reserved before duplication. Persistent pool storage is unchanged.
+    pub const GUARD_CLONE_SCRATCH: usize =
+        4 * Self::GUARD_FILE_STORAGE + 4 * size_of::<Failure>() + 1024;
     /// Admission/rollback, controller Drop and one shutdown attempt prepaid before use.
     pub const ADMISSION_WORK: usize = CONTROL_WORK * 2 + SHUTDOWN_WORK;
     /// Reacquiring control prepays its Drop and one shutdown attempt on the same account.
@@ -298,6 +311,83 @@ impl Service {
             native.deployment_guard = Some(guard);
             Ok(())
         })
+    }
+
+    /// Clones the existing deployment guard for controlled native validation.
+    ///
+    /// The active controller and an installed guard are required. Occupied and
+    /// draining pools are allowed: this admits no child and cannot reopen
+    /// admission. There is no replacement, detach, pathname or lock admission.
+    /// The caller must validate the returned File against its actual native
+    /// lifecycle owner; possession alone proves no deployment authority.
+    ///
+    /// One F_DUPFD_CLOEXEC attempt returns a descriptor at least 256, sharing the
+    /// guard's open file description by construction. Never unlock that alias,
+    /// change its shared flags or contents, or pass it to uncontrolled code.
+    /// Close-only Drop does not unlock the pool's remaining alias. Conversely,
+    /// an outstanding clone retains the lock even after successful pool shutdown.
+    ///
+    /// The guard stays charged to the original service account, not the request.
+    /// GUARD_CLONE_WORK is debited on both ledgers before duplication. The request
+    /// reserves GUARD_CLONE_SCRATCH plus GUARD_FILE_STORAGE above its entry charge;
+    /// the service keeps its full STORAGE reservation. Entry request storage is
+    /// restored on success, error and unwind without refunding work or history.
+    /// Reserve the returned FULL additional_storage before retaining the File,
+    /// then retire that charge only after Drop. No existing reservation is retired.
+    ///
+    /// ```
+    /// use fe2o3_protected_service_spawn::{ProtectedServiceCleanupServiceV2 as Cleanup,
+    ///     ProtectedServiceCleanupErrorV2 as Error};
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn observe(c: &mut Cleanup, b: &mut Budget<'_>) -> Result<(), Error> {
+    ///     let (file, charge) = c.try_clone_deployment_guard(b)?;
+    ///     b.reserve_storage(charge.additional_storage())?;
+    ///     // Actual native lifecycle validation belongs here, on this same budget.
+    ///     drop(file);
+    ///     b.release_storage(charge.additional_storage())?;
+    ///     Ok(())
+    /// }
+    /// ```
+    /// ```compile_fail
+    /// use fe2o3_protected_service_spawn::ProtectedServiceCleanupServiceV2 as Cleanup;
+    /// fn unmetered(c: &mut Cleanup) { let _ = c.try_clone_deployment_guard(); }
+    /// ```
+    pub fn try_clone_deployment_guard(
+        &mut self,
+        budget: &mut Budget<'_>,
+    ) -> Result<(File, Storage), Failure> {
+        self.try_clone_deployment_guard_with(budget, |guard| {
+            rustix::io::fcntl_dupfd_cloexec(guard, 256).map(File::from)
+        })
+    }
+
+    fn try_clone_deployment_guard_with(
+        &mut self,
+        budget: &mut Budget<'_>,
+        duplicate: impl FnOnce(&File) -> Result<File, Errno>,
+    ) -> Result<(File, Storage), Failure> {
+        budget.with_prepaid_scope(
+            0,
+            0,
+            Self::GUARD_CLONE_WORK,
+            Self::GUARD_CLONE_SCRATCH,
+            |b| {
+                b.reserve_storage(Self::GUARD_FILE_STORAGE)?;
+                let mut mode = self
+                    .reaper
+                    .mode
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let native = self.native(&mut mode)?;
+                native.charge(Self::GUARD_CLONE_WORK)?;
+                if native.ledger.storage() != Self::STORAGE {
+                    return Err(Resource::Accounting.into());
+                }
+                let guard = native.deployment_guard.as_ref().ok_or(Failure::State)?;
+                let file = duplicate(guard).map_err(Failure::GuardIo)?;
+                Ok((file, Storage(Self::GUARD_FILE_STORAGE)))
+            },
+        )
     }
 
     /// Reserves charged capacity and prepays request emergency cleanup before clone.
