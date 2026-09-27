@@ -1,5 +1,6 @@
 //! Native Cargo custody on the existing child channel and artifact transaction.
 //! Version selection remains with the production migration; there is no fallback.
+use super::completion::{CompletedCompilerChild, CompletionError};
 use fe2o3_artifact_transaction::{
     BuildAttempt, CompilerExecutionReceiptTransportErrorV3 as TransportError,
     CompilerExecutionSubjectErrorV3 as SubjectError,
@@ -57,6 +58,7 @@ pub(crate) struct ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
     policy: Policy,
     received: Received,
     child_pid: u32,
+    completion: Option<CompletedCompilerChild>,
     budget: &'b mut Budget<'w>,
 }
 
@@ -103,6 +105,7 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
             policy,
             received,
             child_pid,
+            completion: None,
             budget,
         })
     }
@@ -128,6 +131,22 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
             })
     }
 
+    pub(crate) fn require_compiler_success(
+        &mut self,
+        child: &mut std::process::Child,
+    ) -> Result<()> {
+        self.budget.charge_work(LOCAL_WORK)?;
+        self.completion = Some(CompletedCompilerChild::observe(child, self.child_pid)?);
+        Ok(())
+    }
+
+    fn require_completion(&self) -> Result<()> {
+        self.completion
+            .as_ref()
+            .map(|_| ())
+            .ok_or_else(|| CompletionError::NotObserved.into())
+    }
+
     pub(crate) fn retain_through<T>(mut self, operation: impl FnOnce(&mut Self) -> T) -> T {
         operation(&mut self)
     }
@@ -142,6 +161,7 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
     ) -> Result<(Lease, Token)> {
+        self.require_completion()?;
         self.revalidate()?;
         let (lease, token) =
             self.budget
@@ -180,6 +200,7 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
         lease: &Lease,
         token: &Token,
     ) -> Result<Carriage> {
+        self.require_completion()?;
         let floor = self
             .retained_storage()
             .checked_add(lease.storage().retained_storage())
@@ -311,6 +332,7 @@ fn validate_receipt(
 
 #[derive(Debug)]
 pub(crate) enum Failure {
+    Completion(CompletionError),
     Child(fe2o3_compiler_execution_client::CompilerExecutionChildChannelErrorV1),
     Policy(fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV3),
     Resource(Resource),
@@ -335,7 +357,7 @@ macro_rules! causes {
         } }
     };
 }
-causes!(Resource=>Resource, CapabilityError=>Capability, SupervisorError=>Supervisor,
+causes!(CompletionError=>Completion, Resource=>Resource, CapabilityError=>Capability, SupervisorError=>Supervisor,
     fe2o3_compiler_execution_client::CompilerExecutionChildChannelErrorV1=>Child,
     fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV3=>Policy,
     ManifestError=>Manifest, ReadyError=>Ready, HandoffError=>Handoff, SubjectError=>Subject,

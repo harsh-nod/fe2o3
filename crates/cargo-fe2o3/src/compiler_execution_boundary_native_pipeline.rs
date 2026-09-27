@@ -203,7 +203,7 @@ type Result<T> = std::result::Result<T, ContinuationError>;
 mod replacement;
 
 impl<'b, 'w> Readiness<'b, 'w> {
-    /// Call only after successful child completion. The enclosing attempt keeps
+    /// Requires observed successful child completion. The enclosing attempt keeps
     /// path/producer, parent capture and policy inputs prepaid. The recipe must
     /// have been prepared on this same account and retains its original floor.
     /// This consumes the recipe's owned vectors without cloning caller payloads.
@@ -223,6 +223,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
         policy: &ConditionalRecoveryPolicy<'_>,
         recipe: PreparedNativeProductionBuildConfig,
     ) -> Result<ParentPreparedConditionalArtifact<'a, 'b, 'w>> {
+        self.require_completion()?;
         let (worker, providers, options, output, limits, configuration_storage) =
             recipe.into_worker_parts(self.budget)?;
         let floor = self

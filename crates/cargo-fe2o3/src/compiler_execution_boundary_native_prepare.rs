@@ -102,20 +102,22 @@ impl<'b, 'w> PreparedCompilerExecutionBoundaryV3<'b, 'w> {
 }
 
 impl<'b, 'w> ReadyCompilerExecutionAttemptV3<'b, 'w> {
-    /// The enclosing supervisor must establish successful compiler completion
-    /// before calling. Output/path, exact parent invocation and independently
-    /// admitted recovery-policy inputs remain separately prepaid. Finalization
+    /// Checks successful completion of the exact retained compiler child before
+    /// acquiring any publication. Output/path, exact parent invocation and
+    /// independently admitted recovery-policy inputs remain separately prepaid. Finalization
     /// and independent durable recovery use the same policy view and retain this
     /// readiness through both stages. Failure/unwind is terminal, without refund.
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     pub(crate) fn finalize_after_compiler_success<'a>(
-        self,
+        mut self,
+        child: &mut std::process::Child,
         output_dir: &Path,
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
         invocation: &'a Invocation,
         policy: ConditionalRecoveryPolicy<'_>,
     ) -> std::result::Result<ParentDurableConditionalArtifact<'a, 'b, 'w>, ContinuationError> {
+        self.readiness.require_compiler_success(child)?;
         let prepared = self.recipe.finalize_conditional_current(
             self.readiness,
             output_dir,

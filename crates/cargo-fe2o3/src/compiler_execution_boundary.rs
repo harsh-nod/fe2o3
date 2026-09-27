@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 #[path = "compiler_execution_boundary_native.rs"]
 pub(crate) mod native;
 
+#[path = "compiler_child_completion.rs"]
+mod completion;
+use completion::{CompletedCompilerChild, CompletionError};
+
 use fe2o3_compiler_closure_capability::{
     CompilerExecutionClientProfileCapabilityV1, CompilerExecutionPolicyCapabilityV1,
 };
@@ -147,6 +151,15 @@ pub(crate) struct ParentCompilerExecutionReadinessCustodyV1 {
 }
 
 impl ParentCompilerExecutionReadinessCustodyV1 {
+    pub(crate) fn require_compiler_success(
+        &self,
+        child: &mut std::process::Child,
+    ) -> Result<(), CompilerExecutionBoundaryErrorV1> {
+        CompletedCompilerChild::observe(child, self.child_pid)
+            .map(|_| ())
+            .map_err(CompilerExecutionBoundaryErrorV1::Completion)
+    }
+
     fn admit(
         profile: CompilerExecutionClientProfileCapabilityV1,
         policy: CompilerExecutionPolicyCapabilityV1,
@@ -325,6 +338,7 @@ pub(crate) fn validate_compiler_execution_receipt_carriage(
 
 #[derive(Debug)]
 pub(crate) enum CompilerExecutionBoundaryErrorV1 {
+    Completion(CompletionError),
     DeadlineOverflow,
     Profile(String),
     Policy(String),
@@ -339,6 +353,7 @@ pub(crate) enum CompilerExecutionBoundaryErrorV1 {
 impl CompilerExecutionBoundaryErrorV1 {
     pub(crate) const fn stage(&self) -> &'static str {
         match self {
+            Self::Completion(_) => "selected compiler child completion",
             Self::DeadlineOverflow => "compiler-execution boundary deadline",
             Self::Profile(_) => "client-profile retention",
             Self::Policy(_) => "issuer-policy installation",
@@ -356,6 +371,7 @@ impl fmt::Display for CompilerExecutionBoundaryErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{} failed: ", self.stage())?;
         match self {
+            Self::Completion(error) => error.fmt(formatter),
             Self::DeadlineOverflow => formatter.write_str("monotonic deadline overflowed"),
             Self::Profile(error) | Self::Policy(error) | Self::Evidence(error) => {
                 formatter.write_str(error)
@@ -372,6 +388,7 @@ impl fmt::Display for CompilerExecutionBoundaryErrorV1 {
 impl Error for CompilerExecutionBoundaryErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Completion(error) => Some(error),
             Self::DeadlineOverflow => None,
             Self::ChildChannel(error) => Some(error),
             Self::SupervisorCredentials(error)

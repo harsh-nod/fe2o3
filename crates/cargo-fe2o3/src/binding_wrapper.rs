@@ -717,6 +717,17 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 cleanup,
             }
         })?;
+        if status.success()
+            && let Some(readiness) = &compiler_execution_readiness
+        {
+            readiness
+                .require_compiler_success(&mut child)
+                .map_err(|error| BindingWrapperError::CompilerExecutionBoundary {
+                    stage: error.stage(),
+                    primary: error.to_string(),
+                    cleanup: terminate_spawned_rustc(&mut child),
+                })?;
+        }
         Ok((
             Ok(status),
             parent_rustc_invocation_custody,
