@@ -76,3 +76,46 @@ production wrapper still selects V1. No new GPU or 47/47 claim is supported.
 During this checkpoint, MI350 and both GitHub remotes failed DNS resolution.
 No remote job was started. Native delegation also remained unavailable due to
 the agent thread limit; this patch was implemented locally by the primary agent.
+
+## Follow-up: preserve socket-query errors
+
+Base: `93527802c4a77c4a3b51d533971a98f48aaddfc3`.
+
+The two child-channel failures above now have a confirmed immediate cause:
+this environment permits an AF_UNIX SOCK_SEQPACKET `socketpair` but refuses
+`getsockopt(SO_TYPE)` with `EPERM`. A separate Python socketpair probe reproduced
+the refusal outside fe2o3. This does not identify every environment restriction
+or establish that removing this one denial would complete protected execution.
+
+The shared child-channel admission and supervisor revalidation now preserve
+descriptor syscall errors, including their `Error::source`, instead of mapping
+all failures to `InvalidServicePeer`. Actual socket-shape refusals retain that
+classification. Cargo's pre-exec validation likewise preserves `getsockopt` and
+`getpeername` errors rather than replacing them with `ESTALE`. Socket type,
+address, connectedness, credentials and close-on-exec requirements are unchanged;
+no failed query is accepted and no permission check is bypassed.
+
+- Client `child_channel::tests::`: **3 passed**, covering OS causes, shape
+  refusals and an actual failed socket query against a non-socket descriptor.
+- Cargo `application_exec::tests::socket_query_refusal_preserves_os_error_and_cloexec`:
+  **1 passed**; the failed query does not expose the descriptor.
+- Cargo `compiler_execution_boundary::tests::`: **5 passed, 2 failed**. The
+  same two positive-channel tests now both report OS code 1 (`EPERM`) at their
+  existing failure sites. They remain failures, not skipped or waived checks.
+- `cargo check -p fe2o3-compiler-execution-client -p cargo-fe2o3 --all-targets`:
+  passed with existing warnings. Changed-file formatting and diff checks passed.
+
+The follow-up used the same pinned offline, single-job build settings. Its
+private temporary directory was removed. Three obsolete Cargo executables in
+the dedicated build cache were removed when disk space became scarce; source,
+reports, and the current executable were preserved. All three GPU aliases
+(`mi350`, `mi350-2`, `mi300x`) and both GitHub fetches failed DNS resolution.
+
+Additional logs in the same evidence directory:
+
+| Log | SHA-256 |
+| --- | --- |
+| `child-channel-os-errors-client-20260927.log` | `53e8f068203235a4782b3123ff04e8c67a91d7aacf5bfcef227346abcd265bbc` |
+| `child-channel-os-errors-cargo-20260927.log` | `eeed63c7f4568f4e442461b528c71fbb9d3b1240417c2a143e06e82475dc47af` |
+| `child-channel-os-errors-boundary-20260927.log` | `b395c2828c0d8bde412a37b46c69656a21b8ac646442bd527da3d693b8ac27d1` |
+| `child-channel-os-errors-check-20260927.log` | `a57b93a61a065033f196910f8697f23a5bcaeb4ff991ba20e7704ef536f56755` |

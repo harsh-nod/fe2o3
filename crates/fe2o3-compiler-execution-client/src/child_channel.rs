@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
 use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, recvmsg};
 
-use crate::{COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, validate_seqpacket_peer};
+use crate::{
+    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, CompilerExecutionClientErrorV1, validate_seqpacket_peer,
+};
 
 const TRANSFER_MAGIC: [u8; 8] = *b"FE2CEC2\0";
 const TRANSFER_VERSION: u32 = 2;
@@ -87,8 +89,7 @@ impl CompilerExecutionServiceLaunchV1 {
         {
             return Err(CompilerExecutionChildChannelErrorV1::ParentCredentialsMismatch);
         }
-        validate_seqpacket_peer(&self.service_peer)
-            .map_err(|_| CompilerExecutionChildChannelErrorV1::InvalidServicePeer)?;
+        validate_seqpacket_peer(&self.service_peer).map_err(service_peer_error)?;
         require_close_on_exec(&self.service_peer)?;
         require_close_on_exec(&self.client_pidfd)?;
         if peer_identity(&self.service_peer)? != self.client {
@@ -208,8 +209,7 @@ impl PendingCompilerExecutionChildChannelV1 {
         if transferred_parent_pid != std::process::id() {
             return Err(CompilerExecutionChildChannelErrorV1::ParentPidMismatch);
         }
-        validate_seqpacket_peer(&service_peer)
-            .map_err(|_| CompilerExecutionChildChannelErrorV1::InvalidServicePeer)?;
+        validate_seqpacket_peer(&service_peer).map_err(service_peer_error)?;
         require_close_on_exec(&service_peer)?;
         let client = peer_identity(&service_peer)?;
         if client.pid() != child_pid {
@@ -233,6 +233,17 @@ impl PendingCompilerExecutionChildChannelV1 {
             client,
             submitter,
         })
+    }
+}
+
+fn service_peer_error(
+    error: CompilerExecutionClientErrorV1,
+) -> CompilerExecutionChildChannelErrorV1 {
+    match error {
+        CompilerExecutionClientErrorV1::Descriptor(error) => {
+            CompilerExecutionChildChannelErrorV1::Descriptor(error)
+        }
+        _ => CompilerExecutionChildChannelErrorV1::InvalidServicePeer,
     }
 }
 
@@ -710,5 +721,49 @@ impl Error for CompilerExecutionChildChannelErrorV1 {
             | Self::PeerCredentials(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_peer_validation_preserves_os_error_and_source() {
+        for code in [libc::EPERM, libc::EINTR, libc::EBADF, libc::ENOTSOCK] {
+            let error = service_peer_error(CompilerExecutionClientErrorV1::Descriptor(
+                io::Error::from_raw_os_error(code),
+            ));
+            let source = error.source().unwrap().downcast_ref::<io::Error>().unwrap();
+            assert_eq!(source.raw_os_error(), Some(code));
+            assert!(error.to_string().contains(&source.to_string()));
+        }
+    }
+
+    #[test]
+    fn service_peer_shape_refusals_remain_shape_refusals() {
+        for cause in [
+            CompilerExecutionClientErrorV1::NotSeqpacket,
+            CompilerExecutionClientErrorV1::NamedOrNonUnixPeer,
+        ] {
+            let error = service_peer_error(cause);
+            assert!(matches!(
+                error,
+                CompilerExecutionChildChannelErrorV1::InvalidServicePeer
+            ));
+            assert!(error.source().is_none());
+        }
+    }
+
+    #[test]
+    fn service_peer_validation_preserves_actual_socket_query_refusal() {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let expected = rustix::net::sockopt::socket_type(&file).unwrap_err();
+        let peer = OwnedFd::from(file);
+        let error = validate_seqpacket_peer(&peer)
+            .map_err(service_peer_error)
+            .unwrap_err();
+        let source = error.source().unwrap().downcast_ref::<io::Error>().unwrap();
+        assert_eq!(source.raw_os_error(), Some(expected.raw_os_error()));
     }
 }

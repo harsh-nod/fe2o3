@@ -49,7 +49,10 @@ pub(crate) fn validate_and_expose_connected_seqpacket_descriptor(fd: RawFd) -> i
             std::ptr::addr_of_mut!(socket_type_length),
         )
     } != 0
-        || socket_type_length as usize != std::mem::size_of_val(&socket_type)
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if socket_type_length as usize != std::mem::size_of_val(&socket_type)
         || socket_type != libc::SOCK_SEQPACKET
     {
         return Err(io::Error::from_raw_os_error(libc::ESTALE));
@@ -67,7 +70,10 @@ pub(crate) fn validate_and_expose_connected_seqpacket_descriptor(fd: RawFd) -> i
             std::ptr::addr_of_mut!(peer_length),
         )
     } != 0
-        || peer_length < std::mem::size_of::<libc::sa_family_t>() as libc::socklen_t
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if peer_length < std::mem::size_of::<libc::sa_family_t>() as libc::socklen_t
         || i32::from(peer.ss_family) != libc::AF_UNIX
     {
         return Err(io::Error::from_raw_os_error(libc::ESTALE));
@@ -127,6 +133,18 @@ mod tests {
                 OwnedFd::from_raw_fd(descriptors[1]),
             )
         }
+    }
+
+    #[test]
+    fn socket_query_refusal_preserves_os_error_and_cloexec() {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let before = get_descriptor_flags(file.as_raw_fd()).unwrap();
+        assert_ne!(before & libc::FD_CLOEXEC, 0);
+        let expected = rustix::net::sockopt::socket_type(&file).unwrap_err();
+        let error =
+            validate_and_expose_connected_seqpacket_descriptor(file.as_raw_fd()).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(expected.raw_os_error()));
+        assert_eq!(get_descriptor_flags(file.as_raw_fd()).unwrap(), before);
     }
 
     #[test]
