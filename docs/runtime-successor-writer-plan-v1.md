@@ -198,6 +198,16 @@ Complete producer membership, selected-storage representation and authentic
 settled outcomes remain premises. It does not close full outer-owner invariants,
 reader release/refunds or the active-then-queued Context release composition.
 
+Backend release now has additional CPU custody qualification for
+[SDMA cancellation and unfinished stream ordering](evidence/dev-sdma-cancellation-stream-ordering-2026-09-27/README.md)
+and [unpublished compute settlement](evidence/dev-pending-compute-settlement-2026-09-27/README.md).
+These retain indexed descriptors through checked local release, preserve exact
+recipes on settlement failure, and distinguish malformed FIFO membership from
+valid interior cancellation refusal. They do not establish the complete Context
+composition, arbitrary index-corruption recovery or GPU ordering. Prepared native
+compute cancellation still needs outer descriptor retention across cancellation
+and restoration errors/unwind, including a distinct three-binding test boundary.
+
 ### Unknown Group Disposal
 
 Rejecting disposal while a co-owner exists is safe but cannot finish cleanup:
