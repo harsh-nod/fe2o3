@@ -5,6 +5,7 @@ struct Consumer {
     child: usize,
     id: u64,
     stream: u64,
+    routed_stream: u64,
     module: u64,
     allocation: u64,
 }
@@ -14,9 +15,8 @@ impl Consumer {
         let region = if reading { f.source } else { f.destination };
         let route = f.backend.allocations[&region.allocation];
         let device = f.backend.children[route.child].description.backend_device;
-        let stream = f.backend.children[route.child]
-            .create_stream_v1(device)
-            .unwrap();
+        let routed_stream = f.backend.create_stream_v1(device).unwrap();
+        let stream = f.backend.streams[&routed_stream].local;
         let module = f.backend.children[route.child]
             .load_module_v1(device, &synthetic_cov6::module())
             .unwrap();
@@ -52,7 +52,7 @@ impl Consumer {
         let id = f.backend.children[route.child].next_handle;
         let ancestry = f
             .backend
-            .capture_peer_launch_ancestry_v1(owner, f.stream, &[producer])
+            .capture_peer_launch_ancestry_v1(owner, routed_stream, &[producer])
             .unwrap();
         collected.minimum_dependency_depth = ancestry.depth();
         collected.peer_access = f
@@ -80,6 +80,7 @@ impl Consumer {
             child: route.child,
             id,
             stream,
+            routed_stream,
             module,
             allocation: route.local,
         }
@@ -134,8 +135,8 @@ impl Consumer {
         );
         child.release_submission_v1(self.id).unwrap();
         child.unload_module_v1(self.module).unwrap();
-        child.destroy_stream_v1(self.stream).unwrap();
-        f.backend.peer_launch_retains.release(self.owner);
+        assert!(f.backend.peer_launch_retains.release(self.owner));
+        f.backend.destroy_stream_v1(self.routed_stream).unwrap();
     }
 }
 

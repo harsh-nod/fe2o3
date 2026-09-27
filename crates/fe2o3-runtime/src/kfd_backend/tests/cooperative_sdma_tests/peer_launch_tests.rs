@@ -2,6 +2,7 @@
 
 use super::*;
 use std::mem::ManuallyDrop;
+mod inherited_peer_tests;
 
 fn directed(f: &mut Fixture) -> u64 {
     f.backend
@@ -30,6 +31,15 @@ fn launch(
     kernel: u64,
     dependencies: &[BackendLaunchProducerV1],
 ) -> u64 {
+    try_launch(f, stream, kernel, dependencies).unwrap()
+}
+
+fn try_launch(
+    f: &mut Fixture,
+    stream: u64,
+    kernel: u64,
+    dependencies: &[BackendLaunchProducerV1],
+) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
     let mut kernarg = [0; 16];
     kernarg[8..].copy_from_slice(&1024_u64.to_le_bytes());
     f.backend
@@ -52,7 +62,6 @@ fn launch(
                 dynamic_shared_bytes: 0,
             },
         })
-        .unwrap()
 }
 
 fn routed(f: &Fixture, id: u64) -> RoutedHandleV1 {

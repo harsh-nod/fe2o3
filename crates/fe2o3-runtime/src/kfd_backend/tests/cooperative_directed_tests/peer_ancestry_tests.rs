@@ -250,6 +250,87 @@ fn peer_ancestry_diamond_deduplicates_nodes_but_counts_every_edge_before_effects
 }
 
 #[test]
+fn inherited_peer_roots_are_bounded_quiescence_only_and_deduplicate_closure() {
+    let mut f = Fixture::new();
+    let a = f.route(0, 1);
+    let first = f.submit(a, &[]);
+    let first_event = f.event(a, first);
+    let b = f.route(1, 2);
+    let second = f.submit(b, &[first_event]);
+    f.backend.release_event_v1(first_event.event).unwrap();
+    let stream = f.backend.create_stream_v1(8).unwrap();
+    let owner = f.backend.next_id().unwrap();
+    for (roots, nodes, edges) in [(&[first, second][..], 1, 1), (&[second][..], 2, 0)] {
+        assert!(
+            matches!(f.backend.capture_mixed_peer_launch_ancestry_v1(owner, stream, &[], roots, nodes, edges),
+            Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity)
+        );
+        assert!(f.backend.peer_launch_retains.is_empty());
+    }
+    assert!(
+        matches!(f.backend.capture_mixed_peer_launch_ancestry_v1(owner, stream, &[], &[first, first], 2, 1),
+        Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch)
+    );
+    let ancestry = f
+        .backend
+        .capture_mixed_peer_launch_ancestry_v1(owner, stream, &[], &[first, second], 2, 1)
+        .unwrap();
+    assert_eq!(ancestry.retained_ids().unwrap(), [first, second]);
+    assert_eq!(ancestry.depth(), 1);
+    assert_eq!(ancestry.import_work(), 5);
+    assert_eq!(
+        ancestry.state(&f.backend),
+        (PeerComputeResultV1::Pending, true)
+    );
+    assert_eq!(
+        f.backend.cancel_v1(second).unwrap(),
+        crate::BackendCancellationV1::Cancelled
+    );
+    assert_eq!(
+        ancestry.state(&f.backend),
+        (PeerComputeResultV1::Pending, true)
+    );
+    assert_eq!(
+        f.backend.cancel_v1(first).unwrap(),
+        crate::BackendCancellationV1::Cancelled
+    );
+    assert_eq!(
+        ancestry.state(&f.backend),
+        (PeerComputeResultV1::Succeeded, true)
+    );
+    f.backend
+        .validate_peer_launch_ancestry_v1(&ancestry)
+        .unwrap();
+    f.backend.destroy_stream_v1(stream).unwrap();
+    f.clean(&[first, second]);
+}
+
+#[test]
+fn inherited_peer_child_callback_mismatch_is_terminal_and_preserves_custody() {
+    let mut f = Fixture::new();
+    let a = f.route(0, 1);
+    let first = f.submit(a, &[]);
+    let owner = f.backend.next_id().unwrap();
+    let ancestry = f
+        .backend
+        .capture_peer_launch_ancestry_v1(owner, a.stream, &[first])
+        .unwrap();
+    assert!(matches!(
+        f.backend
+            .with_peer_launch_ancestry_v1(owner, Some(ancestry), |_| Ok(u64::MAX)),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(f.backend.terminal);
+    assert!(f.backend.peer_launch_retains.retains(first));
+    // No child callback effects: reset only the synthetic test fixture.
+    f.backend.terminal = false;
+    f.backend.peer_launch_retains.release(owner);
+    assert!(f.backend.peer_launch_retains.is_empty());
+    assert_eq!(f.drive(first, a, &[]), BackendPollV1::Succeeded);
+    f.clean(&[first]);
+}
+
+#[test]
 fn peer_ancestry_transaction_retains_full_closure_only_on_uncertain_failure() {
     for mode in 0..4 {
         let mut f = Fixture::new();

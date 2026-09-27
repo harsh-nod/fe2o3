@@ -7,7 +7,7 @@ type Failure = RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>;
 
 pub(super) const MAX_PEER_LAUNCH_ANCESTORS_V1: usize =
     fe2o3_host_api::MAX_DISPATCH_BINDINGS_V1 * MAX_RUNTIME_ALLOCATION_CUSTODY_OWNERS_V1;
-const MAX_PEER_LAUNCH_EDGES_V1: usize = MAX_PEER_LAUNCH_ANCESTORS_V1 * 8;
+pub(super) const MAX_PEER_LAUNCH_EDGES_V1: usize = MAX_PEER_LAUNCH_ANCESTORS_V1 * 8;
 
 #[derive(Debug)]
 struct PeerAncestorV1 {
@@ -29,6 +29,7 @@ pub(super) struct PeerLaunchAncestryV1 {
     owner: u64,
     stream: u64,
     success_roots: Box<[u64]>,
+    quiescent_roots: Box<[u64]>,
     ordered: Option<u64>,
     nodes: Vec<PeerAncestorV1>,
     dependencies: Vec<BackendDirectedPeerDependencyV1>,
@@ -44,6 +45,7 @@ impl PeerLaunchAncestryV1 {
         self.ordered
             .into_iter()
             .chain(self.success_roots.iter().copied())
+            .chain(self.quiescent_roots.iter().copied())
     }
 
     pub(super) fn state(
@@ -64,6 +66,10 @@ impl PeerLaunchAncestryV1 {
             .success_roots
             .iter()
             .all(|id| status(*id) == BackendPollV1::Succeeded)
+            && self
+                .quiescent_roots
+                .iter()
+                .all(|id| status(*id) != BackendPollV1::Pending)
         {
             PeerComputeResultV1::Succeeded
         } else {
@@ -87,6 +93,14 @@ impl PeerLaunchAncestryV1 {
         self.nodes.iter().map(|node| node.id)
     }
 
+    pub(super) fn import_work(&self) -> usize {
+        // Include implicit FIFO edges as well as the explicit edge snapshot.
+        self.nodes
+            .len()
+            .saturating_mul(2)
+            .saturating_add(self.dependencies.len())
+    }
+
     pub(super) fn contains(&self, id: u64) -> bool {
         self.nodes.binary_search_by_key(&id, |node| node.id).is_ok()
     }
@@ -101,6 +115,7 @@ impl PeerLaunchAncestryV1 {
 }
 
 impl KfdMultiDeviceRuntimeBackendV1 {
+    #[cfg(test)]
     pub(super) fn capture_peer_launch_ancestry_v1(
         &mut self,
         owner: u64,
@@ -116,6 +131,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn capture_peer_launch_ancestry_with_limits_v1(
         &mut self,
         owner: u64,
@@ -124,9 +140,31 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         node_limit: usize,
         edge_limit: usize,
     ) -> Result<PeerLaunchAncestryV1, Failure> {
+        self.capture_mixed_peer_launch_ancestry_v1(
+            owner,
+            stream,
+            success_roots,
+            &[],
+            node_limit,
+            edge_limit,
+        )
+    }
+
+    pub(super) fn capture_mixed_peer_launch_ancestry_v1(
+        &mut self,
+        owner: u64,
+        stream: u64,
+        success_roots: &[u64],
+        quiescent_roots: &[u64],
+        node_limit: usize,
+        edge_limit: usize,
+    ) -> Result<PeerLaunchAncestryV1, Failure> {
         self.require_live()?;
         Self::route(&self.streams, stream, "unknown peer launch stream")?;
-        if owner == 0 || success_roots.len() > MAX_RUNTIME_DEPENDENCIES_V1 {
+        if owner == 0
+            || success_roots.len() > MAX_RUNTIME_DEPENDENCIES_V1
+            || quiescent_roots.len() > node_limit.min(MAX_PEER_LAUNCH_ANCESTORS_V1)
+        {
             return Err(KfdRuntimeBackendV1::capacity(
                 "peer ancestry root capacity exceeded",
             ));
@@ -137,6 +175,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         sorted_roots.sort_unstable();
         if sorted_roots.iter().any(|id| *id == 0 || *id >= owner)
             || sorted_roots.windows(2).any(|pair| pair[0] == pair[1])
+            || quiescent_roots.iter().any(|id| *id == 0 || *id >= owner)
+            || quiescent_roots.windows(2).any(|pair| pair[0] >= pair[1])
         {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -156,13 +196,26 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             .map_err(|_| KfdRuntimeBackendV1::capacity("peer ancestry roots allocation failed"))?;
         roots.extend_from_slice(success_roots);
         let roots = roots.into_boxed_slice();
+        let mut quiescent = Vec::new();
+        quiescent
+            .try_reserve_exact(quiescent_roots.len())
+            .map_err(|_| {
+                KfdRuntimeBackendV1::capacity("peer quiescence roots allocation failed")
+            })?;
+        quiescent.extend_from_slice(quiescent_roots);
+        let quiescent_roots = quiescent.into_boxed_slice();
         let mut frontier = Vec::new();
         let mut visited = HashSet::new();
         let mut nodes = Vec::new();
         let mut dependencies = Vec::new();
         let mut edge_work = 0_usize;
         let mut depth = 1_usize;
-        for id in success_roots.iter().copied().chain(ordered) {
+        for id in success_roots
+            .iter()
+            .copied()
+            .chain(ordered)
+            .chain(quiescent_roots.iter().copied())
+        {
             if visited.contains(&id) {
                 continue;
             }
@@ -276,6 +329,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             owner,
             stream,
             success_roots: roots,
+            quiescent_roots,
             ordered,
             nodes,
             dependencies,
@@ -325,11 +379,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || ancestry.nodes.len() > MAX_PEER_LAUNCH_ANCESTORS_V1
             || ancestry.dependencies.len() > MAX_PEER_LAUNCH_EDGES_V1
             || ancestry.success_roots.len() > MAX_RUNTIME_DEPENDENCIES_V1
+            || ancestry.quiescent_roots.len() > MAX_PEER_LAUNCH_ANCESTORS_V1
+            || ancestry
+                .quiescent_roots
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
             || ancestry
                 .success_roots
                 .iter()
                 .copied()
                 .chain(ancestry.ordered)
+                .chain(ancestry.quiescent_roots.iter().copied())
                 .any(|id| !ancestry.contains(id))
             || !ancestry
                 .nodes

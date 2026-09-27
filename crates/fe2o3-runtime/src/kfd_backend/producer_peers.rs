@@ -11,6 +11,7 @@ pub(super) struct PeerLaunchRetainsV1 {
     producers: HashMap<u64, usize>,
     ancestries: HashMap<u64, PeerLaunchAncestryV1>,
     streams: HashMap<u64, Vec<u64>>,
+    routes: HashMap<RoutedHandleV1, u64>,
 }
 
 #[derive(Debug)]
@@ -26,6 +27,7 @@ impl PeerLaunchRetainsV1 {
             && self.producers.is_empty()
             && self.ancestries.is_empty()
             && self.streams.is_empty()
+            && self.routes.is_empty()
     }
 
     pub(super) fn retains(&self, producer: u64) -> bool {
@@ -104,9 +106,71 @@ impl PeerLaunchRetainsV1 {
             .push(consumer);
     }
 
-    pub(super) fn release(&mut self, consumer: u64) {
+    fn release_links_are_intact(&self, consumer: u64) -> bool {
+        let Some(entry) = self.consumers.get(&consumer) else {
+            return !self.ancestries.contains_key(&consumer);
+        };
+        entry
+            .producers
+            .iter()
+            .all(|id| self.producers.get(id).is_some_and(|count| *count != 0))
+            && match entry.route {
+                Some(route) => {
+                    self.routes.get(&route) == Some(&consumer)
+                        && self.ancestries.get(&consumer).is_some_and(|ancestry| {
+                            ancestry.owner() == consumer
+                                && Some(ancestry.stream()) == entry.stream
+                                && entry.producers.iter().copied().eq(ancestry.producers())
+                        })
+                }
+                None => !self.ancestries.contains_key(&consumer),
+            }
+    }
+
+    pub(super) fn can_release(&self, consumer: u64) -> bool {
+        self.release_links_are_intact(consumer)
+            && self
+                .consumers
+                .get(&consumer)
+                .and_then(|entry| entry.stream)
+                .is_none_or(|stream| {
+                    self.streams
+                        .get(&stream)
+                        .is_some_and(|ids| ids.iter().filter(|id| **id == consumer).count() == 1)
+                })
+    }
+
+    pub(super) fn matches_native_route(
+        &self,
+        consumer: u64,
+        route: RoutedHandleV1,
+        stream: u64,
+    ) -> bool {
+        match self.consumers.get(&consumer) {
+            Some(entry) => {
+                entry.route.is_none_or(|actual| actual == route)
+                    && entry.stream.is_none_or(|actual| actual == stream)
+            }
+            None => {
+                !self.routes.contains_key(&route)
+                    && self
+                        .streams
+                        .get(&stream)
+                        .is_none_or(|ids| !ids.contains(&consumer))
+                    && !self.ancestries.contains_key(&consumer)
+            }
+        }
+    }
+
+    pub(super) fn release(&mut self, consumer: u64) -> bool {
+        if !self.can_release(consumer) {
+            return false;
+        }
         self.ancestries.remove(&consumer);
         if let Some(entry) = self.consumers.remove(&consumer) {
+            if let Some(route) = entry.route {
+                self.routes.remove(&route);
+            }
             if let Some(stream) = entry.stream {
                 let ids = self
                     .streams
@@ -125,20 +189,16 @@ impl PeerLaunchRetainsV1 {
                 );
             }
         }
+        true
     }
 }
 
 impl KfdMultiDeviceRuntimeBackendV1 {
-    /// Walk only the retained native prefix. FIFO edges may be deeper than the
-    /// explicit dependency limit, so bound the traversal by the submission cap.
-    pub(super) fn service_native_peer_prefix_v1(
+    fn native_peer_prefix_v1(
         &mut self,
-        route: RoutedHandleV1,
-        execute: bool,
-    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if self.peer_launch_retains.is_empty() {
-            return Ok(());
-        }
+        child_index: usize,
+        roots: impl Iterator<Item = u64>,
+    ) -> Result<Vec<(u64, u64)>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let mut visited = HashSet::new();
         let mut frontier = Vec::new();
         let mut order = Vec::new();
@@ -161,37 +221,212 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             frontier.push(id);
             Ok(())
         };
-        queue(route.local, &mut visited, &mut frontier)?;
+        for id in roots {
+            queue(id, &mut visited, &mut frontier)?;
+        }
         while let Some(id) = frontier.pop() {
-            let child = &self.children[route.child];
+            let child = &self.children[child_index];
+            let native_stream = |submission| {
+                child
+                    .pending_compute
+                    .get(&submission)
+                    .map(|pending| pending.launch.stream)
+                    .or_else(|| {
+                        child
+                            .active_sdma
+                            .get(&submission)
+                            .map(|active| active.stream)
+                    })
+                    .or_else(|| {
+                        child
+                            .active_compute_submission_v1(submission)
+                            .map(|active| active.stream)
+                    })
+                    .or_else(|| {
+                        child
+                            .submissions
+                            .get(&submission)
+                            .map(|record| record.stream)
+                    })
+            };
             let (stream, dependencies, prior) =
                 if let Some(pending) = child.pending_compute.get(&id) {
+                    if pending.id != id {
+                        return Err(self.directed_corruption_v1());
+                    }
                     (
                         pending.launch.stream,
                         pending.explicit_success_dependencies.as_ref(),
                         pending.ordered_predecessor,
                     )
                 } else if let Some(active) = child.active_sdma.get(&id) {
+                    if active.id != id {
+                        return Err(self.directed_corruption_v1());
+                    }
                     (
                         active.stream,
                         active.dependencies.as_slice(),
                         active.prior_stream_submission,
                     )
+                } else if let Some(active) = child.active_compute_submission_v1(id) {
+                    (active.stream, &[][..], None)
+                } else if let Some(record) = child.submissions.get(&id) {
+                    (record.stream, &[][..], None)
                 } else {
-                    continue;
+                    return Err(self.directed_corruption_v1());
                 };
+            if id == 0
+                || !child.streams.contains_key(&stream)
+                || dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1
+                || dependencies
+                    .iter()
+                    .enumerate()
+                    .any(|(index, id)| dependencies[..index].contains(id))
+                || prior.is_some_and(|prior| native_stream(prior) != Some(stream))
+            {
+                return Err(self.directed_corruption_v1());
+            }
             order.try_reserve(1).map_err(|_| {
                 KfdRuntimeBackendV1::capacity("native peer prefix schedule allocation failed")
             })?;
             order.push((id, stream));
             for predecessor in dependencies.iter().copied().chain(prior) {
-                if predecessor == 0 || predecessor >= id {
+                let retains = if child.pending_compute.contains_key(&id) {
+                    &child.compute_dependency_retain_counts
+                } else {
+                    &child.sdma_dependency_retain_counts
+                };
+                if predecessor == 0
+                    || predecessor >= id
+                    || retains.get(&predecessor).is_none_or(|count| *count == 0)
+                {
                     return Err(self.directed_corruption_v1());
                 }
                 queue(predecessor, &mut visited, &mut frontier)?;
             }
         }
         order.sort_unstable_by_key(|(id, _)| *id);
+        Ok(order)
+    }
+
+    pub(super) fn inherited_peer_launch_roots_v1(
+        &mut self,
+        stream: RoutedHandleV1,
+        collected: &CollectedComputeDependenciesV1,
+    ) -> Result<Vec<u64>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let prefix = self.native_peer_prefix_v1(
+            stream.child,
+            collected
+                .explicit_success_dependencies
+                .iter()
+                .copied()
+                .chain(collected.ordered_predecessor),
+        )?;
+        let mut roots = HashSet::new();
+        let mut work = 0_usize;
+        for (id, local_stream) in prefix {
+            if Some(id) == collected.ordered_predecessor && local_stream != stream.local {
+                return Err(self.directed_corruption_v1());
+            }
+            let route = RoutedHandleV1 {
+                child: stream.child,
+                local: id,
+            };
+            let gate = self.children[stream.child]
+                .pending_compute
+                .get(&id)
+                .and_then(|pending| pending.peer_gate);
+            let Some(&owner) = self.peer_launch_retains.routes.get(&route) else {
+                if gate.is_some() {
+                    return Err(self.directed_corruption_v1());
+                }
+                continue;
+            };
+            let Some(ancestry) = self.peer_launch_retains.ancestries.get(&owner) else {
+                return Err(self.directed_corruption_v1());
+            };
+            // Bound cumulative snapshot work, including repeated shared closures.
+            work = work
+                .checked_add(ancestry.import_work())
+                .filter(|work| *work <= peer_ancestry::MAX_PEER_LAUNCH_EDGES_V1)
+                .ok_or_else(|| {
+                    KfdRuntimeBackendV1::capacity("inherited peer snapshot work capacity exceeded")
+                })?;
+            if ancestry.owner() != owner
+                || !self.peer_launch_ancestry_is_intact_v1(ancestry)
+                || !matches!(self.submissions.get(&owner), Some(RoutedSubmissionV1::Native { route: actual, stream }) if *actual == route && *stream == ancestry.stream())
+                || self.streams.get(&ancestry.stream())
+                    != Some(&RoutedHandleV1 {
+                        child: stream.child,
+                        local: local_stream,
+                    })
+                || self
+                    .peer_launch_retains
+                    .consumers
+                    .get(&owner)
+                    .is_none_or(|entry| {
+                        entry.route != Some(route)
+                            || entry.stream != Some(ancestry.stream())
+                            || !entry.producers.iter().copied().eq(ancestry.producers())
+                    })
+                || gate.is_some_and(|gate| !gate.owns(owner, id))
+                || ancestry
+                    .producers()
+                    .any(|producer| !self.peer_launch_retains.retains(producer))
+                || self.children[stream.child]
+                    .pending_compute
+                    .contains_key(&id)
+                    && gate.is_none()
+                || gate.is_none()
+                    && !Self::child_launch_is_quiescent_v1(&self.children[stream.child], id)
+                    && !(self.children[stream.child]
+                        .active_compute_lane_v1(id)
+                        .is_some()
+                        && ancestry.state(self) == (PeerComputeResultV1::Succeeded, true))
+            {
+                return Err(self.directed_corruption_v1());
+            }
+            for producer in ancestry.producers() {
+                if !roots.contains(&producer) {
+                    if roots.len() == peer_ancestry::MAX_PEER_LAUNCH_ANCESTORS_V1 {
+                        return Err(KfdRuntimeBackendV1::capacity(
+                            "inherited peer root capacity exceeded",
+                        ));
+                    }
+                    roots.try_reserve(1).map_err(|_| {
+                        KfdRuntimeBackendV1::capacity("inherited peer root index allocation failed")
+                    })?;
+                    roots.insert(producer);
+                }
+            }
+        }
+        let mut sorted = Vec::new();
+        sorted
+            .try_reserve_exact(roots.len())
+            .map_err(|_| KfdRuntimeBackendV1::capacity("inherited peer root allocation failed"))?;
+        sorted.extend(roots);
+        sorted.sort_unstable();
+        Ok(sorted)
+    }
+
+    /// Walk only the retained native prefix. FIFO edges may be deeper than the
+    /// explicit dependency limit, so bound the traversal by the submission cap.
+    pub(super) fn service_native_peer_prefix_v1(
+        &mut self,
+        route: RoutedHandleV1,
+        execute: bool,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if self.peer_launch_retains.is_empty() {
+            if self.children[route.child]
+                .pending_compute
+                .get(&route.local)
+                .is_some_and(|pending| pending.peer_gate.is_some())
+            {
+                return Err(self.directed_corruption_v1());
+            }
+            return Ok(());
+        }
+        let order = self.native_peer_prefix_v1(route.child, core::iter::once(route.local))?;
         for (id, stream) in order {
             let gate = self.children[route.child]
                 .pending_compute
@@ -305,6 +540,13 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             child,
             local: self.children[child].next_handle,
         };
+        if self.peer_launch_retains.routes.contains_key(&route) {
+            return Err(self.directed_corruption_v1());
+        }
+        self.peer_launch_retains
+            .routes
+            .try_reserve(1)
+            .map_err(|_| KfdRuntimeBackendV1::capacity("peer launch route index growth failed"))?;
         self.with_peer_launch_custody_v1(id, ids, |backend| {
             backend
                 .peer_launch_retains
@@ -316,7 +558,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 .expect("acquired consumer")
                 .route = Some(route);
             backend.peer_launch_retains.ancestries.insert(id, ancestry);
-            submit(backend)
+            backend.peer_launch_retains.routes.insert(route, id);
+            let local = submit(backend)?;
+            if local != route.local {
+                return Err(backend.directed_corruption_v1());
+            }
+            Ok(local)
         })
     }
 
@@ -341,8 +588,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     result,
                     Err(RuntimeBackendFailureV1::Rejected(_)
                         | RuntimeBackendFailureV1::Quiescent(_))
-                ) {
-                    self.peer_launch_retains.release(id);
+                ) && !self.peer_launch_retains.release(id)
+                {
+                    return Err(self.directed_corruption_v1());
                 }
                 self.latch(result)
             }
@@ -359,16 +607,29 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         result: Result<T, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>,
         quiescent: impl FnOnce(&T) -> bool,
     ) -> Result<T, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if !self.peer_launch_release_route_is_intact_v1(id) {
+            return Err(self.directed_corruption_v1());
+        }
         if self.peer_launch_retains.consumers.contains_key(&id)
             && match &result {
                 Ok(value) => quiescent(value),
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => self.peer_launch_is_quiescent_v1(id),
                 _ => false,
             }
+            && !self.peer_launch_retains.release(id)
         {
-            self.peer_launch_retains.release(id);
+            return Err(self.directed_corruption_v1());
         }
         self.latch(result)
+    }
+
+    fn peer_launch_release_route_is_intact_v1(&self, id: u64) -> bool {
+        match self.submissions.get(&id) {
+            Some(RoutedSubmissionV1::Native { route, stream }) => self
+                .peer_launch_retains
+                .matches_native_route(id, *route, *stream),
+            _ => true,
+        }
     }
 
     fn peer_launch_is_quiescent_v1(&self, id: u64) -> bool {
@@ -388,15 +649,38 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             && child.active_compute_lane_v1(id).is_none()
     }
 
-    pub(super) fn retire_flushed_peer_launches_v1(&mut self, stream: u64) {
+    pub(super) fn retire_flushed_peer_launches_v1(
+        &mut self,
+        stream: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if self
+            .peer_launch_retains
+            .streams
+            .get(&stream)
+            .is_some_and(|ids| {
+                !ids.windows(2).all(|pair| pair[0] < pair[1])
+                    || ids.iter().any(|id| {
+                        !self.peer_launch_retains.release_links_are_intact(*id)
+                            || !self.peer_launch_release_route_is_intact_v1(*id)
+                            || self
+                                .peer_launch_retains
+                                .consumers
+                                .get(id)
+                                .is_none_or(|entry| entry.stream != Some(stream))
+                    })
+            })
+        {
+            return Err(self.directed_corruption_v1());
+        }
         let PeerLaunchRetainsV1 {
             consumers,
             producers,
             ancestries,
             streams,
+            routes,
         } = &mut self.peer_launch_retains;
         let Some(ids) = streams.get_mut(&stream) else {
-            return;
+            return Ok(());
         };
         ids.retain(|id| {
             let settled = matches!(self.submissions.get(id), Some(RoutedSubmissionV1::Native { route, stream: owner })
@@ -404,6 +688,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             if settled {
                 ancestries.remove(id);
                 let entry = consumers.remove(id).expect("stream index retains consumer");
+                if let Some(route) = entry.route {
+                    routes.remove(&route);
+                }
                 for producer in entry.producers {
                     Self::decrement_indexed_count(producers, producer, "flushed peer launch retains producer");
                 }
@@ -413,6 +700,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         if ids.is_empty() {
             streams.remove(&stream);
         }
+        Ok(())
     }
 
     pub(super) fn refresh_peer_launch_gate_v1(
@@ -420,6 +708,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         id: u64,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let Some(ancestry) = self.peer_launch_retains.ancestries.get(&id) else {
+            if let Some(RoutedSubmissionV1::Native { route, .. }) = self.submissions.get(&id)
+                && (self.peer_launch_retains.routes.contains_key(route)
+                    || self.children.get(route.child).is_none_or(|child| {
+                        child
+                            .pending_compute
+                            .get(&route.local)
+                            .is_some_and(|pending| pending.peer_gate.is_some())
+                    }))
+            {
+                return Err(self.directed_corruption_v1());
+            }
             return Ok(());
         };
         if ancestry.owner() != id || !self.peer_launch_ancestry_is_intact_v1(ancestry) {
@@ -429,6 +728,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             return Err(self.directed_corruption_v1());
         };
         if stream != ancestry.stream()
+            || self.peer_launch_retains.routes.get(&route) != Some(&id)
             || self
                 .peer_launch_retains
                 .consumers

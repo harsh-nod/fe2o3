@@ -12475,9 +12475,20 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             self.release_cooperative_sdma_leaf_v1(submission)?;
         }
         if let Some(route) = native_route {
+            if !self.peer_launch_retains.can_release(submission)
+                || !self.peer_launch_retains.matches_native_route(
+                    submission,
+                    route,
+                    native_stream.expect("native submission retains its stream"),
+                )
+            {
+                return Err(self.directed_corruption_v1());
+            }
             let result = self.children[route.child].release_submission_v1(route.local);
             self.latch(result)?;
-            self.peer_launch_retains.release(submission);
+            if !self.peer_launch_retains.release(submission) {
+                return Err(self.directed_corruption_v1());
+            }
         }
         if let Some(stream) = native_stream {
             self.release_native_stream_submission_v1(stream);
@@ -12723,6 +12734,7 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             ComputeDependencyRosterV1::Exact(&dependencies),
         );
         let mut collected = self.latch(child_preflight)?;
+        let inherited = self.inherited_peer_launch_roots_v1(stream, &collected)?;
         self.reserve_native_stream_submission_v1(request.stream)?;
         Self::reserve_route(
             &mut self.submissions,
@@ -12730,11 +12742,19 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         )?;
         let id = self.next_id()?;
         let ancestry = if peer_producers.is_empty()
+            && inherited.is_empty()
             && !self.cooperative_stream_tails.contains_key(&request.stream)
         {
             None
         } else {
-            Some(self.capture_peer_launch_ancestry_v1(id, request.stream, &peer_producers)?)
+            Some(self.capture_mixed_peer_launch_ancestry_v1(
+                id,
+                request.stream,
+                &peer_producers,
+                &inherited,
+                peer_ancestry::MAX_PEER_LAUNCH_ANCESTORS_V1,
+                peer_ancestry::MAX_PEER_LAUNCH_EDGES_V1,
+            )?)
         };
         if let Some(ancestry) = &ancestry {
             let child_id = self.children[stream.child].next_handle;
@@ -13686,7 +13706,7 @@ impl RuntimeFlushBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             );
             if let Err(error) = result {
                 if !self.terminal {
-                    self.retire_flushed_peer_launches_v1(stream);
+                    self.retire_flushed_peer_launches_v1(stream)?;
                 }
                 return Err(error);
             }
@@ -13730,7 +13750,7 @@ impl RuntimeFlushBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         let result = self.children[route.child].flush_stream_v1(route.local);
         let result = self.latch(result);
         if !self.terminal {
-            self.retire_flushed_peer_launches_v1(stream);
+            self.retire_flushed_peer_launches_v1(stream)?;
         }
         result
     }

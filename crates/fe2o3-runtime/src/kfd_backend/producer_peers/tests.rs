@@ -1,6 +1,82 @@
 use super::*;
 mod authentication;
 
+#[test]
+fn inherited_peer_route_corruption_preserves_all_custody_before_retirement() {
+    for flush in [false, true] {
+        let mut backend = backend();
+        let stream = backend.create_stream_v1(8).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(8, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let producer = backend
+            .peer_copy_v1(
+                stream,
+                BackendMemoryRegionV1 {
+                    allocation: source,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 8,
+                },
+                BackendMemoryRegionV1 {
+                    allocation: destination,
+                    access: RuntimeAccessV1::Write,
+                    byte_offset: 0,
+                    byte_len: 8,
+                },
+                &[],
+            )
+            .unwrap();
+        backend.flush_stream_v1(stream).unwrap();
+        let consumer = backend.next_id().unwrap();
+        let route = RoutedHandleV1 {
+            child: 1,
+            local: backend.children[1].next_handle,
+        };
+        let ancestry = backend
+            .capture_peer_launch_ancestry_v1(consumer, stream, &[producer])
+            .unwrap();
+        backend
+            .with_peer_launch_ancestry_v1(consumer, Some(ancestry), |_| Ok(route.local))
+            .unwrap();
+        assert!(backend.peer_launch_retains.can_release(consumer));
+        backend
+            .peer_launch_retains
+            .routes
+            .insert(route, consumer + 1);
+        assert!(!backend.peer_launch_retains.release(consumer));
+        let result = if flush {
+            backend.retire_flushed_peer_launches_v1(stream)
+        } else {
+            backend
+                .observe_peer_launch_result_v1(consumer, Ok(BackendPollV1::Succeeded), |_| true)
+                .map(|_| ())
+        };
+        assert!(matches!(result, Err(RuntimeBackendFailureV1::Terminal(_))));
+        assert!(backend.terminal);
+        assert_eq!(
+            backend.peer_launch_retains.consumers[&consumer].producers,
+            [producer]
+        );
+        assert_eq!(backend.peer_launch_retains.producers[&producer], 1);
+        assert_eq!(backend.peer_launch_retains.streams[&stream], [consumer]);
+        assert_eq!(backend.peer_launch_retains.routes[&route], consumer + 1);
+        // Repair only deliberately forged, CPU-only bookkeeping for teardown.
+        backend.peer_launch_retains.routes.insert(route, consumer);
+        backend.terminal = false;
+        assert!(backend.peer_launch_retains.release(consumer));
+        assert!(backend.peer_launch_retains.is_empty());
+        backend.release_submission_v1(producer).unwrap();
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+}
+
 fn backend() -> KfdMultiDeviceRuntimeBackendV1 {
     let mut right = KfdRuntimeBackendV1::mock();
     right.description.backend_device = 8;
