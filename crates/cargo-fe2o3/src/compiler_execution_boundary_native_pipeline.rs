@@ -12,44 +12,35 @@ use super::{
 };
 use crate::build_config::native::PreparedNativeProductionBuildConfig;
 use crate::protected_compiler_handoff_v3::ParentRustcInvocationCustody as Invocation;
-use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_artifact_transaction::{
     CompilerModuleHandoffAdmissionErrorV5, CompilerModuleHandoffReceiptV5 as Receipt,
     consume_compiler_module_handoff_with_currentness_v5 as consume,
 };
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5 as Handoff;
+pub(crate) use fe2o3_hsaco_finalize::ConditionalWorkerRecoveryPolicyV5 as ConditionalRecoveryPolicy;
 use fe2o3_hsaco_finalize::{
-    ConditionalWorkerCompactFinalizerReplayV5 as Transcript, NativeFirstBuildWorkerErrorV1,
+    ConditionalWorkerCompactFinalizerReplayV5 as Transcript,
+    ConditionalWorkerHsacoPublicationErrorV5 as PublicationError, NativeFirstBuildWorkerErrorV1,
     NativeWorkerCompactReplayErrorV1 as TranscriptError, NativeWorkerFinalizationErrorV1,
+    PreparedConditionalWorkerHsacoPublicationV5 as Publication,
     PreparedFinalizedConditionalWorkerHsacoV5 as Artifact,
     execute_preflighted_conditional_reproducible_first_build_worker_v2 as execute,
     finalize_conditional_worker_hsaco_v5 as finalize,
     preflight_conditional_reproducible_first_build_worker_v2 as preflight,
     prepare_conditional_worker_compact_finalizer_replay_v5 as prepare_transcript,
+    prepare_conditional_worker_hsaco_publication_v5 as prepare_publication,
 };
-use fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1;
 use fe2o3_verifier::{
     CompilerConditionalNativeSemanticHandoffErrorV5 as RecoveryError,
-    NativeConditionalRootPolicyV2,
     recover_compiler_conditional_native_semantic_handoff_v5 as recover,
 };
 use std::{fmt, mem::size_of, path::Path};
-
-/// Independently admitted inputs, never derived from a handoff's own claims.
-/// The outer broker/verifier boundary must establish their provenance and keep
-/// their complete backing prepaid; constructing this view grants no authority.
-pub(crate) struct ConditionalRecoveryPolicy<'a> {
-    pub(crate) roots: &'a [NativeConditionalRootPolicyV2<'a>],
-    pub(crate) history_limits: CanonicalRefinedForwardingHistoryLimitsV1,
-    pub(crate) target: ProductionAmdTargetProfileV1,
-}
 
 /// Move-only structural result. Exact parent/readiness custody and its exclusive
 /// budget borrow survive through this owner; there is no detached parts escape.
 /// Publication and the sealed verifier/host authority gate remain separate.
 pub(crate) struct ParentPreparedConditionalArtifact<'a, 'b, 'w> {
-    artifact: Artifact,
-    transcript: Transcript,
+    publication: Publication,
     compiler_execution: Carriage,
     readiness: Readiness<'b, 'w>,
     invocation: &'a Invocation,
@@ -57,27 +48,25 @@ pub(crate) struct ParentPreparedConditionalArtifact<'a, 'b, 'w> {
 }
 impl ParentPreparedConditionalArtifact<'_, '_, '_> {
     const HEADER: usize = size_of::<Self>()
-        - size_of::<Artifact>()
-        - size_of::<Transcript>()
+        - size_of::<Publication>()
         - size_of::<Carriage>()
         - size_of::<Readiness<'static, 'static>>();
 
     pub(crate) fn artifact(&self) -> &Artifact {
-        &self.artifact
+        self.publication.finalized()
     }
     pub(crate) fn compiler_execution(&self) -> &Carriage {
         &self.compiler_execution
     }
     pub(crate) fn transcript(&self) -> &Transcript {
-        &self.transcript
+        self.publication.transcript()
     }
     pub(crate) fn revalidate(&mut self) -> Result<()> {
         let parent_storage = self.invocation.native_retained_storage()?;
         let floor = self
-            .artifact
+            .publication
             .required_retained_storage()
-            .checked_add(self.transcript.storage().retained_storage())
-            .and_then(|n| n.checked_add(self.compiler_execution.retained_storage()))
+            .checked_add(self.compiler_execution.retained_storage())
             .and_then(|n| n.checked_add(self.readiness.retained_storage()))
             .and_then(|n| n.checked_add(Self::HEADER))
             .and_then(|n| n.checked_add(parent_storage))
@@ -86,14 +75,19 @@ impl ParentPreparedConditionalArtifact<'_, '_, '_> {
         check_account_floor(self.readiness.budget, floor)?;
         // Fixed comparisons of the occurrence, source and finalization coordinates.
         self.readiness.budget.charge_work(1024)?;
-        self.transcript
-            .verify_finalized_coordinates(&self.artifact)?;
+        self.publication
+            .transcript()
+            .verify_finalized_coordinates(self.publication.finalized())?;
         self.readiness.revalidate()?;
         check_pair(
             &mut self.readiness,
             self.invocation,
-            self.artifact.source().binding().receipt(),
-            self.artifact.source().recovered_handoff().handoff(),
+            self.publication.finalized().source().binding().receipt(),
+            self.publication
+                .finalized()
+                .source()
+                .recovered_handoff()
+                .handoff(),
             &self.compiler_execution,
         )
     }
@@ -185,6 +179,9 @@ impl<'b, 'w> Readiness<'b, 'w> {
         self.budget.reserve_storage(storage.retained_storage())?;
         let (transcript, storage) = prepare_transcript(&artifact, self.budget)?;
         self.budget.reserve_storage(storage.retained_storage())?;
+        let (publication, storage) =
+            prepare_publication(producer, artifact, transcript, self.budget)?;
+        self.budget.reserve_storage(storage.retained_storage())?;
 
         // Only known success-only scratch is released. Source/preflight/worker
         // reservations remain with the actual retained artifact and receipt.
@@ -194,8 +191,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
         self.budget
             .release_storage(FRAME - ParentPreparedConditionalArtifact::HEADER)?;
         let mut prepared = ParentPreparedConditionalArtifact {
-            artifact,
-            transcript,
+            publication,
             compiler_execution,
             readiness: self,
             invocation,
@@ -275,6 +271,7 @@ pub(crate) enum ContinuationError {
     Worker(NativeFirstBuildWorkerErrorV1),
     Finalizer(NativeWorkerFinalizationErrorV1),
     Transcript(TranscriptError),
+    Publication(PublicationError),
 }
 macro_rules! causes {
     ($($ty:ty => $variant:ident),+ $(,)?) => {
@@ -297,4 +294,4 @@ causes!(Resource => Resource, Failure => Readiness, CapabilityError => Invocatio
     CompilerModuleHandoffAdmissionErrorV5<RecoveryError> => Recovery,
     HandoffError => Transaction, SubjectError => Subject,
     NativeFirstBuildWorkerErrorV1 => Worker, NativeWorkerFinalizationErrorV1 => Finalizer,
-    TranscriptError => Transcript);
+    TranscriptError => Transcript, PublicationError => Publication);

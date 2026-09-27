@@ -163,11 +163,16 @@ pub use native_worker_finalization::{
     finalize_native_worker_hsaco_v1, finalize_native_worker_hsaco_v4,
 };
 pub use native_worker_publication::{
-    NativeWorkerHsacoPublicationErrorV1, NativeWorkerHsacoPublicationStorageV1,
-    NativeWorkerPublicationIntentIdentityV1, NativeWorkerPublicationIntentV1,
-    NativeWorkerPublicationPlanIdentityV1, PreparedNativeWorkerHsacoPublicationV1,
-    RecoveredNativeWorkerHsacoPublicationV1, persist_prepared_native_worker_hsaco_publication_v1,
-    prepare_native_worker_hsaco_publication_v1, recover_native_worker_hsaco_publication_v1,
+    ConditionalWorkerHsacoPublicationErrorV5, ConditionalWorkerPublicationIntentV5,
+    ConditionalWorkerRecoveryPolicyV5, NativeWorkerHsacoPublicationErrorV1,
+    NativeWorkerHsacoPublicationStorageV1, NativeWorkerPublicationIntentIdentityV1,
+    NativeWorkerPublicationIntentV1, NativeWorkerPublicationPlanIdentityV1,
+    PreparedConditionalWorkerHsacoPublicationV5, PreparedNativeWorkerHsacoPublicationV1,
+    RecoveredConditionalWorkerHsacoPublicationV5, RecoveredNativeWorkerHsacoPublicationV1,
+    persist_prepared_conditional_worker_hsaco_publication_v5,
+    persist_prepared_native_worker_hsaco_publication_v1,
+    prepare_conditional_worker_hsaco_publication_v5, prepare_native_worker_hsaco_publication_v1,
+    recover_conditional_worker_hsaco_publication_v5, recover_native_worker_hsaco_publication_v1,
 };
 pub use native_worker_replay::{
     NativeWorkerReplayErrorV1, NativeWorkerReplayStorageV1, revalidate_native_worker_finalizer_v1,
