@@ -506,7 +506,7 @@ fn attribute_queries_fail_closed_without_retrying_or_allocating() {
     for errno in [Errno::NODATA, Errno::OPNOTSUPP] {
         attribute_absent(Err(errno)).unwrap();
     }
-    for errno in [Errno::INTR, Errno::ACCES, Errno::IO] {
+    for errno in [Errno::INTR, Errno::ACCESS, Errno::IO] {
         assert!(
             matches!(attribute_absent(Err(errno)), Err(RootSourceErrorV2::Io { errno: e, .. }) if e == errno.raw_os_error())
         );
@@ -540,7 +540,7 @@ fn genuine_extended_acl_is_rejected_when_supported() {
             Err(RootSourceErrorV2::ForbiddenAttribute)
         ),
         // Some test filesystems or sandboxes do not support setting ACLs.
-        Err(Errno::OPNOTSUPP | Errno::PERM | Errno::ACCES) => {}
+        Err(Errno::OPNOTSUPP | Errno::PERM | Errno::ACCESS) => {}
         Err(error) => panic!("unexpected ACL setup refusal: {error}"),
     }
 }
