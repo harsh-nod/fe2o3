@@ -640,6 +640,18 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         entry: usize,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<SourceReferenceFunctionOutcomeV29, ProductionSemanticKirErrorV1> {
+        with_source_reference_liveness_v29(self, instance, budget, |builder, liveness, budget| {
+            builder.run_cfg_with_liveness_v29(instance, entry, liveness, budget)
+        })
+    }
+
+    fn run_cfg_with_liveness_v29(
+        &mut self,
+        instance: ProductionCallInstanceIdV1,
+        entry: usize,
+        liveness: &SourceReferenceLivenessV29<'_, '_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<SourceReferenceFunctionOutcomeV29, ProductionSemanticKirErrorV1> {
         // One retained return option and one non-reentrant Some construction
         // slot. Input option cells themselves are paid in their vector backing.
         budget.reserve_storage(source_reference_cfg_run_headers_v29()?)?;
@@ -709,6 +721,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                     Ok(()) => {}
                     Err(error) => return Err(source_reference_locate_access_error_v29(error, diagnostic)),
                 }
+                self.expire_completed_statement_v29(liveness, site, budget)?;
             }
             let site = SourceReferenceSiteV29 {
                 instance,
@@ -839,3 +852,4 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
 }
 
 include!("production_source_reference_call_transfer_v29.rs");
+include!("production_source_reference_liveness_v29.rs");

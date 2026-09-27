@@ -614,7 +614,6 @@ fn optimized_source_scalar_expression_endpoint_v18(
         let work_limit = relation.source.limits(budget)?.max_operations
             .checked_mul(UNSUPPORTED_INDEX_CORRELATION_STEPS_PER_OPERATION_V1)
             .ok_or(ArgumentResourceV1::Arithmetic)?;
-        let floor = budget.storage();
         let run = |budget: &mut ArgumentBudgetV1<'_>| {
             budget.charge_work(MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1)?;
             let ledger = CorrelationLedgerV18::new(budget, relation.source.cleanup);
@@ -667,17 +666,12 @@ fn optimized_source_scalar_expression_endpoint_v18(
             }
             optimized_source_endpoints_v18(relation, optimized, budget)
         };
-        type Result = SourceOwnedResultV18<()>;
-        budget.reserve_storage(argument_sum_v1(&[
-            std::mem::size_of_val(&run), size_of::<Result>(),
-            size_of::<std::thread::Result<Result>>(), size_of::<std::panic::AssertUnwindSafe<Result>>(),
+        let storage = argument_sum_v1(&[
             size_of::<CorrelationLedgerV18<'_, '_, '_>>(), size_of::<SourceScalarVisitingV18>(),
             size_of::<SourceExpressionLeavesV18<'_, '_, '_, '_, '_, '_>>(),
             size_of::<InventoryCorrelationV18<'_, '_, '_, '_, '_, '_>>(),
             size_of::<BTreeMap<(FunctionOperationLocation, u32), SemanticAccessSiteV1>>(),
-        ])?)?;
-        scoped_source_attempt_v29(relation.source.cleanup, budget, floor, run)?;
-        budget.release_storage(budget.storage().checked_sub(floor).ok_or(ArgumentResourceV1::Accounting)?)?;
-        Ok(())
+        ])?;
+        source_scalar_normalization_scratch_v18(relation.source.cleanup, budget, storage, run)
     })())
 }

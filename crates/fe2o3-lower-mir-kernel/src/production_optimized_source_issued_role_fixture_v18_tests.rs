@@ -179,11 +179,23 @@ fn original_issued_descriptor_store_recipe_checks_both_unchanged_endpoints() {
                         // This mutates the requested recipe, not the immutable
                         // graph. Actual wrong-producer coverage is separate.
                         let wrong = ProductionSemanticExpressionV2::Constant { scalar, bits: 18 };
+                        let query_floor = budget.storage();
+                        assert!(query_floor > MODULE_FLOOR);
                         let refused = if output { request.check_expression(&wrong, budget) }
                             else { request.original.check_expression(&wrong, budget) };
                         let error = refused.unwrap_err();
                         assert!(matches!(error, ProductionSourceOwnedViewErrorV18::Binding(detail)
                             if detail == expected), "{error:?}");
+                        assert_eq!(budget.storage(), query_floor,
+                            "dropped normalization scratch is not an owned refusal");
+                        let work = budget.work();
+                        for again in [request.original.check_expression(&exact, budget),
+                            request.check_expression(&exact, budget)] {
+                            assert!(matches!(again, Err(ProductionSourceOwnedViewErrorV18::Binding(detail))
+                                if detail == expected), "{again:?}");
+                        }
+                        assert_eq!((budget.work(), budget.storage()), (work, query_floor),
+                            "the exact first query refusal is retained without further debits");
                         completed.set(true);
                         Err(error)
                     }).map(|count| assert_eq!(count, 1))
@@ -192,6 +204,114 @@ fn original_issued_descriptor_store_recipe_checks_both_unchanged_endpoints() {
         assert!(completed.get(), "the exact same candidate precedes the copied recipe mutation: {result:?}");
         assert!(matches!(result, Err(ProductionSourceOwnedViewErrorV18::Binding(detail))
             if detail == expected));
+    }
+}
+
+#[test]
+fn original_issued_descriptor_scalar_scratch_refunds_after_fixed_and_partial_denials() {
+    // This unit boundary control is separate from the genuine same-candidate
+    // expression mismatch above. It never fabricates a scalar/source proof.
+    for fault in 0..5 {
+        const WORK: usize = 256;
+        const LIMIT: usize = 4096;
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+        let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let entered = std::cell::Cell::new(false);
+        let dropped = std::cell::Cell::new(false);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_scoped_source_cleanup_v29(&mut budget, MODULE_FLOOR, |cleanup, budget| {
+                let floor = budget.storage();
+                let fixed = size_of::<[u64; 7]>();
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    source_scalar_normalization_scratch_v18(cleanup, budget, fixed, |budget| {
+                        assert!(budget.storage() >= floor + fixed);
+                        entered.set(true);
+                        if fault == 2 {
+                            // The denial occurs after the whole fixed scratch
+                            // debit, not at the source query entrance.
+                            budget.charge_work(WORK - budget.work())?;
+                            budget.charge_work(1)?;
+                        }
+                        struct Dropped<'a>(&'a std::cell::Cell<bool>, Box<[u8; 32]>);
+                        impl Drop for Dropped<'_> {
+                            fn drop(&mut self) { self.0.set(true); }
+                        }
+                        budget.reserve_storage(size_of::<Dropped<'_>>() + size_of::<[u8; 32]>())?;
+                        let owned = Dropped(&dropped, Box::new([0; 32]));
+                        assert_eq!(owned.1[0], 0);
+                        if fault == 3 {
+                            // A denied second allocation must also settle the
+                            // accepted first allocation after its owner drops.
+                            budget.reserve_storage(LIMIT - budget.storage() + 1)?;
+                        }
+                        if fault == 4 { std::panic::panic_any("scalar scratch sentinel"); }
+                        if fault == 1 {
+                            return Err(ProductionSourceOwnedViewErrorV18::Binding("scalar scratch sentinel"));
+                        }
+                        Ok(())
+                    })
+                }));
+                assert_eq!(budget.storage(), floor, "fault {fault}");
+                assert!(!cleanup.is_denied());
+                if fault != 2 { assert!(dropped.get()); }
+                match outcome {
+                    Ok(value) => value,
+                    Err(payload) => std::panic::resume_unwind(payload),
+                }
+            })
+        }));
+        assert!(entered.get());
+        assert_eq!(budget.storage(), MODULE_FLOOR);
+        match fault {
+            0 => result.unwrap().unwrap(),
+            1 => assert!(matches!(result.unwrap(), Err(ProductionSourceOwnedViewErrorV18::Binding("scalar scratch sentinel")))),
+            2 => assert!(matches!(result.unwrap(), Err(ProductionSourceOwnedViewErrorV18::Resource(
+                ArgumentResourceV1::Work(error))) if error.limit() == WORK && error.actual() == WORK + 1)),
+            3 => assert!(matches!(result.unwrap(), Err(ProductionSourceOwnedViewErrorV18::Resource(
+                ArgumentResourceV1::Storage(error))) if error.limit() == LIMIT && error.actual() == LIMIT + 1)),
+            4 => assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"scalar scratch sentinel")),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn original_issued_descriptor_scalar_scratch_denies_refund_below_its_live_fixed_floor() {
+    for panic in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(256);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 4096);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let retained = std::cell::Cell::new(None);
+        let completed = std::cell::Cell::new(false);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_scoped_source_cleanup_v29(&mut budget, MODULE_FLOOR, |cleanup, budget| {
+                let outer = budget.storage();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    source_scalar_normalization_scratch_v18(cleanup, budget, size_of::<[u64; 7]>(), |budget| {
+                        budget.release_storage(1)?;
+                        assert!(budget.storage() > outer);
+                        retained.set(Some(budget.storage()));
+                        if panic { std::panic::panic_any("scalar scratch floor sentinel"); }
+                        Err(ProductionSourceOwnedViewErrorV18::Binding("scalar scratch floor sentinel"))
+                    })
+                }));
+                assert!(cleanup.is_denied(), "the higher fixed scratch floor is mandatory on Err and unwind");
+                assert_eq!(Some(budget.storage()), retained.get());
+                completed.set(true);
+                match result {
+                    Ok(value) => value,
+                    Err(payload) => std::panic::resume_unwind(payload),
+                }
+            })
+        }));
+        assert!(completed.get());
+        assert_eq!(Some(budget.storage()), retained.get(), "no containing scope may refund the lost custody");
+        if panic {
+            assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&"scalar scratch floor sentinel"));
+        } else {
+            assert!(matches!(result.unwrap(), Err(ProductionSourceOwnedViewErrorV18::Binding("scalar scratch floor sentinel"))));
+        }
     }
 }
 

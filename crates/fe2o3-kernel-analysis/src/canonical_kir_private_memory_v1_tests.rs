@@ -372,3 +372,6 @@ fn ring_queue_has_fixed_capacity_checked_indices_and_exact_fifo() {
     assert_eq!(queue.length, 2);
     assert!(queue.queued.iter().all(|queued| !queued));
 }
+
+#[path = "canonical_kir_private_memory_groundwork_v18_tests.rs"]
+mod native_groundwork;

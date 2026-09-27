@@ -295,7 +295,7 @@ fn source_scalar_expression_endpoint_v18(
             argument_product_v1(fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2,
                 argument_product_v1(2, size_of::<NormalizedScalarExpressionV1>())?)?,
         ])?;
-        budget.reserve_storage(storage)?;
+        source_scalar_normalization_scratch_v18(relation.source.cleanup, budget, storage, |budget| {
         budget.charge_work(MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1)?;
         let ledger = CorrelationLedgerV18::new(budget, relation.source.cleanup);
         let graph = InventoryCorrelationV18 {
@@ -329,9 +329,41 @@ fn source_scalar_expression_endpoint_v18(
         if refused || !equal {
             return relation.source.missing("actual scalar expression differs from its original source value");
         }
-        budget.release_storage(storage)?;
         Ok(())
+        })
     })())
+}
+
+// Only a unit result escapes this boundary. All trees, helper expansions and
+// ledger borrows are dropped before either attempt can refund their credits.
+fn source_scalar_normalization_scratch_v18<'work>(
+    cleanup: &ScopedSourceCleanupV29,
+    budget: &mut ArgumentBudgetV1<'work>,
+    storage: usize,
+    run: impl FnOnce(&mut ArgumentBudgetV1<'work>) -> SourceOwnedResultV18<()>,
+) -> SourceOwnedResultV18<()> {
+    if cleanup.is_denied() {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    let floor = budget.storage();
+    let attempt = |budget: &mut ArgumentBudgetV1<'work>| {
+        budget.reserve_storage(storage)?;
+        // This inner floor includes the still-live fixed scratch, so Err and
+        // unwind cannot hide a local undercut above the caller's outer floor.
+        let retained = budget.storage();
+        scoped_source_attempt_v29(cleanup, budget, retained, run)
+    };
+    type Result = SourceOwnedResultV18<()>;
+    budget.reserve_storage(argument_sum_v1(&[
+        std::mem::size_of_val(&attempt),
+        argument_product_v1(2, argument_sum_v1(&[
+            size_of::<Result>(), size_of::<std::thread::Result<Result>>(),
+            size_of::<std::panic::AssertUnwindSafe<Result>>(),
+        ])?)?,
+    ])?)?;
+    scoped_source_attempt_v29(cleanup, budget, floor, attempt)?;
+    budget.release_storage(budget.storage().checked_sub(floor).ok_or(ArgumentResourceV1::Accounting)?)?;
+    Ok(())
 }
 
 impl SourceScalarNormalizationV18 for SourceScalarNormalizationInputV18<'_, '_, '_> {

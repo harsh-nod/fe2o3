@@ -11,8 +11,8 @@ pub(super) enum Event {
 
 // Events retain dense inventory/cell ordinals only. They are not initialization
 // facts; read permission is established exclusively by the converged replay.
-fn events(
-    inventory: &CanonicalKirInventoryV1<'_>,
+fn events<O: typed::PrivateMemoryOwner>(
+    inventory: &CanonicalKirInventoryV1<'_, O>,
     addresses: &[Option<Address>],
     budget: &mut Budget<'_>,
 ) -> R<Vec<Event>> {
@@ -30,10 +30,9 @@ fn events(
                     length: address.length,
                 }
             }
-            OperationKind::Load { pointer, access }
-            | OperationKind::Store {
-                pointer, access, ..
-            } if access.address_space == AddressSpace::Private => {
+            _ if memory_access::<O>(&row.operation.kind).is_some() => {
+                let (pointer, _, writing) =
+                    memory_access::<O>(&row.operation.kind).ok_or_else(arithmetic)?;
                 let definition = index(inventory, row.coordinate.block.function, pointer, budget)?;
                 charge(budget, 3)?;
                 let address = addresses[definition].ok_or_else(arithmetic)?;
@@ -41,7 +40,7 @@ fn events(
                     .start
                     .checked_add(address.offset)
                     .ok_or_else(arithmetic)?;
-                if matches!(row.operation.kind, OperationKind::Store { .. }) {
+                if writing {
                     Event::Write(cell)
                 } else {
                     Event::Read(cell)
@@ -92,8 +91,8 @@ pub(super) fn transfer(
     Ok(())
 }
 
-pub(super) fn check(
-    inventory: &CanonicalKirInventoryV1<'_>,
+pub(super) fn check<O: typed::PrivateMemoryOwner>(
+    inventory: &CanonicalKirInventoryV1<'_, O>,
     addresses: &[Option<Address>],
     latest: &mut [Option<usize>],
     budget: &mut Budget<'_>,

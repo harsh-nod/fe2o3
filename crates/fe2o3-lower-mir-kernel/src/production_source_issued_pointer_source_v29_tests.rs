@@ -254,6 +254,34 @@ pub(super) fn owner_with_shape(issuer_count: usize, access_count: usize) -> Prod
 }
 
 fn owner_with_shape_and_read(issuer_count: usize, access_count: usize, read: bool) -> ProductionSemanticSsaOwnerV1 {
+    owner_with_shape_and_effects(issuer_count, access_count, read, None)
+}
+
+fn owner_with_shape_and_effects(issuer_count: usize, access_count: usize, read: bool,
+    ordered: Option<SemanticVolatilityV1>) -> ProductionSemanticSsaOwnerV1 {
+    owner_with_shape_effects_and_guard(issuer_count, access_count, read, ordered, true)
+}
+
+fn owner_with_shape_effects_and_guard(issuer_count: usize, access_count: usize, read: bool,
+    ordered: Option<SemanticVolatilityV1>, valid_guard: bool) -> ProductionSemanticSsaOwnerV1 {
+    owner_with_shape_effects_guard_and_atomic(issuer_count, access_count, read, ordered, valid_guard, false)
+}
+
+fn owner_with_shape_effects_guard_and_atomic(issuer_count: usize, access_count: usize, read: bool,
+    ordered: Option<SemanticVolatilityV1>, valid_guard: bool, atomic: bool) -> ProductionSemanticSsaOwnerV1 {
+    owner_with_issuer_locals(issuer_count, access_count, read, ordered, valid_guard, atomic, true)
+}
+
+pub(super) fn owner_with_reused_option_issuers(issuer_count: usize, access_count: usize)
+    -> ProductionSemanticSsaOwnerV1
+{
+    owner_with_issuer_locals(issuer_count, access_count, false, None, true, false, false)
+}
+
+fn owner_with_issuer_locals(issuer_count: usize, access_count: usize, read: bool,
+    ordered: Option<SemanticVolatilityV1>, valid_guard: bool, atomic: bool, distinct: bool)
+    -> ProductionSemanticSsaOwnerV1
+{
     // Fixture block identities are single-byte ordered tags, not a production
     // workload limit. The scale controls stay inside that identity domain.
     assert!((1..=32).contains(&issuer_count));
@@ -344,8 +372,8 @@ fn owner_with_shape_and_read(issuer_count: usize, access_count: usize, read: boo
             ).unwrap()), None,
         ),
     ));
-    let some = SemanticPlaceV1::new(
-        SemanticLocalIdV1::from_index(5),
+    let some = |local| SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(local),
         vec![
             SemanticProjectionV1::new(SemanticProjectionKindV1::Downcast(1), OPTIONAL).unwrap(),
             SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), REFERENCE).unwrap(),
@@ -359,9 +387,14 @@ fn owner_with_shape_and_read(issuer_count: usize, access_count: usize, read: boo
         U32,
     )
     .unwrap();
+    let atomic = atomic.then_some(SemanticAtomicAccessV1::new(SemanticAtomicOrderingV1::Relaxed, SemanticAtomicScopeV1::Device));
     let store = SemanticStatementV1::new(
         provenance(),
-        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+        if let Some(volatility) = ordered {
+            SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(pointer,
+                SemanticOperandV1::Constant(SemanticConstantV1::new(U32,
+                    SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(7, 4).unwrap()))), volatility, atomic))
+        } else { SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
             pointer,
             SemanticRvalueV1::new(
                 U32,
@@ -370,19 +403,19 @@ fn owner_with_shape_and_read(issuer_count: usize, access_count: usize, read: boo
                     SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(7, 4).unwrap()),
                 ))),
             ),
-        )),
+        )) },
     );
     let mut issued_access = vec![assign(
         7,
         REFERENCE,
-        SemanticRvalueKindV1::Use(SemanticOperandV1::Move(some)),
+        SemanticRvalueKindV1::Use(SemanticOperandV1::Move(some(5))),
     )];
     for _ in 0..access_count {
         if read {
             issued_access.push(assign(8, U32, SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
                 SemanticPlaceV1::new(SemanticLocalIdV1::from_index(7), vec![
                     SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32).unwrap(),
-                ], U32).unwrap(), SemanticVolatilityV1::NonVolatile, None))));
+                ], U32).unwrap(), ordered.unwrap_or(SemanticVolatilityV1::NonVolatile), atomic))));
         }
         issued_access.push(store.clone());
     }
@@ -411,6 +444,16 @@ fn owner_with_shape_and_read(issuer_count: usize, access_count: usize, read: boo
     }
     let mut blocks = Vec::new();
     for issuer in 0..issuer_count {
+        let option = if distinct && issuer != 0 {
+            let local = u32::try_from(locals.len()).unwrap();
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([40 + u8::try_from(local).unwrap(); 32]),
+                OPTIONAL, SemanticLocalRoleV1::Temporary, provenance()));
+            local
+        } else { 5 };
+        let mut access = issued_access.clone();
+        access[0] = assign(7, REFERENCE,
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Move(some(option))));
         let base = u32::try_from(issuer * 4).unwrap();
         blocks.push(block(base as u8, vec![assign(
             3, BORROW, SemanticRvalueKindV1::Borrow {
@@ -420,16 +463,16 @@ fn owner_with_shape_and_read(issuer_count: usize, access_count: usize, read: boo
         blocks.push(block((base + 1) as u8, vec![], call(2, vec![
             SemanticOperandV1::Move(place(3, BORROW)),
             SemanticOperandV1::Move(place(4, WITNESS)),
-        ], 5, OPTIONAL, base + 2)));
+        ], option, OPTIONAL, base + 2)));
         blocks.push(block((base + 2) as u8, vec![assign(
-            6, U32, SemanticRvalueKindV1::Discriminant(place(5, OPTIONAL)),
+            6, U32, SemanticRvalueKindV1::Discriminant(place(option, OPTIONAL)),
         )], SemanticTerminatorKindV1::SwitchInt {
             discriminant: SemanticOperandV1::Copy(place(6, U32)),
             targets: SemanticSwitchTargetsV1::new(vec![SemanticSwitchTargetV1::new(
-                1, edge(SemanticEdgeRoleV1::SwitchValue, base + 3),
-            )], edge(SemanticEdgeRoleV1::SwitchOtherwise, base + 4)).unwrap(),
+                1, edge(SemanticEdgeRoleV1::SwitchValue, base + if valid_guard { 3 } else { 4 }),
+            )], edge(SemanticEdgeRoleV1::SwitchOtherwise, base + if valid_guard { 4 } else { 3 })).unwrap(),
         }));
-        blocks.push(block((base + 3) as u8, issued_access.clone(),
+        blocks.push(block((base + 3) as u8, access,
             SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, base + 4))));
     }
     blocks.push(block((issuer_count * 4) as u8, vec![assign(
@@ -522,10 +565,13 @@ thread_local! {
 
 fn observe_original(
     pending: &mut PendingScopedRootEmissionV29,
-    _: &ExecutionInstancesV29<'_>,
-    _: &SourceReferencePlanV29<'_, '_>,
+    instances: &ExecutionInstancesV29<'_>,
+    references: &SourceReferencePlanV29<'_, '_>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    if ISSUED_SEMANTIC_REPLAY_OBSERVE.get() {
+        observe_issued_semantic_replay_v29(pending, instances, references, budget)?;
+    }
     let fault = ISSUED_SOURCE_FAULT.get();
     let body = pending.function.body.as_mut().unwrap();
     assert_eq!(body.parameters.len(), 2);
@@ -898,3 +944,5 @@ fn issued_pointer_unused_original_issuer_still_checks_actual_input_index_and_tai
         run_original_with_access(fault, false);
     }
 }
+
+include!("production_source_issued_semantic_v29_tests.rs");

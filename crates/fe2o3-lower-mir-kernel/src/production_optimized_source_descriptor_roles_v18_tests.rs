@@ -157,6 +157,28 @@ fn run_descriptor_role_owner_with_abi_v18(
         &mut ArgumentBudgetV1<'work>,
     ) -> SourceOwnedResultV18<()>,
 ) -> (SourceOwnedResultV18<()>, usize, usize) {
+    let (result, work, peak) = run_descriptor_role_owner_result_with_abi_v18(
+        owner, abi, work_limit, storage_limit, consume);
+    let result = result.map_err(|error| match error {
+        ProductionSourceOptimizationErrorV18::Source(error) => error,
+        other => panic!("actual source-owned optimizer and consumer: {other:?}"),
+    });
+    (result, work, peak)
+}
+
+// Custody negatives need the selected callback's actual optimizer variant;
+// ordinary positive helpers must still reject unexpected adoption failures.
+fn run_descriptor_role_owner_result_with_abi_v18(
+    owner: ProductionSemanticSsaOwnerV1,
+    abi: kernel_argument_abi_v18::tests::FixtureKernelAbiV18,
+    work_limit: usize,
+    storage_limit: usize,
+    consume: impl for<'scope, 'work> FnOnce(
+        &ProductionSourceCorrespondenceV18<'scope>,
+        &ProductionOptimizedSourceCorrespondenceV18<'scope>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> SourceOwnedResultV18<()>,
+) -> (ProductionOptimizerTestResultV18, usize, usize) {
     let semantic = owner.source_semantic();
     let entry = semantic.functions()[0].kernel_entry().unwrap();
     let launch = ProductionSourceLaunchRosterV1::try_new(
@@ -180,7 +202,7 @@ fn run_descriptor_role_owner_with_abi_v18(
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let result = (|| -> SourceOwnedResultV18<()> {
+    let result = (|| -> ProductionOptimizerTestResultV18 {
         let prepared =
             ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
                 owner,
@@ -189,8 +211,8 @@ fn run_descriptor_role_owner_with_abi_v18(
                 ProductionKernelArgumentAbiInputV18 { roots: &roots },
                 ProductionSemanticKirLimitsV1::default(),
                 &mut budget,
-            )?;
-        with_production_optimized_consumer_v18(prepared, &mut budget, consume)
+            ).map_err(ProductionSourceOptimizationErrorV18::Source)?;
+        with_production_optimizer_result_v18(prepared, &mut budget, consume)
     })();
     assert_eq!(
         budget.storage(),
@@ -530,7 +552,6 @@ fn original_descriptor_role_complete_transaction_exact_and_one_short_limits() {
 
 #[test]
 fn original_descriptor_role_scope_observes_local_floor_on_success_error_and_unwind() {
-    let entrance = DescriptorRoleEntranceV18::IssuedDisjointSlice;
     struct Restore(Option<usize>);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -541,8 +562,9 @@ fn original_descriptor_role_scope_observes_local_floor_on_success_error_and_unwi
     for mode in 0..3 {
         DESCRIPTOR_ROLE_RETAINED_FLOOR_V18.set(None);
         let completed = std::cell::Cell::new(false);
-        let result = run_descriptor_roles_v18(entrance,
-            DescriptorRoleSourceV18::ReadValue,
+        let owner = issued_descriptor_role_owner_v18(DescriptorRoleSourceV18::ReadValue);
+        let abi = issued_descriptor_role_abi_v18(&owner);
+        let result = run_descriptor_role_owner_result_with_abi_v18(owner, abi,
             OPTIMIZED_SOURCE_WORK_LIMIT_V18,
             MODULE_LIMIT,
             |original, optimized, budget| {
@@ -627,15 +649,20 @@ fn original_descriptor_role_scope_observes_local_floor_on_success_error_and_unwi
         match (mode, result) {
             (
                 0,
-                Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Accounting)),
+                Err(ProductionSourceOptimizationErrorV18::Source(
+                    ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Accounting))),
             ) => {}
             (
                 1,
-                Err(ProductionSourceOwnedViewErrorV18::Binding("descriptor callback sentinel")),
+                Err(ProductionSourceOptimizationErrorV18::Adoption(
+                    fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(
+                        ProductionSourceOwnedViewErrorV18::Binding("descriptor callback sentinel")))),
             ) => {}
             (
                 2,
-                Err(ProductionSourceOwnedViewErrorV18::Binding("caught descriptor callback panic")),
+                Err(ProductionSourceOptimizationErrorV18::Adoption(
+                    fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(
+                        ProductionSourceOwnedViewErrorV18::Binding("caught descriptor callback panic")))),
             ) => {}
             (_, error) => panic!("descriptor outer custody disposition: {error:?}"),
         }

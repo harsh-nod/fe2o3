@@ -1,6 +1,8 @@
 use super::*;
 use super::super::source_reference_lowering_v29_tests::cells_tests;
 
+include!("production_source_reference_liveness_v29_tests.rs");
+
 fn distinct_exit_loan_owner_v29(shared_successor: bool, writeback: bool) -> ProductionSemanticSsaOwnerV1 {
     owner_with(if writeback { Case::Writeback } else { Case::Shared }, |_, functions| {
         let borrowed = if writeback { SemanticBorrowKindV1::Mutable } else { SemanticBorrowKindV1::Shared };

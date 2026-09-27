@@ -43,11 +43,25 @@ fn run_issued_role_source_shape_v18(
         &mut ArgumentBudgetV1<'work>,
     ) -> SourceOwnedResultV18<()>,
 ) -> (SourceOwnedResultV18<()>, usize, usize) {
+    run_issued_role_owner_v18(
+        source_issued_pointer_source_tests_v29::owner_with_shape(issuer_count, access_count),
+        work_limit, storage_limit, retained_floor, consume)
+}
+
+fn run_issued_role_owner_v18(
+    owner: ProductionSemanticSsaOwnerV1,
+    work_limit: usize,
+    storage_limit: usize,
+    retained_floor: &std::cell::Cell<Option<usize>>,
+    consume: impl for<'scope, 'work> FnOnce(
+        &ProductionSourceCorrespondenceV18<'scope>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> SourceOwnedResultV18<()>,
+) -> (SourceOwnedResultV18<()>, usize, usize) {
     use fe2o3_kernel_descriptor::{
         DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, LogicalArgumentV1, ScalarTypeV1,
         SourceTypeDescriptorV1, SourceTypeDescriptorV3, SourceTypeRecordV1, ValidName,
     };
-    let owner = source_issued_pointer_source_tests_v29::owner_with_shape(issuer_count, access_count);
     let occurrence_storage = owner.occurrence_storage().unwrap().retained_storage();
     let semantic = owner.source_semantic();
     let hash = *owner.source_semantic_sha256();
@@ -193,6 +207,41 @@ fn issued_pointer_original_issuers_and_accesses_grow_independently() {
             previous = Some((work, peak));
         }
     }
+}
+
+#[test]
+fn issued_pointer_reused_original_option_local_remains_an_explicit_admission_gap() {
+    use source_issued_pointer_source_tests_v29::{owner_with_shape, owner_with_reused_option_issuers};
+    let single = owner_with_shape(1, 1);
+    let old_single = owner_with_reused_option_issuers(1, 1);
+    assert_eq!(single.source_semantic_sha256(), old_single.source_semantic_sha256(),
+        "the one-issuer original source identity is unchanged");
+    let owner = owner_with_shape(2, 1);
+    let old = owner_with_reused_option_issuers(2, 1);
+    assert_ne!(owner.source_semantic_sha256(), old.source_semantic_sha256(),
+        "independent local producers are a fixture correction, not a same-source recovery");
+    assert_eq!(old.source_semantic().functions()[0].locals().len(), 8);
+    assert_eq!(owner.source_semantic().functions()[0].locals().len(), 9);
+    let complete = std::cell::Cell::new(false);
+    let positive = run_issued_role_owner_v18(owner, ISSUED_ROLE_LIMIT, ISSUED_ROLE_LIMIT,
+        &std::cell::Cell::new(None), |original, budget| {
+            let rows = issued_rows_v18(original);
+            assert_eq!((rows.sources.len(), rows.issuers.len(), rows.accesses.len()), (2, 2, 2));
+            check_immutable_issued_roles_v18(original, 0, rows, budget)?;
+            complete.set(true);
+            Ok(())
+        }).0;
+    positive.unwrap();
+    assert!(complete.get());
+    let entered = std::cell::Cell::new(false);
+    let refused = run_issued_role_owner_v18(old, ISSUED_ROLE_LIMIT, ISSUED_ROLE_LIMIT,
+        &std::cell::Cell::new(None), |_, _| { entered.set(true); Ok(()) }).0;
+    assert!(!entered.get());
+    assert!(matches!(refused, Err(ProductionSourceOwnedViewErrorV18::Source(
+        ProductionPendingScopedSourceErrorV29::Source(ProductionSemanticKirErrorV1::Unsupported {
+            function: 0, block: None, statement: None,
+            detail: "an Option capability local does not have one exact producer",
+        })))), "{refused:?}");
 }
 
 fn copied_issued_rows_v18(rows: &PendingSourceIssuedRolesV29, budget: &mut ArgumentBudgetV1<'_>)

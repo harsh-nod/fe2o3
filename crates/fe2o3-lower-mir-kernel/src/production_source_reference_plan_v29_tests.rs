@@ -511,6 +511,7 @@ enum Case {
     Conflict,
     Reborrow,
     SuspendedParent,
+    DeadChild,
     Address,
 }
 
@@ -889,7 +890,7 @@ fn try_owner_with(
             &[(SemanticProjectionKindV1::Field(0), REFERENCE)],
         ))),
     )];
-    if matches!(case, Case::Reborrow | Case::SuspendedParent) {
+    if matches!(case, Case::Reborrow | Case::SuspendedParent | Case::DeadChild) {
         statements.push(assign(
             place(4, REFERENCE),
             SemanticRvalueKindV1::Borrow {
@@ -906,6 +907,15 @@ fn try_owner_with(
             &[(SemanticProjectionKindV1::Dereference, WORD)],
         ))),
     ));
+    if case == Case::SuspendedParent {
+        statements.push(assign(
+            place(3, WORD),
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(projected(
+                4,
+                &[(SemanticProjectionKindV1::Dereference, WORD)],
+            ))),
+        ));
+    }
     if case == Case::Writeback {
         statements.push(assign(
             projected(
@@ -1071,6 +1081,21 @@ fn source_reference_reborrow_suspends_then_resumes_parent_without_new_origin() {
             ..
         })
     ));
+}
+
+#[test]
+fn source_reference_dead_child_no_longer_suspends_parent() {
+    run(Case::DeadChild, |plan, _| {
+        let children: Vec<_> = plan.loans.iter().filter(|loan| loan.parent.is_some()).collect();
+        assert_eq!(children.len(), 2);
+        for child in children {
+            assert!(plan.accesses.iter().any(|access|
+                access.key.site.instance == child.site.instance
+                    && access.key.site.statement == Some(2)
+                    && access.key.access == SourceReferenceAccessV29::Read));
+        }
+        Ok(())
+    }).unwrap();
 }
 
 #[test]

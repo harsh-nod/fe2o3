@@ -16,8 +16,11 @@ use std::{
 mod physical_cfg;
 #[path = "canonical_kir_private_memory_queue_v1.rs"]
 mod queue;
+#[path = "canonical_kir_private_memory_typed_v18.rs"]
+mod typed;
 #[doc(hidden)]
 pub use queue::CanonicalKirPrivateDataflowQueueV1;
+pub use typed::{CheckedCanonicalKirPrivateMemoryV18, check_canonical_kir_private_memory_v18};
 
 /// Existing physical cell ceiling, independent of the live byte ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -113,15 +116,20 @@ type Address = CanonicalKirPrivateMemoryAddressV1;
 ///     let _ = value.clone();
 /// }
 /// ```
-pub struct CheckedCanonicalKirPrivateMemoryV1<'a, 'g> {
-    inventory: &'a CanonicalKirInventoryV1<'g>,
+pub struct CheckedCanonicalKirPrivateMemoryV1<
+    'a,
+    'g,
+    O = fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+> {
+    inventory: &'a CanonicalKirInventoryV1<'g, O>,
     definitions: Vec<Option<Address>>,
     operations: Vec<bool>,
     latest_stores: Vec<Option<usize>>,
 }
-type PrivateMemory<'a, 'g> = CheckedCanonicalKirPrivateMemoryV1<'a, 'g>;
-impl<'a, 'g> CheckedCanonicalKirPrivateMemoryV1<'a, 'g> {
-    pub const fn inventory(&self) -> &'a CanonicalKirInventoryV1<'g> {
+type PrivateMemory<'a, 'g, O = fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12> =
+    CheckedCanonicalKirPrivateMemoryV1<'a, 'g, O>;
+impl<'a, 'g, O> CheckedCanonicalKirPrivateMemoryV1<'a, 'g, O> {
+    pub const fn inventory(&self) -> &'a CanonicalKirInventoryV1<'g, O> {
         self.inventory
     }
     pub fn definition(&self, index: usize) -> bool {
@@ -130,7 +138,7 @@ impl<'a, 'g> CheckedCanonicalKirPrivateMemoryV1<'a, 'g> {
     pub fn operation(&self, index: usize) -> bool {
         self.operations.get(index).copied().unwrap_or(false)
     }
-    pub fn is_for(&self, inventory: &CanonicalKirInventoryV1<'_>) -> bool {
+    pub fn is_for(&self, inventory: &CanonicalKirInventoryV1<'_, O>) -> bool {
         std::ptr::eq(self.inventory, inventory)
     }
     pub fn address(&self, index: usize) -> Option<&CanonicalKirPrivateMemoryAddressV1> {
@@ -331,8 +339,8 @@ fn is_private(ty: &Type) -> bool {
     matches!(ty, Type::Pointer(pointer) if pointer.address_space == AddressSpace::Private)
 }
 
-fn index(
-    inventory: &CanonicalKirInventoryV1<'_>,
+fn index<O>(
+    inventory: &CanonicalKirInventoryV1<'_, O>,
     function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
     value: ValueId,
     budget: &mut Budget<'_>,
@@ -343,14 +351,14 @@ fn index(
         .ok_or_else(|| refused("private", "exact function-local definition"))
 }
 
-fn build<'a, 'g>(
-    inventory: &'a CanonicalKirInventoryV1<'g>,
+fn build<'a, 'g, O: typed::PrivateMemoryOwner>(
+    inventory: &'a CanonicalKirInventoryV1<'g, O>,
     max_cells: usize,
     budget: &mut Budget<'_>,
-) -> R<PrivateMemory<'a, 'g>> {
+) -> R<PrivateMemory<'a, 'g, O>> {
     charge(budget, 2)?;
     budget
-        .reserve_storage(std::mem::size_of::<&CanonicalKirInventoryV1<'_>>())
+        .reserve_storage(std::mem::size_of::<&CanonicalKirInventoryV1<'_, O>>())
         .map_err(Error::Resource)?;
     let mut constants = scratch::<Option<u64>>(inventory.definitions().len(), budget)?;
     let mut addresses = scratch::<Option<Address>>(inventory.definitions().len(), budget)?;
@@ -381,6 +389,13 @@ fn build<'a, 'g>(
             && row.results.len() == 1
         {
             constants[row.results.start] = Some(value);
+        } else if O::TYPED {
+            charge(budget, 1)?;
+            if let OperationKind::Constant(value) = &row.operation.kind
+                && row.results.len() == 1
+            {
+                constants[row.results.start] = typed::count_literal(value);
+            }
         }
     }
     let mut cells = 0usize;
@@ -396,7 +411,8 @@ fn build<'a, 'g>(
             continue;
         };
         if *address_space != AddressSpace::Private
-            || !matches!(element, Type::Scalar(_))
+            || (!matches!(element, Type::Scalar(_))
+                && !(O::TYPED && matches!(element, Type::StorageObject(_))))
             || *alignment == 0
             || row.results.len() != 1
             || row.effects.len() != 1
@@ -404,15 +420,18 @@ fn build<'a, 'g>(
             return Err(refused("private", "one exact scalar private allocation"));
         }
         charge(budget, 3)?;
-        let Type::Scalar(scalar) = element else {
-            unreachable!()
+        let stride = match element {
+            Type::Scalar(scalar) => usize::from(
+                scalar
+                    .bit_width()
+                    .ok_or_else(|| refused("private", "fixed-width scalar allocation layout"))?
+                    .div_ceil(8),
+            ),
+            Type::StorageObject(layout) if O::TYPED => {
+                typed::scalar_stride(inventory.owner().layouts(), *layout, *alignment, budget)?
+            }
+            _ => return Err(refused("private", "one exact scalar private allocation")),
         };
-        let stride = usize::from(
-            scalar
-                .bit_width()
-                .ok_or_else(|| refused("private", "fixed-width scalar allocation layout"))?
-                .div_ceil(8),
-        );
         let length = match count {
             None => 1,
             Some(count) => {
@@ -478,6 +497,18 @@ fn build<'a, 'g>(
         let base =
             addresses[base_index].ok_or_else(|| refused("private", "known allocation base"))?;
         let allocation = &inventory.operations()[base.allocation];
+        if O::TYPED {
+            charge(budget, 1)?;
+            if matches!(
+                allocation.operation.kind,
+                OperationKind::Alloca {
+                    element: Type::StorageObject(_),
+                    ..
+                }
+            ) {
+                return Err(refused("private", "whole typed allocation address only"));
+            }
+        }
         if base.offset != 0 || allocation.results.start != base_index || row.results.len() != 1 {
             return Err(refused("private", "direct allocation base only"));
         }
@@ -511,22 +542,15 @@ fn build<'a, 'g>(
         for ordinal in block.operations.clone() {
             let row = &inventory.operations()[ordinal];
             charge(budget, 3)?;
-            let memory = match row.operation.kind {
-                OperationKind::Load { pointer, access }
-                    if access.address_space == AddressSpace::Private =>
-                {
-                    Some((pointer, access, false))
-                }
-                OperationKind::Store {
-                    pointer, access, ..
-                } if access.address_space == AddressSpace::Private => Some((pointer, access, true)),
-                _ => None,
-            };
+            let memory = memory_access::<O>(&row.operation.kind);
             if let Some((pointer, access, write)) = memory {
                 let definition = index(inventory, row.coordinate.block.function, pointer, budget)?;
                 charge(budget, 6)?;
                 let address = addresses[definition]
                     .ok_or_else(|| refused("private", "known memory address"))?;
+                if O::TYPED && matches!(row.operation.kind, OperationKind::Storage(_)) {
+                    typed::check_access(inventory, row, definition, address, budget)?;
+                }
                 if access.volatile || access.alignment == 0 || row.effects.len() != 1 {
                     return Err(refused("private", "one ordinary nonvolatile memory effect"));
                 }
@@ -583,6 +607,17 @@ fn build<'a, 'g>(
                     OperationKind::Store { pointer, value, .. } => {
                         pointer == operand.value && value != operand.value && operations[ordinal]
                     }
+                    OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::ReadValue {
+                        address,
+                        ..
+                    }) if O::TYPED => address == operand.value && operations[ordinal],
+                    OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::WriteValue {
+                        address,
+                        value,
+                        ..
+                    }) if O::TYPED => {
+                        address == operand.value && value != operand.value && operations[ordinal]
+                    }
                     _ => false,
                 };
                 if !permitted {
@@ -606,6 +641,35 @@ fn build<'a, 'g>(
         operations,
         latest_stores,
     })
+}
+
+fn memory_access<O: typed::PrivateMemoryOwner>(
+    kind: &OperationKind,
+) -> Option<(ValueId, fe2o3_kernel_ir::MemoryAccess, bool)> {
+    match *kind {
+        OperationKind::Load { pointer, access }
+            if access.address_space == AddressSpace::Private =>
+        {
+            Some((pointer, access, false))
+        }
+        OperationKind::Store {
+            pointer, access, ..
+        } if access.address_space == AddressSpace::Private => Some((pointer, access, true)),
+        OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::ReadValue {
+            address,
+            access,
+        }) if O::TYPED && access.address_space == AddressSpace::Private => {
+            Some((address, access, false))
+        }
+        OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::WriteValue {
+            address,
+            access,
+            ..
+        }) if O::TYPED && access.address_space == AddressSpace::Private => {
+            Some((address, access, true))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
