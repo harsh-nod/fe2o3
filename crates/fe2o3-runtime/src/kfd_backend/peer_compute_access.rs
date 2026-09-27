@@ -2,7 +2,7 @@
 
 use super::*;
 
-const MAX_PEER_COMPUTE_PERMITS_V1: usize = 2 * MAX_RUNTIME_DEPENDENCIES_V1;
+const MAX_PEER_COMPUTE_PERMITS_V1: usize = 2 * peer_ancestry::MAX_PEER_LAUNCH_ANCESTORS_V1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(super) enum PeerCopyLegV1 {
@@ -369,34 +369,29 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         }))
     }
 
-    // Direct parents only. General transitive/FIFO ancestry admission remains separate.
-    pub(super) fn prepare_direct_peer_compute_access_v1(
+    pub(super) fn prepare_peer_compute_access_v1(
         &mut self,
-        owner: u64,
         consumer: RoutedHandleV1,
-        producers: &[u64],
+        ancestry: &PeerLaunchAncestryV1,
         bindings: &[BackendBindingV1],
     ) -> Result<PeerComputePermitsV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let mut permits = Vec::new();
-        if owner == 0
-            || consumer.local == 0
-            || self.children.get(consumer.child).is_none()
-            || producers.len() > MAX_RUNTIME_DEPENDENCIES_V1
-        {
+        let owner = ancestry.owner();
+        if owner == 0 || consumer.local == 0 || self.children.get(consumer.child).is_none() {
             return Err(KfdRuntimeBackendV1::capacity(
                 "invalid peer compute permit roster",
             ));
         }
-        for producer in producers {
-            self.check_directed_if_present_v1(*producer)?;
-            let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = self.submissions.get(producer)
+        self.admit_peer_ancestry_bindings_v1(ancestry, consumer.child, bindings)?;
+        for producer in ancestry.producers() {
+            let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = self.submissions.get(&producer)
             else {
                 return Err(self.directed_corruption_v1());
             };
             if copy.is_quiescent() {
                 continue;
             }
-            if copy.directed.is_none() || *producer >= owner {
+            if copy.directed.is_none() || producer >= owner {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                     "peer permit requires an earlier directed producer",
@@ -431,7 +426,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                         consumer: consumer.local,
                         purpose,
                         region: PeerCopyRegionV1 {
-                            producer: *producer,
+                            producer,
                             endpoint,
                             device: self.children[endpoint.child].description.backend_device,
                             leg,

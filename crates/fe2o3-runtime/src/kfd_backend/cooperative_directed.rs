@@ -23,6 +23,19 @@ pub(super) struct Root {
 }
 
 impl Root {
+    pub(super) fn extents(&self) -> [u64; 2] {
+        self.extents
+    }
+
+    pub(super) fn dependencies(&self) -> &[BackendDirectedPeerDependencyV1] {
+        &self.dependencies
+    }
+
+    #[cfg(test)]
+    pub(super) fn dependencies_mut(&mut self) -> &mut [BackendDirectedPeerDependencyV1] {
+        &mut self.dependencies
+    }
+
     pub(super) fn shares_read_source(
         &self,
         other: &CooperativeCopySubmissionV1,
@@ -242,7 +255,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         Ok(())
     }
 
-    fn directed_owner_roster_is_intact_v1(&self, endpoint: RoutedHandleV1) -> bool {
+    pub(super) fn directed_owner_roster_is_intact_v1(&self, endpoint: RoutedHandleV1) -> bool {
         let Some(owners) = self.cooperative_allocation_owners.get(&endpoint) else {
             return true;
         };

@@ -50,22 +50,28 @@ impl Consumer {
             .unwrap();
         let owner = f.backend.next_id().unwrap();
         let id = f.backend.children[route.child].next_handle;
+        let ancestry = f
+            .backend
+            .capture_peer_launch_ancestry_v1(owner, f.stream, &[producer])
+            .unwrap();
+        collected.minimum_dependency_depth = ancestry.depth();
         collected.peer_access = f
             .backend
-            .prepare_direct_peer_compute_access_v1(
-                owner,
+            .prepare_peer_compute_access_v1(
                 RoutedHandleV1 {
                     child: route.child,
                     local: id,
                 },
-                &[producer],
+                &ancestry,
                 &bindings,
             )
             .unwrap();
         collected.peer_gate = Some(PeerComputeGateV1::waiting(owner, id, true));
         assert_eq!(
-            f.backend.children[route.child]
-                .submit_collected_compute_v1(launch, collected)
+            f.backend
+                .with_peer_launch_ancestry_v1(owner, Some(ancestry), |backend| backend.children
+                    [route.child]
+                    .submit_collected_compute_v1(launch, collected))
                 .unwrap(),
             id
         );
@@ -129,6 +135,7 @@ impl Consumer {
         child.release_submission_v1(self.id).unwrap();
         child.unload_module_v1(self.module).unwrap();
         child.destroy_stream_v1(self.stream).unwrap();
+        f.backend.peer_launch_retains.release(self.owner);
     }
 }
 
@@ -597,5 +604,63 @@ fn peer_compute_access_multipart_dma_preserves_consumer_custody_and_public_exclu
         consumer.assert_retained(&mut f);
         consumer.finish(&mut f);
         f.clean(&[producer]);
+    }
+}
+
+#[test]
+fn peer_compute_access_transitive_dma_runs_under_genuine_gated_child_custody() {
+    for reading in [true, false] {
+        let mut source_steps = phase_steps(true, 0, 8, true);
+        source_steps.extend(phase_steps(true, 0, 8, true));
+        let mut destination_steps = phase_steps(false, 0, 8, true);
+        destination_steps.extend(phase_steps(false, 0, 8, true));
+        let mut f = fixture(8, source_steps, destination_steps);
+        let (first, route) = submit(&mut f);
+        let event = f.backend.record_event_v1(route.stream, first).unwrap();
+        let second = f
+            .backend
+            .submit_directed_scalar_peer_copy_v1(BackendDirectedScalarPeerCopyV1 {
+                route,
+                dependencies: &[BackendDirectedPeerDependencyV1 {
+                    event,
+                    producer_submission: first,
+                }],
+            })
+            .unwrap();
+        f.backend.release_event_v1(event).unwrap();
+        let consumer = Consumer::new(&mut f, second, reading);
+        assert_eq!(
+            f.backend.children[consumer.child].pending_compute[&consumer.id].dependency_depth,
+            3
+        );
+        let mut observed_first_terminal = false;
+        for _ in 0..128 {
+            consumer.assert_retained(&mut f);
+            let status = f
+                .backend
+                .progress_directed_scalar_peer_copy_v1(BackendDirectedScalarProgressV1 {
+                    submission: second,
+                    route,
+                    producer_submissions: &[first],
+                })
+                .unwrap();
+            if f.backend.poll_v1(first).unwrap() == BackendPollV1::Succeeded {
+                observed_first_terminal = true;
+                assert!(f.backend.peer_launch_retains.retains(first));
+                assert!(matches!(f.backend.release_submission_v1(first),
+                    Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Busy));
+            }
+            if status == BackendPollV1::Succeeded {
+                break;
+            }
+            f.assert_observation_only(second);
+        }
+        assert!(observed_first_terminal);
+        assert_eq!(f.backend.poll_v1(second).unwrap(), BackendPollV1::Succeeded);
+        assert_eq!(f.bytes(false), [0x53; 8]);
+        consumer.assert_retained(&mut f);
+        consumer.finish(&mut f);
+        assert!(f.backend.peer_launch_retains.is_empty());
+        f.clean(&[first, second]);
     }
 }

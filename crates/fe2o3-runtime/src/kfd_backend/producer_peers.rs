@@ -1,4 +1,4 @@
-//! Router-owned dependency custody for completed cooperative copy producers.
+//! Router-owned predecessor custody, independent of child completion storage.
 
 use super::*;
 
@@ -9,11 +9,12 @@ mod tests;
 pub(super) struct PeerLaunchRetainsV1 {
     consumers: HashMap<u64, Vec<u64>>,
     producers: HashMap<u64, usize>,
+    ancestries: HashMap<u64, PeerLaunchAncestryV1>,
 }
 
 impl PeerLaunchRetainsV1 {
     pub(super) fn is_empty(&self) -> bool {
-        self.consumers.is_empty() && self.producers.is_empty()
+        self.consumers.is_empty() && self.producers.is_empty() && self.ancestries.is_empty()
     }
 
     pub(super) fn retains(&self, producer: u64) -> bool {
@@ -55,6 +56,7 @@ impl PeerLaunchRetainsV1 {
     }
 
     pub(super) fn release(&mut self, consumer: u64) {
+        self.ancestries.remove(&consumer);
         if let Some(producers) = self.consumers.remove(&consumer) {
             for producer in producers {
                 KfdMultiDeviceRuntimeBackendV1::decrement_indexed_count(
@@ -68,6 +70,39 @@ impl PeerLaunchRetainsV1 {
 }
 
 impl KfdMultiDeviceRuntimeBackendV1 {
+    pub(super) fn with_peer_launch_ancestry_v1(
+        &mut self,
+        id: u64,
+        ancestry: Option<PeerLaunchAncestryV1>,
+        submit: impl FnOnce(&mut Self) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>,
+    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let Some(ancestry) = ancestry else {
+            return self.with_peer_launch_custody_v1(id, Vec::new(), submit);
+        };
+        if ancestry.owner() != id || self.peer_launch_retains.ancestries.contains_key(&id) {
+            return Err(self.directed_corruption_v1());
+        }
+        self.validate_peer_launch_ancestry_v1(&ancestry)?;
+        let ids = ancestry.retained_ids()?;
+        if ids.is_empty() {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "peer ancestry custody requires a predecessor",
+            ));
+        }
+        self.peer_launch_retains.prepare(&ids)?;
+        self.peer_launch_retains
+            .ancestries
+            .try_reserve(1)
+            .map_err(|_| {
+                KfdRuntimeBackendV1::capacity("peer launch ancestry custody growth failed")
+            })?;
+        self.with_peer_launch_custody_v1(id, ids, |backend| {
+            backend.peer_launch_retains.ancestries.insert(id, ancestry);
+            submit(backend)
+        })
+    }
+
     pub(super) fn with_peer_launch_custody_v1(
         &mut self,
         id: u64,
@@ -138,6 +173,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
 
     pub(super) fn retire_flushed_peer_launches_v1(&mut self, stream: u64) {
         let producers = &mut self.peer_launch_retains.producers;
+        let ancestries = &mut self.peer_launch_retains.ancestries;
         self.peer_launch_retains
             .consumers
             .retain(|id, dependencies| {
@@ -151,6 +187,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     _ => false,
                 };
                 if settled {
+                    ancestries.remove(id);
                     for producer in dependencies {
                         Self::decrement_indexed_count(
                             producers,

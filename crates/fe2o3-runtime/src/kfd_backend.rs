@@ -91,7 +91,9 @@ mod multi_allocation;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_peer_gate;
+mod peer_ancestry;
 mod peer_compute_access;
+use peer_ancestry::PeerLaunchAncestryV1;
 use peer_compute_access::{
     PeerAccessPurposeV1, PeerComputePermitsV1, PeerCopyAccessV1, PeerCopyLegV1, PeerCopyOriginV1,
 };
@@ -844,6 +846,7 @@ enum ComputeInputAdmissionV1 {
 }
 
 struct CollectedComputeDependenciesV1 {
+    minimum_dependency_depth: usize,
     ordered_predecessor: Option<u64>,
     explicit_success_dependencies: Box<[u64]>,
     input_admission: ComputeInputAdmissionV1,
@@ -5831,6 +5834,7 @@ impl KfdRuntimeBackendV1 {
             ),
         };
         Ok(CollectedComputeDependenciesV1 {
+            minimum_dependency_depth: 1,
             ordered_predecessor,
             explicit_success_dependencies,
             input_admission,
@@ -5845,13 +5849,15 @@ impl KfdRuntimeBackendV1 {
         collected: CollectedComputeDependenciesV1,
     ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let CollectedComputeDependenciesV1 {
+            minimum_dependency_depth,
             ordered_predecessor,
             explicit_success_dependencies,
             input_admission,
             peer_gate,
             peer_access,
         } = collected;
-        if !peer_access.valid_for(peer_gate, self.next_handle, launch.bindings)
+        if !(1..=MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1).contains(&minimum_dependency_depth)
+            || !peer_access.valid_for(peer_gate, self.next_handle, launch.bindings)
             || peer_gate.is_some_and(|gate| {
                 gate.action(self.next_handle, false, false) == PeerComputeActionV1::Invalid
             })
@@ -5873,7 +5879,8 @@ impl KfdRuntimeBackendV1 {
                     }
                 };
                 Self::capacity(detail)
-            })?;
+            })?
+            .max(minimum_dependency_depth);
         self.validate_compute_launch_v1(&launch, &explicit_success_dependencies, input_admission)?;
 
         let explicit_kernarg = try_copy_vec_v1(
@@ -12560,22 +12567,26 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             ComputeDependencyRosterV1::Exact(&dependencies),
         );
         let mut collected = self.latch(child_preflight)?;
-        self.peer_launch_retains.prepare(&peer_producers)?;
         self.reserve_native_stream_submission_v1(request.stream)?;
         Self::reserve_route(
             &mut self.submissions,
             "multi-device submission route allocation failed",
         )?;
         let id = self.next_id()?;
-        if !peer_producers.is_empty() {
+        let ancestry = if peer_producers.is_empty() {
+            None
+        } else {
+            Some(self.capture_peer_launch_ancestry_v1(id, request.stream, &peer_producers)?)
+        };
+        if let Some(ancestry) = &ancestry {
             let child_id = self.children[stream.child].next_handle;
-            collected.peer_access = self.prepare_direct_peer_compute_access_v1(
-                id,
+            collected.minimum_dependency_depth = ancestry.depth();
+            collected.peer_access = self.prepare_peer_compute_access_v1(
                 RoutedHandleV1 {
                     child: stream.child,
                     local: child_id,
                 },
-                &peer_producers,
+                ancestry,
                 &bindings,
             )?;
             collected.peer_gate = Some(
@@ -12584,7 +12595,7 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                     .expect("exact completed peer producers retain their child consumer identity"),
             );
         }
-        let local = self.with_peer_launch_custody_v1(id, peer_producers, |backend| {
+        let local = self.with_peer_launch_ancestry_v1(id, ancestry, |backend| {
             backend.children[stream.child].submit_collected_compute_v1(child_launch, collected)
         })?;
         self.submissions.insert(
