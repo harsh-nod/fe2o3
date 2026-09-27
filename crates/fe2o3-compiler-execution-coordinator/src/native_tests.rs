@@ -251,7 +251,17 @@ fn image_checks_reject_each_role_owner_and_metadata_change() {
             Err(Failure::Executable(_))
         ));
         rustix::fs::fchmod(&alias, rustix::fs::Mode::from_bits_truncate(0o555)).unwrap();
-        // Restoring permissions does not restore the pinned inode change time.
+        // Rapid chmod calls can share a ctime tick. After restoring the mode,
+        // change mtime explicitly so this tests observable snapshot drift.
+        let before = alias.metadata().unwrap().modified().unwrap();
+        let changed = if before == std::time::UNIX_EPOCH {
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1)
+        } else {
+            std::time::UNIX_EPOCH
+        };
+        alias.set_modified(changed).unwrap();
+        assert_eq!(alias.metadata().unwrap().modified().unwrap(), changed);
+        assert_ne!(before, changed);
         assert!(matches!(
             check_programs(&images, f.expected, credentials(), &mut b),
             Err(Failure::Executable(_))

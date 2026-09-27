@@ -65,6 +65,8 @@ mod inherited;
 mod lifecycle;
 mod native;
 mod native_adapter;
+mod native_launch;
+mod native_launch_adapter;
 mod native_trust_adapter;
 mod native_trust_v2;
 mod native_trust_v3;
@@ -79,13 +81,17 @@ pub use native::{
     CompilerExecutionPreparationErrorV2, CompilerExecutionPreparationQuotaV2,
     CompilerExecutionPreparationStorageV2,
 };
+pub use native_launch::{
+    CompilerExecutionLaunchErrorV2, CompilerExecutionLaunchQuotaV2,
+    CompilerExecutionLaunchStorageV2,
+};
 pub use native_trust_adapter::{
     CompilerExecutionSupervisorTrustErrorV2, CompilerExecutionSupervisorTrustStorageV2,
 };
 pub use native_trust_v2::CompilerExecutionSupervisorTrustV2;
 pub use native_trust_v3::CompilerExecutionSupervisorTrustV3;
-pub use native_v2::PreparedCompilerExecutionSupervisorV2;
-pub use native_v3::PreparedCompilerExecutionSupervisorV3;
+pub use native_v2::{PreparedCompilerExecutionSupervisorV2, RootManagedCompilerExecutionServiceV2};
+pub use native_v3::{PreparedCompilerExecutionSupervisorV3, RootManagedCompilerExecutionServiceV3};
 
 pub use inherited::{
     COMPILER_EXECUTION_COORDINATOR_ANCHOR_DAEMON_FD_V1,

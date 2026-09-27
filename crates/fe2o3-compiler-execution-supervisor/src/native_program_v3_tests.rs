@@ -143,6 +143,13 @@ fn original_account_covers_v3_program_and_exact_distinct_image_transfers() {
 
 #[test]
 fn v3_program_refusals_close_consumed_sources_and_preserve_prepaid_account() {
+    crate::eof_test_process::isolated_eof_case(
+        "program_v3::tests::v3_program_refusals_close_consumed_sources_and_preserve_prepaid_account",
+        program_refusal_closure_cases,
+    );
+}
+
+fn program_refusal_closure_cases() {
     let f = Fixture::new("v3-program-refusal");
     for mode in 0..4 {
         let mut work = Work::new(WORK_LIMIT);

@@ -68,8 +68,9 @@ macro_rules! preparation {
         /// and a genuine live native anchor. No V1 admitted owner is upgraded. The V1
         /// program-source bundle is only three untrusted Files, not legacy authority.
         /// Preparation grants neither provisioning provenance nor permission to launch
-        /// a GPU. Inherited production composition and consuming supervisor launch are
-        /// separate integration steps; this owner itself performs no process creation.
+        /// a GPU. Preparation creates no process; consuming launch separately transfers
+        /// this complete owner into shared child custody. Inherited production composition
+        /// and protected deployment validation remain separate integration steps.
         ///
         /// Prepay prepare_input_storage(), including all three FULL source images.
         /// Reserve returned growth before retaining the result; keep consumed charges.

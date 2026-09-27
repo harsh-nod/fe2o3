@@ -578,4 +578,6 @@ fn map_protected_executable_error(
 }
 
 #[cfg(test)]
+mod eof_test_process;
+#[cfg(test)]
 mod tests;
