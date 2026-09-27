@@ -7,7 +7,7 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
-use std::{error::Error, fmt, mem::size_of, sync::atomic::Ordering};
+use std::{error::Error, fmt, fs::File, mem::size_of, sync::atomic::Ordering};
 
 const CONTROL_WORK: usize = 8;
 const SHUTDOWN_WORK: usize = CONTROL_WORK + CAPACITY;
@@ -17,6 +17,7 @@ pub(super) struct NativeAccount {
     cursor: usize,
     leased: bool,
     admission_open: bool,
+    deployment_guard: Option<File>,
 }
 
 /// Fixed failure categories for native cleanup funding and custody.
@@ -137,13 +138,19 @@ use ProtectedServiceCleanupServiceV2 as Service;
 impl Service {
     /// Fixed pool/controller, outstanding reservation headers and logical pidfd charges.
     ///
+    /// Includes capacity for one deployment guard retained until empty shutdown.
     /// Embedded records, mutexes, phase state, lease and account metadata are
     /// included exactly once by `size_of`; this is logical retention, not RSS.
     pub const STORAGE: usize = size_of::<DeferredReaperV1>()
         + size_of::<Self>()
         + CAPACITY
             * (size_of::<ProtectedServiceCleanupReservationV2>()
-                + size_of::<std::os::fd::OwnedFd>());
+                + size_of::<std::os::fd::OwnedFd>())
+        + Self::GUARD_FILE_STORAGE;
+    /// Full logical input charge for a deployment guard descriptor, excluding file data.
+    pub const GUARD_FILE_STORAGE: usize = size_of::<(File, usize)>();
+    /// Fixed request and service work (each) to transfer a deployment guard.
+    pub const GUARD_WORK: usize = CONTROL_WORK + CAPACITY;
     /// Admission/rollback, controller Drop and one shutdown attempt prepaid before use.
     pub const ADMISSION_WORK: usize = CONTROL_WORK * 2 + SHUTDOWN_WORK;
     /// Reacquiring control prepays its Drop and one shutdown attempt on the same account.
@@ -193,6 +200,7 @@ impl Service {
             cursor: 0,
             leased: true,
             admission_open,
+            deployment_guard: None,
         });
         Ok(Self {
             reaper,
@@ -250,6 +258,46 @@ impl Service {
             native.cursor = (native.cursor + 1) % CAPACITY;
         }
         Ok(native.report())
+    }
+
+    /// Retains one close-only deployment guard in this persistently funded pool.
+    ///
+    /// The caller must authenticate and lock the descriptor before transfer. This
+    /// method grants no authority, checks no pathname, and never unlocks the file.
+    /// Only an empty, admission-open pool without a guard accepts it. There is no
+    /// replacement or detach operation: even controller Drop, unwind, quarantine,
+    /// and work exhaustion retain the descriptor until successful empty shutdown.
+    ///
+    /// Prepay GUARD_FILE_STORAGE on the request ledger; this consumes the File on
+    /// either outcome and restores entry storage. Retire that input charge after
+    /// return. Success transfers custody to the capacity prepaid by STORAGE, with
+    /// GUARD_WORK debited on both original ledgers before any custody transfer.
+    pub fn retain_deployment_guard(
+        &mut self,
+        guard: File,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), Failure> {
+        budget.with_prepaid_scope(Self::GUARD_FILE_STORAGE, 0, Self::GUARD_WORK, 0, |_| {
+            let mut mode = self
+                .reaper
+                .mode
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let native = self.native(&mut mode)?;
+            native.charge(Self::GUARD_WORK)?;
+            if !native.admission_open
+                || native.deployment_guard.is_some()
+                || self
+                    .reaper
+                    .cells
+                    .iter()
+                    .any(|cell| cell.state.load(Ordering::Acquire) != EMPTY)
+            {
+                return Err(Failure::State);
+            }
+            native.deployment_guard = Some(guard);
+            Ok(())
+        })
     }
 
     /// Reserves charged capacity and prepays request emergency cleanup before clone.
@@ -315,6 +363,8 @@ impl Service {
         if native.ledger.storage() != Self::STORAGE {
             return Err(Failure::Resource(Resource::Accounting));
         }
+        // Every slot is terminal before releasing deployment replacement exclusion.
+        drop(native.deployment_guard.take());
         native
             .ledger
             .with_budget(|budget| budget.release_storage(Self::STORAGE))?;
@@ -413,3 +463,7 @@ pub(crate) fn isolated_cleanup(account: Account) -> Service {
 #[cfg(test)]
 #[path = "process_reaper_native_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "process_reaper_guard_tests.rs"]
+mod guard_tests;

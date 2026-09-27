@@ -24,8 +24,9 @@ pub(super) fn auxiliary_closes() -> usize {
 
 #[repr(C)]
 struct Backing {
-    // A zero-sized first field gives bytes the exact cmsghdr alignment.
-    _alignment: [libc::cmsghdr; 0],
+    // Rustix's Linux syscall header is word-aligned even when musl's libc
+    // header is only int-aligned. Its receive buffer must not shift our start.
+    _alignment: [usize; 0],
     bytes: [MaybeUninit<u8>; BYTES],
 }
 
@@ -89,7 +90,8 @@ impl Guard {
                     .cast::<libc::cmsghdr>()
                     .read_unaligned()
             };
-            let length = header.cmsg_len;
+            // An unrepresentable length is malformed, never a truncated prefix.
+            let length = usize::try_from(header.cmsg_len).unwrap_or(usize::MAX);
             if length == 0 {
                 return unexpected || bytes[offset..].iter().any(|&byte| byte != 0);
             }
@@ -149,6 +151,7 @@ fn align(length: usize) -> Option<usize> {
 
 const _: () = {
     assert!(FD_BYTES == size_of::<i32>());
+    assert!(std::mem::align_of::<Backing>() >= std::mem::align_of::<libc::cmsghdr>());
     assert!(HEADER >= size_of::<libc::cmsghdr>());
     assert!(BYTES >= HEADER + FD_BYTES);
 };

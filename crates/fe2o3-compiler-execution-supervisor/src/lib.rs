@@ -43,6 +43,10 @@ mod listener;
 #[cfg(test)]
 mod native_consuming_test_process;
 #[allow(unsafe_code)]
+mod native_deployment_io;
+#[allow(unsafe_code)]
+mod native_entrypoint;
+#[allow(unsafe_code)]
 mod process;
 mod process_cleanup {
     pub(crate) use fe2o3_protected_service_spawn::cleanup_bridge::{ChildCleanupV1, CleanupPollV1};
@@ -113,6 +117,14 @@ pub use listener::{
     ProtectedIssuerServiceStorageV3, ProtectedIssuerServiceV1, ProtectedIssuerServiceV2,
     ProtectedIssuerServiceV3, ProtectedIssuerServiceWorkerCountV1, ProtectedIssuerSessionOutcomeV1,
     ProtectedIssuerSessionReportV2, ProtectedIssuerSessionReportV3,
+};
+pub use native_deployment_io::NativeIssuerStartupIoErrorV2;
+pub use native_entrypoint::{
+    NATIVE_ISSUER_PROCESS_STORAGE_V2, NATIVE_ISSUER_PROCESS_WORK_V2,
+    NATIVE_ISSUER_STARTUP_FRAME_STORAGE_V2, NATIVE_ISSUER_STARTUP_INPUT_STORAGE_V2,
+    NATIVE_ISSUER_STARTUP_INPUT_STORAGE_V3, NATIVE_ISSUER_STARTUP_WORK_V2,
+    ProtectedIssuerDeploymentErrorV2, ProtectedIssuerDeploymentErrorV3,
+    run_inherited_protected_issuer_service_v2, run_inherited_protected_issuer_service_v3,
 };
 pub use process::{
     ExitedProtectedIssuerV1, LaunchedProtectedIssuerV1, MAX_PROTECTED_ISSUER_PROCESSES_V1,

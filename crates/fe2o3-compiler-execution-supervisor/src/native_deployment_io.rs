@@ -188,6 +188,7 @@ impl Sources {
 
     /// Single close after capability admission retained its own charged descriptor.
     /// Clear custody BEFORE close: Linux close errors must never lead to a retry.
+    #[cfg(test)]
     pub(crate) fn close(&mut self, role: usize) -> Result<()> {
         self.close_with(role, deployment::close_inherited)
     }

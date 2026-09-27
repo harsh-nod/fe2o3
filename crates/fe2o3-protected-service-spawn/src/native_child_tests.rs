@@ -8,6 +8,8 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrWorkBudgetV1 as Work,
 };
 use std::{
+    fs::File,
+    os::fd::AsRawFd,
     panic::{AssertUnwindSafe, catch_unwind},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -199,10 +201,49 @@ fn native_child_subprocess() {
     }
     let mut service =
         Drain(Service::admit(Account::new(Work::new(LIMIT), Service::STORAGE)).unwrap());
+    let guard = File::from(
+        rustix::fs::memfd_create(c"native-child-guard", rustix::fs::MemfdFlags::CLOEXEC).unwrap(),
+    );
+    let observer = File::open(format!("/proc/self/fd/{}", guard.as_raw_fd())).unwrap();
+    rustix::fs::flock(&guard, rustix::fs::FlockOperation::NonBlockingLockShared).unwrap();
+    let mut startup_work = Work::new(LIMIT);
+    let mut startup = Budget::new(&mut startup_work, Service::GUARD_FILE_STORAGE);
+    startup
+        .reserve_storage(Service::GUARD_FILE_STORAGE)
+        .unwrap();
+    service
+        .0
+        .retain_deployment_guard(guard, &mut startup)
+        .unwrap();
+    startup
+        .release_storage(Service::GUARD_FILE_STORAGE)
+        .unwrap();
     if std::env::var_os(MARKER).as_deref() == Some(std::ffi::OsStr::new("clone")) {
-        return clone_probe(&mut service);
+        clone_probe(&mut service);
+    } else {
+        lifecycle_probe(&mut service, &observer);
     }
-    for confirm in [false, true] {
+    assert_guard_locked(&observer);
+    drop(service);
+    rustix::fs::flock(
+        &observer,
+        rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    )
+    .unwrap();
+}
+
+fn assert_guard_locked(observer: &File) {
+    assert_eq!(
+        rustix::fs::flock(
+            observer,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive
+        ),
+        Err(Errno::AGAIN)
+    );
+}
+
+fn lifecycle_probe(service: &mut Drain, observer: &File) {
+    for (confirm, unwind) in [(false, false), (true, false), (true, true)] {
         let mut w = Work::new(LIMIT);
         let mut b = Budget::new(&mut w, LIMIT);
         let slot = service.0.reserve_launch(&mut b).unwrap().into_slot();
@@ -250,9 +291,27 @@ fn native_child_subprocess() {
             assert!(matches!(disposition, Poll::Pending | Poll::Reaped));
             assert_eq!(child.cancel(), disposition);
         }
-        drop(child);
+        assert_guard_locked(observer);
+        if confirm {
+            assert!(b.charge_work(LIMIT).is_err());
+            assert_guard_locked(observer);
+        }
+        if unwind {
+            assert!(matches!(service.0.shutdown(), Err(Failure::Busy)));
+            assert!(
+                catch_unwind(AssertUnwindSafe(move || {
+                    let _child = child;
+                    panic!("native post-exec unwind with deployment guard");
+                }))
+                .is_err()
+            );
+        } else {
+            drop(child);
+        }
+        assert_guard_locked(observer);
         b.release_storage(Owner::STORAGE).unwrap();
-        await_reaped(&mut service, &witness);
+        await_reaped(service, &witness);
+        assert_guard_locked(observer);
         drop(witness);
         b.release_storage(charge.additional_storage()).unwrap();
         assert_eq!(b.storage(), 0);
