@@ -153,12 +153,18 @@ This import does not manufacture a content digest or add a native refinement pro
 The [import qualification](evidence/dev-compute-data-import-2026-09-27/README.md)
 records full CPU suites, genuine public-path fixtures and existing environment failures.
 
-A sealed quiescent conversion from initialized storage into typed compute input
-remains open, including preservation of its non-dispatch origin through bind,
-replay and cancellation. No new public pending-peer launch or initialized-compute
-constructor is enabled here.
-See [coverage qualification](evidence/dev-sdma-initialized-prefix-2026-09-27/README.md)
-for the exact proof, tests, rejected campaign and remaining adapter boundary.
+A sealed quiescent native conversion and its deferred runtime adapter are now
+implemented for admitted single-binding and exact R/R/W compute. Conversion
+preserves its non-dispatch origin through cancellation and returns initialized
+replay after completion. It runs after gate, dependency, FIFO and native conflict
+checks; integrity errors never authorize materialization fallback. Only typed
+clean ineligibility permits independently validated Read fallback. Conversion
+invalidates content-digest metadata without manufacturing a previous dispatch.
+The [adapter checkpoint](evidence/dev-runtime-storage-adapter-2026-09-27/README.md)
+records CPU qualification and remaining native/formal/performance boundaries.
+It does not open public pending-peer router admission. The earlier
+[coverage qualification](evidence/dev-sdma-initialized-prefix-2026-09-27/README.md)
+retains the initialized-prefix proof boundary; it is not a proof of this adapter.
 
 ## Not Yet Supported
 
