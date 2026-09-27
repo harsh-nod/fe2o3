@@ -102,6 +102,11 @@ impl From<NativeFirstBuildWorkerErrorV1> for NativeWorkerFinalizationErrorV1 {
         Self::Source(value)
     }
 }
+impl From<crate::WorkerV3HsacoInspectionError> for NativeWorkerFinalizationErrorV1 {
+    fn from(error: crate::WorkerV3HsacoInspectionError) -> Self {
+        failure("launch", error)
+    }
+}
 impl fmt::Display for NativeWorkerFinalizationErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -117,7 +122,10 @@ impl std::error::Error for NativeWorkerFinalizationErrorV1 {}
 
 type Result<T> = std::result::Result<T, NativeWorkerFinalizationErrorV1>;
 
-fn failure(phase: &'static str, value: impl fmt::Display) -> NativeWorkerFinalizationErrorV1 {
+pub(crate) fn failure(
+    phase: &'static str,
+    value: impl fmt::Display,
+) -> NativeWorkerFinalizationErrorV1 {
     NativeWorkerFinalizationErrorV1::Artifact {
         phase,
         diagnostic: NativeWorkerDiagnosticV1::from_display(value),
@@ -260,7 +268,7 @@ pub(crate) fn finalize_native_worker_core(
         let output_identity = ContentIdentityV1::calculate(&bytes);
         let descriptor_identity = ContentIdentityV1::calculate(&descriptor);
         let identity = finalization_identity(
-            mode,
+            mode.identity_domain(),
             source.identity().as_bytes(),
             source.binding().identity().as_bytes(),
             &inspection,
@@ -450,8 +458,8 @@ fn derive_launch(
     launch.ok_or_else(|| failure("launch", "empty kernel set"))
 }
 
-fn finalization_identity(
-    mode: NativeDescriptorMode,
+pub(crate) fn finalization_identity(
+    domain: &'static [u8],
     source: &[u8; 32],
     binding: &[u8; 32],
     inspection: &SharedWorkerV3HsacoInspectionV1,
@@ -463,7 +471,7 @@ fn finalization_identity(
     // original occurrence, actual F and exact candidate/replay transcripts. This
     // fixed preimage composes those identities with independently checked output.
     let mut hash = Sha256::new();
-    hash.update(mode.identity_domain());
+    hash.update(domain);
     hash.update(source);
     hash.update(binding);
     hash.update(inspection.policy.identity().as_bytes());

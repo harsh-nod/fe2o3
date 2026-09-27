@@ -1,9 +1,10 @@
-//! Closed request identity binding shared by the two typed handoff adapters.
+//! Closed request identity binding shared by the typed handoff adapters.
 
 use sha2::{Digest, Sha256};
 
 use crate::{
     ProtectedCompilerHandoffBindingV3,
+    first_build_worker_conditional_binding::ProtectedCompilerConditionalHandoffBindingV2,
     first_build_worker_native_binding::ProtectedCompilerNativeHandoffBindingV1,
 };
 
@@ -11,6 +12,13 @@ use crate::{
 pub(crate) enum WorkerCompilerBinding<'a> {
     Semantic(&'a ProtectedCompilerHandoffBindingV3),
     Native(&'a ProtectedCompilerNativeHandoffBindingV1),
+    Conditional(&'a ProtectedCompilerConditionalHandoffBindingV2),
+}
+
+impl<'a> From<&'a ProtectedCompilerConditionalHandoffBindingV2> for WorkerCompilerBinding<'a> {
+    fn from(binding: &'a ProtectedCompilerConditionalHandoffBindingV2) -> Self {
+        Self::Conditional(binding)
+    }
 }
 
 impl<'a> From<&'a ProtectedCompilerHandoffBindingV3> for WorkerCompilerBinding<'a> {
@@ -34,6 +42,9 @@ impl WorkerCompilerBinding<'_> {
             Self::Native(_) => {
                 &b"FE2O3/NATIVE-CAPSULE-PROTECTED-FIRST-BUILD-WORKER-REQUEST/V1\0"[..]
             }
+            Self::Conditional(_) => {
+                &b"FE2O3/CONDITIONAL-CAPSULE-PROTECTED-FIRST-BUILD-WORKER-REQUEST/V2\0"[..]
+            }
         });
         self.hash_preimage(hasher);
     }
@@ -46,6 +57,9 @@ impl WorkerCompilerBinding<'_> {
             Self::Native(_) => {
                 &b"FE2O3/NATIVE-CAPSULE-PROTECTED-PLAN-BOUND-WORKER-REQUEST/V1\0"[..]
             }
+            Self::Conditional(_) => {
+                &b"FE2O3/CONDITIONAL-CAPSULE-PROTECTED-PLAN-BOUND-WORKER-REQUEST/V2\0"[..]
+            }
         });
         self.hash_preimage(hasher);
     }
@@ -54,6 +68,9 @@ impl WorkerCompilerBinding<'_> {
         hasher.update(match self {
             Self::Semantic(_) => &b"FE2O3/PROTECTED-FIRST-BUILD-WORKER-EVIDENCE/V3\0"[..],
             Self::Native(_) => &b"FE2O3/NATIVE-PROTECTED-FIRST-BUILD-WORKER-EVIDENCE/V1\0"[..],
+            Self::Conditional(_) => {
+                &b"FE2O3/CONDITIONAL-PROTECTED-FIRST-BUILD-WORKER-EVIDENCE/V2\0"[..]
+            }
         });
         self.hash_preimage(hasher);
     }
@@ -62,6 +79,7 @@ impl WorkerCompilerBinding<'_> {
         match self {
             Self::Semantic(binding) => binding.hash_identity_preimage(hasher),
             Self::Native(binding) => binding.hash_identity_preimage(hasher),
+            Self::Conditional(binding) => binding.hash_identity_preimage(hasher),
         }
     }
 }

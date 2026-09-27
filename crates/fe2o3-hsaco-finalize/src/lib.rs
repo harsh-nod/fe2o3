@@ -20,8 +20,11 @@ use fe2o3_kernel_descriptor::{
 
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
+mod conditional_worker_finalization;
 mod engineering_hsaco;
 mod first_build_worker_binding;
+mod first_build_worker_conditional;
+mod first_build_worker_conditional_binding;
 mod first_build_worker_engine;
 mod first_build_worker_native;
 mod first_build_worker_native_binding;
@@ -29,6 +32,7 @@ mod first_build_worker_native_resources;
 mod first_build_worker_v3;
 mod link_plan;
 mod native_worker_compact_replay;
+mod native_worker_engine;
 mod native_worker_finalization;
 mod native_worker_publication;
 mod native_worker_replay;
@@ -85,6 +89,10 @@ pub use compiler_ffi_observation::{
     StagedCompilerFfiEnvelopeInspectionV1, StagedCompilerFfiEnvelopeV1,
     stage_compiler_ffi_envelope_v1,
 };
+pub use conditional_worker_finalization::{
+    ConditionalWorkerFinalizationStorageV5, PreparedFinalizedConditionalWorkerHsacoV5,
+    finalize_conditional_worker_hsaco_v5,
+};
 pub use engineering_hsaco::{
     EngineeringHsacoErrorV1, EngineeringHsacoObservationV1, EngineeringProviderObservationV1,
     observe_engineering_hsaco_v1,
@@ -103,6 +111,13 @@ pub use fe2o3_compiler_ffi::{
     MAX_COMPILER_FFI_ENVELOPE_BYTES_V1, MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1,
     MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1,
 };
+pub use first_build_worker_conditional::{
+    ConditionalFirstBuildWorkerStorageV2, InertConditionalFirstBuildWorkerEvidenceV2,
+    PreparedConditionalFirstBuildWorkerV2,
+    execute_preflighted_conditional_reproducible_first_build_worker_v2,
+    preflight_conditional_reproducible_first_build_worker_v2,
+};
+pub use first_build_worker_conditional_binding::ProtectedCompilerConditionalHandoffBindingV2;
 pub use first_build_worker_native::{
     InertNativeFirstBuildWorkerEvidenceV1, NativeFirstBuildWorkerErrorV1,
     NativeFirstBuildWorkerIdentityV1, NativeFirstBuildWorkerStorageV1, NativeWorkerDiagnosticV1,
