@@ -45,6 +45,8 @@ mod memory;
 mod shared_memory;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod initialized_prefix;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod persistent_allocation;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

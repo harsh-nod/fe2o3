@@ -1948,19 +1948,14 @@ pub(crate) fn promote_directional_persistent_sdma_custody_v1(
     pair: Gfx942PersistentDirectionalSdmaPairV1,
     outstanding_buffers: usize,
 ) -> Result<(Gfx942DirectionalQueuePersistentAllocationV1, usize), Gfx942SdmaBufferV1> {
-    if outstanding_buffers == 0 {
+    if outstanding_buffers == 0 || buffer.kind() != Gfx942SdmaBufferKindV1::DeviceLocal {
         return Err(buffer);
     }
     let storage_identity = buffer.storage_identity();
     let physical_bytes = buffer.physical_bytes();
     let (storage, queue, pool_generation, logical_bytes) = buffer.into_bridge_parts();
     let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
-        return Err(Gfx942SdmaBufferV1::from_bridge_parts(
-            storage,
-            queue,
-            pool_generation,
-            logical_bytes,
-        ));
+        unreachable!("prevalidated device buffer kind");
     };
     Ok((
         Gfx942DirectionalQueuePersistentAllocationV1 {

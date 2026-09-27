@@ -66,6 +66,8 @@ pub use persistent_wait_diagnostic::{
     Gfx942SdmaPersistentDiagnosticSleepCeilingV1, Gfx942SdmaPersistentWaitCountersV1,
     Gfx942SdmaPersistentWaitCpuV1, Gfx942SdmaPersistentWaitDiagnosticsV1,
 };
+#[cfg(test)]
+mod initialized_prefix_tests;
 mod owner_release;
 pub(crate) mod retained_release;
 mod single_copy;
@@ -406,6 +408,7 @@ pub struct Gfx942SdmaBufferV1 {
     pool_generation: u64,
     logical_bytes: u64,
     host_content_certificate: Option<Box<Gfx942SdmaHostContentCertificateV1>>,
+    initialized_prefix: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -417,6 +420,7 @@ pub(crate) struct Gfx942SdmaBufferCleanupMetadataV1 {
     physical_bytes: u64,
     physical_alignment: u64,
     host_content_certificate: Option<Box<Gfx942SdmaHostContentCertificateV1>>,
+    initialized_prefix: u64,
 }
 
 impl fmt::Debug for Gfx942SdmaBufferV1 {
@@ -453,6 +457,7 @@ impl Gfx942SdmaBufferV1 {
     pub(crate) fn advance_pool_generation(&mut self) -> Result<(), Gfx942SdmaErrorV1> {
         let generation = next_pool_generation(self.pool_generation)?;
         self.host_content_certificate = None;
+        self.initialized_prefix = 0;
         self.pool_generation = generation;
         Ok(())
     }
@@ -474,6 +479,7 @@ impl Gfx942SdmaBufferV1 {
     pub(crate) fn set_logical_bytes(&mut self, logical_bytes: u64) {
         debug_assert!(logical_bytes != 0 && logical_bytes <= self.physical_bytes());
         self.host_content_certificate = None;
+        self.initialized_prefix = 0;
         self.logical_bytes = logical_bytes;
     }
 
@@ -481,9 +487,32 @@ impl Gfx942SdmaBufferV1 {
         self.host_content_certificate = None;
     }
 
+    pub(crate) fn initialized_range_is_known(&self, offset: u64, len: u64) -> bool {
+        crate::initialized_prefix::covers(self.initialized_prefix, self.logical_bytes, offset, len)
+    }
+
+    fn record_initialized_write(&mut self, offset: u64, len: u64, known: bool) {
+        self.initialized_prefix = crate::initialized_prefix::after_write(
+            self.initialized_prefix,
+            self.logical_bytes,
+            offset,
+            len,
+            known,
+        )
+        .unwrap_or(0);
+    }
+
+    fn prepare_destination_write(&mut self, offset: u64, len: u64, known: bool) {
+        self.clear_host_content_certificate();
+        if !known {
+            self.record_initialized_write(offset, len, false);
+        }
+    }
+
     fn certify_full_host_content(&mut self, sha256: [u8; 32]) {
         debug_assert_eq!(self.kind(), Gfx942SdmaBufferKindV1::HostVisibleCoherent);
         debug_assert_eq!(self.logical_bytes, self.physical_bytes());
+        self.record_initialized_write(0, self.logical_bytes, true);
         self.host_content_certificate = Some(Box::new(Gfx942SdmaHostContentCertificateV1 {
             owner: self.owner,
             storage_identity: self.storage_identity(),
@@ -552,6 +581,7 @@ impl Gfx942SdmaBufferV1 {
             physical_bytes: self.physical_bytes(),
             physical_alignment: self.physical_alignment(),
             host_content_certificate: self.host_content_certificate,
+            initialized_prefix: self.initialized_prefix,
         };
         (self.storage, metadata)
     }
@@ -566,6 +596,7 @@ impl Gfx942SdmaBufferV1 {
             physical_bytes: self.physical_bytes(),
             physical_alignment: self.physical_alignment(),
             host_content_certificate: self.host_content_certificate.clone(),
+            initialized_prefix: self.initialized_prefix,
         }
     }
 
@@ -581,6 +612,7 @@ impl Gfx942SdmaBufferV1 {
             pool_generation,
             logical_bytes,
             host_content_certificate: None,
+            initialized_prefix: 0,
         }
     }
 
@@ -723,7 +755,13 @@ impl Gfx942SdmaCopyRequestV1 {
         destination_offset: u64,
         copy_bytes: u32,
     ) -> Self {
-        destination.clear_host_content_certificate();
+        // A request can be rejected or returned unpublished. Never grow coverage
+        // here, and invalidate possible unknown-byte overwrites before publication.
+        destination.prepare_destination_write(
+            destination_offset,
+            u64::from(copy_bytes),
+            source.initialized_range_is_known(source_offset, u64::from(copy_bytes)),
+        );
         Self {
             source,
             source_offset,
@@ -735,6 +773,29 @@ impl Gfx942SdmaCopyRequestV1 {
 
     pub fn into_buffers(self) -> (Gfx942SdmaBufferV1, Gfx942SdmaBufferV1) {
         (self.source, self.destination)
+    }
+
+    fn record_completed_initialization(&mut self) {
+        let known = self
+            .source
+            .initialized_range_is_known(self.source_offset, u64::from(self.copy_bytes));
+        self.destination.clear_host_content_certificate();
+        self.destination.record_initialized_write(
+            self.destination_offset,
+            u64::from(self.copy_bytes),
+            known,
+        );
+    }
+
+    fn prepare_destination_write(&mut self) {
+        let known = self
+            .source
+            .initialized_range_is_known(self.source_offset, u64::from(self.copy_bytes));
+        self.destination.prepare_destination_write(
+            self.destination_offset,
+            u64::from(self.copy_bytes),
+            known,
+        );
     }
 }
 
@@ -748,6 +809,24 @@ pub struct Gfx942SdmaCompletedCopyV1 {
 }
 
 impl Gfx942SdmaCompletedCopyV1 {
+    fn from_completed_record(record: SdmaCopyRecordV1) -> Self {
+        let mut request = Gfx942SdmaCopyRequestV1 {
+            source: record.source,
+            destination: record.destination,
+            copy_bytes: record.copy_bytes,
+            source_offset: record.source_offset,
+            destination_offset: record.destination_offset,
+        };
+        request.record_completed_initialization();
+        Self {
+            source: request.source,
+            destination: request.destination,
+            copy_bytes: request.copy_bytes,
+            source_offset: request.source_offset,
+            destination_offset: request.destination_offset,
+        }
+    }
+
     pub const fn copy_bytes(&self) -> u32 {
         self.copy_bytes
     }
@@ -1766,7 +1845,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         memory: &mut SharedGttMemorySessionV1,
         source: Gfx942SdmaBufferV1,
         source_offset: u64,
-        destination: Gfx942SdmaBufferV1,
+        mut destination: Gfx942SdmaBufferV1,
         destination_offset: u64,
         copy_bytes: u32,
     ) -> Result<Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1> {
@@ -1835,6 +1914,11 @@ impl Gfx942SdmaQueueOwnerV1 {
         }
 
         let doorbell_failure = preallocate_doorbell_failure_message()?;
+        destination.prepare_destination_write(
+            destination_offset,
+            u64::from(copy_bytes),
+            source.initialized_range_is_known(source_offset, u64::from(copy_bytes)),
+        );
         self.poisoned = true;
         let completions = self.completions.as_mut().expect("checked completion arena");
         memory.overwrite_mapped_host_visible_subrange_in_current_scope(
@@ -2384,9 +2468,10 @@ impl Gfx942SdmaQueueOwnerV1 {
             write_end,
             copy,
             ticket,
-            request,
+            mut request,
             ..
         } = prepared;
+        request.prepare_destination_write();
         self.generations[copy.slot] = copy.generation;
         self.records[copy.slot] = Some(SdmaCopyRecordV1 {
             directional_persistent,
@@ -2610,10 +2695,11 @@ impl Gfx942SdmaQueueOwnerV1 {
         let PreparedPersistentSdmaWindowV1 {
             copies,
             tickets,
-            request,
+            mut request,
             doorbell_failure,
             ..
         } = prepared;
+        request.prepare_destination_write();
         let anchor_slot = copies[0].slot;
         let packet_count = copies.len();
         self.persistent_window_records[anchor_slot] = Some(PersistentSdmaWindowRecordV1 {
@@ -2767,9 +2853,10 @@ impl Gfx942SdmaQueueOwnerV1 {
         for ticket in tickets {
             self.persistent_window_slots[usize::from(ticket.slot)] = None;
         }
-        let record = self.persistent_window_records[anchor_slot]
+        let mut record = self.persistent_window_records[anchor_slot]
             .take()
             .expect("validated persistent SDMA window owner");
+        record.request.record_completed_initialization();
         CompletedPersistentSdmaWindowV1 {
             request: record.request,
             packet_count: record.packet_count,
@@ -2959,7 +3046,8 @@ impl Gfx942SdmaQueueOwnerV1 {
         // Every fallible structural check and allocation precedes this point.
         // Retain all buffers before the first mapped write so a later error
         // leaves exact native custody in this poisoned owner.
-        for (request, item) in requests.into_iter().zip(&copies) {
+        for (mut request, item) in requests.into_iter().zip(&copies) {
+            request.prepare_destination_write();
             self.generations[item.slot] = item.generation;
             self.records[item.slot] = Some(SdmaCopyRecordV1 {
                 directional_persistent: false,
@@ -3077,13 +3165,9 @@ impl Gfx942SdmaQueueOwnerV1 {
             .completion_observed = true;
         memory.check_queue_operational_currentness()?;
         let record = self.records[slot].take().expect("observed SDMA record");
-        Ok(Gfx942SdmaCopyPollV1::Completed(Gfx942SdmaCompletedCopyV1 {
-            source: record.source,
-            destination: record.destination,
-            copy_bytes: record.copy_bytes,
-            source_offset: record.source_offset,
-            destination_offset: record.destination_offset,
-        }))
+        Ok(Gfx942SdmaCopyPollV1::Completed(
+            Gfx942SdmaCompletedCopyV1::from_completed_record(record),
+        ))
     }
 
     pub(crate) fn wait_for(
@@ -3127,13 +3211,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         }
         memory.check_queue_operational_currentness()?;
         let record = self.records[slot].take().expect("completed SDMA record");
-        Ok(Gfx942SdmaCompletedCopyV1 {
-            source: record.source,
-            destination: record.destination,
-            copy_bytes: record.copy_bytes,
-            source_offset: record.source_offset,
-            destination_offset: record.destination_offset,
-        })
+        Ok(Gfx942SdmaCompletedCopyV1::from_completed_record(record))
     }
 
     fn wait_for_in_current_scope_with_final_currentness(
@@ -3201,13 +3279,9 @@ impl Gfx942SdmaQueueOwnerV1 {
         let record = self.records[slot]
             .take()
             .expect("final-current completed SDMA record");
-        SingleSdmaWaitInCurrentScopeV1::Completed(Gfx942SdmaCompletedCopyV1 {
-            source: record.source,
-            destination: record.destination,
-            copy_bytes: record.copy_bytes,
-            source_offset: record.source_offset,
-            destination_offset: record.destination_offset,
-        })
+        SingleSdmaWaitInCurrentScopeV1::Completed(Gfx942SdmaCompletedCopyV1::from_completed_record(
+            record,
+        ))
     }
 
     pub(crate) fn wait_many_for(
@@ -3536,13 +3610,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             let record = self.records[slot]
                 .take()
                 .expect("completed SDMA batch record");
-            completed.push(Gfx942SdmaCompletedCopyV1 {
-                source: record.source,
-                destination: record.destination,
-                copy_bytes: record.copy_bytes,
-                source_offset: record.source_offset,
-                destination_offset: record.destination_offset,
-            });
+            completed.push(Gfx942SdmaCompletedCopyV1::from_completed_record(record));
         }
         Ok(completed)
     }
@@ -3674,13 +3742,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         let Some(record) = self.records.get_mut(slot).and_then(Option::take) else {
             std::process::abort();
         };
-        Gfx942SdmaCompletedCopyV1 {
-            source: record.source,
-            destination: record.destination,
-            copy_bytes: record.copy_bytes,
-            source_offset: record.source_offset,
-            destination_offset: record.destination_offset,
-        }
+        Gfx942SdmaCompletedCopyV1::from_completed_record(record)
     }
 
     fn validated_slot_remains_present(&self, slot: usize) -> bool {
@@ -6010,6 +6072,7 @@ pub(crate) fn persistent_sdma_buffers_for_test(
         pool_generation: 1,
         logical_bytes: 4096,
         host_content_certificate: None,
+        initialized_prefix: 0,
     };
     let host = Gfx942SdmaBufferV1 {
         storage: Gfx942SdmaBufferStorageV1::Host(
@@ -6019,6 +6082,7 @@ pub(crate) fn persistent_sdma_buffers_for_test(
         pool_generation: 1,
         logical_bytes: 4096,
         host_content_certificate: None,
+        initialized_prefix: 0,
     };
     (device, host)
 }
@@ -6063,6 +6127,7 @@ pub(crate) fn write_host_buffer(
     match &mut buffer.storage {
         Gfx942SdmaBufferStorageV1::Host(token) => {
             memory.overwrite_mapped_host_visible_subrange(token, offset, source)?;
+            buffer.record_initialized_write(offset, source.len() as u64, true);
             Ok(())
         }
         Gfx942SdmaBufferStorageV1::Device(_) => Err(Gfx942SdmaErrorV1::Contract(
@@ -6363,7 +6428,7 @@ mod tests {
         );
     }
 
-    fn queue_key(physical: u64, queue: u64, generation: u64) -> QueueKeyV1 {
+    pub(super) fn queue_key(physical: u64, queue: u64, generation: u64) -> QueueKeyV1 {
         QueueKeyV1 {
             vm: VmKeyV1 {
                 device: DeviceKeyV1 {

@@ -2337,16 +2337,14 @@ fn promote_persistent_sdma_custody_v1(
     native_queue_id: u32,
     engine_index: u32,
 ) -> Result<Gfx942QueuePersistentAllocationV1, Gfx942SdmaBufferV1> {
+    if buffer.kind() != Gfx942SdmaBufferKindV1::DeviceLocal {
+        return Err(buffer);
+    }
     let storage_identity = buffer.storage_identity();
     let physical_bytes = buffer.physical_bytes();
     let (storage, queue, pool_generation, logical_bytes) = buffer.into_bridge_parts();
     let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
-        return Err(Gfx942SdmaBufferV1::from_bridge_parts(
-            storage,
-            queue,
-            pool_generation,
-            logical_bytes,
-        ));
+        unreachable!("prevalidated device buffer kind");
     };
     Ok(Gfx942QueuePersistentAllocationV1 {
         owner: Gfx942PersistentDeviceAllocationV1::from_local_mapping(lease),
