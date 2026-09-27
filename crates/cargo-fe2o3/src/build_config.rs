@@ -428,6 +428,21 @@ pub(crate) fn validate_expected_build_config_identity_values(
     }
 }
 
+/// The broker's authenticated digest binds the schema, manifest and transitive
+/// inputs; environment agreement alone cannot establish this binding.
+pub(crate) fn validate_brokered_build_config_identity(
+    config: Option<&PreparedProductionBuildConfig>,
+    authenticated_identity: Option<[u8; 32]>,
+) -> Result<(), BuildConfigError> {
+    if config.map(|config| *config.identity().as_bytes()) != authenticated_identity {
+        return Err(BuildConfigError::Invalid(
+            "production build configuration differs from the authenticated broker binding"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn prepare_production_manifest_v1(
     path: &Path,
 ) -> Result<PreparedProductionBuildConfig, BuildConfigError> {
@@ -1777,6 +1792,44 @@ pub(crate) mod tests {
             assert!(result.is_err());
         }
         assert!(validate_expected_build_config_identity_values(None, None, None).is_ok());
+    }
+
+    #[test]
+    fn broker_identity_rejects_schema_substitution_omission_and_environment_only_agreement() {
+        let scratch = ScratchDirectory::new();
+        let v1_path = scratch.write_manifest("v1.json", &complete_manifest(&scratch, 1));
+        let v2_path = scratch.write_manifest("v2.json", &complete_manifest(&scratch, 2));
+        let v1 = prepare_production_manifest_v1(&v1_path).unwrap();
+        let v2 = prepare_production_manifest_v2(&v2_path).unwrap();
+        assert_ne!(v1.identity(), v2.identity());
+        assert!(validate_brokered_build_config_identity(None, None).is_ok());
+        for (config, other) in [(&v1, &v2), (&v2, &v1)] {
+            let identity = *config.identity().as_bytes();
+            validate_brokered_build_config_identity(Some(config), Some(identity)).unwrap();
+            let environment_identity = config.identity().to_hex();
+            let (expected_v1, expected_v2) = match config.version {
+                ProductionBuildConfigVersion::V1 => (Some(OsStr::new(&environment_identity)), None),
+                ProductionBuildConfigVersion::V2(_) => {
+                    (None, Some(OsStr::new(&environment_identity)))
+                }
+            };
+            validate_expected_build_config_identity_values(Some(config), expected_v1, expected_v2)
+                .unwrap();
+            let mut changed = identity;
+            changed[0] ^= 1;
+            for result in [
+                validate_brokered_build_config_identity(Some(config), None),
+                validate_brokered_build_config_identity(None, Some(identity)),
+                validate_brokered_build_config_identity(Some(config), Some(changed)),
+                validate_brokered_build_config_identity(
+                    Some(config),
+                    Some(*other.identity().as_bytes()),
+                ),
+            ] {
+                assert!(matches!(result, Err(BuildConfigError::Invalid(message))
+                    if message == "production build configuration differs from the authenticated broker binding"));
+            }
+        }
     }
 
     #[test]

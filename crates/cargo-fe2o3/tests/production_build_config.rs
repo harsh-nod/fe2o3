@@ -156,15 +156,15 @@ fn production_capability_release_preserves_v1_and_defers_only_selected_v2() {
     let source = include_str!("../src/binding_wrapper.rs");
     let broker = include_str!("../src/capability_broker.rs");
     let intake = source
-        .split("fn from_production_environment(")
+        .split("fn from_authenticated_transfer(")
         .nth(1)
         .expect("direct production capability intake exists")
         .split("fn output_dir(&self)")
         .next()
         .expect("production capability API follows capability intake");
     assert!(intake.contains("release_or_retain_invocation_authority"));
-    assert!(intake.contains("false"));
-    assert!(intake.contains("from_production_environment_with_source_isa_observer"));
+    assert!(intake.contains("retain_for_selected_source_isa_observer"));
+    assert!(!intake.contains("receive_validated_compiler_capabilities"));
     assert!(!intake.contains("ROW_SOFTMAX"));
     assert!(!intake.contains("FE2O3_QUALIFICATION"));
     let selection = source
@@ -185,6 +185,46 @@ fn production_capability_release_preserves_v1_and_defers_only_selected_v2() {
     assert!(!broker.contains("S09"));
     assert!(!broker.contains("fn inherit_for_child("));
     assert!(!broker.contains("pinned_cargo_image: File"));
+}
+
+#[test]
+fn wrapper_authenticates_before_configuration_io_and_attempt_creation() {
+    let source = include_str!("../src/binding_wrapper.rs");
+    let run = source
+        .split("pub(crate) fn run(")
+        .nth(1)
+        .unwrap()
+        .split("scope_managed_rustc_arguments")
+        .next()
+        .unwrap();
+    let mut previous = 0;
+    for stage in [
+        "CapabilityBindingV3::from_environment_for_client",
+        "authenticate_pinned_rustc(&pinned_rustc",
+        "validate_rustc_lib_tree_descriptor(capability_binding)?",
+        "receive_validated_compiler_capabilities(capability_binding)?",
+        "PreparedProductionBuildConfig::from_environment()",
+        "validate_expected_build_config_identity(",
+        "let source_isa_selection =",
+        "CompilerCapabilities::from_authenticated_transfer(",
+        "prepare_production_managed_attempt(",
+        "release_invocation_with_source_isa_observer(",
+    ] {
+        let offset = run.find(stage).unwrap_or_else(|| panic!("missing {stage}"));
+        assert!(offset > previous, "out-of-order production stage: {stage}");
+        previous = offset;
+    }
+    assert!(run.contains("capability_binding.config_identity()"));
+    assert_eq!(
+        run.matches("receive_validated_compiler_capabilities(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        run.matches("PreparedProductionBuildConfig::from_environment()")
+            .count(),
+        1
+    );
 }
 
 #[test]

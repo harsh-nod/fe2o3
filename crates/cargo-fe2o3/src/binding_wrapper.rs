@@ -358,9 +358,22 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             let metadata = ordered_rustc_codegen_metadata_v1(compile)?;
             let build_observation =
                 CompileBuildObservationV2::from_ordered_metadata(compile.crate_name(), &metadata)?;
+            let capability_binding =
+                capability_broker::CapabilityBindingV3::from_environment_for_client(
+                    capability_broker::CapabilityProfileV1::Ordinary,
+                )
+                .map_err(BindingWrapperError::CapabilityBroker)?;
+            authenticate_pinned_rustc(&pinned_rustc, capability_binding.rustc_executable_sha256())?;
+            validate_rustc_lib_tree_descriptor(capability_binding)?;
+            // Authenticate the route and retain its invocation capability
+            // before opening the configuration or any transitive provider input.
+            let transferred = receive_validated_compiler_capabilities(capability_binding)?;
             let build_config = PreparedProductionBuildConfig::from_environment()
                 .map_err(BindingWrapperError::BuildConfiguration)?;
-            validate_expected_build_config_identity(build_config.as_ref())?;
+            validate_expected_build_config_identity(
+                build_config.as_ref(),
+                capability_binding.config_identity(),
+            )?;
             let source_isa_selection = if build_config
                 .as_ref()
                 .is_some_and(PreparedProductionBuildConfig::source_isa_summary_enabled)
@@ -399,30 +412,17 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             } else {
                 None
             };
-            let capability_profile = capability_broker::CapabilityProfileV1::Ordinary;
-            let capability_binding =
-                capability_broker::CapabilityBindingV3::from_environment_for_client(
-                    capability_profile,
-                    build_config
-                        .as_ref()
-                        .map(|config| *config.identity().as_bytes()),
-                )
-                .map_err(BindingWrapperError::CapabilityBroker)?;
-            authenticate_pinned_rustc(&pinned_rustc, capability_binding.rustc_executable_sha256())?;
-            validate_rustc_lib_tree_descriptor(capability_binding)?;
             let retain_source_isa_observer =
                 source_isa_selection
                     .as_ref()
                     .is_some_and(|(_, selected, binding, _)| {
                         retain_source_isa_observer(*selected, *binding)
                     });
-            let mut compiler_capabilities = if retain_source_isa_observer {
-                CompilerCapabilities::from_production_environment_with_source_isa_observer(
-                    capability_binding,
-                )?
-            } else {
-                CompilerCapabilities::from_production_environment(capability_binding)?
-            };
+            let mut compiler_capabilities = CompilerCapabilities::from_authenticated_transfer(
+                capability_binding,
+                transferred,
+                retain_source_isa_observer,
+            )?;
             let (
                 current_dir,
                 selected_kernel_root,
@@ -1375,7 +1375,10 @@ fn os_string(value: Vec<u8>) -> Result<OsString, ()> {
 
 fn validate_expected_build_config_identity(
     config: Option<&PreparedProductionBuildConfig>,
+    broker_identity: Option<[u8; 32]>,
 ) -> Result<(), BindingWrapperError> {
+    crate::build_config::validate_brokered_build_config_identity(config, broker_identity)
+        .map_err(BindingWrapperError::BuildConfiguration)?;
     if std::env::var_os(WORKER_V2_EXPECTED_ID_ENV).is_some() {
         return Err(BindingWrapperError::BuildConfiguration(
             BuildConfigError::Invalid(format!(
@@ -1441,45 +1444,18 @@ fn receive_validated_compiler_capabilities(
 }
 
 impl CompilerCapabilities {
-    fn from_production_environment(
+    fn from_authenticated_transfer(
         binding: capability_broker::CapabilityBindingV3,
+        mut transferred: capability_broker::BrokeredCapabilities,
+        retain_for_selected_source_isa_observer: bool,
     ) -> Result<Self, BindingWrapperError> {
-        let mut transferred = receive_validated_compiler_capabilities(binding)?;
         let invocation_authority = release_or_retain_invocation_authority(
             transferred.invocation_authority.take(),
-            false,
+            retain_for_selected_source_isa_observer,
             capability_broker::BrokeredInvocationAuthorityV1::release,
         )?;
-        Ok(Self::from_transferred(
-            binding,
-            transferred,
-            invocation_authority,
-        ))
-    }
-
-    fn from_production_environment_with_source_isa_observer(
-        binding: capability_broker::CapabilityBindingV3,
-    ) -> Result<Self, BindingWrapperError> {
-        let mut transferred = receive_validated_compiler_capabilities(binding)?;
-        let invocation_authority = release_or_retain_invocation_authority(
-            transferred.invocation_authority.take(),
-            true,
-            capability_broker::BrokeredInvocationAuthorityV1::release,
-        )?;
-        Ok(Self::from_transferred(
-            binding,
-            transferred,
-            invocation_authority,
-        ))
-    }
-
-    fn from_transferred(
-        binding: capability_broker::CapabilityBindingV3,
-        transferred: capability_broker::BrokeredCapabilities,
-        invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
-    ) -> Self {
         let output_dir = transferred.artifact.child_path();
-        Self {
+        Ok(Self {
             binding,
             backend: transferred.backend,
             artifact: transferred.artifact,
@@ -1487,7 +1463,7 @@ impl CompilerCapabilities {
             compiler_execution_profile: transferred.compiler_execution_profile,
             invocation_authority,
             output_dir,
-        }
+        })
     }
 
     fn take_invocation_authority(
@@ -2584,6 +2560,76 @@ mod lifecycle_tests {
             BuildInvocation::from_bytes([discriminator; 32])
         ))
         .unwrap()
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn unauthenticated_route_rejects_before_manifest_io() {
+        use std::os::{fd::AsRawFd, unix::process::CommandExt};
+
+        const SENTINEL: &str = "FE2O3_WRAPPER_PRECONFIG_TEST";
+        const TEST: &str =
+            "binding_wrapper::lifecycle_tests::unauthenticated_route_rejects_before_manifest_io";
+        if std::env::var_os(SENTINEL).is_none() {
+            let temp = TestDirectory::new();
+            let rustc = PinnedExecutable::open(Path::new("/bin/true")).unwrap();
+            let args = [
+                "-Zmir-enable-passes=-JumpThreading".to_owned(),
+                "--cfg".to_owned(),
+                format!("fe2o3_codegen_generation=\"{}\"", "1".repeat(32)),
+                format!("-Zcodegen-backend=/proc/./self/fd/{BACKEND_CHILD_FD}"),
+            ]
+            .join("\u{1f}");
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+                .env_clear()
+                .env(SENTINEL, "1")
+                .env(crate::EXPECTED_RUSTC_SHA256_ENV, hex(rustc.sha256()))
+                .env(MANAGED_RUSTC_ARGS_ENV, args)
+                .env(PRODUCTION_BUILD_CONFIG_ENV, temp.0.join("missing.json"))
+                .env(PRODUCTION_BUILD_EXPECTED_ID_ENV, hex(&[1; 32]))
+                .env(capability_broker::CAPABILITY_BROKER_ENV, "malformed");
+            // SAFETY: close_range(CLOEXEC) preserves descriptors until exec and
+            // prevents unrelated inherited descriptors from reaching this test.
+            unsafe {
+                command.pre_exec(crate::application_exec::protect_all_nonstdio_descriptors);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "isolated wrapper test failed\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+        // This process never executes the fixture image or creates an attempt.
+        let image = PinnedExecutable::open(Path::new("/bin/true"))
+            .unwrap()
+            .seal_executable_image()
+            .unwrap();
+        let source = image.try_clone_for_transfer().unwrap();
+        let descriptor = rustix::io::fcntl_dupfd_cloexec(&source, RUSTC_CHILD_FD).unwrap();
+        assert_eq!(descriptor.as_raw_fd(), RUSTC_CHILD_FD);
+        let argv = [
+            format!("/proc/self/fd/{RUSTC_CHILD_FD}"),
+            "--crate-name".to_owned(),
+            "kernel".to_owned(),
+            "src/lib.rs".to_owned(),
+            "--crate-type=lib".to_owned(),
+            "--emit=metadata".to_owned(),
+            "-Cmetadata=preconfig".to_owned(),
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        let error = run(argv).unwrap_err();
+        assert!(
+            matches!(&error, BindingWrapperError::CapabilityBroker(message)
+                if message == "capability broker route is not canonical V3"),
+            "unexpected wrapper refusal: {error}"
+        );
     }
 
     #[test]
