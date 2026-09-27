@@ -27,6 +27,9 @@ use fe2o3_hsaco_finalize::{
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+#[path = "build_config_native.rs"]
+mod native;
+
 pub(crate) const QUALIFICATION_ORACLE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
 const OBSOLETE_CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub(crate) const PRODUCTION_BUILD_CONFIG_ENV: &str = "FE2O3_PRODUCTION_BUILD_CONFIG_V1";

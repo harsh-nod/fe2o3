@@ -39,6 +39,9 @@ const LOCAL_WORK: usize = 8192;
 const FRAME: usize = 4 * size_of::<Failure>() + 4096;
 const SUBJECT_STORAGE: usize = size_of::<(Subject, SubjectStorage)>();
 
+#[path = "compiler_execution_boundary_native_pipeline.rs"]
+pub(crate) mod pipeline;
+
 /// The exact selected child, sealed configuration and original account remain
 /// owned together through receipt admission. Neither readiness nor a signed
 /// carriage grants compiler, publication, load or launch authority.
@@ -278,6 +281,20 @@ fn decode_receipt(
         profile.revalidate(b)?;
         let (carriage, storage) = Carriage::decode(bytes, b)?;
         b.reserve_storage(storage.additional_storage())?;
+        validate_receipt(profile, subject, &carriage, b)?;
+        Ok((carriage, storage))
+    })
+}
+
+fn validate_receipt(
+    profile: &Profile,
+    subject: &Subject,
+    carriage: &Carriage,
+    b: &mut Budget<'_>,
+) -> Result<()> {
+    let floor = profile.retained_storage() + SUBJECT_STORAGE + carriage.retained_storage();
+    b.with_prepaid_scope(floor, 8, LOCAL_WORK, FRAME, |b| {
+        profile.revalidate(b)?;
         if carriage.policy().canonical_bytes() != profile.profile().policy().canonical_bytes()
             || carriage.request().subject().canonical_bytes() != subject.canonical_bytes()
         {
@@ -285,8 +302,7 @@ fn decode_receipt(
                 "receipt differs from retained policy or exact subject",
             ));
         }
-        profile.revalidate(b)?;
-        Ok((carriage, storage))
+        Ok(())
     })
 }
 

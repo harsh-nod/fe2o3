@@ -187,6 +187,7 @@ fn receipt_matches_full_policy_subject_and_signature_without_granting_authority(
     let subject = subject(&mut b);
     let carriage = carriage(&mut b);
     let floor = b.storage();
+    validate_receipt(&profile, &subject, &carriage, &mut b).unwrap();
     let (decoded, storage) =
         decode_receipt(&profile, &subject, carriage.canonical_bytes(), &mut b).unwrap();
     assert_eq!(decoded, carriage);
@@ -200,6 +201,10 @@ fn receipt_matches_full_policy_subject_and_signature_without_granting_authority(
 
     let other_profile = self::profile(8, &mut b);
     assert!(matches!(
+        validate_receipt(&other_profile, &subject, &carriage, &mut b),
+        Err(Failure::Mismatch(_))
+    ));
+    assert!(matches!(
         decode_receipt(&other_profile, &subject, carriage.canonical_bytes(), &mut b),
         Err(Failure::Mismatch(_))
     ));
@@ -209,6 +214,10 @@ fn receipt_matches_full_policy_subject_and_signature_without_granting_authority(
     b.reserve_storage(other_subject.len()).unwrap();
     let (other_subject, storage) = Subject::decode(&other_subject, &mut b).unwrap();
     b.reserve_storage(storage.retained_storage()).unwrap();
+    assert!(matches!(
+        validate_receipt(&profile, &other_subject, &carriage, &mut b),
+        Err(Failure::Mismatch(_))
+    ));
     assert!(matches!(
         decode_receipt(&profile, &other_subject, carriage.canonical_bytes(), &mut b),
         Err(Failure::Mismatch(_))
