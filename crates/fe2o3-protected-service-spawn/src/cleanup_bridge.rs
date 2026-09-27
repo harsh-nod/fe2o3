@@ -23,6 +23,11 @@
 //! use fe2o3_protected_service_spawn::ProtectedServiceCleanupReservationV2;
 //! fn extract(slot: ProtectedServiceCleanupReservationV2) { let _ = slot.into_spawn_slot(); }
 //! ```
+//! ```compile_fail
+//! use fe2o3_protected_service_spawn::ProtectedServiceCleanupServiceV2 as Cleanup;
+//! use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+//! fn unchecked(c: &mut Cleanup, b: &mut Budget<'_>) { c.reserve_launch_retaining((), 0, b); }
+//! ```
 
 pub use crate::process_cleanup::{ChildCleanupV1, CleanupPollV1};
 pub use crate::process_reaper::{LegacyCleanupReservationErrorV1, ReapSlotV1};
@@ -91,6 +96,45 @@ impl crate::ProtectedServiceCleanupReservationV2 {
     #[doc(hidden)]
     pub unsafe fn into_spawn_slot(self) -> ReapSlotV1<'static> {
         self.into_slot()
+    }
+}
+
+impl crate::ProtectedServiceCleanupServiceV2 {
+    /// Retains complete dependencies in a funded slot BEFORE process creation.
+    ///
+    /// Prepay the full consumed input storage on the original request account.
+    /// Success preserves that reservation and returns unreserved GROWTH for the
+    /// typed view. The pool independently funds the full payload until rollback
+    /// before clone or exact terminal retirement. Neither pending cleanup nor
+    /// controller loss releases that charge. The view may outlive retirement;
+    /// keep its full retained_storage charged until Drop. Failure consumes the
+    /// input but leaves its request reservation for caller retirement.
+    ///
+    /// # Safety
+    /// retained_storage must cover the ENTIRE value and all resources it owns.
+    /// Drop must be bounded, nonpanicking, and fit retained_launch_work, apart
+    /// from nested child cancellation whose existing prepayment remains owned.
+    /// As with any consuming operation, dropping the input on an early refusal
+    /// must already be funded. Do not retain this pool's controller in the value.
+    /// Shared access must preserve all transitively retained obligations; it must
+    /// not extract owners through interior mutation or unlock shared lock aliases.
+    /// Before clone transfer the reservation to the exclusive child custodian;
+    /// never retire it while that child is unresolved. No raw descriptor, PID,
+    /// storage number or caller value is authenticated by this operation.
+    pub unsafe fn reserve_launch_retaining<T: Send + 'static>(
+        &mut self,
+        value: T,
+        retained_storage: usize,
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<
+        (
+            crate::ProtectedServiceCleanupReservationV2,
+            crate::RetainedResourcesV2<T>,
+            crate::native_spawn::ProtectedServiceSpawnStorageV2,
+        ),
+        crate::ProtectedServiceCleanupErrorV2,
+    > {
+        self.reserve_retaining(value, retained_storage, budget)
     }
 }
 

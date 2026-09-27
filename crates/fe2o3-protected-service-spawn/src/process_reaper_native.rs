@@ -20,6 +20,7 @@ pub(super) struct NativeAccount {
     leased: bool,
     admission_open: bool,
     deployment_guard: Option<File>,
+    retained_storage: usize,
 }
 
 /// Fixed failure categories for native cleanup funding and custody.
@@ -214,6 +215,7 @@ impl Service {
             leased: true,
             admission_open,
             deployment_guard: None,
+            retained_storage: 0,
         });
         Ok(Self {
             reaper,
@@ -266,11 +268,20 @@ impl Service {
             .unwrap_or_else(|error| error.into_inner());
         let native = self.native(&mut mode)?;
         native.charge(Self::TURN_WORK + visits * Self::CELL_WORK)?;
+        drop(mode);
         for _ in 0..visits {
-            DeferredReaperV1::pump_cell(&self.reaper.cells[native.cursor]);
+            let mut mode = self
+                .reaper
+                .mode
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let native = self.native(&mut mode)?;
+            let index = native.cursor;
             native.cursor = (native.cursor + 1) % CAPACITY;
+            drop(mode);
+            self.reaper.pump_cell(&self.reaper.cells[index]);
         }
-        Ok(native.report())
+        self.report()
     }
 
     /// Retains one close-only deployment guard in this persistently funded pool.
@@ -380,9 +391,7 @@ impl Service {
                     .unwrap_or_else(|error| error.into_inner());
                 let native = self.native(&mut mode)?;
                 native.charge(Self::GUARD_CLONE_WORK)?;
-                if native.ledger.storage() != Self::STORAGE {
-                    return Err(Resource::Accounting.into());
-                }
+                native.check_storage()?;
                 let guard = native.deployment_guard.as_ref().ok_or(Failure::State)?;
                 let file = duplicate(guard).map_err(Failure::GuardIo)?;
                 Ok((file, Storage(Self::GUARD_FILE_STORAGE)))
@@ -450,8 +459,9 @@ impl Service {
         {
             return Err(Failure::Busy);
         }
-        if native.ledger.storage() != Self::STORAGE {
-            return Err(Failure::Resource(Resource::Accounting));
+        native.check_storage()?;
+        if native.retained_storage != 0 {
+            return Err(Resource::Accounting.into());
         }
         // Every slot is terminal before releasing deployment replacement exclusion.
         drop(native.deployment_guard.take());
@@ -489,6 +499,30 @@ impl Drop for Service {
 }
 
 impl NativeAccount {
+    pub(super) fn check_storage(&self) -> Result<(), Failure> {
+        if Service::STORAGE.checked_add(self.retained_storage) != Some(self.ledger.storage()) {
+            return Err(Resource::Accounting.into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn retire_storage(&mut self, bytes: usize) -> Result<(), Failure> {
+        let result = (|| {
+            self.check_storage()?;
+            let retained = self
+                .retained_storage
+                .checked_sub(bytes)
+                .ok_or(Resource::Accounting)?;
+            self.ledger
+                .with_budget(|budget| budget.release_storage(bytes))?;
+            self.retained_storage = retained;
+            Ok(())
+        })();
+        if result.is_err() {
+            self.admission_open = false;
+        }
+        result
+    }
     fn can_fund_turn(ledger: &Account) -> bool {
         ledger.work_limit().saturating_sub(ledger.work()) >= Service::TURN_WORK + Service::CELL_WORK
     }
@@ -557,3 +591,6 @@ mod tests;
 #[cfg(test)]
 #[path = "process_reaper_guard_tests.rs"]
 mod guard_tests;
+
+#[path = "process_reaper_retained.rs"]
+mod retained;

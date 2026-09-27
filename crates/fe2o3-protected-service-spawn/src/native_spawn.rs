@@ -51,11 +51,14 @@ use std::{
 #[path = "native_child.rs"]
 mod child;
 pub use child::RootOwnedProtectedServiceChildV2;
+#[path = "native_retained_child.rs"]
+mod retained_child;
+pub use retained_child::RootOwnedRetainedServiceChildV2;
 
 pub(crate) const ENTRY: usize = 8;
 pub(crate) type Result<T> = std::result::Result<T, ProtectedServiceSpawnErrorV2>;
 
-/// Full unreserved retained storage, not growth over borrowed inputs.
+/// Unreserved retained storage; each operation specifies FULL charge or GROWTH.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProtectedServiceSpawnStorageV2(pub(crate) usize);
 impl ProtectedServiceSpawnStorageV2 {
@@ -74,6 +77,8 @@ pub enum ProtectedServiceSpawnErrorV2 {
     Profile(observations::Error),
     /// Funded global cleanup service refused a reservation.
     Cleanup(ProtectedServiceCleanupErrorV2),
+    /// Retained input access refused after an interrupted owner operation.
+    Retained(crate::RetainedResourceAccessErrorV2),
     /// Original artifact-spawn coordinator refused the pre-clone lease.
     SpawnLease(fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseErrorV1),
     /// Fixed structural or lifecycle refusal.
@@ -101,12 +106,18 @@ impl From<ProtectedServiceCleanupErrorV2> for ProtectedServiceSpawnErrorV2 {
         Self::Cleanup(e)
     }
 }
+impl From<crate::RetainedResourceAccessErrorV2> for ProtectedServiceSpawnErrorV2 {
+    fn from(e: crate::RetainedResourceAccessErrorV2) -> Self {
+        Self::Retained(e)
+    }
+}
 impl fmt::Display for ProtectedServiceSpawnErrorV2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Resource(e) => e.fmt(f),
             Self::Profile(e) => e.fmt(f),
             Self::Cleanup(e) => e.fmt(f),
+            Self::Retained(e) => e.fmt(f),
             Self::SpawnLease(e) => e.fmt(f),
             Self::State(s) => f.write_str(s),
             Self::Io { operation, source } => write!(f, "{operation}: {source}"),
@@ -119,6 +130,7 @@ impl Error for ProtectedServiceSpawnErrorV2 {
             Self::Resource(e) => Some(e),
             Self::Profile(e) => Some(e),
             Self::Cleanup(e) => Some(e),
+            Self::Retained(e) => Some(e),
             Self::SpawnLease(e) => Some(e),
             Self::Io { source, .. } => Some(source),
             Self::State(_) => None,
@@ -273,6 +285,34 @@ impl StagedProtectedServiceExecV2 {
             .ok_or(Resource::Arithmetic.into())
     }
 
+    /// Successful work envelope for spawn_retaining, including persistent retention.
+    pub fn spawn_retaining_work<T: Send + 'static>(
+        &self,
+        cap_last_cap: u32,
+        input: usize,
+    ) -> Result<usize> {
+        let retention = Cleanup::retained_launch_work::<T>(input)?;
+        Self::SPAWN_WORK
+            .checked_add(native_work::child_work(
+                self.inner.descriptor_count(),
+                cap_last_cap,
+            )?)
+            .and_then(|n| n.checked_add(retention))
+            .ok_or(Resource::Arithmetic.into())
+    }
+
+    /// Additional request peak for retained spawn, above staged and consumed inputs.
+    /// Service payload storage is funded independently on its persistent account.
+    pub fn spawn_retaining_scratch<T: Send + 'static>(input: usize) -> Result<usize> {
+        let growth = crate::RetainedResourcesV2::<T>::storage_for(input)?
+            .checked_sub(input)
+            .ok_or(Resource::Accounting)?;
+        Self::SPAWN_SCRATCH
+            .checked_add(Cleanup::retained_launch_scratch::<T>(input)?)
+            .and_then(|n| n.checked_add(growth))
+            .ok_or(Resource::Arithmetic.into())
+    }
+
     /// Creates one root-to-service child under pre-funded finite cleanup custody.
     /// Returns a FULL unreserved child charge. Drop of a successfully returned
     /// child uses only the reservation's emergency allowance, never a fresh ledger.
@@ -307,9 +347,73 @@ impl StagedProtectedServiceExecV2 {
         RootOwnedProtectedServiceChildV2,
         ProtectedServiceSpawnStorageV2,
     )> {
+        let (child, ()) =
+            self.spawn_reserved(self.retained, credentials, cleanup, b, |cleanup, b| {
+                Ok((cleanup.reserve_launch(b)?.into_slot(), ()))
+            })?;
+        Ok((
+            child,
+            ProtectedServiceSpawnStorageV2(RootOwnedProtectedServiceChildV2::STORAGE),
+        ))
+    }
+
+    /// Consumes complete service dependencies into the child and its cleanup slot.
+    /// Returns GROWTH over their prepaid retained_storage; the staged image stays
+    /// borrowed and charged independently. The pool also pays full persistent
+    /// payload storage before clone. Refusal consumes dependencies but leaves
+    /// their request reservation for retirement. Pending cleanup retains them.
+    ///
+    /// # Safety
+    /// All spawn and reserve_launch_retaining obligations apply, including final
+    /// staged-file validation, full dependency accounting and bounded funded Drop.
+    /// The value must contain every owner required while this child is unresolved;
+    /// caller-side field ordering alone does not extend those lifetimes.
+    pub unsafe fn spawn_retaining<T: Send + 'static>(
+        &self,
+        credentials: Credentials,
+        resources: T,
+        retained_storage: usize,
+        cleanup: &mut Cleanup,
+        b: &mut Budget<'_>,
+    ) -> Result<(
+        RootOwnedRetainedServiceChildV2<T>,
+        ProtectedServiceSpawnStorageV2,
+    )> {
+        let floor = self
+            .retained
+            .checked_add(retained_storage)
+            .ok_or(Resource::Arithmetic)?;
+        let full = RootOwnedRetainedServiceChildV2::<T>::storage_for(retained_storage)?;
+        let growth = full
+            .checked_sub(retained_storage)
+            .ok_or(Resource::Accounting)?;
+        let (child, resources) =
+            self.spawn_reserved(floor, credentials, cleanup, b, |cleanup, b| {
+                let (reservation, view, charge) =
+                    cleanup.reserve_retaining(resources, retained_storage, b)?;
+                b.reserve_storage(charge.additional_storage())?;
+                Ok((reservation.into_slot(), view))
+            })?;
+        Ok((
+            RootOwnedRetainedServiceChildV2::new(child, resources, full),
+            ProtectedServiceSpawnStorageV2(growth),
+        ))
+    }
+
+    fn spawn_reserved<R>(
+        &self,
+        floor: usize,
+        credentials: Credentials,
+        cleanup: &mut Cleanup,
+        b: &mut Budget<'_>,
+        reserve: impl FnOnce(
+            &mut Cleanup,
+            &mut Budget<'_>,
+        ) -> Result<(crate::process_reaper::ReapSlotV1<'static>, R)>,
+    ) -> Result<(RootOwnedProtectedServiceChildV2, R)> {
         b.charge_work(ENTRY)?;
         b.with_prepaid_scope(
-            self.retained,
+            floor,
             0,
             Self::SPAWN_WORK - ENTRY,
             Self::SPAWN_SCRATCH,
@@ -325,15 +429,12 @@ impl StagedProtectedServiceExecV2 {
                     self.inner.descriptor_count(),
                     ceiling,
                 )?)?;
-                let slot = cleanup.reserve_launch(b)?.into_slot();
+                let (slot, resources) = reserve(cleanup, b)?;
                 let lease =
                     fe2o3_artifact_transaction::try_acquire_artifact_process_spawn_lease_v1()
                         .map_err(ProtectedServiceSpawnErrorV2::SpawnLease)?;
                 let child = clone_guarded(&self.inner, credentials, ceiling, lease, slot)?;
-                Ok((
-                    child,
-                    ProtectedServiceSpawnStorageV2(RootOwnedProtectedServiceChildV2::STORAGE),
-                ))
+                Ok((child, resources))
             },
         )
     }

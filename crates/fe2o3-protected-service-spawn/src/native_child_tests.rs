@@ -146,6 +146,7 @@ fn atomic_clone_and_guard_adoption_in_subprocess() {
 }
 
 fn subprocess(mode: &str) {
+    let completion = tempfile::NamedTempFile::new().unwrap();
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -154,6 +155,7 @@ fn subprocess(mode: &str) {
         ])
         .env_clear()
         .env(MARKER, mode)
+        .env("FE2O3_NATIVE_CHILD_COMPLETION", completion.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -174,6 +176,7 @@ fn subprocess(mode: &str) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(std::fs::read(completion.path()).unwrap(), b"complete");
 }
 
 // A dedicated subprocess may select the REAL global service without influencing
@@ -200,7 +203,7 @@ fn native_child_subprocess() {
         return;
     }
     let mut service =
-        Drain(Service::admit(Account::new(Work::new(LIMIT), Service::STORAGE)).unwrap());
+        Drain(Service::admit(Account::new(Work::new(LIMIT), Service::STORAGE + 1024)).unwrap());
     let guard = File::from(
         rustix::fs::memfd_create(c"native-child-guard", rustix::fs::MemfdFlags::CLOEXEC).unwrap(),
     );
@@ -228,6 +231,11 @@ fn native_child_subprocess() {
     rustix::fs::flock(
         &observer,
         rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    )
+    .unwrap();
+    std::fs::write(
+        std::env::var_os("FE2O3_NATIVE_CHILD_COMPLETION").unwrap(),
+        b"complete",
     )
     .unwrap();
 }
@@ -347,21 +355,43 @@ fn clone_probe(service: &mut Drain) {
     b.reserve_storage(charge.additional_storage()).unwrap();
     let credentials = Credentials::new(65534, 65534).unwrap();
     for failure in 0..3 {
-        let mut child = b
+        let held = File::from(
+            rustix::fs::memfd_create(
+                c"retained-clone-dependency",
+                rustix::fs::MemfdFlags::CLOEXEC,
+            )
+            .unwrap(),
+        );
+        rustix::fs::flock(&held, rustix::fs::FlockOperation::NonBlockingLockShared).unwrap();
+        let observer = File::open(format!("/proc/self/fd/{}", held.as_raw_fd())).unwrap();
+        b.reserve_storage(Service::GUARD_FILE_STORAGE).unwrap();
+        let (mut child, resources) = b
             .with_prepaid_scope::<_, Error>(
-                stage.retained_storage(),
+                stage.retained_storage() + Service::GUARD_FILE_STORAGE,
                 0,
                 stage.spawn_work(63).unwrap() - Service::RESERVATION_WORK,
                 Stage::SPAWN_SCRATCH,
                 |b| {
-                    let slot = service.0.reserve_launch(b)?.into_slot();
+                    let (slot, resources, charge) =
+                        service
+                            .0
+                            .reserve_retaining(held, Service::GUARD_FILE_STORAGE, b)?;
+                    b.reserve_storage(charge.additional_storage())?;
                     let lease =
                         fe2o3_artifact_transaction::try_acquire_artifact_process_spawn_lease_v1()
                             .map_err(Error::SpawnLease)?;
-                    clone_guarded(&stage.inner, credentials, 63, lease, slot)
+                    clone_guarded(&stage.inner, credentials, 63, lease, slot.into_slot())
+                        .map(|child| (child, resources))
                 },
             )
             .unwrap();
+        let resources_charge = resources.retained_storage();
+        b.reserve_storage(resources_charge - Service::GUARD_FILE_STORAGE)
+            .unwrap();
+        drop(resources);
+        b.release_storage(resources_charge).unwrap();
+        assert_guard_locked(&observer);
+        assert!(service.0.report().unwrap().storage > Service::STORAGE);
         b.reserve_storage(Owner::STORAGE).unwrap();
         assert!(child.record().unwrap().retains_spawn_lease());
         let (witness, witness_charge) = child.try_clone_pidfd(&mut b).unwrap();
@@ -389,6 +419,12 @@ fn clone_probe(service: &mut Drain) {
         }
         b.release_storage(Owner::STORAGE).unwrap();
         await_reaped(service, &witness);
+        rustix::fs::flock(
+            &observer,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .unwrap();
+        assert_eq!(service.0.report().unwrap().storage, Service::STORAGE);
         drop(witness);
         b.release_storage(witness_charge.additional_storage())
             .unwrap();
@@ -412,6 +448,104 @@ fn await_reaped(service: &mut Drain, witness: &OwnedFd) {
                 std::thread::sleep(Duration::from_millis(2));
             }
             Err(e) => panic!("observe fixture reap: {e}"),
+        }
+    }
+}
+
+#[test]
+fn retained_child_keeps_complete_inputs_through_exec_cancel_and_unwind() {
+    use super::super::RootOwnedRetainedServiceChildV2 as RetainedChild;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct Input(Arc<AtomicUsize>);
+    impl Drop for Input {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    const INPUT: usize = 64;
+    for terminal in [false, true] {
+        for unwind in [false, true] {
+            let mut c =
+                crate::process_reaper::isolated_cleanup(Account::new(Work::new(LIMIT), LIMIT));
+            let mut w = Work::new(LIMIT);
+            let mut b = Budget::new(&mut w, LIMIT);
+            b.reserve_storage(INPUT).unwrap();
+            let drops = Arc::new(AtomicUsize::new(0));
+            let (slot, resources, _) = c
+                .reserve_retaining(Input(drops.clone()), INPUT, &mut b)
+                .unwrap();
+            let pid = Pid::from_raw(1000).unwrap();
+            let mut record = Child::new(None, pid, None);
+            if terminal {
+                record.terminal_reaped();
+            }
+            let child = Owner {
+                custody: Custody(Some((record, slot.into_slot()))),
+                pid,
+                disposition: Poll::Pending,
+            };
+            let full = RetainedChild::<Input>::storage_for(INPUT).unwrap();
+            b.reserve_storage(full - INPUT).unwrap();
+            let mut child = RetainedChild::new(child, resources, full);
+            child
+                .with_resources(&mut b, |resources, _| {
+                    assert!(Arc::ptr_eq(&resources.0, &drops));
+                    Ok::<_, Error>(())
+                })
+                .unwrap();
+            assert_eq!(child.retained_storage(), full);
+            let mut short_w = Work::new(LIMIT);
+            let mut short = Budget::new(&mut short_w, LIMIT);
+            short.reserve_storage(full - 1).unwrap();
+            assert!(matches!(
+                child.is_live(&mut short),
+                Err(Error::Resource(Resource::Accounting))
+            ));
+            assert!(matches!(
+                child.try_clone_pidfd(&mut short),
+                Err(Error::Resource(Resource::Accounting))
+            ));
+            // No process or inherited artifact alias exists in this synthetic record.
+            unsafe {
+                child.confirm_exec(&mut b).unwrap();
+            }
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
+            assert!(c.report().unwrap().storage > Service::STORAGE);
+            if unwind {
+                assert!(
+                    catch_unwind(AssertUnwindSafe(move || {
+                        let _child = child;
+                        panic!("retained child owner unwind");
+                    }))
+                    .is_err()
+                );
+            } else {
+                let result = child.cancel();
+                assert_eq!(
+                    result,
+                    if terminal {
+                        Poll::Reaped
+                    } else {
+                        Poll::Quarantined
+                    }
+                );
+                assert_eq!(child.cancel(), result);
+                assert_eq!(drops.load(Ordering::SeqCst), 0);
+                drop(child);
+            }
+            b.release_storage(full).unwrap();
+            assert_eq!(drops.load(Ordering::SeqCst), usize::from(terminal));
+            if terminal {
+                assert_eq!(c.report().unwrap().storage, Service::STORAGE);
+                assert_eq!(c.shutdown().unwrap().storage(), 0);
+            } else {
+                c.pump(64).unwrap();
+                assert!(matches!(c.shutdown(), Err(Failure::Busy)));
+                assert!(c.report().unwrap().storage > Service::STORAGE);
+            }
         }
     }
 }

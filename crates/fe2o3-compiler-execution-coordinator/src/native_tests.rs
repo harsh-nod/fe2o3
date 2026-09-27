@@ -11,6 +11,16 @@ use std::{
 
 const LIMIT: usize = 1 << 34;
 const EXTRA: usize = 27;
+
+#[test]
+fn native_prepared_types_satisfy_retained_owner_send_bound() {
+    fn retained<T: Send + 'static>() {
+        let floor = std::mem::size_of::<T>();
+        assert!(fe2o3_protected_service_spawn::native_spawn::RootOwnedRetainedServiceChildV2::<T>::storage_for(floor).unwrap() > floor);
+    }
+    retained::<crate::PreparedCompilerExecutionSupervisorV2>();
+    retained::<crate::PreparedCompilerExecutionSupervisorV3>();
+}
 struct Fixture {
     dir: tempfile::TempDir,
     expected: [Measurement; 3],

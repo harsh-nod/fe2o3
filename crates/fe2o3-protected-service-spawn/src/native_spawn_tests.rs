@@ -234,3 +234,61 @@ fn staging_restores_storage_and_keeps_prefix_denials_during_unwind() {
     assert_eq!(b.failed_work(), failed_work);
     assert_eq!(b.failed_storage(), failed_storage);
 }
+
+#[test]
+fn retaining_spawn_requires_complete_inputs_and_preserves_root_refusal() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct Input(Arc<AtomicUsize>);
+    impl Drop for Input {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let (stage, _) = run(1, false, LIMIT, LIMIT, SOURCE).0.unwrap();
+    let mut cleanup =
+        crate::process_reaper::isolated_cleanup(Account::new(Work::new(LIMIT), LIMIT));
+    let before = cleanup.report().unwrap();
+    let credentials = Credentials::new(65534, 65534).unwrap();
+    let work = stage.spawn_retaining_work::<Input>(63, 64).unwrap();
+    assert_eq!(
+        work,
+        Stage::SPAWN_WORK
+            + native_work::child_work(1, 63).unwrap()
+            + Cleanup::retained_launch_work::<Input>(64).unwrap()
+    );
+    let scratch = Stage::spawn_retaining_scratch::<Input>(64).unwrap();
+    for short in [true, false] {
+        if !short && rustix::process::geteuid().is_root() {
+            continue;
+        }
+        let floor = stage.retained_storage() + 64 - usize::from(short);
+        let mut w = Work::new(work);
+        let mut b = Budget::new(&mut w, floor + scratch);
+        b.reserve_storage(floor).unwrap();
+        let drops = Arc::new(AtomicUsize::new(0));
+        // The short owner floor or exact-root gate forbids clone. This only
+        // exercises consuming refusal, never admitted deployment or child evidence.
+        let result = unsafe {
+            stage.spawn_retaining(credentials, Input(drops.clone()), 64, &mut cleanup, &mut b)
+        };
+        if short {
+            assert!(matches!(
+                result,
+                Err(ProtectedServiceSpawnErrorV2::Resource(Resource::Accounting))
+            ));
+        } else {
+            assert!(matches!(
+                result,
+                Err(ProtectedServiceSpawnErrorV2::State(
+                    "native protected-service spawn requires exact root"
+                ))
+            ));
+        }
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(b.storage(), floor);
+        assert_eq!(cleanup.report().unwrap(), before);
+    }
+}

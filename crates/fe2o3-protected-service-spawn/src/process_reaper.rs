@@ -1,11 +1,12 @@
 //! One fixed-capacity cleanup pool, with mutually exclusive legacy/native funding.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::MAX_PROTECTED_SERVICE_PROCESSES_V2 as CAPACITY;
 use crate::process_cleanup::{ChildCleanupV1, CleanupPollV1};
+use crate::retained_resources::RetainedPayload;
 
 #[path = "process_reaper_native.rs"]
 mod native;
@@ -28,6 +29,7 @@ const EMPTY: u8 = 0;
 const RESERVED: u8 = 1;
 const DEFERRED: u8 = 2;
 const QUARANTINED: u8 = 3;
+const RETIRING: u8 = 4;
 
 /// Fixed refusal categories for the trusted legacy cleanup protocol.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +43,8 @@ pub enum LegacyCleanupReservationErrorV1 {
 struct ReapCellV1 {
     state: AtomicU8,
     child: Mutex<Option<ChildCleanupV1>>,
+    retained: Mutex<Option<RetainedPayload>>,
+    retained_storage: AtomicUsize,
 }
 
 impl ReapCellV1 {
@@ -48,6 +52,8 @@ impl ReapCellV1 {
         Self {
             state: AtomicU8::new(EMPTY),
             child: Mutex::new(None),
+            retained: Mutex::new(None),
+            retained_storage: AtomicUsize::new(0),
         }
     }
 }
@@ -103,7 +109,11 @@ impl DeferredReaperV1 {
                 .compare_exchange(EMPTY, RESERVED, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
-                return Ok(ReapSlotV1 { cell, armed: true });
+                return Ok(ReapSlotV1 {
+                    reaper: self,
+                    cell,
+                    armed: true,
+                });
             }
         }
         Err(LegacyCleanupReservationErrorV1::Capacity)
@@ -113,11 +123,11 @@ impl DeferredReaperV1 {
     // and all custody; ownership loss must not look like our successful terminal wait.
     fn pump(&self) {
         for cell in &self.cells {
-            Self::pump_cell(cell);
+            self.pump_cell(cell);
         }
     }
 
-    fn pump_cell(cell: &ReapCellV1) {
+    fn pump_cell(&self, cell: &ReapCellV1) {
         if cell.state.load(Ordering::Acquire) != DEFERRED {
             return;
         }
@@ -125,8 +135,10 @@ impl DeferredReaperV1 {
         let next_state = match child.as_mut().map(ChildCleanupV1::step) {
             Some(CleanupPollV1::Pending) => None,
             Some(CleanupPollV1::Reaped) => {
-                drop(child.take());
-                Some(EMPTY)
+                let terminal = child.take();
+                drop(child);
+                self.retire_cell(cell, terminal);
+                return;
             }
             Some(CleanupPollV1::Quarantined) | None => Some(QUARANTINED),
         };
@@ -141,14 +153,15 @@ impl DeferredReaperV1 {
 /// Reserved cleanup capacity; the trusted bridge binds its lifecycle to one child.
 #[must_use]
 pub struct ReapSlotV1<'a> {
+    reaper: &'a DeferredReaperV1,
     cell: &'a ReapCellV1,
     armed: bool,
 }
 
 impl ReapSlotV1<'_> {
     pub(crate) fn complete(mut self) {
-        self.cell.state.store(EMPTY, Ordering::Release);
         self.armed = false;
+        self.reaper.retire_cell(self.cell, None);
     }
 
     /// Transfers complete unresolved custody into this slot without further I/O.
@@ -166,7 +179,7 @@ impl ReapSlotV1<'_> {
 impl Drop for ReapSlotV1<'_> {
     fn drop(&mut self) {
         if self.armed {
-            self.cell.state.store(EMPTY, Ordering::Release);
+            self.reaper.retire_cell(self.cell, None);
         }
     }
 }

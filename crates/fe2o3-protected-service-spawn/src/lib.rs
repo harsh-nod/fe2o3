@@ -12,6 +12,8 @@ pub mod launch_io;
 #[doc(hidden)]
 #[allow(unsafe_code)]
 pub mod native_spawn;
+mod retained_resources;
+pub use retained_resources::{RetainedResourceAccessErrorV2, RetainedResourcesV2};
 mod native_work;
 #[doc(hidden)]
 pub mod pre_exec;
