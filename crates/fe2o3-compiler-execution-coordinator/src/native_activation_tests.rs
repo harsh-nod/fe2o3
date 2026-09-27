@@ -417,7 +417,7 @@ fn capture_exact_quota_returns_unreserved_owner_on_original_account() {
     assert_eq!(b.storage(), EXTRA);
     assert_eq!(b.peak_storage(), EXTRA + CAPTURE_SCRATCH);
     assert_eq!(b.work(), CAPTURE_WORK);
-    assert_eq!(b.work_ledger_identity_v1(), identity);
+    assert!(b.work_ledger_identity_v1() == identity);
     b.reserve_storage(storage.additional_storage()).unwrap();
     drop(owner);
     b.release_storage(storage.additional_storage()).unwrap();
@@ -452,7 +452,7 @@ fn capture_work_or_scratch_one_short_never_probes_or_clears() {
             assert_eq!(b.work(), CAPTURE_WORK);
         }
         assert_eq!(b.storage(), EXTRA);
-        assert_eq!(b.work_ledger_identity_v1(), identity);
+        assert!(b.work_ledger_identity_v1() == identity);
     }
 }
 
@@ -519,7 +519,7 @@ fn capture_clear_failure_and_unwind_restore_only_storage() {
         assert_eq!(b.storage(), EXTRA);
         assert_eq!(b.work(), CAPTURE_WORK);
         assert_eq!(b.peak_storage(), EXTRA + CAPTURE_SCRATCH);
-        assert_eq!(b.work_ledger_identity_v1(), identity);
+        assert!(b.work_ledger_identity_v1() == identity);
     }
 }
 
@@ -616,7 +616,7 @@ fn signal_install_exact_quota_returns_unreserved_charge_and_one_short_never_inst
             assert_eq!(b.work(), INSTALL_WORK);
         }
         assert_eq!(b.storage(), EXTRA);
-        assert_eq!(b.work_ledger_identity_v1(), identity);
+        assert!(b.work_ledger_identity_v1() == identity);
     }
 }
 
@@ -770,7 +770,7 @@ fn signal_scope_unwind_preserves_original_ledger_and_live_mask_state() {
         assert_eq!(b.storage(), SIGNALS_STORAGE);
         assert_eq!(b.work(), quota);
         assert_eq!(b.peak_storage(), SIGNALS_STORAGE + scratch);
-        assert_eq!(b.work_ledger_identity_v1(), identity);
+        assert!(b.work_ledger_identity_v1() == identity);
         assert!(signals.active);
     }
 }

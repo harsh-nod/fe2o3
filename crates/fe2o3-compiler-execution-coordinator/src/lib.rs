@@ -64,6 +64,9 @@ mod entrypoint;
 mod inherited;
 mod lifecycle;
 mod native;
+// Installed activation remains V1 until its provisioning records migrate together.
+#[allow(dead_code)]
+mod native_activation;
 mod native_adapter;
 mod native_inherited;
 mod native_inherited_adapter;
