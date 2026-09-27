@@ -1010,3 +1010,7 @@ pub(super) fn fixed_guard_raw_probe_for_test_v1(
     drop(proof);
     Ok((result, work))
 }
+
+// Private lazy component; not connected to the ordinary bounds loop.
+#[path = "lazy_fixed_proof_owner_v1.rs"]
+pub(super) mod lazy_fixed_proof_owner_v1;

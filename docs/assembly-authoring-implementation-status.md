@@ -5,6 +5,24 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Lazy fixed-proof ownership and read-only debugger replay — 2026-09-26
+
+The [lazy-proof checkpoint](bf16-lazy-fixed-proof-qualification-20260926.md)
+retains first-use proof state and pending candidates across refusal. All 26 new
+controls passed; full regression passed 331 model and 2,942 backend tests
+(189 ignored), backend build and 83 JavaScript controls. Both ordinary ladders
+passed with 38 lossless observation bodies and 52 artifacts unchanged.
+
+The separate [debugger replay](debugger-readonly-replay-qualification-20260926.md)
+passed 30 controls and actual read-only validation of 27 products, 38 runtime
+sources, 16 startup modules, 93 benign records and 310 startup records. It did
+not launch a debugger, target or GPU, and does not qualify a fresh native capture.
+
+Physical proof-payload retirement through factory postflight, authentic argument
+initialization, earlier producer chronology, the joint bounds driver, remaining
+writers and production routing remain open. Accepted broad exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Preparation policy and direct comparisons — 2026-09-26
 
 The [policy/comparison checkpoint](bf16-policy-direct-comparison-qualification-20260926.md)
