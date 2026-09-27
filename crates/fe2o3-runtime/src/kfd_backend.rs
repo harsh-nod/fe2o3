@@ -3970,13 +3970,6 @@ impl KfdRuntimeBackendV1 {
         self.settle_sdma_copy_v1(submission, sdma_settlement::SdmaSettlementV1::Succeeded)
     }
 
-    fn release_sdma_dependency_retains_v1(&mut self, dependencies: &[u64]) {
-        Self::release_sdma_dependency_counts_v1(
-            &mut self.sdma_dependency_retain_counts,
-            dependencies,
-        );
-    }
-
     fn release_sdma_dependency_counts_v1(counts: &mut HashMap<u64, usize>, dependencies: &[u64]) {
         for dependency in dependencies {
             let remove = {
@@ -13156,6 +13149,9 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
                 _ => unreachable!("prepared cancellation preflight selected a published launch"),
             }
         }
+        if self.active_sdma.contains_key(&submission) {
+            return self.cancel_sdma_copy_v1(submission);
+        }
         if self.submissions.contains_key(&submission)
             || self.active_compute_lane_v1(submission).is_some()
         {
@@ -13186,39 +13182,6 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
             let stream = pending.launch.stream;
             let prior = pending.ordered_predecessor;
             self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -2 });
-            self.restore_stream_tail_before_v1(stream, submission, prior);
-            return Ok(crate::BackendCancellationV1::Cancelled);
-        }
-        if self.active_sdma.get(&submission).is_some_and(|active| {
-            matches!(
-                active.phase,
-                ActiveSdmaPhaseV1::DirectionalPublished(_)
-                    | ActiveSdmaPhaseV1::SameDevicePublished(_)
-            ) || active.completed_bytes != 0
-        }) {
-            return Ok(crate::BackendCancellationV1::TooLate);
-        }
-        if let Some(active) = self.active_sdma.remove(&submission) {
-            self.unindex_published_sdma_v1(submission);
-            let stream = active.stream;
-            let prior = active.prior_stream_submission;
-            self.release_sdma_dependency_retains_v1(&active.dependencies);
-            self.release_allocation_custody_v1(active.source, active.id);
-            self.release_allocation_custody_v1(active.destination, active.id);
-            self.release_active_sdma_stream_v1(stream, submission);
-            self.submissions.insert(
-                submission,
-                SubmissionRecordV1 {
-                    stream: active.stream,
-                    status: BackendPollV1::Failed { code: -2 },
-                    dependency_depth: active.dependency_depth,
-                    profile_dispatch_published: false,
-                },
-            );
-            self.sdma_completion_reservations = self
-                .sdma_completion_reservations
-                .checked_sub(1)
-                .expect("cancelled SDMA copy reserved one completion slot");
             self.restore_stream_tail_before_v1(stream, submission, prior);
             return Ok(crate::BackendCancellationV1::Cancelled);
         }
@@ -13636,6 +13599,7 @@ mod tests {
     #[cfg(feature = "hardware-qualification")]
     mod r57_v2_tests;
     mod sdma_allocation_tests;
+    mod sdma_cancellation_custody_tests;
     mod sdma_demotion_tests;
     mod sdma_host_read_tests;
     mod sdma_host_write_tests;
@@ -26632,6 +26596,12 @@ mod tests {
     fn direct_kfd_cancels_only_an_unpublished_dependency_waiter() {
         let mut backend = KfdRuntimeBackendV1::mock();
         let stream = backend.create_stream_v1(7).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
+            .unwrap();
         backend.submissions.insert(
             40,
             SubmissionRecordV1 {
@@ -26648,8 +26618,8 @@ mod tests {
                 id: 41,
                 stream,
                 prior_stream_submission: Some(40),
-                source: 1,
-                destination: 2,
+                source,
+                destination,
                 source_offset: 0,
                 destination_offset: 0,
                 byte_len: 8,
@@ -26677,6 +26647,8 @@ mod tests {
         );
         backend.release_submission_v1(40).unwrap();
         backend.release_submission_v1(41).unwrap();
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
         backend.destroy_stream_v1(stream).unwrap();
         backend.shutdown_native_v1().unwrap();
     }
@@ -27351,7 +27323,7 @@ mod tests {
             .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
             .unwrap();
         let destination = backend
-            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
             .unwrap();
         backend.active_sdma.insert(
             40,
@@ -27391,61 +27363,7 @@ mod tests {
 
     #[test]
     fn direct_kfd_partial_sdma_continuation_is_observed_and_not_cancellable() {
-        let mut backend = KfdRuntimeBackendV1::mock();
-        let stream = backend.create_stream_v1(7).unwrap();
-        let source = backend
-            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
-            .unwrap();
-        let destination = backend
-            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
-            .unwrap();
-        backend.active_sdma.insert(
-            40,
-            ActiveSdmaCopyV1 {
-                id: 40,
-                stream,
-                prior_stream_submission: None,
-                source,
-                destination,
-                source_offset: 0,
-                destination_offset: 0,
-                byte_len: 8,
-                completed_bytes: 4,
-                window_bytes: 0,
-                window_requests: None,
-                dependencies: Vec::new(),
-                dependency_cursor: 0,
-                dependency_depth: 1,
-                peer_access: None,
-                phase: ActiveSdmaPhaseV1::Ready,
-            },
-        );
-        index_sdma_custody_for_test_v1(&mut backend, 40);
-        backend.stream_submission_tails.insert(stream, 40);
-
-        assert_eq!(backend.poll_v1(40).unwrap(), BackendPollV1::Pending);
-        assert_eq!(backend.active_sdma[&40].completed_bytes, 4);
-        assert!(matches!(
-            backend.active_sdma[&40].phase,
-            ActiveSdmaPhaseV1::Ready
-        ));
-        assert_eq!(
-            backend.cancel_v1(40).unwrap(),
-            crate::BackendCancellationV1::TooLate
-        );
-
-        // Repair the synthetic fixture to exercise ordinary prepublication
-        // cleanup; production cannot roll back already-published bytes.
-        backend.active_sdma.get_mut(&40).unwrap().completed_bytes = 0;
-        assert_eq!(
-            backend.cancel_v1(40).unwrap(),
-            crate::BackendCancellationV1::Cancelled
-        );
-        backend.release_submission_v1(40).unwrap();
-        backend.release_allocation_v1(source).unwrap();
-        backend.release_allocation_v1(destination).unwrap();
-        backend.destroy_stream_v1(stream).unwrap();
-        backend.shutdown_native_v1().unwrap();
+        sdma_cancellation_custody_tests::inspect_partial_cancellation(0);
     }
 
     #[test]

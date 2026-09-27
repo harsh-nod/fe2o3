@@ -2526,6 +2526,12 @@ mod scripted {
         destination_owner_id: u64,
     }
 
+    impl ScriptedSameDeviceSubmissionOwnerV1 {
+        pub(crate) fn pair(&self) -> &SameDeviceSdmaPairOwnerV1 {
+            &self.pair
+        }
+    }
+
     #[derive(Debug)]
     pub(crate) struct ScriptedSameDeviceCompletedOwnerV1 {
         pair: SameDeviceSdmaPairOwnerV1,

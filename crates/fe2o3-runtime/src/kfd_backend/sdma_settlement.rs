@@ -7,6 +7,7 @@ pub(super) enum SdmaSettlementV1 {
     Succeeded,
     Failed,
     Quiescent,
+    Cancelled,
 }
 
 impl KfdRuntimeBackendV1 {
@@ -99,10 +100,19 @@ impl KfdRuntimeBackendV1 {
         settlement: SdmaSettlementV1,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
-        let intact = if settlement == SdmaSettlementV1::Succeeded {
-            self.sdma_completion_custody_is_intact_v1(submission)
-        } else {
-            self.sdma_release_custody_is_intact_v1(submission)
+        let intact = match settlement {
+            SdmaSettlementV1::Succeeded => self.sdma_completion_custody_is_intact_v1(submission),
+            SdmaSettlementV1::Cancelled => {
+                let active = &self.active_sdma[&submission];
+                matches!(active.phase, ActiveSdmaPhaseV1::Ready)
+                    && active.completed_bytes == 0
+                    && active.window_bytes == 0
+                    && active.window_requests.is_none()
+                    && self.sdma_release_custody_is_intact_v1(submission)
+            }
+            SdmaSettlementV1::Failed | SdmaSettlementV1::Quiescent => {
+                self.sdma_release_custody_is_intact_v1(submission)
+            }
         };
         let quiescent = settlement == SdmaSettlementV1::Quiescent;
         if !intact
@@ -125,12 +135,12 @@ impl KfdRuntimeBackendV1 {
         self.release_allocation_custody_v1(source, submission);
         self.release_allocation_custody_v1(destination, submission);
         self.release_active_sdma_stream_v1(stream, submission);
-        let status = if settlement == SdmaSettlementV1::Succeeded {
-            BackendPollV1::Succeeded
-        } else {
-            BackendPollV1::Failed {
+        let status = match settlement {
+            SdmaSettlementV1::Succeeded => BackendPollV1::Succeeded,
+            SdmaSettlementV1::Cancelled => BackendPollV1::Failed { code: -2 },
+            SdmaSettlementV1::Failed | SdmaSettlementV1::Quiescent => BackendPollV1::Failed {
                 code: COOPERATIVE_COPY_FAILURE_CODE_V1,
-            }
+            },
         };
         self.submissions.insert(
             submission,
@@ -150,6 +160,26 @@ impl KfdRuntimeBackendV1 {
             debug_assert!(self.quiescent_sdma_marker_capacity_is_reserved_v1());
         }
         Ok(status)
+    }
+
+    pub(super) fn cancel_sdma_copy_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<crate::BackendCancellationV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    {
+        self.require_live()?;
+        let active = &self.active_sdma[&submission];
+        if matches!(
+            active.phase,
+            ActiveSdmaPhaseV1::DirectionalPublished(_) | ActiveSdmaPhaseV1::SameDevicePublished(_)
+        ) || active.completed_bytes != 0
+        {
+            return Ok(crate::BackendCancellationV1::TooLate);
+        }
+        let (stream, prior) = (active.stream, active.prior_stream_submission);
+        self.settle_sdma_copy_v1(submission, SdmaSettlementV1::Cancelled)?;
+        self.restore_stream_tail_before_v1(stream, submission, prior);
+        Ok(crate::BackendCancellationV1::Cancelled)
     }
 
     pub(super) fn fail_unpublished_sdma_copy_v1(
