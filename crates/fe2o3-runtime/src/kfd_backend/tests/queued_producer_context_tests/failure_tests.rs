@@ -14,7 +14,12 @@ fn assert_context_terminal<T>(result: Result<T, crate::RuntimeErrorV1<KfdRuntime
     ));
 }
 
-fn inspect_failure_and_drop(cross_stream: bool, unwind: bool, consumer_active: bool) {
+fn inspect_failure_and_drop(
+    cross_stream: bool,
+    unwind: bool,
+    consumer_active: bool,
+    flush_middle: bool,
+) {
     let mut f = Fixture::new(cross_stream);
     let (a, ai) = f.launch(0, &[]);
     f.context.flush_stream(f.streams[0]).unwrap();
@@ -96,6 +101,13 @@ fn inspect_failure_and_drop(cross_stream: bool, unwind: bool, consumer_active: b
     );
     assert!(!usage_before.poisoned);
     assert_eq!(Arc::strong_count(&callbacks), 2);
+    let pending_recipes = [bi, ci].map(|id| {
+        f.context
+            .backend()
+            .pending_compute
+            .get(&id)
+            .map(|pending| Arc::downgrade(&pending.launch))
+    });
 
     let retention = |f: &Fixture| {
         let backend = f.context.backend();
@@ -122,7 +134,7 @@ fn inspect_failure_and_drop(cross_stream: bool, unwind: bool, consumer_active: b
                     (
                         pending.id,
                         pending.module,
-                        pending.launch.clone(),
+                        pending.launch.as_ref().clone(),
                         pending.retained_allocations.clone(),
                         pending.ordered_predecessor,
                         pending.explicit_success_dependencies.clone(),
@@ -130,6 +142,12 @@ fn inspect_failure_and_drop(cross_stream: bool, unwind: bool, consumer_active: b
                         pending.quiescence_dependencies.clone(),
                         pending.quiescence_cursor,
                         pending.dependency_depth,
+                        (
+                            Arc::as_ptr(&pending.launch) as usize,
+                            pending.retained_allocations.as_ptr() as usize,
+                            pending.explicit_success_dependencies.as_ptr() as usize,
+                            pending.quiescence_dependencies.as_ptr() as usize,
+                        ),
                     )
                 })
             }),
@@ -172,16 +190,23 @@ fn inspect_failure_and_drop(cross_stream: bool, unwind: bool, consumer_active: b
                 .sdma_storage = KfdRuntimeSdmaStorageV1::ComputeInFlight(active_id + 1);
         }
     }
+    let observe = |f: &mut Fixture, c: &mut Submission| {
+        if flush_middle {
+            f.context.flush_stream(f.streams[1]).map(|_| ())
+        } else {
+            f.context.poll(c).map(|_| ())
+        }
+    };
     if unwind {
         let panic =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f.context.poll(&mut c)))
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observe(&mut f, &mut c)))
                 .expect_err("the injected native unwind must propagate");
         assert_eq!(
             panic.downcast_ref::<&str>().copied(),
             Some("scripted three-binding unwind before active take")
         );
     } else {
-        let Err(crate::RuntimeErrorV1::BackendTerminal(error)) = f.context.poll(&mut c) else {
+        let Err(crate::RuntimeErrorV1::BackendTerminal(error)) = observe(&mut f, &mut c) else {
             panic!("restoration slot mismatch must be terminal");
         };
         assert_eq!(
@@ -255,10 +280,16 @@ fn inspect_failure_and_drop(cross_stream: bool, unwind: bool, consumer_active: b
         assert_eq!(report.producer_launch_records_v1(), 3);
         assert_eq!(report.scalar_peer_copy_records_v1(), 0);
         assert_eq!(retention(&f), retained_before);
+        for recipe in pending_recipes.iter().flatten() {
+            assert!(
+                recipe.upgrade().is_some(),
+                "pending recipe must remain backend-owned"
+            );
+        }
         assert_eq!(Arc::strong_count(&callbacks), 2);
         f.assert_owners(5);
         let backend = f.context.backend();
-        assert_eq!(backend.terminal, !unwind);
+        assert_eq!(backend.terminal, !unwind || flush_middle);
         assert_eq!(
             backend.pending_compute.len(),
             if consumer_active { 0 } else { 2 }
@@ -310,15 +341,17 @@ fn inspect_failure_and_drop(cross_stream: bool, unwind: bool, consumer_active: b
 fn queued_native_context_terminal_and_unwind_preserve_custody_until_abort() {
     const CHILD: &str = "FE2O3_TEST_QUEUED_NATIVE_FAILURE_DROP";
     const TEST: &str = "kfd_backend::tests::queued_producer_context_tests::failure_tests::queued_native_context_terminal_and_unwind_preserve_custody_until_abort";
-    const CASES: [(&str, bool, bool, bool); 8] = [
-        ("same-terminal-ancestor", false, false, false),
-        ("cross-terminal-ancestor", true, false, false),
-        ("same-unwind-ancestor", false, true, false),
-        ("cross-unwind-ancestor", true, true, false),
-        ("same-terminal-consumer", false, false, true),
-        ("cross-terminal-consumer", true, false, true),
-        ("same-unwind-consumer", false, true, true),
-        ("cross-unwind-consumer", true, true, true),
+    const CASES: [(&str, bool, bool, bool, bool); 10] = [
+        ("same-terminal-ancestor", false, false, false, false),
+        ("cross-terminal-ancestor", true, false, false, false),
+        ("same-unwind-ancestor", false, true, false, false),
+        ("cross-unwind-ancestor", true, true, false, false),
+        ("same-terminal-consumer", false, false, true, false),
+        ("cross-terminal-consumer", true, false, true, false),
+        ("same-unwind-consumer", false, true, true, false),
+        ("cross-unwind-consumer", true, true, true, false),
+        ("same-unwind-middle-flush", false, true, false, true),
+        ("same-terminal-middle-flush", false, false, false, true),
     ];
     if let Some(mode) = std::env::var_os(CHILD) {
         rustix::process::setrlimit(
@@ -330,14 +363,14 @@ fn queued_native_context_terminal_and_unwind_preserve_custody_until_abort() {
         )
         .unwrap();
         let mode = mode.to_str().unwrap();
-        let (_, cross_stream, unwind, consumer_active) = CASES
+        let (_, cross_stream, unwind, consumer_active, flush_middle) = CASES
             .into_iter()
             .find(|case| case.0 == mode)
             .expect("known failure case");
-        inspect_failure_and_drop(cross_stream, unwind, consumer_active);
+        inspect_failure_and_drop(cross_stream, unwind, consumer_active, flush_middle);
         unreachable!();
     }
-    for (mode, _, _, _) in CASES {
+    for (mode, _, _, _, _) in CASES {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--nocapture"])
             .env(CHILD, mode)

@@ -168,9 +168,26 @@ Repeated public ingress and cleanup cannot release that custody. Dropping the
 unrepaired Context aborts with core dumps disabled; no test disarms the backend.
 
 These cases inject a restoration-slot mismatch or a panic immediately before the
-active dispatch is moved. The ancestor fault occurs while polling an exclusive
-blocker, before the pending consumer is removed from its index. They do not cover
-every ownership-moving panic point, native GPU execution or formal unwind safety.
+active dispatch is moved. Consumer polling reaches the ancestor fault through an
+exclusive blocker, before the pending consumer is removed from its index.
+Additional same-stream flush cases reach the producer with the middle pending
+submission temporarily outside its index. The latter exposed a lost pending
+recipe/roster on unwind while FIFO and retain accounting remained live.
+
+The six previously unguarded dependency observations now retain that exact
+pending owner outside the caught poll, reinsert it and seal the backend before
+resuming the original panic. Normal return/error classification is unchanged;
+no launch or roster is cloned by the guard. Weak recipe references and original
+roster addresses ensure the test snapshots cannot keep the lost recipe alive or
+accept replacement storage. Backend adapter tests separately cover explicit and
+ordered observation, ordered progress and failed-explicit dependency handling
+behind a still-active FIFO predecessor. Direct observer cases exercise the
+adapter after the SPI's normal ownership move, not its earlier blocker pre-poll.
+
+These tests do not cover every ownership-moving panic point, the polled owner's
+own unwind safety, native GPU execution or formal unwind safety. In particular,
+the conflicting-SDMA-copy guard has regression-suite coverage but no dedicated
+injected-panic case in this checkpoint.
 The separately authorized three-phase hardware profile and full shared-body
 queued-owner proofs remain open. The existing two-launch R57 authority and
 inner-journal proofs do not cover those gates.

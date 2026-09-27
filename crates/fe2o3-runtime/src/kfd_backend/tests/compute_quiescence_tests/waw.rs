@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod unwind_tests;
+
 fn fixture(cross_stream: bool) -> (ManuallyDrop<ScriptedActiveProducerFixtureV1>, u64) {
     let steps = (0..5).flat_map(|_| {
         [

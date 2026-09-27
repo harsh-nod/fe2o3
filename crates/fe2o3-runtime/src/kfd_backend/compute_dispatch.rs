@@ -1895,16 +1895,39 @@ impl KfdRuntimeBackendV1 {
         })
     }
 
-    fn settle_failed_compute_after_ordering_v1(
+    fn poll_retained_pending_dependency_v1(
         &mut self,
         pending: PendingComputeSubmissionV1,
+        dependency: u64,
+    ) -> (
+        PendingComputeSubmissionV1,
+        Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>,
+    ) {
+        // Dependency observation may unwind while this node is outside its
+        // index. Keep its sole recipe and rosters outside the unwinding frame.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.poll_v1(dependency))) {
+            Ok(result) => (pending, result),
+            Err(payload) => {
+                self.pending_compute.insert(pending.id, pending);
+                super::sdma_host_write::resume_sdma_owner_panic_v1(payload, || {
+                    self.poison_terminal_v1()
+                })
+            }
+        }
+    }
+
+    fn settle_failed_compute_after_ordering_v1(
+        &mut self,
+        mut pending: PendingComputeSubmissionV1,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         // A failed unpublished node still orders its successor after the entire
         // stream prefix. Keep its custody until that predecessor has completed.
         if let Some(predecessor) = pending.ordered_predecessor
             && !self.exact_submission_quiescent_v1(predecessor)
         {
-            match self.poll_v1(predecessor) {
+            let (retained, result) = self.poll_retained_pending_dependency_v1(pending, predecessor);
+            pending = retained;
+            match result {
                 Ok(BackendPollV1::Pending) => {
                     self.pending_compute.insert(pending.id, pending);
                     return Ok(BackendPollV1::Pending);
@@ -1946,7 +1969,9 @@ impl KfdRuntimeBackendV1 {
             .get(pending.explicit_dependency_cursor)
             .copied()
         {
-            let status = match self.poll_v1(dependency) {
+            let (retained, result) = self.poll_retained_pending_dependency_v1(pending, dependency);
+            pending = retained;
+            let status = match result {
                 Ok(status) => status,
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => {
                     return self.settle_failed_compute_after_ordering_v1(pending);
@@ -2027,7 +2052,9 @@ impl KfdRuntimeBackendV1 {
                     }
                 }
             }
-            let status = match self.poll_v1(predecessor) {
+            let (retained, result) = self.poll_retained_pending_dependency_v1(pending, predecessor);
+            pending = retained;
+            let status = match result {
                 Ok(status) => status,
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => {
                     if !self.exact_submission_quiescent_v1(predecessor) {
@@ -2150,7 +2177,8 @@ impl KfdRuntimeBackendV1 {
             &pending.launch.bindings,
         );
         if let Some(copy) = conflicting_copy {
-            return match self.poll_v1(copy) {
+            let (pending, result) = self.poll_retained_pending_dependency_v1(pending, copy);
+            return match result {
                 Ok(_) => {
                     self.pending_compute.insert(pending.id, pending);
                     Ok(BackendPollV1::Pending)
@@ -2306,7 +2334,9 @@ impl KfdRuntimeBackendV1 {
             .get(pending.explicit_dependency_cursor)
             .copied()
         {
-            let status = match self.poll_v1(dependency) {
+            let (retained, result) = self.poll_retained_pending_dependency_v1(pending, dependency);
+            pending = retained;
+            let status = match result {
                 Ok(status) => status,
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => {
                     return self.settle_failed_compute_after_ordering_v1(pending);
@@ -2339,7 +2369,9 @@ impl KfdRuntimeBackendV1 {
                 .get(&predecessor)
                 .is_some_and(|record| record.status != BackendPollV1::Pending)
         {
-            match self.poll_v1(predecessor) {
+            let (retained, result) = self.poll_retained_pending_dependency_v1(pending, predecessor);
+            pending = retained;
+            match result {
                 Ok(_) => {}
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => {
                     if !self.exact_submission_quiescent_v1(predecessor) {
