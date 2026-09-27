@@ -465,8 +465,9 @@ fn peer_compute_access_publication_rejects_changed_arguments_gate_or_dirty_autho
         }
         assert!(!child.peer_dma_access_is_intact_v1(&active));
         // Exercise the publication boundary directly, retaining the existing native phase.
+        child.active_sdma.insert(dma, active);
         assert!(matches!(
-            child.publish_sdma_copy_v1(active),
+            child.publish_sdma_copy_v1(dma),
             Err(RuntimeBackendFailureV1::Terminal(_))
         ));
         assert!(child.active_sdma.contains_key(&dma));

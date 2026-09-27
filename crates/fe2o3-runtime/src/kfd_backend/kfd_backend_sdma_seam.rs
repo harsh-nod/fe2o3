@@ -2355,6 +2355,8 @@ mod scripted {
             requests: Vec<SameDeviceSdmaCopyRequestV1>,
             outcome: ScriptedFailureModeV1,
         },
+        SubmitPanic,
+        SubmitSameDevicePanic,
         Poll(ScriptedExecutionOutcomeV1),
         Wait(ScriptedExecutionOutcomeV1),
         Retire(ScriptedFailureModeV1),
@@ -2556,6 +2558,8 @@ mod scripted {
         recycle_custody: Option<ScriptedBufferOwnerV1>,
         wait_custody: Option<ScriptedSubmissionOwnerV1>,
         retirement_custody: Option<ScriptedCompletedOwnerV1>,
+        publication_custody: Option<ScriptedTerminalCustodyV1>,
+        pub(crate) publication_byte_limit: Option<u32>,
     }
 
     impl core::fmt::Debug for ScriptedSdmaDriverV1 {
@@ -2582,6 +2586,8 @@ mod scripted {
                 recycle_custody: None,
                 wait_custody: None,
                 retirement_custody: None,
+                publication_custody: None,
+                publication_byte_limit: None,
             }
         }
 
@@ -2619,6 +2625,18 @@ mod scripted {
 
         pub(crate) fn retirement_custody(&self) -> Option<&ScriptedCompletedOwnerV1> {
             self.retirement_custody.as_ref()
+        }
+
+        pub(crate) fn publication_custody(&self) -> Option<&ScriptedTerminalCustodyV1> {
+            self.publication_custody.as_ref()
+        }
+
+        fn retain_publication_and_panic(&mut self, custody: ScriptedTerminalCustodyV1) -> ! {
+            if self.publication_custody.is_some() {
+                std::process::abort();
+            }
+            self.publication_custody = Some(custody);
+            std::panic::panic_any("scripted SDMA publication panic");
         }
 
         pub(crate) fn demotion_custody(&self) -> Option<(u64, &[u8])> {
@@ -3121,6 +3139,9 @@ mod scripted {
                 Err(detail) => return Err(scripted_pair_mismatch(pair, detail)),
             };
             let outcome = match (self.pop(), &requests) {
+                (Ok(ScriptedSdmaStepV1::SubmitPanic), _) => {
+                    self.retain_publication_and_panic(ScriptedTerminalCustodyV1::Pair(pair));
+                }
                 (
                     Ok(ScriptedSdmaStepV1::Submit {
                         direction: expected_direction,
@@ -3222,6 +3243,11 @@ mod scripted {
                     requests: expected_requests,
                     outcome,
                 }) if expected_requests.as_slice() == requests.as_ref() => outcome,
+                Ok(ScriptedSdmaStepV1::SubmitSameDevicePanic) => {
+                    self.retain_publication_and_panic(ScriptedTerminalCustodyV1::SameDevicePair(
+                        pair,
+                    ));
+                }
                 Ok(step) => {
                     return Err(scripted_same_device_pair_mismatch(
                         pair,

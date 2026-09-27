@@ -668,11 +668,20 @@ mod tests {
 
     #[test]
     fn publication_history_hooks_exclude_poll_and_wait_index_restoration() {
-        let source = include_str!("../kfd_backend.rs");
-        let source = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        let source = include_str!("sdma_publication.rs");
+        assert!(
+            !include_str!("sdma_observation.rs").contains("record_drain_capture_publication_v1")
+        );
+        assert!(
+            !include_str!("../kfd_backend.rs")
+                .split_once("mod tests {")
+                .unwrap()
+                .0
+                .contains("self.record_drain_capture_publication_v1(")
+        );
         assert_eq!(
             source
-                .matches("self.record_drain_capture_publication_v1(active.id);")
+                .matches("self.record_drain_capture_publication_v1(submission);")
                 .count(),
             2
         );
@@ -681,10 +690,7 @@ mod tests {
                 "    fn publish_directional_sdma_window_v1(",
                 "    fn publish_same_device_sdma_window_v1(",
             ),
-            (
-                "    fn publish_same_device_sdma_window_v1(",
-                "    fn progress_unpublished_sdma_copy_v1(",
-            ),
+            ("    fn publish_same_device_sdma_window_v1(", "\n}\n"),
         ] {
             let body = source
                 .split_once(start)
@@ -694,9 +700,16 @@ mod tests {
                 .unwrap()
                 .0;
             assert_eq!(
-                body.matches("self.record_drain_capture_publication_v1(active.id);")
+                body.matches("self.record_drain_capture_publication_v1(submission);")
                     .count(),
                 1
+            );
+            assert!(
+                body.find("self.index_published_sdma_v1(submission)")
+                    .unwrap()
+                    < body
+                        .find("self.record_drain_capture_publication_v1(submission)")
+                        .unwrap()
             );
         }
     }

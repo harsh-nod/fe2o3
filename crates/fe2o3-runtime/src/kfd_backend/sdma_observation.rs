@@ -6,73 +6,15 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 impl KfdRuntimeBackendV1 {
     pub(super) fn sdma_completion_custody_is_intact_v1(&self, submission: u64) -> bool {
         let active = &self.active_sdma[&submission];
-        if active.id != submission
-            || !matches!(active.phase, ActiveSdmaPhaseV1::Quarantined)
-            || active.source == active.destination
-            || active.window_bytes == 0
-            || active.window_requests.is_none()
-            || active.dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1
-            || active.dependency_cursor > active.dependencies.len()
-            || self.sdma_completion_reservations == 0
-            || self.submissions.contains_key(&submission)
-            || self.submissions.len() == self.submissions.capacity()
-            || self.published_sdma_submissions.contains(&submission)
-        {
-            return false;
-        }
-        // The admitted roster is unique but not sorted. Check uniqueness without
-        // allocating or replacing its retained backing, before decrementing counts.
-        let mut sorted = [0_u64; MAX_RUNTIME_DEPENDENCIES_V1];
-        let dependencies = &mut sorted[..active.dependencies.len()];
-        dependencies.copy_from_slice(&active.dependencies);
-        dependencies.sort_unstable();
-        if dependencies.windows(2).any(|pair| pair[0] == pair[1])
-            || dependencies.iter().any(|id| {
-                self.sdma_dependency_retain_counts
+        matches!(active.phase, ActiveSdmaPhaseV1::Quarantined)
+            && active.window_bytes != 0
+            && active.window_requests.is_some()
+            && active.dependencies.iter().all(|id| {
+                self.submissions
                     .get(id)
-                    .is_none_or(|count| *count == 0)
-                    || self
-                        .submissions
-                        .get(id)
-                        .is_none_or(|record| record.status != BackendPollV1::Succeeded)
+                    .is_some_and(|record| record.status == BackendPollV1::Succeeded)
             })
-        {
-            return false;
-        }
-        let expected = RuntimeAllocationCustodyOwnerV1 {
-            submission,
-            stream: active.stream,
-            kind: RuntimeAllocationCustodyKindV1::Sdma,
-        };
-        // Private admission/removal preserves ordered owner and stream indexes.
-        // Validate local release prerequisites without rescanning an entire queue.
-        [active.source, active.destination].into_iter().all(|id| {
-            self.allocation_custody.get(&id).is_some_and(|custody| {
-                custody.owner_counts[RuntimeAllocationCustodyKindV1::Sdma.index()] != 0
-                    && custody
-                        .owners
-                        .binary_search_by_key(&submission, |owner| owner.submission)
-                        .is_ok_and(|index| {
-                            custody.owners[index] == expected
-                                && index
-                                    .checked_sub(1)
-                                    .and_then(|prior| custody.owners.get(prior))
-                                    .is_none_or(|owner| owner.submission != submission)
-                                && custody
-                                    .owners
-                                    .get(index + 1)
-                                    .is_none_or(|owner| owner.submission != submission)
-                        })
-            })
-        }) && self
-            .active_sdma_streams
-            .get(&active.stream)
-            .is_some_and(|queue| {
-                queue.binary_search(&submission).is_ok_and(|index| {
-                    index.checked_sub(1).and_then(|prior| queue.get(prior)) != Some(&submission)
-                        && queue.get(index + 1) != Some(&submission)
-                })
-            })
+            && self.sdma_release_custody_is_intact_v1(submission)
     }
 
     pub(super) fn observe_sdma_copy_v1(

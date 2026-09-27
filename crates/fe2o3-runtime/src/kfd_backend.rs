@@ -171,8 +171,10 @@ mod sdma_host_read;
 mod sdma_host_write;
 mod sdma_observation;
 mod sdma_promotion;
+mod sdma_publication;
 use initialized_storage::InitializedStorageOwnerV1;
 mod sdma_recycle;
+mod sdma_settlement;
 mod sdma_synchronous;
 use compute_dispatch::*;
 use compute_state::*;
@@ -1159,7 +1161,17 @@ impl DirectSdmaRequestPlanV1 {
 }
 
 fn direct_sdma_window_plan_v1(active: &ActiveSdmaCopyV1) -> Option<DirectSdmaWindowPlanV1> {
-    let mut remaining = active.byte_len.checked_sub(active.completed_bytes)?;
+    direct_sdma_window_plan_with_limit_v1(active, u64::MAX)
+}
+
+fn direct_sdma_window_plan_with_limit_v1(
+    active: &ActiveSdmaCopyV1,
+    byte_limit: u64,
+) -> Option<DirectSdmaWindowPlanV1> {
+    let mut remaining = active
+        .byte_len
+        .checked_sub(active.completed_bytes)?
+        .min(byte_limit);
     if remaining == 0 {
         return None;
     }
@@ -3453,11 +3465,11 @@ impl KfdRuntimeBackendV1 {
 
     fn take_directional_sdma_storage_v1(
         &mut self,
-        active: &ActiveSdmaCopyV1,
+        active: SdmaStorageBindingV1,
         direction: Gfx942PersistentSdmaDirectionV1,
         owner: KfdRuntimeSdmaInFlightV1,
     ) -> Result<DirectionalSdmaPairOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let (host_id, device_id) = directional_sdma_allocation_ids_v1(active.into(), direction);
+        let (host_id, device_id) = directional_sdma_allocation_ids_v1(active, direction);
         let host_ready = self.allocations.get(&host_id).is_some_and(|record| {
             record
                 .sdma_storage
@@ -3545,7 +3557,7 @@ impl KfdRuntimeBackendV1 {
 
     fn take_same_device_sdma_storage_v1(
         &mut self,
-        active: &ActiveSdmaCopyV1,
+        active: SdmaStorageBindingV1,
         owner: KfdRuntimeSdmaInFlightV1,
     ) -> Result<SameDeviceSdmaPairOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if active.source == active.destination {
@@ -3955,35 +3967,7 @@ impl KfdRuntimeBackendV1 {
             active.window_requests = None;
             return Ok(BackendPollV1::Pending);
         }
-        if !self.sdma_completion_custody_is_intact_v1(submission) {
-            return Err(self.terminal_error("SDMA completion custody changed before release"));
-        }
-        let (source, destination, stream, dependency_depth) = (
-            active.source,
-            active.destination,
-            active.stream,
-            active.dependency_depth,
-        );
-        Self::release_sdma_dependency_counts_v1(
-            &mut self.sdma_dependency_retain_counts,
-            &active.dependencies,
-        );
-        self.release_allocation_custody_v1(source, submission);
-        self.release_allocation_custody_v1(destination, submission);
-        self.release_active_sdma_stream_v1(stream, submission);
-        let status = BackendPollV1::Succeeded;
-        self.submissions.insert(
-            submission,
-            SubmissionRecordV1 {
-                stream,
-                status,
-                dependency_depth,
-                profile_dispatch_published: false,
-            },
-        );
-        self.sdma_completion_reservations -= 1;
-        self.active_sdma.remove(&submission);
-        Ok(status)
+        self.settle_sdma_copy_v1(submission, sdma_settlement::SdmaSettlementV1::Succeeded)
     }
 
     fn release_sdma_dependency_retains_v1(&mut self, dependencies: &[u64]) {
@@ -4008,246 +3992,12 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
-    fn fail_unpublished_sdma_copy_v1(&mut self, active: ActiveSdmaCopyV1) -> BackendPollV1 {
-        self.release_sdma_dependency_retains_v1(&active.dependencies);
-        self.release_allocation_custody_v1(active.source, active.id);
-        self.release_allocation_custody_v1(active.destination, active.id);
-        self.release_active_sdma_stream_v1(active.stream, active.id);
-        let status = BackendPollV1::Failed {
-            code: COOPERATIVE_COPY_FAILURE_CODE_V1,
-        };
-        self.submissions.insert(
-            active.id,
-            SubmissionRecordV1 {
-                stream: active.stream,
-                status,
-                dependency_depth: active.dependency_depth,
-                profile_dispatch_published: false,
-            },
-        );
-        self.sdma_completion_reservations = self
-            .sdma_completion_reservations
-            .checked_sub(1)
-            .expect("accepted SDMA copy reserves one completion slot");
-        status
-    }
-
     fn quiescent_sdma_marker_capacity_is_reserved_v1(&self) -> bool {
         self.quiescent_sdma_submissions.capacity()
             >= self
                 .quiescent_sdma_submissions
                 .len()
                 .saturating_add(self.sdma_completion_reservations)
-    }
-
-    fn fail_quiescent_sdma_copy_v1(&mut self, active: ActiveSdmaCopyV1) {
-        let id = active.id;
-        let _ = self.fail_unpublished_sdma_copy_v1(active);
-        let inserted = self.quiescent_sdma_submissions.insert(id);
-        debug_assert!(inserted, "quiescent SDMA result is marked exactly once");
-        debug_assert!(self.quiescent_sdma_marker_capacity_is_reserved_v1());
-    }
-
-    fn publish_sdma_copy_v1(
-        &mut self,
-        active: ActiveSdmaCopyV1,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if !self.peer_dma_access_is_intact_v1(&active) {
-            self.active_sdma.insert(active.id, active);
-            return Err(
-                self.terminal_error("private peer DMA lost its retained predecessor access")
-            );
-        }
-        if self.persistent_compute_is_active_v1()
-            && !self.sdma_can_coexist_with_persistent_compute_v1(&active)
-        {
-            self.active_sdma.insert(active.id, active);
-            return Ok(BackendPollV1::Pending);
-        }
-        let copy_kind = match self.direct_sdma_copy_kind_for_active_v1(&active) {
-            Ok(copy_kind) => copy_kind,
-            Err(_) => return Ok(self.fail_unpublished_sdma_copy_v1(active)),
-        };
-        for allocation in [active.source, active.destination] {
-            let reconciliation = self
-                .normalize_h2d_ready_v1(allocation)
-                .and_then(|()| self.synchronize_native_allocation_v1(allocation));
-            if let Err(failure) = reconciliation {
-                if active.completed_bytes != 0 {
-                    self.fail_quiescent_sdma_copy_v1(active);
-                    return Err(match failure {
-                        RuntimeBackendFailureV1::Rejected(error) => {
-                            RuntimeBackendFailureV1::Quiescent(error)
-                        }
-                        failure => failure,
-                    });
-                }
-                return match failure {
-                    RuntimeBackendFailureV1::Rejected(_)
-                    | RuntimeBackendFailureV1::Quiescent(_) => {
-                        Ok(self.fail_unpublished_sdma_copy_v1(active))
-                    }
-                    failure @ RuntimeBackendFailureV1::Terminal(_) => Err(failure),
-                };
-            }
-        }
-        let Some(window) = direct_sdma_window_plan_v1(&active) else {
-            return Ok(self.fail_unpublished_sdma_copy_v1(active));
-        };
-        let publication = match copy_kind {
-            DirectSdmaCopyKindV1::Directional(direction) => {
-                directional_sdma_requests_v1(&window.requests, direction)
-                    .map(|requests| EitherSdmaWindowRequestsV1::Directional(direction, requests))
-            }
-            DirectSdmaCopyKindV1::SameDevice => same_device_sdma_requests_v1(&window.requests)
-                .map(EitherSdmaWindowRequestsV1::SameDevice),
-        };
-        let Some(publication) = publication else {
-            if active.completed_bytes != 0 {
-                self.fail_quiescent_sdma_copy_v1(active);
-                return Err(Self::quiescent_error(
-                    KfdRuntimeBackendErrorKindV1::Capacity,
-                    "KFD SDMA window metadata allocation failed",
-                ));
-            }
-            return Ok(self.fail_unpublished_sdma_copy_v1(active));
-        };
-        match publication {
-            EitherSdmaWindowRequestsV1::Directional(direction, requests) => {
-                self.publish_directional_sdma_window_v1(active, window, direction, requests)
-            }
-            EitherSdmaWindowRequestsV1::SameDevice(requests) => {
-                self.publish_same_device_sdma_window_v1(active, window, requests)
-            }
-        }
-    }
-
-    fn publish_directional_sdma_window_v1(
-        &mut self,
-        mut active: ActiveSdmaCopyV1,
-        window: DirectSdmaWindowPlanV1,
-        direction: Gfx942PersistentSdmaDirectionV1,
-        publication_requests: DirectionalSdmaRequestPlanV1,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let pair = match self.take_directional_sdma_storage_v1(
-            &active,
-            direction,
-            KfdRuntimeSdmaInFlightV1::Async(active.id),
-        ) {
-            Ok(custody) => custody,
-            Err(failure) if active.completed_bytes != 0 => {
-                self.fail_quiescent_sdma_copy_v1(active);
-                return Err(match failure {
-                    RuntimeBackendFailureV1::Rejected(error) => {
-                        RuntimeBackendFailureV1::Quiescent(error)
-                    }
-                    failure => failure,
-                });
-            }
-            Err(_) => return Ok(self.fail_unpublished_sdma_copy_v1(active)),
-        };
-        match self
-            .directional_sdma_ops_v1()
-            .submit(pair, direction, publication_requests)
-        {
-            Ok(submission) => {
-                active.window_bytes = window.copy_bytes;
-                active.window_requests = Some(window.requests);
-                active.phase = ActiveSdmaPhaseV1::DirectionalPublished(Box::new(submission));
-                self.index_published_sdma_v1(active.id);
-                #[cfg(feature = "hardware-qualification")]
-                self.record_drain_capture_publication_v1(active.id);
-                self.active_sdma.insert(active.id, active);
-                Ok(BackendPollV1::Pending)
-            }
-            Err(failure) => match failure {
-                SdmaTransitionFailureV1::Retryable { detail, custody } => {
-                    let detail = format!("KFD directional SDMA publication: {detail}");
-                    self.restore_directional_sdma_storage_v1(
-                        (&active).into(),
-                        direction,
-                        KfdRuntimeSdmaInFlightV1::Async(active.id),
-                        custody,
-                        false,
-                    )?;
-                    if active.completed_bytes != 0 {
-                        self.fail_quiescent_sdma_copy_v1(active);
-                        Err(Self::quiescent_error(
-                            KfdRuntimeBackendErrorKindV1::Native,
-                            detail,
-                        ))
-                    } else {
-                        Ok(self.fail_unpublished_sdma_copy_v1(active))
-                    }
-                }
-                SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
-                    let detail = format!("KFD directional SDMA publication: {detail}");
-                    self.retain_sdma_seam_terminal_v1(custody);
-                    Err(self.terminal_error(detail))
-                }
-            },
-        }
-    }
-
-    fn publish_same_device_sdma_window_v1(
-        &mut self,
-        mut active: ActiveSdmaCopyV1,
-        window: DirectSdmaWindowPlanV1,
-        publication_requests: Box<[SameDeviceSdmaCopyRequestV1]>,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let pair = match self
-            .take_same_device_sdma_storage_v1(&active, KfdRuntimeSdmaInFlightV1::Async(active.id))
-        {
-            Ok(custody) => custody,
-            Err(failure) if active.completed_bytes != 0 => {
-                self.fail_quiescent_sdma_copy_v1(active);
-                return Err(match failure {
-                    RuntimeBackendFailureV1::Rejected(error) => {
-                        RuntimeBackendFailureV1::Quiescent(error)
-                    }
-                    failure => failure,
-                });
-            }
-            Err(_) => return Ok(self.fail_unpublished_sdma_copy_v1(active)),
-        };
-        match self
-            .directional_sdma_ops_v1()
-            .submit_same_device(pair, publication_requests)
-        {
-            Ok(submission) => {
-                active.window_bytes = window.copy_bytes;
-                active.window_requests = Some(window.requests);
-                active.phase = ActiveSdmaPhaseV1::SameDevicePublished(Box::new(submission));
-                self.index_published_sdma_v1(active.id);
-                #[cfg(feature = "hardware-qualification")]
-                self.record_drain_capture_publication_v1(active.id);
-                self.active_sdma.insert(active.id, active);
-                Ok(BackendPollV1::Pending)
-            }
-            Err(SdmaTransitionFailureV1::Retryable { detail, custody }) => {
-                let detail = format!("KFD same-device SDMA publication: {detail}");
-                self.restore_same_device_sdma_storage_v1(
-                    (&active).into(),
-                    KfdRuntimeSdmaInFlightV1::Async(active.id),
-                    custody,
-                    false,
-                )?;
-                if active.completed_bytes != 0 {
-                    self.fail_quiescent_sdma_copy_v1(active);
-                    Err(Self::quiescent_error(
-                        KfdRuntimeBackendErrorKindV1::Native,
-                        detail,
-                    ))
-                } else {
-                    Ok(self.fail_unpublished_sdma_copy_v1(active))
-                }
-            }
-            Err(SdmaTransitionFailureV1::ProcessTeardown { detail, custody }) => {
-                let detail = format!("KFD same-device SDMA publication: {detail}");
-                self.retain_sdma_seam_terminal_v1(custody);
-                Err(self.terminal_error(detail))
-            }
-        }
     }
 
     fn progress_unpublished_sdma_copy_v1(
@@ -4261,11 +4011,7 @@ impl KfdRuntimeBackendV1 {
         if active.dependency_cursor != active.dependencies.len() {
             return Ok(BackendPollV1::Pending);
         }
-        let active = self
-            .active_sdma
-            .remove(&submission)
-            .expect("dependency-ready copy remains indexed");
-        self.publish_sdma_copy_v1(active)
+        self.publish_sdma_copy_v1(submission)
     }
 
     fn observe_unpublished_sdma_copy_v1(
@@ -4300,11 +4046,7 @@ impl KfdRuntimeBackendV1 {
                     )));
                 }
                 Ok(Err(failure @ RuntimeBackendFailureV1::Quiescent(_))) => {
-                    let active = self
-                        .active_sdma
-                        .remove(&submission)
-                        .expect("quiescent copy remains indexed");
-                    self.fail_quiescent_sdma_copy_v1(active);
+                    self.fail_quiescent_sdma_copy_v1(submission)?;
                     return Err(failure);
                 }
                 Ok(Err(failure)) => return Err(failure),
@@ -4318,11 +4060,7 @@ impl KfdRuntimeBackendV1 {
                 }
                 BackendPollV1::Pending => return Ok(BackendPollV1::Pending),
                 BackendPollV1::Failed { .. } => {
-                    let active = self
-                        .active_sdma
-                        .remove(&submission)
-                        .expect("failed copy remains indexed");
-                    return Ok(self.fail_unpublished_sdma_copy_v1(active));
+                    return self.fail_unpublished_sdma_copy_v1(submission);
                 }
             }
         }
@@ -13126,10 +12864,9 @@ impl KfdRuntimeBackendV1 {
                         .get(&allocation)
                         .is_some_and(|record| record.native_dirty.is_empty())
                 });
+        self.active_sdma.insert(id, active);
         if all_ready && preparation_is_ready {
-            self.publish_sdma_copy_v1(active)?;
-        } else {
-            self.active_sdma.insert(id, active);
+            self.publish_sdma_copy_v1(id)?;
         }
         Ok(id)
     }
@@ -13905,6 +13642,7 @@ mod tests {
     mod sdma_observation_custody_tests;
     mod sdma_pending_allocation_tests;
     mod sdma_promotion_tests;
+    mod sdma_publication_custody_tests;
     mod sdma_readiness_tests;
     mod sdma_recycle_tests;
     mod sdma_synchronous_tests;
@@ -23501,6 +23239,10 @@ mod tests {
             new_entries,
         );
         backend.sdma_completion_reservations += 1;
+        backend
+            .quiescent_sdma_submissions
+            .try_reserve(backend.sdma_completion_reservations)
+            .unwrap();
         let new_stream_queue = backend.reserve_active_sdma_stream_v1(stream).unwrap();
         backend.retain_active_sdma_stream_v1(stream, submission, new_stream_queue);
         backend
@@ -24184,6 +23926,12 @@ mod tests {
     fn direct_kfd_quiescent_copy_marker_has_no_live_custody() {
         let mut backend = KfdRuntimeBackendV1::mock();
         let stream = backend.create_stream_v1(7).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
+            .unwrap();
         let dependency = 30;
         let submission = 40;
         backend.active_sdma.insert(
@@ -24192,8 +23940,8 @@ mod tests {
                 id: submission,
                 stream,
                 prior_stream_submission: None,
-                source: 10,
-                destination: 20,
+                source,
+                destination,
                 source_offset: 0,
                 destination_offset: 0,
                 byte_len: 8,
@@ -24210,8 +23958,7 @@ mod tests {
         index_sdma_custody_for_test_v1(&mut backend, submission);
         backend.sdma_dependency_retain_counts.insert(dependency, 1);
         backend.stream_submission_tails.insert(stream, submission);
-        let active = backend.active_sdma.remove(&submission).unwrap();
-        backend.fail_quiescent_sdma_copy_v1(active);
+        backend.fail_quiescent_sdma_copy_v1(submission).unwrap();
 
         assert!(backend.quiescent_sdma_submissions.contains(&submission));
         assert!(!backend.active_sdma.contains_key(&submission));
@@ -24245,8 +23992,8 @@ mod tests {
                 id: dependent,
                 stream,
                 prior_stream_submission: Some(submission),
-                source: 10,
-                destination: 20,
+                source,
+                destination,
                 source_offset: 0,
                 destination_offset: 0,
                 byte_len: 8,
@@ -24285,6 +24032,8 @@ mod tests {
         backend.release_submission_v1(dependent).unwrap();
         backend.release_submission_v1(submission).unwrap();
         assert!(backend.quiescent_sdma_submissions.is_empty());
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -24292,6 +24041,12 @@ mod tests {
     fn direct_kfd_zero_progress_failure_is_conclusive_without_marker() {
         let mut backend = KfdRuntimeBackendV1::mock();
         let stream = backend.create_stream_v1(7).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
+            .unwrap();
         let submission = 40;
         backend.active_sdma.insert(
             submission,
@@ -24299,8 +24054,8 @@ mod tests {
                 id: submission,
                 stream,
                 prior_stream_submission: None,
-                source: 10,
-                destination: 20,
+                source,
+                destination,
                 source_offset: 0,
                 destination_offset: 0,
                 byte_len: 8,
@@ -24316,9 +24071,8 @@ mod tests {
         );
         index_sdma_custody_for_test_v1(&mut backend, submission);
         backend.stream_submission_tails.insert(stream, submission);
-        let active = backend.active_sdma.remove(&submission).unwrap();
         assert_eq!(
-            backend.fail_unpublished_sdma_copy_v1(active),
+            backend.fail_unpublished_sdma_copy_v1(submission).unwrap(),
             BackendPollV1::Failed {
                 code: COOPERATIVE_COPY_FAILURE_CODE_V1
             }
@@ -24336,6 +24090,8 @@ mod tests {
         assert_eq!(backend.sdma_completion_reservations, 0);
         backend.release_submission_v1(submission).unwrap();
         backend.destroy_stream_v1(stream).unwrap();
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -27416,7 +27172,7 @@ mod tests {
             .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
             .unwrap();
         let destination = backend
-            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
             .unwrap();
         backend.active_sdma.insert(
             40,
