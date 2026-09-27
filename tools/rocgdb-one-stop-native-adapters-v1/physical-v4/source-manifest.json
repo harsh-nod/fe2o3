@@ -442,8 +442,8 @@
         },
         {
           "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
-          "bytes": 11219,
-          "sha256": "d27609cfd5705df5a3830626cd940f1a3cdc47b706d9e4db1ffcc37a35fed8b3"
+          "bytes": 11432,
+          "sha256": "b821dcedecd23477b5d2878d12d9c5aa81fcaf39eab7d8f0ba761f43c0b7fec5"
         },
         {
           "path": "gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc",
@@ -761,8 +761,8 @@
     },
     {
       "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
-      "bytes": 11219,
-      "sha256": "d27609cfd5705df5a3830626cd940f1a3cdc47b706d9e4db1ffcc37a35fed8b3"
+      "bytes": 11432,
+      "sha256": "b821dcedecd23477b5d2878d12d9c5aa81fcaf39eab7d8f0ba761f43c0b7fec5"
     },
     {
       "path": "gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc",
@@ -1028,8 +1028,8 @@
   "patches": [
     {
       "path": "patches/0001-disabled-loaded-maintenance.patch",
-      "bytes": 26509,
-      "sha256": "521bea8a8d57d73210e2e7d85bbe43d107e192f968dc95744217eb9e4fea7242",
+      "bytes": 26726,
+      "sha256": "fc5516ae78059308b2d58efc1ebc4a746d8a6c24289e3c390698c85f27e2c8d7",
       "changes": [
         {
           "path": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
@@ -1079,8 +1079,8 @@
           },
           "postimage": {
             "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
-            "bytes": 11219,
-            "sha256": "d27609cfd5705df5a3830626cd940f1a3cdc47b706d9e4db1ffcc37a35fed8b3"
+            "bytes": 11432,
+            "sha256": "b821dcedecd23477b5d2878d12d9c5aa81fcaf39eab7d8f0ba761f43c0b7fec5"
           }
         },
         {
@@ -1126,8 +1126,8 @@
     {
       "path": "src/amd-dbgapi-one-stop-native-v1.h",
       "source": "gdb/amd-dbgapi-one-stop-native-v1.h",
-      "bytes": 11219,
-      "sha256": "d27609cfd5705df5a3830626cd940f1a3cdc47b706d9e4db1ffcc37a35fed8b3"
+      "bytes": 11432,
+      "sha256": "b821dcedecd23477b5d2878d12d9c5aa81fcaf39eab7d8f0ba761f43c0b7fec5"
     },
     {
       "path": "src/amd-dbgapi-owned-one-stop-v1.h",
@@ -1153,8 +1153,8 @@
   },
   "transforms": {
     "path": "ordinary-transforms.json",
-    "bytes": 60347,
-    "sha256": "67ef719a4b80055f53a32919e133d5eb1d933c9425c5255769c28589901da29a"
+    "bytes": 60770,
+    "sha256": "d0a087688b991e0521cb59147f6ad975e685443e83df387604457c824de51b14"
   },
   "test_payloads": [
     {
@@ -1169,13 +1169,13 @@
     },
     {
       "path": "tests/helper-extraction.json",
-      "bytes": 3883,
-      "sha256": "39b6e06212b48cb268db918a64f5843ba8dcdeb398b99691930a547b6b8b11ed"
+      "bytes": 5108,
+      "sha256": "d2484db9b740f17e306970cd9c51b0bc8366447dbe08b7db5d276f395efcda65"
     },
     {
       "path": "tests/loaded-scratch.inc",
-      "bytes": 1870,
-      "sha256": "eadfe1535de32221f195ecf1c1b0d0a46df9706a603c7787d456d74ee6b89f4a"
+      "bytes": 2083,
+      "sha256": "0fea16617b64fbd4e661d304c56def6d28393ef8e8a09bd904900e29e5be78f4"
     },
     {
       "path": "tests/first-poison-controls.cc",
@@ -1190,7 +1190,7 @@
     {
       "path": "tests/source-files-tests.mjs",
       "bytes": 6517,
-      "sha256": "0ba880955345bc9cfe7c11bc4ffb799addc58040a2884b82f5c20ee523b65a1d"
+      "sha256": "79555faeac7778ac5751ab2b9a9d933a71312c48d08dfb9e48cda9be72b84d1d"
     },
     {
       "path": "tests/initialization-tests.mjs",
@@ -1209,8 +1209,8 @@
     },
     {
       "path": "tests/maintenance-placement-tests.mjs",
-      "bytes": 6444,
-      "sha256": "d929cfbc0483a524036ca395e85fbb17144d2564fbee50a348777318adf498a5"
+      "bytes": 10061,
+      "sha256": "b1bdaedd137662f86f258d83fb5c37584db17474508fe4abe7af451a551f8235"
     }
   ]
 }

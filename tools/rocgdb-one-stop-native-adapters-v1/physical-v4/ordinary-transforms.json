@@ -238,6 +238,13 @@
       "before": "  static constexpr std::uint64_t logical_storage () noexcept;",
       "after": "  static constexpr std::uint64_t loaded_maintenance_scalar_scratch = sizeof (loaded_maintenance_scratch);\n  static constexpr std::uint64_t logical_storage () noexcept;",
       "count": 1
+    },
+    {
+      "stage": "observability",
+      "file": "amd-dbgapi-one-stop-native-v1.h",
+      "before": "class native_adapter final {",
+      "after": "// Debug-type observability only: no call or object construction.\n[[gnu::used]] static const loaded_maintenance_scratch *\nloaded_maintenance_debug_type (const loaded_maintenance_scratch *p) noexcept\n{ return p; }\nclass native_adapter final {",
+      "count": 1
     }
   ],
   "reverse_exact": true

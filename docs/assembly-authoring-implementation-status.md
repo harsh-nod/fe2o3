@@ -1510,3 +1510,12 @@ See [the qualification record](original-fixed-query-content-qualification-202609
 The authentic same-source/shared-Budget connector and later production stages
 remain open. Broad accepted exits remain 6/18; no public activation or global
 compiler pin change.
+
+## Disabled debugger debug-type anchor — 2026-09-27
+
+The disabled physical-v4 package retains the complete scratch debug type without
+adding runtime calls or owner fields. All 45 source controls, strict CPU builds,
+264 maintenance groups / 1,033 checks and six first-poison groups passed.
+See [the qualification record](debugger-disabled-type-anchor-qualification-20260927.md).
+Actual nine-type layout, current startup and native capture remain unqualified.
+All public gates remain disabled; accepted broad exits remain 6/18.

@@ -305,7 +305,7 @@
    m_output.forget (); // Serialized history is never a live value accessor.
 --- a/gdb/amd-dbgapi-one-stop-native-v1.h
 +++ b/gdb/amd-dbgapi-one-stop-native-v1.h
-@@ -15,6 +15,31 @@
+@@ -15,6 +15,35 @@
  #include <sys/stat.h>
  namespace amd_owned_one_stop_v1 {
  class owned_checkpoint_breakpoint;
@@ -334,10 +334,14 @@
 +  struct ref_frame { target_ops *source; target_ops_ref result;
 +    target_ops_ref *destination,*incoming; target_ops *incref,*decref; } refs[3];
 +};
++// Debug-type observability only: no call or object construction.
++[[gnu::used]] static const loaded_maintenance_scratch *
++loaded_maintenance_debug_type (const loaded_maintenance_scratch *p) noexcept
++{ return p; }
  class native_adapter final {
  public:
    native_adapter (const native_adapter &) = delete;
-@@ -68,13 +93,17 @@
+@@ -68,13 +97,17 @@
  private:
    friend class owned_checkpoint_breakpoint;
    native_adapter () noexcept = default;
@@ -357,7 +361,7 @@
    identity current_identity ();
    amd_dbgapi_inferior_info &info ();
    void thread_roster (std::size_t &, std::size_t &);
-@@ -105,6 +134,7 @@
+@@ -105,6 +138,7 @@
    static constexpr std::uint64_t constant_and_scratch = 4096;
    static constexpr std::uint64_t snapshot_scalar_scratch = 1024;
    static constexpr std::uint64_t entry_maintenance_scalar_scratch = 256;
@@ -365,7 +369,7 @@
    static constexpr std::uint64_t logical_storage () noexcept;
    owner m_owner;
    physical_snapshot m_snapshot; // Private, same selected-lifetime sizeof reservation.
-@@ -142,6 +172,9 @@
+@@ -142,6 +176,9 @@
    enum class path : std::uint8_t { none,entry,callback_step,callback_continue,publication,completion };
    enum class callback_progress : std::uint8_t { none,step_ready,step_inflight,continue_ready };
    enum class entry_epoch : std::uint8_t { unused,entry_commit,armed,retired };
@@ -375,7 +379,7 @@
    target_ops_ref m_entry_process_ref,m_entry_top_ref;
    entry_epoch m_entry_epoch=entry_epoch::unused;
    bool m_entry_maintenance_inflight=false;
-@@ -164,10 +197,10 @@
+@@ -164,10 +201,10 @@
       Another256 bytes prepay simultaneous borrowed output pointers/closures,
       without silently reusing any of those existing reservations. */
    return sizeof (native_adapter) + constant_and_scratch + snapshot_scalar_scratch

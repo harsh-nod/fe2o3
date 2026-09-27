@@ -10,9 +10,9 @@ const reject=change=>{const m=clone();change(m);assert.throws(()=>validateManife
 test('one measured 63-row two-stage boundary with unchanged cap',()=>{
  const m=manifest();assert.equal(PATHS.length,63);assert.equal(new Set(PATHS).size,63);
  assert.deepEqual(PATHS,[...PATHS].sort());assert.equal(m.standalone.length,5);
- assert.deepEqual(m.stages.map(s=>s.files.reduce((a,r)=>a+r.bytes,0)),[2183132,2194713]);
- assert.equal(MAX_TOTAL,2144*1024);assert.equal(MAX_TOTAL-2194713,743);
- assert.equal(2194713-2183132,11581);assert.equal(m.patches[0].changes.length,5);
+ assert.deepEqual(m.stages.map(s=>s.files.reduce((a,r)=>a+r.bytes,0)),[2183132,2194926]);
+ assert.equal(MAX_TOTAL,2144*1024);assert.equal(MAX_TOTAL-2194926,530);
+ assert.equal(2194926-2183132,11794);assert.equal(m.patches[0].changes.length,5);
 });
 test('the three lifetime headers are in BOTH same cumulative rosters',()=>{
  const m=manifest();for(const p of ['gdb/process-stratum-target.h','gdbsupport/gdb_ref_ptr.h','gdbsupport/refcounted-object.h']){

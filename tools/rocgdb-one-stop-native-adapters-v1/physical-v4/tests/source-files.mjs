@@ -75,7 +75,7 @@ export const PATHS=Object.freeze([
   "gdbsupport/refcounted-object.h"
 ]);
 export const STAGES=Object.freeze(['physical-host-entry-maintenance-disabled-v3','physical-loaded-maintenance-disabled-v4']);
-const EXPECTED_MANIFEST='a2e0318386ef15158dc2c0c05c2ac1d2a8ea6c243d24253cfa3560bb93b2de7e';
+const EXPECTED_MANIFEST='4d5e577c8ce393d1eccb7f0c16eef91224eb77163bd5de6632a716a249c16dcc';
 const digest=b=>crypto.createHash('sha256').update(b).digest('hex');
 const keys=(v,k)=>assert.deepEqual(Object.keys(v).sort(),k.slice().sort());
 const own=p=>fileURLToPath(new URL('../'+p,import.meta.url));

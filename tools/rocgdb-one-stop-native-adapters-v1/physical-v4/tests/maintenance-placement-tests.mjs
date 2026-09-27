@@ -12,13 +12,13 @@ const transforms=JSON.parse(packageText('ordinary-transforms.json'));
 function prior(name,stage){
  let result=files['gdb/'+name];
  for(const op of [...transforms.operations].reverse()){
-  if(op.file!==name || stage==='diagnostic'&&op.stage!=='loaded')continue;
+  if(op.file!==name || stage==='diagnostic'&&op.stage==='diagnostic')continue;
   assert.equal(result.split(op.after).length,2);result=result.replace(op.after,op.before);
  }
  return result;
 }
-test('34 runtime edits join and invert all five immutable v3 preimages',()=>{
- assert.equal(transforms.operations.length,34);assert.equal(transforms.operations.filter(x=>x.stage==='diagnostic').length,13);
+test('35 runtime edits join and invert all five immutable v3 preimages',()=>{
+ assert.equal(transforms.operations.length,35);assert.equal(transforms.operations.filter(x=>x.stage==='diagnostic').length,13);
  assert.equal(transforms.operations.filter(x=>x.stage==='loaded').length,21);
  for(const row of spec.patches[0].changes){
   const name=row.path.slice(4),p=name==='amd-dbgapi-owned-one-stop-v1.h'?'../../src/'+name:'../../physical-v3/src/'+name;
@@ -84,4 +84,45 @@ test('public first-poison fixture binds exact old owner and two include-only edi
  assert.equal(Buffer.byteLength(text),x.first_poison.private_fixture.bytes);assert.equal(sha(text),x.first_poison.private_fixture.sha256);
  const old=readBounded(fileURLToPath(new URL('../../src/amd-dbgapi-owned-one-stop-v1.h',import.meta.url)),MAX_FILE);
  assert.equal(old.length,x.first_poison.old_owner.bytes);assert.equal(sha(old),x.first_poison.old_owner.sha256);
+});
+
+function debugTypeAnchor(header,scratch){
+ const x=JSON.parse(packageText('tests/helper-extraction.json')).scratch;
+ checkedText(x.current_header,Buffer.from(header));checkedText(x.extraction,Buffer.from(scratch));
+ assert.equal(header.split(x.anchor.after).length,2,'one exact namespace-private debug-type anchor');
+ const before=header.replace(x.anchor.after,()=>x.anchor.before);
+ checkedText(x.prior_header,Buffer.from(before));
+ assert.equal(before.split(x.anchor.before).length,2);assert.equal(before.replace(x.anchor.before,()=>x.anchor.after),header);
+ assert.equal(slice(header,x.start,x.end),scratch,'complete scratch and anchor extraction');
+ assert.equal(header.slice(header.indexOf(x.end)),before.slice(before.indexOf(x.end)),'native_adapter suffix unchanged');
+ assert.equal((header.match(/loaded_maintenance_debug_type\s*\(/g)||[]).length,1,'definition only, no source call');
+ assert.equal(Buffer.byteLength(header)-Buffer.byteLength(before),213);
+ return before;
+}
+test('debug-type anchor is exact noncalled const identity and whole CPU extraction',()=>{
+ const header=files['gdb/amd-dbgapi-one-stop-native-v1.h'],scratch=packageText('tests/loaded-scratch.inc');
+ const before=debugTypeAnchor(header,scratch),x=JSON.parse(packageText('tests/helper-extraction.json')).scratch;
+ assert.equal(x.anchor.bytes,213);assert.equal(x.anchor.calls_added,0);assert.equal(x.anchor.objects_added,0);
+ assert.equal(x.actual_gdb_layout,null);assert.equal(x.native_authority,false);
+ assert(header.includes('[[gnu::used]] static const loaded_maintenance_scratch *\nloaded_maintenance_debug_type (const loaded_maintenance_scratch *p) noexcept\n{ return p; }\n'));
+ assert.equal(sha(before),x.prior_header.sha256);
+});
+test('missing duplicated mutable or changed-return debug anchor refuses',()=>{
+ const header=files['gdb/amd-dbgapi-one-stop-native-v1.h'],scratch=packageText('tests/loaded-scratch.inc'),x=JSON.parse(packageText('tests/helper-extraction.json')).scratch;
+ for(const replacement of [x.anchor.before,x.anchor.after+x.anchor.after,x.anchor.after.replace('static const loaded_maintenance_scratch *','static loaded_maintenance_scratch *'),x.anchor.after.replace('return p;','return nullptr;')]){
+  const bad=header.replace(x.anchor.after,()=>replacement);assert.notEqual(bad,header);assert.throws(()=>debugTypeAnchor(bad,scratch));
+ }
+});
+test('old truncated foreign or extended CPU scratch cannot bypass anchor binding',()=>{
+ const header=files['gdb/amd-dbgapi-one-stop-native-v1.h'],scratch=packageText('tests/loaded-scratch.inc');
+ for(const bad of [scratch.slice(1),scratch+'\n',scratch.replace('return p;','return nullptr;'),scratch.slice(0,scratch.indexOf('// Debug-type observability'))]){
+  assert.notEqual(bad,scratch);assert.throws(()=>debugTypeAnchor(header,bad));
+ }
+});
+test('anchor is a third exact stage and keeps all34 prior transformations',()=>{
+ const anchors=transforms.operations.filter(x=>x.stage==='observability');assert.equal(anchors.length,1);
+ assert.equal(transforms.operations.at(-1),anchors[0]);assert.equal(anchors[0].file,'amd-dbgapi-one-stop-native-v1.h');assert.equal(anchors[0].count,1);
+ assert.deepEqual(transforms.operations.slice(0,-1).map(x=>x.stage),[...Array(13).fill('diagnostic'),...Array(21).fill('loaded')]);
+ const x=JSON.parse(packageText('tests/helper-extraction.json')).scratch;assert.equal(anchors[0].before,x.anchor.before);assert.equal(anchors[0].after,x.anchor.after);
+ falseGates(files);for(const key of ['activation_available','capture_available','publication_available','source_checks_are_native_authority'])assert.equal(spec[key],false);
 });

@@ -9,9 +9,9 @@ The five changed source leaves are byte-identical to the separately CPU-qualifie
 The two named stages share one exact 63-path roster:
 
 - physical-host-entry-maintenance-disabled-v3: 2,183,132 accepted source bytes.
-- physical-loaded-maintenance-disabled-v4: 2,194,713 accepted source bytes.
+- physical-loaded-maintenance-disabled-v4: 2,194,926 accepted source bytes.
 
-The existing 2,144 KiB combined selected-stage cap is unchanged (743 bytes spare). Per-file 512 KiB and metadata 64 KiB limits are unchanged. Parent packages and the shared bounded reader remain immutable. This is selected source-byte accounting, not whole-process I/O, allocator, kernel, RSS, or wall-time accounting.
+The existing 2,144 KiB combined selected-stage cap is unchanged (530 bytes spare). Per-file 512 KiB and metadata 64 KiB limits are unchanged. Parent packages and the shared bounded reader remain immutable. This is selected source-byte accounting, not whole-process I/O, allocator, kernel, RSS, or wall-time accounting.
 
 Root may apply the single patch to a fresh exact disabled v3 source projection, then run the explicit verifier and tests. No default source root exists. Do not apply this disabled patch to an active private projection or infer authority from merely matching five leaves. The complete 63-row source contract, false gates and external API header must be checked.
 
@@ -20,3 +20,9 @@ Root may apply the single patch to a fresh exact disabled v3 source projection, 
 The package retains initialization/publication controls, adapts the output inverse through both predecessor layers, adds exact five-leaf forward/reverse and helper-extraction checks, and provides hostile real-helper CPU mocks. The mocks do not implement actual GDB object lifetimes, runtime callbacks, target effects or library behavior.
 
 Fresh relocated metadata/source/API checks, both C++ builds/runs and Node controls remain required. A full private GDB rebuild, actual compiled adapter/scratch layout, loaded-runtime closure, controller/family/replay/static custody and a separately authorized one-attempt native lease are distinct requirements. There is no debugger ELF or native-success evidence in this source package.
+
+## Debug-type observability source anchor
+
+The native header and CPU scratch extraction include the exact 213-byte namespace-private, noncalled const-pointer identity anchor. No owner object, callback, mutable API, instruction effect, availability gate, or native budget changes. The prior34 runtime transforms remain intact and the anchor is a separate final transformation. Four additional source controls preserve the original41 controls (45 total). These are declared source checks, not results for this relocated successor.
+
+All previous public test/build receipts apply to the prior package only. This successor requires fresh source/API, Node and both C++ qualifications. Actual GDB build, complete nine-type DWARF layout, fresh runtime custody and startup remain absent; no scratch size is inferred.
