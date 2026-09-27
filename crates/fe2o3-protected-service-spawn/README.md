@@ -45,6 +45,21 @@ ledgers pay before duplication; refusal, unwind and controller recovery retain
 the pool's guard. A clone is not deployment authority and must never be unlocked
 or passed to uncontrolled code.
 
+`reserve_launch_retaining` and `StagedProtectedServiceExecV2::spawn_retaining`
+put complete dependencies in that same slot before process creation. The pool
+funds their full retained storage independently of the request's typed view.
+Deferred or quarantined cancellation keeps them alive; exec confirmation does
+not release them. Terminal retirement drops dependencies outside both pool locks,
+so one dependency can defer another child without a second reaper or deadlock.
+
+`RootOwnedRetainedServiceChildV2<T>` preserves typed, metered read-only access
+through an exclusive mutex. Inputs need `Send`, not `Sync`; existing `Cell`-based
+owners keep their programming model. A panicking access poisons later access.
+Caller-declared storage and generic values are not admitted authority. The unsafe
+boundary requires complete charges and bounded, funded, nonpanicking destruction.
+Using this primitive in consuming native compiler-supervisor launch remains work
+for that coordinator, not a property established by the generic wrapper.
+
 ## Shared Readiness
 
 `launch_io` supplies the one bounded profile/gate/readiness/status scheduler to

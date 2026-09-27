@@ -424,8 +424,17 @@ unwinds, including child-storage refusal and failure after endpoint receipt,
 still need direct coverage. See the
 [preparation checkpoint](evidence/conditional-native-compiler-preparation-20260926.md).
 
-The consuming supervisor path also needs ordered deferred custody: its complete
-prepared owner, live anchor and both leases must remain retained until the
-supervisor is genuinely terminal. Calling `cancel` or dropping the child field
-first is insufficient when cleanup transfers a pending child to the pool. This
-integration is outstanding; a persistent guard alone does not complete it.
+The shared spawn path now supports ordered deferred custody. Before clone, the
+existing cleanup slot retains the complete dependency payload and charges its
+full storage to the original persistent account. Pending or quarantined children
+keep that payload; exact terminal wait retires it outside pool locks, permitting
+nested anchor cancellation in the same pool. Metered exclusive access supports
+the actual prepared owners without requiring their listeners to be `Sync`.
+See the [retained-custody checkpoint](evidence/conditional-native-retained-custody-20260926.md).
+
+The consuming supervisor integration is still outstanding. It must transfer its
+actual complete prepared owner, live anchor and both leases through that path,
+join the installed cleanup guard to the actual compiler lifecycle/root, and
+validate staged Files, protected readiness and continuity. Calling `cancel`,
+dropping the child field first, or retaining a persistent guard alone does not
+establish those properties or a successful production launch.

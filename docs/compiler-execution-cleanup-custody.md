@@ -110,6 +110,50 @@ allowance; further attempts require additional work. No handle may reset or
 replace the account while retained custody exists. An admitted shutdown attempt
 stops new reservations even when it finds the pool busy; pumping remains allowed.
 
+## Retained Dependencies
+
+The shared slot can also own complete service dependencies before clone.
+`reserve_launch_retaining` consumes the fully charged input and returns a typed
+view plus request GROWTH. Keep the original input reservation and reserve that
+growth before retaining the view. The original service account independently
+pays full payload storage and lifetime work before allocation. No replacement
+ledger or second cleanup table is created.
+
+The accounting invariant becomes `Cleanup::STORAGE + retained_payload_bytes`.
+Fixed slot/controller metadata remains in `STORAGE`; dynamic payloads include
+the declared transitive storage and mutex/Arc allocation overhead. The request
+also pays the full payload while holding its view, since that view can outlive
+slot retirement. Quota methods use checked arithmetic. Storage or work refusal
+keeps original counters and denial history, stops service admission as appropriate,
+and never publishes a partially funded payload.
+
+`spawn_retaining` follows the existing root checks and clone/adoption path. Its
+reservation already holds the dependencies before clone, so even a failed parent
+pidfd check cannot release them while the new child is unresolved. The typed
+child wrapper returns growth over the consumed input, includes the complete owner
+floor in operations, and grants no admitted service authority.
+
+An unused pre-clone reservation rolls back. After clone, only exact consuming
+terminal reaping permits retirement; exec confirmation, signal success, NOWAIT,
+ECHILD and Pending do not. A `RETIRING` slot stays unavailable while dependencies
+drop outside both cell and account mutexes. Their destructors may therefore
+defer another child into this same pool. Only afterward does accounting retire
+and the slot become empty. A destructor contract violation or accounting
+mismatch quarantines the slot instead of publishing reuse.
+
+The view uses `Arc<Mutex<T>>` and requires `T: Send`, not `Sync`. Metered scoped
+access borrows only `&T`; it exposes no mutable guard, raw pointer, Arc clone or
+owner extraction. Panic poisons subsequent access. Recursive access to the same
+view is forbidden. The trusted construction boundary still requires all
+transitive resources to survive shared access and all destruction to be bounded,
+nonpanicking and funded, including existing nested cancellation prepayments.
+These mechanical APIs do not validate a caller's declared charge or deployment.
+
+This closes a primitive lifetime gap, not the consuming compiler-coordinator
+integration: that coordinator must actually transfer its prepared owner, live
+anchor and both lifecycle leases through this path and validate final staged
+Files, readiness and protected provenance.
+
 ## Remaining Limits
 
 Native pool storage also prepays one close-only deployment-guard descriptor.
