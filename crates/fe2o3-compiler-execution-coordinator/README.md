@@ -6,10 +6,11 @@ sealed images, listener/root inputs, root-bound lifecycle leases and a managed
 anchor on the original resource ledger. Consuming native supervisor launch now
 transfers that complete preparation into ordered child custody before clone.
 Native inherited descriptor admission and anchor-first composition now exist.
-The installed entrypoint still uses V1; native activation, complete startup quota
-queries and protected deployment validation remain unfinished. These APIs do not
+The installed entrypoint still uses V1. Admission quota queries and bounded native
+activation mechanics now exist; complete launch/cleanup funding, the installed
+native runner and matching provisioning remain unfinished. These APIs do not
 establish 47/47 safe GPU launch. See the
-[native root checkpoint](../../docs/evidence/conditional-native-root-admission-20260926.md).
+[startup checkpoint](../../docs/evidence/conditional-native-startup-bounds-20260926.md).
 
 ## Native Preparation
 
@@ -65,10 +66,18 @@ before unlinking. All five declared image lengths are bounded before seed reads.
 
 Consuming `launch` installs the canonical cleanup guard before the anchor, then
 uses native compiler preparation and retained supervisor launch on the original
-request and cleanup accounts. `SOURCE_STORAGE` covers the raw inputs only, not
-the complete successful startup envelope. Full quota queries, genuine root-path
-failure tests and installed native activation remain required. Component tests
-are not a successful protected deployment.
+request and cleanup accounts. `SOURCE_STORAGE` covers the raw inputs only;
+`admission_quota()` additionally covers all nested admission work and retained/
+temporary storage at the fixed image ceilings. This inert query needs no
+descriptor, seed or admitted owner. It excludes consuming launch, monitoring and
+the independent cleanup account, whose full composition is still required.
+
+Private native activation mechanics bound command-line and environment reads,
+validate all fourteen roles and the main PID, clear the validated environment,
+and meter one-shot readiness and finite termination waits. They are compiled and
+component-tested, not selected by `main.rs`. Native runner integration must change
+provisioning records and protected images together. Genuine root-path failure
+tests and protected boot validation remain required.
 
 ## Existing V1 Deployment
 
