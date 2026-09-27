@@ -177,6 +177,7 @@ fn native_launch_quota_covers_staging_and_full_owner_overlap() {
 #[test]
 fn native_launch_refusals_run_with_an_actual_cleanup_account() {
     use std::process::{Command, Stdio};
+    let completion = tempfile::NamedTempFile::new().unwrap();
     let name = format!(
         "{}::native_launch_refusal_subprocess",
         module_path!().split_once("::").unwrap().1
@@ -184,6 +185,7 @@ fn native_launch_refusals_run_with_an_actual_cleanup_account() {
     let mut process = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", &name, "--nocapture"])
         .env("FE2O3_NATIVE_ANCHOR_REFUSAL_PROBE", "1")
+        .env("FE2O3_NATIVE_ANCHOR_REFUSAL_COMPLETION", completion.path())
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -193,6 +195,7 @@ fn native_launch_refusals_run_with_an_actual_cleanup_account() {
     loop {
         if let Some(status) = process.try_wait().unwrap() {
             assert!(status.success(), "native root refusal subprocess failed");
+            assert_eq!(std::fs::read(completion.path()).unwrap(), b"complete");
             break;
         }
         if std::time::Instant::now() >= deadline {
@@ -244,5 +247,103 @@ fn native_launch_refusal_subprocess() {
         assert_eq!(b.storage(), floor);
         assert_eq!(cleanup.report().unwrap(), before);
     }
+    native_root_guard_schedules(&mut cleanup);
+    std::fs::write(
+        std::env::var_os("FE2O3_NATIVE_ANCHOR_REFUSAL_COMPLETION").unwrap(),
+        b"complete",
+    )
+    .unwrap();
+}
+
+fn native_root_guard_schedules(cleanup: &mut Cleanup) {
+    let (f, mut p) = prepared_fixture();
+    let (other, mut unrelated) = prepared_fixture();
+    let floor = p.launch_input_storage(&f.supervisor, &f.policy).unwrap();
+    let unrelated_floor = unrelated
+        .launch_input_storage(&other.supervisor, &other.policy)
+        .unwrap();
+    let mut w = Work::new(LIMIT);
+    let mut b = Budget::new(&mut w, LIMIT);
+    b.reserve_storage(floor + unrelated_floor).unwrap();
+    let ledger = b.work_ledger_identity_v1();
+
+    // Both leases are valid independently; only the actual root binding is sufficient.
+    std::mem::swap(&mut p.lifecycle, &mut unrelated.lifecycle);
+    assert!(matches!(
+        p.revalidate_inner::<false>(&f.supervisor, &f.policy, &mut b),
+        Err(Error::Lifecycle(_))
+    ));
+    std::mem::swap(&mut p.lifecycle, &mut unrelated.lifecycle);
+    assert!(matches!(
+        p.cleanup_guard::<false>(&f.supervisor, &f.policy, cleanup, false, &mut b),
+        Err(LaunchError::Cleanup(
+            fe2o3_protected_service_spawn::ProtectedServiceCleanupErrorV2::State
+        ))
+    ));
+
+    let quota = p.cleanup_guard_quota(true).unwrap();
+    let mut short_work = Work::new(quota.work() - 1);
+    let mut short = Budget::new(&mut short_work, floor + quota.scratch());
+    short.reserve_storage(floor).unwrap();
+    assert!(
+        p.cleanup_guard::<false>(&f.supervisor, &f.policy, cleanup, true, &mut short)
+            .is_err()
+    );
+    assert_eq!(short.storage(), floor);
+    assert!(matches!(
+        cleanup.try_clone_deployment_guard(&mut b),
+        Err(fe2o3_protected_service_spawn::ProtectedServiceCleanupErrorV2::State)
+    ));
+
+    let mut exact_work = Work::new(quota.work());
+    let mut exact = Budget::new(&mut exact_work, floor + quota.scratch());
+    exact.reserve_storage(floor).unwrap();
+    p.cleanup_guard::<false>(&f.supervisor, &f.policy, cleanup, true, &mut exact)
+        .unwrap();
+    assert_eq!(exact.work(), quota.work());
+    assert_eq!(exact.storage(), floor);
+    assert!(exact.peak_storage() <= floor + quota.scratch());
+    assert!(
+        p.cleanup_guard::<false>(&f.supervisor, &f.policy, cleanup, true, &mut b)
+            .is_err()
+    );
+    assert!(matches!(
+        unrelated.cleanup_guard::<false>(&other.supervisor, &other.policy, cleanup, false, &mut b),
+        Err(LaunchError::Preparation(Error::Lifecycle(_)))
+    ));
+
+    let quota = p.cleanup_guard_quota(false).unwrap();
+    let mut exact_work = Work::new(quota.work());
+    let mut exact = Budget::new(&mut exact_work, floor + quota.scratch());
+    exact.reserve_storage(floor).unwrap();
+    p.cleanup_guard::<false>(&f.supervisor, &f.policy, cleanup, false, &mut exact)
+        .unwrap();
+    assert_eq!(exact.work(), quota.work());
+    assert_eq!(exact.storage(), floor);
+    let before = cleanup.report().unwrap();
+    assert_eq!(before.storage, Cleanup::STORAGE);
+    assert!(before.admission_open);
+
+    let lock_name = std::path::Path::new(
+        fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1,
+    )
+    .file_name()
+    .unwrap();
+    let observer = File::open(f.dir.path().join(lock_name)).unwrap();
+    let unwind = catch_unwind(AssertUnwindSafe(|| {
+        p.cleanup_guard::<false>(&f.supervisor, &f.policy, cleanup, false, &mut b)
+            .unwrap();
+        drop(p);
+        panic!("root guard must survive prepared-owner unwind");
+    }));
+    assert!(unwind.is_err());
+    assert_eq!(
+        rustix::fs::flock(&observer, FlockOperation::NonBlockingLockExclusive),
+        Err(rustix::io::Errno::AGAIN)
+    );
+    assert_eq!(b.storage(), floor + unrelated_floor);
+    assert!(b.work_ledger_identity_v1() == ledger);
     cleanup.shutdown().unwrap();
+    rustix::fs::flock(&observer, FlockOperation::NonBlockingLockExclusive).unwrap();
+    rustix::fs::flock(&observer, FlockOperation::Unlock).unwrap();
 }

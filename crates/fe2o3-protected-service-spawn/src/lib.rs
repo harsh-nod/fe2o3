@@ -8,6 +8,8 @@ compile_error!("fe2o3-protected-service-spawn requires Linux x86-64");
 #[allow(unsafe_code)]
 pub mod cleanup_bridge;
 #[doc(hidden)]
+pub mod launch_io;
+#[doc(hidden)]
 #[allow(unsafe_code)]
 pub mod native_spawn;
 mod native_work;

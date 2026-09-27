@@ -1655,6 +1655,7 @@ dependencies = [
  "fe2o3-protected-service-profile",
  "libc",
  "rustix",
+ "tempfile",
 ]
 
 [[package]]

@@ -43,6 +43,49 @@ macro_rules! launch {
                 launch::sum(&[self.retained, supervisor.retained_storage(), policy.retained_storage()])
             }
 
+            /// Complete request work/extra peak for installing or validating the guard.
+            /// The cleanup account independently pays GUARD_WORK or GUARD_CLONE_WORK.
+            pub fn cleanup_guard_quota(&self, install: bool) -> LaunchResult<LaunchQuota> {
+                let q = self.revalidation_quota()?;
+                Ok(LaunchQuota {
+                    work: launch::sum(&[launch::LOCAL_WORK, q.work(), Lease::TRANSFER_WORK,
+                        if install { Cleanup::GUARD_WORK } else { Cleanup::GUARD_CLONE_WORK }])?,
+                    scratch: launch::sum(&[LAUNCH_FRAME, q.scratch(), Lease::IO_STORAGE,
+                        Cleanup::GUARD_CLONE_SCRATCH, 2 * Cleanup::GUARD_FILE_STORAGE])?,
+                })
+            }
+
+            /// Installs an actual root-bound lifecycle alias before the first child.
+            /// Requires an empty, admission-open cleanup pool with no guard. Keep the
+            /// full prepared/context floor charged on the original request ledger.
+            /// No lease, identity or fresh budget is substituted after installation.
+            /// Startup refusal or unwind cannot detach this persistent pool custody.
+            pub fn retain_cleanup_guard(&self, supervisor: &SupervisorCap, policy: &PolicyCap,
+                cleanup: &mut Cleanup, b: &mut Budget<'_>) -> LaunchResult<()> {
+                self.cleanup_guard::<true>(supervisor, policy, cleanup, true, b)
+            }
+
+            fn cleanup_guard<const ROOT: bool>(&self, supervisor: &SupervisorCap, policy: &PolicyCap,
+                cleanup: &mut Cleanup, install: bool, b: &mut Budget<'_>) -> LaunchResult<()> {
+                let floor = self.launch_input_storage(supervisor, policy)?;
+                b.with_prepaid_scope(floor, ENTRY_WORK, launch::LOCAL_WORK, LAUNCH_FRAME, |b| {
+                    self.revalidate_inner::<ROOT>(supervisor, policy, b)?;
+                    if install {
+                        let (guard, c) = self.lifecycle.try_clone_for_transfer(b).map_err(Error::from)?;
+                        b.reserve_storage(c.additional_storage())?;
+                        cleanup.retain_deployment_guard(guard, b)?;
+                        b.release_storage(c.additional_storage())?;
+                    } else {
+                        let (guard, c) = cleanup.try_clone_deployment_guard(b)?;
+                        b.reserve_storage(c.additional_storage())?;
+                        self.lifecycle.validate_transfer(&guard, b).map_err(Error::from)?;
+                        drop(guard);
+                        b.release_storage(c.additional_storage())?;
+                    }
+                    Ok(())
+                })
+            }
+
             fn transfer_source_storage(&self) -> LaunchResult<usize> {
                 launch::sum(&[Image::file_storage(self.helper.measurement()).map_err(Error::from)?,
                     Image::file_storage(self.daemon.measurement()).map_err(Error::from)?,
@@ -78,15 +121,16 @@ macro_rules! launch {
             pub fn launch_quota(&self) -> LaunchResult<LaunchQuota> {
                 let staging = self.staging_quota()?;
                 let validation = self.revalidation_quota()?;
+                let guard = self.cleanup_guard_quota(false)?;
                 let polling = launch_io::MAX_LIVENESS_CHECKS.checked_mul(Child::OPERATION_WORK)
                     .and_then(|n| n.checked_add(launch_io::MAX_WORK)).ok_or(Resource::Arithmetic)?;
                 Ok(LaunchQuota {
-                    work: launch::sum(&[launch::LOCAL_WORK, staging.work(), validation.work(),
+                    work: launch::sum(&[launch::LOCAL_WORK, staging.work(), validation.work(), guard.work(),
                         Namespaces::CAPTURE_WORK, Namespaces::REVALIDATE_SELF_WORK,
                         Namespaces::REVALIDATE_PROCESS_WORK, observations::PROCESS_VALIDATE_WORK,
                         Stage::spawn_work_for(DESTINATIONS.len(), 63)?, polling, 3 * Child::OPERATION_WORK,
                         Admission::ADMISSION_WORK, Admission::REVALIDATION_WORK])?,
-                    scratch: launch::sum(&[LAUNCH_FRAME, Channels::STORAGE, NAMESPACE_STORAGE,
+                    scratch: launch::sum(&[LAUNCH_FRAME, Channels::STORAGE, NAMESPACE_STORAGE, guard.scratch(),
                         Namespaces::CAPTURE_SCRATCH, Namespaces::REVALIDATE_SELF_SCRATCH,
                         Namespaces::REVALIDATE_PROCESS_SCRATCH, observations::PROCESS_VALIDATE_SCRATCH,
                         staging.scratch(), Stage::storage_for_sources(self.transfer_source_storage()?)?,
@@ -174,6 +218,8 @@ macro_rules! launch {
             /// full input floor reserved; reserve returned growth before retention.
             /// On failure inputs close but their reservations remain for retirement.
             /// Cleanup may defer/quarantine a child; refusal never means it was reaped.
+            /// Call retain_cleanup_guard before the first launch. Launch validates the
+            /// installed guard against this actual root-bound lease before spawning.
             ///
             /// ```
             #[doc = concat!("use fe2o3_external_anchor_coordinator::{", stringify!($Prepared), " as Prepared, ", stringify!($Managed), " as Managed, ExternalAnchorLaunchErrorV2 as Error, ExternalAnchorLaunchStorageV2 as Storage};")]
@@ -182,6 +228,7 @@ macro_rules! launch {
             /// use fe2o3_protected_service_spawn::ProtectedServiceCleanupServiceV2 as Cleanup;
             /// fn launch(p: Prepared, s: &Supervisor, policy: &Policy, c: &mut Cleanup,
             ///     b: &mut Budget<'_>) -> Result<(Managed, Storage), Error> {
+            ///     p.retain_cleanup_guard(s, policy, c, b)?;
             ///     p.launch(s, policy, std::time::Duration::from_secs(30), c, b)
             /// }
             /// ```
@@ -194,6 +241,7 @@ macro_rules! launch {
                     let deadline = launch_io::bounded_deadline(timeout)
                         .map_err(|_| LaunchError::Invalid("invalid native anchor launch timeout"))?;
                     native::require_root::<true>()?;
+                    self.cleanup_guard::<true>(supervisor, policy, cleanup, false, b)?;
                     let (namespaces, c) = Namespaces::capture_self(b)?;
                     b.reserve_storage(c.additional_storage())?;
                     let credentials = Credentials::new(self.deployment.deployment().service().uid(),

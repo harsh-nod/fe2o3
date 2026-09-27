@@ -9,6 +9,7 @@ use fe2o3_protected_service_profile::{
     ProtectedServiceCredentialProfileErrorV1 as Credentials,
     ProtectedServiceProfileErrorV2 as Profile, observations,
 };
+use fe2o3_protected_service_spawn::ProtectedServiceCleanupErrorV2 as CleanupError;
 use fe2o3_protected_service_spawn::native_spawn::{
     ProtectedServiceSpawnErrorV2 as Spawn, RootOwnedProtectedServiceChildV2 as Child,
 };
@@ -28,6 +29,8 @@ pub enum ExternalAnchorLaunchErrorV2 {
     Preparation(Preparation),
     /// Shared native process custody refused.
     Spawn(Spawn),
+    /// The original persistent cleanup account or its lifecycle guard refused.
+    Cleanup(CleanupError),
     /// Native endpoint admission refused.
     Admission(Admission),
     /// Namespace observation refused.
@@ -65,6 +68,7 @@ macro_rules! from_error {
 from_error!(Resource, Resource);
 from_error!(Preparation, Preparation);
 from_error!(Spawn, Spawn);
+from_error!(CleanupError, Cleanup);
 from_error!(Admission, Admission);
 from_error!(Profile, Profile);
 from_error!(Credentials, Credentials);
@@ -75,6 +79,7 @@ impl fmt::Display for Error {
             Self::Resource(e) => e.fmt(f),
             Self::Preparation(e) => e.fmt(f),
             Self::Spawn(e) => e.fmt(f),
+            Self::Cleanup(e) => e.fmt(f),
             Self::Admission(e) => e.fmt(f),
             Self::Profile(e) => e.fmt(f),
             Self::Credentials(e) => e.fmt(f),
@@ -93,6 +98,7 @@ impl StdError for Error {
             Self::Resource(e) => Some(e),
             Self::Preparation(e) => Some(e),
             Self::Spawn(e) => Some(e),
+            Self::Cleanup(e) => Some(e),
             Self::Admission(e) => Some(e),
             Self::Profile(e) => Some(e),
             Self::Credentials(e) => Some(e),

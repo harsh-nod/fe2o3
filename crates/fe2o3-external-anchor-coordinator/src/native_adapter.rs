@@ -21,10 +21,10 @@ macro_rules! preparation {
 
         const CONTEXT_WORK: usize = PolicyCap::IO_WORK + SupervisorCap::IO_WORK
             + DeploymentCap::IO_WORK + ProvisioningCap::IO_WORK + DEPLOYMENT_WORK
-            + PROVISIONING_WORK + Key::IO_WORK + Lease::REVALIDATION_WORK;
+            + PROVISIONING_WORK + Key::IO_WORK + Lease::ROOT_BINDING_WORK;
         const CONTEXT_STORAGE: usize = maximum(&[PolicyCap::IO_STORAGE,
             SupervisorCap::IO_STORAGE, DeploymentCap::IO_STORAGE, ProvisioningCap::IO_STORAGE,
-            DEPLOYMENT_STORAGE, PROVISIONING_STORAGE, Key::IO_STORAGE, Lease::IO_STORAGE]);
+            DEPLOYMENT_STORAGE, PROVISIONING_STORAGE, Key::IO_STORAGE, Lease::ROOT_BINDING_SCRATCH]);
         const IMAGE_GROWTH: usize = size_of::<(Image, ImageStorage)>()
             - size_of::<(File, ImageStorage)>();
 
@@ -183,9 +183,9 @@ macro_rules! preparation {
                     .ok_or(Resource::Arithmetic)?;
                 b.with_prepaid_scope(floor, 0, LOCAL_WORK - ENTRY_WORK, Self::FRAME_STORAGE, |b| {
                     native::require_root::<ROOT>()?;
-                    check_context(&deployment, &provisioning, &key_template, &lifecycle,
-                        supervisor, policy, b)?;
+                    check_context(&deployment, &provisioning, &key_template, supervisor, policy, b)?;
                     let root_snapshot = native::state_root(&root, deployment.deployment().service())?;
+                    lifecycle.revalidate_for_root(&root, b)?;
                     let owner = ImageOwner::new(deployment.deployment().service().uid(),
                         deployment.deployment().service().gid()).map_err(ImageError::from)?;
                     let (helper, growth) = Image::seal_source_for_owner(helper_source,
@@ -233,10 +233,11 @@ macro_rules! preparation {
                     return Err(Error::Invalid(Failure::CoordinatorChanged));
                 }
                 check_context(&self.deployment, &self.provisioning, &self.key_template,
-                    &self.lifecycle, supervisor, policy, b)?;
+                    supervisor, policy, b)?;
                 if native::state_root(&self.root, self.deployment.deployment().service())? != self.root_snapshot {
                     return Err(Error::Invalid(Failure::StateRootChanged));
                 }
+                self.lifecycle.revalidate_for_root(&self.root, b)?;
                 self.helper.revalidate(b)?;
                 self.daemon.revalidate(b)?;
                 native::require_root::<ROOT>()
@@ -246,7 +247,7 @@ macro_rules! preparation {
         }
 
         fn check_context(deployment: &DeploymentCap, provisioning: &ProvisioningCap,
-            key: &Key, lifecycle: &Lease, supervisor: &SupervisorCap, policy: &PolicyCap,
+            key: &Key, supervisor: &SupervisorCap, policy: &PolicyCap,
             b: &mut Budget<'_>) -> Result<()> {
             policy.revalidate(b)?;
             supervisor.revalidate(b)?;
@@ -263,7 +264,6 @@ macro_rules! preparation {
             // Secret validation requires the CURRENT owner; the public path checked
             // every root ID before reaching here, hence a root-owned template.
             key.revalidate(d, b)?;
-            lifecycle.revalidate(b)?;
             Ok(())
         }
         impl fmt::Debug for $Prepared {
