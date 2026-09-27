@@ -4,6 +4,92 @@ use super::*;
 use std::mem::ManuallyDrop;
 use std::os::unix::process::ExitStatusExt;
 
+#[test]
+fn asynchronous_copy_completion_preserves_later_same_stream_owners() {
+    let mut steps = (0..3)
+        .flat_map(|_| {
+            [
+                scripted_submit_step_v1(
+                    Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                    0,
+                    0,
+                    8,
+                    ScriptedFailureModeV1::Success,
+                ),
+                ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
+                    direction: None,
+                    copy_bytes: None,
+                }),
+                ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
+            ]
+        })
+        .collect::<Vec<_>>();
+    steps.extend(scripted_release_steps_v1());
+    let (mut backend, stream, host, device) = scripted_direct_backend_v1(16, steps);
+    let (source, destination) = scripted_copy_regions_v1(host, device, 8);
+    let copies: [u64; 3] = std::array::from_fn(|_| {
+        backend
+            .copy_async_v1(stream, source, destination, &[])
+            .unwrap()
+    });
+    for (index, &copy) in copies.iter().enumerate() {
+        let later = &copies[index + 1..];
+        let rosters = later
+            .iter()
+            .map(|id| {
+                let active = &backend.active_sdma[id];
+                (
+                    *id,
+                    active.dependencies.clone(),
+                    active.dependencies.as_ptr() as usize,
+                    active.dependency_cursor,
+                )
+            })
+            .collect::<Vec<_>>();
+        backend.flush_stream_v1(stream).unwrap();
+        assert_eq!(backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
+        assert!(!backend.active_sdma.contains_key(&copy));
+        assert_eq!(backend.sdma_completion_reservations, later.len());
+        assert_eq!(
+            backend
+                .active_sdma_streams
+                .get(&stream)
+                .map(|queue| queue.iter().copied().collect::<Vec<_>>())
+                .unwrap_or_default(),
+            later
+        );
+        assert_eq!(backend.stream_submission_tails[&stream], copies[2]);
+        for allocation in [host, device] {
+            let owners = backend
+                .allocation_custody
+                .get(&allocation)
+                .map(|custody| {
+                    assert_eq!(custody.sole_stream, Some(stream));
+                    assert_eq!(custody.owner_counts, [0, later.len()]);
+                    custody
+                        .owners
+                        .iter()
+                        .map(|owner| owner.submission)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            assert_eq!(owners, later);
+        }
+        for (id, dependencies, pointer, cursor) in rosters {
+            let active = &backend.active_sdma[&id];
+            assert!(matches!(active.phase, ActiveSdmaPhaseV1::Ready));
+            assert_eq!(active.dependencies, dependencies);
+            assert_eq!(active.dependencies.as_ptr() as usize, pointer);
+            assert_eq!(active.dependency_cursor, cursor);
+        }
+    }
+    assert!(backend.sdma_dependency_retain_counts.is_empty());
+    for copy in copies.into_iter().rev() {
+        backend.release_submission_v1(copy).unwrap();
+    }
+    clean_scripted_direct_backend_v1(&mut backend, stream, host, device, None);
+}
+
 fn inspect_completion_preflight_and_drop(mutation: usize) {
     let steps = (0..3).flat_map(|_| {
         [
@@ -80,6 +166,23 @@ fn inspect_completion_preflight_and_drop(mutation: usize) {
             .unwrap()
             .dependencies
             .push(dependencies[0]),
+        6 => backend
+            .active_sdma_streams
+            .get_mut(&stream)
+            .unwrap()
+            .push_back(copy),
+        7 => {
+            let custody = backend.allocation_custody.get_mut(&device).unwrap();
+            custody.owners.push_back(custody.owners[0]);
+            custody.owner_counts[RuntimeAllocationCustodyKindV1::Sdma.index()] += 1;
+        }
+        8 => {
+            backend
+                .submissions
+                .get_mut(&dependencies[1])
+                .unwrap()
+                .status = BackendPollV1::Pending
+        }
         _ => panic!("unknown completion mutation"),
     }
     let facts = |backend: &KfdRuntimeBackendV1| {
@@ -171,7 +274,7 @@ fn asynchronous_copy_completion_preflight_releases_no_prefix_on_invalid_custody(
         inspect_completion_preflight_and_drop(case.parse().unwrap());
         unreachable!();
     }
-    for case in 0..6 {
+    for case in 0..9 {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--nocapture"])
             .env(CHILD, case.to_string())
