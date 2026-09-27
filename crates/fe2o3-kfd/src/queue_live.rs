@@ -2883,8 +2883,8 @@ fn persistent_compute_input_allocation_mut_v1(
     input: &mut Gfx942PersistentComputeInputV1,
 ) -> &mut Gfx942DirectionalQueuePersistentAllocationV1 {
     match input {
-        Gfx942PersistentComputeInputV1::Uninitialized(allocation)
-        | Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation) => allocation,
+        Gfx942PersistentComputeInputV1::Uninitialized(allocation) => allocation,
+        Gfx942PersistentComputeInputV1::InitializedAfterDispatch(ready) => &mut ready.allocation,
         Gfx942PersistentComputeInputV1::Initialized(ready) => &mut ready.allocation,
     }
 }
@@ -16197,7 +16197,7 @@ mod tests {
                 .unwrap()
                 .storage_identity();
             (
-                Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation),
+                Gfx942PersistentComputeInputV1::from_parts(allocation, None, true),
                 identity,
             )
         };
@@ -16446,7 +16446,7 @@ mod tests {
                     .storage_identity(),
                 allocation.byte_len(),
             );
-            let input = Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation);
+            let input = Gfx942PersistentComputeInputV1::from_parts(allocation, None, true);
             let packet = Gfx942FixedDispatchPacketV1::new(
                 0,
                 fe2o3_aql::AqlDispatchGeometryV1::new([1, 1, 1], [1, 1, 1]).unwrap(),
@@ -16578,7 +16578,7 @@ mod tests {
                 .local_native_for_sdma()
                 .unwrap()
                 .storage_identity();
-            let input = Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation);
+            let input = Gfx942PersistentComputeInputV1::from_parts(allocation, None, true);
             let packet = Gfx942FixedDispatchPacketV1::new(
                 0,
                 fe2o3_aql::AqlDispatchGeometryV1::new([1, 1, 1], [1, 1, 1]).unwrap(),
@@ -17184,7 +17184,7 @@ mod tests {
                 .unwrap()
                 .storage_identity();
             (
-                Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation),
+                Gfx942PersistentComputeInputV1::from_parts(allocation, None, true),
                 identity,
             )
         };
@@ -18157,6 +18157,7 @@ mod tests {
         let Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation) = input else {
             panic!("digest-free initialized replay must remain fully initialized")
         };
+        let allocation = allocation.into_allocation();
         assert_eq!(
             allocation
                 .owner

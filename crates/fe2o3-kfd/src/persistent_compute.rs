@@ -216,6 +216,70 @@ impl fmt::Debug for Gfx942PersistentComputeReadyFailureV1 {
     }
 }
 
+/// Sealed, digest-free initialization authority restored from exact compute custody.
+/// Normalizing to a bare allocation consumes this authority.
+///
+/// Bare storage cannot mint an initialized input:
+/// ```compile_fail,E0308
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInputV1};
+/// fn forge(allocation: Gfx942DirectionalQueuePersistentAllocationV1) -> Gfx942PersistentComputeInputV1 {
+///     Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation)
+/// }
+/// ```
+/// Internal recovery cannot be used as a public initialization constructor:
+/// ```compile_fail,E0624
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInputV1};
+/// fn forge(allocation: Gfx942DirectionalQueuePersistentAllocationV1) -> Gfx942PersistentComputeInputV1 {
+///     Gfx942PersistentComputeInputV1::from_parts(allocation, None, true)
+/// }
+/// ```
+/// The payload has no public constructor or mutable allocation access:
+/// ```compile_fail,E0451
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInitializedAfterDispatchV1};
+/// fn forge(allocation: Gfx942DirectionalQueuePersistentAllocationV1) -> Gfx942PersistentComputeInitializedAfterDispatchV1 {
+///     Gfx942PersistentComputeInitializedAfterDispatchV1 { allocation }
+/// }
+/// ```
+/// ```compile_fail,E0616
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInitializedAfterDispatchV1};
+/// fn replace(value: &mut Gfx942PersistentComputeInitializedAfterDispatchV1, bare: Gfx942DirectionalQueuePersistentAllocationV1) {
+///     value.allocation = bare;
+/// }
+/// ```
+/// Authority cannot be duplicated or reused after normalization:
+/// ```compile_fail,E0599
+/// use fe2o3_kfd::Gfx942PersistentComputeInitializedAfterDispatchV1;
+/// fn duplicate(value: Gfx942PersistentComputeInitializedAfterDispatchV1) {
+///     let _copy = value.clone();
+/// }
+/// ```
+/// ```compile_fail,E0382
+/// use fe2o3_kfd::{Gfx942PersistentComputeInitializedAfterDispatchV1, Gfx942PersistentComputeInputV1};
+/// fn reuse(value: Gfx942PersistentComputeInitializedAfterDispatchV1) {
+///     let _bare = value.into_allocation();
+///     let _forged = Gfx942PersistentComputeInputV1::InitializedAfterDispatch(value);
+/// }
+/// ```
+#[derive(Debug)]
+#[must_use = "initialized compute custody must be bound or normalized"]
+pub struct Gfx942PersistentComputeInitializedAfterDispatchV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+}
+
+impl Gfx942PersistentComputeInitializedAfterDispatchV1 {
+    pub const fn byte_len(&self) -> u64 {
+        self.allocation.byte_len()
+    }
+
+    pub const fn physical_byte_len(&self) -> u64 {
+        self.allocation.physical_byte_len()
+    }
+
+    pub fn into_allocation(self) -> Gfx942DirectionalQueuePersistentAllocationV1 {
+        self.allocation
+    }
+}
+
 /// Quiescent input for one persistent compute attachment.
 #[must_use = "persistent compute input must be bound or normalized"]
 pub enum Gfx942PersistentComputeInputV1 {
@@ -225,7 +289,7 @@ pub enum Gfx942PersistentComputeInputV1 {
     Initialized(Gfx942PersistentComputeReadyV1),
     /// Exact predecessor compute completed, recycled, detached, restored, and
     /// retired its dependency frontier while proving the full extent initialized.
-    InitializedAfterDispatch(Gfx942DirectionalQueuePersistentAllocationV1),
+    InitializedAfterDispatch(Gfx942PersistentComputeInitializedAfterDispatchV1),
 }
 
 /// Exact input roster for the bounded two-read/one-write persistent dispatch.
@@ -267,7 +331,7 @@ impl Gfx942PersistentComputeInputV1 {
         match self {
             Self::Uninitialized(allocation) => allocation.attachment.queue == queue,
             Self::Initialized(ready) => ready.allocation.attachment.queue == queue,
-            Self::InitializedAfterDispatch(allocation) => allocation.attachment.queue == queue,
+            Self::InitializedAfterDispatch(ready) => ready.allocation.attachment.queue == queue,
         }
     }
 
@@ -297,7 +361,7 @@ impl Gfx942PersistentComputeInputV1 {
         match self {
             Self::Uninitialized(allocation) => (allocation, None, false),
             Self::Initialized(ready) => (ready.allocation, Some(ready.authenticated_sha256), true),
-            Self::InitializedAfterDispatch(allocation) => (allocation, None, true),
+            Self::InitializedAfterDispatch(ready) => (ready.allocation, None, true),
         }
     }
 
@@ -313,7 +377,11 @@ impl Gfx942PersistentComputeInputV1 {
                     authenticated_sha256,
                 })
             }
-            (None, true) => Self::InitializedAfterDispatch(allocation),
+            (None, true) => {
+                Self::InitializedAfterDispatch(Gfx942PersistentComputeInitializedAfterDispatchV1 {
+                    allocation,
+                })
+            }
             (None, false) => Self::Uninitialized(allocation),
             (Some(_), false) => {
                 debug_assert!(false, "authenticated persistent input must be initialized");
@@ -324,9 +392,8 @@ impl Gfx942PersistentComputeInputV1 {
 
     pub fn into_allocation(self) -> Gfx942DirectionalQueuePersistentAllocationV1 {
         match self {
-            Self::Uninitialized(allocation) | Self::InitializedAfterDispatch(allocation) => {
-                allocation
-            }
+            Self::Uninitialized(allocation) => allocation,
+            Self::InitializedAfterDispatch(ready) => ready.allocation,
             Self::Initialized(ready) => ready.allocation,
         }
     }
@@ -632,7 +699,9 @@ impl Gfx942PersistentComputeCompletedV1 {
                     authenticated_sha256,
                 })
             }
-            (None, true) => Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation),
+            (None, true) => Gfx942PersistentComputeInputV1::InitializedAfterDispatch(
+                Gfx942PersistentComputeInitializedAfterDispatchV1 { allocation },
+            ),
             (_, false) => Gfx942PersistentComputeInputV1::Uninitialized(allocation),
         };
         Ok((input, self.effect))

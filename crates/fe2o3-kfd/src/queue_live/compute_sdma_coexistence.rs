@@ -425,9 +425,9 @@ impl ComputeAqlQueueSessionV1 {
         let mut compute = ArrayVec::<R66DeviceStorageV1, MAX_DISPATCH_DATA_LEASES_V1>::new();
         for input in inputs {
             let allocation = match input {
-                Gfx942PersistentComputeInputV1::Uninitialized(allocation)
-                | Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation) => {
-                    allocation
+                Gfx942PersistentComputeInputV1::Uninitialized(allocation) => allocation,
+                Gfx942PersistentComputeInputV1::InitializedAfterDispatch(ready) => {
+                    &ready.allocation
                 }
                 Gfx942PersistentComputeInputV1::Initialized(ready) => &ready.allocation,
             };

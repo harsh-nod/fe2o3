@@ -1535,8 +1535,10 @@ impl ComputeAqlQueueSessionV1 {
         };
         let initialized = !matches!(&input, Gfx942PersistentComputeInputV1::Uninitialized(_));
         let allocation = match &mut input {
-            Gfx942PersistentComputeInputV1::Uninitialized(allocation)
-            | Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation) => allocation,
+            Gfx942PersistentComputeInputV1::Uninitialized(allocation) => allocation,
+            Gfx942PersistentComputeInputV1::InitializedAfterDispatch(ready) => {
+                &mut ready.allocation
+            }
             Gfx942PersistentComputeInputV1::Initialized(ready) => &mut ready.allocation,
         };
         if allocation.attachment.queue != self.compute_lane_session
