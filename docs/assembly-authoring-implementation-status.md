@@ -1474,3 +1474,18 @@ The hard boundaries above do not block every lane. With disjoint owner approval:
 Each lane still needs its own reviewed contract, bounded implementation and
 actual qualification; difficulty is not a blocker and partial delivery is not
 completion.
+
+## Original fixed-proof constructor retention — 2026-09-27
+
+The test-only original constructor now retains partial/completed proof payloads
+through postflight and destruction-before-refund. All ten new controls passed,
+including original debit one-short refusal and same-Box checkpoint panic custody.
+Full CPU regression passed 356 model and 3,020 backend tests (189 ignored) plus
+backend/extractor build. Root verified seven full original inverses, three
+registration inverses and 56 source spans.
+
+See [the qualification record](original-fixed-constructor-retention-qualification-20260927.md).
+This does not yet execute original queries or establish genuine nonempty proof
+comparison. Original query driver, exact nonempty DATA, genuine connector and
+later production stages remain open. Broad accepted exits remain 6/18;
+no public activation or global compiler pin change.

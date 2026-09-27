@@ -850,3 +850,7 @@ impl super::bf16_nominal_preparation_resources_v1::PreparationPolicyMeterV1
 #[cfg(test)]
 #[path = "preparation_reserve_policy_v1_tests.rs"]
 mod preparation_policy_tests;
+
+#[cfg(test)]
+#[path = "original_assertion_nested_retention_v1.rs"]
+pub(super) mod original_nested_retention;

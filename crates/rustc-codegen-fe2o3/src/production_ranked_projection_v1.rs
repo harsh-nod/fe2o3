@@ -24405,6 +24405,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_04_tests.rs");
     include!("production_ranked_projection_v1/dynamic_local_array_tests.rs");
     include!("production_ranked_projection_v1/fixed_guard_preparation_v1_tests.rs");
+    include!("production_ranked_projection_v1/original_fixed_constructor_retention_v1_tests.rs");
     include!("production_ranked_projection_v1/lazy_fixed_proof_owner_v1_tests.rs");
     include!("production_ranked_projection_v1/slice_extent_projection_v1_tests.rs");
     include!("production_ranked_projection_v1/projection_05_tests.rs");
