@@ -24,11 +24,15 @@ use fe2o3_hsaco_finalize::{
     WorkerProtocolError, execute_preflighted_protected_reproducible_first_build_worker_v3,
     preflight_protected_reproducible_first_build_worker_v3,
 };
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 #[path = "build_config_native.rs"]
-mod native;
+pub(crate) mod native;
 
 pub(crate) const QUALIFICATION_ORACLE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
 const OBSOLETE_CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
@@ -164,7 +168,7 @@ pub(crate) struct PreparedProductionBuildConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ProductionBuildConfigVersion {
+pub(crate) enum ProductionBuildConfigVersion {
     V1,
     V2(ProductionSourceIsaObservationKindV1),
 }
@@ -427,57 +431,34 @@ pub(crate) fn validate_expected_build_config_identity_values(
 fn prepare_production_manifest_v1(
     path: &Path,
 ) -> Result<PreparedProductionBuildConfig, BuildConfigError> {
-    require_absolute_path(path, "configuration")?;
-    let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
-    let value: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| BuildConfigError::Json(error.to_string()))?;
-    let canonical =
-        serde_json::to_vec(&value).map_err(|error| BuildConfigError::Json(error.to_string()))?;
-    if canonical != bytes {
-        return Err(BuildConfigError::Invalid(
-            "configuration must be compact canonical JSON with lexicographically ordered object keys"
-                .to_owned(),
-        ));
-    }
-
-    let root = exact_production_root_object(&value)?;
-    if required_string(root, "format", "configuration")? != PRODUCTION_BUILD_CONFIG_FORMAT_V1 {
-        return Err(BuildConfigError::Invalid(format!(
-            "configuration format must be exactly {PRODUCTION_BUILD_CONFIG_FORMAT_V1:?}"
-        )));
-    }
-    let worker = prepare_worker(required_value(root, "worker", "configuration")?)?;
-    let providers = prepare_providers(required_value(root, "providers", "configuration")?)?;
-    let link_options = parse_link_options(required_value(root, "link_options", "configuration")?)?;
-    let candidate_output = WorkerOutputConstraintsV1::new(required_u64(
-        root,
-        "candidate_output_max_bytes",
-        "configuration",
-    )?)
-    .map_err(BuildConfigError::Protocol)?;
-    let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
-    let units = parse_units(required_value(root, "units", "configuration")?)?;
-    let identity =
-        transitive_identity(PRODUCTION_CONFIG_PROFILE_ID_V1, &bytes, &worker, &providers);
-    Ok(PreparedProductionBuildConfig {
-        link: PreparedLinkBuildConfig {
-            identity,
-            worker,
-            providers,
-            link_options,
-            candidate_output,
-            limits,
-            units,
-        },
-        version: ProductionBuildConfigVersion::V1,
-    })
+    prepare_production_manifest(path, ProductionBuildConfigVersion::V1, None)
 }
 
 fn prepare_production_manifest_v2(
     path: &Path,
 ) -> Result<PreparedProductionBuildConfig, BuildConfigError> {
+    prepare_production_manifest(
+        path,
+        ProductionBuildConfigVersion::V2(ProductionSourceIsaObservationKindV1::Summary),
+        None,
+    )
+}
+
+fn prepare_production_manifest(
+    path: &Path,
+    version: ProductionBuildConfigVersion,
+    mut budget: Option<&mut Budget<'_>>,
+) -> Result<PreparedProductionBuildConfig, BuildConfigError> {
     require_absolute_path(path, "configuration")?;
-    let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
+    let bytes = read_bounded(
+        path,
+        MAX_CONFIG_BYTES,
+        "configuration",
+        budget.as_deref_mut(),
+    )?;
+    if let Some(b) = budget.as_deref_mut() {
+        native::prepay_manifest(bytes.len(), b)?;
+    }
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|error| BuildConfigError::Json(error.to_string()))?;
     let canonical =
@@ -489,16 +470,30 @@ fn prepare_production_manifest_v2(
         ));
     }
 
-    let root = exact_production_v2_root_object(&value)?;
-    if required_string(root, "format", "configuration")? != PRODUCTION_BUILD_CONFIG_FORMAT_V2 {
+    let (root, format) = match version {
+        ProductionBuildConfigVersion::V1 => (
+            exact_production_root_object(&value)?,
+            PRODUCTION_BUILD_CONFIG_FORMAT_V1,
+        ),
+        ProductionBuildConfigVersion::V2(_) => (
+            exact_production_v2_root_object(&value)?,
+            PRODUCTION_BUILD_CONFIG_FORMAT_V2,
+        ),
+    };
+    if required_string(root, "format", "configuration")? != format {
         return Err(BuildConfigError::Invalid(format!(
-            "configuration format must be exactly {PRODUCTION_BUILD_CONFIG_FORMAT_V2:?}"
+            "configuration format must be exactly {format:?}"
         )));
     }
-    let observation_kind =
-        parse_source_isa_observation(required_value(root, "observation", "configuration")?)?;
+    let version = match version {
+        ProductionBuildConfigVersion::V1 => version,
+        ProductionBuildConfigVersion::V2(_) => ProductionBuildConfigVersion::V2(
+            parse_source_isa_observation(required_value(root, "observation", "configuration")?)?,
+        ),
+    };
     let worker = prepare_worker(required_value(root, "worker", "configuration")?)?;
-    let providers = prepare_providers(required_value(root, "providers", "configuration")?)?;
+    let providers =
+        prepare_providers_on_account(required_value(root, "providers", "configuration")?, budget)?;
     let link_options = parse_link_options(required_value(root, "link_options", "configuration")?)?;
     let candidate_output = WorkerOutputConstraintsV1::new(required_u64(
         root,
@@ -508,13 +503,20 @@ fn prepare_production_manifest_v2(
     .map_err(BuildConfigError::Protocol)?;
     let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
     let units = parse_units(required_value(root, "units", "configuration")?)?;
-    if observation_kind == ProductionSourceIsaObservationKindV1::Characteristic && units.len() != 1
+    if version.source_isa_observation_kind()
+        == Some(ProductionSourceIsaObservationKindV1::Characteristic)
+        && units.len() != 1
     {
         return Err(BuildConfigError::Invalid(
             "source-isa-characteristic-v1 requires exactly one configured unit".to_owned(),
         ));
     }
-    let identity = transitive_identity_v2(&bytes, &worker, &providers);
+    let identity = match version {
+        ProductionBuildConfigVersion::V1 => {
+            transitive_identity(PRODUCTION_CONFIG_PROFILE_ID_V1, &bytes, &worker, &providers)
+        }
+        ProductionBuildConfigVersion::V2(_) => transitive_identity_v2(&bytes, &worker, &providers),
+    };
     Ok(PreparedProductionBuildConfig {
         link: PreparedLinkBuildConfig {
             identity,
@@ -525,7 +527,7 @@ fn prepare_production_manifest_v2(
             limits,
             units,
         },
-        version: ProductionBuildConfigVersion::V2(observation_kind),
+        version,
     })
 }
 
@@ -669,6 +671,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[derive(Debug)]
 pub(crate) enum BuildConfigError {
+    Resource(Resource),
     MissingConfiguration,
     Io {
         kind: &'static str,
@@ -685,6 +688,7 @@ pub(crate) enum BuildConfigError {
 impl fmt::Display for BuildConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Resource(error) => error.fmt(formatter),
             Self::MissingConfiguration => {
                 write!(
                     formatter,
@@ -710,12 +714,19 @@ impl fmt::Display for BuildConfigError {
 impl Error for BuildConfigError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Resource(error) => Some(error),
             Self::Io { error, .. } => Some(error),
             Self::LinkPlan(error) => Some(error),
             Self::Protocol(error) => Some(error),
             Self::Worker(error) => Some(error),
             Self::MissingConfiguration | Self::Json(_) | Self::Invalid(_) => None,
         }
+    }
+}
+
+impl From<Resource> for BuildConfigError {
+    fn from(error: Resource) -> Self {
+        Self::Resource(error)
     }
 }
 
@@ -732,7 +743,15 @@ fn prepare_worker(value: &Value) -> Result<PinnedWorkerV1, BuildConfigError> {
     PinnedWorkerV1::open(path, measurement).map_err(BuildConfigError::Worker)
 }
 
+#[cfg(test)]
 fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, BuildConfigError> {
+    prepare_providers_on_account(value, None)
+}
+
+fn prepare_providers_on_account(
+    value: &Value,
+    budget: Option<&mut Budget<'_>>,
+) -> Result<Vec<WorkerInputV1>, BuildConfigError> {
     let values = value
         .as_array()
         .ok_or_else(|| BuildConfigError::Invalid("providers must be an array".to_owned()))?;
@@ -777,10 +796,13 @@ fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, BuildConfigErr
         };
         declared.push((path, kind, identity));
     }
+    if let Some(b) = budget {
+        native::prepay_providers(total_bytes as usize, declared.len(), b)?;
+    }
     declared
         .into_iter()
         .map(|(path, kind, identity)| {
-            let bytes = read_bounded(&path, identity.byte_len() as usize, "provider")?;
+            let bytes = read_bounded(&path, identity.byte_len() as usize, "provider", None)?;
             WorkerInputV1::from_declared(kind, identity, bytes).map_err(BuildConfigError::Protocol)
         })
         .collect()
@@ -1008,6 +1030,7 @@ fn read_bounded(
     path: &Path,
     maximum: usize,
     kind: &'static str,
+    budget: Option<&mut Budget<'_>>,
 ) -> Result<Vec<u8>, BuildConfigError> {
     let mut file = OpenOptions::new()
         .read(true)
@@ -1032,9 +1055,13 @@ fn read_bounded(
             path.display()
         )));
     }
-    let mut bytes = Vec::with_capacity(initial_len.expect("validated bounded length"));
+    let length = initial_len.expect("validated bounded length");
+    if let Some(b) = budget {
+        native::prepay_read(length, b)?;
+    }
+    let mut bytes = Vec::with_capacity(length);
     Read::by_ref(&mut file)
-        .take((maximum + 1) as u64)
+        .take((length + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|error| BuildConfigError::Io {
             kind,
@@ -1281,6 +1308,221 @@ mod tests {
             );
         }
         root
+    }
+
+    fn native_fixture(scratch: &ScratchDirectory, version: u8) -> (PathBuf, BuildConfigIdentity) {
+        let mut manifest = complete_manifest(scratch, version);
+        let worker = Path::new("/bin/true");
+        let worker_bytes = fs::read(worker).unwrap();
+        manifest["worker"]["path"] = serde_json::json!(worker);
+        manifest["worker"]["byte_len"] = Value::from(worker_bytes.len());
+        manifest["worker"]["sha256"] = Value::from(hex(&Sha256::digest(&worker_bytes)));
+        let payload = b"native configuration provider";
+        let path = scratch.0.join("provider.bc");
+        fs::write(&path, payload).unwrap();
+        manifest["providers"] = serde_json::json!([provider(
+            &path,
+            payload.len() as u64,
+            Sha256::digest(payload).into()
+        )]);
+        let path = scratch.write_manifest(&format!("native-v{version}.json"), &manifest);
+        let parsed = if version == 1 {
+            prepare_production_manifest_v1(&path)
+        } else {
+            prepare_production_manifest_v2(&path)
+        }
+        .unwrap();
+        (path, parsed.identity())
+    }
+
+    #[test]
+    fn native_configuration_preserves_both_schema_identities_and_exact_account_limits() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        use native::PreparedNativeProductionBuildConfig as Native;
+        let scratch = ScratchDirectory::new();
+        for version in [1, 2] {
+            let (path, expected) = native_fixture(&scratch, version);
+            let schema = if version == 1 {
+                ProductionBuildConfigVersion::V1
+            } else {
+                ProductionBuildConfigVersion::V2(ProductionSourceIsaObservationKindV1::Summary)
+            };
+            let mut limits = (30_000_000, 30_000_000);
+            for case in 0..4 {
+                let mut work = Work::new(limits.0 - usize::from(case == 2));
+                let mut b = Budget::new(&mut work, limits.1 - usize::from(case == 3));
+                b.charge_work(19).unwrap();
+                b.reserve_storage(37).unwrap();
+                let ledger = b.work_ledger_identity_v1();
+                let result = Native::from_manifest(&path, schema, expected.as_bytes(), &mut b);
+                if case < 2 {
+                    assert_eq!(result.unwrap().identity(), expected);
+                } else {
+                    assert!(matches!(result, Err(BuildConfigError::Resource(_))));
+                }
+                if case == 0 {
+                    limits = (b.work(), b.peak_storage());
+                }
+                if case == 3 {
+                    assert!(b.failed_storage().is_some());
+                }
+                assert!(b.storage() >= 37);
+                assert!(b.work_ledger_identity_v1() == ledger);
+            }
+        }
+    }
+
+    #[test]
+    fn native_recipe_rejects_foreign_ledgers_and_retired_input_storage() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        use native::PreparedNativeProductionBuildConfig as Native;
+        let scratch = ScratchDirectory::new();
+        let (path, expected) = native_fixture(&scratch, 1);
+        for case in 0..4 {
+            let mut work = Work::new(30_000_000);
+            let mut b = Budget::new(&mut work, 30_000_000);
+            b.reserve_storage(37).unwrap();
+            let recipe = Native::from_manifest(
+                &path,
+                ProductionBuildConfigVersion::V1,
+                expected.as_bytes(),
+                &mut b,
+            )
+            .unwrap();
+            let paid = b.storage();
+            if case == 1 {
+                let mut other_work = Work::new(30_000_000);
+                let mut other = Budget::new(&mut other_work, 30_000_000);
+                other.reserve_storage(paid).unwrap();
+                assert!(matches!(
+                    recipe.into_worker_parts(&mut other),
+                    Err(Resource::Accounting)
+                ));
+                assert_eq!(b.storage(), paid);
+            } else if case == 2 {
+                b.release_storage(1).unwrap();
+                assert!(matches!(
+                    recipe.into_worker_parts(&mut b),
+                    Err(Resource::Accounting)
+                ));
+                assert_eq!(b.storage(), paid - 1);
+            } else if case == 3 {
+                let mut relocated = Box::new(b);
+                assert!(matches!(
+                    recipe.into_worker_parts(&mut relocated),
+                    Err(Resource::Accounting)
+                ));
+                assert_eq!(relocated.storage(), paid);
+            } else {
+                let (_, providers, options, _, _, storage) =
+                    recipe.into_worker_parts(&mut b).unwrap();
+                assert_eq!(providers[0].bytes(), b"native configuration provider");
+                assert_eq!(options.len(), REQUIRED_OPTIONS.len());
+                assert_eq!(storage + 37, paid);
+                assert_eq!(b.storage(), paid);
+            }
+        }
+    }
+
+    #[test]
+    fn native_configuration_checks_expected_identity_and_keeps_terminal_reservations() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        use native::PreparedNativeProductionBuildConfig as Native;
+        let scratch = ScratchDirectory::new();
+        let (path, expected) = native_fixture(&scratch, 1);
+        let mut wrong = *expected.as_bytes();
+        wrong[0] ^= 1;
+        let mut work = Work::new(30_000_000);
+        let mut b = Budget::new(&mut work, 30_000_000);
+        b.reserve_storage(37).unwrap();
+        let ledger = b.work_ledger_identity_v1();
+        assert!(
+            matches!(Native::from_manifest(&path, ProductionBuildConfigVersion::V1, &wrong, &mut b),
+            Err(BuildConfigError::Invalid(reason)) if reason.contains("expected identity"))
+        );
+        let after_failure = b.storage();
+        assert!(after_failure > 37);
+        assert!(matches!(
+            Native::from_manifest(
+                &path,
+                ProductionBuildConfigVersion::V2(ProductionSourceIsaObservationKindV1::Summary),
+                expected.as_bytes(),
+                &mut b
+            ),
+            Err(BuildConfigError::Invalid(_))
+        ));
+        assert!(b.storage() > after_failure);
+        assert!(b.work_ledger_identity_v1() == ledger);
+    }
+
+    #[test]
+    fn native_configuration_resource_denials_precede_their_io_and_parse_operations() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        use native::PreparedNativeProductionBuildConfig as Native;
+        let scratch = ScratchDirectory::new();
+        let missing = scratch.0.join("missing");
+        let mut work = Work::new(0);
+        let mut b = Budget::new(&mut work, 30_000_000);
+        assert!(matches!(
+            Native::from_manifest(&missing, ProductionBuildConfigVersion::V1, &[0; 32], &mut b),
+            Err(BuildConfigError::Resource(Resource::Work(_)))
+        ));
+
+        let malformed = scratch.0.join("malformed.json");
+        fs::write(&malformed, b"{").unwrap();
+        let mut work = Work::new(30_000_000);
+        let mut b = Budget::new(&mut work, 30_000_000);
+        assert!(matches!(
+            Native::from_manifest(
+                &malformed,
+                ProductionBuildConfigVersion::V1,
+                &[0; 32],
+                &mut b
+            ),
+            Err(BuildConfigError::Json(_))
+        ));
+        let exact_work = b.work();
+        let paid = b.storage();
+        let mut work = Work::new(exact_work - 1);
+        let mut b = Budget::new(&mut work, paid);
+        assert!(matches!(
+            Native::from_manifest(
+                &malformed,
+                ProductionBuildConfigVersion::V1,
+                &[0; 32],
+                &mut b
+            ),
+            Err(BuildConfigError::Resource(Resource::Work(_)))
+        ));
+        let mut work = Work::new(30_000_000);
+        let mut b = Budget::new(&mut work, 0);
+        assert!(matches!(
+            prepare_providers_on_account(
+                &serde_json::json!([provider(&missing, 1, [0; 32])]),
+                Some(&mut b)
+            ),
+            Err(BuildConfigError::Resource(Resource::Storage(_)))
+        ));
+    }
+
+    #[test]
+    fn native_configuration_quote_overflow_keeps_the_original_account() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        let mut work = Work::new(100);
+        let mut b = Budget::new(&mut work, 100);
+        b.charge_work(7).unwrap();
+        b.reserve_storage(37).unwrap();
+        let ledger = b.work_ledger_identity_v1();
+        for result in [
+            native::prepay_read(usize::MAX, &mut b),
+            native::prepay_manifest(usize::MAX, &mut b),
+            native::prepay_providers(usize::MAX, 0, &mut b),
+            native::prepay_providers(0, usize::MAX, &mut b),
+        ] {
+            assert_eq!(result, Err(Resource::Arithmetic));
+        }
+        assert_eq!((b.work(), b.storage()), (7, 37));
+        assert!(b.work_ledger_identity_v1() == ledger);
     }
 
     #[test]

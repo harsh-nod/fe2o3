@@ -10,6 +10,7 @@ use super::{
     ParentCompilerExecutionReadinessCustodyV3 as Readiness, ProducerIdentity, Resource, Subject,
     SubjectError, validate_receipt,
 };
+use crate::build_config::native::PreparedNativeProductionBuildConfig;
 use crate::protected_compiler_handoff_v3::ParentRustcInvocationCustody as Invocation;
 use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_artifact_transaction::{
@@ -18,9 +19,8 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5 as Handoff;
 use fe2o3_hsaco_finalize::{
-    LinkOptionV1, NativeFirstBuildWorkerErrorV1, NativeWorkerFinalizationErrorV1, PinnedWorkerV1,
-    PreparedFinalizedConditionalWorkerHsacoV5 as Artifact, WorkerExecutionLimitsV1, WorkerInputV1,
-    WorkerOutputConstraintsV1,
+    NativeFirstBuildWorkerErrorV1, NativeWorkerFinalizationErrorV1,
+    PreparedFinalizedConditionalWorkerHsacoV5 as Artifact,
     execute_preflighted_conditional_reproducible_first_build_worker_v2 as execute,
     finalize_conditional_worker_hsaco_v5 as finalize,
     preflight_conditional_reproducible_first_build_worker_v2 as preflight,
@@ -50,6 +50,7 @@ pub(crate) struct ParentPreparedConditionalArtifact<'a, 'b, 'w> {
     compiler_execution: Carriage,
     readiness: Readiness<'b, 'w>,
     invocation: &'a Invocation,
+    configuration_storage: usize,
 }
 impl ParentPreparedConditionalArtifact<'_, '_, '_> {
     const HEADER: usize = size_of::<Self>()
@@ -72,10 +73,9 @@ impl ParentPreparedConditionalArtifact<'_, '_, '_> {
             .and_then(|n| n.checked_add(self.readiness.retained_storage()))
             .and_then(|n| n.checked_add(Self::HEADER))
             .and_then(|n| n.checked_add(parent_storage))
+            .and_then(|n| n.checked_add(self.configuration_storage))
             .ok_or(Resource::Arithmetic)?;
-        self.readiness
-            .budget
-            .with_prepaid_scope(floor, 8, 0, 0, |_| Ok::<_, Resource>(()))?;
+        check_account_floor(self.readiness.budget, floor)?;
         self.readiness.revalidate()?;
         check_pair(
             &mut self.readiness,
@@ -94,7 +94,8 @@ type Result<T> = std::result::Result<T, ContinuationError>;
 
 impl<'b, 'w> Readiness<'b, 'w> {
     /// Call only after successful child completion. The enclosing attempt keeps
-    /// path/producer, parent capture, policy and prepared recipe inputs prepaid.
+    /// path/producer, parent capture and policy inputs prepaid. The recipe must
+    /// have been prepared on this same account and retains its original floor.
     /// This consumes the recipe's owned vectors without cloning caller payloads.
     ///
     /// This is a terminal operation on refusal/unwind. In particular, no scope
@@ -110,18 +111,16 @@ impl<'b, 'w> Readiness<'b, 'w> {
         attempt: BuildAttempt,
         invocation: &'a Invocation,
         policy: ConditionalRecoveryPolicy<'_>,
-        worker: &PinnedWorkerV1,
-        providers: Vec<WorkerInputV1>,
-        options: Vec<LinkOptionV1>,
-        output: WorkerOutputConstraintsV1,
-        limits: WorkerExecutionLimitsV1,
+        recipe: PreparedNativeProductionBuildConfig,
     ) -> Result<ParentPreparedConditionalArtifact<'a, 'b, 'w>> {
+        let (worker, providers, options, output, limits, configuration_storage) =
+            recipe.into_worker_parts(self.budget)?;
         let floor = self
             .retained_storage()
             .checked_add(invocation.native_retained_storage()?)
+            .and_then(|n| n.checked_add(configuration_storage))
             .ok_or(Resource::Arithmetic)?;
-        self.budget
-            .with_prepaid_scope(floor, 8, 0, 0, |_| Ok::<_, Resource>(()))?;
+        check_account_floor(self.budget, floor)?;
         self.budget.reserve_storage(FRAME)?;
         self.revalidate()?;
         invocation.revalidate_native(self.budget)?;
@@ -147,7 +146,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
             &token,
             receipt,
             closure,
-            worker,
+            &worker,
             providers,
             options,
             output,
@@ -168,7 +167,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
             consumed.content().handoff(),
             &compiler_execution,
         )?;
-        let (evidence, storage) = execute(consumed, prepared, worker, self.budget)?;
+        let (evidence, storage) = execute(consumed, prepared, &worker, self.budget)?;
         self.budget.reserve_storage(storage.retained_storage())?;
         let (artifact, storage) = finalize(evidence, self.budget)?;
         self.budget.reserve_storage(storage.retained_storage())?;
@@ -185,6 +184,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
             compiler_execution,
             readiness: self,
             invocation,
+            configuration_storage,
         };
         prepared.revalidate()?;
         Ok(prepared)
@@ -200,14 +200,53 @@ fn check_pair(
 ) -> Result<()> {
     invocation.match_native_invocation(handoff.capsule().invocation(), readiness.budget)?;
     let floor = readiness.budget.storage();
+    check_account_floor(readiness.budget, floor)?;
     readiness
         .budget
-        .with_prepaid_scope(floor, 8, 0, FRAME, |b| {
+        .with_prepaid_scope(floor, 0, 0, FRAME, |b| {
             let (subject, storage) = Subject::from_publication(receipt, handoff, b)?;
             b.reserve_storage(storage.retained_storage())?;
             validate_receipt(&readiness.profile, &subject, carriage, b)?;
             Ok(())
         })
+}
+
+fn check_account_floor(
+    b: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    floor: usize,
+) -> std::result::Result<(), Resource> {
+    // The total scope work includes, rather than adds to, its entry work.
+    b.with_prepaid_scope(floor, 8, 8, 0, |_| Ok(()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+
+    #[test]
+    fn continuation_account_floor_accepts_exact_and_rejects_short_resources() {
+        for (quota, storage) in [(8, 96), (7, 96), (8, 95)] {
+            let mut work = Work::new(quota);
+            let mut b = Budget::new(&mut work, 96);
+            b.reserve_storage(storage).unwrap();
+            let ledger = b.work_ledger_identity_v1();
+            let result = check_account_floor(&mut b, 96);
+            if quota == 7 {
+                assert!(matches!(result, Err(Resource::Work(_))));
+            } else if storage == 95 {
+                assert_eq!(result, Err(Resource::Accounting));
+            } else {
+                assert_eq!(result, Ok(()));
+                assert_eq!(b.work(), 8);
+            }
+            assert_eq!(b.storage(), storage);
+            assert!(b.work_ledger_identity_v1() == ledger);
+        }
+    }
 }
 
 #[derive(Debug)]
