@@ -144,6 +144,7 @@ pub(super) enum ScriptedPersistentTransitionFailureV1 {
     Poll,
     Recycle,
     Detach,
+    UnwindBeforeTake,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

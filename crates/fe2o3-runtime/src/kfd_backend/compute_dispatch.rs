@@ -1088,6 +1088,19 @@ impl KfdRuntimeBackendV1 {
             } else {
                 None
             };
+            #[cfg(test)]
+            if backend.scripted_persistent_transition_failure
+                == Some(ScriptedPersistentTransitionFailureV1::UnwindBeforeTake)
+                && backend.active.as_ref().is_some_and(|active| {
+                    matches!(
+                        active.execution.as_ref(),
+                        Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { .. })
+                    )
+                })
+            {
+                backend.scripted_persistent_transition_failure = None;
+                panic!("scripted three-binding unwind before active take");
+            }
             let Some(mut active) = backend.active.take() else {
                 return Err(backend
                     .terminal_error("selected KFD compute lane lost its logical frontier owner"));

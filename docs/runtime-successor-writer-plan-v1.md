@@ -158,9 +158,22 @@ non-Send owner thread checks admission, progress, reply-cell retirement before
 shutdown and owner-thread-only backend calls. Its MockBackend supplies consistent
 terminal facts; it does not establish native scheduling or byte execution.
 
-Integrated native terminal/unwind retention, the separately authorized three-phase
-hardware profile and shared-body queued-owner proofs remain open. The existing
-two-launch R57 authority and inner-journal proofs do not cover those gates.
+Scripted native terminal/unwind integration now covers both an active ancestor
+with its two descendants still indexed and an active consumer after physical-only
+ancestor completion. Same-stream and cross-stream subprocesses check exact owner
+identities, pending rosters, dependency/module/event retains, completion reservations,
+allocation-custody rosters and lane leases. Context retains six reads, three writer
+roots, the pending event/callback and all five quarantined allocation charges.
+Repeated public ingress and cleanup cannot release that custody. Dropping the
+unrepaired Context aborts with core dumps disabled; no test disarms the backend.
+
+These cases inject a restoration-slot mismatch or a panic immediately before the
+active dispatch is moved. The ancestor fault occurs while polling an exclusive
+blocker, before the pending consumer is removed from its index. They do not cover
+every ownership-moving panic point, native GPU execution or formal unwind safety.
+The separately authorized three-phase hardware profile and full shared-body
+queued-owner proofs remain open. The existing two-launch R57 authority and
+inner-journal proofs do not cover those gates.
 
 The shared queued-read resolution body now has a dedicated
 [conditional proof boundary](runtime-queued-read-resolution-proof-v1.md).

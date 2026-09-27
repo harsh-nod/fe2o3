@@ -4,6 +4,8 @@ use super::*;
 use crate::{RuntimeCancellationV1, RuntimeCompletionStatusV1, RuntimePollV1};
 use std::mem::ManuallyDrop;
 
+mod failure_tests;
+
 type Submission = crate::RuntimeSubmissionV1<ThreeBindingCandidateContextArgumentsV1>;
 
 struct Fixture {
