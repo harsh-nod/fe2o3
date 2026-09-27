@@ -91,6 +91,8 @@ fn typed_roots(semantic: &AdmittedInertSemanticMirV1) -> Vec<TypedDescriptorRoot
                             rustc_abi_class: RustcAbiClassV1::Scalar,
                             semantic_type_identity: semantic.types()[ty.index() as usize]
                                 .identity(),
+                            semantic_layout_identity: semantic.types()[ty.index() as usize]
+                                .layout_identity(),
                         })
                         .collect(),
                 )
@@ -325,6 +327,7 @@ fn output_fields() -> (TypedDescriptorRootV1, SemanticTypeDeclV1, Type) {
                 source_alignment: 8,
                 rustc_abi_class: RustcAbiClassV1::ScalarPair,
                 semantic_type_identity: ty.identity(),
+                semantic_layout_identity: ty.layout_identity(),
             })
             .collect(),
     )

@@ -3,6 +3,8 @@ pub use source_arguments_v1::{
     ProductionArgumentTraceV1, ProductionPhysicalArgumentV1,
 };
 
+include!("production_source_abi_plan_v1.rs");
+
 /// Scoped checked entry correspondence over one owner-qualified function.
 ///
 /// This borrows existing MIR/KIR and temporary indices; it is not an executable

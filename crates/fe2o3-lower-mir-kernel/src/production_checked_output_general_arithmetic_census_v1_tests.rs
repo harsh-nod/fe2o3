@@ -79,10 +79,16 @@ fn census_component(scalar: ScalarType, op: BinaryOp, admitted: bool) {
             assert!(
                 matches!(
                     result,
-                    Err(E::Unsupported {
+                    Err(E::UnsupportedOperation {
                         phase: "test native grammar",
                         detail: "closed opcode census",
-                    })
+                        context: ProductionCheckedOutputCensusContextV1::Native {
+                            coordinate,
+                            kind: ProductionCheckedOutputNativeCensusKindV1::Binary(actual),
+                            results: 1,
+                            first_result: Some(ProductionCheckedOutputCensusTypeV1::Scalar(ty)),
+                        },
+                    }) if coordinate == inventory.operations()[0].coordinate && actual == op && ty == scalar
                 ),
                 "only the exact native arithmetic grammar is under test: {result:?}"
             );

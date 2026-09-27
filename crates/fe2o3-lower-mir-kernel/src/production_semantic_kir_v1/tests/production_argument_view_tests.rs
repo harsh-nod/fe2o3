@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "../../production_source_abi_plan_v1_tests.rs"]
+mod source_abi_plan_tests;
+
 #[path = "production_atomic_argument_view_tests.rs"]
 mod atomic_view_tests;
 

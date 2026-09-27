@@ -53,6 +53,8 @@ fn argument(kind: DescriptorArgumentKindV1) -> TypedDescriptorArgumentV1 {
             RustcAbiClassV1::Scalar
         },
         semantic_type_identity: SemanticTypeIdentityV1::from_sha256([3; 32]),
+        semantic_layout_identity:
+            fe2o3_mir_model::semantic_mir_v1::SemanticLayoutIdentityV1::from_sha256([0; 32]),
     }
 }
 

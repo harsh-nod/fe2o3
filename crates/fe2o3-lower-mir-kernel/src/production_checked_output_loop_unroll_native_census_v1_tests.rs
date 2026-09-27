@@ -170,6 +170,20 @@ fn with_chain(
         &mut AssertOriginBudgetV1<'_>,
     ),
 ) {
+    with_launch_module(graph(extra), run)
+}
+fn with_launch_module(
+    module: Module,
+    run: impl FnOnce(
+        &RefinementPair<'_>,
+        &ForwardingPair<'_>,
+        &CanonicalKirInventoryV1<'_>,
+        &CanonicalKirInventoryV1<'_>,
+        &UnrollPair<'_, '_, '_>,
+        &CanonicalKirInventoryV1<'_>,
+        &mut AssertOriginBudgetV1<'_>,
+    ),
+) {
     let mut work = Work::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
     let sibling = vec![0x63u8; 31];
@@ -178,8 +192,7 @@ fn with_chain(
     let ledger = budget.work_ledger_identity_v1();
     {
         let (l, receipt) =
-            Owner::from_module_ref_with_verification_budget_v12(&graph(extra), &mut budget)
-                .unwrap();
+            Owner::from_module_ref_with_verification_budget_v12(&module, &mut budget).unwrap();
         budget.reserve_storage(receipt.retained_storage()).unwrap();
         let r = fe2o3_kernel_opt::prepare_owned_induction_refinement_v1(
             &l,
@@ -225,6 +238,76 @@ fn with_chain(
     assert_eq!(budget.storage(), floor);
     assert!(budget.work_ledger_identity_v1() == ledger);
     assert_eq!(sibling, [0x63; 31]);
+}
+#[test]
+fn invocation_index_census_unroll_continuation_preserves_exact_launch_sites() {
+    use fe2o3_kernel_ir::{Axis, IndexKind, IntrinsicKind, IntrinsicOperation};
+    for kind in [IndexKind::Local, IndexKind::Workgroup] {
+        for axis in [Axis::X, Axis::Y] {
+            let mut module = graph(None);
+            if axis == Axis::Y {
+                let LaunchDomain::D1 { x } = module.kernels[0].domain.clone() else {
+                    panic!("expected the original one-dimensional fixture");
+                };
+                module.kernels[0].domain = LaunchDomain::D2 {
+                    x,
+                    y: LaunchExtent::Static(1),
+                };
+            }
+            module.functions[0].body.as_mut().unwrap().blocks[0]
+                .operations
+                .push(Operation::effect_free(
+                    ValueDef::new(ValueId(1000), Type::INDEX),
+                    OperationKind::Intrinsic(IntrinsicOperation::new(
+                        IntrinsicKind::InvocationIndex { kind, axis },
+                        Type::INDEX,
+                    )),
+                ));
+            with_launch_module(module, |r, f, ri, fi, u, ui, budget| {
+                for inventory in [ri, fi, ui] {
+                    assert_eq!(inventory.operations().iter().filter(|row| matches!(row.operation.kind,
+                        OperationKind::Intrinsic(IntrinsicOperation { kind: IntrinsicKind::InvocationIndex { kind: actual, axis: actual_axis }, .. })
+                            if actual == kind && actual_axis == axis)).count(), 1);
+                }
+                let private = private_memory::check(ui, 1024, budget).unwrap();
+                let division = unsigned_division::check(
+                    ui,
+                    SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(
+                        [91; 32],
+                    )),
+                    budget,
+                )
+                .unwrap();
+                let helpers = scalar_helpers::check(ui, budget).unwrap();
+                let result = native_with_loop_unroll(
+                    ui,
+                    &private,
+                    &division,
+                    &helpers,
+                    "launch unroll test",
+                    |_, _| Ok(false),
+                    r,
+                    f,
+                    ri,
+                    fi,
+                    u,
+                    budget,
+                );
+                if axis == Axis::X {
+                    result.unwrap();
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(E::UnsupportedOperation {
+                            phase: "launch unroll test",
+                            detail: "closed opcode census",
+                            ..
+                        })
+                    ));
+                }
+            });
+        }
+    }
 }
 #[test]
 fn unrolled_add_permission_requires_three_actual_pairs_and_exact_copy_sites() {
@@ -305,9 +388,10 @@ fn unrolled_add_permission_keeps_all_twenty_seven_ordinary_arithmetic_negatives(
                         u,
                         budget
                     ),
-                    Err(E::Unsupported {
+                    Err(E::UnsupportedOperation {
                         phase: "unrolled ordinary negative",
-                        detail: "closed opcode census"
+                        detail: "closed opcode census",
+                        ..
                     })
                 ));
             });

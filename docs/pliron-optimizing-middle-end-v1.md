@@ -1347,3 +1347,49 @@ Callers prepay the exported view/query/scratch extents and their live backing.
 V1/V2 decoding and identities remain unchanged. This codec admits inert content,
 not an authenticated source ABI, signed native output or executable artifact;
 the independent source join, host packer and production handoff remain separate.
+
+## Source ABI and invocation-index admission
+
+The [source ABI plan](../crates/fe2o3-lower-mir-kernel/src/production_source_abi_plan_v1.rs)
+borrows the admitted semantic source, exact kernel-root association and actual
+physical entry signature. It preserves every logical argument, including
+ignored zero-sized arguments, and maps each supported source leaf to its
+physical parameter. Source byte offsets describe the retained Rust layout;
+they are not kernarg offsets or permission to copy a Rust value's bytes.
+
+The [backend correspondence check](../crates/rustc-codegen-fe2o3/src/compiler_descriptor_source_abi_v1.rs)
+captures fresh rustc layout identities and rejoins the complete logical and
+physical argument rosters with original source, target layout and actual
+optimized output. Struct, tuple, array, nested and zero-sized forms have
+actual-rustc coverage across gfx942/gfx950 and opt0/mir0 plus opt3/mir2.
+Foreign source/layout, changed argument or optimized-endpoint substitutions
+remain refusals. Owner-bound queries use the continuing resource ledger;
+source offsets and equal physical widths never replace source type identity.
+
+This is a descriptor prerequisite, not general aggregate launch support.
+Existing descriptor encoding and argument-count restrictions remain in force.
+A physical packing schedule, a versioned aggregate descriptor schema, safe
+typed host serialization and the consuming production launch join are still
+required. No public detached plan or caller-supplied correspondence constructs
+source admission.
+
+The [invocation-index census](../crates/fe2o3-lower-mir-kernel/src/production_checked_output_invocation_indices_v1.rs)
+recognizes exact `Local-X` and `Workgroup-X` scalar intrinsics in the existing
+checked-output continuations, at kernel entries only; other axes remain closed.
+It checks the immutable operation occurrence,
+kernel-entry/root association, result definition and type, and absence of
+operands, memory effects and compiler-ordering effects. It does not infer
+ranges, uniformity, safe addressing or launch dimensions. Source replay,
+transition equality, exact target coordinates and final memory/formal checks
+remain separate mandatory checks on the actual output.
+
+Structured [census diagnostics](../crates/fe2o3-lower-mir-kernel/src/production_checked_output_census_context_v1.rs)
+retain phase, operation coordinates and closed opcode/type context for
+unsupported operations. They do not broaden admission. At the private
+descriptor boundary, checked source-ABI errors reuse the existing typed
+admission or optimization payload; redundant wrapper nesting is normalized
+without changing the internal checks or allocating an error box.
+
+The legacy default backend route is unchanged by these additions. Passing a
+checked-output component does not select it as the default compiler, publish
+an artifact or establish signed proof, host launch or hardware qualification.

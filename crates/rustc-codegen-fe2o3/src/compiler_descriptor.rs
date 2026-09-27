@@ -19,6 +19,8 @@ pub(crate) mod checked_output_policy3_v1;
 
 #[path = "compiler_descriptor_laid_out_plan_v1.rs"]
 mod laid_out_plan_v1;
+#[path = "compiler_descriptor_source_abi_v1.rs"]
+pub(crate) mod source_abi_v1;
 
 #[path = "compiler_descriptor_conditional_contract_projection_v1.rs"]
 pub(crate) mod conditional_contract_projection_v1;
@@ -137,6 +139,7 @@ struct TypedDescriptorArgumentV1 {
     source_alignment: u32,
     rustc_abi_class: RustcAbiClassV1,
     semantic_type_identity: SemanticTypeIdentityV1,
+    semantic_layout_identity: fe2o3_mir_model::semantic_mir_v1::SemanticLayoutIdentityV1,
 }
 
 /// Re-derives the complete generic typed evidence directly from rustc and the
@@ -211,6 +214,8 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                             reason: "typed descriptor argument/signature arity changed".to_owned(),
                         });
                     }
+                    let source_target = source_abi_v1::capture_target(tcx)
+                        .map_err(CompilerDescriptorError::from_source_abi)?;
                     let derived = if contract.layout_deferred() {
                         derive_compiler_layout_registration_identity_v1(
                             MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
@@ -279,6 +284,12 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                                     crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(
                                         tcx, source_ty,
                                     ),
+                                semantic_layout_identity: source_abi_v1::capture_layout(
+                                    tcx,
+                                    source_target,
+                                    source_ty,
+                                )
+                                .map_err(CompilerDescriptorError::from_source_abi)?,
                             })
                         })
                         .collect::<Result<Vec<_>, CompilerDescriptorError>>()?;
@@ -1783,9 +1794,30 @@ pub(crate) enum CompilerDescriptorError {
     CheckedOutputTarget(dialect_amdgcn::ProductionTargetCoordinateErrorV1),
     ProductionGeometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     ProductionDescriptorMismatch(&'static str),
+    SourceAbi(source_abi_v1::SourceAbiDiagnosticV1),
+    SourceAbiCheckedOptimization(fe2o3_kernel_opt::CanonicalPolicy4OptimizationErrorV1),
     UnsupportedCapability(String),
     Validation(ValidationError),
     Source(CompilerDescriptorSourceErrorV1),
+}
+
+impl CompilerDescriptorError {
+    // Normalize only the private diagnostic wrappers, never an admission result.
+    // Checked Admission keeps the existing full Policy3 cause and its phase;
+    // checked Optimization keeps its exact typed payload. Their former
+    // SourceAbi -> Checked -> Admission/Optimization wrapper path is not kept.
+    pub(crate) fn from_source_abi(error: source_abi_v1::SourceAbiErrorV1) -> Self {
+        use fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy4V1 as Checked;
+        use source_abi_v1::{SourceAbiDiagnosticV1 as Detail, SourceAbiErrorV1 as E};
+        match error {
+            E::Resource(error) => Self::SourceAbi(Detail::Resource(error)),
+            E::Source(error) => Self::SourceAbi(Detail::Source(error)),
+            E::Checked(Checked::Admission(error)) => Self::CheckedOutputPolicy3(error),
+            E::Checked(Checked::Optimization(error)) => Self::SourceAbiCheckedOptimization(error),
+            E::Target(error) => Self::SourceAbi(Detail::Target(error)),
+            E::Mismatch(detail) => Self::SourceAbi(Detail::Mismatch(detail)),
+        }
+    }
 }
 
 impl From<ValidationError> for CompilerDescriptorError {
@@ -1956,6 +1988,13 @@ impl fmt::Display for CompilerDescriptorError {
                 formatter,
                 "production descriptor evidence has an internal {field} mismatch"
             ),
+            Self::SourceAbi(error) => {
+                write!(formatter, "source ABI correspondence failed: {error}")
+            }
+            Self::SourceAbiCheckedOptimization(error) => write!(
+                formatter,
+                "source ABI checked optimization replay failed: {error}"
+            ),
             Self::UnsupportedCapability(capability) => write!(
                 formatter,
                 "typed descriptor cannot represent capability {capability}"
@@ -1966,7 +2005,16 @@ impl fmt::Display for CompilerDescriptorError {
     }
 }
 
-impl std::error::Error for CompilerDescriptorError {}
+impl std::error::Error for CompilerDescriptorError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::SourceAbi(error) => Some(error),
+            Self::CheckedOutputPolicy3(error) => Some(error),
+            Self::SourceAbiCheckedOptimization(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -2108,6 +2156,10 @@ mod tests {
                     semantic_type_identity: SemanticTypeIdentityV1::from_sha256(
                         [u8::try_from(index).unwrap(); 32],
                     ),
+                    semantic_layout_identity:
+                        fe2o3_mir_model::semantic_mir_v1::SemanticLayoutIdentityV1::from_sha256(
+                            [0; 32],
+                        ),
                 }
             })
             .collect::<Vec<_>>();
@@ -2207,6 +2259,8 @@ mod tests {
             semantic_type_identity: SemanticTypeIdentityV1::from_sha256(
                 [u8::try_from(index).unwrap(); 32],
             ),
+            semantic_layout_identity:
+                fe2o3_mir_model::semantic_mir_v1::SemanticLayoutIdentityV1::from_sha256([0; 32]),
         }
     }
 

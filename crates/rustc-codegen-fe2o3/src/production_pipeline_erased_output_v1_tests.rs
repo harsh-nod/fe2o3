@@ -73,6 +73,8 @@ pub(super) fn erased_typed_roots(source: &Erased) -> Vec<TypedDescriptorRootV1> 
                     source_alignment: 8,
                     rustc_abi_class: RustcAbiClassV1::Scalar,
                     semantic_type_identity: semantic.types()[ty.index() as usize].identity(),
+                    semantic_layout_identity: semantic.types()[ty.index() as usize]
+                        .layout_identity(),
                 }])
                 .unwrap(),
                 explicit_argument_bytes: 8,
