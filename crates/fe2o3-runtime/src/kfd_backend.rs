@@ -576,6 +576,10 @@ enum KfdRuntimeLaunchGateV1 {
         crate::qualification_gfx942_r57_n3_v1::AdmittedGfx942R57N3QualificationV1,
     ),
     #[cfg(feature = "hardware-qualification")]
+    ExactGfx942R57N3V2(
+        crate::qualification_gfx942_r57_n3_v1::AdmittedGfx942R57N3QualificationV2,
+    ),
+    #[cfg(feature = "hardware-qualification")]
     ExactGfx942InplaceTransform(
         crate::qualification_gfx942_inplace_transform_v1::AdmittedGfx942InplaceTransformQualificationV1,
     ),
@@ -603,6 +607,8 @@ impl fmt::Debug for KfdRuntimeLaunchGateV1 {
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942R57N3(_) => formatter.write_str("ExactGfx942R57N3"),
             #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942R57N3V2(_) => formatter.write_str("ExactGfx942R57N3V2"),
+            #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942InplaceTransform(_) => {
                 formatter.write_str("ExactGfx942InplaceTransform")
             }
@@ -624,6 +630,8 @@ impl KfdRuntimeLaunchGateV1 {
             Self::ExactGfx942Vecadd(admitted) => admitted.authorizes_kfd_request_v1(request),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942R57N3(admitted) => admitted.authorizes_kfd_request_v1(request),
+            #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942R57N3V2(admitted) => admitted.authorizes_kfd_request_v1(request),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942InplaceTransform(admitted) => {
                 admitted.authorizes_kfd_request_v1(request)
@@ -1512,8 +1520,10 @@ impl KfdRuntimeBackendV1 {
     /// Opens the exact repository-owned gfx942 DeviceLocal R57 N3 qualification backend.
     ///
     /// The returned observer exposes only the bounded authority-call count used
-    /// to prove that the initial uninitialized-C rejection precedes authority.
-    /// The retained gate admits exactly `A+B -> C` followed by `C+B -> D`.
+    /// by the historical V1 lane. The retained gate admits exactly `A+B -> C`
+    /// followed by `C+B -> D`. Current zero-initialized DeviceLocal allocation
+    /// semantics do not reproduce V1's original prepublication negative case;
+    /// use the separately identified V2 lane for new qualification runs.
     pub fn open_gfx942_r57_n3_qualification_v1(
         device_unique_id: u64,
     ) -> Result<
@@ -1535,6 +1545,34 @@ impl KfdRuntimeBackendV1 {
         let backend = Self::open_default_with_gate(
             device_unique_id,
             KfdRuntimeLaunchGateV1::ExactGfx942R57N3(admitted),
+        )?;
+        Ok((backend, observation))
+    }
+
+    #[cfg(feature = "hardware-qualification")]
+    /// Opens the V2 R57 N3 gate with a separately pinned mixed-memory negative.
+    /// This grants no production or general kernel authority.
+    pub fn open_gfx942_r57_n3_qualification_v2(
+        device_unique_id: u64,
+    ) -> Result<
+        (
+            Self,
+            crate::qualification_gfx942_r57_n3_v1::Gfx942R57N3QualificationAuthorityObservationV1,
+        ),
+        KfdRuntimeBackendErrorV1,
+    > {
+        let admitted = crate::qualification_gfx942_r57_n3_v1::admit_gfx942_r57_n3_qualification_v2(
+        )
+        .map_err(|error| {
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                error.to_string(),
+            )
+        })?;
+        let observation = admitted.observation_v1();
+        let backend = Self::open_default_with_gate(
+            device_unique_id,
+            KfdRuntimeLaunchGateV1::ExactGfx942R57N3V2(admitted),
         )?;
         Ok((backend, observation))
     }
@@ -13988,6 +14026,8 @@ mod tests {
     mod initialized_storage_tests;
     mod native_xgmi_creation_tests;
     mod native_xgmi_retirement_tests;
+    #[cfg(feature = "hardware-qualification")]
+    mod r57_v2_tests;
     mod sdma_allocation_tests;
     mod sdma_demotion_tests;
     mod sdma_host_read_tests;
@@ -14701,6 +14741,26 @@ mod tests {
         [crate::RuntimeAllocationIdV1; 3],
         [u64; 3],
     ) {
+        scripted_three_binding_context_with_steps_v1(
+            byte_len,
+            (0..3).flat_map(|_| {
+                [
+                    ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
+                    ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+                ]
+            }),
+        )
+    }
+
+    fn scripted_three_binding_context_with_steps_v1(
+        byte_len: u64,
+        steps: impl IntoIterator<Item = ScriptedSdmaStepV1>,
+    ) -> (
+        crate::RuntimeContextV1<KfdRuntimeBackendV1>,
+        crate::RuntimeStreamIdV1,
+        [crate::RuntimeAllocationIdV1; 3],
+        [u64; 3],
+    ) {
         let mut context = crate::RuntimeContextV1::open(KfdRuntimeBackendV1::mock()).unwrap();
         let device = context.devices()[0].id();
         let stream = context.create_stream(device).unwrap();
@@ -14711,15 +14771,7 @@ mod tests {
         });
         let backend_allocations = {
             let backend = context.backend_mut_for_test_v1();
-            let release_steps = [
-                ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
-                ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
-                ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
-                ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
-                ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
-                ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
-            ];
-            let driver = ScriptedSdmaDriverV1::new(release_steps);
+            let driver = ScriptedSdmaDriverV1::new(steps);
             let owners: [DirectionalSdmaDeviceOwnerV1; 3] =
                 std::array::from_fn(|_| driver.test_device_owner(byte_len as usize));
             let mut backend_allocations: Vec<_> = backend.allocations.keys().copied().collect();

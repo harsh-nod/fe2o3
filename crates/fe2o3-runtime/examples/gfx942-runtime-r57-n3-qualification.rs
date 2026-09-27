@@ -1,4 +1,4 @@
-//! Exact live qualification of the gfx942 DeviceLocal R57 N3 path.
+//! Exact live V2 qualification of the gfx942 DeviceLocal R57 N3 path.
 
 #[cfg(not(feature = "hardware-qualification"))]
 fn main() {
@@ -15,8 +15,9 @@ mod enabled {
     use fe2o3_runtime::qualification_gfx942_r57_n3_v1::{
         GFX942_R57_N3_QUALIFICATION_BUFFER_ALIGNMENT_V1,
         GFX942_R57_N3_QUALIFICATION_BUFFER_BYTES_V1, GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1,
-        GFX942_R57_N3_QUALIFICATION_KERNEL_V1, Gfx942R57N3QualificationArgumentsV1,
-        Gfx942R57N3QualificationAuthorityObservationV1, admit_gfx942_r57_n3_qualification_v1,
+        GFX942_R57_N3_QUALIFICATION_KERNEL_V1, GFX942_R57_N3_QUALIFICATION_POLICY_SHA256_V2,
+        GFX942_R57_N3_QUALIFICATION_PROFILE_ID_V2, Gfx942R57N3QualificationArgumentsV2,
+        Gfx942R57N3QualificationAuthorityObservationV1, admit_gfx942_r57_n3_qualification_v2,
     };
     use fe2o3_runtime::{
         KfdRuntimeBackendErrorKindV1, KfdRuntimeBackendV1, KfdRuntimeLaunchDataPathV1,
@@ -144,7 +145,7 @@ mod enabled {
         authority: Gfx942R57N3QualificationAuthorityObservationV1,
         stream: RuntimeStreamIdV1,
         module: RuntimeModuleIdV1,
-        kernel: TypedRuntimeKernelV1<Gfx942R57N3QualificationArgumentsV1>,
+        kernel: TypedRuntimeKernelV1<Gfx942R57N3QualificationArgumentsV2>,
         upload: RuntimeAllocationIdV1,
         allocations: [RuntimeAllocationIdV1; 4],
         initial: [Vec<u8>; 4],
@@ -154,13 +155,13 @@ mod enabled {
     impl QualifiedRunV1 {
         fn open(device_unique_id: u64) -> Result<Self, String> {
             let admitted =
-                admit_gfx942_r57_n3_qualification_v1().map_err(|error| error.to_string())?;
+                admit_gfx942_r57_n3_qualification_v2().map_err(|error| error.to_string())?;
             let [a, b, c_initial, d_initial, expected_c, expected_d] = admitted
                 .host_buffers()
                 .map_err(|error| error.to_string())?
                 .into_parts();
             let (backend, authority) =
-                KfdRuntimeBackendV1::open_gfx942_r57_n3_qualification_v1(device_unique_id)
+                KfdRuntimeBackendV1::open_gfx942_r57_n3_qualification_v2(device_unique_id)
                     .map_err(backend_error)?;
             let mut context = RuntimeContextV1::open(backend).map_err(backend_error)?;
             if context.devices().len() != 1 {
@@ -181,7 +182,7 @@ mod enabled {
                 .load_module(device, admitted.hsaco())
                 .map_err(backend_error)?;
             let kernel = context
-                .resolve_kernel::<Gfx942R57N3QualificationArgumentsV1>(
+                .resolve_kernel::<Gfx942R57N3QualificationArgumentsV2>(
                     module,
                     GFX942_R57_N3_QUALIFICATION_KERNEL_V1,
                 )
@@ -229,7 +230,7 @@ mod enabled {
         }
 
         fn qualify(mut self) -> Result<[String; 4], String> {
-            let first_arguments = Gfx942R57N3QualificationArgumentsV1::new(
+            let first_arguments = Gfx942R57N3QualificationArgumentsV2::new(
                 self.allocations[0],
                 self.allocations[1],
                 self.allocations[2],
@@ -237,7 +238,7 @@ mod enabled {
             .map_err(|error| error.to_string())?;
             // Fresh DeviceLocal output is zero-initialized and can be converted.
             // A mixed-memory roster remains invalid before final authority.
-            let invalid_arguments = Gfx942R57N3QualificationArgumentsV1::new(
+            let invalid_arguments = Gfx942R57N3QualificationArgumentsV2::new(
                 self.allocations[0],
                 self.allocations[1],
                 self.upload,
@@ -252,7 +253,9 @@ mod enabled {
             ) {
                 Err(RuntimeErrorV1::BackendRejected(error))
                     if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
-                        && error.detail().contains("exact R/R/W admission") => {}
+                        && error.detail()
+                            == "three-binding persistent-compute candidate failed exact R/R/W admission" =>
+                    {}
                 Err(error) => {
                     return Err(format!(
                         "mixed-memory roster produced the wrong rejection: {error:?}"
@@ -308,7 +311,7 @@ mod enabled {
                     .ok_or_else(|| "A+B -> C has no performance observation".to_owned())?,
             )?;
 
-            let second_arguments = Gfx942R57N3QualificationArgumentsV1::new(
+            let second_arguments = Gfx942R57N3QualificationArgumentsV2::new(
                 self.allocations[2],
                 self.allocations[1],
                 self.allocations[3],
@@ -395,8 +398,10 @@ mod enabled {
             return Err(USAGE.into());
         }
         let [a, b, c, d] = QualifiedRunV1::open(unique_id)?.qualify()?;
+        let profile = GFX942_R57_N3_QUALIFICATION_PROFILE_ID_V2;
+        let policy = hex(GFX942_R57_N3_QUALIFICATION_POLICY_SHA256_V2);
         println!(
-            "PASS schema=fe2o3.runtime.gfx942-r57-n3-qualification.v1 target=gfx942:xnack- expected_prepublication_rejections=1 authority_calls=2 launches=2 data_path=PersistentDeviceReused user_data_materializations=0 persistent_control_reused=false readbacks=4 a_sha256={a} b_sha256={b} c_sha256={c} d_sha256={d} cleanup=complete"
+            "PASS schema={profile} policy_sha256={policy} target=gfx942:xnack- expected_prepublication_rejections=1 authority_calls=2 launches=2 data_path=PersistentDeviceReused user_data_materializations=0 persistent_control_reused=false readbacks=4 a_sha256={a} b_sha256={b} c_sha256={c} d_sha256={d} cleanup=complete"
         );
         Ok(())
     }

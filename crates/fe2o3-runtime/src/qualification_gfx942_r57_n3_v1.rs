@@ -4,6 +4,8 @@
 //! one pinned, repository-owned vecadd object but supplies an independent
 //! policy identity and a two-step authority. It grants no general launch or
 //! Worker V3 authority.
+//! V2 preserves the two-launch gate but gives the mixed-memory negative lane
+//! its own policy identity. Historical V1 identities are unchanged.
 
 use core::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,6 +49,14 @@ pub const GFX942_R57_N3_QUALIFICATION_POLICY_SHA256_V1: [u8; 32] = [
 ];
 pub const GFX942_R57_N3_QUALIFICATION_SIGNATURE_V1: [u8; 32] =
     GFX942_R57_N3_QUALIFICATION_POLICY_SHA256_V1;
+pub const GFX942_R57_N3_QUALIFICATION_PROFILE_ID_V2: &str =
+    "fe2o3.runtime.gfx942-r57-n3-qualification.v2";
+pub const GFX942_R57_N3_QUALIFICATION_POLICY_SHA256_V2: [u8; 32] = [
+    0x48, 0x76, 0x9f, 0xab, 0x74, 0xdf, 0x8a, 0x1e, 0x24, 0xcc, 0x5f, 0x58, 0x37, 0xfa, 0x73, 0xd9,
+    0x2f, 0x2d, 0x35, 0xa8, 0xc9, 0x3b, 0x02, 0xdf, 0xb3, 0x46, 0xf8, 0xae, 0xc1, 0x9d, 0xf9, 0x42,
+];
+pub const GFX942_R57_N3_QUALIFICATION_SIGNATURE_V2: [u8; 32] =
+    GFX942_R57_N3_QUALIFICATION_POLICY_SHA256_V2;
 pub const GFX942_R57_N3_QUALIFICATION_HSACO_SHA256_V1: [u8; 32] = [
     0x3a, 0x25, 0xe3, 0x64, 0xdd, 0x1e, 0x19, 0x31, 0xd1, 0xa1, 0x6c, 0x24, 0xb3, 0x7a, 0xa9, 0x98,
     0xdf, 0x2c, 0x6e, 0xf1, 0xcb, 0xcf, 0x0e, 0xc2, 0xaf, 0xb6, 0x37, 0x2c, 0xbc, 0x87, 0x8b, 0xab,
@@ -54,6 +64,7 @@ pub const GFX942_R57_N3_QUALIFICATION_HSACO_SHA256_V1: [u8; 32] = [
 
 const SOURCE_BYTES_V1: &[u8] = include_bytes!("../fixtures/trusted-gfx942-vecadd-v1/vecadd.ll");
 const POLICY_BYTES_V1: &[u8] = include_bytes!("../fixtures/trusted-gfx942-r57-n3-v1/policy-v1.txt");
+const POLICY_BYTES_V2: &[u8] = include_bytes!("../fixtures/trusted-gfx942-r57-n3-v2/policy-v2.txt");
 const HSACO_BYTES_V1: &[u8] = include_bytes!("../fixtures/trusted-gfx942-vecadd-v1/vecadd.hsaco");
 
 pub const fn gfx942_r57_n3_qualification_hsaco_v1() -> &'static [u8] {
@@ -66,6 +77,32 @@ pub const fn gfx942_r57_n3_qualification_source_v1() -> &'static [u8] {
 
 pub const fn gfx942_r57_n3_qualification_policy_v1() -> &'static [u8] {
     POLICY_BYTES_V1
+}
+
+pub const fn gfx942_r57_n3_qualification_policy_v2() -> &'static [u8] {
+    POLICY_BYTES_V2
+}
+
+#[derive(Clone, Copy, Debug)]
+enum QualificationProfile {
+    V1,
+    V2,
+}
+
+impl QualificationProfile {
+    const fn policy(self) -> &'static [u8] {
+        match self {
+            Self::V1 => POLICY_BYTES_V1,
+            Self::V2 => POLICY_BYTES_V2,
+        }
+    }
+
+    const fn signature(self) -> [u8; 32] {
+        match self {
+            Self::V1 => GFX942_R57_N3_QUALIFICATION_SIGNATURE_V1,
+            Self::V2 => GFX942_R57_N3_QUALIFICATION_SIGNATURE_V2,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,9 +164,14 @@ impl Gfx942R57N3QualificationAuthorityObservationV1 {
 /// Non-cloneable evidence retaining the exact two-launch qualification gate.
 #[derive(Debug)]
 pub struct AdmittedGfx942R57N3QualificationV1 {
+    authority: QualificationAuthorityV1,
+}
+
+#[derive(Debug)]
+struct QualificationAuthorityV1 {
     initial_sha256: [[u8; 32]; 4],
     state: Arc<QualificationAuthorityStateV1>,
-    _private: (),
+    profile: QualificationProfile,
 }
 
 impl AdmittedGfx942R57N3QualificationV1 {
@@ -143,7 +185,7 @@ impl AdmittedGfx942R57N3QualificationV1 {
 
     pub fn observation_v1(&self) -> Gfx942R57N3QualificationAuthorityObservationV1 {
         Gfx942R57N3QualificationAuthorityObservationV1 {
-            state: Arc::clone(&self.state),
+            state: Arc::clone(&self.authority.state),
         }
     }
 
@@ -157,6 +199,47 @@ impl AdmittedGfx942R57N3QualificationV1 {
         &self,
         request: KfdRuntimeAuthorityRequestV1<'_>,
     ) -> bool {
+        self.authority.authorizes_kfd_request_v1(request)
+    }
+}
+
+/// Non-cloneable V2 evidence; V1 requests cannot use this authority.
+#[derive(Debug)]
+pub struct AdmittedGfx942R57N3QualificationV2 {
+    authority: QualificationAuthorityV1,
+}
+
+impl AdmittedGfx942R57N3QualificationV2 {
+    pub const fn hsaco(&self) -> &'static [u8] {
+        HSACO_BYTES_V1
+    }
+
+    pub const fn kernel_name(&self) -> &'static str {
+        GFX942_R57_N3_QUALIFICATION_KERNEL_V1
+    }
+
+    pub fn observation_v1(&self) -> Gfx942R57N3QualificationAuthorityObservationV1 {
+        Gfx942R57N3QualificationAuthorityObservationV1 {
+            state: Arc::clone(&self.authority.state),
+        }
+    }
+
+    pub fn host_buffers(
+        &self,
+    ) -> Result<Gfx942R57N3QualificationHostBuffersV1, Gfx942R57N3QualificationFixtureErrorV1> {
+        gfx942_r57_n3_qualification_host_buffers_v1()
+    }
+
+    pub(crate) fn authorizes_kfd_request_v1(
+        &self,
+        request: KfdRuntimeAuthorityRequestV1<'_>,
+    ) -> bool {
+        self.authority.authorizes_kfd_request_v1(request)
+    }
+}
+
+impl QualificationAuthorityV1 {
+    fn authorizes_kfd_request_v1(&self, request: KfdRuntimeAuthorityRequestV1<'_>) -> bool {
         if self
             .state
             .calls
@@ -165,7 +248,7 @@ impl AdmittedGfx942R57N3QualificationV1 {
             })
             .is_err()
             || request.semantic_launch != crate::KfdRuntimeSemanticLaunchV1::Ordinary
-            || !exact_artifact_kernarg_geometry_and_abi_v1(&request)
+            || !exact_artifact_kernarg_geometry_and_abi_v1(&request, self.profile)
         {
             return false;
         }
@@ -214,10 +297,25 @@ impl AdmittedGfx942R57N3QualificationV1 {
 /// Re-hashes and admits the independent policy, shared source, and shared object.
 pub fn admit_gfx942_r57_n3_qualification_v1()
 -> Result<AdmittedGfx942R57N3QualificationV1, Gfx942R57N3QualificationAdmissionErrorV1> {
+    Ok(AdmittedGfx942R57N3QualificationV1 {
+        authority: admit_qualification_profile(QualificationProfile::V1)?,
+    })
+}
+
+/// Admits the V2 policy without reinterpreting or modifying V1 evidence.
+pub fn admit_gfx942_r57_n3_qualification_v2()
+-> Result<AdmittedGfx942R57N3QualificationV2, Gfx942R57N3QualificationAdmissionErrorV1> {
+    Ok(AdmittedGfx942R57N3QualificationV2 {
+        authority: admit_qualification_profile(QualificationProfile::V2)?,
+    })
+}
+
+fn admit_qualification_profile(
+    profile: QualificationProfile,
+) -> Result<QualificationAuthorityV1, Gfx942R57N3QualificationAdmissionErrorV1> {
     if <[u8; 32]>::from(Sha256::digest(SOURCE_BYTES_V1))
         != GFX942_R57_N3_QUALIFICATION_SOURCE_SHA256_V1
-        || <[u8; 32]>::from(Sha256::digest(POLICY_BYTES_V1))
-            != GFX942_R57_N3_QUALIFICATION_POLICY_SHA256_V1
+        || <[u8; 32]>::from(Sha256::digest(profile.policy())) != profile.signature()
         || <[u8; 32]>::from(Sha256::digest(HSACO_BYTES_V1))
             != GFX942_R57_N3_QUALIFICATION_HSACO_SHA256_V1
     {
@@ -273,7 +371,7 @@ pub fn admit_gfx942_r57_n3_qualification_v1()
     }
     let buffers = gfx942_r57_n3_qualification_host_buffers_v1()
         .map_err(|_| Gfx942R57N3QualificationAdmissionErrorV1::AbiOrEffects)?;
-    Ok(AdmittedGfx942R57N3QualificationV1 {
+    Ok(QualificationAuthorityV1 {
         initial_sha256: [
             Sha256::digest(buffers.a()).into(),
             Sha256::digest(buffers.b()).into(),
@@ -284,7 +382,7 @@ pub fn admit_gfx942_r57_n3_qualification_v1()
             calls: AtomicU64::new(0),
             phase: Mutex::new(QualificationPhaseV1::First),
         }),
-        _private: (),
+        profile,
     })
 }
 
@@ -389,6 +487,36 @@ impl RuntimeArgumentsV1 for Gfx942R57N3QualificationArgumentsV1 {
     }
 }
 
+/// The unchanged R/R/W ABI authenticated under the separate V2 policy.
+#[derive(Debug)]
+pub struct Gfx942R57N3QualificationArgumentsV2 {
+    arguments: Gfx942R57N3QualificationArgumentsV1,
+}
+
+impl Gfx942R57N3QualificationArgumentsV2 {
+    pub fn new(
+        left: RuntimeAllocationIdV1,
+        right: RuntimeAllocationIdV1,
+        output: RuntimeAllocationIdV1,
+    ) -> Result<Self, Gfx942R57N3QualificationFixtureErrorV1> {
+        Ok(Self {
+            arguments: Gfx942R57N3QualificationArgumentsV1::new(left, right, output)?,
+        })
+    }
+}
+
+impl RuntimeArgumentsV1 for Gfx942R57N3QualificationArgumentsV2 {
+    const SIGNATURE_V1: [u8; 32] = GFX942_R57_N3_QUALIFICATION_SIGNATURE_V2;
+
+    fn encode_explicit_kernarg_v1(&self) -> Vec<u8> {
+        self.arguments.encode_explicit_kernarg_v1()
+    }
+
+    fn bindings_v1(&self) -> Vec<RuntimeBindingV1> {
+        self.arguments.bindings_v1()
+    }
+}
+
 #[derive(Debug)]
 pub struct Gfx942R57N3QualificationHostBuffersV1 {
     a: Vec<u8>,
@@ -475,14 +603,17 @@ pub fn gfx942_r57_n3_qualification_explicit_kernarg_v1()
     bytes
 }
 
-fn exact_artifact_kernarg_geometry_and_abi_v1(request: &KfdRuntimeAuthorityRequestV1<'_>) -> bool {
+fn exact_artifact_kernarg_geometry_and_abi_v1(
+    request: &KfdRuntimeAuthorityRequestV1<'_>,
+    profile: QualificationProfile,
+) -> bool {
     let expected_kernarg = gfx942_r57_n3_qualification_explicit_kernarg_v1();
     request.module_image == HSACO_BYTES_V1
         && request.module_sha256 == GFX942_R57_N3_QUALIFICATION_HSACO_SHA256_V1
         && <[u8; 32]>::from(Sha256::digest(request.module_image))
             == GFX942_R57_N3_QUALIFICATION_HSACO_SHA256_V1
         && request.kernel_name == GFX942_R57_N3_QUALIFICATION_KERNEL_V1
-        && request.signature == GFX942_R57_N3_QUALIFICATION_SIGNATURE_V1
+        && request.signature == profile.signature()
         && request.explicit_kernarg == expected_kernarg
         && request.complete_kernarg_template == expected_kernarg
         && request.geometry == GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1
@@ -576,6 +707,8 @@ const fn argument_access_v1(access: RuntimeAccessV1) -> ArgumentAccess {
 mod tests {
     use super::*;
     use crate::{BackendBindingV1, BackendMemoryRegionV1, KfdRuntimeAuthorityGlobalBufferV1};
+
+    mod v2;
 
     #[test]
     fn independent_policy_and_shared_artifact_identities_are_exact() {
