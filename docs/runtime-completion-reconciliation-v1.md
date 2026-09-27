@@ -100,7 +100,10 @@ three executable profile-guard mutations: rejecting the mixed edge, admitting
 the reverse edge, and admitting an ordinary kind-0 parent. Each leaves the
 profile specification and identity/depth checks unchanged. The ordinary mutant
 tests malformed finite input, not real ordinary-peer construction. The old
-35-phase packet is not evidence for the expanded 56-obligation root.
+35-phase packet is not evidence for the expanded 56-obligation root. The fresh
+[mixed-parent packet](evidence/dev-pending-peer-context-2026-09-26/README.md)
+passes all 38 phases, including three 56/0 full proofs and 28 logical mutations,
+with exact signed-source relocation and opening/closing source/tool continuity.
 
 The adapters deliberately omit actual HashMap allocation, full event/device/
 allocation custody metadata, journal ownership, callbacks, dependency-release

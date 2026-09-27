@@ -24,6 +24,21 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest pending-peer Context development (2026-09-26): typed producer-aware
+launches accept pending directed peers and mixed native/peer inputs, validating
+every original Read alias and retaining exact writer identity and graph depth.
+Ten new CPU groups cover all completion ingresses, actual input bytes, failure,
+cancellation, discarded results, custody corruption, slot reuse and depth limits.
+The expanded finite projection passes 56 obligations; its signed 38-phase
+campaign passes three full positives and 28 logical mutation controls, including
+exact mixed-parent observation and explicit dependency-profile checks. The
+[development packet](evidence/dev-pending-peer-context-2026-09-26/README.md)
+records 1,590 broad passes, three unchanged socket-permission failures, 28 ignores,
+52 doctests and passing strict static checks. Production KFD still rejects
+pending peer-to-compute until native publication gates and exact predecessor
+access are implemented. Full adapter refinement, native qualification and
+matched performance remain open; accepted milestones and parity are unchanged.
+
 Latest directed router development (2026-09-26): the multi-device cooperative
 backend implements the explicit directed peer-copy SPI with immutable ordered
 provenance, completed-ancestor depth, bounded shared-source custody and
