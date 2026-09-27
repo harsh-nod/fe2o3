@@ -57,8 +57,9 @@ through an exclusive mutex. Inputs need `Send`, not `Sync`; existing `Cell`-base
 owners keep their programming model. A panicking access poisons later access.
 Caller-declared storage and generic values are not admitted authority. The unsafe
 boundary requires complete charges and bounded, funded, nonpanicking destruction.
-Using this primitive in consuming native compiler-supervisor launch remains work
-for that coordinator, not a property established by the generic wrapper.
+The native compiler coordinator now transfers its actual complete preparation
+through this primitive. Contextual admission remains that coordinator's duty,
+not a property established by the generic wrapper.
 
 ## Shared Readiness
 
@@ -67,7 +68,8 @@ root coordinators. It returns inert bytes and either one or zero descriptor
 rights; family-specific decoding remains in the owning coordinator. Attempt
 charges, finite retries, deadlines and descriptor disposal share one implementation.
 The anchor uses 16 bytes plus one right; native supervisor transport supports
-88 bytes without rights. This is not a completed consuming supervisor launch.
+88 bytes without rights. Coordinators supply nominal decoding and admission;
+transport alone does not establish a successful protected launch.
 
 Terminal status enables Linux `SO_PASSCRED` so even a queued empty record has a
 kernel credential marker, while EOF has none. The marker is framing, not identity
@@ -103,7 +105,8 @@ indefinitely; finite cleanup funding does not guarantee eventual reaping.
 
 The native external-anchor coordinator now calls these primitives after deriving
 full charges and validating staged Files, and owns gated readiness/exec/endpoint
-admission and managed lifetime. Protected startup remains unvalidated; compiler
-coordinator integration is still pending. Rootless clone and cleanup tests do not
-establish successful protected startup. See the
-[launch checkpoint](../../docs/evidence/conditional-native-root-launch-20260926.md).
+admission and managed lifetime. The native compiler coordinator now also composes
+retained spawn, nominal readiness and continuity. Protected startup and native
+inherited root composition remain unvalidated/unfinished. Rootless clone and
+cleanup tests do not establish successful protected startup. See the
+[compiler launch checkpoint](../../docs/evidence/conditional-native-compiler-launch-20260926.md).

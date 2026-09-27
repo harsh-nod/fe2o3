@@ -3,10 +3,11 @@
 The production composition below currently uses V1 owners. Native V2/V3 trust
 and preparation now compose genuine deployment/policy/key custody, three freshly
 sealed images, listener/root inputs, root-bound lifecycle leases and a managed
-anchor on the original resource ledger. Preparation creates no process: native
-inherited composition, supervisor startup and consuming launch remain unfinished.
-These APIs do not establish 47/47 safe GPU launch. See the
-[native preparation checkpoint](../../docs/evidence/conditional-native-compiler-preparation-20260926.md).
+anchor on the original resource ledger. Consuming native supervisor launch now
+transfers that complete preparation into ordered child custody before clone.
+Native inherited root composition and protected deployment validation remain
+unfinished. These APIs do not establish 47/47 safe GPU launch. See the
+[native launch checkpoint](../../docs/evidence/conditional-native-compiler-launch-20260926.md).
 
 ## Native Preparation
 
@@ -24,6 +25,26 @@ owner, keep all consumed charges live, and retire the full retained charge only
 after Drop. Calls restore entry storage without resetting work or denial history.
 No V1 authority conversion, raw-descriptor accessor or public signing operation
 is exposed. The V1 program-source bundle is reused only as three untrusted Files.
+
+## Native Launch
+
+`PreparedCompilerExecutionSupervisorV2/V3::launch` validates the already installed
+cleanup guard against its actual root-bound lifecycle. The anchor must install
+that guard before the first child; compiler preparation cannot replace it. Exact
+final staged Files are checked against retained native owners before spawn.
+
+The existing bounded scheduler requires profile readiness and context checks
+before gate release, then exact same-family Ready bound to the actual child PID
+and deployment, EOF, repeated profile/context validation and liveness before exec
+confirmation. `RootManagedCompilerExecutionServiceV2/V3` retain the typed child,
+complete preparation and nominal readiness with metered continuity checks.
+
+Deferred or quarantined supervisor cleanup retains preparation and its live
+anchor. Exact supervisor termination permits nested anchor cancellation outside
+pool locks; that cancellation may itself defer. The original persistent cleanup
+account funds the complete payload independently of the original request ledger.
+No new pool or budget reset is introduced. Component tests and compile checks
+are not a successful protected deployment or a completed production GPU path.
 
 ## Existing V1 Deployment
 

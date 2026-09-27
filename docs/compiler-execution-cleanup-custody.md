@@ -97,8 +97,9 @@ that request ledger: it lives in the independently funded service pool.
 Discarding an unused reservation returns its slot without new work charges.
 Having enough service work for one turn does not promise eventual reaping of
 every retained child; later progress still depends on funding and observations.
-Connecting that private reservation to the native consuming launch is still
-required, together with the parent's and child's finite protocol envelopes.
+Native consuming launch now connects this reservation to the guarded child and
+finite parent/child protocol envelopes; protected deployment validation remains
+a separate gate.
 
 The pool charge includes the fixed table, controller/account metadata, embedded
 records and spawn obligations, plus a logical descriptor charge per slot. It
@@ -149,10 +150,13 @@ transitive resources to survive shared access and all destruction to be bounded,
 nonpanicking and funded, including existing nested cancellation prepayments.
 These mechanical APIs do not validate a caller's declared charge or deployment.
 
-This closes a primitive lifetime gap, not the consuming compiler-coordinator
-integration: that coordinator must actually transfer its prepared owner, live
-anchor and both lifecycle leases through this path and validate final staged
-Files, readiness and protected provenance.
+The native compiler coordinator now transfers its actual prepared owner, live
+anchor and both lifecycle leases through this path. It validates the final
+staged Files and uses nominal readiness, EOF and continuity checks before exec
+confirmation. Its inherited root composition and protected deployment validation
+remain outstanding; the generic wrapper alone establishes neither provenance
+nor successful startup. See the
+[compiler launch checkpoint](evidence/conditional-native-compiler-launch-20260926.md).
 
 ## Remaining Limits
 

@@ -410,8 +410,9 @@ Compiler coordinator native preparation now owns the genuine matching trust,
 three freshly sealed images, listener/root, two root-bound lifecycle leases and
 managed anchor. Lease validity is joined to the actual retained service root,
 not accepted as an unrelated valid lock. Preparation itself spawns nothing;
-production root inherited composition and consuming supervisor launch still use
-V1 and remain to be migrated. Dedicated native V2/V3 supervisor binaries now
+production root inherited composition still uses V1 and remains to be migrated.
+Consuming native supervisor launch now exists as described below. Dedicated
+native V2/V3 supervisor binaries now
 compose inherited descriptor intake, actual admission, listener activation,
 bounded readiness and dispatch. Their protected deployment is not yet validated.
 Startup transfers an actual lifecycle-lock alias into the existing charged
@@ -432,9 +433,15 @@ nested anchor cancellation in the same pool. Metered exclusive access supports
 the actual prepared owners without requiring their listeners to be `Sync`.
 See the [retained-custody checkpoint](evidence/conditional-native-retained-custody-20260926.md).
 
-The consuming supervisor integration is still outstanding. It must transfer its
-actual complete prepared owner, live anchor and both leases through that path,
-join the installed cleanup guard to the actual compiler lifecycle/root, and
-validate staged Files, protected readiness and continuity. Calling `cancel`,
-dropping the child field first, or retaining a persistent guard alone does not
-establish those properties or a successful production launch.
+Consuming supervisor launch now transfers its actual complete prepared owner,
+live anchor and both leases through that path. It joins the installed cleanup
+guard to the actual compiler lifecycle/root and validates final staged Files,
+profile, nominal Ready, EOF, final context and child liveness before confirming
+exec. Managed continuity retains the same owners and original request ledger.
+
+This composition is implemented but not validated as a protected deployment.
+Genuine-preparation quota boundaries, complete-path staged substitutions and
+post-spawn refusal/unwind schedules still need coverage. Native inherited root
+composition also remains outstanding. Neither `cancel`, field-drop order, a
+persistent guard nor passing component tests establish successful production
+startup. See the [compiler launch checkpoint](evidence/conditional-native-compiler-launch-20260926.md).
