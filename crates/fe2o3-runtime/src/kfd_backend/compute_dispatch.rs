@@ -36,7 +36,7 @@ pub(super) fn three_binding_requires_persistent_admission_v1(
         })
 }
 
-fn three_binding_persistent_compute_shape_v1(
+pub(super) fn three_binding_persistent_compute_shape_v1(
     semantic_launch: KfdRuntimeSemanticLaunchV1,
     bindings: &[BackendBindingV1],
     stream_device: u64,
@@ -79,11 +79,16 @@ fn three_binding_persistent_compute_shape_v1(
     })
 }
 
-fn three_binding_persistent_ready_source_v1(
+pub(super) fn three_binding_persistent_ready_source_v1(
     allocation: &AllocationRecordV1,
 ) -> Option<PersistentFullRangeComputeSourceV1> {
     let logical_bytes = u64::try_from(allocation.bytes.len()).ok()?;
     match &allocation.sdma_storage {
+        KfdRuntimeSdmaStorageV1::InitializedStorage(ready)
+            if ready.extents() == (logical_bytes, logical_bytes) =>
+        {
+            Some(PersistentFullRangeComputeSourceV1::InitializedStorage)
+        }
         KfdRuntimeSdmaStorageV1::H2dReady(ready)
             if !allocation.sdma_shadow_dirty
                 && allocation.content_sha256 == Some(ready.owner.authenticated_sha256())
@@ -497,6 +502,7 @@ impl KfdRuntimeBackendV1 {
         ) && self
             .three_binding_persistent_admission_for_launch_v1(*launch)
             .is_none()
+            && !self.three_binding_storage_candidates_admissible_v1(*launch)
             && (input_admission != ComputeInputAdmissionV1::ExactProducers
                 || !self.three_binding_producer_inputs_are_deferred_v1(*launch, dependencies))
         {
@@ -538,9 +544,12 @@ impl KfdRuntimeBackendV1 {
         ) {
             return false;
         }
+        let candidates = self.initialized_storage_candidates_v1(launch);
         launch.bindings.iter().enumerate().all(|(index, binding)| {
             let allocation = &self.allocations[&binding.region.allocation];
-            if three_binding_persistent_ready_source_v1(allocation).is_some() {
+            if three_binding_persistent_ready_source_v1(allocation).is_some()
+                || candidates.contains(&Some(binding.region.allocation))
+            {
                 return true;
             }
             let KfdRuntimeSdmaStorageV1::ComputeInFlight(owner) = &allocation.sdma_storage else {
@@ -1274,7 +1283,8 @@ impl KfdRuntimeBackendV1 {
                         KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => {
                             ready.owner.normalize()
                         }
-                        KfdRuntimePersistentComputeInputV1::ScriptedReplay(device) => device,
+                        KfdRuntimePersistentComputeInputV1::ScriptedReplay(device)
+                        | KfdRuntimePersistentComputeInputV1::ScriptedStorage(device) => device,
                         KfdRuntimePersistentComputeInputV1::Native(_) => {
                             unreachable!("scripted publication retained native input")
                         }
@@ -1889,6 +1899,10 @@ impl KfdRuntimeBackendV1 {
             // ordered predecessor therefore does not fail this launch unless
             // the same identity also appeared in the explicit dependency set.
         }
+        let conversion_candidate = self
+            .initialized_storage_candidates_v1(pending.launch.borrowed())
+            .iter()
+            .any(Option::is_some);
         let three_binding_admission =
             self.three_binding_persistent_admission_for_launch_v1(pending.launch.borrowed());
         if three_binding_requires_persistent_admission_v1(
@@ -1896,14 +1910,16 @@ impl KfdRuntimeBackendV1 {
             &pending.launch.bindings,
             &self.allocations,
         ) && three_binding_admission.is_none()
+            && !conversion_candidate
         {
             return Ok(
                 self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 })
             );
         }
-        let persistent_selected = self
-            .persistent_full_range_admission_for_launch_v1(pending.launch.borrowed())
-            .is_some()
+        let persistent_selected = conversion_candidate
+            || self
+                .persistent_full_range_admission_for_launch_v1(pending.launch.borrowed())
+                .is_some()
             || three_binding_admission.is_some();
         if self.native_reconciliations.iter().flatten().any(|root| {
             persistent_selected
@@ -1992,7 +2008,7 @@ impl KfdRuntimeBackendV1 {
                 }
             };
         }
-        let staging = (|| {
+        let staging = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if persistent_selected {
                 self.release_compute_lane_cache_v1(lane)?;
             }
@@ -2009,8 +2025,24 @@ impl KfdRuntimeBackendV1 {
                     }
                 }
             }
+            for allocation in self
+                .initialized_storage_candidates_v1(pending.launch.borrowed())
+                .into_iter()
+                .flatten()
+            {
+                self.convert_initialized_storage_v1(allocation)?;
+            }
             Ok(())
-        })();
+        }));
+        let staging = match staging {
+            Ok(staging) => staging,
+            Err(payload) => {
+                self.pending_compute.insert(pending.id, pending);
+                super::sdma_host_write::resume_sdma_owner_panic_v1(payload, || {
+                    self.poison_terminal_v1()
+                })
+            }
+        };
         if let Err(failure) = staging {
             return match failure {
                 RuntimeBackendFailureV1::Rejected(_) | RuntimeBackendFailureV1::Quiescent(_) => {
@@ -2023,6 +2055,22 @@ impl KfdRuntimeBackendV1 {
                 }
             };
         }
+        let three_binding_admission =
+            self.three_binding_persistent_admission_for_launch_v1(pending.launch.borrowed());
+        if three_binding_requires_persistent_admission_v1(
+            pending.launch.semantic_launch,
+            &pending.launch.bindings,
+            &self.allocations,
+        ) && three_binding_admission.is_none()
+        {
+            return Ok(
+                self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 })
+            );
+        }
+        let persistent_selected = self
+            .persistent_full_range_admission_for_launch_v1(pending.launch.borrowed())
+            .is_some()
+            || three_binding_admission.is_some();
         self.lease_compute_lane_v1(pending.launch.stream, lane);
         let publication = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.with_compute_lane_state_v1(lane, |backend| {
@@ -2166,6 +2214,17 @@ impl KfdRuntimeBackendV1 {
         predecessor: u64,
     ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if !pending.peer_gate_allows_native_checks_v1()
+            || self
+                .initialized_storage_candidates_v1(pending.launch.borrowed())
+                .iter()
+                .any(Option::is_some)
+            || pending.launch.bindings.iter().any(|binding| {
+                binding.region.access != RuntimeAccessV1::Write
+                    && self
+                        .allocations
+                        .get(&binding.region.allocation)
+                        .is_some_and(|allocation| allocation.sdma_shadow_dirty)
+            })
             || !self.compute_pipeline.has_successor_capacity()
             || three_binding_requires_persistent_admission_v1(
                 pending.launch.semantic_launch,
@@ -2433,7 +2492,15 @@ impl KfdRuntimeBackendV1 {
             stream_device,
             allocation,
             ready,
-        );
+        )
+        .or_else(|| {
+            initialized_storage::initialized_storage_full_range_admission_v1(
+                launch.semantic_launch,
+                launch.bindings,
+                stream_device,
+                allocation,
+            )
+        });
         let Some(retained) = self.retained_persistent_dispatch else {
             return authenticated;
         };
@@ -2527,7 +2594,7 @@ impl KfdRuntimeBackendV1 {
             ));
         }
         let replaces_retained_control = persistent_admission.is_some_and(|admission| {
-            admission.source == PersistentFullRangeComputeSourceV1::AuthenticatedH2d
+            admission.source != PersistentFullRangeComputeSourceV1::RetainedControlReplay
                 && self.retained_persistent_dispatch.is_some_and(|retained| {
                     retained.allocation != admission.allocation
                         || retained.dispatch_shape_sha256 != dispatch_shape_sha256
@@ -3474,7 +3541,8 @@ impl KfdRuntimeBackendV1 {
         if self.scripted_sdma.is_some() {
             let devices = persistent_inputs.map(|input| match input {
                 KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => ready.owner.normalize(),
-                KfdRuntimePersistentComputeInputV1::ScriptedReplay(device) => device,
+                KfdRuntimePersistentComputeInputV1::ScriptedReplay(device)
+                | KfdRuntimePersistentComputeInputV1::ScriptedStorage(device) => device,
                 KfdRuntimePersistentComputeInputV1::Native(_) => {
                     unreachable!("scripted three-binding publication retained native input")
                 }
@@ -3538,7 +3606,8 @@ impl KfdRuntimeBackendV1 {
             persistent_inputs.map(|input| match input {
                 KfdRuntimePersistentComputeInputV1::Native(input) => input,
                 KfdRuntimePersistentComputeInputV1::ScriptedReady(_)
-                | KfdRuntimePersistentComputeInputV1::ScriptedReplay(_) => unreachable!(),
+                | KfdRuntimePersistentComputeInputV1::ScriptedReplay(_)
+                | KfdRuntimePersistentComputeInputV1::ScriptedStorage(_) => unreachable!(),
             })
         };
         let native_binding_started = Instant::now();
@@ -3761,7 +3830,8 @@ impl KfdRuntimeBackendV1 {
             }
             let device = Box::new(match persistent_input {
                 KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => ready.owner.normalize(),
-                KfdRuntimePersistentComputeInputV1::ScriptedReplay(device) => device,
+                KfdRuntimePersistentComputeInputV1::ScriptedReplay(device)
+                | KfdRuntimePersistentComputeInputV1::ScriptedStorage(device) => device,
                 KfdRuntimePersistentComputeInputV1::Native(_) => {
                     unreachable!("scripted publication retained native input")
                 }
@@ -3800,6 +3870,13 @@ impl KfdRuntimeBackendV1 {
         #[cfg(test)]
         let input = match persistent_input {
             KfdRuntimePersistentComputeInputV1::Native(input) => input,
+            input @ KfdRuntimePersistentComputeInputV1::ScriptedStorage(_) => {
+                self.restore_initialized_storage_input_v1(persistent.allocation, id, input)?;
+                return Err(Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "scripted initialized-storage publication has no native queue",
+                ));
+            }
             #[cfg(test)]
             KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => {
                 self.restore_h2d_ready_after_compute_rejection_v1(
@@ -3835,8 +3912,7 @@ impl KfdRuntimeBackendV1 {
         let binding = match binding {
             Ok(binding) => binding,
             Err(failure) => {
-                let detail = failure.error().to_string();
-                let (_, custody) = failure.into_parts();
+                let (detail, custody) = failure.into_parts();
                 return match custody {
                     Gfx942PersistentComputeBindFailureCustodyV1::Retryable(recovered) => {
                         self.restore_persistent_compute_input_v1(
@@ -5070,7 +5146,13 @@ pub(super) fn snapshot_three_binding_persistent_data_v1(
             allocation_offset: 0,
             bytes: Arc::clone(&allocation.bytes),
             byte_range: 0..allocation.bytes.len(),
-            content_sha256: allocation.content_sha256,
+            content_sha256: if admission.bindings[index].source
+                == PersistentFullRangeComputeSourceV1::InitializedStorage
+            {
+                None
+            } else {
+                allocation.content_sha256
+            },
         });
         placements.insert(
             binding.region.allocation,
@@ -5106,6 +5188,14 @@ pub(super) fn snapshot_persistent_full_range_data_v1(
         )
     })?;
     let current = match admission.source {
+        PersistentFullRangeComputeSourceV1::InitializedStorage => {
+            initialized_storage::initialized_storage_full_range_admission_v1(
+                KfdRuntimeSemanticLaunchV1::Ordinary,
+                core::slice::from_ref(binding),
+                stream_device,
+                Some(allocation),
+            )
+        }
         PersistentFullRangeComputeSourceV1::AuthenticatedH2d => allocation
             .sdma_storage
             .persistent_compute_ready_facts_v1()
@@ -5149,7 +5239,13 @@ pub(super) fn snapshot_persistent_full_range_data_v1(
         allocation_offset: 0,
         bytes: Arc::clone(&allocation.bytes),
         byte_range: 0..allocation.bytes.len(),
-        content_sha256: allocation.content_sha256,
+        content_sha256: if admission.source
+            == PersistentFullRangeComputeSourceV1::InitializedStorage
+        {
+            None
+        } else {
+            allocation.content_sha256
+        },
     });
     let mut placements = HashMap::new();
     placements

@@ -246,6 +246,7 @@ pub(in crate::kfd_backend) mod tests {
             sdma_backed: true,
             sdma_initialized: true,
             sdma_shadow_dirty: true,
+            persistent_storage_restore: None,
             scripted_three_binding_replay: false,
         }
     }

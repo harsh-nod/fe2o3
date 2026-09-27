@@ -12,6 +12,9 @@
     clippy::result_large_err
 )]
 
+use super::initialized_storage::{InitializedStorageAttemptV1, InitializedStorageOwnerV1};
+#[cfg(test)]
+use fe2o3_kfd::Gfx942PersistentComputeStorageIneligibilityV1;
 use fe2o3_kfd::{
     ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
     GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1,
@@ -43,6 +46,9 @@ use fe2o3_kfd::{
     Gfx942SameDevicePersistentSdmaWindowSubmissionV1,
     Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1, Gfx942SdmaAllocationDispositionV1,
     Gfx942SdmaAllocationFailureV1, Gfx942SdmaBufferV1, Gfx942SdmaErrorV1,
+};
+use fe2o3_kfd::{
+    Gfx942PersistentComputeStorageAttemptV1, Gfx942PersistentComputeStoragePromotionCustodyV1,
 };
 #[cfg(test)]
 use sha2::{Digest, Sha256};
@@ -490,6 +496,7 @@ pub(super) enum NativeDirectionalSdmaTerminalCustodyV1 {
         host: Gfx942SdmaBufferV1,
     },
     ReadyPromotion(Gfx942PersistentComputeReadyTerminalCustodyV1),
+    StoragePromotion(fe2o3_kfd::Gfx942PersistentComputeStoragePromotionTerminalCustodyV1),
 }
 
 #[allow(dead_code)]
@@ -912,6 +919,67 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     "directional SDMA owner/driver mismatch during promotion".to_owned(),
                 ),
                 custody: scripted_mismatch_buffer(buffer, "promotion"),
+            }),
+        }
+    }
+
+    pub(super) fn promote_initialized_storage(
+        &mut self,
+        device: DirectionalSdmaDeviceOwnerV1,
+    ) -> Result<
+        InitializedStorageAttemptV1,
+        SdmaTransitionFailureV1<DirectionalSdmaDeviceOwnerV1, SdmaOwnerDiagnosticV1>,
+    > {
+        match (self, device) {
+            (Self::Native(queue), DirectionalSdmaDeviceOwnerV1::Native(device)) => {
+                queue
+                    .try_promote_initialized_persistent_allocation_for_compute_v1(device)
+                    .map(|attempt| match attempt {
+                        Gfx942PersistentComputeStorageAttemptV1::Promoted(ready) => {
+                            InitializedStorageAttemptV1::Promoted(
+                                InitializedStorageOwnerV1::Native(ready),
+                            )
+                        }
+                        Gfx942PersistentComputeStorageAttemptV1::NotEligible {
+                            allocation,
+                            reason,
+                        } => InitializedStorageAttemptV1::NotEligible {
+                            device: DirectionalSdmaDeviceOwnerV1::Native(allocation),
+                            reason,
+                        },
+                    })
+                    .map_err(|failure| {
+                        let (error, custody) = failure.into_parts();
+                        let detail = SdmaOwnerDiagnosticV1::Native(error);
+                        match custody {
+                            Gfx942PersistentComputeStoragePromotionCustodyV1::Retryable(device)
+                            | Gfx942PersistentComputeStoragePromotionCustodyV1::ForeignQueue(
+                                device,
+                            ) => SdmaTransitionFailureV1::Retryable {
+                                detail,
+                                custody: DirectionalSdmaDeviceOwnerV1::Native(device),
+                            },
+                            Gfx942PersistentComputeStoragePromotionCustodyV1::ProcessTeardown(
+                                custody,
+                            ) => SdmaTransitionFailureV1::ProcessTeardown {
+                                detail,
+                                custody: SdmaTerminalCustodyV1::Native(
+                                    NativeDirectionalSdmaTerminalCustodyV1::StoragePromotion(
+                                        custody,
+                                    ),
+                                ),
+                            },
+                        }
+                    })
+            }
+            #[cfg(test)]
+            (Self::Scripted(driver), DirectionalSdmaDeviceOwnerV1::Scripted(device)) => {
+                driver.promote_initialized_storage(device)
+            }
+            #[cfg(test)]
+            (_, device) => Err(SdmaTransitionFailureV1::ProcessTeardown {
+                detail: SdmaOwnerDiagnosticV1::Static("initialized-storage owner/driver mismatch"),
+                custody: scripted_mismatch_device(device, "initialized storage"),
             }),
         }
     }
@@ -2263,6 +2331,9 @@ mod scripted {
         },
         Promote(ScriptedFailureModeV1),
         PromotePanic,
+        PromoteInitializedStorage(ScriptedFailureModeV1),
+        InitializedStorageNotEligible(Gfx942PersistentComputeStorageIneligibilityV1),
+        InitializedStoragePanic,
         PromoteComputeReady(ScriptedFailureModeV1),
         PromoteComputeReadyForeignQueue,
         PromoteComputeReadyForeignQueueTerminal,
@@ -2481,6 +2552,7 @@ mod scripted {
         ledger: Rc<RefCell<ScriptedCustodyLedgerV1>>,
         promotion_custody: Option<ScriptedBufferOwnerV1>,
         demotion_custody: Option<ScriptedDeviceOwnerV1>,
+        storage_conversion_custody: Option<ScriptedDeviceOwnerV1>,
         recycle_custody: Option<ScriptedBufferOwnerV1>,
         wait_custody: Option<ScriptedSubmissionOwnerV1>,
         retirement_custody: Option<ScriptedCompletedOwnerV1>,
@@ -2506,6 +2578,7 @@ mod scripted {
                 ledger: Rc::new(RefCell::new(ScriptedCustodyLedgerV1::default())),
                 promotion_custody: None,
                 demotion_custody: None,
+                storage_conversion_custody: None,
                 recycle_custody: None,
                 wait_custody: None,
                 retirement_custody: None,
@@ -2528,6 +2601,12 @@ mod scripted {
 
         pub(crate) fn promotion_custody(&self) -> Option<&ScriptedBufferOwnerV1> {
             self.promotion_custody.as_ref()
+        }
+
+        pub(crate) fn storage_conversion_custody(&self) -> Option<u64> {
+            self.storage_conversion_custody
+                .as_ref()
+                .map(ScriptedDeviceOwnerV1::owner_id)
         }
 
         pub(crate) fn recycle_custody(&self) -> Option<&ScriptedBufferOwnerV1> {
@@ -2885,6 +2964,78 @@ mod scripted {
                         ),
                     })
                 }
+            }
+        }
+
+        pub(super) fn promote_initialized_storage(
+            &mut self,
+            device: ScriptedDeviceOwnerV1,
+        ) -> Result<
+            InitializedStorageAttemptV1,
+            SdmaTransitionFailureV1<DirectionalSdmaDeviceOwnerV1, SdmaOwnerDiagnosticV1>,
+        > {
+            if self.storage_conversion_custody.is_some() {
+                std::process::abort();
+            }
+            self.storage_conversion_custody = Some(device);
+            let owned = self.owns_device(self.storage_conversion_custody.as_ref().unwrap());
+            let outcome = if owned
+                && matches!(
+                    self.steps.front(),
+                    Some(
+                        ScriptedSdmaStepV1::PromoteInitializedStorage(_)
+                            | ScriptedSdmaStepV1::InitializedStorageNotEligible(_)
+                            | ScriptedSdmaStepV1::InitializedStoragePanic
+                    )
+                ) {
+                self.steps.pop_front().unwrap()
+            } else {
+                // Scripted byte storage alone is not an initialization witness.
+                ScriptedSdmaStepV1::InitializedStorageNotEligible(
+                    Gfx942PersistentComputeStorageIneligibilityV1::IncompleteInitialization,
+                )
+            };
+            if matches!(outcome, ScriptedSdmaStepV1::InitializedStoragePanic) {
+                std::panic::panic_any("scripted initialized-storage conversion panic");
+            }
+            let device = DirectionalSdmaDeviceOwnerV1::Scripted(
+                self.storage_conversion_custody.take().unwrap(),
+            );
+            if !owned
+                || matches!(
+                    outcome,
+                    ScriptedSdmaStepV1::PromoteInitializedStorage(
+                        ScriptedFailureModeV1::ProcessTeardown
+                    )
+                )
+            {
+                return Err(SdmaTransitionFailureV1::ProcessTeardown {
+                    detail: SdmaOwnerDiagnosticV1::Static(
+                        "scripted initialized-storage terminal failure",
+                    ),
+                    custody: SdmaTerminalCustodyV1::Scripted(ScriptedTerminalCustodyV1::Device(
+                        device,
+                    )),
+                });
+            }
+            match outcome {
+                ScriptedSdmaStepV1::PromoteInitializedStorage(ScriptedFailureModeV1::Success) => {
+                    Ok(InitializedStorageAttemptV1::Promoted(
+                        InitializedStorageOwnerV1::Scripted(device),
+                    ))
+                }
+                ScriptedSdmaStepV1::PromoteInitializedStorage(ScriptedFailureModeV1::Retryable) => {
+                    Err(SdmaTransitionFailureV1::Retryable {
+                        detail: SdmaOwnerDiagnosticV1::Static(
+                            "scripted initialized-storage retryable failure",
+                        ),
+                        custody: device,
+                    })
+                }
+                ScriptedSdmaStepV1::InitializedStorageNotEligible(reason) => {
+                    Ok(InitializedStorageAttemptV1::NotEligible { device, reason })
+                }
+                _ => unreachable!("bounded storage conversion script"),
             }
         }
 

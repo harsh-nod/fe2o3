@@ -5,6 +5,8 @@
 use super::*;
 use crate::persistent_compute::{
     Gfx942PersistentComputeInitializedStorageV1 as InitializedStorage,
+    Gfx942PersistentComputeStorageAttemptV1 as Attempt,
+    Gfx942PersistentComputeStorageIneligibilityV1 as Ineligible,
     Gfx942PersistentComputeStoragePromotionCustodyV1 as Custody,
     Gfx942PersistentComputeStoragePromotionFailureV1 as Failure,
     Gfx942PersistentComputeStoragePromotionTerminalCustodyV1 as Root,
@@ -16,7 +18,7 @@ pub(super) trait InitializedStorageContextV1 {
     fn preflight(
         &self,
         allocation: &Gfx942DirectionalQueuePersistentAllocationV1,
-    ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
+    ) -> Result<Option<Ineligible>, ComputeAqlQueueSessionErrorV1>;
     fn root(&mut self) -> &mut Option<Root>;
     fn loan(&mut self) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1>;
     fn currentness(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1>;
@@ -53,21 +55,49 @@ pub(super) fn promote_in_place<C: InitializedStorageContextV1>(
     context: &mut C,
     allocation: Gfx942DirectionalQueuePersistentAllocationV1,
 ) -> Result<InitializedStorage, Failure> {
+    match try_promote_in_place(context, allocation)? {
+        Attempt::Promoted(ready) => Ok(ready),
+        Attempt::NotEligible { allocation, .. } => Err(failure(
+            ComputeAqlQueueSessionErrorV1::Contract(
+                "storage is not fully initialized over its physical extent",
+            ),
+            allocation,
+            false,
+        )),
+    }
+}
+
+#[allow(clippy::result_large_err)]
+pub(super) fn try_promote_in_place<C: InitializedStorageContextV1>(
+    context: &mut C,
+    allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+) -> Result<Attempt, Failure> {
     if allocation.attachment.queue != context.owner() {
         return Err(Failure {
             error: ComputeAqlQueueSessionErrorV1::Contract("foreign initialized storage owner"),
             custody: Custody::ForeignQueue(allocation),
         });
     }
-    if let Err(error) = context.preflight(&allocation) {
-        return Err(failure(error, allocation, context.is_terminal()));
-    }
+    let ineligible = match context.preflight(&allocation) {
+        Ok(ineligible) => ineligible,
+        Err(error) => return Err(failure(error, allocation, context.is_terminal())),
+    };
     if context.root().is_some() {
         return Err(failure(
             ComputeAqlQueueSessionErrorV1::Contract("unfinished initialized storage promotion"),
             allocation,
             context.is_terminal(),
         ));
+    }
+    if context.is_terminal() {
+        return Err(failure(
+            ComputeAqlQueueSessionErrorV1::Contract("terminal initialized storage promotion"),
+            allocation,
+            true,
+        ));
+    }
+    if let Some(reason) = ineligible {
+        return Ok(Attempt::NotEligible { allocation, reason });
     }
     *context.root() = Some(Root { allocation });
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -101,7 +131,7 @@ pub(super) fn promote_in_place<C: InitializedStorageContextV1>(
         })
     }));
     match result {
-        Ok(Ok(ready)) => Ok(ready),
+        Ok(Ok(ready)) => Ok(Attempt::Promoted(ready)),
         Ok(Err(error)) => {
             let terminal = context.is_terminal();
             let allocation = context
@@ -122,7 +152,7 @@ pub(super) fn admit_allocation(
     allocation: &Gfx942DirectionalQueuePersistentAllocationV1,
     compute_queue: QueueKeyV1,
     attachment_current: bool,
-) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+) -> Result<Option<Ineligible>, ComputeAqlQueueSessionErrorV1> {
     if allocation.attachment.queue != compute_queue || !attachment_current {
         return Err(ComputeAqlQueueSessionErrorV1::Contract(
             "initialized storage requires the exact primary compute and SDMA queue pair",
@@ -154,8 +184,19 @@ impl InitializedStorageContextV1 for ComputeAqlQueueSessionV1 {
     fn preflight(
         &self,
         allocation: &Gfx942DirectionalQueuePersistentAllocationV1,
-    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+    ) -> Result<Option<Ineligible>, ComputeAqlQueueSessionErrorV1> {
         self.require_sdma_enabled()?;
+        let engine = self
+            .engine
+            .as_ref()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))?;
+        if !engine.backend.foundation_in_engine {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "live-queue model foundation was already restored",
+            ));
+        }
         admit_allocation(
             allocation,
             self.compute_lane_session,

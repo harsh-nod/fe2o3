@@ -108,6 +108,7 @@ impl KfdRuntimeBackendV1 {
                 sdma_backed: self.native_available,
                 sdma_initialized,
                 sdma_shadow_dirty: false,
+                persistent_storage_restore: None,
                 #[cfg(test)]
                 scripted_three_binding_replay: false,
             },

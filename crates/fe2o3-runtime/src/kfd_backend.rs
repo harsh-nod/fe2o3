@@ -161,12 +161,14 @@ pub use qualification_drain_capture::{
     KfdDrainCaptureCopyObservationV1, KfdDrainCaptureCopyPhaseV1,
     KfdDrainCaptureCustodyObservationV1, KfdDrainCaptureObservationFailureV1,
 };
+mod initialized_storage;
 mod kfd_backend_sdma_seam;
 mod sdma_allocation;
 mod sdma_demotion;
 mod sdma_host_read;
 mod sdma_host_write;
 mod sdma_promotion;
+use initialized_storage::InitializedStorageOwnerV1;
 mod sdma_recycle;
 mod sdma_synchronous;
 use compute_dispatch::*;
@@ -715,6 +717,7 @@ struct AllocationRecordV1 {
     sdma_backed: bool,
     sdma_initialized: bool,
     sdma_shadow_dirty: bool,
+    persistent_storage_restore: Option<ThreeBindingPersistentRestoreShellV1>,
     #[cfg(test)]
     scripted_three_binding_replay: bool,
 }
@@ -730,6 +733,7 @@ enum KfdRuntimeSdmaStorageV1 {
     Synthetic,
     Host(SdmaBufferOwnerV1),
     Device(Box<DirectionalSdmaDeviceOwnerV1>),
+    InitializedStorage(Box<InitializedStorageOwnerV1>),
     PersistentReplay(Box<Gfx942PersistentComputeInputV1>),
     H2dReady(Box<PersistentComputeReadyStorageV1>),
     ComputeInFlight(u64),
@@ -749,6 +753,8 @@ enum KfdRuntimePersistentComputeInputV1 {
     ScriptedReady(PersistentComputeReadyStorageV1),
     #[cfg(test)]
     ScriptedReplay(DirectionalSdmaDeviceOwnerV1),
+    #[cfg(test)]
+    ScriptedStorage(DirectionalSdmaDeviceOwnerV1),
 }
 
 type ThreeBindingPersistentInputRosterV1 = (
@@ -756,10 +762,12 @@ type ThreeBindingPersistentInputRosterV1 = (
     [Option<KfdRuntimeReadyPromotionPerformanceV1>; 3],
 );
 
+#[derive(Debug)]
 struct ThreeBindingPersistentRestoreShellV1 {
     ready: Option<Box<MaybeUninit<PersistentComputeReadyStorageV1>>>,
     device: Option<Box<MaybeUninit<DirectionalSdmaDeviceOwnerV1>>>,
     replay: Option<Box<MaybeUninit<Gfx942PersistentComputeInputV1>>>,
+    initialized: Option<Box<MaybeUninit<InitializedStorageOwnerV1>>>,
 }
 
 fn try_uninit_box_v1<T>() -> Result<Box<MaybeUninit<T>>, ()> {
@@ -796,7 +804,7 @@ impl KfdRuntimeSdmaStorageV1 {
             (self, kind),
             (Self::Host(_), RuntimeMemoryKindV1::HostVisible)
                 | (
-                    Self::Device(_) | Self::PersistentReplay(_),
+                    Self::Device(_) | Self::PersistentReplay(_) | Self::InitializedStorage(_),
                     RuntimeMemoryKindV1::DeviceLocal
                 )
         )
@@ -917,6 +925,8 @@ enum KfdRuntimeTerminalSdmaCustodyV1 {
     Synchronous(sdma_synchronous::SynchronousSdmaCustodyV1),
     Buffer(SdmaBufferOwnerV1),
     Device(DirectionalSdmaDeviceOwnerV1),
+    InitializedStorage(InitializedStorageOwnerV1),
+    StoragePromotion(fe2o3_kfd::Gfx942PersistentComputeStoragePromotionTerminalCustodyV1),
     Promotion(Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1),
     Demotion(Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1),
     SingleSubmission(Gfx942DirectionalPersistentSdmaTerminalCustodyV1),
@@ -939,6 +949,7 @@ enum KfdRuntimeTerminalSdmaCustodyV1 {
     ThreeBindingPersistentComputeRecycled(Gfx942RecycledThreeBindingPersistentComputeDispatchV1),
     ThreeBindingPersistentComputeCompleted(Gfx942ThreeBindingPersistentComputeCompletedV1),
     PersistentComputeInput(Gfx942PersistentComputeInputV1),
+    PersistentRuntimeInput(KfdRuntimePersistentComputeInputV1),
     ThreeBindingPersistentInputs([KfdRuntimePersistentComputeInputV1; 3]),
     Pair {
         device: DirectionalSdmaDeviceOwnerV1,
@@ -3316,6 +3327,9 @@ impl KfdRuntimeBackendV1 {
                 kfd_backend_sdma_seam::NativeDirectionalSdmaTerminalCustodyV1::ReadyPromotion(
                     custody,
                 ) => KfdRuntimeTerminalSdmaCustodyV1::ReadyPromotion(custody),
+                kfd_backend_sdma_seam::NativeDirectionalSdmaTerminalCustodyV1::StoragePromotion(
+                    custody,
+                ) => KfdRuntimeTerminalSdmaCustodyV1::StoragePromotion(custody),
             },
             kfd_backend_sdma_seam::SdmaTerminalCustodyV1::NativeSameDevice(custody) => {
                 KfdRuntimeTerminalSdmaCustodyV1::SameDevice(custody)
@@ -4235,7 +4249,9 @@ impl KfdRuntimeBackendV1 {
         let is_ready = self.allocations.get(&allocation).is_some_and(|record| {
             matches!(
                 record.sdma_storage,
-                KfdRuntimeSdmaStorageV1::H2dReady(_) | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
+                KfdRuntimeSdmaStorageV1::H2dReady(_)
+                    | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
+                    | KfdRuntimeSdmaStorageV1::InitializedStorage(_)
             )
         });
         if !is_ready {
@@ -4253,6 +4269,7 @@ impl KfdRuntimeBackendV1 {
             KfdRuntimeSdmaStorageV1::PersistentReplay(input) => {
                 DirectionalSdmaDeviceOwnerV1::Native(input.into_allocation())
             }
+            KfdRuntimeSdmaStorageV1::InitializedStorage(ready) => ready.normalize(),
             _ => unreachable!("preflighted persistent-compute storage remains normalizable"),
         };
         let slot_matches = self.allocations.get(&allocation).is_some_and(|record| {
@@ -4316,17 +4333,41 @@ impl KfdRuntimeBackendV1 {
         ),
         RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
     > {
+        let restore = if source == PersistentFullRangeComputeSourceV1::InitializedStorage {
+            Some(self.prepare_persistent_restore_shell_v1(
+                PersistentFullRangeComputeAdmissionV1 {
+                    allocation,
+                    access: RuntimeAccessV1::ReadWrite,
+                    source,
+                },
+            )?)
+        } else {
+            None
+        };
         let record = self.allocations.get_mut(&allocation).ok_or_else(|| {
             Self::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
                 "persistent-compute allocation disappeared",
             )
         })?;
+        if record.persistent_storage_restore.is_some() {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "persistent storage restoration is already pending",
+            ));
+        }
         let storage = core::mem::replace(
             &mut record.sdma_storage,
             KfdRuntimeSdmaStorageV1::ComputeInFlight(submission),
         );
         match (source, storage) {
+            (
+                PersistentFullRangeComputeSourceV1::InitializedStorage,
+                KfdRuntimeSdmaStorageV1::InitializedStorage(ready),
+            ) => {
+                record.persistent_storage_restore = restore;
+                Ok((ready.into_input(), None))
+            }
             (
                 PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
                 KfdRuntimeSdmaStorageV1::H2dReady(ready),
@@ -4384,6 +4425,10 @@ impl KfdRuntimeBackendV1 {
                 .get(&admission.allocation)
                 .is_some_and(|record| match (admission.source, &record.sdma_storage) {
                     (
+                        PersistentFullRangeComputeSourceV1::InitializedStorage,
+                        KfdRuntimeSdmaStorageV1::InitializedStorage(_),
+                    ) => true,
+                    (
                         PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
                         KfdRuntimeSdmaStorageV1::H2dReady(_),
                     ) => true,
@@ -4415,6 +4460,10 @@ impl KfdRuntimeBackendV1 {
                 KfdRuntimeSdmaStorageV1::ComputeInFlight(submission),
             );
             let (input, promotion) = match (admission.source, storage) {
+                (
+                    PersistentFullRangeComputeSourceV1::InitializedStorage,
+                    KfdRuntimeSdmaStorageV1::InitializedStorage(ready),
+                ) => (ready.into_input(), None),
                 (
                     PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
                     KfdRuntimeSdmaStorageV1::H2dReady(ready),
@@ -4469,77 +4518,98 @@ impl KfdRuntimeBackendV1 {
         [ThreeBindingPersistentRestoreShellV1; 3],
         RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
     > {
-        let prepare = |admission: PersistentFullRangeComputeAdmissionV1| {
-            let record = self.allocations.get(&admission.allocation).ok_or_else(|| {
-                Self::rejected(
-                    KfdRuntimeBackendErrorKindV1::UnknownHandle,
-                    "three-binding persistent restore allocation disappeared",
-                )
-            })?;
-            let shell = match record.sdma_storage {
-                KfdRuntimeSdmaStorageV1::H2dReady(_) => ThreeBindingPersistentRestoreShellV1 {
-                    ready: Some(try_uninit_box_v1().map_err(|_| {
-                        Self::capacity("KFD three-binding ready restore-shell allocation failed")
+        Ok([
+            self.prepare_persistent_restore_shell_v1(admissions[0])?,
+            self.prepare_persistent_restore_shell_v1(admissions[1])?,
+            self.prepare_persistent_restore_shell_v1(admissions[2])?,
+        ])
+    }
+
+    fn prepare_persistent_restore_shell_v1(
+        &self,
+        admission: PersistentFullRangeComputeAdmissionV1,
+    ) -> Result<
+        ThreeBindingPersistentRestoreShellV1,
+        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+    > {
+        let record = self.allocations.get(&admission.allocation).ok_or_else(|| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "three-binding persistent restore allocation disappeared",
+            )
+        })?;
+        let shell = match record.sdma_storage {
+            KfdRuntimeSdmaStorageV1::H2dReady(_) => ThreeBindingPersistentRestoreShellV1 {
+                initialized: None,
+                ready: Some(try_uninit_box_v1().map_err(|_| {
+                    Self::capacity("KFD three-binding ready restore-shell allocation failed")
+                })?),
+                #[cfg(test)]
+                device: (admission.access == RuntimeAccessV1::Write)
+                    .then(try_uninit_box_v1)
+                    .transpose()
+                    .map_err(|_| {
+                        Self::capacity(
+                            "KFD three-binding scripted device restore-shell allocation failed",
+                        )
+                    })?,
+                #[cfg(not(test))]
+                device: None,
+                replay: (admission.access == RuntimeAccessV1::Write)
+                    .then(try_uninit_box_v1)
+                    .transpose()
+                    .map_err(|_| {
+                        Self::capacity(
+                            "KFD three-binding output replay restore-shell allocation failed",
+                        )
+                    })?,
+            },
+            KfdRuntimeSdmaStorageV1::Device(_) => ThreeBindingPersistentRestoreShellV1 {
+                initialized: None,
+                ready: None,
+                device: Some(try_uninit_box_v1().map_err(|_| {
+                    Self::capacity("KFD three-binding device restore-shell allocation failed")
+                })?),
+                replay: (admission.access == RuntimeAccessV1::Write)
+                    .then(try_uninit_box_v1)
+                    .transpose()
+                    .map_err(|_| {
+                        Self::capacity("KFD three-binding replay restore-shell allocation failed")
+                    })?,
+            },
+            KfdRuntimeSdmaStorageV1::PersistentReplay(_) => ThreeBindingPersistentRestoreShellV1 {
+                initialized: None,
+                ready: None,
+                device: None,
+                replay: Some(try_uninit_box_v1().map_err(|_| {
+                    Self::capacity("KFD three-binding replay restore-shell allocation failed")
+                })?),
+            },
+            KfdRuntimeSdmaStorageV1::InitializedStorage(_) => {
+                ThreeBindingPersistentRestoreShellV1 {
+                    initialized: Some(try_uninit_box_v1().map_err(|_| {
+                        Self::capacity("KFD initialized-storage restore-shell allocation failed")
+                    })?),
+                    ready: None,
+                    replay: Some(try_uninit_box_v1().map_err(|_| {
+                        Self::capacity("KFD storage-origin replay restore-shell allocation failed")
                     })?),
                     #[cfg(test)]
-                    device: (admission.access == RuntimeAccessV1::Write)
-                        .then(try_uninit_box_v1)
-                        .transpose()
-                        .map_err(|_| {
-                            Self::capacity(
-                                "KFD three-binding scripted device restore-shell allocation failed",
-                            )
-                        })?,
+                    device: Some(try_uninit_box_v1().map_err(|_| {
+                        Self::capacity("KFD scripted storage restore-shell allocation failed")
+                    })?),
                     #[cfg(not(test))]
                     device: None,
-                    replay: (admission.access == RuntimeAccessV1::Write)
-                        .then(try_uninit_box_v1)
-                        .transpose()
-                        .map_err(|_| {
-                            Self::capacity(
-                                "KFD three-binding output replay restore-shell allocation failed",
-                            )
-                        })?,
-                },
-                KfdRuntimeSdmaStorageV1::Device(_) => ThreeBindingPersistentRestoreShellV1 {
-                    ready: None,
-                    device: Some(try_uninit_box_v1().map_err(|_| {
-                        Self::capacity("KFD three-binding device restore-shell allocation failed")
-                    })?),
-                    replay: (admission.access == RuntimeAccessV1::Write)
-                        .then(try_uninit_box_v1)
-                        .transpose()
-                        .map_err(|_| {
-                            Self::capacity(
-                                "KFD three-binding replay restore-shell allocation failed",
-                            )
-                        })?,
-                },
-                KfdRuntimeSdmaStorageV1::PersistentReplay(_) => {
-                    ThreeBindingPersistentRestoreShellV1 {
-                        ready: None,
-                        device: None,
-                        replay: Some(try_uninit_box_v1().map_err(|_| {
-                            Self::capacity(
-                                "KFD three-binding replay restore-shell allocation failed",
-                            )
-                        })?),
-                    }
                 }
-                _ => {
-                    return Err(Self::rejected(
-                        KfdRuntimeBackendErrorKindV1::Busy,
-                        "three-binding persistent restore storage changed before extraction",
-                    ));
-                }
-            };
-            Ok(shell)
+            }
+            _ => {
+                return Err(Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Busy,
+                    "three-binding persistent restore storage changed before extraction",
+                ));
+            }
         };
-        Ok([
-            prepare(admissions[0])?,
-            prepare(admissions[1])?,
-            prepare(admissions[2])?,
-        ])
+        Ok(shell)
     }
 
     fn restore_three_binding_persistent_inputs_v1(
@@ -4570,6 +4640,28 @@ impl KfdRuntimeBackendV1 {
                 .zip(&shells)
                 .all(
                     |((admission, input), shell)| match (admission.source, input) {
+                        (
+                            PersistentFullRangeComputeSourceV1::InitializedStorage,
+                            KfdRuntimePersistentComputeInputV1::Native(
+                                Gfx942PersistentComputeInputV1::InitializedStorage(_),
+                            ),
+                        ) => shell.initialized.is_some(),
+                        (
+                            PersistentFullRangeComputeSourceV1::InitializedStorage,
+                            KfdRuntimePersistentComputeInputV1::Native(
+                                Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_),
+                            ),
+                        ) => shell.replay.is_some(),
+                        #[cfg(test)]
+                        (
+                            PersistentFullRangeComputeSourceV1::InitializedStorage,
+                            KfdRuntimePersistentComputeInputV1::ScriptedStorage(_),
+                        ) => shell.initialized.is_some(),
+                        #[cfg(test)]
+                        (
+                            PersistentFullRangeComputeSourceV1::InitializedStorage,
+                            KfdRuntimePersistentComputeInputV1::ScriptedReplay(_),
+                        ) => shell.device.is_some(),
                         (
                             PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
                             KfdRuntimePersistentComputeInputV1::Native(
@@ -4665,8 +4757,22 @@ impl KfdRuntimeBackendV1 {
                     ))
                 }
                 KfdRuntimePersistentComputeInputV1::Native(
-                    Gfx942PersistentComputeInputV1::InitializedStorage(_),
-                ) => unreachable!("storage-origin input is rejected by the whole-roster preflight"),
+                    Gfx942PersistentComputeInputV1::InitializedStorage(ready),
+                ) => KfdRuntimeSdmaStorageV1::InitializedStorage(fill_restore_shell_v1(
+                    shell
+                        .initialized
+                        .expect("storage source preallocated initialized shell"),
+                    InitializedStorageOwnerV1::Native(ready),
+                )),
+                #[cfg(test)]
+                KfdRuntimePersistentComputeInputV1::ScriptedStorage(device) => {
+                    KfdRuntimeSdmaStorageV1::InitializedStorage(fill_restore_shell_v1(
+                        shell
+                            .initialized
+                            .expect("scripted storage preallocated initialized shell"),
+                        InitializedStorageOwnerV1::Scripted(device),
+                    ))
+                }
                 #[cfg(test)]
                 KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => {
                     let shell = shell
@@ -4731,6 +4837,18 @@ impl KfdRuntimeBackendV1 {
         input: Gfx942PersistentComputeInputV1,
         promotion: Option<KfdRuntimeReadyPromotionPerformanceV1>,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if matches!(input, Gfx942PersistentComputeInputV1::InitializedStorage(_))
+            || self
+                .allocations
+                .get(&allocation)
+                .is_some_and(|record| record.persistent_storage_restore.is_some())
+        {
+            return self.restore_initialized_storage_input_v1(
+                allocation,
+                submission,
+                KfdRuntimePersistentComputeInputV1::Native(input),
+            );
+        }
         match input {
             Gfx942PersistentComputeInputV1::Initialized(ready) => self
                 .restore_h2d_ready_after_compute_rejection_v1(
@@ -4755,13 +4873,8 @@ impl KfdRuntimeBackendV1 {
                     submission,
                     KfdRuntimeSdmaStorageV1::PersistentReplay(Box::new(input)),
                 ),
-            input @ Gfx942PersistentComputeInputV1::InitializedStorage(_) => {
-                self.retain_terminal_sdma_custody_v1(
-                    KfdRuntimeTerminalSdmaCustodyV1::PersistentComputeInput(input),
-                );
-                Err(self.terminal_error(
-                    "storage-origin compute input requires the deferred native conversion adapter",
-                ))
+            Gfx942PersistentComputeInputV1::InitializedStorage(_) => {
+                unreachable!("storage-origin restoration handled above")
             }
         }
     }
@@ -4804,6 +4917,24 @@ impl KfdRuntimeBackendV1 {
         device: DirectionalSdmaDeviceOwnerV1,
         effect: Gfx942PersistentComputeEffectV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if self
+            .allocations
+            .get(&allocation)
+            .is_some_and(|record| record.persistent_storage_restore.is_some())
+        {
+            self.restore_initialized_storage_input_v1(
+                allocation,
+                submission,
+                KfdRuntimePersistentComputeInputV1::ScriptedReplay(device),
+            )?;
+            apply_persistent_compute_effect_v1(
+                self.allocations
+                    .get_mut(&allocation)
+                    .expect("restored storage-origin completion"),
+                effect,
+            );
+            return Ok(());
+        }
         let slot_matches = self.allocations.get(&allocation).is_some_and(|record| {
             matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::ComputeInFlight(actual) if actual == submission)
         });
@@ -4881,6 +5012,7 @@ impl KfdRuntimeBackendV1 {
             KfdRuntimeSdmaStorageV1::Synthetic
             | KfdRuntimeSdmaStorageV1::H2dReady(_)
             | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
+            | KfdRuntimeSdmaStorageV1::InitializedStorage(_)
             | KfdRuntimeSdmaStorageV1::ComputeInFlight(_)
             | KfdRuntimeSdmaStorageV1::InFlight(_) => {
                 unreachable!("preflighted releasable SDMA storage")
@@ -13321,6 +13453,8 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
                     allocation, input, ..
                 } => {
                     match *input {
+                        input @ KfdRuntimePersistentComputeInputV1::ScriptedStorage(_) => self
+                            .restore_initialized_storage_input_v1(allocation, submission, input)?,
                         KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => self
                             .restore_h2d_ready_after_compute_rejection_v1(
                                 allocation, submission, ready,
@@ -13758,6 +13892,8 @@ mod tests {
     mod cooperative_sdma_tests;
     #[cfg(feature = "hardware-diagnostic")]
     mod directional_wait_diagnostic_tests;
+    #[path = "initialized_storage_tests.rs"]
+    mod initialized_storage_tests;
     mod native_xgmi_creation_tests;
     mod native_xgmi_retirement_tests;
     mod sdma_allocation_tests;
@@ -14048,6 +14184,7 @@ mod tests {
             sdma_backed: true,
             sdma_initialized: true,
             sdma_shadow_dirty: false,
+            persistent_storage_restore: None,
             #[cfg(test)]
             #[cfg(test)]
             #[cfg(test)]
@@ -14118,6 +14255,7 @@ mod tests {
             sdma_backed: true,
             sdma_initialized: true,
             sdma_shadow_dirty: false,
+            persistent_storage_restore: None,
             #[cfg(test)]
             scripted_three_binding_replay: false,
         };
@@ -14353,6 +14491,7 @@ mod tests {
         sdma_backed: bool,
         sdma_initialized: bool,
         sdma_shadow_dirty: bool,
+        storage_restore_pending: bool,
         scripted_three_binding_replay: bool,
         storage: ThreeBindingPrelaunchStorageV1,
     }
@@ -14398,6 +14537,7 @@ mod tests {
                 sdma_backed: record.sdma_backed,
                 sdma_initialized: record.sdma_initialized,
                 sdma_shadow_dirty: record.sdma_shadow_dirty,
+                storage_restore_pending: record.persistent_storage_restore.is_some(),
                 scripted_three_binding_replay: record.scripted_three_binding_replay,
                 storage,
             }
@@ -14580,6 +14720,7 @@ mod tests {
                     sdma_backed: true,
                     sdma_initialized: true,
                     sdma_shadow_dirty: false,
+                    persistent_storage_restore: None,
                     #[cfg(test)]
                     scripted_three_binding_replay: false,
                 },
@@ -14624,6 +14765,7 @@ mod tests {
             sdma_backed: true,
             sdma_initialized: true,
             sdma_shadow_dirty: false,
+            persistent_storage_restore: None,
             #[cfg(test)]
             scripted_three_binding_replay: false,
         };
@@ -15879,12 +16021,19 @@ mod tests {
             accesses: exact_accesses,
         };
         for _ in 0..2 {
-            assert!(matches!(
-                context.launch(stream, &kernel, &exact_arguments, geometry, &[]),
-                Err(crate::RuntimeErrorV1::BackendRejected(error))
-                    if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
-                        && error.detail().contains("exact R/R/W admission")
-            ));
+            // Raw storage can be admitted for deferred native conversion, but
+            // bytes alone cannot grant publication when conversion is refused.
+            let mut submission = context
+                .launch(stream, &kernel, &exact_arguments, geometry, &[])
+                .unwrap();
+            assert_eq!(
+                context
+                    .wait(&mut submission, Duration::from_secs(1))
+                    .unwrap(),
+                crate::RuntimePollV1::Failed { code: -1 }
+            );
+            assert!(context.backend().last_launch_performance_v1().is_none());
+            context.release_submission(submission).unwrap();
             assert_eq!(
                 three_binding_prelaunch_snapshot_v1(context.backend(), backend_allocations,),
                 unwitnessed_c_snapshot
@@ -15929,12 +16078,17 @@ mod tests {
             };
             let unwitnessed_input_snapshot =
                 three_binding_prelaunch_snapshot_v1(context.backend(), backend_allocations);
-            assert!(matches!(
-                context.launch(stream, &kernel, &exact_arguments, geometry, &[]),
-                Err(crate::RuntimeErrorV1::BackendRejected(error))
-                    if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
-                        && error.detail().contains("exact R/R/W admission")
-            ));
+            let mut submission = context
+                .launch(stream, &kernel, &exact_arguments, geometry, &[])
+                .unwrap();
+            assert_eq!(
+                context
+                    .wait(&mut submission, Duration::from_secs(1))
+                    .unwrap(),
+                crate::RuntimePollV1::Failed { code: -1 }
+            );
+            assert!(context.backend().last_launch_performance_v1().is_none());
+            context.release_submission(submission).unwrap();
             assert_eq!(
                 three_binding_prelaunch_snapshot_v1(context.backend(), backend_allocations),
                 unwitnessed_input_snapshot
@@ -16076,7 +16230,7 @@ mod tests {
 
     #[cfg(feature = "hardware-qualification")]
     #[test]
-    fn r57_n3_qualification_preflight_rejects_uninitialized_c_before_authority() {
+    fn r57_n3_qualification_refuses_unwitnessed_c_before_authority() {
         let byte_len = 64_u64;
         let (mut context, stream, allocations, backend_allocations) =
             scripted_three_binding_context_v1(byte_len);
@@ -16115,13 +16269,18 @@ mod tests {
             workgroup: [64, 1, 1],
             dynamic_shared_bytes: 0,
         };
-        assert!(matches!(
-            context.launch(stream, &kernel, &arguments, geometry, &[]),
-            Err(crate::RuntimeErrorV1::BackendRejected(error))
-                if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
-                    && error.detail().contains("exact R/R/W admission")
-        ));
+        let mut submission = context
+            .launch(stream, &kernel, &arguments, geometry, &[])
+            .unwrap();
+        assert_eq!(
+            context
+                .wait(&mut submission, Duration::from_secs(1))
+                .unwrap(),
+            crate::RuntimePollV1::Failed { code: -1 }
+        );
         assert_eq!(observation.authorization_calls_v1(), 0);
+        assert!(context.backend().last_launch_performance_v1().is_none());
+        context.release_submission(submission).unwrap();
         assert_eq!(
             three_binding_prelaunch_snapshot_v1(context.backend(), backend_allocations),
             before
@@ -24129,6 +24288,7 @@ mod tests {
             sdma_backed: true,
             sdma_initialized: false,
             sdma_shadow_dirty: false,
+            persistent_storage_restore: None,
             #[cfg(test)]
             scripted_three_binding_replay: false,
         };
@@ -24192,6 +24352,7 @@ mod tests {
             sdma_backed: true,
             sdma_initialized: true,
             sdma_shadow_dirty: false,
+            persistent_storage_restore: None,
             #[cfg(test)]
             scripted_three_binding_replay: false,
         };
@@ -25667,6 +25828,7 @@ mod tests {
                 sdma_backed: false,
                 sdma_initialized: false,
                 sdma_shadow_dirty: false,
+                persistent_storage_restore: None,
                 #[cfg(test)]
                 scripted_three_binding_replay: false,
             },

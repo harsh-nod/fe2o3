@@ -330,6 +330,26 @@ impl Gfx942PersistentComputeInitializedStorageV1 {
     }
 }
 
+/// An authenticated storage shape without the full-storage conversion premise.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942PersistentComputeStorageIneligibilityV1 {
+    PartialExtent,
+    IncompleteInitialization,
+}
+
+/// A clean metadata admission result. Errors, including retryable errors, are not fallback permission.
+/// `NotEligible` does not perform live currentness or mapped-memory validation;
+/// any fallback must independently validate its own native operation.
+#[derive(Debug)]
+#[must_use = "retain either the sealed input or the unchanged allocation"]
+pub enum Gfx942PersistentComputeStorageAttemptV1 {
+    Promoted(Gfx942PersistentComputeInitializedStorageV1),
+    NotEligible {
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        reason: Gfx942PersistentComputeStorageIneligibilityV1,
+    },
+}
+
 /// Original allocation custody returned by failed storage initialization admission.
 #[must_use = "retryable custody may be restored; terminal custody requires process teardown"]
 pub enum Gfx942PersistentComputeStoragePromotionCustodyV1 {

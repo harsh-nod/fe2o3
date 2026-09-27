@@ -235,10 +235,18 @@ mod enabled {
                 self.allocations[2],
             )
             .map_err(|error| error.to_string())?;
+            // Fresh DeviceLocal output is zero-initialized and can be converted.
+            // A mixed-memory roster remains invalid before final authority.
+            let invalid_arguments = Gfx942R57N3QualificationArgumentsV1::new(
+                self.allocations[0],
+                self.allocations[1],
+                self.upload,
+            )
+            .map_err(|error| error.to_string())?;
             match self.context.launch(
                 self.stream,
                 &self.kernel,
-                &first_arguments,
+                &invalid_arguments,
                 GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1,
                 &[],
             ) {
@@ -247,13 +255,13 @@ mod enabled {
                         && error.detail().contains("exact R/R/W admission") => {}
                 Err(error) => {
                     return Err(format!(
-                        "uninitialized C produced the wrong rejection: {error:?}"
+                        "mixed-memory roster produced the wrong rejection: {error:?}"
                     ));
                 }
-                Ok(_) => return Err("uninitialized C launch unexpectedly succeeded".to_owned()),
+                Ok(_) => return Err("mixed-memory roster unexpectedly succeeded".to_owned()),
             }
             if self.authority.authorization_calls_v1() != 0 {
-                return Err("uninitialized C reached final launch authority".to_owned());
+                return Err("mixed-memory roster reached final launch authority".to_owned());
             }
 
             upload_full_h2d(

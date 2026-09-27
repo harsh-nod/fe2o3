@@ -3,12 +3,15 @@
 
 use super::*;
 use crate::persistent_compute::{
+    Gfx942PersistentComputeStorageAttemptV1 as StorageAttempt,
+    Gfx942PersistentComputeStorageIneligibilityV1 as Ineligible,
     Gfx942PersistentComputeStoragePromotionCustodyV1 as StorageCustody,
     Gfx942PersistentComputeStoragePromotionFailureV1 as StorageFailure,
     Gfx942PersistentComputeStoragePromotionTerminalCustodyV1 as StorageRoot,
 };
 use crate::queue::live::initialized_storage::{
     InitializedStorageContextV1, admit_allocation, promote_in_place as convert,
+    try_promote_in_place as attempt,
 };
 
 struct StorageParent {
@@ -106,7 +109,7 @@ impl InitializedStorageContextV1 for StorageParent {
     fn preflight(
         &self,
         allocation: &Gfx942DirectionalQueuePersistentAllocationV1,
-    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+    ) -> Result<Option<Ineligible>, ComputeAqlQueueSessionErrorV1> {
         if self.is_terminal() || self.root.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "unavailable storage fixture",
@@ -281,6 +284,52 @@ fn initialized_storage_conversion_rejects_partial_or_gapped_coverage_without_nat
 }
 
 #[test]
+fn initialized_storage_conversion_typed_ineligibility_is_authenticated_and_effect_free() {
+    for ranges in [
+        &[(0, 2048)][..],
+        &[(2048, 2048)][..],
+        &[(0, 1024), (2048, 2048)][..],
+    ] {
+        let mut f = StorageParent::new();
+        let allocation = f.allocation(ranges);
+        let before = allocation.owner.ownership_snapshot_for_test_v1();
+        let attachment = allocation.attachment;
+        let StorageAttempt::NotEligible { allocation, reason } =
+            attempt(&mut f, allocation).unwrap()
+        else {
+            panic!("incomplete coverage is not ready");
+        };
+        assert_eq!(reason, Ineligible::IncompleteInitialization);
+        assert_eq!(allocation.attachment, attachment);
+        assert_eq!(allocation.owner.ownership_snapshot_for_test_v1(), before);
+        assert!(f.root.is_none());
+        assert_eq!(f.currentness_calls, 0);
+        assert!(f.copy.promotion.base.calls.is_empty());
+        f.release(allocation);
+    }
+
+    let mut f = StorageParent::new();
+    let mut buffer = f.copy.promotion.buffer(4096);
+    buffer.set_logical_bytes(2048);
+    let allocation = super::super::promote_in_place(&mut f.copy.promotion, buffer)
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    let before = allocation.owner.ownership_snapshot_for_test_v1();
+    f.copy.promotion.base.calls.clear();
+    let StorageAttempt::NotEligible { allocation, reason } = attempt(&mut f, allocation).unwrap()
+    else {
+        panic!("a legitimate padded allocation is not a whole-storage input");
+    };
+    assert_eq!(reason, Ineligible::PartialExtent);
+    assert_eq!(allocation.byte_len(), 2048);
+    assert_eq!(allocation.physical_byte_len(), 4096);
+    assert_eq!(allocation.owner.ownership_snapshot_for_test_v1(), before);
+    assert!(f.root.is_none());
+    assert_eq!(f.currentness_calls, 0);
+    assert!(f.copy.promotion.base.calls.is_empty());
+    f.release(allocation);
+}
+
+#[test]
 fn initialized_storage_conversion_opening_failure_preserves_original_owner() {
     for fault in [Fault::Error, Fault::Panic] {
         let mut f = StorageParent::new();
@@ -326,11 +375,11 @@ fn initialized_storage_conversion_public_adapter_preserves_retry_and_existing_ro
     assert_eq!(allocation.owner.ownership_snapshot_for_test_v1(), before);
     assert!(session.initialized_storage_promotion.is_none());
     f.copy.promotion.base.parent.sdma = session.sdma.take();
-    let retry = f.allocation(&[(0, 4096)]);
+    let retry = f.allocation(&[(0, 2048)]);
     let retry_before = retry.owner.ownership_snapshot_for_test_v1();
     session.initialized_storage_promotion = Some(StorageRoot { allocation });
     let failure = session
-        .promote_initialized_persistent_allocation_for_compute_v1(retry)
+        .try_promote_initialized_persistent_allocation_for_compute_v1(retry)
         .unwrap_err();
     assert!(matches!(
         failure.error(),
@@ -349,6 +398,61 @@ fn initialized_storage_conversion_public_adapter_preserves_retry_and_existing_ro
             .unwrap();
     f.copy.promotion.base.outstanding = debit;
     f.copy.promotion.base.release(buffer);
+    f.release(allocation);
+}
+
+#[test]
+fn initialized_storage_conversion_incomplete_public_input_cannot_bypass_missing_engine() {
+    let mut f = StorageParent::new();
+    let allocation = f.allocation(&[(0, 2048)]);
+    let before = allocation.owner.ownership_snapshot_for_test_v1();
+    let mut session = crate::queue::live::tests::persistent_compute_cancellation_test_session(
+        f.owner(),
+        None,
+        None,
+    );
+    session.sdma = f.copy.promotion.base.parent.sdma.take();
+    let failure = session
+        .try_promote_initialized_persistent_allocation_for_compute_v1(allocation)
+        .unwrap_err();
+    assert!(matches!(
+        failure.error(),
+        ComputeAqlQueueSessionErrorV1::Contract("missing queue engine")
+    ));
+    let allocation = returned(failure, false);
+    assert_eq!(allocation.owner.ownership_snapshot_for_test_v1(), before);
+    assert!(session.initialized_storage_promotion.is_none());
+    assert!(f.copy.promotion.base.calls.is_empty());
+    assert_eq!(f.currentness_calls, 0);
+    f.copy.promotion.base.parent.sdma = session.sdma.take();
+    f.release(allocation);
+}
+
+#[test]
+fn initialized_storage_conversion_incomplete_public_input_cannot_bypass_terminal_state() {
+    let mut f = StorageParent::new();
+    let allocation = f.allocation(&[(0, 2048)]);
+    let before = allocation.owner.ownership_snapshot_for_test_v1();
+    let mut session = crate::queue::live::tests::persistent_compute_cancellation_test_session(
+        f.owner(),
+        None,
+        None,
+    );
+    session.sdma = f.copy.promotion.base.parent.sdma.take();
+    session.terminal_poisoned = true;
+    let failure = session
+        .try_promote_initialized_persistent_allocation_for_compute_v1(allocation)
+        .unwrap_err();
+    assert!(matches!(
+        failure.error(),
+        ComputeAqlQueueSessionErrorV1::Contract("terminal queue session requires process teardown")
+    ));
+    let allocation = returned(failure, true);
+    assert_eq!(allocation.owner.ownership_snapshot_for_test_v1(), before);
+    assert!(session.initialized_storage_promotion.is_none());
+    assert!(f.copy.promotion.base.calls.is_empty());
+    assert_eq!(f.currentness_calls, 0);
+    f.copy.promotion.base.parent.sdma = session.sdma.take();
     f.release(allocation);
 }
 
@@ -447,7 +551,7 @@ fn initialized_storage_conversion_requires_retirement_even_after_full_completion
     let mut f = StorageParent::new();
     let (allocation, host, frontier) = f.completed(&[(0, 4096)]).into_parts();
     f.copy.promotion.base.calls.clear();
-    let allocation = returned(convert(&mut f, allocation).unwrap_err(), false);
+    let allocation = returned(attempt(&mut f, allocation).unwrap_err(), false);
     assert_eq!(allocation.owner.retained_settled_use_count(), 1);
     assert_eq!(f.currentness_calls, 0);
     assert!(f.copy.promotion.base.calls.is_empty());
@@ -481,7 +585,7 @@ fn initialized_storage_conversion_rejects_changed_scope_without_losing_owner() {
             _ => unreachable!(),
         }
         let before = allocation.owner.ownership_snapshot_for_test_v1();
-        let failure = convert(&mut f, allocation).unwrap_err();
+        let failure = attempt(&mut f, allocation).unwrap_err();
         let mut allocation = if case == 3 {
             let StorageCustody::ForeignQueue(allocation) = failure.into_parts().1 else {
                 panic!("foreign")
@@ -511,10 +615,10 @@ fn initialized_storage_conversion_rejects_reserved_and_prepared_uses() {
         let reserved = allocation.owner.reserve(request, None).unwrap();
         if prepared {
             let usage = allocation.owner.prepare(reserved).unwrap();
-            allocation = returned(convert(&mut f, allocation).unwrap_err(), false);
+            allocation = returned(attempt(&mut f, allocation).unwrap_err(), false);
             allocation.owner.cancel_prepared(usage).unwrap();
         } else {
-            allocation = returned(convert(&mut f, allocation).unwrap_err(), false);
+            allocation = returned(attempt(&mut f, allocation).unwrap_err(), false);
             allocation.owner.cancel_reserved(reserved).unwrap();
         }
         assert_eq!(f.currentness_calls, 0);

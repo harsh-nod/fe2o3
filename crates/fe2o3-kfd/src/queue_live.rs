@@ -7641,6 +7641,19 @@ impl ComputeAqlQueueSessionV1 {
         initialized_storage::promote_in_place(self, allocation)
     }
 
+    /// Attempts full-storage conversion without conflating ineligibility with failure.
+    /// Only `Ok(NotEligible)` permits a caller's independently validated fallback.
+    #[allow(clippy::result_large_err)]
+    pub fn try_promote_initialized_persistent_allocation_for_compute_v1(
+        &mut self,
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    ) -> Result<
+        crate::persistent_compute::Gfx942PersistentComputeStorageAttemptV1,
+        crate::persistent_compute::Gfx942PersistentComputeStoragePromotionFailureV1,
+    > {
+        initialized_storage::try_promote_in_place(self, allocation)
+    }
+
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     fn admit_directional_persistent_sdma_request_v1(
         &self,

@@ -14,6 +14,24 @@ fn buffers(id: u64) -> (Gfx942SdmaBufferV1, Gfx942SdmaBufferV1) {
 }
 
 #[test]
+fn initialized_storage_corrupt_prefix_is_integrity_failure_not_clean_ineligibility() {
+    let (mut device, _) = buffers(1100);
+    let logical = device.logical_bytes;
+    let physical = device.physical_bytes();
+    let queue = device.queue_owner();
+    let generation = device.pool_generation();
+    // Fault injection only: the normal write transitions never create this fact.
+    device.initialized_prefix = logical + 1;
+    let owner = PersistentOwner::from_sdma_buffer(device).unwrap();
+    let before = owner.ownership_snapshot_for_test_v1();
+    assert_eq!(
+        owner.preflight_initialized_storage_for_compute(queue, generation, logical, physical),
+        Err(UseError::WrongOwnerOrGeneration)
+    );
+    assert_eq!(owner.ownership_snapshot_for_test_v1(), before);
+}
+
+#[test]
 fn initialized_prefix_direct_submit_revokes_digest_before_injected_completion() {
     use crate::shared_memory::{
         DataCleanupCustodyV1, DispatchDataReleaseV1, PreparationMemoryFixtureV1,

@@ -458,6 +458,7 @@ pub(super) struct PersistentFullRangeComputeAdmissionV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PersistentFullRangeComputeSourceV1 {
+    InitializedStorage,
     AuthenticatedH2d,
     RetainedControlReplay,
 }

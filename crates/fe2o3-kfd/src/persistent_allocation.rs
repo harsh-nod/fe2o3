@@ -1318,7 +1318,11 @@ impl Gfx942PersistentDeviceAllocationV1 {
         generation: u64,
         logical_bytes: u64,
         physical_bytes: u64,
-    ) -> Result<(), Gfx942PersistentUseErrorV1> {
+    ) -> Result<
+        Option<crate::persistent_compute::Gfx942PersistentComputeStorageIneligibilityV1>,
+        Gfx942PersistentUseErrorV1,
+    > {
+        use crate::persistent_compute::Gfx942PersistentComputeStorageIneligibilityV1 as Ineligible;
         if self.quarantine.is_some() {
             return Err(Gfx942PersistentUseErrorV1::Quarantined);
         }
@@ -1328,7 +1332,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if self.mapping != Gfx942PersistentMappingFormV1::Local
             || self.state.detached_compute.is_some()
             || logical_bytes == 0
-            || logical_bytes != physical_bytes
+            || logical_bytes > physical_bytes
             || physical_bytes != self.byte_len
         {
             return Err(Gfx942PersistentUseErrorV1::WrongState);
@@ -1339,11 +1343,20 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if !backing.lease().is_some_and(|lease| {
             lease.storage_identity() == self.binding
                 && lease.layout().requested_bytes() == physical_bytes
-        }) || !backing.has_full_initialization(queue, generation, logical_bytes)
-        {
+        }) {
             return Err(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
         }
-        Ok(())
+        let full = backing
+            .full_initialization_in_scope(queue, generation, logical_bytes)
+            .ok_or(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration)?;
+        // Scope and custody must be valid before any clean fallback is offered.
+        Ok(if logical_bytes != physical_bytes {
+            Some(Ineligible::PartialExtent)
+        } else if !full {
+            Some(Ineligible::IncompleteInitialization)
+        } else {
+            None
+        })
     }
 
     pub(crate) fn local_native_for_sdma(

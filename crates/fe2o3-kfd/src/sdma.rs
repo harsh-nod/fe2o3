@@ -506,21 +506,25 @@ impl Gfx942SdmaDeviceBackingV1 {
             })
     }
 
-    pub(crate) fn has_full_initialization(
+    pub(crate) fn full_initialization_in_scope(
         &self,
         queue: QueueKeyV1,
         generation: u64,
         logical_bytes: u64,
-    ) -> bool {
-        self.matches_scope(queue, generation, logical_bytes)
-            && self.initialization.as_ref().is_some_and(|fact| {
-                crate::initialized_prefix::covers(
-                    fact.initialized_prefix,
-                    logical_bytes,
-                    0,
-                    logical_bytes,
-                )
-            })
+    ) -> Option<bool> {
+        if !self.matches_scope(queue, generation, logical_bytes) {
+            return None;
+        }
+        let fact = self.initialization.as_ref()?;
+        if fact.initialized_prefix > logical_bytes {
+            return None;
+        }
+        Some(crate::initialized_prefix::covers(
+            fact.initialized_prefix,
+            logical_bytes,
+            0,
+            logical_bytes,
+        ))
     }
 
     pub(crate) fn from_completed_compute_data(
