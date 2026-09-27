@@ -24,8 +24,10 @@ use fe2o3_hsaco_finalize::{
     NativeWorkerCompactReplayErrorV1 as TranscriptError, NativeWorkerFinalizationErrorV1,
     PreparedConditionalWorkerHsacoPublicationV5 as Publication,
     PreparedFinalizedConditionalWorkerHsacoV5 as Artifact,
+    RecoveredConditionalWorkerHsacoPublicationV5 as DurablePublication,
     execute_preflighted_conditional_reproducible_first_build_worker_v2 as execute,
     finalize_conditional_worker_hsaco_v5 as finalize,
+    persist_prepared_conditional_worker_hsaco_publication_v5 as persist_publication,
     preflight_conditional_reproducible_first_build_worker_v2 as preflight,
     prepare_conditional_worker_compact_finalizer_replay_v5 as prepare_transcript,
     prepare_conditional_worker_hsaco_publication_v5 as prepare_publication,
@@ -41,6 +43,18 @@ use std::{fmt, mem::size_of, path::Path};
 /// Publication and the sealed verifier/host authority gate remain separate.
 pub(crate) struct ParentPreparedConditionalArtifact<'a, 'b, 'w> {
     publication: Publication,
+    custody: ParentArtifactCustody<'a, 'b, 'w>,
+}
+
+/// The original parent/readiness is retained after independent journal recovery.
+/// This is not a constructor from a standalone recovered record, fresh compiler
+/// consumption, or sealed verifier/load/launch authority.
+pub(crate) struct ParentDurableConditionalArtifact<'a, 'b, 'w> {
+    publication: DurablePublication,
+    custody: ParentArtifactCustody<'a, 'b, 'w>,
+}
+
+struct ParentArtifactCustody<'a, 'b, 'w> {
     compiler_execution: Carriage,
     readiness: Readiness<'b, 'w>,
     invocation: &'a Invocation,
@@ -56,38 +70,123 @@ impl ParentPreparedConditionalArtifact<'_, '_, '_> {
         self.publication.finalized()
     }
     pub(crate) fn compiler_execution(&self) -> &Carriage {
-        &self.compiler_execution
+        &self.custody.compiler_execution
     }
     pub(crate) fn transcript(&self) -> &Transcript {
         self.publication.transcript()
     }
     pub(crate) fn revalidate(&mut self) -> Result<()> {
-        let parent_storage = self.invocation.native_retained_storage()?;
-        let floor = self
+        self.custody.revalidate(
+            self.publication.finalized(),
+            self.publication.transcript(),
+            self.publication.required_retained_storage(),
+            Self::HEADER,
+        )
+    }
+}
+
+impl<'a, 'b, 'w> ParentPreparedConditionalArtifact<'a, 'b, 'w> {
+    /// Consumes this fresh owner even on failure. The caller keeps independent
+    /// policy/path/producer backing prepaid. Never enclose this transition in a
+    /// refundable scope; a later refusal cannot roll back an inert journal commit.
+    pub(crate) fn persist(
+        mut self,
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        policy: ConditionalRecoveryPolicy<'_>,
+    ) -> Result<ParentDurableConditionalArtifact<'a, 'b, 'w>> {
+        self.revalidate()?;
+        let retired = self
             .publication
             .required_retained_storage()
+            .checked_add(Self::HEADER)
+            .ok_or(Resource::Arithmetic)?;
+        let replacement = replacement::Replacement::begin(retired, self.custody.readiness.budget)?;
+        let Self {
+            publication,
+            mut custody,
+        } = self;
+        // Concrete terminal source recovery is deliberately outside refund scopes.
+        let (publication, storage) = persist_publication(
+            output_dir,
+            producer,
+            publication,
+            policy,
+            custody.readiness.budget,
+        )?;
+        let charge = storage.retained_storage();
+        if charge != publication.required_retained_storage() {
+            return Err(Resource::Accounting.into());
+        }
+        replacement.reserve(charge, custody.readiness.budget)?;
+        custody.revalidate(
+            publication.finalized(),
+            publication.transcript(),
+            charge,
+            ParentDurableConditionalArtifact::HEADER,
+        )?;
+        // The old publication was dropped by successful exact fresh/recovered
+        // comparison. Retire only its known charge and our superseded header.
+        replacement.finish(
+            charge,
+            ParentDurableConditionalArtifact::HEADER,
+            custody.readiness.budget,
+        )?;
+        Ok(ParentDurableConditionalArtifact {
+            publication,
+            custody,
+        })
+    }
+}
+
+impl ParentDurableConditionalArtifact<'_, '_, '_> {
+    const HEADER: usize = size_of::<Self>()
+        - size_of::<DurablePublication>()
+        - size_of::<Carriage>()
+        - size_of::<Readiness<'static, 'static>>();
+
+    pub(crate) fn publication(&self) -> &DurablePublication {
+        &self.publication
+    }
+    pub(crate) fn compiler_execution(&self) -> &Carriage {
+        &self.custody.compiler_execution
+    }
+    pub(crate) fn revalidate(&mut self) -> Result<()> {
+        self.custody.revalidate(
+            self.publication.finalized(),
+            self.publication.transcript(),
+            self.publication.required_retained_storage(),
+            Self::HEADER,
+        )
+    }
+}
+
+impl ParentArtifactCustody<'_, '_, '_> {
+    fn revalidate(
+        &mut self,
+        artifact: &Artifact,
+        transcript: &Transcript,
+        publication_storage: usize,
+        header: usize,
+    ) -> Result<()> {
+        let parent_storage = self.invocation.native_retained_storage()?;
+        let floor = publication_storage
             .checked_add(self.compiler_execution.retained_storage())
             .and_then(|n| n.checked_add(self.readiness.retained_storage()))
-            .and_then(|n| n.checked_add(Self::HEADER))
+            .and_then(|n| n.checked_add(header))
             .and_then(|n| n.checked_add(parent_storage))
             .and_then(|n| n.checked_add(self.configuration_storage))
             .ok_or(Resource::Arithmetic)?;
         check_account_floor(self.readiness.budget, floor)?;
         // Fixed comparisons of the occurrence, source and finalization coordinates.
         self.readiness.budget.charge_work(1024)?;
-        self.publication
-            .transcript()
-            .verify_finalized_coordinates(self.publication.finalized())?;
+        transcript.verify_finalized_coordinates(artifact)?;
         self.readiness.revalidate()?;
         check_pair(
             &mut self.readiness,
             self.invocation,
-            self.publication.finalized().source().binding().receipt(),
-            self.publication
-                .finalized()
-                .source()
-                .recovered_handoff()
-                .handoff(),
+            artifact.source().binding().receipt(),
+            artifact.source().recovered_handoff().handoff(),
             &self.compiler_execution,
         )
     }
@@ -95,8 +194,13 @@ impl ParentPreparedConditionalArtifact<'_, '_, '_> {
 
 const FRAME: usize = 4 * size_of::<ContinuationError>()
     + 2 * size_of::<ParentPreparedConditionalArtifact<'static, 'static, 'static>>()
+    + 2 * size_of::<ParentDurableConditionalArtifact<'static, 'static, 'static>>()
+    + size_of::<replacement::Replacement>()
     + 8192;
 type Result<T> = std::result::Result<T, ContinuationError>;
+
+#[path = "compiler_execution_boundary_native_replacement.rs"]
+mod replacement;
 
 impl<'b, 'w> Readiness<'b, 'w> {
     /// Call only after successful child completion. The enclosing attempt keeps
@@ -116,7 +220,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
         invocation: &'a Invocation,
-        policy: ConditionalRecoveryPolicy<'_>,
+        policy: &ConditionalRecoveryPolicy<'_>,
         recipe: PreparedNativeProductionBuildConfig,
     ) -> Result<ParentPreparedConditionalArtifact<'a, 'b, 'w>> {
         let (worker, providers, options, output, limits, configuration_storage) =
@@ -192,10 +296,12 @@ impl<'b, 'w> Readiness<'b, 'w> {
             .release_storage(FRAME - ParentPreparedConditionalArtifact::HEADER)?;
         let mut prepared = ParentPreparedConditionalArtifact {
             publication,
-            compiler_execution,
-            readiness: self,
-            invocation,
-            configuration_storage,
+            custody: ParentArtifactCustody {
+                compiler_execution,
+                readiness: self,
+                invocation,
+                configuration_storage,
+            },
         };
         prepared.revalidate()?;
         Ok(prepared)
@@ -260,8 +366,12 @@ mod tests {
     }
 }
 
+/// Opaque terminal error: nested resource errors must not invite blanket refunds
+/// around an operation that can already have consumed source/proof custody.
 #[derive(Debug)]
-pub(crate) enum ContinuationError {
+pub(crate) struct ContinuationError(Cause);
+#[derive(Debug)]
+enum Cause {
     Resource(Resource),
     Readiness(Failure),
     Invocation(CapabilityError),
@@ -276,18 +386,14 @@ pub(crate) enum ContinuationError {
 macro_rules! causes {
     ($($ty:ty => $variant:ident),+ $(,)?) => {
         $(impl From<$ty> for ContinuationError {
-            fn from(error: $ty) -> Self { Self::$variant(error) }
+            fn from(error: $ty) -> Self { Self(Cause::$variant(error)) }
         })+
         impl fmt::Display for ContinuationError {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                match self { $(Self::$variant(error) => error.fmt(f),)+ }
+                match &self.0 { $(Cause::$variant(error) => error.fmt(f),)+ }
             }
         }
-        impl std::error::Error for ContinuationError {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                match self { $(Self::$variant(error) => Some(error),)+ }
-            }
-        }
+        impl std::error::Error for ContinuationError {}
     };
 }
 causes!(Resource => Resource, Failure => Readiness, CapabilityError => Invocation,

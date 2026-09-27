@@ -120,7 +120,7 @@ impl PreparedNativeProductionBuildConfig {
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
         invocation: &'a ParentRustcInvocationCustody,
-        policy: ConditionalRecoveryPolicy<'_>,
+        policy: &ConditionalRecoveryPolicy<'_>,
     ) -> Result<ParentPreparedConditionalArtifact<'a, 'b, 'w>, ContinuationError> {
         readiness
             .finalize_current_publication(output_dir, producer, attempt, invocation, policy, self)

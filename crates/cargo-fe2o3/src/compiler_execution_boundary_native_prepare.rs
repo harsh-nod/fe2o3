@@ -3,7 +3,7 @@
 use super::{
     Budget, ParentCompilerExecutionReadinessCustodyV3 as Readiness, Policy, Profile, Resource,
     Result,
-    pipeline::{ConditionalRecoveryPolicy, ContinuationError, ParentPreparedConditionalArtifact},
+    pipeline::{ConditionalRecoveryPolicy, ContinuationError, ParentDurableConditionalArtifact},
     validate_configuration,
 };
 use crate::{
@@ -104,7 +104,9 @@ impl<'b, 'w> PreparedCompilerExecutionBoundaryV3<'b, 'w> {
 impl<'b, 'w> ReadyCompilerExecutionAttemptV3<'b, 'w> {
     /// The enclosing supervisor must establish successful compiler completion
     /// before calling. Output/path, exact parent invocation and independently
-    /// admitted recovery-policy inputs remain separately prepaid.
+    /// admitted recovery-policy inputs remain separately prepaid. Finalization
+    /// and independent durable recovery use the same policy view and retain this
+    /// readiness through both stages. Failure/unwind is terminal, without refund.
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     pub(crate) fn finalize_after_compiler_success<'a>(
         self,
@@ -113,15 +115,16 @@ impl<'b, 'w> ReadyCompilerExecutionAttemptV3<'b, 'w> {
         attempt: BuildAttempt,
         invocation: &'a Invocation,
         policy: ConditionalRecoveryPolicy<'_>,
-    ) -> std::result::Result<ParentPreparedConditionalArtifact<'a, 'b, 'w>, ContinuationError> {
-        self.recipe.finalize_conditional_current(
+    ) -> std::result::Result<ParentDurableConditionalArtifact<'a, 'b, 'w>, ContinuationError> {
+        let prepared = self.recipe.finalize_conditional_current(
             self.readiness,
             output_dir,
             producer,
             attempt,
             invocation,
-            policy,
-        )
+            &policy,
+        )?;
+        prepared.persist(output_dir, producer, policy)
     }
 }
 
