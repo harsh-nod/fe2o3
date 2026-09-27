@@ -37,6 +37,11 @@ pub(crate) enum Error {
     Module(fe2o3_compiler_ffi::CompilerModuleHandoffErrorV2),
     Roles(crate::compiler_module_contract::CompilerModuleRoleError),
     Mismatch(&'static str),
+    Session(crate::protected_compiler_execution::native_v3::Error),
+    Publication(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV5),
+    SubjectPublication(fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV3),
+    ReceiptTransport(fe2o3_artifact_transaction::CompilerExecutionReceiptTransportErrorV3),
+    LiveInvocation(crate::protected_rustc_invocation::ProtectedRustcInvocationErrorV1),
 }
 impl From<Resource> for Error {
     fn from(value: Resource) -> Self {
@@ -50,6 +55,9 @@ impl fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 type R<T> = Result<T, Error>;
+
+#[path = "production_pipeline_conditional_native_publication_v3.rs"]
+pub(in crate::production_pipeline) mod publication;
 
 pub(in crate::production_pipeline) struct Prepared {
     prefix: Prefix,

@@ -1,5 +1,8 @@
 //! Protected rustc custody for one exact compiler-execution receipt session.
 
+#[path = "protected_compiler_execution_native_v3.rs"]
+pub(crate) mod native_v3;
+
 use std::fmt;
 use std::io;
 use std::time::Duration;

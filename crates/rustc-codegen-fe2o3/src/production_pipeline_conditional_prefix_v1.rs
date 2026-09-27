@@ -28,6 +28,55 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
 };
 
+impl From<crate::protected_compiler_execution::native_v3::Error> for ProductionPipelineError {
+    fn from(error: crate::protected_compiler_execution::native_v3::Error) -> Self {
+        Self::conditional_final_bridge_v1(bridge::Error::Native(bridge::native::Error::Session(
+            error,
+        )))
+    }
+}
+impl From<fe2o3_compiler_execution_client::CompilerExecutionClientErrorV3>
+    for ProductionPipelineError
+{
+    fn from(error: fe2o3_compiler_execution_client::CompilerExecutionClientErrorV3) -> Self {
+        crate::protected_compiler_execution::native_v3::Error::from(error).into()
+    }
+}
+
+impl<'tcx>
+    crate::production_pipeline::ProductionCompilation<
+        'tcx,
+        crate::production_pipeline::CollectedRustStage<'tcx>,
+    >
+{
+    /// Native migration continuation over the existing importer/analysis graph.
+    /// Driver selection is changed only with Cargo and the deployment consumers.
+    /// The admitted session supplies the uninterrupted original TARGET account;
+    /// SOURCE retains its separate original proof account throughout.
+    pub(crate) fn publish_native_worker_handoff(
+        self,
+        session: crate::protected_compiler_execution::native_v3::Admitted<'_, '_>,
+    ) -> Result<fe2o3_artifact_transaction::InertCompilerExecutionSubjectV3, ProductionPipelineError>
+    {
+        let native_error = |error| {
+            ProductionPipelineError::conditional_final_bridge_v1(bridge::Error::Native(error))
+        };
+        session.prepare_and_acquire(
+            |budget| {
+                let prefix = self.verify_general_kernel_checks()?.prepare_conditional_prefix_for_f_v1(
+                    HistoryLimits {
+                        refinement: fe2o3_kernel_analysis::CanonicalKirLoopLimitsV1::default(),
+                        forwarding: fe2o3_kernel_analysis::CanonicalKirCrossBlockForwardingLimitsV1::default(),
+                    }, budget,
+                )?;
+                bridge::native::prepare(prefix, budget).map_err(native_error)
+            },
+            |prepared, budget| prepared.publish(budget).map_err(native_error),
+            |carriage, published, budget| published.finish(carriage, budget).map_err(native_error),
+        )
+    }
+}
+
 /// Constructed only after genuine replay, contract retention and both original
 /// account postchecks. Fields never escape separately or become ordinary V5.
 pub(in crate::production_pipeline) struct ConditionalPrefixForFV1 {

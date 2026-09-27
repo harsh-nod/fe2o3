@@ -49,11 +49,20 @@ impl AdmittedProtectedRustcInvocationV1 {
     pub(crate) fn finish_for_publication(
         self,
     ) -> Result<FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1> {
+        self.revalidate_for_publication()?;
+        Ok(FinishedProtectedRustcInvocationV3 {
+            capability: self.capability,
+        })
+    }
+
+    /// Revalidates before native publication without detaching the original
+    /// invocation from the complete retained source/target preparation owner.
+    pub(crate) fn revalidate_for_publication(&self) -> Result<(), ProtectedRustcInvocationErrorV1> {
         self.capability
             .revalidate()
             .map_err(ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged)?;
         let observation = RustcProcessObservationV1::capture(self.capability.descriptor())?;
-        self.finish_after_publication_observation(observation)
+        validate_retained_capability(&self.capability, observation)
     }
 
     #[cfg(test)]
@@ -67,6 +76,7 @@ impl AdmittedProtectedRustcInvocationV1 {
         self.finish_after_publication_observation(observation)
     }
 
+    #[cfg(test)]
     fn finish_after_publication_observation(
         self,
         observation: RustcProcessObservationV1,
