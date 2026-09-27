@@ -82,6 +82,9 @@ fn generated_adoption_retirement_refuses_queued_owner_before_native_effects() {
             ));
             assert!(fixture.context.is_terminal());
             assert!(!fixture.context.cleanup().is_complete());
+            // Terminal KFD Drop deliberately aborts; retain this resource-free
+            // mock through process exit after checking the semantic boundary.
+            core::mem::forget(fixture.context);
             continue;
         }
         assert!(matches!(
