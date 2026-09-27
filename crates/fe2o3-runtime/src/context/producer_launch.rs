@@ -105,8 +105,11 @@ impl<B: RuntimeProducerAwareLaunchBackendV1> RuntimeContextV1<B> {
     /// reconciled as successful and quiescent. Backend support is still required;
     /// the KFD router currently rejects pending peer-to-compute execution.
     /// Pure reads retain whole-allocation custody; every original pending read
-    /// range must be covered by its named producer's writable ranges. Writable aliases
-    /// with pending predecessors reject. Events must remain live until admission;
+    /// range must be covered by its named producer's writable ranges. Full-allocation
+    /// Write outputs can queue behind an exact latest writer from this profile,
+    /// named by an explicit event. Every output alias must then be a full Write;
+    /// partial/ReadWrite outputs and reads of queued outputs remain unsupported.
+    /// Events must remain live until admission;
     /// afterwards Context retains producers independently of those public events.
     /// Device completion may precede logical completion while producers reconcile.
     pub fn launch_producer_aware_v1<A: RuntimeArgumentsV1>(

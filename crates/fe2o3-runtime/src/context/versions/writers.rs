@@ -127,6 +127,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         record: &AllocationRecordV1,
     ) -> Result<Option<HostWriteTicketV1>, RuntimeValidationErrorV1> {
         self.guard_journal_unwind_v1(|context| {
+            context.validate_journal_unqueued_v1(id, record)?;
             let Some(versions) = context.versions.as_ref() else {
                 return if record.journal.is_none() {
                     Ok(None)
@@ -166,6 +167,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .expect("configured journal")
                     .journal
                     .remaining_writer_slots()
+                    == 0
+                || context
+                    .versions
+                    .as_ref()
+                    .expect("configured journal")
+                    .journal
+                    .remaining_member_slots()
                     == 0
             {
                 return Err(RuntimeValidationErrorV1::Capacity);
@@ -307,18 +315,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return context.journal_result_v1(result).map(Some);
             }
             let result = versions.whole_allocation(id, record).and_then(|member| {
-                let state = versions.journal.lookup_allocation(member.allocation)?;
-                let writer = state
-                    .pending_writer
-                    .map(|writer| {
-                        versions
-                            .retained_writer(writer)
-                            .map(|state| (writer, state))
-                    })
-                    .transpose()?;
-                Ok((member, writer))
+                Ok((member, versions.journal.latest_writer(member.allocation)?))
             });
-            let (member, pending) = context.journal_result_v1(result)?;
+            let (member, latest) = context.journal_result_v1(result)?;
             let result = context
                 .versions
                 .as_ref()
@@ -328,11 +327,39 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             if context.journal_result_v1(result)? != 0 {
                 return Err(RuntimeValidationErrorV1::ContextReserved);
             }
+            if let Some(writer) = latest {
+                let result = context
+                    .versions
+                    .as_ref()
+                    .expect("configured journal")
+                    .journal
+                    .queued_writer_status(writer);
+                match context.journal_result_v1(result)? {
+                    Some(fe2o3_runtime_model::ContextQueuedWriterStatusV1::Unknown) => {
+                        let _ = context.freeze_disposal_group_v1(&[writer])?;
+                        let result = context.prepare_group_allocation_disposal_v1(id, *record);
+                        return context.journal_result_v1(result).map(Some);
+                    }
+                    Some(_) => return Err(RuntimeValidationErrorV1::ContextReserved),
+                    None => {}
+                }
+            }
+            let result = latest
+                .map(|writer| {
+                    context
+                        .versions
+                        .as_ref()
+                        .expect("configured journal")
+                        .retained_writer(writer)
+                        .map(|state| (writer, state))
+                })
+                .transpose();
+            let pending = context.journal_result_v1(result)?;
             let versions = context.versions.as_ref().expect("configured journal");
             let kind = match pending {
                 None => {
                     let result = versions.validate_retirement(&[member.allocation]);
-                    context.journal_result_v1(result)?;
+                    context.journal_availability_result_v1(result)?;
                     AllocationDisposalKindV1::Unwritten
                 }
                 Some((_, ContextWriterStateV1::Pending { .. })) => {
@@ -344,7 +371,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     let result = versions
                         .journal
                         .validate_unknown_disposal(writer, &[member]);
-                    context.journal_result_v1(result)?;
+                    context.journal_availability_result_v1(result)?;
                     AllocationDisposalKindV1::Synchronous(writer)
                 }
                 Some((writer, ContextWriterStateV1::Unknown { .. }))

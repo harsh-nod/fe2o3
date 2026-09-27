@@ -100,16 +100,22 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                     .backend
                     .generated_empty_prefix_v1(stream.backend_stream)
                 {
-                    Ok(())
+                    Ok(None)
                 } else {
                     Err(RuntimeValidationErrorV1::InvalidBackendDescription.into())
                 };
             }
             let plan = self.generated_plan_for_hold_v1(hold)?;
             let unread = self.generated_shells_unread_v1(&plan);
-            if !self.journal_result_v1(unread)? {
-                return Err(RuntimeValidationErrorV1::ContextReserved.into());
-            }
+            Ok(Some((plan, self.journal_result_v1(unread)?)))
+        }));
+        let Some((plan, unread)) = self.finish_gfx942_adoption_v1(result)? else {
+            return Ok(());
+        };
+        if !unread {
+            return Err(RuntimeValidationErrorV1::ContextReserved.into());
+        }
+        let result = catch_unwind(AssertUnwindSafe(|| {
             self.backend
                 .retire_generated_data_v1(&plan)
                 .map_err(map_backend_error)?;
@@ -118,12 +124,12 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         self.finish_gfx942_adoption_v1(result)
     }
 
-    pub(in crate::context) fn finish_gfx942_adoption_v1(
+    pub(in crate::context) fn finish_gfx942_adoption_v1<T>(
         &mut self,
-        result: std::thread::Result<Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>>,
-    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        result: std::thread::Result<Result<T, RuntimeErrorV1<KfdRuntimeBackendErrorV1>>>,
+    ) -> Result<T, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
         match result {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => {
                 self.quarantine_submission_writers_v1();
                 self.backend.quarantine_generated_adoption_v1();

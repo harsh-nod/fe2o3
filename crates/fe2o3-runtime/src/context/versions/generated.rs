@@ -22,6 +22,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let Some(versions) = self.versions.as_ref() else {
             return Ok(true);
         };
+        let mut unread = true;
         for member in plan.members.get(..plan.count).ok_or(E::InvalidState)? {
             let member = member.ok_or(E::InvalidAllocationReference)?;
             let record = self
@@ -29,11 +30,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .get(&member.logical)
                 .ok_or(E::InvalidAllocationReference)?;
             let reference = versions.validate_live(member.logical, record)?;
+            match versions.journal.validate_no_queued_writer(reference) {
+                Err(E::AllocationBusy) => unread = false,
+                result => result?,
+            }
             if versions.journal.reader_count(reference)? != 0 {
-                return Ok(false);
+                unread = false;
             }
         }
-        Ok(true)
+        Ok(unread)
     }
 
     pub(in crate::context) fn validate_generated_writer_v1(

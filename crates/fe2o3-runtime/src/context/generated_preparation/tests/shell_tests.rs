@@ -24,6 +24,112 @@ struct Snapshot {
 }
 
 #[test]
+fn generated_adoption_retirement_refuses_queued_owner_before_native_effects() {
+    use fe2o3_runtime_model::{
+        ContextAllocationWriteV1, ContextQueuedWriteV1, ContextQueuedWriterStatusV1,
+        ContextWriterKeyV1, ContextWriterKindV1, ContextWriterNoEffectEvidenceV1,
+    };
+    for corrupt_later in [false, true] {
+        let mut fixture = Fixture::new_with_journal(Some((60, 3)), Some(3));
+        fixture.install().unwrap();
+        let plan = fixture
+            .context
+            .generated_plan_for_hold_v1(&fixture.hold)
+            .unwrap();
+        let id = plan.members[0].unwrap().logical;
+        let allocation = fixture.context.allocations[&id].journal.unwrap();
+        let keys = [0, 1].map(|_| ContextWriterKeyV1 {
+            context_generation: fixture.context.context_generation,
+            local: fixture.context.next_id().unwrap(),
+            kind: ContextWriterKindV1::Submission,
+        });
+        // This is a valid owner reservation control, not native launch authority.
+        // KFD deliberately rejects ordinary compute on generated shell handles.
+        let journal = fixture
+            .context
+            .versions
+            .as_mut()
+            .unwrap()
+            .read_leases_for_test_v1();
+        let state = journal.lookup_allocation(allocation).unwrap();
+        let destination = ContextAllocationWriteV1 {
+            allocation,
+            device: state.device,
+            byte_extent: state.byte_extent,
+        };
+        let a = journal.register_writer(keys[0]).unwrap();
+        journal.begin_write(a, &[destination]).unwrap();
+        let b = journal.register_writer(keys[1]).unwrap();
+        let requests = [ContextQueuedWriteV1 {
+            destination,
+            predecessor: Some(a),
+        }];
+        journal.begin_queued_write(b, &requests).unwrap();
+        let before_writer = journal.lookup_writer(a).unwrap();
+        let before = fixture.snapshot();
+        if corrupt_later {
+            let later = plan.members[1].unwrap().logical;
+            fixture.context.allocations.get_mut(&later).unwrap().journal = None;
+            assert_eq!(
+                fixture.context.generated_shells_unread_v1(&plan),
+                Err(fe2o3_runtime_model::ContextVersionJournalErrorV1::InvalidState),
+            );
+            assert!(matches!(
+                fixture.context.retire_gfx942_adoption_v1(&fixture.hold),
+                Err(RuntimeErrorV1::Validation(
+                    RuntimeValidationErrorV1::InvalidBackendDescription
+                ))
+            ));
+            assert!(fixture.context.is_terminal());
+            assert!(!fixture.context.cleanup().is_complete());
+            continue;
+        }
+        assert!(matches!(
+            fixture.context.retire_gfx942_adoption_v1(&fixture.hold),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::ContextReserved
+            ))
+        ));
+        assert!(!fixture.context.is_terminal());
+        assert_eq!(fixture.snapshot(), before);
+        assert_eq!(
+            fixture
+                .context
+                .generated_plan_for_hold_v1(&fixture.hold)
+                .unwrap(),
+            plan
+        );
+        let journal = fixture
+            .context
+            .versions
+            .as_mut()
+            .unwrap()
+            .read_leases_for_test_v1();
+        assert_eq!(journal.lookup_writer(a).unwrap(), before_writer);
+        assert_eq!(
+            journal.queued_writer_status(b).unwrap(),
+            Some(ContextQueuedWriterStatusV1::Waiting)
+        );
+        journal.validate_queued_writer(b, &requests).unwrap();
+        journal
+            .settle_no_effect(b, &ContextWriterNoEffectEvidenceV1 { writer: b })
+            .unwrap();
+        journal
+            .settle_no_effect(a, &ContextWriterNoEffectEvidenceV1 { writer: a })
+            .unwrap();
+        fixture
+            .context
+            .retire_gfx942_adoption_v1(&fixture.hold)
+            .unwrap();
+        fixture
+            .context
+            .release_unpublished_hold_v1(&fixture.hold)
+            .unwrap();
+        assert!(fixture.context.cleanup().is_complete());
+    }
+}
+
+#[test]
 fn generated_plan_rejects_swapped_request_credits_before_adoption() {
     let mut fixture = Fixture::new(Some((60, 3)));
     fixture.install().unwrap();

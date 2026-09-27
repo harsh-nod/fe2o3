@@ -135,16 +135,10 @@ impl ContextVersionsV1 {
         generation: u64,
         allocations: usize,
         writers: usize,
+        members: usize,
     ) -> Result<Self, ContextVersionJournalErrorV1> {
-        // Queued admission remains closed. Disjoint active rosters need at most
-        // one member per allocation; shared queues need a separate capacity plan.
-        let journal = ContextQueuedWriterJournalV1::new(
-            generation,
-            allocations,
-            writers,
-            writers,
-            allocations,
-        )?;
+        let journal =
+            ContextQueuedWriterJournalV1::new(generation, allocations, writers, writers, members)?;
         let mut phases = Vec::new();
         phases
             .try_reserve_exact(allocations)
@@ -320,7 +314,59 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         allocation_capacity: usize,
         writer_capacity: usize,
     ) -> Result<Self, RuntimeContextOpenFailureV1<B>> {
-        Self::open_configured_v1(backend, Some((allocation_capacity, writer_capacity)))
+        Self::open_with_version_journal_members_v1(
+            backend,
+            allocation_capacity,
+            writer_capacity,
+            allocation_capacity,
+        )
+    }
+
+    /// Opens the journal with an explicit bound on retained writer members.
+    ///
+    /// Every active or queued (writer, destination) pair consumes one member.
+    /// Shared destinations consume one per writer, not one per allocation.
+    /// The bound must be at least `allocation_capacity` and at most the model's
+    /// journal limit. Exhaustion rejects admission before ID issuance or backend
+    /// entry. The simpler constructor uses `allocation_capacity` for this bound.
+    pub fn open_with_version_journal_members_v1(
+        backend: B,
+        allocation_capacity: usize,
+        writer_capacity: usize,
+        member_capacity: usize,
+    ) -> Result<Self, RuntimeContextOpenFailureV1<B>> {
+        Self::open_configured_v1(
+            backend,
+            Some((allocation_capacity, writer_capacity, member_capacity)),
+        )
+    }
+
+    pub(super) fn journal_availability_result_v1<T>(
+        &mut self,
+        result: Result<T, ContextVersionJournalErrorV1>,
+    ) -> Result<T, RuntimeValidationErrorV1> {
+        match result {
+            Err(ContextVersionJournalErrorV1::AllocationBusy) => {
+                Err(RuntimeValidationErrorV1::ContextReserved)
+            }
+            result => self.journal_result_v1(result),
+        }
+    }
+
+    // Admission only: retained predecessor custody must still be able to drain.
+    pub(super) fn validate_journal_unqueued_v1(
+        &mut self,
+        id: RuntimeAllocationIdV1,
+        record: &AllocationRecordV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        let result = match &self.versions {
+            Some(versions) => versions
+                .validate_live(id, record)
+                .and_then(|allocation| versions.journal.validate_no_queued_writer(allocation)),
+            None if record.journal.is_none() => Ok(()),
+            None => Err(ContextVersionJournalErrorV1::InvalidState),
+        };
+        self.journal_availability_result_v1(result)
     }
 
     pub fn version_journal_usage_v1(&self) -> Option<RuntimeContextJournalUsageV1> {

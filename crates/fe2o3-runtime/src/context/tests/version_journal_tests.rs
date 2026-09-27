@@ -69,6 +69,42 @@ fn journal_constructor_is_fresh_bounded_and_returns_backend_on_failure() {
 }
 
 #[test]
+fn journal_member_constructor_rejects_invalid_bounds_without_backend_entry() {
+    for (allocations, writers, members) in [
+        (1, 1, 0),
+        (2, 1, 1),
+        (
+            1,
+            1,
+            fe2o3_runtime_model::CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1 + 1,
+        ),
+        (1, 1, usize::MAX),
+        (0, 1, 1),
+        (1, 0, 1),
+    ] {
+        let backend = MockBackend {
+            next: 73,
+            ..MockBackend::default()
+        };
+        let Err(failure) = RuntimeContextV1::open_with_version_journal_members_v1(
+            backend,
+            allocations,
+            writers,
+            members,
+        ) else {
+            panic!("invalid member capacity admitted");
+        };
+        let (backend, error) = failure.into_parts();
+        assert!(matches!(
+            error,
+            RuntimeErrorV1::Validation(RuntimeValidationErrorV1::Capacity)
+        ));
+        assert_eq!(backend.next, 73);
+        assert_eq!(backend.enumeration_calls, 0);
+    }
+}
+
+#[test]
 fn journal_capacity_precedes_ids_and_backend_and_disposal_permits_only_fresh_ids() {
     let mut context = configured(1);
     let first = allocate(&mut context).unwrap();

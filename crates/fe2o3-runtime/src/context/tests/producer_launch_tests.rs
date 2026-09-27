@@ -7,12 +7,13 @@ use std::sync::{Arc, Mutex};
 mod completion_faults;
 mod peer_producers;
 mod pending_peers;
+mod queued_outputs;
 
 #[test]
-fn producer_launch_pending_full_output_remains_reserved_before_backend_entry() {
+fn producer_launch_pending_full_output_queues_with_exact_event() {
     for cross_stream in [false, true] {
         let mut f = Fixture::new(4);
-        let mut producer = f
+        let producer = f
             .launch(
                 0,
                 vec![
@@ -29,31 +30,27 @@ fn producer_launch_pending_full_output_remains_reserved_before_backend_entry() {
             span(f.allocations[4], RuntimeAccessV1::Read, 0, 64),
             span(f.allocations[2], RuntimeAccessV1::Write, 0, 64),
         ];
-        let before = f.snapshot();
-        let calls = f.context.backend.producer_launch.calls.clone();
-        let events = f.context.backend.producer_launch.events.clone();
         let output_writer = state(&f.context, f.allocations[2]).pending_writer;
-        validation(
-            f.launch(usize::from(cross_stream), regions.clone(), &[event]),
-            RuntimeValidationErrorV1::ContextReserved,
-        );
-        assert_eq!(f.snapshot(), before);
-        assert_eq!(f.context.backend.producer_launch.calls, calls);
-        assert_eq!(f.context.backend.producer_launch.events, events);
+        let mut consumer = f
+            .launch(usize::from(cross_stream), regions, &[event])
+            .unwrap();
         assert_eq!(
             state(&f.context, f.allocations[2]).pending_writer,
             output_writer
         );
-        assert_eq!(f.context.producer_launches.len(), 1);
+        assert_eq!(f.context.producer_launches.len(), 2);
         assert!(!f.context.is_terminal());
-        // The same exact output is usable after reconciliation, not while a
-        // predecessor owns it. Native WAW eligibility cannot bypass this journal.
-        f.complete(&mut producer);
-        let mut consumer = f
-            .launch(usize::from(cross_stream), regions, &[event])
-            .unwrap();
         f.context.release_event(event).unwrap();
         f.complete(&mut consumer);
+        assert_eq!(
+            f.context.submissions[&producer.id].status,
+            RuntimeCompletionStatusV1::Succeeded
+        );
+        let mut bytes = [0; 64];
+        f.context
+            .read_allocation(f.allocations[2], 0, &mut bytes)
+            .unwrap();
+        assert_eq!(bytes, [output_byte(consumer.backend_submission); 64]);
         assert!(f.context.cleanup().is_complete());
     }
 }
@@ -393,13 +390,18 @@ impl Fixture {
     }
 
     fn configured(capacity: usize, journal: bool) -> Self {
+        Self::with_capacities(capacity, journal, 16, 16)
+    }
+
+    fn with_capacities(capacity: usize, journal: bool, allocations: usize, members: usize) -> Self {
         let backend = MockBackend {
             next: 100,
             deferred_kernel_reads: true,
             ..MockBackend::default()
         };
         let mut context = if journal {
-            Context::open_with_version_journal_v1(backend, 16, capacity).unwrap()
+            Context::open_with_version_journal_members_v1(backend, allocations, capacity, members)
+                .unwrap()
         } else {
             Context::open(backend).unwrap()
         };

@@ -1251,11 +1251,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
 
     fn open_configured_v1(
         backend: B,
-        journal: Option<(usize, usize)>,
+        journal: Option<(usize, usize, usize)>,
     ) -> Result<Self, RuntimeContextOpenFailureV1<B>> {
-        if journal.is_some_and(|(allocations, writers)| {
+        if journal.is_some_and(|(allocations, writers, members)| {
             let bounds = 1..=fe2o3_runtime_model::CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1;
-            !bounds.contains(&allocations) || !bounds.contains(&writers)
+            !bounds.contains(&allocations)
+                || !bounds.contains(&writers)
+                || !bounds.contains(&members)
+                || members < allocations
         }) {
             return Err(RuntimeContextOpenFailureV1 {
                 backend,
@@ -1307,8 +1310,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .map_err(map_backend_error)?,
             )?;
             let versions = journal
-                .map(|(allocations, writers)| {
-                    ContextVersionsV1::new(context_generation, allocations, writers)
+                .map(|(allocations, writers, members)| {
+                    ContextVersionsV1::new(context_generation, allocations, writers, members)
                         .map_err(|_| RuntimeValidationErrorV1::Capacity)
                 })
                 .transpose()?;
@@ -2276,6 +2279,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .get(&allocation)
             .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
         validate_byte_range(record.byte_len, byte_offset, destination.len())?;
+        self.validate_journal_unqueued_v1(allocation, &record)?;
         let result = self.invoke_journal_backend_v1(|backend| {
             backend.read_allocation_v1(record.backend_allocation, byte_offset, destination)
         });

@@ -1,7 +1,8 @@
 use super::*;
 use fe2o3_runtime_model::{
-    ContextAllocationWriteV1, ContextWriterKeyV1, ContextWriterKindV1,
-    ContextWriterNoEffectEvidenceV1, ContextWriterReferenceV1, ContextWriterSuccessEvidenceV1,
+    ContextAllocationWriteV1, ContextQueuedWriteV1, ContextQueuedWriterStatusV1,
+    ContextWriterKeyV1, ContextWriterKindV1, ContextWriterNoEffectEvidenceV1,
+    ContextWriterReferenceV1, ContextWriterSuccessEvidenceV1,
 };
 
 // Context owns this root independently of a returned backend/public handle.
@@ -20,6 +21,7 @@ pub(super) struct RetainedSubmissionWriterV1 {
     pub(super) domain: SubmissionWriterDomainV1,
     pub(super) allocations: Vec<SubmissionWriterAllocationV1>,
     pub(super) members: Vec<ContextAllocationWriteV1>,
+    pub(super) queued: Option<Vec<ContextQueuedWriteV1>>,
     // Ordinary quiescence survives release of public submission metadata.
     pub(super) disposal_quiescent: bool,
     pub(super) disposal_group: Option<ContextWriterReferenceV1>,
@@ -37,6 +39,7 @@ pub(super) struct SubmissionWriterAllocationV1 {
 pub(in crate::context) struct PreparedSubmissionWriterV1 {
     allocations: Vec<SubmissionWriterAllocationV1>,
     members: Vec<ContextAllocationWriteV1>,
+    queued: Option<Vec<ContextQueuedWriteV1>>,
 }
 
 completion_writer_outcome_declaration!(completion_journal_rust_syntax, pub(in crate::context));
@@ -187,12 +190,32 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     local: id.local,
                     kind: ContextWriterKindV1::Submission,
                 })
-            || versions.retained_writer(writer)?
-                != (ContextWriterStateV1::Pending {
-                    member_count: root.members.len(),
-                })
         {
             return Err(E::InvalidReference);
+        }
+        match &root.queued {
+            Some(requests) => {
+                if requests.len() != root.members.len()
+                    || requests
+                        .iter()
+                        .zip(&root.members)
+                        .any(|(request, member)| request.destination != *member)
+                    || versions.journal.lookup_writer(writer)? != ContextWriterStateV1::Reserved
+                {
+                    return Err(E::InvalidReference);
+                }
+                versions.journal.validate_queued_writer(writer, requests)?;
+                if versions.journal.queued_writer_status(writer)?
+                    == Some(ContextQueuedWriterStatusV1::Unknown)
+                {
+                    return Err(E::InvalidState);
+                }
+            }
+            None if versions.retained_writer(writer)?
+                == (ContextWriterStateV1::Pending {
+                    member_count: root.members.len(),
+                }) => {}
+            None => return Err(E::InvalidState),
         }
         for ((allocation, member), expected) in root
             .allocations
@@ -212,11 +235,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     allocation.record.byte_len,
                 )
                 || versions.whole_allocation(allocation.id, &allocation.record)? != *member
-                || versions
-                    .journal
-                    .lookup_allocation(member.allocation)?
-                    .pending_writer
-                    != Some(writer)
+                || (root.queued.is_none()
+                    && versions
+                        .journal
+                        .lookup_allocation(member.allocation)?
+                        .pending_writer
+                        != Some(writer))
             {
                 return Err(E::InvalidAllocationReference);
             }
@@ -307,6 +331,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         destinations: &[RuntimeAllocationIdV1],
     ) -> Result<Option<PreparedSubmissionWriterV1>, RuntimeValidationErrorV1> {
+        self.prepare_submission_writer_profile_v1(destinations, None)
+    }
+
+    fn prepare_submission_writer_profile_v1(
+        &mut self,
+        destinations: &[RuntimeAllocationIdV1],
+        launch: Option<&ProducerLaunchRootV1>,
+    ) -> Result<Option<PreparedSubmissionWriterV1>, RuntimeValidationErrorV1> {
         self.guard_journal_unwind_v1(|context| {
             let Some(versions) = context.versions.as_ref() else {
                 return Ok(None);
@@ -324,6 +356,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             canonical.extend_from_slice(destinations);
             canonical.sort_unstable();
             canonical.dedup();
+            if canonical.len() > versions.journal.remaining_member_slots() {
+                return Err(RuntimeValidationErrorV1::Capacity);
+            }
             let mut allocations = Vec::new();
             allocations
                 .try_reserve_exact(canonical.len())
@@ -332,6 +367,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             members
                 .try_reserve_exact(canonical.len())
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+            let mut requests = Vec::new();
+            if launch.is_some() {
+                requests
+                    .try_reserve_exact(canonical.len())
+                    .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+            }
+            let mut queued = false;
             for id in canonical {
                 let record = *context
                     .allocations
@@ -343,6 +385,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .expect("configured journal")
                     .whole_allocation(id, &record);
                 let member = context.journal_result_v1(result)?;
+                if launch.is_none() {
+                    context.validate_journal_unqueued_v1(id, &record)?;
+                }
                 let result = context
                     .versions
                     .as_ref()
@@ -359,14 +404,25 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .journal
                     .lookup_allocation(member.allocation);
                 let state = context.journal_result_v1(result)?;
-                if let Some(writer) = state.pending_writer {
-                    let result = context
-                        .versions
-                        .as_ref()
-                        .expect("configured journal")
-                        .retained_writer(writer);
-                    context.journal_result_v1(result)?;
-                    return Err(RuntimeValidationErrorV1::ContextReserved);
+                let result = context
+                    .versions
+                    .as_ref()
+                    .expect("configured journal")
+                    .journal
+                    .latest_writer(member.allocation);
+                let predecessor = context.journal_result_v1(result)?;
+                if let Some(writer) = predecessor {
+                    let Some(launch) = launch else {
+                        return Err(RuntimeValidationErrorV1::ContextReserved);
+                    };
+                    context.validate_queued_launch_predecessor_v1(launch, writer)?;
+                    queued = true;
+                }
+                if launch.is_some() {
+                    requests.push(ContextQueuedWriteV1 {
+                        destination: member,
+                        predecessor,
+                    });
                 }
                 if state.attempt_epoch == u64::MAX {
                     return Err(RuntimeValidationErrorV1::Capacity);
@@ -378,6 +434,57 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     disposed: false,
                 });
             }
+            if queued {
+                let launch = launch.expect("queued launch profile");
+                // A queued writer must not read or partially preserve any output.
+                // Sources exclude writable aliases, so check original bindings.
+                for allocation in &allocations {
+                    let mut found = false;
+                    for binding in launch
+                        .bindings
+                        .iter()
+                        .filter(|binding| binding.region.allocation == allocation.id)
+                    {
+                        if binding.record != allocation.record
+                            || binding.region.access != RuntimeAccessV1::Write
+                            || binding.region.byte_offset != 0
+                            || binding.region.byte_len != allocation.record.byte_len
+                        {
+                            return Err(RuntimeValidationErrorV1::ContextReserved);
+                        }
+                        found = true;
+                    }
+                    if !found {
+                        return context.journal_result_v1(Err(
+                            ContextVersionJournalErrorV1::InvalidReference,
+                        ));
+                    }
+                }
+                let key = ContextWriterKeyV1 {
+                    context_generation: context.context_generation,
+                    local: context.next_identity,
+                    kind: ContextWriterKindV1::Submission,
+                };
+                if key.local == 0 || key.local == u64::MAX {
+                    return Err(RuntimeValidationErrorV1::Capacity);
+                }
+                let result = context
+                    .versions
+                    .as_ref()
+                    .expect("configured journal")
+                    .journal
+                    .validate_queued_write_admission(key, &requests);
+                match result {
+                    Err(
+                        ContextVersionJournalErrorV1::MemberCapacity
+                        | ContextVersionJournalErrorV1::WriterCapacity
+                        | ContextVersionJournalErrorV1::EpochExhausted,
+                    ) => {
+                        return Err(RuntimeValidationErrorV1::Capacity);
+                    }
+                    result => context.journal_availability_result_v1(result)?,
+                }
+            }
             context
                 .versions
                 .as_mut()
@@ -388,8 +495,42 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             Ok(Some(PreparedSubmissionWriterV1 {
                 allocations,
                 members,
+                queued: queued.then_some(requests),
             }))
         })
+    }
+
+    fn validate_queued_launch_predecessor_v1(
+        &mut self,
+        launch: &ProducerLaunchRootV1,
+        writer: ContextWriterReferenceV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        let dependency = launch
+            .dependencies
+            .iter()
+            .find(|dependency| {
+                writer.key.kind == ContextWriterKindV1::Submission
+                    && writer.key.context_generation == dependency.submission.context_generation
+                    && writer.key.local == dependency.submission.local
+            })
+            .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
+        if !self.producer_launches.contains_key(&dependency.submission) {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        let versions = self.versions.as_ref().expect("configured journal");
+        let result = versions.journal.queued_writer_status(writer);
+        if matches!(
+            self.journal_result_v1(result)?,
+            Some(ContextQueuedWriterStatusV1::Unknown | ContextQueuedWriterStatusV1::Blocked)
+        ) {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        let result = self.validate_pending_producer_launch_roots_v1(dependency.submission);
+        self.journal_result_v1(result)?;
+        if self.submissions[&dependency.submission].journal_writer != Some(writer) {
+            return self.journal_result_v1(Err(ContextVersionJournalErrorV1::InvalidReference));
+        }
+        Ok(())
     }
 
     pub(in crate::context) fn begin_submission_writer_v1(
@@ -430,6 +571,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     domain,
                     allocations: prepared.allocations,
                     members: prepared.members,
+                    queued: prepared.queued,
                     disposal_quiescent: false,
                     disposal_group: None,
                     disposal_started: false,
@@ -437,9 +579,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     journal_disposed: false,
                 },
             );
-            let result = versions
-                .journal
-                .begin_write(writer, &versions.submission_writers[&id].members);
+            let root = &versions.submission_writers[&id];
+            let result = match &root.queued {
+                Some(requests) => versions.journal.begin_queued_write(writer, requests),
+                None => versions.journal.begin_write(writer, &root.members),
+            };
             if result.is_err() {
                 let abort = versions.journal.abort_reserved(writer);
                 context.journal_result_v1(abort)?;
@@ -609,7 +753,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         sources: &[ContextReadSourceV1],
         submit: impl FnOnce(&mut B) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
     ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>> {
-        let prepared = self.prepare_submission_writer_v1(destinations)?;
+        let launch = match &custody {
+            Some(PreparedSubmissionCustodyV1::Launch(root)) => Some(root),
+            _ => None,
+        };
+        let prepared = self.prepare_submission_writer_profile_v1(destinations, launch)?;
         let (reads, producer) = match &custody {
             Some(PreparedSubmissionCustodyV1::Launch(root)) => {
                 self.prepare_launch_inputs_v1(root, sources)?

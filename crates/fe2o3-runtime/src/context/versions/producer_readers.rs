@@ -152,6 +152,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .map(|state| (allocation, state))
             });
         let (allocation, state) = self.journal_result_v1(result)?;
+        self.validate_journal_unqueued_v1(source.region.allocation, &source.record)?;
         let Some(writer) = state.pending_writer else {
             return Ok(None);
         };

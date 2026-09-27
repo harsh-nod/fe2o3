@@ -1,17 +1,20 @@
 # Successor Writer Integration Plan
 
-Open implementation plan, not a supported API, accepted proof, or parity claim.
-Native full-output wait eligibility is only a prerequisite. Context still rejects
-a writable destination with a pending predecessor, including an exact event.
+Implementation and qualification plan, not accepted formal proof or a parity
+claim. The journal-enabled producer-aware Context profile now admits queued
+full-overwrite destinations behind exact explicit latest-writer events. Native
+backend eligibility and hardware qualification remain separate boundaries.
 
 ## Ownership Boundary
 
 The executable model now has `ContextQueuedWriterJournalV1`, a bounded queued-writer
 owner around `ContextProducerReadJournalV1`. It deliberately exposes neither mutable
 nor immutable dereferencing: inherited availability queries could bypass queue
-custody. Context now uses this owner with queued admission still closed and one
-member slot per allocation, sufficient for its disjoint active rosters. Shared
-queues require an explicit larger member-capacity policy before admission. Do not
+custody. Context uses this owner with bounded queued admission. The original
+journal constructor supplies one member slot per allocation; the new
+`open_with_version_journal_members_v1` constructor permits an explicit larger
+bound. Every retained (writer, destination) pair consumes a member, including
+shared destinations. Exhaustion refuses before ID issuance/backend entry. Do not
 replace or bypass the inner single-pending-writer invariant. Existing core proofs
 continue to describe the inner journal; the new composition needs its own proof and concrete integration
 qualification. An immutable projection must not expose an availability API that
@@ -25,11 +28,11 @@ Queue storage has an explicit checked bound and fallible preallocation before
 backend submission. Settlement must use indexed retained members/edges, not scan
 every writer or allocation. Dropping a descriptive reference never releases it.
 
-The native N3 path has one full-allocation Write destination. The overall goal
-also requires multi-destination writers, mixed ready/busy destinations, partial
-writes, ReadWrite and downstream reads. A first full-overwrite implementation
-must not be reported as those broader semantics. A Context writer must not be
-split into separately settled immediate and queued subsets.
+The native N3 path has one full-allocation Write destination. Context supports
+whole multi-destination writers, multi-parent joins and mixed idle/busy
+destinations without splitting settlement. The overall goal also requires partial
+writes, ReadWrite and downstream queued-output reads. Full-overwrite support must
+not be reported as those broader semantics or as multi-output native support.
 
 ## Transitions
 
@@ -74,15 +77,16 @@ Model tests exercise arena conservation, fixed storage addresses/capacities,
 three-deep success, cancellation permutations, multi-parent/idle joins, readers,
 stale identities, epoch exhaustion and fail-stop Unknown custody.
 
-This is not public Context successor support or a proof of the new owner.
-In particular:
+The owner model alone is not proof of the Context composition. In particular:
 
-- Context must authenticate each exact latest writer and explicit success event,
-  retain the queued roster, and audit all availability probes before enabling it.
+- Context authenticates each exact latest Ordinary producer-launch writer and
+  explicit success event, retains the complete queued roster and blocks outside
+  access through queue-aware availability preflights. Generated, synchronous and
+  peer-copy predecessors do not grant queued-output admission.
 - Queued Unknown is fail-stop and cannot be refunded by a later NoEffect value.
   Closed-group model disposal and Context shared receipt bookkeeping are
-  implemented. Context tests cover disjoint multi-root groups; overlapping
-  queued Context groups still require admission/integration qualification.
+  implemented. Context tests now cover genuinely overlapping queued groups as
+  well as disjoint multi-root groups. Native qualification remains separate.
   Disposal destroys allocations rather than exposing uncertain content.
 - Failed/quiescent backend results alone are not NoEffect authority. Descendant
   failure after cancellation cannot be used to silently release queued custody.
@@ -157,10 +161,27 @@ private multi-seed preparation helper. They cover all 24 four-allocation release
 orders with and without public metadata, retries, pending refusal, index
 corruption, reused backend handles, and every unique credit-refund prefix. A
 missing-model-root fault checks that retained Context custody remains visible.
-These tests do not qualify overlapping Context writer queues. The next steps
-are queue-member capacity policy, availability guards, exact event authentication
-and retained queued-writer admission/reconciliation, then shared-body proofs and
-native qualification.
+Those earlier tests did not qualify overlapping Context writer queues. The new
+public admission tests exercise overlapping groups, cancellation without
+reparenting, no-handle rejection/quiescence, terminal/panic custody, multi-parent
+joins, released public events, exact version progression and capacity refusal.
+They also test native Success retained before logical reconciliation, TooLate
+cancellation, and contradictory native parent observations. Completion fault
+controls retain Context custody before effects and after committed prefixes.
+
+Public host reads, host writes, ordinary launches and both stable/producer input
+admission respect outer reservations even after the inner head has settled.
+Generated adoption checks outer reservations before native DATA retirement;
+predecessor settlement remains unguarded so it can make progress. Queued-only
+Unknown disposal discovers the closed component rather than treating an idle
+inner slot as available. Shared-body proofs, native qualification, generated
+retirement hardware qualification and broader input/write semantics remain open.
+
+A generated-shell owner-reservation test checks that adoption retirement refuses
+queued custody before native DATA retirement without poisoning Context. It uses
+valid journal reservations, not ordinary native launches on generated handles:
+KFD intentionally rejects those handles. Preflight journal faults and any failure
+after native retirement begins retain the existing fail-stop boundary.
 
 ## Entry-Point Audit
 
