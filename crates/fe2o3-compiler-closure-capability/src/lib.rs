@@ -50,6 +50,8 @@ mod compiler_execution_supervisor_deployment_native;
 mod compiler_execution_supervisor_deployment_v2;
 mod compiler_execution_supervisor_deployment_v3;
 mod native_capability;
+#[cfg(test)]
+mod native_policy_inheritance_tests;
 mod native_secret;
 mod rustc_invocation;
 mod sealed_image;

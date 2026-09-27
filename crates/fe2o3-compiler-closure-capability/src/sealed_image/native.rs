@@ -174,7 +174,7 @@ impl SealedCapabilityImage {
         Ok(())
     }
 
-    fn revalidate_fixed(&self) -> Result<fs::Metadata> {
+    pub(super) fn revalidate_fixed(&self) -> Result<fs::Metadata> {
         self.revalidate_file_fixed(&self.image)
     }
 

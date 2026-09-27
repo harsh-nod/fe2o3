@@ -81,6 +81,28 @@ macro_rules! policy_capability {
             ) -> Result<()> {
                 self.0.validate_transfer(transfer, budget)
             }
+            /// Reserves fixed policy FD 202 without replacing an occupied slot.
+            /// Command owns the CLOEXEC alias; the child hook checks its exact sealed
+            /// object and clears CLOEXEC only after fork. Parent flags stay unchanged.
+            ///
+            /// Prepay retained_storage() + FILE_STORAGE on the original ledger.
+            /// FILE_STORAGE remains caller-owned until Command drops, including on
+            /// failure. Also prepay the complete Command, hook backing/growth and
+            /// spawning schedule separately: this API meters only capability work
+            /// and scratch, not arbitrary Command construction or process execution.
+            /// Drop Command after its one intended spawn, before retiring its charge.
+            /// No policy decode, allocation or retry runs in the child hook.
+            pub fn inherit_for_child(
+                &self,
+                command: &mut std::process::Command,
+                budget: &mut Budget<'_>,
+            ) -> Result<()> {
+                self.0.inherit_for_child_at(
+                    command,
+                    crate::COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
+                    budget,
+                )
+            }
             pub const fn retained_storage(&self) -> usize {
                 Capability::RETAINED
             }

@@ -372,6 +372,21 @@ impl<T: Record<N>, const N: usize> NativeCapability<T, N> {
             Ok(())
         })
     }
+
+    pub(crate) fn inherit_for_child_at(
+        &self,
+        command: &mut std::process::Command,
+        child_fd: RawFd,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        // The caller retains the alias/hook reservation until Command drops.
+        // IO_WORK covers checks, reservation and the child's four descriptor calls;
+        // spawning and Command allocation are separately prepaid by the caller.
+        Self::scope(budget, Self::RETAINED + Self::FILE_STORAGE, |_| {
+            self.check()?;
+            self.image.inherit_fixed(command, child_fd)
+        })
+    }
 }
 
 pub(crate) const fn envelope_overhead<T, E>() -> usize {
