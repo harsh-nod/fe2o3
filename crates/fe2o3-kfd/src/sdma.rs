@@ -411,6 +411,145 @@ pub struct Gfx942SdmaBufferV1 {
     initialized_prefix: u64,
 }
 
+/// Storage and its initialization evidence move together across persistent ownership.
+/// Only an inspected, never-published compute cancellation may restore a detached lease
+/// without discarding this evidence.
+pub(crate) struct Gfx942SdmaDeviceBackingV1 {
+    lease: Option<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>>,
+    initialization: Option<Gfx942SdmaDeviceInitializationV1>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct Gfx942SdmaDeviceInitializationV1 {
+    identity: Gfx942DeviceMemoryIdentityV1,
+    queue: QueueKeyV1,
+    physical_bytes: u64,
+    pool_generation: u64,
+    logical_bytes: u64,
+    initialized_prefix: u64,
+}
+
+impl Gfx942SdmaDeviceBackingV1 {
+    pub(crate) fn from_native(
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Self {
+        Self {
+            lease: Some(lease),
+            initialization: None,
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn from_buffer(buffer: Gfx942SdmaBufferV1) -> Result<Self, Gfx942SdmaBufferV1> {
+        if buffer.kind() != Gfx942SdmaBufferKindV1::DeviceLocal {
+            return Err(buffer);
+        }
+        let Gfx942SdmaBufferStorageV1::Device(lease) = buffer.storage else {
+            unreachable!("checked device storage")
+        };
+        let initialization = Gfx942SdmaDeviceInitializationV1 {
+            identity: lease.storage_identity(),
+            queue: buffer.owner,
+            physical_bytes: lease.layout().requested_bytes(),
+            pool_generation: buffer.pool_generation,
+            logical_bytes: buffer.logical_bytes,
+            initialized_prefix: buffer.initialized_prefix,
+        };
+        Ok(Self {
+            lease: Some(lease),
+            initialization: Some(initialization),
+        })
+    }
+
+    pub(crate) fn lease(&self) -> Option<&Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>> {
+        self.lease.as_ref()
+    }
+
+    pub(crate) fn into_native(self) -> Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1> {
+        self.lease.expect("attached device backing")
+    }
+
+    pub(crate) fn matches_scope(
+        &self,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+    ) -> bool {
+        self.lease.as_ref().is_some_and(|lease| {
+            logical_bytes != 0
+                && logical_bytes <= lease.layout().requested_bytes()
+                && self.initialization.as_ref().is_none_or(|fact| {
+                    fact.identity == lease.storage_identity()
+                        && exact_queue_owner(fact.queue, queue)
+                        && fact.physical_bytes == lease.layout().requested_bytes()
+                        && fact.pool_generation == generation
+                        && fact.logical_bytes == logical_bytes
+                })
+        })
+    }
+
+    pub(crate) fn into_buffer(
+        self,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+    ) -> Gfx942SdmaBufferV1 {
+        let lease = self.lease.expect("attached device backing");
+        let prefix = self
+            .initialization
+            .filter(|fact| {
+                fact.identity == lease.storage_identity()
+                    && exact_queue_owner(fact.queue, queue)
+                    && fact.physical_bytes == lease.layout().requested_bytes()
+                    && fact.pool_generation == generation
+                    && fact.logical_bytes == logical_bytes
+                    && fact.initialized_prefix <= logical_bytes
+                    && logical_bytes <= fact.physical_bytes
+            })
+            .map_or(0, |fact| fact.initialized_prefix);
+        let mut buffer = Gfx942SdmaBufferV1::from_bridge_parts(
+            Gfx942SdmaBufferStorageV1::Device(lease),
+            queue,
+            generation,
+            logical_bytes,
+        );
+        buffer.initialized_prefix = prefix;
+        buffer
+    }
+
+    pub(crate) fn detach_for_compute(
+        &mut self,
+    ) -> Option<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>> {
+        self.lease.take()
+    }
+
+    pub(crate) fn restore_cancelled_compute(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        _permit: crate::persistent_allocation::PersistentComputeCancellationPermitV1,
+    ) {
+        assert!(self.lease.is_none());
+        // The persistent owner checks the exact prepared use and storage before entry.
+        self.lease = Some(lease);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn initialization_for_test(
+        &self,
+    ) -> Option<(Gfx942DeviceMemoryIdentityV1, QueueKeyV1, u64, u64, u64, u64)> {
+        self.initialization.as_ref().map(|fact| {
+            (
+                fact.identity,
+                fact.queue,
+                fact.physical_bytes,
+                fact.pool_generation,
+                fact.logical_bytes,
+                fact.initialized_prefix,
+            )
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Gfx942SdmaBufferCleanupMetadataV1 {
     identity: Gfx942SdmaBufferStorageIdentityV1,
@@ -452,6 +591,10 @@ impl Gfx942SdmaBufferV1 {
 
     pub(crate) fn belongs_to(&self, owner: QueueKeyV1) -> bool {
         exact_queue_owner(self.owner, owner)
+    }
+
+    pub(crate) const fn queue_owner(&self) -> QueueKeyV1 {
+        self.owner
     }
 
     pub(crate) fn advance_pool_generation(&mut self) -> Result<(), Gfx942SdmaErrorV1> {
@@ -1842,7 +1985,7 @@ impl Gfx942SdmaQueueOwnerV1 {
 
     pub(crate) fn submit(
         &mut self,
-        memory: &mut SharedGttMemorySessionV1,
+        memory: &mut impl SdmaSingleMemoryV1,
         source: Gfx942SdmaBufferV1,
         source_offset: u64,
         mut destination: Gfx942SdmaBufferV1,
@@ -1893,7 +2036,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         let completion_value = generation;
         let completion_offset = (ring_slot * 8) as u64;
         let completion_address = memory
-            .mapped_resource_facts(
+            .single_host_facts(
                 self.completions
                     .as_ref()
                     .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?,
@@ -1949,10 +2092,11 @@ impl Gfx942SdmaQueueOwnerV1 {
             write,
             write_end,
         )?;
-        self.doorbell
-            .as_mut()
-            .expect("checked SDMA doorbell")
-            .store_packet_id_release(write_end)
+        memory
+            .single_doorbell(
+                self.doorbell.as_mut().expect("checked SDMA doorbell"),
+                write_end,
+            )
             .map_err(|_| Gfx942SdmaErrorV1::Doorbell(doorbell_failure))?;
         self.poisoned = false;
         Ok(Gfx942SdmaCopyTicketV1 {
@@ -5548,7 +5692,7 @@ impl Gfx942SdmaQueueSetV1 {
 
     pub(crate) fn submit(
         &mut self,
-        memory: &mut SharedGttMemorySessionV1,
+        memory: &mut impl SdmaSingleMemoryV1,
         source: Gfx942SdmaBufferV1,
         source_offset: u64,
         destination: Gfx942SdmaBufferV1,

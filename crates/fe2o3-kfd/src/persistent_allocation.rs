@@ -4,9 +4,14 @@
 //! record a checked host-side custody protocol; they do not publish AQL or SDMA
 //! packets and are not evidence that firmware observed a dependency.
 
+use fe2o3_runtime_model::QueueKeyV1;
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
+
+use crate::sdma::{
+    Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferV1, Gfx942SdmaDeviceBackingV1,
+};
 
 use crate::shared_memory::{
     Gfx942DeviceMemoryIdentityV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
@@ -24,6 +29,16 @@ pub const GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1: usize = 64;
 pub enum Gfx942PersistentNativeAllocationV1 {
     Local(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
     ExactTwoDevicePeer(Gfx942XgmiMappedDeviceMemoryV1),
+}
+
+enum PersistentBackingV1 {
+    Local(Gfx942SdmaDeviceBackingV1),
+    ExactTwoDevicePeer(Gfx942XgmiMappedDeviceMemoryV1),
+}
+
+/// Minted only after exact never-published compute restoration preflight.
+pub(crate) struct PersistentComputeCancellationPermitV1 {
+    _private: (),
 }
 
 impl fmt::Debug for Gfx942PersistentNativeAllocationV1 {
@@ -457,6 +472,8 @@ pub(crate) struct PersistentOwnerSnapshotForTestV1 {
     binding: Gfx942DeviceMemoryIdentityV1,
     mapping: Gfx942PersistentMappingFormV1,
     byte_len: u64,
+    initialization: Option<(Gfx942DeviceMemoryIdentityV1, QueueKeyV1, u64, u64, u64, u64)>,
+    detached_compute: Option<(u8, u64)>,
     ledger_address: usize,
     ledger: [Option<LedgerRecordV1>; GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1],
     next_generation: u64,
@@ -506,18 +523,23 @@ impl PersistentOwnerSnapshotForTestV1 {
 #[must_use = "persistent native authority must be explicitly released or retained"]
 pub struct Gfx942PersistentDeviceAllocationV1 {
     incarnation: Rc<()>,
-    native: Option<Gfx942PersistentNativeAllocationV1>,
     binding: Gfx942DeviceMemoryIdentityV1,
     mapping: Gfx942PersistentMappingFormV1,
     byte_len: u64,
-    // Allocate fixed storage once so bounded custody does not multiply inline ledgers.
-    ledger: Box<[Option<LedgerRecordV1>; GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1]>,
+    // One allocation keeps both the bounded ledger and backing out of inline custody.
+    state: Box<PersistentOwnerStateV1>,
     next_generation: u64,
     next_sequence: u64,
     frontier_generation: u64,
     frontier_sequence: Option<u64>,
     quarantine: Option<Gfx942PersistentQuarantineReasonV1>,
     thread_affinity: PhantomData<Rc<()>>,
+}
+
+struct PersistentOwnerStateV1 {
+    native: Option<PersistentBackingV1>,
+    detached_compute: Option<(u8, u64)>,
+    ledger: [Option<LedgerRecordV1>; GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1],
 }
 
 impl fmt::Debug for Gfx942PersistentDeviceAllocationV1 {
@@ -543,11 +565,25 @@ impl Gfx942PersistentDeviceAllocationV1 {
         let binding = lease.storage_identity();
         let byte_len = lease.layout().requested_bytes();
         Self::new(
-            Gfx942PersistentNativeAllocationV1::Local(lease),
+            PersistentBackingV1::Local(Gfx942SdmaDeviceBackingV1::from_native(lease)),
             binding,
             Gfx942PersistentMappingFormV1::Local,
             byte_len,
         )
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn from_sdma_buffer(buffer: Gfx942SdmaBufferV1) -> Result<Self, Gfx942SdmaBufferV1> {
+        let backing = Gfx942SdmaDeviceBackingV1::from_buffer(buffer)?;
+        let lease = backing.lease().expect("attached buffer");
+        let binding = lease.storage_identity();
+        let byte_len = lease.layout().requested_bytes();
+        Ok(Self::new(
+            PersistentBackingV1::Local(backing),
+            binding,
+            Gfx942PersistentMappingFormV1::Local,
+            byte_len,
+        ))
     }
 
     #[allow(clippy::result_large_err)]
@@ -564,7 +600,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         let binding = mapping.lease().storage_identity();
         let byte_len = mapping.lease().layout().requested_bytes();
         Ok(Self::new(
-            Gfx942PersistentNativeAllocationV1::ExactTwoDevicePeer(mapping),
+            PersistentBackingV1::ExactTwoDevicePeer(mapping),
             binding,
             Gfx942PersistentMappingFormV1::ExactTwoDevicePeer { gpu_ids },
             byte_len,
@@ -572,18 +608,21 @@ impl Gfx942PersistentDeviceAllocationV1 {
     }
 
     fn new(
-        native: Gfx942PersistentNativeAllocationV1,
+        native: PersistentBackingV1,
         binding: Gfx942DeviceMemoryIdentityV1,
         mapping: Gfx942PersistentMappingFormV1,
         byte_len: u64,
     ) -> Self {
         Self {
             incarnation: Rc::new(()),
-            native: Some(native),
             binding,
             mapping,
             byte_len,
-            ledger: Box::new([None; GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1]),
+            state: Box::new(PersistentOwnerStateV1 {
+                native: Some(native),
+                detached_compute: None,
+                ledger: [None; GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1],
+            }),
             next_generation: 1,
             next_sequence: 1,
             frontier_generation: 0,
@@ -607,8 +646,13 @@ impl Gfx942PersistentDeviceAllocationV1 {
             binding: self.binding,
             mapping: self.mapping,
             byte_len: self.byte_len,
-            ledger_address: self.ledger.as_ptr() as usize,
-            ledger: *self.ledger,
+            initialization: match self.state.native.as_ref() {
+                Some(PersistentBackingV1::Local(backing)) => backing.initialization_for_test(),
+                _ => None,
+            },
+            detached_compute: self.state.detached_compute,
+            ledger_address: self.state.ledger.as_ptr() as usize,
+            ledger: self.state.ledger,
             next_generation: self.next_generation,
             next_sequence: self.next_sequence,
             frontier_generation: self.frontier_generation,
@@ -626,7 +670,8 @@ impl Gfx942PersistentDeviceAllocationV1 {
     }
 
     pub fn live_use_count(&self) -> usize {
-        self.ledger
+        self.state
+            .ledger
             .iter()
             .flatten()
             .filter(|record| record.state != LedgerStateV1::Settled)
@@ -634,7 +679,8 @@ impl Gfx942PersistentDeviceAllocationV1 {
     }
 
     pub fn retained_settled_use_count(&self) -> usize {
-        self.ledger
+        self.state
+            .ledger
             .iter()
             .flatten()
             .filter(|record| record.state == LedgerStateV1::Settled)
@@ -671,7 +717,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         }
 
         let mut needs_dependency = false;
-        for record in self.ledger.iter().flatten() {
+        for record in self.state.ledger.iter().flatten() {
             if !request.range.overlaps(record.request.range) {
                 continue;
             }
@@ -703,7 +749,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
             _ => {}
         }
 
-        let Some(slot) = self.ledger.iter().position(Option::is_none) else {
+        let Some(slot) = self.state.ledger.iter().position(Option::is_none) else {
             return Err(fail(Gfx942PersistentUseErrorV1::Capacity));
         };
         let generation = self.next_generation;
@@ -716,7 +762,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         };
         self.next_generation = next_generation;
         self.next_sequence = next_sequence;
-        self.ledger[slot] = Some(LedgerRecordV1 {
+        self.state.ledger[slot] = Some(LedgerRecordV1 {
             generation,
             sequence,
             request,
@@ -774,7 +820,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if let Err(error) = result {
             return Err(Gfx942PersistentTransitionFailureV1 { error, lease });
         }
-        self.ledger[usize::from(lease.slot)]
+        self.state.ledger[usize::from(lease.slot)]
             .as_mut()
             .expect("validated ledger slot")
             .state = next;
@@ -810,7 +856,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if let Err(error) = self.validate_lease(&lease, expected) {
             return Err(Gfx942PersistentTransitionFailureV1 { error, lease });
         }
-        self.ledger[usize::from(lease.slot)] = None;
+        self.state.ledger[usize::from(lease.slot)] = None;
         Ok(())
     }
 
@@ -837,7 +883,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if let Err(error) = self.validate_lease(&lease, LedgerStateV1::Completed) {
             return Err(Gfx942PersistentTransitionFailureV1 { error, lease });
         }
-        if self.ledger.iter().flatten().any(|record| {
+        if self.state.ledger.iter().flatten().any(|record| {
             record.sequence < lease.sequence && record.state != LedgerStateV1::Settled
         }) {
             return Err(Gfx942PersistentTransitionFailureV1 {
@@ -851,7 +897,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
                 lease,
             });
         };
-        self.ledger[usize::from(lease.slot)]
+        self.state.ledger[usize::from(lease.slot)]
             .as_mut()
             .expect("validated ledger slot")
             .state = LedgerStateV1::Settled;
@@ -871,7 +917,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         lease: &Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
     ) -> Result<(), Gfx942PersistentUseErrorV1> {
         self.validate_lease(lease, LedgerStateV1::Completed)?;
-        if self.ledger.iter().flatten().any(|record| {
+        if self.state.ledger.iter().flatten().any(|record| {
             record.sequence < lease.sequence && record.state != LedgerStateV1::Settled
         }) {
             return Err(Gfx942PersistentUseErrorV1::EarlierUseNotSettled);
@@ -893,6 +939,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
             && frontier.generation == self.frontier_generation
             && Some(frontier.through_sequence) == self.frontier_sequence;
         let has_active = self
+            .state
             .ledger
             .iter()
             .flatten()
@@ -900,7 +947,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if !current || has_active || self.quarantine.is_some() {
             return Err(frontier);
         }
-        for slot in self.ledger.iter_mut() {
+        for slot in self.state.ledger.iter_mut() {
             if slot
                 .as_ref()
                 .is_some_and(|record| record.state == LedgerStateV1::Settled)
@@ -921,6 +968,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
             && frontier.generation == self.frontier_generation
             && Some(frontier.through_sequence) == self.frontier_sequence;
         let has_active = self
+            .state
             .ledger
             .iter()
             .flatten()
@@ -939,7 +987,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if let Err(error) = self.validate_lease(&lease, LedgerStateV1::Published) {
             return Err(Gfx942PersistentTransitionFailureV1 { error, lease });
         }
-        self.ledger[usize::from(lease.slot)]
+        self.state.ledger[usize::from(lease.slot)]
             .as_mut()
             .expect("validated ledger slot")
             .state = LedgerStateV1::Quarantined;
@@ -958,7 +1006,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if let Err(error) = self.validate_lease(&lease, LedgerStateV1::Prepared) {
             return Err(Gfx942PersistentTransitionFailureV1 { error, lease });
         }
-        self.ledger[usize::from(lease.slot)]
+        self.state.ledger[usize::from(lease.slot)]
             .as_mut()
             .expect("validated ledger slot")
             .state = LedgerStateV1::Quarantined;
@@ -976,7 +1024,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if let Err(error) = self.validate_lease(&lease, LedgerStateV1::Completed) {
             return Err(Gfx942PersistentTransitionFailureV1 { error, lease });
         }
-        self.ledger[usize::from(lease.slot)]
+        self.state.ledger[usize::from(lease.slot)]
             .as_mut()
             .expect("validated ledger slot")
             .state = LedgerStateV1::Quarantined;
@@ -995,7 +1043,14 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if prepared.request.owner() != Gfx942PersistentUseOwnerV1::Compute {
             return Err(Gfx942PersistentUseErrorV1::WrongState);
         }
-        self.detach_local_native_for_sdma()
+        let Some(PersistentBackingV1::Local(backing)) = self.state.native.as_mut() else {
+            return Err(Gfx942PersistentUseErrorV1::WrongState);
+        };
+        let lease = backing
+            .detach_for_compute()
+            .ok_or(Gfx942PersistentUseErrorV1::WrongState)?;
+        self.state.detached_compute = Some((prepared.slot, prepared.generation));
+        Ok(lease)
     }
 
     /// Restores only the exact mapping returned by the completed compute use.
@@ -1017,6 +1072,9 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if completed.request.owner() != Gfx942PersistentUseOwnerV1::Compute {
             return Err((Gfx942PersistentUseErrorV1::WrongState, lease));
         }
+        if let Err(error) = self.preflight_restore_local_native_from_compute(completed, &lease) {
+            return Err((error, lease));
+        }
         self.restore_local_native_from_sdma(lease)
     }
 
@@ -1027,7 +1085,8 @@ impl Gfx942PersistentDeviceAllocationV1 {
     ) -> Result<(), Gfx942PersistentUseErrorV1> {
         self.validate_lease(completed, LedgerStateV1::Completed)?;
         if completed.request.owner() != Gfx942PersistentUseOwnerV1::Compute
-            || self.native.is_some()
+            || self.state.detached_compute != Some((completed.slot, completed.generation))
+            || self.local_native_is_attached_for_sdma()
             || lease.storage_identity() != self.binding
             || lease.layout().requested_bytes() != self.byte_len
         {
@@ -1056,7 +1115,20 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if prepared.request.owner() != Gfx942PersistentUseOwnerV1::Compute {
             return Err((Gfx942PersistentUseErrorV1::WrongState, lease));
         }
-        self.restore_local_native_from_sdma(lease)
+        if let Err(error) =
+            self.preflight_restore_local_native_from_cancelled_compute(prepared, &lease)
+        {
+            return Err((error, lease));
+        }
+        let Some(PersistentBackingV1::Local(backing)) = self.state.native.as_mut() else {
+            return Err((Gfx942PersistentUseErrorV1::WrongState, lease));
+        };
+        backing.restore_cancelled_compute(
+            lease,
+            PersistentComputeCancellationPermitV1 { _private: () },
+        );
+        self.state.detached_compute = None;
+        Ok(())
     }
 
     pub(crate) fn preflight_restore_local_native_from_cancelled_compute(
@@ -1066,7 +1138,9 @@ impl Gfx942PersistentDeviceAllocationV1 {
     ) -> Result<(), Gfx942PersistentUseErrorV1> {
         self.validate_lease(prepared, LedgerStateV1::Prepared)?;
         if prepared.request.owner() != Gfx942PersistentUseOwnerV1::Compute
-            || self.native.is_some()
+            || self.state.detached_compute != Some((prepared.slot, prepared.generation))
+            || self.local_native_is_attached_for_sdma()
+            || !matches!(self.state.native, Some(PersistentBackingV1::Local(_)))
             || lease.storage_identity() != self.binding
             || lease.layout().requested_bytes() != self.byte_len
         {
@@ -1077,6 +1151,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
 
     /// Temporarily moves the exact local mapping into a queue record. The
     /// queue adapter retains this owner while the native authority is absent.
+    #[cfg(test)]
     pub(crate) fn detach_local_native_for_sdma(
         &mut self,
     ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>, Gfx942PersistentUseErrorV1>
@@ -1084,14 +1159,62 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if self.quarantine.is_some() {
             return Err(Gfx942PersistentUseErrorV1::Quarantined);
         }
-        match self.native.take() {
-            Some(Gfx942PersistentNativeAllocationV1::Local(lease)) => Ok(lease),
-            Some(native @ Gfx942PersistentNativeAllocationV1::ExactTwoDevicePeer(_)) => {
-                self.native = Some(native);
-                Err(Gfx942PersistentUseErrorV1::WrongState)
-            }
-            None => Err(Gfx942PersistentUseErrorV1::WrongState),
+        if !self.local_native_is_attached_for_sdma() {
+            return Err(Gfx942PersistentUseErrorV1::WrongState);
         }
+        let Some(PersistentBackingV1::Local(backing)) = self.state.native.take() else {
+            unreachable!("checked attached local backing")
+        };
+        Ok(backing.into_native())
+    }
+
+    pub(crate) fn detach_sdma_buffer(
+        &mut self,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+    ) -> Result<Gfx942SdmaBufferV1, Gfx942PersistentUseErrorV1> {
+        if self.quarantine.is_some() {
+            return Err(Gfx942PersistentUseErrorV1::Quarantined);
+        }
+        if !self.can_detach_sdma_buffer(queue, generation, logical_bytes) {
+            return Err(Gfx942PersistentUseErrorV1::WrongState);
+        }
+        let Some(PersistentBackingV1::Local(backing)) = self.state.native.take() else {
+            unreachable!("checked attached local backing")
+        };
+        Ok(backing.into_buffer(queue, generation, logical_bytes))
+    }
+
+    fn can_detach_sdma_buffer(
+        &self,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+    ) -> bool {
+        matches!(self.state.native.as_ref(), Some(PersistentBackingV1::Local(backing)) if backing.matches_scope(queue, generation, logical_bytes))
+    }
+
+    fn can_restore_sdma_buffer(&self, buffer: &Gfx942SdmaBufferV1) -> bool {
+        self.quarantine.is_none()
+            && self.mapping == Gfx942PersistentMappingFormV1::Local
+            && self.state.native.is_none()
+            && buffer.storage_identity() == Gfx942SdmaBufferStorageIdentityV1::Device(self.binding)
+            && buffer.physical_bytes() == self.byte_len
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn restore_sdma_buffer(
+        &mut self,
+        buffer: Gfx942SdmaBufferV1,
+    ) -> Result<(), Gfx942SdmaBufferV1> {
+        if !self.can_restore_sdma_buffer(&buffer) {
+            return Err(buffer);
+        }
+        self.state.native = Some(PersistentBackingV1::Local(
+            Gfx942SdmaDeviceBackingV1::from_buffer(buffer).expect("checked device backing"),
+        ));
+        Ok(())
     }
 
     /// Restores only the exact local mapping detached from this owner.
@@ -1106,7 +1229,9 @@ impl Gfx942PersistentDeviceAllocationV1 {
             Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
         ),
     > {
-        if self.native.is_some() {
+        if self.local_native_is_attached_for_sdma()
+            || self.mapping != Gfx942PersistentMappingFormV1::Local
+        {
             return Err((Gfx942PersistentUseErrorV1::WrongState, lease));
         }
         if lease.storage_identity() != self.binding
@@ -1114,23 +1239,23 @@ impl Gfx942PersistentDeviceAllocationV1 {
         {
             return Err((Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration, lease));
         }
-        self.native = Some(Gfx942PersistentNativeAllocationV1::Local(lease));
+        self.state.native = Some(PersistentBackingV1::Local(
+            Gfx942SdmaDeviceBackingV1::from_native(lease),
+        ));
+        self.state.detached_compute = None;
         Ok(())
     }
 
     pub(crate) fn local_native_is_attached_for_sdma(&self) -> bool {
-        matches!(
-            self.native,
-            Some(Gfx942PersistentNativeAllocationV1::Local(_))
-        )
+        self.local_native_for_sdma().is_some()
     }
 
     pub(crate) fn local_native_for_sdma(
         &self,
     ) -> Option<&Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>> {
-        match self.native.as_ref()? {
-            Gfx942PersistentNativeAllocationV1::Local(lease) => Some(lease),
-            Gfx942PersistentNativeAllocationV1::ExactTwoDevicePeer(_) => None,
+        match self.state.native.as_ref()? {
+            PersistentBackingV1::Local(backing) => backing.lease(),
+            PersistentBackingV1::ExactTwoDevicePeer(_) => None,
         }
     }
 
@@ -1150,6 +1275,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
             return Err((Gfx942PersistentUseErrorV1::Quarantined, self));
         }
         if self
+            .state
             .ledger
             .iter()
             .flatten()
@@ -1157,10 +1283,22 @@ impl Gfx942PersistentDeviceAllocationV1 {
         {
             return Err((Gfx942PersistentUseErrorV1::OutstandingUses, self));
         }
-        Ok(self
-            .native
-            .take()
-            .expect("persistent owner retains native authority"))
+        if self.state.native.is_none()
+            || (self.mapping == Gfx942PersistentMappingFormV1::Local
+                && !self.local_native_is_attached_for_sdma())
+        {
+            return Err((Gfx942PersistentUseErrorV1::WrongState, self));
+        }
+        Ok(
+            match self.state.native.take().expect("checked native authority") {
+                PersistentBackingV1::Local(backing) => {
+                    Gfx942PersistentNativeAllocationV1::Local(backing.into_native())
+                }
+                PersistentBackingV1::ExactTwoDevicePeer(mapping) => {
+                    Gfx942PersistentNativeAllocationV1::ExactTwoDevicePeer(mapping)
+                }
+            },
+        )
     }
 
     fn validate_lease<S: Gfx942PersistentUseStateV1>(
@@ -1175,6 +1313,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
             return Err(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
         }
         let Some(record) = self
+            .state
             .ledger
             .get(usize::from(lease.slot))
             .and_then(Option::as_ref)
@@ -1213,6 +1352,31 @@ fn validate_local_sdma_pair<S: Gfx942PersistentUseStateV1>(
     destination_owner.validate_lease(destination, expected)
 }
 
+fn detach_local_backing_pair_for_sdma_v1(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+) -> Result<(Gfx942SdmaDeviceBackingV1, Gfx942SdmaDeviceBackingV1), Gfx942PersistentUseErrorV1> {
+    if source_owner.quarantine.is_some() || destination_owner.quarantine.is_some() {
+        return Err(Gfx942PersistentUseErrorV1::Quarantined);
+    }
+    if Rc::ptr_eq(&source_owner.incarnation, &destination_owner.incarnation)
+        || source_owner.binding == destination_owner.binding
+        || !source_owner.local_native_is_attached_for_sdma()
+        || !destination_owner.local_native_is_attached_for_sdma()
+    {
+        return Err(Gfx942PersistentUseErrorV1::WrongState);
+    }
+    let Some(PersistentBackingV1::Local(source)) = source_owner.state.native.take() else {
+        unreachable!("prevalidated local source native custody")
+    };
+    let Some(PersistentBackingV1::Local(destination)) = destination_owner.state.native.take()
+    else {
+        unreachable!("prevalidated local destination native custody")
+    };
+    Ok((source, destination))
+}
+
+#[cfg(test)]
 pub(crate) fn detach_local_native_pair_for_sdma_v1(
     source_owner: &mut Gfx942PersistentDeviceAllocationV1,
     destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
@@ -1223,45 +1387,50 @@ pub(crate) fn detach_local_native_pair_for_sdma_v1(
     ),
     Gfx942PersistentUseErrorV1,
 > {
-    if source_owner.quarantine.is_some() || destination_owner.quarantine.is_some() {
-        return Err(Gfx942PersistentUseErrorV1::Quarantined);
-    }
-    if Rc::ptr_eq(&source_owner.incarnation, &destination_owner.incarnation)
-        || source_owner.binding == destination_owner.binding
-        || !matches!(
-            source_owner.native,
-            Some(Gfx942PersistentNativeAllocationV1::Local(_))
-        )
-        || !matches!(
-            destination_owner.native,
-            Some(Gfx942PersistentNativeAllocationV1::Local(_))
+    let (source, destination) =
+        detach_local_backing_pair_for_sdma_v1(source_owner, destination_owner)?;
+    Ok((source.into_native(), destination.into_native()))
+}
+
+pub(crate) fn detach_sdma_buffer_pair_v1(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    source_scope: (QueueKeyV1, u64, u64),
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination_scope: (QueueKeyV1, u64, u64),
+) -> Result<(Gfx942SdmaBufferV1, Gfx942SdmaBufferV1), Gfx942PersistentUseErrorV1> {
+    if !source_owner.can_detach_sdma_buffer(source_scope.0, source_scope.1, source_scope.2)
+        || !destination_owner.can_detach_sdma_buffer(
+            destination_scope.0,
+            destination_scope.1,
+            destination_scope.2,
         )
     {
         return Err(Gfx942PersistentUseErrorV1::WrongState);
     }
-    let Some(Gfx942PersistentNativeAllocationV1::Local(source)) = source_owner.native.take() else {
-        unreachable!("prevalidated local source native custody")
-    };
-    let Some(Gfx942PersistentNativeAllocationV1::Local(destination)) =
-        destination_owner.native.take()
-    else {
-        unreachable!("prevalidated local destination native custody")
-    };
-    Ok((source, destination))
+    let (source, destination) =
+        detach_local_backing_pair_for_sdma_v1(source_owner, destination_owner)?;
+    Ok((
+        source.into_buffer(source_scope.0, source_scope.1, source_scope.2),
+        destination.into_buffer(
+            destination_scope.0,
+            destination_scope.1,
+            destination_scope.2,
+        ),
+    ))
 }
 
 #[allow(clippy::result_large_err)]
-pub(crate) fn restore_local_native_pair_from_sdma_v1(
+pub(crate) fn restore_sdma_buffer_pair_v1(
     source_owner: &mut Gfx942PersistentDeviceAllocationV1,
-    source: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    source: Gfx942SdmaBufferV1,
     destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
-    destination: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    destination: Gfx942SdmaBufferV1,
 ) -> Result<
     (),
     (
         Gfx942PersistentUseErrorV1,
-        Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
-        Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        Gfx942SdmaBufferV1,
+        Gfx942SdmaBufferV1,
     ),
 > {
     if source_owner.quarantine.is_some() || destination_owner.quarantine.is_some() {
@@ -1269,13 +1438,9 @@ pub(crate) fn restore_local_native_pair_from_sdma_v1(
     }
     if Rc::ptr_eq(&source_owner.incarnation, &destination_owner.incarnation)
         || source_owner.binding == destination_owner.binding
-        || source_owner.native.is_some()
-        || destination_owner.native.is_some()
-        || source.storage_identity() != source_owner.binding
-        || destination.storage_identity() != destination_owner.binding
+        || !source_owner.can_restore_sdma_buffer(&source)
+        || !destination_owner.can_restore_sdma_buffer(&destination)
         || source.storage_identity() == destination.storage_identity()
-        || source.layout().requested_bytes() != source_owner.byte_len
-        || destination.layout().requested_bytes() != destination_owner.byte_len
     {
         return Err((
             Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration,
@@ -1283,8 +1448,12 @@ pub(crate) fn restore_local_native_pair_from_sdma_v1(
             destination,
         ));
     }
-    source_owner.native = Some(Gfx942PersistentNativeAllocationV1::Local(source));
-    destination_owner.native = Some(Gfx942PersistentNativeAllocationV1::Local(destination));
+    source_owner
+        .restore_sdma_buffer(source)
+        .expect("prevalidated source backing");
+    destination_owner
+        .restore_sdma_buffer(destination)
+        .expect("prevalidated destination backing");
     Ok(())
 }
 
@@ -1313,11 +1482,11 @@ fn transition_local_sdma_pair<S: Gfx942PersistentUseStateV1, T: Gfx942Persistent
             destination,
         });
     }
-    source_owner.ledger[usize::from(source.slot)]
+    source_owner.state.ledger[usize::from(source.slot)]
         .as_mut()
         .expect("validated source ledger slot")
         .state = next;
-    destination_owner.ledger[usize::from(destination.slot)]
+    destination_owner.state.ledger[usize::from(destination.slot)]
         .as_mut()
         .expect("validated destination ledger slot")
         .state = next;
@@ -1390,8 +1559,8 @@ pub(crate) fn cancel_prepared_local_sdma_pair_v1(
             destination,
         });
     }
-    source_owner.ledger[usize::from(source.slot)] = None;
-    destination_owner.ledger[usize::from(destination.slot)] = None;
+    source_owner.state.ledger[usize::from(source.slot)] = None;
+    destination_owner.state.ledger[usize::from(destination.slot)] = None;
     Ok(())
 }
 
@@ -1416,11 +1585,11 @@ pub(crate) fn quarantine_prepared_local_sdma_pair_v1(
             destination,
         });
     }
-    source_owner.ledger[usize::from(source.slot)]
+    source_owner.state.ledger[usize::from(source.slot)]
         .as_mut()
         .expect("validated source ledger slot")
         .state = LedgerStateV1::Quarantined;
-    destination_owner.ledger[usize::from(destination.slot)]
+    destination_owner.state.ledger[usize::from(destination.slot)]
         .as_mut()
         .expect("validated destination ledger slot")
         .state = LedgerStateV1::Quarantined;
@@ -1450,11 +1619,11 @@ pub(crate) fn quarantine_published_local_sdma_pair_v1(
             destination,
         });
     }
-    source_owner.ledger[usize::from(source.slot)]
+    source_owner.state.ledger[usize::from(source.slot)]
         .as_mut()
         .expect("validated source ledger slot")
         .state = LedgerStateV1::Quarantined;
-    destination_owner.ledger[usize::from(destination.slot)]
+    destination_owner.state.ledger[usize::from(destination.slot)]
         .as_mut()
         .expect("validated destination ledger slot")
         .state = LedgerStateV1::Quarantined;
@@ -1484,11 +1653,17 @@ pub(crate) fn settle_completed_local_sdma_pair_v1(
         LedgerStateV1::Completed,
     )
     .and_then(|()| {
-        if source_owner.ledger.iter().flatten().any(|record| {
+        if source_owner.state.ledger.iter().flatten().any(|record| {
             record.sequence < source.sequence && record.state != LedgerStateV1::Settled
-        }) || destination_owner.ledger.iter().flatten().any(|record| {
-            record.sequence < destination.sequence && record.state != LedgerStateV1::Settled
-        }) {
+        }) || destination_owner
+            .state
+            .ledger
+            .iter()
+            .flatten()
+            .any(|record| {
+                record.sequence < destination.sequence && record.state != LedgerStateV1::Settled
+            })
+        {
             return Err(Gfx942PersistentUseErrorV1::EarlierUseNotSettled);
         }
         if source_owner.frontier_generation.checked_add(1).is_none()
@@ -1510,11 +1685,11 @@ pub(crate) fn settle_completed_local_sdma_pair_v1(
     }
     let source_generation = source_owner.frontier_generation + 1;
     let destination_generation = destination_owner.frontier_generation + 1;
-    source_owner.ledger[usize::from(source.slot)]
+    source_owner.state.ledger[usize::from(source.slot)]
         .as_mut()
         .expect("validated source ledger slot")
         .state = LedgerStateV1::Settled;
-    destination_owner.ledger[usize::from(destination.slot)]
+    destination_owner.state.ledger[usize::from(destination.slot)]
         .as_mut()
         .expect("validated destination ledger slot")
         .state = LedgerStateV1::Settled;
@@ -1560,6 +1735,7 @@ pub(crate) fn retire_settled_local_sdma_pair_v1(
             && frontier.generation == owner.frontier_generation
             && Some(frontier.through_sequence) == owner.frontier_sequence
             && owner
+                .state
                 .ledger
                 .iter()
                 .flatten()
@@ -1569,7 +1745,7 @@ pub(crate) fn retire_settled_local_sdma_pair_v1(
     if !current(source_owner, &source) || !current(destination_owner, &destination) {
         return Err((source, destination));
     }
-    for slot in source_owner.ledger.iter_mut() {
+    for slot in source_owner.state.ledger.iter_mut() {
         if slot
             .as_ref()
             .is_some_and(|record| record.state == LedgerStateV1::Settled)
@@ -1577,7 +1753,7 @@ pub(crate) fn retire_settled_local_sdma_pair_v1(
             *slot = None;
         }
     }
-    for slot in destination_owner.ledger.iter_mut() {
+    for slot in destination_owner.state.ledger.iter_mut() {
         if slot
             .as_ref()
             .is_some_and(|record| record.state == LedgerStateV1::Settled)
@@ -1630,12 +1806,21 @@ mod tests {
     #[test]
     fn persistent_owner_and_queue_layouts_keep_ledgers_out_of_inline_custody() {
         assert!(std::mem::size_of::<Gfx942PersistentDeviceAllocationV1>() <= 512);
+        let ledger_bytes = std::mem::size_of::<
+            [Option<LedgerRecordV1>; GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1],
+        >();
+        let state_bytes = std::mem::size_of::<PersistentOwnerStateV1>();
+        assert!(state_bytes <= ledger_bytes + 1024);
         assert!(std::mem::size_of::<PersistentComputeCancellationCustodyV1>() <= 8 * 1024);
         assert!(std::mem::size_of::<BoundedPersistentComputeAttachmentV1>() <= 32 * 1024);
         // Capacity configuration and table-credit custody add fixed metadata;
         // neither the 64-slot nor the 1024-slot table may be inline here.
         let bytes = std::mem::size_of::<crate::ComputeAqlQueueSessionV1>();
         assert!(bytes <= 41 * 1024, "queue inline bytes: {bytes}");
+        eprintln!(
+            "owner_inline={} owner_heap={state_bytes} ledger={ledger_bytes} queue_inline={bytes}",
+            std::mem::size_of::<Gfx942PersistentDeviceAllocationV1>()
+        );
         assert!(std::mem::size_of::<fe2o3_resource_accounting::HostMetadataTableV1<u64>>() <= 64);
     }
 
@@ -1648,20 +1833,20 @@ mod tests {
             owner(32),
         ] {
             let binding = allocation.binding;
-            let ledger = allocation.ledger.as_ptr();
+            let ledger = allocation.state.ledger.as_ptr();
             assert_eq!(
-                allocation.ledger.len(),
+                allocation.state.ledger.len(),
                 GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1
             );
             let read = request(Gfx942PersistentOperationV1::ComputeRead, 0, 8);
             let reserved = allocation.reserve(read, None).unwrap();
             allocation = std::hint::black_box(allocation);
-            assert_eq!(allocation.ledger.as_ptr(), ledger);
+            assert_eq!(allocation.state.ledger.as_ptr(), ledger);
             assert_eq!(allocation.live_use_count(), 1);
             let (error, recovered) = allocation.try_into_native().unwrap_err();
             assert_eq!(error, Gfx942PersistentUseErrorV1::OutstandingUses);
             allocation = recovered;
-            assert_eq!(allocation.ledger.as_ptr(), ledger);
+            assert_eq!(allocation.state.ledger.as_ptr(), ledger);
             let prepared = allocation.prepare(reserved).unwrap();
             allocation.cancel_prepared(prepared).unwrap();
 
@@ -1671,8 +1856,8 @@ mod tests {
             assert_eq!(allocation.retained_settled_use_count(), 1);
             allocation = std::hint::black_box(allocation);
             allocation.retire_settled_frontier(frontier).unwrap();
-            assert_eq!(allocation.ledger.as_ptr(), ledger);
-            assert!(allocation.ledger.iter().all(Option::is_none));
+            assert_eq!(allocation.state.ledger.as_ptr(), ledger);
+            assert!(allocation.state.ledger.iter().all(Option::is_none));
             let native_binding = match allocation.try_into_native().unwrap() {
                 Gfx942PersistentNativeAllocationV1::Local(lease) => lease.storage_identity(),
                 Gfx942PersistentNativeAllocationV1::ExactTwoDevicePeer(mapping) => {

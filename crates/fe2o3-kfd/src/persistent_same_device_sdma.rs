@@ -7,15 +7,14 @@ use crate::persistent_allocation::{
     Gfx942PersistentPublishedV1, Gfx942PersistentQuarantineReasonV1, Gfx942PersistentUseLeaseV1,
     Gfx942PersistentUseRequestV1, cancel_prepared_local_sdma_pair_v1, complete_local_sdma_pair_v1,
     publish_local_sdma_pair_v1, quarantine_prepared_local_sdma_pair_v1,
-    quarantine_published_local_sdma_pair_v1, restore_local_native_pair_from_sdma_v1,
+    quarantine_published_local_sdma_pair_v1, restore_sdma_buffer_pair_v1,
     retire_settled_local_sdma_pair_v1, settle_completed_local_sdma_pair_v1,
 };
 use crate::persistent_directional_sdma::Gfx942DirectionalQueuePersistentAllocationV1;
 use crate::queue::ComputeAqlQueueSessionErrorV1;
 use crate::sdma::{
-    CompletedPersistentSdmaWindowV1, Gfx942SdmaBufferKindV1, Gfx942SdmaBufferStorageV1,
-    Gfx942SdmaBufferV1, Gfx942SdmaCopyRequestV1, Gfx942SdmaCopyTicketV1,
-    planned_ticket_matches_queue_occurrence,
+    CompletedPersistentSdmaWindowV1, Gfx942SdmaBufferKindV1, Gfx942SdmaBufferV1,
+    Gfx942SdmaCopyRequestV1, Gfx942SdmaCopyTicketV1, planned_ticket_matches_queue_occurrence,
 };
 
 pub const GFX942_SAME_DEVICE_PERSISTENT_SDMA_MAX_WINDOW_PACKETS_V1: usize =
@@ -479,47 +478,23 @@ pub(crate) fn restore_same_device_persistent_sdma_request_v1(
         destination,
         ..
     } = request;
-    let (source_storage, source_queue, source_pool_generation, source_logical_bytes) =
-        source.into_bridge_parts();
-    let (
-        destination_storage,
-        destination_queue,
-        destination_pool_generation,
-        destination_logical_bytes,
-    ) = destination.into_bridge_parts();
-    let Gfx942SdmaBufferStorageV1::Device(source_lease) = source_storage else {
-        unreachable!("checked same-device source storage")
-    };
-    let Gfx942SdmaBufferStorageV1::Device(destination_lease) = destination_storage else {
-        unreachable!("checked same-device destination storage")
-    };
-    match restore_local_native_pair_from_sdma_v1(
+    match restore_sdma_buffer_pair_v1(
         &mut source_owner.owner,
-        source_lease,
+        source,
         &mut destination_owner.owner,
-        destination_lease,
+        destination,
     ) {
         Ok(()) => Ok((source_owner, destination_owner)),
-        Err((_, source_lease, destination_lease)) => Err((
+        Err((_, source, destination)) => Err((
             source_owner,
             destination_owner,
-            same_device_persistent_sdma_request_v1(
-                Gfx942SdmaBufferV1::from_bridge_parts(
-                    Gfx942SdmaBufferStorageV1::Device(source_lease),
-                    source_queue,
-                    source_pool_generation,
-                    source_logical_bytes,
-                ),
-                descriptor.source_offset,
-                Gfx942SdmaBufferV1::from_bridge_parts(
-                    Gfx942SdmaBufferStorageV1::Device(destination_lease),
-                    destination_queue,
-                    destination_pool_generation,
-                    destination_logical_bytes,
-                ),
-                descriptor.destination_offset,
-                descriptor.copy_bytes,
-            ),
+            Gfx942SdmaCopyRequestV1 {
+                source,
+                source_offset: descriptor.source_offset,
+                destination,
+                destination_offset: descriptor.destination_offset,
+                copy_bytes: descriptor.copy_bytes,
+            },
         )),
     }
 }
@@ -999,6 +974,7 @@ mod tests {
     use crate::persistent_directional_sdma::{
         admit_persistent_directional_sdma_pair_v1, promote_directional_persistent_sdma_custody_v1,
     };
+    use crate::sdma::Gfx942SdmaBufferStorageV1;
     use crate::sdma::{
         GFX942_SDMA_D2H_ENGINE_INDEX_V1, GFX942_SDMA_H2D_ENGINE_INDEX_V1,
         GFX942_SDMA_MAX_IN_FLIGHT_V1, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1,

@@ -80,18 +80,16 @@ impl SdmaSynchronousCustodyV1 {
         self.sequence = Some(reserved.sequence());
         self.usage = Some(UseV1::Reserved(reserved));
         self.prepare_use()?;
-        let native = self
+        let attachment = self.allocation().attachment;
+        let device = self
             .allocation()
             .owner
-            .detach_local_native_for_sdma()
+            .detach_sdma_buffer(
+                attachment.queue,
+                attachment.pool_generation,
+                attachment.logical_bytes,
+            )
             .map_err(map_directional_persistent_sdma_use_error_v1)?;
-        let attachment = self.allocation().attachment;
-        let device = Gfx942SdmaBufferV1::from_bridge_parts(
-            Gfx942SdmaBufferStorageV1::Device(native),
-            attachment.queue,
-            attachment.pool_generation,
-            attachment.logical_bytes,
-        );
         self.data = Some(SingleSdmaCopyCustodyV1::Request(
             directional_persistent_sdma_request_v1(
                 self.direction,

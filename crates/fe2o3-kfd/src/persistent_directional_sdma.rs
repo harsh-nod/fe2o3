@@ -1796,27 +1796,24 @@ pub(crate) fn restore_directional_persistent_sdma_request_v1(
         Gfx942PersistentSdmaDirectionV1::HostToDevice => (destination, source),
         Gfx942PersistentSdmaDirectionV1::DeviceToHost => (source, destination),
     };
-    let (storage, owner, pool_generation, logical_bytes) = device.into_bridge_parts();
-    let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
-        unreachable!("prevalidated device-local storage")
-    };
-    if let Err((_, lease)) = allocation.owner.restore_local_native_from_sdma(lease) {
-        let device = Gfx942SdmaBufferV1::from_bridge_parts(
-            Gfx942SdmaBufferStorageV1::Device(lease),
-            owner,
-            pool_generation,
-            logical_bytes,
-        );
+    if let Err(device) = allocation.owner.restore_sdma_buffer(device) {
+        let (source, source_offset, destination, destination_offset) = match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                (host, host_offset, device, device_offset)
+            }
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                (device, device_offset, host, host_offset)
+            }
+        };
         return Err((
             allocation,
-            directional_persistent_sdma_request_v1(
-                direction,
-                host,
-                host_offset,
-                device,
-                device_offset,
+            Gfx942SdmaCopyRequestV1 {
+                source,
+                source_offset,
+                destination,
+                destination_offset,
                 copy_bytes,
-            ),
+            },
         ));
     }
     Ok((allocation, host))
@@ -1953,13 +1950,12 @@ pub(crate) fn promote_directional_persistent_sdma_custody_v1(
     }
     let storage_identity = buffer.storage_identity();
     let physical_bytes = buffer.physical_bytes();
-    let (storage, queue, pool_generation, logical_bytes) = buffer.into_bridge_parts();
-    let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
-        unreachable!("prevalidated device buffer kind");
-    };
+    let queue = buffer.queue_owner();
+    let pool_generation = buffer.pool_generation();
+    let logical_bytes = buffer.requested_bytes();
     Ok((
         Gfx942DirectionalQueuePersistentAllocationV1 {
-            owner: Gfx942PersistentDeviceAllocationV1::from_local_mapping(lease),
+            owner: Gfx942PersistentDeviceAllocationV1::from_sdma_buffer(buffer)?,
             attachment: Gfx942PersistentDirectionalSdmaAttachmentV1 {
                 queue,
                 pair,
@@ -3033,7 +3029,7 @@ mod tests {
             .unwrap();
         assert!(admitted_preparation.contains("allocation.owner.reserve("));
         assert!(admitted_preparation.contains("allocation.owner.prepare("));
-        assert!(admitted_preparation.contains("allocation.owner.detach_local_native_for_sdma()"));
+        assert!(admitted_preparation.contains("allocation.owner.detach_sdma_buffer("));
         assert!(!admitted_preparation.contains("with_sdma_owner_memory"));
         assert!(!admitted_preparation.contains("check_queue_operational_currentness"));
 

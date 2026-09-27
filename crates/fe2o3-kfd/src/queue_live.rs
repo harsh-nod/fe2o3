@@ -74,7 +74,7 @@ use crate::persistent_allocation::{
     Gfx942PersistentDeviceAllocationV1, Gfx942PersistentOperationV1, Gfx942PersistentPreparedV1,
     Gfx942PersistentPublishedV1, Gfx942PersistentQuarantineReasonV1, Gfx942PersistentReservedV1,
     Gfx942PersistentUseErrorV1, Gfx942PersistentUseLeaseV1, Gfx942PersistentUseRequestV1,
-    cancel_prepared_local_sdma_pair_v1, detach_local_native_pair_for_sdma_v1,
+    cancel_prepared_local_sdma_pair_v1, detach_sdma_buffer_pair_v1,
     quarantine_published_local_sdma_pair_v1,
 };
 use crate::persistent_compute::{
@@ -2162,58 +2162,48 @@ fn restore_persistent_sdma_request(
     if !matches_offsets {
         return Err((allocation, request));
     }
-    let Gfx942SdmaCopyRequestV1 {
-        source,
-        source_offset: _,
-        destination,
-        destination_offset: _,
-        copy_bytes,
-    } = request;
     let (device, host) = match direction {
-        Gfx942PersistentSdmaDirectionV1::HostToDevice => (destination, source),
-        Gfx942PersistentSdmaDirectionV1::DeviceToHost => (source, destination),
+        Gfx942PersistentSdmaDirectionV1::HostToDevice => (&request.destination, &request.source),
+        Gfx942PersistentSdmaDirectionV1::DeviceToHost => (&request.source, &request.destination),
     };
     let attachment = allocation.attachment;
     let exact = device.belongs_to(attachment.queue)
-        && host_binding.matches(&host)
+        && host_binding.matches(host)
         && device.storage_identity() == attachment.storage_identity
         && device.pool_generation() == attachment.pool_generation
         && device.requested_bytes() == attachment.logical_bytes
         && device.physical_bytes() == attachment.physical_bytes;
     if !exact {
-        return Err((
-            allocation,
-            persistent_sdma_request(
-                direction,
-                host,
-                host_offset,
-                device,
-                device_offset,
-                copy_bytes,
-            ),
-        ));
+        return Err((allocation, request));
     }
-    let (storage, owner, pool_generation, logical_bytes) = device.into_bridge_parts();
-    let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
-        unreachable!("checked device-local SDMA storage")
+    let Gfx942SdmaCopyRequestV1 {
+        source,
+        destination,
+        copy_bytes,
+        ..
+    } = request;
+    let (device, host) = match direction {
+        Gfx942PersistentSdmaDirectionV1::HostToDevice => (destination, source),
+        Gfx942PersistentSdmaDirectionV1::DeviceToHost => (source, destination),
     };
-    if let Err((_, lease)) = allocation.owner.restore_local_native_from_sdma(lease) {
-        let device = Gfx942SdmaBufferV1::from_bridge_parts(
-            Gfx942SdmaBufferStorageV1::Device(lease),
-            owner,
-            pool_generation,
-            logical_bytes,
-        );
+    if let Err(device) = allocation.owner.restore_sdma_buffer(device) {
+        let (source, source_offset, destination, destination_offset) = match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                (host, host_offset, device, device_offset)
+            }
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                (device, device_offset, host, host_offset)
+            }
+        };
         return Err((
             allocation,
-            persistent_sdma_request(
-                direction,
-                host,
-                host_offset,
-                device,
-                device_offset,
+            Gfx942SdmaCopyRequestV1 {
+                source,
+                source_offset,
+                destination,
+                destination_offset,
                 copy_bytes,
-            ),
+            },
         ));
     }
     Ok((allocation, host))
@@ -2342,12 +2332,11 @@ fn promote_persistent_sdma_custody_v1(
     }
     let storage_identity = buffer.storage_identity();
     let physical_bytes = buffer.physical_bytes();
-    let (storage, queue, pool_generation, logical_bytes) = buffer.into_bridge_parts();
-    let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
-        unreachable!("prevalidated device buffer kind");
-    };
+    let queue = buffer.queue_owner();
+    let pool_generation = buffer.pool_generation();
+    let logical_bytes = buffer.requested_bytes();
     Ok(Gfx942QueuePersistentAllocationV1 {
-        owner: Gfx942PersistentDeviceAllocationV1::from_local_mapping(lease),
+        owner: Gfx942PersistentDeviceAllocationV1::from_sdma_buffer(buffer)?,
         attachment: Gfx942PersistentSdmaAttachmentV1 {
             queue,
             native_queue_id,
@@ -7152,8 +7141,12 @@ impl ComputeAqlQueueSessionV1 {
                 ));
             }
         };
-        let lease = match allocation.owner.detach_local_native_for_sdma() {
-            Ok(lease) => lease,
+        let device = match allocation.owner.detach_sdma_buffer(
+            allocation.attachment.queue,
+            allocation.attachment.pool_generation,
+            allocation.attachment.logical_bytes,
+        ) {
+            Ok(device) => device,
             Err(error) => {
                 let _ = allocation.owner.cancel_prepared(prepared_use);
                 return Err(retryable(
@@ -7163,12 +7156,6 @@ impl ComputeAqlQueueSessionV1 {
                 ));
             }
         };
-        let device = Gfx942SdmaBufferV1::from_bridge_parts(
-            Gfx942SdmaBufferStorageV1::Device(lease),
-            allocation.attachment.queue,
-            allocation.attachment.pool_generation,
-            allocation.attachment.logical_bytes,
-        );
         let request = persistent_sdma_request(
             direction,
             host,
@@ -7766,8 +7753,12 @@ impl ComputeAqlQueueSessionV1 {
                 ));
             }
         };
-        let lease = match allocation.owner.detach_local_native_for_sdma() {
-            Ok(lease) => lease,
+        let device = match allocation.owner.detach_sdma_buffer(
+            allocation.attachment.queue,
+            allocation.attachment.pool_generation,
+            allocation.attachment.logical_bytes,
+        ) {
+            Ok(device) => device,
             Err(error) => {
                 let _ = allocation.owner.cancel_prepared(prepared_use);
                 return Err(retryable(
@@ -7777,12 +7768,6 @@ impl ComputeAqlQueueSessionV1 {
                 ));
             }
         };
-        let device = Gfx942SdmaBufferV1::from_bridge_parts(
-            Gfx942SdmaBufferStorageV1::Device(lease),
-            allocation.attachment.queue,
-            allocation.attachment.pool_generation,
-            allocation.attachment.logical_bytes,
-        );
         let request = directional_persistent_sdma_request_v1(
             direction,
             host,
@@ -8387,8 +8372,12 @@ impl ComputeAqlQueueSessionV1 {
                 ));
             }
         };
-        let lease = match allocation.owner.detach_local_native_for_sdma() {
-            Ok(lease) => lease,
+        let device = match allocation.owner.detach_sdma_buffer(
+            allocation.attachment.queue,
+            allocation.attachment.pool_generation,
+            allocation.attachment.logical_bytes,
+        ) {
+            Ok(device) => device,
             Err(error) => {
                 let _ = allocation.owner.cancel_prepared(prepared_use);
                 return Err(retryable(
@@ -8398,12 +8387,6 @@ impl ComputeAqlQueueSessionV1 {
                 ));
             }
         };
-        let device = Gfx942SdmaBufferV1::from_bridge_parts(
-            Gfx942SdmaBufferStorageV1::Device(lease),
-            allocation.attachment.queue,
-            allocation.attachment.pool_generation,
-            allocation.attachment.logical_bytes,
-        );
         let request = directional_persistent_sdma_request_v1(
             direction,
             host,
@@ -9083,36 +9066,36 @@ impl ComputeAqlQueueSessionV1 {
                 ));
             }
         };
-        let (source_lease, destination_lease) =
-            match detach_local_native_pair_for_sdma_v1(&mut source.owner, &mut destination.owner) {
-                Ok(leases) => leases,
-                Err(error) => {
-                    cancel_prepared_local_sdma_pair_v1(
-                        &mut source.owner,
-                        source_prepared,
-                        &mut destination.owner,
-                        destination_prepared,
-                    )
-                    .unwrap_or_else(|failure| panic!("private prepared pair: {:?}", failure.error));
-                    return Err(retryable(
-                        map_directional_persistent_sdma_use_error_v1(error),
-                        source,
-                        destination,
-                    ));
-                }
-            };
-        let source_buffer = Gfx942SdmaBufferV1::from_bridge_parts(
-            Gfx942SdmaBufferStorageV1::Device(source_lease),
-            source.attachment.queue,
-            source.attachment.pool_generation,
-            source.attachment.logical_bytes,
-        );
-        let destination_buffer = Gfx942SdmaBufferV1::from_bridge_parts(
-            Gfx942SdmaBufferStorageV1::Device(destination_lease),
-            destination.attachment.queue,
-            destination.attachment.pool_generation,
-            destination.attachment.logical_bytes,
-        );
+        let (source_buffer, destination_buffer) = match detach_sdma_buffer_pair_v1(
+            &mut source.owner,
+            (
+                source.attachment.queue,
+                source.attachment.pool_generation,
+                source.attachment.logical_bytes,
+            ),
+            &mut destination.owner,
+            (
+                destination.attachment.queue,
+                destination.attachment.pool_generation,
+                destination.attachment.logical_bytes,
+            ),
+        ) {
+            Ok(leases) => leases,
+            Err(error) => {
+                cancel_prepared_local_sdma_pair_v1(
+                    &mut source.owner,
+                    source_prepared,
+                    &mut destination.owner,
+                    destination_prepared,
+                )
+                .unwrap_or_else(|failure| panic!("private prepared pair: {:?}", failure.error));
+                return Err(retryable(
+                    map_directional_persistent_sdma_use_error_v1(error),
+                    source,
+                    destination,
+                ));
+            }
+        };
         let request = same_device_persistent_sdma_request_v1(
             source_buffer,
             source_offset,
