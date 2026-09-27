@@ -478,6 +478,74 @@ fn native_quiescence_observer_error_and_unwind_preserve_exact_custody() {
 }
 
 #[test]
+fn native_quiescence_invalid_cursor_is_terminal_without_polling_or_refunding() {
+    let mut f = ManuallyDrop::new(ScriptedActiveProducerFixtureV1::new(true));
+    let b_stream = f.launch.stream;
+    let b = f.submit().unwrap();
+    let b_dep = dependency(&mut f, b_stream, b);
+    let stream = f.backend.create_stream_v1(7).unwrap();
+    let c = submit(&mut f, stream, &[b_dep]).unwrap();
+    let mut pending = f.backend.pending_compute.remove(&c).unwrap();
+    let launch = Arc::clone(&pending.launch);
+    pending.quiescence_cursor = pending.quiescence_dependencies.len() + 1;
+    let invalid_cursor = pending.quiescence_cursor;
+    assert!(!pending.quiescence_complete_v1());
+    let retains = f.backend.compute_dependency_retain_counts.clone();
+    let fifo = f.backend.pending_compute_streams.clone();
+    let reservations = f.backend.compute_completion_reservations;
+    let owners = f.allocations.map(|id| {
+        f.backend
+            .allocation_custody
+            .get(&id)
+            .map(|row| row.owners.clone())
+    });
+    let steps = f.backend.scripted_sdma.as_ref().unwrap().remaining_steps();
+    assert!(matches!(
+        f.backend
+            .observe_compute_quiescence_with_v1(pending, |_, _| {
+                panic!("invalid cursor must not observe any owner")
+            }),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(f.backend.terminal);
+    let pending = &f.backend.pending_compute[&c];
+    assert_eq!(pending.quiescence_cursor, invalid_cursor);
+    assert!(Arc::ptr_eq(&pending.launch, &launch));
+    assert_eq!(f.backend.compute_dependency_retain_counts, retains);
+    assert_eq!(f.backend.pending_compute_streams, fifo);
+    assert_eq!(f.backend.compute_completion_reservations, reservations);
+    assert_eq!(
+        f.allocations.map(|id| f
+            .backend
+            .allocation_custody
+            .get(&id)
+            .map(|row| row.owners.clone())),
+        owners
+    );
+    assert_eq!(
+        f.backend.scripted_sdma.as_ref().unwrap().remaining_steps(),
+        steps
+    );
+    // No native observer ran; restore only the injected metadata for fixture teardown.
+    f.backend
+        .pending_compute
+        .get_mut(&c)
+        .unwrap()
+        .quiescence_cursor = 0;
+    f.backend.terminal = false;
+    f.backend.release_event_v1(b_dep.event).unwrap();
+    for id in [c, b] {
+        assert_eq!(
+            f.backend.cancel_v1(id).unwrap(),
+            crate::BackendCancellationV1::Cancelled
+        );
+        f.backend.release_submission_v1(id).unwrap();
+    }
+    f.backend.destroy_stream_v1(stream).unwrap();
+    ManuallyDrop::into_inner(f).finish(None);
+}
+
+#[test]
 fn native_quiescence_missing_prefix_retain_is_terminal_before_admission() {
     let mut f = ManuallyDrop::new(ScriptedActiveProducerFixtureV1::new(true));
     let b_stream = f.launch.stream;

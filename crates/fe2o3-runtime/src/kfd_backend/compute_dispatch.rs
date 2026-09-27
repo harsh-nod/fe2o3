@@ -2217,8 +2217,7 @@ impl KfdRuntimeBackendV1 {
         self.lease_compute_lane_v1(pending.launch.stream, lane);
         let publication = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.with_compute_lane_state_v1(lane, |backend| {
-                if !pending.peer_gate_allows_native_checks_v1()
-                    || pending.quiescence_cursor != pending.quiescence_dependencies.len()
+                if !pending.peer_gate_allows_native_checks_v1() || !pending.quiescence_complete_v1()
                 {
                     return Err(
                         backend.terminal_error("KFD compute publication lost a completion gate")
@@ -2601,7 +2600,7 @@ impl KfdRuntimeBackendV1 {
         };
         if !pending.peer_gate_allows_native_checks_v1()
             || pending.explicit_dependency_cursor != pending.explicit_success_dependencies.len()
-            || pending.quiescence_cursor != pending.quiescence_dependencies.len()
+            || !pending.quiescence_complete_v1()
             || self.native_dirty_extents != 0
             || !pending.launch.bindings.iter().all(|binding| {
                 self.allocations

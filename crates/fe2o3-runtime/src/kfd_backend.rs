@@ -91,6 +91,7 @@ mod multi_allocation;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_peer_gate;
+mod compute_quiescence_control;
 mod peer_ancestry;
 mod peer_compute_access;
 use peer_ancestry::PeerLaunchAncestryV1;
@@ -13305,7 +13306,7 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
             .pending_compute
             .get(&submission)
             .expect("successful peer gate retains its real compute stream head");
-        if pending.quiescence_cursor == pending.quiescence_dependencies.len()
+        if pending.quiescence_complete_v1()
             && let Some(detail) = self.compute_stream_head_publication_blocker_v1(pending)
         {
             return Err(Self::rejected(KfdRuntimeBackendErrorKindV1::Busy, detail));
@@ -13328,7 +13329,7 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
                 pending.peer_gate_allows_native_checks_v1()
                     && pending.explicit_dependency_cursor
                         == pending.explicit_success_dependencies.len()
-                    && pending.quiescence_cursor == pending.quiescence_dependencies.len()
+                    && pending.quiescence_complete_v1()
                     && pending.ordered_predecessor.is_none_or(|predecessor| {
                         self.submissions
                             .get(&predecessor)

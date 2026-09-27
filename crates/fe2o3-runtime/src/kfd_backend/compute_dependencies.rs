@@ -1,5 +1,6 @@
 //! Native dependency reachability and independently retained buffer ordering.
 
+use super::compute_quiescence_control::{QuiescenceActionV1, quiescence_step_v1};
 use super::*;
 
 type Failure = RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>;
@@ -489,31 +490,44 @@ impl KfdRuntimeBackendV1 {
     ) -> Result<Option<PendingComputeSubmissionV1>, Failure> {
         let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut polled = false;
-            while let Some(&id) = pending
-                .quiescence_dependencies
-                .get(pending.quiescence_cursor)
-            {
-                if !self.exact_submission_quiescent_v1(id) {
-                    if polled {
-                        return Ok(false);
+            loop {
+                let exact = pending
+                    .quiescence_dependencies
+                    .get(pending.quiescence_cursor)
+                    .is_some_and(|&id| self.exact_submission_quiescent_v1(id));
+                let step = quiescence_step_v1(
+                    pending.quiescence_cursor,
+                    pending.quiescence_dependencies.len(),
+                    polled,
+                    exact,
+                );
+                pending.quiescence_cursor = step.cursor;
+                polled = step.polled;
+                match step.action {
+                    QuiescenceActionV1::Invalid => {
+                        return Err(self.terminal_error(
+                            "compute quiescence cursor exceeded its retained roster",
+                        ));
                     }
-                    polled = true;
-                    match poll(self, id) {
-                        Ok(_) | Err(RuntimeBackendFailureV1::Quiescent(_)) => {}
-                        Err(RuntimeBackendFailureV1::Rejected(error)) => {
-                            return Err(self.terminal_error(format!(
-                                "compute quiescence retained a rejected predecessor: {error}"
-                            )));
+                    QuiescenceActionV1::Complete => return Ok(true),
+                    QuiescenceActionV1::Advance => continue,
+                    QuiescenceActionV1::Wait => return Ok(false),
+                    QuiescenceActionV1::Poll => {
+                        let id = pending.quiescence_dependencies[pending.quiescence_cursor];
+                        match poll(self, id) {
+                            Ok(_) | Err(RuntimeBackendFailureV1::Quiescent(_)) => {}
+                            Err(RuntimeBackendFailureV1::Rejected(error)) => {
+                                return Err(self.terminal_error(format!(
+                                    "compute quiescence retained a rejected predecessor: {error}"
+                                )));
+                            }
+                            Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
+                                return Err(failure);
+                            }
                         }
-                        Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => return Err(failure),
-                    }
-                    if !self.exact_submission_quiescent_v1(id) {
-                        return Ok(false);
                     }
                 }
-                pending.quiescence_cursor += 1;
             }
-            Ok(true)
         }));
         match observed {
             Ok(Ok(true)) => Ok(Some(pending)),
