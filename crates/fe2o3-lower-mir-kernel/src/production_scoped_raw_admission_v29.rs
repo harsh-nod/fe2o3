@@ -739,11 +739,19 @@ fn immutable_index_locations_v29(
                     .ok_or(ProductionSourceOwnedViewErrorV18::Binding("missing original retained index load"))?;
                 let (operation, _) = immutable_memory_access_v29(correspondence, root, access, budget)?;
                 let sidecar = correspondence.source.sidecar(root, source.instance.index(), budget)?;
-                let row = sidecar.scoped_memory_anchors.as_ref().and_then(|rows| rows.rows.get(anchor))
+                let anchors = sidecar.scoped_memory_anchors.as_ref()
+                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding("retained index source anchors"))?;
+                let row = anchors.rows.get(anchor)
                     .ok_or(ProductionSourceOwnedViewErrorV18::Binding("retained index source anchor"))?;
-                let ScopedMemoryAnchorKindV29::Access {
-                    payload: Some(ScopedMemoryPayloadV29::IndexLoad { result, read }), ..
-                } = row.kind else { return correspondence.source.missing("retained index payload role"); };
+                // Physical replay already checked this exact mapped operation.
+                // Both original scalar and typed index reads retain the same
+                // independently authenticated source-use coordinates.
+                let payload = match scoped_original_index_payload_v29(anchors, row, budget) {
+                    Ok(payload) => payload,
+                    Err(error) => return Err(immutable_memory_error_v29(error)),
+                };
+                let Some((result, read)) = payload
+                else { return correspondence.source.missing("retained index payload role"); };
                 let (function, _) = correspondence.source.instance(root, source.instance.index(), budget)?;
                 let ssa = &correspondence.source.owner.inner.source.owner;
                 let source_occurrences = ssa.occurrences_v1()
@@ -1824,9 +1832,9 @@ fn retain_pending_memory_v29(
     index_guards: Vec<PendingSourceIndexGuardV29>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<PendingSourceMemoryV29, ProductionSemanticKirErrorV1> {
+    budget.charge_work(indices.len())?;
     let ordinary_indices = indices.iter().any(|row| row.load_anchor.is_some())
         || !original_census(instances, Some(plan), budget)?.requires_physical();
-    budget.charge_work(indices.len())?;
     // This is only a may-roster of original activation boundaries for each
     // exact object. It never proves that any one site reaches an access. The
     // immutable all-path lifetime equations remain mandatory for every row.
@@ -1904,7 +1912,7 @@ fn retain_pending_memory_v29(
         retained_storage: 0,
     };
     for source in sources {
-        budget.charge_work(2)?;
+        budget.charge_work(3)?;
         let first = output.alternatives.len();
         if let Some(access) = source.raw {
             let set = plan
@@ -1996,7 +2004,15 @@ fn retain_pending_memory_v29(
                     )?;
                 }
             }
-        } else if ordinary_indices {
+        } else if ordinary_indices
+            && matches!(
+                slots.slots.get(source.physical.slot)
+                    .ok_or_else(source_raw_physical_error_v29)?.representation,
+                ScopedSlotRepresentationV29::ScalarArray(_)
+            )
+        {
+            // A retained scalar index does not supply activation alternatives
+            // for unrelated typed objects. Their direct accesses remain pending.
             let slot = slots.slots.get(source.physical.slot).ok_or_else(source_raw_physical_error_v29)?;
             budget.charge_work(argument_product_v1(2, call_splice_search_work_v1(ordinary_activations.len()))?)?;
             let first = ordinary_activations.partition_point(|row| row.0 < source.physical.slot);

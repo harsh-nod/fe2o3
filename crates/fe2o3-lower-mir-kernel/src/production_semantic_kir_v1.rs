@@ -13097,13 +13097,8 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         for (identity, slot) in slots {
             let local = match (identity, &slot.storage) {
                 (ScopedAllocationIdentityV29::LegacyLocal(local), SemanticRetainedStorageV29::ScalarArray { .. }) => local,
-                (ScopedAllocationIdentityV29::OriginalObject { local, .. }, SemanticRetainedStorageV29::Object { .. }) => {
-                    let declaration = self.function.locals().get(local as usize)
-                        .ok_or_else(scoped_object_allocation_error_v29)?;
-                    if declaration.role().is_entry_argument() {
-                        return Err(unsupported(self.semantic_function.index(), Some(target.id.0), None,
-                            "typed entry allocation requires source-bound object materialization"));
-                    }
+                (ScopedAllocationIdentityV29::OriginalObject { .. }, SemanticRetainedStorageV29::Object { .. }) => {
+                    self.emit_source_object_entry_v29(target.id, identity, &slot, &mut target.operations)?;
                     continue;
                 }
                 _ => return Err(scoped_object_allocation_error_v29()),

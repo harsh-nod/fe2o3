@@ -57,6 +57,10 @@ pub(crate) fn capability_work_refusal_for_test_v18(error: &ProductionRankedProje
     }
 }
 mod optimized_source_consumer_v18;
+mod optimized_ranked_roster_v18;
+pub(crate) use optimized_ranked_roster_v18::with_source_native_ranked_roots_v18;
+#[cfg(test)]
+pub(crate) use optimized_ranked_roster_v18::with_actual_root_controls_v18;
 use source_ranked_consumer_v18::{ResolverActiveDefinitionsV18, ResolverBorrowedLocalsV18, SourceScalarResolverLeavesV18};
 #[path = "production_ranked_projection_v1/source_ranked_consumer_resources_v18.rs"]
 mod source_ranked_consumer_resources_v18;

@@ -478,6 +478,7 @@ fn retained_source_index_rejects_missing_wrong_occurrence_local_projection_role_
 
 mod retained_index_equations_v29 {
     use super::*;
+    include!("production_source_object_index_equations_v29_tests.rs");
     use fe2o3_kernel_analysis::{CanonicalKirInventoryV18, CanonicalKirMemorySsaV18};
     use fe2o3_kernel_ir::{
         CanonicalKirFunctionCoordinateV1 as FunctionCoordinate,
@@ -647,6 +648,21 @@ mod retained_index_equations_v29 {
             &mut ArgumentBudgetV1<'_>,
         ),
     ) {
+        with_model_or_error_versions(module, true, inspect)
+    }
+
+    fn with_model_or_error_versions(
+        module: &Module,
+        supply_versions: bool,
+        inspect: impl FnOnce(
+            Result<
+                &mut scoped_index_memory_v29::SourceIndexMemoryV29<'_, '_, '_>,
+                ProductionSemanticKirErrorV1,
+            >,
+            &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
+            &mut ArgumentBudgetV1<'_>,
+        ),
+    ) {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
@@ -679,26 +695,37 @@ mod retained_index_equations_v29 {
                 let OperationKind::Alloca { element, .. } = &row.kind else {
                     continue;
                 };
-                assert_eq!(element, &Type::Scalar(ScalarType::U32));
+                let (identity, source, representation) = match element {
+                    Type::Scalar(ScalarType::U32) => (
+                        ScopedAllocationIdentityV29::LegacyLocal(slots.len() as u32),
+                        ScopedAllocationSourceV29::Legacy,
+                        ScopedSlotRepresentationV29::ScalarArray(ScopedScalarArraySlotV29 {
+                            element_type: SemanticTypeIdV1::from_index(0),
+                            element: PrivateRetainedSlotFactsV1 {
+                                element: PrivateRetainedElementFactsV1::Scalar(ScalarType::U32),
+                                size: 4, alignment: 4,
+                            },
+                            length: 1, bytes: 4, count: None,
+                        }),
+                    ),
+                    Type::StorageObject(schema) => (
+                        ScopedAllocationIdentityV29::OriginalObject {
+                            local: slots.len() as u32, generation: 0,
+                        },
+                        ScopedAllocationSourceV29::OriginalObject { cell: slots.len(), schema: *schema },
+                        ScopedSlotRepresentationV29::Object { schema: *schema, bytes: 4, alignment: 4 },
+                    ),
+                    other => panic!("closed scalar holder test profile: {other:?}"),
+                };
                 slots.push(ScopedSourceSlotV29 {
                     instance: ProductionCallInstanceIdV1(0),
                     origin: ScopedSlotOriginV29 {
-                        identity: ScopedAllocationIdentityV29::LegacyLocal(slots.len() as u32),
-                        source: ScopedAllocationSourceV29::Legacy,
+                        identity,
+                        source,
                         semantic_type: SemanticTypeIdV1::from_index(0),
                         pointer: row.results[0].id,
                     },
-                    representation: ScopedSlotRepresentationV29::ScalarArray(ScopedScalarArraySlotV29 {
-                    element_type: SemanticTypeIdV1::from_index(0),
-                    element: PrivateRetainedSlotFactsV1 {
-                        element: PrivateRetainedElementFactsV1::Scalar(ScalarType::U32),
-                        size: 4,
-                        alignment: 4,
-                    },
-                    length: 1,
-                    bytes: 4,
-                    count: None,
-                    }),
+                    representation,
                     allocation: PrivateArrayPhysicalLocationV1 {
                         block_ordinal,
                         block: block.id,
@@ -721,7 +748,9 @@ mod retained_index_equations_v29 {
                     .filter_map(|(operation, row)| {
                         let pointer = match row.kind {
                             OperationKind::Load { pointer, .. }
-                            | OperationKind::Store { pointer, .. } => pointer,
+                            | OperationKind::Store { pointer, .. }
+                            | OperationKind::Storage(ScopedObjectOperationV29::ReadValue { address: pointer, .. })
+                            | OperationKind::Storage(ScopedObjectOperationV29::WriteValue { address: pointer, .. }) => pointer,
                             _ => return None,
                         };
                         let slot = slots.iter().position(|row| row.origin.pointer == pointer)?;
@@ -734,11 +763,13 @@ mod retained_index_equations_v29 {
                     .collect::<Vec<_>>()
             })
             .collect();
-        match SourceAddressMemoryV29::new(function, &slots, None, &accesses, &[], &mut budget) {
+        match SourceAddressMemoryV29::prepare_inventory(
+            &inventory, FunctionCoordinate(0), &slots, &accesses, &mut budget,
+        ).and_then(|graph| graph.solve(&slots, &accesses, &[], &mut budget)) {
             Ok(graph) => {
-                let mut query = scoped_index_memory_v29::SourceIndexMemoryV29::new(
+                let mut query = scoped_index_memory_v29::SourceIndexMemoryV29::with_optional_versions(
                     &inventory,
-                    &memory,
+                    supply_versions.then_some(&memory),
                     &graph,
                     FunctionCoordinate(0),
                     &slots,

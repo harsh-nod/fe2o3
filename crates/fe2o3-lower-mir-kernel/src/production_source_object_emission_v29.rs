@@ -1,4 +1,5 @@
 include!("production_source_object_aggregate_emission_v29.rs");
+include!("production_source_object_entry_v29.rs");
 
 #[cfg(test)]
 fn selected_pointer_test_owner_v29(
@@ -803,10 +804,88 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         volatility: SemanticVolatilityV1,
         operations: &mut Vec<Operation>,
     ) -> Result<Option<SemanticValueBindingV1>, ProductionSemanticKirErrorV1> {
+        if self.scoped_memory.as_ref().is_some_and(|recorder| recorder.index_payload.is_some())
+            && let Some(value) = self.try_read_source_object_index_v29(
+                block, statement, place, volatility, operations,
+            )?
+        { return Ok(Some(value)); }
         let Some((source, address, mut access)) = self.source_object_leaf_address_v29(block, statement, place, SourceReferenceAccessV29::Read, operations)? else { return Ok(None); };
         let ty = self.source_object_leaf_type_v29(block, statement, place, SourceReferenceAccessV29::Read, source.projected_schema)?;
         access.volatile = volatility == SemanticVolatilityV1::Volatile;
         self.source_object_read_value_v29(source, address, access, ty, operations).map(Some)
+    }
+
+    fn try_read_source_object_index_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        place: &SemanticPlaceV1,
+        volatility: SemanticVolatilityV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<Option<SemanticValueBindingV1>, ProductionSemanticKirErrorV1> {
+        let Some(read) = self.scoped_memory.as_ref().and_then(|recorder| recorder.index_payload) else {
+            return Ok(None);
+        };
+        let selected = self.with_emission_budget_v1(|this, budget| {
+            let cursor = this.execution.as_ref().ok_or(ArgumentResourceV1::Accounting)?;
+            let references = cursor.references.ok_or(ArgumentResourceV1::Accounting)?;
+            references.check(budget)?;
+            let plan = references.plan;
+            source_reference_owned_prepay_v29::<Option<SemanticValueBindingV1>>(plan, budget)?;
+            source_reference_owned_prepay_v29::<Option<(ScopedObjectEndpointV29, ValueId, MemoryAccess, Type)>>(plan, budget)?;
+            source_reference_owned_prepay_v29::<Option<(usize, usize, SourceReferenceScalarCellV29)>>(plan, budget)?;
+            source_reference_owned_prepay_v29::<Option<&SemanticRetainedLocalSlotV1>>(plan, budget)?;
+            source_reference_owned_prepay_v29::<Option<(&ScopedAllocationIdentityV29, &SemanticRetainedLocalSlotV1)>>(plan, budget)?;
+            source_reference_owned_prepay_v29::<std::collections::btree_map::Range<'_, ScopedAllocationIdentityV29, SemanticRetainedLocalSlotV1>>(plan, budget)?;
+            source_reference_owned_prepay_v29::<std::ops::RangeInclusive<ScopedAllocationIdentityV29>>(plan, budget)?;
+            source_reference_owned_prepay_v29::<Type>(plan, budget)?;
+            source_reference_owned_prepay_v29::<bool>(plan, budget)?;
+            charge_execution_cfg_lookup_v29(this.retained_local_slots.len(), budget)?;
+            let objects = ScopedAllocationIdentityV29::OriginalObject { local: read.local.index(), generation: 0 }
+                ..=ScopedAllocationIdentityV29::OriginalObject { local: read.local.index(), generation: u32::MAX };
+            if this.retained_local_slots.range(objects).next().is_none() { return Ok(None); }
+            budget.charge_work(12)?;
+            if read.site != execution_site_v29(block, statement)
+                || read.local != place.local() || read.ty != place.ty()
+                || !place.projections().is_empty() || volatility != SemanticVolatilityV1::NonVolatile
+                || this.scoped_memory.as_ref().and_then(|recorder| recorder.frame)
+                    != Some(ScopedMemoryFrameV29::operand(read.site, Some(read.role)))
+            { return Err(scoped_object_error_v29()); }
+            let generation = source_retained_index_generation_v29(plan, cursor.instance, read, budget)?;
+            let mapping = plan.physical_object_generation(cursor.instance, read.local, generation, budget)?;
+            let identity = ScopedAllocationIdentityV29::OriginalObject {
+                local: read.local.index(), generation: mapping.map_or(generation, |(_, _, row)| row.generation),
+            };
+            charge_execution_cfg_lookup_v29(this.retained_local_slots.len(), budget)?;
+            let slot = this.retained_local_slots.get(&identity).ok_or_else(scoped_object_error_v29)?;
+            let SemanticRetainedStorageV29::Object { cell, schema, bytes, alignment } = slot.storage else {
+                return Err(scoped_object_error_v29());
+            };
+            if slot.semantic_type != read.ty { return Err(scoped_object_error_v29()); }
+            let logical = if let Some((logical, representative, physical)) = mapping {
+                if representative != cell || physical.ty != read.ty || physical.kind != SourceBackingKindV29::Object(schema) {
+                    return Err(scoped_object_error_v29());
+                }
+                logical
+            } else { cell };
+            if !budget.source_object_storage_matches_v29(plan, logical, cursor.instance, read.local,
+                generation, schema, Some((bytes, alignment)))?
+            { return Err(scoped_object_error_v29()); }
+            let ty = lower_scalar_type(this.types, read.ty)?;
+            let path = ScopedObjectPathV29 { first: 0, count: 0 };
+            Ok(Some((ScopedObjectEndpointV29 {
+                object: ScopedObjectIdentityV29::Local { instance: cursor.instance, local: read.local, generation },
+                source: ScopedObjectSourceV29::ProjectionIndex(read),
+                root_type: read.ty, projected_type: read.ty, root_schema: schema, projected_schema: schema,
+                source_path: path, path,
+            }, slot.pointer, MemoryAccess::new(AddressSpace::Private, alignment), ty)))
+        })?;
+        let Some((source, address, access, ty)) = selected else { return Ok(None); };
+        self.with_scoped_object_role_v29(ScopedObjectRoleV29::ReadValue {
+            source, read: ScopedObjectReadOriginV29::ProjectionIndex(read),
+        }, |this| this.emit(operations, ty, OperationKind::Storage(
+            ScopedObjectOperationV29::ReadValue { address, access },
+        ))).map(Some)
     }
 
     fn try_write_source_object_leaf_v29(

@@ -54,6 +54,9 @@ fn run_shared_production_checks_inner_v1<'a>(
                 PipelineFamilyV1::CanonicalPrivate(input) => {
                     LivePlironStructuralIdentityProviderV1::canonical_private(input)
                 }
+                PipelineFamilyV1::LifecycleV18(input) => {
+                    LivePlironStructuralIdentityProviderV1::lifecycle_v18(input)
+                }
                 _ => LivePlironStructuralIdentityProviderV1::new(context, function),
             };
             let preservation = begin_observed_pass_session_v1(provider, resource_limits, observer)
@@ -305,6 +308,16 @@ fn run_shared_production_checks_inner_v1<'a>(
                 let bound =
                     preflight_ranked_bounds_resource_upper_bound_v1(input_census, limits)
                         .map_err(|error| observed_pipeline_resource_error_v1(observer, error))?;
+                let bound = if let PipelineFamilyV1::LifecycleV18(input) = family {
+                    let work = input.identity_lookup_work().ok_or(ProductionAnalysisResourceLimitV1 {
+                        phase,
+                        resource: "V18 lifecycle bounds occurrence work",
+                    }).map_err(|error| observed_pipeline_resource_error_v1(observer, error))?;
+                    let extra = ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, 0, 0)
+                        .map_err(|error| observed_pipeline_resource_error_v1(observer, error))?;
+                    bound.checked_then_retain(extra, phase)
+                        .map_err(|error| observed_pipeline_resource_error_v1(observer, error))?
+                } else { bound };
                 Ok(PreparedProductionStageV1 {
                     stage: ProductionAnalysisStageV1 {
                         pass: KernelCheckPassKindV1::MemoryBounds,
@@ -320,6 +333,10 @@ fn run_shared_production_checks_inner_v1<'a>(
             match family {
             PipelineFamilyV1::CanonicalPrivate(input) =>
                 crate::production_analysis::pliron_ranked_bounds::require_canonical_private_bounds_v1(
+                    input, analyses, observer,
+                ),
+            PipelineFamilyV1::LifecycleV18(input) =>
+                crate::production_analysis::pliron_ranked_bounds::require_canonical_lifecycle_bounds_v18(
                     input, analyses, observer,
                 ),
             _ => require_observed_bounds_v1(context, function, analyses, observer),
@@ -436,7 +453,7 @@ fn run_shared_production_checks_inner_v1<'a>(
             )
         };
     let (ownership, ownership_upper_bound) = match family {
-        PipelineFamilyV1::Ordinary | PipelineFamilyV1::CanonicalPrivate(_) => {
+        PipelineFamilyV1::Ordinary | PipelineFamilyV1::LifecycleV18(_) | PipelineFamilyV1::CanonicalPrivate(_) => {
             let (report, bound) = run_preflight_and_record_production_stage_v1(
                 (context, function),
                 &mut analyses,
@@ -713,7 +730,7 @@ fn run_shared_production_checks_inner_v1<'a>(
             )
         };
     let semantics = match family {
-        PipelineFamilyV1::Ordinary | PipelineFamilyV1::CanonicalPrivate(_) => {
+        PipelineFamilyV1::Ordinary | PipelineFamilyV1::LifecycleV18(_) | PipelineFamilyV1::CanonicalPrivate(_) => {
             let (report, _) = run_preflight_and_record_production_stage_v1(
                 (context, function),
                 &mut analyses,

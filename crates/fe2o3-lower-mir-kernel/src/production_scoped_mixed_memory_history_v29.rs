@@ -59,7 +59,7 @@ pub(super) fn check_expanded_indices_v29<'view, 'inventory, 'graph>(
     budget.charge_work(slots.len())?;
     if !slots.iter().any(|slot| matches!(slot.representation, ScopedSlotRepresentationV29::Object { .. })) {
         return check_expanded_array_history_v29(function, graph, slots, accesses, accesses,
-            kills, lifetimes, failures, selected, guards, inventory, versions,
+            kills, kills, lifetimes, failures, selected, guards, inventory, versions,
             function_coordinate, budget);
     }
     with_canonical_call_scratch_v1(budget, |budget| {
@@ -100,7 +100,7 @@ pub(super) fn check_expanded_indices_v29<'view, 'inventory, 'graph>(
         check_expanded_static_object_history_v29(function, graph, slots, &objects.accesses,
             &objects.kills, &objects.failures, budget)?;
         check_expanded_array_history_v29(function, graph, slots, &arrays.accesses, accesses,
-            &arrays.kills, lifetimes, &arrays.failures, selected, guards, inventory,
+            &arrays.kills, kills, lifetimes, &arrays.failures, selected, guards, inventory,
             versions, function_coordinate, budget)
     })
 }

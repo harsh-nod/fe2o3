@@ -87,6 +87,7 @@ fn check_expanded_array_history_v29<'view, 'inventory, 'graph>(
     accesses: &'view [SourceAddressAccessV29],
     memory_accesses: &'view [SourceAddressAccessV29],
     kills: &[SourceAddressKillV29],
+    memory_kills: &[SourceAddressKillV29],
     lifetimes: &[SourceAddressLifetimeV29],
     failures: &[SourceIndexFailureV29],
     selected: &[SourceIndexLocationV29],
@@ -119,7 +120,7 @@ fn check_expanded_array_history_v29<'view, 'inventory, 'graph>(
     }
     let mut resets = emission_vec_v1(selected.len(), budget)?;
     for selected in selected {
-        memory.check_recipe(selected, guards, kills, lifetimes, budget)?;
+        memory.check_recipe(selected, guards, memory_kills, lifetimes, budget)?;
         let (block, gap) = memory.reevaluation(selected.source.original, budget)?;
         resets.push(IndexResetV29 {
             block,

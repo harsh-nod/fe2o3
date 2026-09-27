@@ -167,6 +167,7 @@ fn visit_source_requirements(
                         | Terminator::Switch { .. }
                         | Terminator::IntegerSwitch { .. }
                         | Terminator::Return { .. }
+                        | Terminator::Unreachable
                 )
             ) {
                 return Err(Failure::UnsupportedGraph {
@@ -399,16 +400,16 @@ fn execute_fixed_native_reports_v18<'g, 'w, T>(
     ) -> Result<T, Failure>,
 ) -> Result<Result<T, Failure>, Failure> {
     exact_snapshot(graph, layouts, epoch, budget)?;
-    graph.visit_ranked_policy_functions_v18(epoch, budget, |ordinal, context, function| {
+    graph.visit_ranked_policy_functions_v18(epoch, budget, |ordinal, identity| {
         let slot = reports.get_mut(ordinal).ok_or(Failure::ExactGraph)?;
         if slot.is_some() {
             return Err(Failure::ExactGraph);
         }
         #[cfg(test)]
         pending::before_function();
-        *slot = Some(invoke_native_policy_function_v1(
-            analysis, ordinal, context, function,
-        )?);
+        let outcome = analysis.invoke_lifecycle_v18(ordinal, identity)?;
+        let history = analysis.last.ok_or(Failure::InvocationAccounting)?;
+        *slot = Some(ReportRow { outcome, history });
         #[cfg(test)]
         tests::after_function(&graph, ordinal);
         #[cfg(test)]
@@ -432,3 +433,7 @@ fn execute_fixed_native_reports_v18<'g, 'w, T>(
 #[cfg(test)]
 #[path = "canonical_ranked_checks_v18_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "canonical_ranked_lifecycle_identity_v18_tests.rs"]
+mod lifecycle_identity_tests;

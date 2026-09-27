@@ -517,6 +517,25 @@ fn source_reference_select_backing_v29(
                 equations.ensure_cell(plan, cells, instance, local, generation, budget)?;
             }
         }
+        // A successful implicit index read can be the only observation of a
+        // joined activation. Keep that original logical cell in the same
+        // backing equations; physical family reconciliation still runs below.
+        if !plan.selectors.is_empty() {
+            source_reference_emission_prepay_v29::<SourceReferenceSelectorV29>(budget)?;
+            source_reference_emission_prepay_v29::<(usize, usize)>(budget)?;
+            for ordinal in 0..plan.selectors.len() {
+                budget.charge_work(3)?;
+                let selector = plan.selectors[ordinal];
+                if !matches!(selector.value, SourceReferenceSelectorValueV29::Retained { .. }) {
+                    continue;
+                }
+                selector.check(plan.instances, budget)?;
+                let generation = selector.retained_generation.ok_or_else(source_backing_error_v29)?;
+                if source_backing_original_request_v29(requests, selector.instance, selector.local, budget)? {
+                    equations.ensure_cell(plan, cells, selector.instance, selector.local, generation, budget)?;
+                }
+            }
+        }
         if has_schema_inputs {
             source_reference_seed_schema_inputs_v29(plan, &mut equations, cells, budget)?;
         }

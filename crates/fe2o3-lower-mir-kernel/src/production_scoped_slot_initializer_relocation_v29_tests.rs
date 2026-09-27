@@ -13,6 +13,7 @@ mod fresh_stack_tests {
 }
 
 const LIMIT: usize = 20_000_000;
+include!("production_source_scalar_entry_v29_tests.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SuffixCase {

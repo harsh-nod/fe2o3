@@ -505,6 +505,17 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         access: SourceReferenceAccessV29,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<SourceReferencePlaceV29, ProductionSemanticKirErrorV1> {
+        self.resolve_reference_place_recorded(site, place, access, true, budget)
+    }
+
+    fn resolve_reference_place_recorded(
+        &mut self,
+        site: SourceReferenceSiteV29,
+        place: &SemanticPlaceV1,
+        access: SourceReferenceAccessV29,
+        original_place: bool,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<SourceReferencePlaceV29, ProductionSemanticKirErrorV1> {
         budget.charge_work(1)?;
         budget.reserve_storage(std::mem::size_of::<SourceReferencePlaceV29>())?;
         let mut raw_path = self.plan.raw_source_path(site, place, access, budget)?;
@@ -635,7 +646,16 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                     Ok(place) => place,
                     Err(_) => return Err(ArgumentResourceV1::Accounting.into()),
                 };
-                self.read_place(site, &index_place, budget)?;
+                // The temporary whole-local place is only an evaluator input.
+                // Retain the original parent projection/event, not its address.
+                let index_value = self.resolve_reference_place_recorded(
+                    site, &index_place, SourceReferenceAccessV29::Read, false, budget,
+                )?;
+                if let Some(loan) = index_value.loan {
+                    self.effect(loan, SourceReferenceEffectV29::ReadReferent, budget)?;
+                }
+                self.attach_storage_value(&index_value, budget)?;
+                self.retain_selector_generation(site, place, projection_ordinal, &index_value, budget)?;
             }
             match (projection.kind(), self.plan.nodes[resolved.node].kind) {
                 (SemanticProjectionKindV1::Downcast(variant), SourceReferenceNodeKindV29::Plain(_)) => {
@@ -847,7 +867,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         ) {
             self.check_place_access(&resolved, access, budget)?;
         }
-        if access == SourceReferenceAccessV29::Read {
+        if original_place && access == SourceReferenceAccessV29::Read {
             self.retain_descriptor_value(site, place, place.projections().len(), resolved.node, budget)?;
         }
         if access == SourceReferenceAccessV29::Read && resolved.shared_path {
@@ -859,7 +879,9 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                 }
             }
         }
-        self.retain_reference_access(site, place, access, &resolved, budget)?;
+        if original_place {
+            self.retain_reference_access(site, place, access, &resolved, budget)?;
+        }
         Ok(resolved)
     }
 
@@ -1456,6 +1478,14 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                 .is_some() =>
             {
                 let expanded = self.expand_plain_reference_fields(right, budget)?;
+                self.merge_node_at_depth(left, expanded, depth, budget)
+            }
+            (SourceReferenceNodeKindV29::Plain(_), SourceReferenceNodeKindV29::Aggregate { .. }) => {
+                let expanded = self.expand_plain_scalar_array_for_merge_v29(left, right, budget)?;
+                self.merge_node_at_depth(expanded, right, depth, budget)
+            }
+            (SourceReferenceNodeKindV29::Aggregate { .. }, SourceReferenceNodeKindV29::Plain(_)) => {
+                let expanded = self.expand_plain_scalar_array_for_merge_v29(right, left, budget)?;
                 self.merge_node_at_depth(left, expanded, depth, budget)
             }
             (SourceReferenceNodeKindV29::Absent, SourceReferenceNodeKindV29::Absent) => {

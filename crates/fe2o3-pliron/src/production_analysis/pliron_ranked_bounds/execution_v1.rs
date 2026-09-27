@@ -58,9 +58,9 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_observation_v1(
     observer: RankedBoundsObserverV1<'_, '_, '_>,
 ) -> RankedBoundsReportV1 {
     match observer {
-        None => run_pliron_ranked_bounds_inner_v1(context, function, analyses, None, None),
+        None => run_pliron_ranked_bounds_inner_v1(context, function, analyses, None, None, None),
         Some(observer) => observer.with_projection(&Ok, |nested| {
-            run_pliron_ranked_bounds_inner_v1(context, function, analyses, None, Some(nested))
+            run_pliron_ranked_bounds_inner_v1(context, function, analyses, None, None, Some(nested))
         }),
     }
 }
@@ -70,9 +70,13 @@ fn run_pliron_ranked_bounds_inner_v1(
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
     private: Option<&crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1<'_>>,
+    lifecycle: Option<&crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'_>>,
     observer: RankedBoundsObserverV1<'_, '_, '_>,
 ) -> RankedBoundsReportV1 {
     if private.is_some_and(|input| !input.authenticate(context, function)) {
+        return structural_failure();
+    }
+    if lifecycle.is_some_and(|input| !input.authenticate(context, function)) {
         return structural_failure();
     }
     let mut budget = RankedBoundsBudget::default();
@@ -114,7 +118,19 @@ fn run_pliron_ranked_bounds_inner_v1(
             }
             let operation = Operation::get_op_dyn(operation_pointer, context);
             let classified = match private {
-                None => ranked_operation_kind(operation.as_ref()),
+                None => ranked_operation_kind(operation.as_ref()).or_else(|| {
+                    // Only exact imported lifecycle operations or the exact
+                    // zero-edge Unreachable terminal reach this extension.
+                    // It supplies no memory or completed source-role authority.
+                    lifecycle.and_then(|input| {
+                        input.operation(context, operation_pointer)?;
+                        Some(if input.unreachable(context, operation_pointer) {
+                            RankedOperationKind::TerminalEnd
+                        } else {
+                            RankedOperationKind::NativeData
+                        })
+                    })
+                }),
                 Some(input) => {
                     canonical_private_operation_kind_v1(input, context, operation_pointer)
                 }
@@ -546,6 +562,7 @@ pub(crate) fn require_canonical_private_bounds_v1(
             analyses,
             Some(input),
             None,
+            None,
         ),
         Some(observer) => observer.with_projection(&Ok, |nested| {
             run_pliron_ranked_bounds_inner_v1(
@@ -553,6 +570,7 @@ pub(crate) fn require_canonical_private_bounds_v1(
                 input.function(),
                 analyses,
                 Some(input),
+                None,
                 Some(nested),
             )
         }),
@@ -562,4 +580,24 @@ pub(crate) fn require_canonical_private_bounds_v1(
     } else {
         Err(RankedBoundsCheckErrorV1 { report })
     }
+}
+
+pub(crate) fn require_canonical_lifecycle_bounds_v18(
+    input: &crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'_>,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
+) -> Result<RankedBoundsReportV1, RankedBoundsCheckErrorV1> {
+    // The fixed pipeline prepays the bounded occurrence lookups before this
+    // shared solver, just as the existing private profile prepays its joins.
+    let report = match observer {
+        None => run_pliron_ranked_bounds_inner_v1(
+            input.context(), input.function(), analyses, None, Some(input), None,
+        ),
+        Some(observer) => observer.with_projection(&Ok, |nested| {
+            run_pliron_ranked_bounds_inner_v1(
+                input.context(), input.function(), analyses, None, Some(input), Some(nested),
+            )
+        }),
+    };
+    if report.is_clean() { Ok(report) } else { Err(RankedBoundsCheckErrorV1 { report }) }
 }

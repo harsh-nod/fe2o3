@@ -57,6 +57,16 @@ fn source_static_object_expected_location_inner_v29(
         }
         return Ok(None);
     };
+    if matches!(endpoint.source, ScopedObjectSourceV29::EntryArgument { .. }) {
+        source_index.sidecar(instance, budget)?;
+        let slot = source_address_object_entry_v29(instances, plan, slots, instance, endpoint, budget)?;
+        return Ok(Some(SourceStaticObjectLocationV29 { slot, offset: 0, schema: Some(endpoint.root_schema) }));
+    }
+    if let ScopedObjectSourceV29::ProjectionIndex(read) = endpoint.source {
+        source_index.sidecar(instance, budget)?;
+        let slot = source_address_object_index_v29(instances, plan, slots, instance, read, endpoint, budget)?;
+        return Ok(Some(SourceStaticObjectLocationV29 { slot, offset: 0, schema: Some(endpoint.root_schema) }));
+    }
     let (site, role, prefix, generated_operand) = match endpoint.source {
         ScopedObjectSourceV29::Place {
             site, role, prefix, ..

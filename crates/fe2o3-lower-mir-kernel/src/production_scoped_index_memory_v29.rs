@@ -128,6 +128,8 @@ impl<'view, 'inventory, 'graph> SourceIndexMemoryV29<'view, 'inventory, 'graph> 
             // Reused fixed envelopes for the bounded selector normalization
             // query. No definition walk allocates or retains per-value state.
             index_normalization_header_v29()?,
+            std::mem::size_of::<Result<ScalarType, ProductionSemanticKirErrorV1>>(),
+            std::mem::size_of::<Option<&fe2o3_kernel_ir::StorageLayoutV1>>(),
         ])?)?;
         Ok(Self {
             inventory,
@@ -208,6 +210,37 @@ impl<'view, 'inventory, 'graph> SourceIndexMemoryV29<'view, 'inventory, 'graph> 
             .ok_or_else(source_raw_physical_error_v29)
     }
 
+    fn holder_scalar(
+        &self,
+        slot: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<ScalarType, ProductionSemanticKirErrorV1> {
+        self.check(budget)?;
+        budget.charge_work(4)?;
+        let row = self.slots.get(slot).ok_or_else(source_raw_physical_error_v29)?;
+        match row.representation {
+            ScopedSlotRepresentationV29::ScalarArray(array)
+                if array.length == 1 && array.bytes == array.element.size => {
+                let PrivateRetainedElementFactsV1::Scalar(scalar) = array.element.element else {
+                    return Err(source_raw_physical_error_v29());
+                };
+                Ok(scalar)
+            }
+            ScopedSlotRepresentationV29::Object { schema, bytes, alignment } => {
+                let layout = self.inventory.owner().module().storage_layouts.get(schema.0 as usize)
+                    .ok_or_else(source_raw_physical_error_v29)?;
+                let fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(scalar) = layout.kind else {
+                    return Err(source_raw_physical_error_v29());
+                };
+                if layout.size != bytes || layout.alignment != alignment {
+                    return Err(source_raw_physical_error_v29());
+                }
+                Ok(scalar)
+            }
+            _ => Err(source_raw_physical_error_v29()),
+        }
+    }
+
     fn intern(
         &mut self,
         slot: usize,
@@ -220,20 +253,7 @@ impl<'view, 'inventory, 'graph> SourceIndexMemoryV29<'view, 'inventory, 'graph> 
         if let Some(&existing) = self.index.get(&key) {
             return Ok(existing);
         }
-        let slot_row = self
-            .slots
-            .get(slot)
-            .ok_or_else(source_raw_physical_error_v29)?;
-        let scalar = slot_row.scalar_array()?;
-        if scalar.length != 1
-            || scalar.bytes != scalar.element.size
-            || !matches!(
-                scalar.element.element,
-                PrivateRetainedElementFactsV1::Scalar(_)
-            )
-        {
-            return Err(source_raw_physical_error_v29());
-        }
+        self.holder_scalar(slot, budget)?;
         let upper = argument_product_v1(self.slots.len(), self.memory()?.node_count())?;
         if self.equations.len() >= upper {
             return Err(source_raw_physical_error_v29());
@@ -331,7 +351,9 @@ impl<'view, 'inventory, 'graph> SourceIndexMemoryV29<'view, 'inventory, 'graph> 
                             pointer,
                             value,
                             access,
-                        } if !access.volatile => {
+                        } | OperationKind::Storage(ScopedObjectOperationV29::WriteValue {
+                            address: pointer, value, access,
+                        }) if !access.volatile => {
                             let block = self.block_id(coordinate, budget)?;
                             let tracked = SourceAddressMemoryV29::access(
                                 self.accesses,
@@ -353,7 +375,7 @@ impl<'view, 'inventory, 'graph> SourceIndexMemoryV29<'view, 'inventory, 'graph> 
                                     else {
                                         return Err(source_raw_physical_error_v29());
                                     };
-                                    if self.slots[slot].scalar_array()?.length != 1 || !operation.results.is_empty()
+                                    if self.holder_scalar(slot, budget)? != *scalar || !operation.results.is_empty()
                                     {
                                         return Err(source_raw_physical_error_v29());
                                     }
@@ -375,6 +397,7 @@ impl<'view, 'inventory, 'graph> SourceIndexMemoryV29<'view, 'inventory, 'graph> 
                                         let original = self.operation(source, budget)?;
                                         match original.kind {
                                             OperationKind::Load { pointer, access }
+                                            | OperationKind::Storage(ScopedObjectOperationV29::ReadValue { address: pointer, access })
                                                 if !access.volatile =>
                                             {
                                                 if result != 0
@@ -442,22 +465,6 @@ impl<'view, 'inventory, 'graph> SourceIndexMemoryV29<'view, 'inventory, 'graph> 
                                 // Only the independently solved physical graph
                                 // can exclude an untracked Global/Constant write.
                                 (None, None) => {
-                                    self.push_input(slot, incoming, budget)?;
-                                    IndexMemorySeedV29::Pending
-                                }
-                                _ => IndexMemorySeedV29::Unknown,
-                            }
-                        }
-                        OperationKind::Storage(ScopedObjectOperationV29::WriteValue { .. }) => {
-                            let access = source_address_value_access_v29(operation)?
-                                .ok_or_else(source_raw_physical_error_v29)?;
-                            let tracked = SourceAddressMemoryV29::access(self.accesses,
-                                self.block_id(coordinate, budget)?, coordinate.operation as usize, budget)?;
-                            match (self.physical.exact(access.pointer, budget)?, tracked) {
-                                (Some(actual), Some(row)) if actual == row.slot && actual != slot
-                                    && !access.access.volatile => {
-                                    // The complete checked access census proves
-                                    // this typed write belongs to another object.
                                     self.push_input(slot, incoming, budget)?;
                                     IndexMemorySeedV29::Pending
                                 }
@@ -630,13 +637,16 @@ impl<'view, 'inventory, 'graph> SourceIndexMemoryV29<'view, 'inventory, 'graph> 
     ) -> Result<bool, ProductionSemanticKirErrorV1> {
         self.check(budget)?;
         let operation = self.operation(load, budget)?;
-        let OperationKind::Load { pointer, access } = operation.kind else {
-            return Err(source_raw_physical_error_v29());
+        let (pointer, access) = match operation.kind {
+            OperationKind::Load { pointer, access }
+            | OperationKind::Storage(ScopedObjectOperationV29::ReadValue { address: pointer, access }) => (pointer, access),
+            _ => return Err(source_raw_physical_error_v29()),
         };
         let [actual] = operation.results.as_slice() else {
             return Err(source_raw_physical_error_v29());
         };
         if actual.id != result
+            || actual.ty != Type::Scalar(self.holder_scalar(slot, budget)?)
             || access.volatile
             || self.physical.exact(pointer, budget)? != Some(slot)
         {
@@ -776,7 +786,8 @@ impl<'view, 'inventory, 'graph> SourceIndexMemoryV29<'view, 'inventory, 'graph> 
         }
         let operation = self.operation(coordinate, budget)?;
         Ok(match operation.kind {
-            OperationKind::Store { pointer, .. } => {
+            OperationKind::Store { pointer, .. }
+            | OperationKind::Storage(ScopedObjectOperationV29::WriteValue { address: pointer, .. }) => {
                 let actual = self.physical.exact(pointer, budget)?;
                 let access = SourceAddressMemoryV29::access(
                     self.accesses,
@@ -971,6 +982,7 @@ impl<'view, 'inventory, 'graph> SourceIndexMemoryV29<'view, 'inventory, 'graph> 
         budget.charge_work(6)?;
         let actual_load = self.operation(located.load, budget)?;
         if !matches!(actual_load.kind, OperationKind::Load { pointer, access }
+            | OperationKind::Storage(ScopedObjectOperationV29::ReadValue { address: pointer, access })
             if !access.volatile && self.physical.exact(pointer, budget)? == Some(guard.slot))
             || !matches!(actual_load.results.as_slice(), [result] if result.id == guard.value && result.ty == Type::Scalar(guard.scalar))
         {

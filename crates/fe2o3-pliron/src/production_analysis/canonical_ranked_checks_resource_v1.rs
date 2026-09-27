@@ -245,6 +245,24 @@ impl AnalysisState {
         context: &Context,
         function: &FuncOp,
     ) -> Result<ProductionPlironPreloweringOutcomeV1, Failure> {
+        self.invoke_with_identity_v18(ordinal, context, function, None)
+    }
+
+    pub(super) fn invoke_lifecycle_v18(
+        &mut self,
+        ordinal: usize,
+        identity: &crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'_>,
+    ) -> Result<ProductionPlironPreloweringOutcomeV1, Failure> {
+        self.invoke_with_identity_v18(ordinal, identity.context(), identity.function(), Some(identity))
+    }
+
+    fn invoke_with_identity_v18<'a>(
+        &mut self,
+        ordinal: usize,
+        context: &'a Context,
+        function: &'a FuncOp,
+        identity: Option<&'a crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'a>>,
+    ) -> Result<ProductionPlironPreloweringOutcomeV1, Failure> {
         let floor = self.contract.cumulative();
         let local = self
             .contract
@@ -253,11 +271,12 @@ impl AnalysisState {
         let mut receipt =
             InvocationReceiptV1::new(floor, self.limits).map_err(|error| self.denial(error))?;
         let result = catch_unwind(AssertUnwindSafe(|| {
-            require_production_pliron_checks_with_observation_v1(
+            crate::production_analysis::pliron_pipeline::require_production_pliron_checks_with_identity_observation_v18(
                 context,
                 function,
                 local,
                 &mut receipt,
+                identity,
             )
         }));
         let observed = receipt.snapshot();

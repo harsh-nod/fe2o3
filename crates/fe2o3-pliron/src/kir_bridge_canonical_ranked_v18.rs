@@ -34,11 +34,12 @@ impl KirPlironGraphV18<'_> {
         &self,
         expected_epoch: u64,
         budget: &mut Budget<'_>,
-        mut consume: impl FnMut(usize, &Context, &FuncOp) -> Result<(), Failure>,
+        mut consume: impl FnMut(usize, &NativeLifecycleIdentityAdmissionV18<'_>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
         self.validate_custody(budget)?;
         self.check_ranked_policy_epoch_v18(expected_epoch)?;
         budget.reserve_storage(std::mem::size_of_val(&consume))?;
+        budget.reserve_storage(std::mem::size_of::<NativeLifecycleIdentityAdmissionV18<'_>>())?;
         let context = &self.session.context;
         let root = self.session.operations[&self.root.identity];
         let region = root.deref(context).get_region(0);
@@ -62,7 +63,20 @@ impl KirPlironGraphV18<'_> {
             let function =
                 Operation::get_op::<FuncOp>(pointer, context).ok_or(Failure::NativeSchema)?;
             self.check_ranked_policy_epoch_v18(expected_epoch)?;
-            consume(ordinal, context, &function)?;
+            let source_body = source.body.as_ref().ok_or(Failure::NativeSchema)?;
+            budget.charge_work(source_body.blocks.len())?;
+            let operations = source_body.blocks.iter().try_fold(0usize, |count, block| {
+                count.checked_add(block.operations.len())?.checked_add(1)
+            }).ok_or(ResourceError::Arithmetic)?;
+            let identity = NativeLifecycleIdentityAdmissionV18 {
+                context,
+                function: &function,
+                origins: &self.origins,
+                ordinal,
+                epoch: expected_epoch,
+                operations,
+            };
+            consume(ordinal, &identity)?;
             self.check_ranked_policy_epoch_v18(expected_epoch)?;
         }
         budget.charge_work(1)?;
@@ -73,3 +87,7 @@ impl KirPlironGraphV18<'_> {
         self.check_ranked_policy_epoch_v18(expected_epoch)
     }
 }
+
+#[cfg(test)]
+#[path = "kir_bridge_lifecycle_identity_v18_tests.rs"]
+mod lifecycle_identity_tests;

@@ -168,6 +168,14 @@ fn source_address_object_payload_v29(
         (
             ScopedObjectOperationV29::ReadValue { .. },
             ScopedObjectRoleV29::ReadValue {
+                source, read: ScopedObjectReadOriginV29::ProjectionIndex(read),
+            },
+        ) => (source, ScopedMemoryPayloadV29::IndexLoad {
+            result: payload.result.ok_or_else(scoped_object_error_v29)?, read,
+        }),
+        (
+            ScopedObjectOperationV29::ReadValue { .. },
+            ScopedObjectRoleV29::ReadValue {
                 source,
                 read: ScopedObjectReadOriginV29::Original(read),
             },
@@ -188,6 +196,18 @@ fn source_address_object_payload_v29(
         _ => return Err(scoped_object_pending_v29()),
     };
     match (endpoint.object, endpoint.source) {
+        (ScopedObjectIdentityV29::Local { local, generation: 0, .. }, ScopedObjectSourceV29::EntryArgument { local: original })
+            if local == original && endpoint.source_path == (ScopedObjectPathV29 { first: 0, count: 0 })
+                && endpoint.path == endpoint.source_path && endpoint.root_type == endpoint.projected_type
+                && endpoint.root_schema == endpoint.projected_schema
+                && matches!(role, ScopedMemoryPayloadV29::Store {
+                    source: ScopedMemoryStoreSourceV29::EntryArgument { local: actual, ty }, ..
+                } if actual == local && ty == endpoint.root_type) => {}
+        (ScopedObjectIdentityV29::Local { local, .. }, ScopedObjectSourceV29::ProjectionIndex(read))
+            if local == read.local && endpoint.source_path.count == 0 && endpoint.path.count == 0
+                && endpoint.root_type == read.ty && endpoint.projected_type == read.ty
+                && endpoint.root_schema == endpoint.projected_schema
+                && matches!(role, ScopedMemoryPayloadV29::IndexLoad { read: actual, .. } if actual == read) => {}
         (ScopedObjectIdentityV29::Local { .. }, ScopedObjectSourceV29::Place { .. }) => {
             if endpoint.source_path.count > 1 || endpoint.path.count > 1 {
                 return Err(scoped_object_pending_v29());
@@ -215,6 +235,60 @@ fn source_address_object_payload_v29(
         _ => return Err(scoped_object_pending_v29()),
     }
     Ok(Some((endpoint, role)))
+}
+
+fn source_address_object_entry_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    plan: &SourceReferencePlanV29<'_, '_>,
+    slots: &OwnedScopedSourceSlotsV29,
+    instance: ProductionCallInstanceIdV1,
+    endpoint: ScopedObjectEndpointV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
+    plan.check_owner(instances, budget)?;
+    let result = (|| {
+    source_reference_owned_prepay_v29::<usize>(plan, budget)?;
+    source_reference_owned_prepay_v29::<Option<&ScopedSourceSlotV29>>(plan, budget)?;
+    let local = source_object_entry_local_v29(plan, instance, endpoint, budget)?;
+    let slot = source_address_object_slot_v29(instances, plan, slots, instance, local, 0,
+        endpoint.root_type, budget)?;
+    budget.charge_work(3)?;
+    if !matches!(slots.slots.get(slot),
+        Some(ScopedSourceSlotV29 { representation: ScopedSlotRepresentationV29::Object { schema, .. }, .. })
+            if *schema == endpoint.root_schema)
+    { return Err(scoped_object_error_v29()); }
+    Ok(slot)
+    })();
+    result.inspect_err(|error| source_reference_record_failure_v29(plan, error))
+}
+
+fn source_address_object_index_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    plan: &SourceReferencePlanV29<'_, '_>,
+    slots: &OwnedScopedSourceSlotsV29,
+    instance: ProductionCallInstanceIdV1,
+    read: ScopedMemoryIndexReadV29,
+    endpoint: ScopedObjectEndpointV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
+    budget.source_reference_owner_v29(plan)?;
+    source_reference_owned_prepay_v29::<usize>(plan, budget)?;
+    source_reference_owned_prepay_v29::<Option<&ScopedSourceSlotV29>>(plan, budget)?;
+    let generation = source_retained_index_generation_v29(plan, instance, read, budget)?;
+    budget.charge_work(8)?;
+    if endpoint.object != (ScopedObjectIdentityV29::Local { instance, local: read.local, generation })
+        || endpoint.source != ScopedObjectSourceV29::ProjectionIndex(read)
+        || endpoint.root_type != read.ty || endpoint.projected_type != read.ty
+        || endpoint.root_schema != endpoint.projected_schema
+        || endpoint.source_path.count != 0 || endpoint.path.count != 0
+    { return Err(source_raw_physical_error_v29()); }
+    let slot = source_address_object_slot_v29(instances, plan, slots, instance,
+        read.local, generation, read.ty, budget)?;
+    if !matches!(slots.slots.get(slot),
+        Some(ScopedSourceSlotV29 { representation: ScopedSlotRepresentationV29::Object { schema, .. }, .. })
+            if *schema == endpoint.root_schema)
+    { return Err(source_raw_physical_error_v29()); }
+    Ok(slot)
 }
 
 fn source_address_object_direct_v29(
@@ -318,6 +392,20 @@ fn source_address_live_generation_v29(
     Err(source_raw_physical_error_v29())
 }
 
+#[cfg(test)]
+type SourceObjectEffectCensusObserverV29 = fn(
+    &SourceAddressSourceIndexV29<'_>,
+    &mut Vec<SourceAddressAccessSourceV29>,
+    &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1>;
+
+#[cfg(test)]
+thread_local! {
+    static SOURCE_OBJECT_EFFECT_CENSUS_OBSERVER_V29:
+        std::cell::Cell<Option<SourceObjectEffectCensusObserverV29>> =
+        const { std::cell::Cell::new(None) };
+}
+
 fn check_source_object_effect_census_v29(
     instances: &ExecutionInstancesV29<'_>,
     plan: &SourceReferencePlanV29<'_, '_>,
@@ -333,7 +421,32 @@ fn check_source_object_effect_census_v29(
     {
         return Err(ArgumentResourceV1::Accounting.into());
     }
-    source_reference_owned_prepay_v29::<(Vec<bool>, Vec<bool>, Vec<(usize, u32)>)>(plan, budget)?;
+    #[cfg(test)]
+    let candidate_sources = if let Some(observer) = SOURCE_OBJECT_EFFECT_CENSUS_OBSERVER_V29.get() {
+        source_reference_owned_prepay_v29::<Vec<SourceAddressAccessSourceV29>>(plan, budget)?;
+        let mut rows = emission_vec_v1(argument_sum_v1(&[sources.len(), 1])?, budget)?;
+        budget.charge_work(sources.len())?;
+        rows.extend_from_slice(sources);
+        observer(source_index, &mut rows, budget)?;
+        Some(rows)
+    } else {
+        None
+    };
+    #[cfg(test)]
+    let sources = candidate_sources.as_deref().unwrap_or(sources);
+    source_reference_owned_prepay_v29::<(Vec<bool>, Vec<bool>, Vec<bool>, Vec<(usize, u32)>)>(plan, budget)?;
+    source_reference_owned_prepay_v29::<Option<(usize, SourceReferenceSelectorV29)>>(plan, budget)?;
+    source_reference_owned_prepay_v29::<Option<&SemanticPlaceV1>>(plan, budget)?;
+    source_reference_owned_prepay_v29::<Option<&mut bool>>(plan, budget)?;
+    source_reference_owned_prepay_v29::<ScopedEmittedPointsV29<'_, '_, '_>>(plan, budget)?;
+    source_reference_owned_prepay_v29::<Result<Option<(BlockId, u32)>, ScopedTileFailureKindV29>>(plan, budget)?;
+    source_reference_owned_prepay_v29::<(usize, usize, Option<(usize, u32)>)>(plan, budget)?;
+    source_reference_owned_prepay_v29::<(u32, u32)>(plan, budget)?;
+    let mut entry_count = 0usize;
+    let mut previous_entry = None;
+    let mut selector_reads = emission_vec_v1(plan.selectors.len(), budget)?;
+    budget.charge_work(plan.selectors.len())?;
+    selector_reads.resize(plan.selectors.len(), false);
     let mut terminal = emission_vec_v1(plan.accesses.len(), budget)?;
     let mut holders = emission_vec_v1(plan.raw_accesses.len(), budget)?;
     let mut aggregate_fields = Vec::new();
@@ -357,6 +470,73 @@ fn check_source_object_effect_census_v29(
         else {
             continue;
         };
+        budget.charge_work(2)?;
+        if let ScopedObjectSourceV29::EntryArgument { local } = endpoint.source {
+            budget.charge_work(5)?;
+            let key = (source.instance.index(), local.index());
+            if previous_entry.is_some_and(|previous| previous >= key)
+                || row.source.is_some() || source.raw.is_some()
+                || source_address_object_entry_v29(instances, plan, slots, source.instance,
+                    endpoint, budget)? != source.physical.slot
+                || !matches!(payload, ScopedMemoryPayloadV29::Store {
+                    source: ScopedMemoryStoreSourceV29::EntryArgument { local: actual, ty }, ..
+                } if actual == local && ty == endpoint.root_type)
+            { return Err(scoped_object_error_v29()); }
+            let mut mapping = ScopedEmittedPointsV29 {
+                coordinates: &source_index.pending.coordinates,
+                relocation: &source_index.pending.slot_relocation, budget,
+            };
+            let physical = mapping.emitted_point(source.instance, row.block,
+                u32::try_from(row.position).map_err(|_| ArgumentResourceV1::Arithmetic)?, false)
+                .map_err(source_address_point_error_v29)?.ok_or_else(scoped_object_error_v29)?;
+            if physical != (source.physical.block,
+                u32::try_from(source.physical.operation).map_err(|_| ArgumentResourceV1::Arithmetic)?)
+            { return Err(scoped_object_error_v29()); }
+            previous_entry = Some(key);
+            entry_count = argument_sum_v1(&[entry_count, 1])?;
+            continue;
+        }
+        if let ScopedObjectSourceV29::ProjectionIndex(read) = endpoint.source {
+            // Implicit selectors are not explicit Place accesses. Rejoin their
+            // original use and physical row, then count each selector once.
+            if !matches!(payload, ScopedMemoryPayloadV29::IndexLoad { read: actual, .. } if actual == read)
+                || source.raw.is_some()
+                || row.source != Some(ScopedMemoryFrameV29::operand(read.site, Some(read.role)))
+                || source_address_object_index_v29(instances, plan, slots, source.instance,
+                    read, endpoint, budget)? != source.physical.slot
+            { return Err(scoped_object_error_v29()); }
+            let original = instances.instance(source.instance)
+                .ok_or_else(scoped_object_error_v29)?.declaration();
+            let place = source_reference_selector_place_v29(original, read.site, read.role)
+                .ok_or_else(scoped_object_error_v29)?;
+            let (index, selector) = plan.selector_at(source.instance, read.site, place,
+                read.projection as usize, budget)?.ok_or_else(scoped_object_error_v29)?;
+            budget.charge_work(5)?;
+            if selector.local != read.local
+                || selector.value != (SourceReferenceSelectorValueV29::Retained { event: read.event })
+            { return Err(scoped_object_error_v29()); }
+            source_index.frame_gap(source.instance,
+                ScopedMemoryFrameV29::operand(read.site, Some(read.role)),
+                row.block, row.position, budget)?;
+            let mut mapping = ScopedEmittedPointsV29 {
+                coordinates: &source_index.pending.coordinates,
+                relocation: &source_index.pending.slot_relocation,
+                budget,
+            };
+            let physical = mapping.emitted_point(source.instance, row.block,
+                u32::try_from(row.position).map_err(|_| ArgumentResourceV1::Arithmetic)?, false)
+                .map_err(source_address_point_error_v29)?
+                .ok_or_else(scoped_object_error_v29)?;
+            if physical != (source.physical.block,
+                u32::try_from(source.physical.operation).map_err(|_| ArgumentResourceV1::Arithmetic)?)
+            { return Err(scoped_object_error_v29()); }
+            let seen = selector_reads.get_mut(index).ok_or_else(scoped_object_error_v29)?;
+            if std::mem::replace(seen, true) {
+                return Err(source_reference_error_v29(
+                    "original typed selector read is duplicated in the actual candidate"));
+            }
+            continue;
+        }
         if let ScopedObjectSourceV29::AggregateComponent { site, operand, destination, variant: None } = endpoint.source {
             let original = instances.instance(source.instance).ok_or_else(scoped_object_error_v29)?.declaration();
             let Some(SemanticStatementKindV1::Assign(assignment)) = scoped_source_statement_v29(original, site) else {
@@ -438,6 +618,39 @@ fn check_source_object_effect_census_v29(
             if std::mem::replace(seen, true) {
                 return Err(scoped_object_error_v29());
             }
+        }
+    }
+    let mut expected_entries = 0usize;
+    for instance in &slots.instances {
+        budget.charge_work(2)?;
+        let rows = slots.slots.get(instance.slots.clone()).ok_or_else(scoped_object_error_v29)?;
+        // This is the same original declaration/slot roster used before
+        // relocation, not a count inferred from actual entry stores.
+        let Some(first) = rows.first() else { continue; };
+        let entry = first.allocation.block;
+        visit_scoped_slot_initializers_v29(instances, instance.instance, entry, rows, budget,
+            |_, slot, _, _| {
+                if matches!(slot.representation, ScopedSlotRepresentationV29::Object { .. }) {
+                    expected_entries = argument_sum_v1(&[expected_entries, 1])?;
+                }
+                Ok(())
+            })?;
+    }
+    if entry_count != expected_entries { return Err(scoped_object_error_v29()); }
+    for (index, selector) in plan.selectors.iter().enumerate() {
+        budget.charge_work(4)?;
+        selector.check(instances, budget)?;
+        let expected = match (selector.value, selector.retained_generation) {
+            (SourceReferenceSelectorValueV29::Retained { .. }, Some(generation)) =>
+                source_address_has_object_v29(plan, slots, selector.instance,
+                    selector.local, generation, budget)?,
+            (SourceReferenceSelectorValueV29::Retained { .. }, None)
+                if plan.storage_root.is_some() => return Err(scoped_memory_error_v29()),
+            _ => false,
+        };
+        if selector_reads[index] != expected {
+            return Err(source_reference_error_v29(
+                "original typed selector read is missing from the actual candidate"));
         }
     }
     for failure in failures {
@@ -548,10 +761,16 @@ fn check_source_object_effect_census_v29(
             ));
         }
     }
-    let bytes = argument_sum_v1(&[terminal.capacity(), holders.capacity(),
+    let bytes = argument_sum_v1(&[terminal.capacity(), holders.capacity(), selector_reads.capacity(),
         argument_product_v1(aggregate_fields.capacity(), std::mem::size_of::<(usize, u32)>())?])?;
-    drop((terminal, holders, aggregate_fields));
+    drop((terminal, holders, selector_reads, aggregate_fields));
     budget.release_storage(bytes)?;
+    #[cfg(test)]
+    if let Some(rows) = candidate_sources {
+        let bytes = argument_product_v1(rows.capacity(), std::mem::size_of::<SourceAddressAccessSourceV29>())?;
+        drop(rows);
+        budget.release_storage(bytes)?;
+    }
     Ok(())
 }
 

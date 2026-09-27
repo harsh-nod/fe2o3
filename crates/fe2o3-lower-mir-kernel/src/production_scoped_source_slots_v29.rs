@@ -289,10 +289,19 @@ fn visit_scoped_slot_initializers_v29(
         if !local.role().is_entry_argument() {
             continue;
         }
-        if slot.origin.identity.legacy_local()? != local_index
-            || slot.representation.scalar_array()?.count.is_some()
-        {
-            return Err(scoped_slot_error_v29());
+        match (slot.origin.identity, slot.representation) {
+            (ScopedAllocationIdentityV29::LegacyLocal(actual), ScopedSlotRepresentationV29::ScalarArray(row))
+                if actual == local_index && row.count.is_none() => {}
+            (ScopedAllocationIdentityV29::OriginalObject { generation: 0, .. },
+                ScopedSlotRepresentationV29::Object { .. }) => {
+                budget.charge_work(2)?;
+                if !matches!(instances.owner().source_semantic().types()[local.ty().index() as usize].shape(),
+                    SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+                { return Err(scoped_slot_error_v29()); }
+            }
+            (ScopedAllocationIdentityV29::OriginalObject { generation, .. },
+                ScopedSlotRepresentationV29::Object { .. }) if generation != 0 => continue,
+            _ => return Err(scoped_slot_error_v29()),
         }
         visit(
             index,
@@ -600,14 +609,12 @@ fn append_scoped_source_slots_v29(
             let references = references.ok_or_else(scoped_slot_error_v29)?;
             let initialization = private_array_operation_v1(body, location, budget)?
                 .ok_or_else(scoped_slot_error_v29)?;
-            source_reference_retained_scalar_entry_store_v29(
-                references,
-                id,
-                slot.origin,
-                lowered,
-                initialization,
-                budget,
-            )
+            match slot.representation {
+                ScopedSlotRepresentationV29::Object { .. } => source_reference_object_entry_store_v29(
+                    references, id, slot, lowered, location, initialization, budget),
+                ScopedSlotRepresentationV29::ScalarArray(_) => source_reference_retained_scalar_entry_store_v29(
+                    references, id, slot.origin, lowered, initialization, budget),
+            }
         },
     )?;
     budget.charge_work(4)?;

@@ -1259,7 +1259,13 @@ fn source_address_accesses_v29(
                         return Err(source_raw_physical_error_v29());
                     }
                     source_index.frame_gap(instance, frame, row.block, row.position, budget)?;
-                    (source_address_original_slot_v29(instances, slots, instance, read.local, read.ty, budget)?, None)
+                    let slot = if let Some((endpoint, _)) = object {
+                        source_address_object_index_v29(instances, references.plan, slots,
+                            instance, read, endpoint, budget)?
+                    } else {
+                        source_address_original_slot_v29(instances, slots, instance, read.local, read.ty, budget)?
+                    };
+                    (slot, None)
                 }
                 Some(ScopedMemoryPayloadV29::Store {
                     source: ScopedMemoryStoreSourceV29::EntryArgument { local, ty },
@@ -1274,12 +1280,13 @@ fn source_address_accesses_v29(
                     {
                         return Err(source_raw_physical_error_v29());
                     }
-                    (
-                        source_address_original_slot_v29(
-                            instances, slots, instance, local, ty, budget,
-                        )?,
-                        None,
-                    )
+                    let slot = if let Some((endpoint, _)) = object {
+                        source_address_object_entry_v29(instances, references.plan, slots,
+                            instance, endpoint, budget)?
+                    } else {
+                        source_address_original_slot_v29(instances, slots, instance, local, ty, budget)?
+                    };
+                    (slot, None)
                 }
                 Some(payload) => {
                     let frame = row.source.ok_or_else(source_raw_physical_error_v29)?;

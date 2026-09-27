@@ -17,6 +17,9 @@ struct SourceReferenceSelectorV29 {
     element: SemanticTypeIdV1,
     length: u64,
     canonical: usize,
+    // Observed only after the original implicit index read passes C2. This is
+    // a scalar holder activation locator, never pointer freshness authority.
+    retained_generation: Option<u32>,
 }
 
 type SourceReferenceSelectorSiteV29 = (usize, u32, Option<usize>, usize, usize);
@@ -146,6 +149,58 @@ impl SourceReferenceSelectorV29 {
 }
 
 impl SourceReferenceBuilderV29<'_, '_, '_> {
+    fn retain_selector_generation(
+        &mut self,
+        site: SourceReferenceSiteV29,
+        source: &SemanticPlaceV1,
+        projection: usize,
+        resolved: &SourceReferencePlaceV29,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        source_reference_emission_prepay_v29::<()>(budget)?;
+        if self.storage_root.is_none() { return Ok(()); }
+        source_reference_emission_prepay_v29::<SourceReferenceSelectorV29>(budget)?;
+        source_reference_emission_prepay_v29::<SourceReferenceSelectorSiteV29>(budget)?;
+        source_reference_emission_prepay_v29::<Option<&usize>>(budget)?;
+        source_reference_emission_prepay_v29::<Option<&SourceReferenceSelectorV29>>(budget)?;
+        source_reference_emission_prepay_v29::<Option<&fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1>>(budget)?;
+        source_reference_emission_prepay_v29::<Option<&SemanticTypeDeclV1>>(budget)?;
+        source_reference_emission_prepay_v29::<Option<SemanticTypeIdV1>>(budget)?;
+        charge_execution_cfg_lookup_v29(self.plan.selector_sites.len(), budget)?;
+        let key = (site.instance.index(), site.block.index(), site.statement,
+            source as *const SemanticPlaceV1 as usize, projection);
+        let Some(&index) = self.plan.selector_sites.get(&key) else { return Ok(()); };
+        budget.charge_work(12)?;
+        let row = *self.plan.selectors.get(index).ok_or(ArgumentResourceV1::Accounting)?;
+        let original = row.check(self.plan.instances, budget)?;
+        if row.instance != site.instance || row.projection != projection
+            || !std::ptr::eq(original, source) || resolved.instance != row.instance
+            || resolved.local != row.local || resolved.loan.is_some()
+            || resolved.shared_path || !resolved.projections.is_empty()
+            || !resolved.traversed.is_empty()
+        { return Err(source_reference_cfg_obligation_v29()); }
+        if !matches!(row.value, SourceReferenceSelectorValueV29::Retained { .. }) {
+            return Ok(());
+        }
+        let local = self.plan.instances.instance(row.instance)
+            .and_then(|instance| instance.declaration().locals().get(row.local.index() as usize))
+            .ok_or(ArgumentResourceV1::Accounting)?;
+        let declaration = self.plan.instances.owner().source_semantic().types()
+            .get(local.ty().index() as usize).ok_or(ArgumentResourceV1::Accounting)?;
+        if self.plan.nodes.get(resolved.node).map(|node| node.ty) != Some(local.ty())
+            || !matches!(declaration.shape(), SemanticTypeShapeV1::Scalar(_)
+                | SemanticTypeShapeV1::ValidityScalar(_))
+        { return Err(source_reference_cfg_obligation_v29()); }
+        let generation = match row.retained_generation {
+            Some(previous) if previous != resolved.generation => self.join_storage_epochs(
+                row.instance, row.local, previous, resolved.generation, budget,
+            )?,
+            _ => resolved.generation,
+        };
+        self.plan.selectors[index].retained_generation = Some(generation);
+        Ok(())
+    }
+
     fn collect_storage_selectors(
         &mut self,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -261,6 +316,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                     element: *element,
                     length: *length,
                     canonical,
+                    retained_generation: None,
                 };
                 selector.check(instances, budget)?;
                 let key = source_reference_selector_site_v29(

@@ -118,6 +118,190 @@ fn pending_census_is_complete_and_preflight_runs_no_native_stage() {
 }
 
 #[test]
+fn pending_unreachable_keeps_the_complete_operation_census_and_strict_role_gate() {
+    let mut module = lifecycle(true);
+    let mut terminal = BasicBlock::new(BlockId(41));
+    terminal.terminator = Some(Terminator::Unreachable);
+    let mut later = BasicBlock::new(BlockId(97));
+    later.operations.push(Operation::new(
+        vec![ValueDef::new(ValueId(4), Type::Scalar(ScalarType::U32))],
+        OperationKind::Load {
+            pointer: ValueId(2),
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    ));
+    later.terminator = Some(Terminator::Unreachable);
+    let body = module.functions[0].body.as_mut().unwrap();
+    body.blocks.extend([terminal, later]);
+    assert!(Terminator::Unreachable.successors().is_empty());
+    with_checked(&module, |checked, budget| {
+        let exact = checked.inventory(budget).unwrap().owner();
+        let floor = budget.storage();
+        let completed = Cell::new(false);
+        NATIVE_STARTS.with(|count| count.set(0));
+        with_pending_canonical_ranked_source_roles_v18(
+            checked,
+            LAYOUTS,
+            budget,
+            |pending, budget| {
+                assert!(std::ptr::eq(pending.owner(budget)?, exact));
+                assert_eq!(pending.owner(budget)?.module(), &module);
+                let rows = pending.obligations(budget)?;
+                assert_eq!(rows.len(), 5);
+                for (row, (block, operation, requirement)) in rows.iter().zip([
+                    (0, 0, CanonicalRankedSourceRequirementV18::Execution),
+                    (0, 1, CanonicalRankedSourceRequirementV18::Execution),
+                    (0, 2, CanonicalRankedSourceRequirementV18::Execution),
+                    (0, 3, CanonicalRankedSourceRequirementV18::Memory),
+                    (2, 0, CanonicalRankedSourceRequirementV18::Memory),
+                ]) {
+                    assert_eq!(row.coordinate().block.function.0, 0);
+                    assert_eq!(row.coordinate().block.block, block);
+                    assert_eq!(row.coordinate().operation, operation);
+                    assert_eq!(row.requirement(), requirement);
+                }
+                assert!(!pending.source_roles_are_complete());
+                assert!(!pending.grants_artifact_or_launch_authority());
+                completed.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(completed.get());
+        assert_eq!(NATIVE_STARTS.with(Cell::get), 0);
+        assert_eq!(budget.storage(), floor);
+        let error = with_canonical_ranked_policy_checks_v18(
+            checked,
+            LAYOUTS,
+            budget,
+            |_, _| -> Result<(), Failure> { panic!("unreachable bypassed a source role") },
+        )
+        .unwrap_err();
+        assert!(matches!(error.failure(), Failure::SourceRequirementV18 {
+            coordinate, requirement: CanonicalRankedSourceRequirementV18::Execution,
+        } if coordinate.block.function.0 == 0 && coordinate.block.block == 0 && coordinate.operation == 0));
+        assert_eq!(error.observation().work_upper_bound(), 0);
+        assert!(error.last_invocation().is_none());
+        assert_eq!(NATIVE_STARTS.with(Cell::get), 0);
+        assert_eq!(budget.storage(), floor);
+    });
+}
+
+#[test]
+fn pending_unreachable_native_observation_preserves_the_exact_terminal_graph() {
+    for reachable in [false, true] {
+        let mut module = Module::new("pending-scalar-unreachable");
+        let mut entry = BasicBlock::new(BlockId(17));
+        entry.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(0),
+            then_target: BlockId(22),
+            then_arguments: vec![],
+            else_target: BlockId(22),
+            else_arguments: vec![],
+        });
+        let mut end = BasicBlock::new(BlockId(22));
+        end.terminator = Some(if reachable {
+            Terminator::Unreachable
+        } else {
+            Terminator::Return { values: vec![] }
+        });
+        let mut blocks = vec![entry, end];
+        if !reachable {
+            let mut terminal = BasicBlock::new(BlockId(97));
+            terminal.terminator = Some(Terminator::Unreachable);
+            blocks.push(terminal);
+        }
+        module.functions.push(Function::internal_helper(
+            "entry",
+            Signature::new(vec![Type::BOOL], vec![]),
+            vec![ValueId(0)],
+            blocks,
+        ));
+        with_checked(&module, |checked, budget| {
+            let exact = checked.inventory(budget).unwrap().owner();
+            let floor = budget.storage();
+            let completed = Cell::new(false);
+            NATIVE_STARTS.with(|count| count.set(0));
+            with_pending_canonical_ranked_source_roles_v18(
+                checked,
+                LAYOUTS,
+                budget,
+                |pending, budget| {
+                    assert!(pending.obligations(budget)?.is_empty());
+                    let phase_floor = budget.storage();
+                    assert!(std::ptr::eq(pending.owner(budget)?, exact));
+                    assert_eq!(pending.owner(budget)?.module(), &module);
+                    let attempt = pending
+                        .with_native_observations(budget, |observed, budget| {
+                            assert!(std::ptr::eq(observed.owner(budget)?, exact));
+                            assert_eq!(observed.owner(budget)?.module(), &module);
+                            assert!(observed.obligations(budget)?.is_empty());
+                            assert_eq!(observed.function_count(budget)?, 1);
+                            assert!(observed.report(0, budget)?.unwrap().is_clean());
+                            assert!(observed.history(0, budget)?.is_some());
+                            assert!(observed.observation(budget)?.work_upper_bound() > 0);
+                            assert!(!observed.source_roles_are_complete());
+                            assert!(!observed.ranked_verification_is_complete());
+                            assert!(!observed.grants_artifact_or_launch_authority());
+                            completed.set(true);
+                            Ok(())
+                        });
+                    if reachable {
+                        attempt.unwrap();
+                    } else {
+                        // Exact identity preserves the dead block too. The
+                        // unchanged bounds policy independently refuses it.
+                        let error = attempt.unwrap_err();
+                        let Failure::Analysis { function: 0,
+                            cause: ProductionPlironPreloweringErrorV2::Bounds(bounds) } = error.failure()
+                        else { panic!("disconnected terminal lost its exact bounds refusal: {:?}", error.failure()); };
+                        assert!(matches!(bounds.report().findings(),
+                            [crate::production_analysis::pliron_ranked_bounds::RankedBoundsFindingV1::UnreachableBlock { block: 2 }]));
+                        assert!(error.last_invocation().is_some());
+                        assert!(error.observation().work_upper_bound() > 0);
+                        assert!(!completed.get());
+                        assert!(std::ptr::eq(pending.owner(budget)?, exact));
+                        assert_eq!(pending.owner(budget)?.module(), &module);
+                    }
+                    assert_eq!(budget.storage(), phase_floor);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(completed.get(), reachable, "reachable={reachable}");
+            assert_eq!(NATIVE_STARTS.with(Cell::get), 1);
+            assert_eq!(budget.storage(), floor);
+        });
+    }
+}
+
+#[test]
+fn pending_unreachable_does_not_admit_a_missing_terminator() {
+    let mut module = pointer_flow(false);
+    module.functions[0].body.as_mut().unwrap().blocks[1].terminator = None;
+    let mut work = Work::new(AMPLE);
+    let mut budget = Budget::new(&mut work, AMPLE);
+    budget.reserve_storage(23).unwrap();
+    NATIVE_STARTS.with(|count| count.set(0));
+    let error = VerifiedCanonicalKernelIrModuleV18::from_module_ref_with_verification_budget_v18(
+        &module,
+        LAYOUTS,
+        &mut budget,
+    )
+    .unwrap_err();
+    let fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Verification(
+        fe2o3_kernel_ir::BorrowedKernelIrVerificationErrorV1::Verification(errors),
+    ) = error
+    else {
+        panic!("missing terminator changed its verifier refusal: {error:?}");
+    };
+    assert!(errors.diagnostics().iter().any(|diagnostic|
+        diagnostic.code == fe2o3_kernel_ir::DiagnosticCode::MissingTerminator));
+    assert_eq!(NATIVE_STARTS.with(Cell::get), 0);
+    assert_eq!(budget.storage(), 23);
+}
+
+#[test]
 fn pending_native_observations_run_actual_fixed_stages_but_remain_pending() {
     with_checked(&pointer_flow(false), |checked, budget| {
         let exact = checked.inventory(budget).unwrap().owner();

@@ -262,6 +262,60 @@ impl ProductionLifecycleCheckedNativePoliciesV18<'_, '_> {
         Ok(())
     }
 
+    /// Authenticates the exact source/output relation behind this lexical view.
+    /// This permits a containing source consumer to attach its original root
+    /// roster; it does not complete ranked, formal, target or launch checks.
+    pub fn check_source_subject_v18(
+        &self,
+        original: &ProductionSourceCorrespondenceV18<'_>,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> NativeResult {
+        self.check(budget)?;
+        self.recipes
+            .optimized
+            .retain(budget.charge_work(2).map_err(Into::into))?;
+        if !std::ptr::eq(self.recipes.optimized.original, original) {
+            return Err(self
+                .recipes
+                .source_failure("native root attachment substituted its original source"));
+        }
+        if !std::ptr::eq(self.recipes.optimized, optimized) {
+            return Err(self
+                .recipes
+                .source_failure("native root attachment substituted its optimized subject"));
+        }
+        optimized.query(budget)?;
+        Ok(())
+    }
+
+    /// Retains a containing source consumer's failed binding query in this
+    /// exact source owner's first-error state. This can only deny admission.
+    pub fn retain_source_binding_error_v18(&self, detail: &'static str) -> NativeError {
+        self.recipes.source_failure(detail)
+    }
+
+    /// Observes a containing root attachment's still-live retained storage.
+    /// A larger required floor can only deny cleanup; it grants no authority.
+    /// Custody is observed even when a previous query has already failed.
+    pub fn check_retained_root_storage_v18(
+        &self,
+        required: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> NativeResult {
+        let original = self.recipes.optimized.original;
+        if original.observe_custody(budget).is_err() || budget.storage() < required {
+            original.source.cleanup.deny_refund();
+            return Err(NativeError::Source(
+                original.retain_query_resource_error_v18(ArgumentResourceV1::Accounting),
+            ));
+        }
+        self.recipes
+            .optimized
+            .retain(self.recipes.observe_custody(budget))?;
+        Ok(())
+    }
+
     /// Number of exact output declarations and definitions, in original order.
     pub fn function_count(&self, budget: &mut ArgumentBudgetV1<'_>) -> Result<usize, NativeError> {
         self.check(budget)?;

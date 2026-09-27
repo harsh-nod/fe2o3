@@ -386,8 +386,43 @@ pub(crate) struct BuiltIdentityV1 {
 }
 
 use crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1;
-type PrivateIdentityV1<'a> = Option<&'a NativeCanonicalPrivateAdmissionV1<'a>>;
-type PrivateAttributeV1<'a> = Option<(&'a NativeCanonicalPrivateAdmissionV1<'a>, Ptr<Operation>)>;
+use crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18;
+
+#[derive(Clone, Copy)]
+enum IdentityAdmissionV1<'a> {
+    Private(&'a NativeCanonicalPrivateAdmissionV1<'a>),
+    Lifecycle(&'a NativeLifecycleIdentityAdmissionV18<'a>),
+}
+
+impl IdentityAdmissionV1<'_> {
+    fn authenticate(self, context: &Context, function: &FuncOp) -> bool {
+        match self {
+            Self::Private(input) => input.authenticate(context, function),
+            Self::Lifecycle(input) => input.authenticate(context, function),
+        }
+    }
+    fn operation(self, context: &Context, pointer: Ptr<Operation>) -> Option<()> {
+        match self {
+            Self::Private(input) => input.operation(context, pointer).map(|_| ()),
+            Self::Lifecycle(input) => input.operation(context, pointer),
+        }
+    }
+    fn attribute(self, context: &Context, pointer: Ptr<Operation>, key: &str, dialect: &str, name: &str) -> bool {
+        match self {
+            Self::Private(input) => input.attribute(context, pointer, key, dialect, name),
+            Self::Lifecycle(input) => input.attribute(context, pointer, key, dialect, name),
+        }
+    }
+    fn identity_lookup_work(self) -> Option<usize> {
+        match self {
+            Self::Private(input) => input.identity_lookup_work(),
+            Self::Lifecycle(input) => input.identity_lookup_work(),
+        }
+    }
+}
+
+type PrivateIdentityV1<'a> = Option<IdentityAdmissionV1<'a>>;
+type PrivateAttributeV1<'a> = Option<(IdentityAdmissionV1<'a>, Ptr<Operation>)>;
 
 pub(crate) struct LivePlironStructuralIdentityProviderV1<'a> {
     context: &'a Context,
@@ -408,7 +443,15 @@ impl<'a> LivePlironStructuralIdentityProviderV1<'a> {
         Self {
             context: input.context(),
             function: input.function(),
-            private: Some(input),
+            private: Some(IdentityAdmissionV1::Private(input)),
+        }
+    }
+
+    pub(crate) fn lifecycle_v18(input: &'a NativeLifecycleIdentityAdmissionV18<'a>) -> Self {
+        Self {
+            context: input.context(),
+            function: input.function(),
+            private: Some(IdentityAdmissionV1::Lifecycle(input)),
         }
     }
 

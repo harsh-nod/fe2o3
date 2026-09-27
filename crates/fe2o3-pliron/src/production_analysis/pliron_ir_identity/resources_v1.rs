@@ -541,7 +541,7 @@ fn private_identity_work_v1(
     usize,
     crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
 > {
-    private.map_or(Some(0), NativeCanonicalPrivateAdmissionV1::identity_lookup_work)
+    private.map_or(Some(0), IdentityAdmissionV1::identity_lookup_work)
         .ok_or(crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1 {
             phase: ProductionAnalysisResourcePhaseV1::StructuralIdentity,
             resource: "private identity lookup work",

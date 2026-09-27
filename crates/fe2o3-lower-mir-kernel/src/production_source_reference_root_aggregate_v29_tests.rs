@@ -913,3 +913,178 @@ fn plain_array_enum_and_union_nodes_never_acquire_guessed_field_rosters() {
     budget.release_storage(capture.retained_storage()).unwrap();
     assert_eq!(budget.storage(), FLOOR);
 }
+
+fn scalar_array_merge_owner_v29() -> (ProductionSemanticSsaOwnerV1, Vec<SemanticTypeIdV1>) {
+    let base = owner(Shape::Aggregate, Flow::SiblingRead).unwrap();
+    let source = base.source_semantic();
+    let mut types = source.types().to_vec();
+    let raw = reference(&mut types, U32, SemanticMutabilityV1::Mutable, true);
+    let validity = declaration(&mut types,
+        SemanticTypeLayoutV1::new_with_backend_repr(Some(4), 4,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::integer(false, 32, 4),
+                SemanticScalarValidityRangeV1::new(1, u32::MAX.into()))), false).unwrap(),
+        SemanticTypeShapeV1::ValidityScalar(SemanticValidityScalarTypeV1::new(
+            SemanticScalarTypeV1::Integer { signed: false, bits: 32 },
+            vec![SemanticScalarValidityRangeV1::new(1, u32::MAX.into())]).unwrap()), None);
+    let mut arrays = Vec::new();
+    for index in 0..5 {
+        let (element, length) = match index {
+            0 => (U32, 2),
+            1 => (U32, 5),
+            2 => (validity, 3),
+            3 => (raw, 2),
+            _ => (arrays[0], 2),
+        };
+        let layout = types[element.index() as usize].layout();
+        let stride = layout.size_bytes().unwrap();
+        let alignment = layout.alignment_bytes();
+        arrays.push(declaration(&mut types,
+            SemanticTypeLayoutV1::with_exact_rustc_layout(stride * length, alignment,
+                SemanticFieldsShapeV1::array(stride, length),
+                SemanticRustcVariantsV1::Single { index: 0 }, SemanticBackendReprV1::memory(true),
+                None, false, None, alignment, 0, SemanticTypeLayoutDetailsV1::None).unwrap(),
+            SemanticTypeShapeV1::Array { element, length }, None));
+    }
+    let mut functions = source.functions().to_vec();
+    let original = &functions[0];
+    let mut locals = original.locals().to_vec();
+    for (index, &ty) in arrays.iter().enumerate() {
+        locals.push(local(245 + index as u8, ty, SemanticLocalRoleV1::Temporary));
+    }
+    functions[0] = SemanticFunctionDeclV1::new(original.identity(), original.role(),
+        original.item_definition_identity(), original.monomorphization_identity(),
+        original.generic_type_arguments_identity(), original.const_generic_arguments_identity(),
+        original.source(), original.abi().clone(), locals, original.entry(), original.blocks().to_vec())
+        .unwrap().with_kernel_entry(original.kernel_entry().unwrap().clone());
+    let admitted = InertSemanticMirRequestV1::new_with_callables(source.target(), types,
+        vec![], vec![], vec![], functions, source.callables().to_vec(), vec![ROOT]).unwrap()
+        .admit_exact_v29(SemanticMirLimitsV1::default()).unwrap();
+    (ProductionSemanticSsaOwnerV1::try_new(ProductionSemanticMirOwnerV1::try_new(admitted,
+        ProductionSemanticMirLimitsV1::default()).unwrap(), ProductionSemanticSsaLimitsV1::default()).unwrap(), arrays)
+}
+
+#[test]
+fn scalar_array_cfg_merge_uses_exact_primitive_roster_in_both_directions() {
+    let (mut owner, arrays) = scalar_array_merge_owner_v29();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
+    budget.reserve_storage(FLOOR).unwrap();
+    let capture = owner.try_capture_occurrences_with_budget_v1(&mut budget).unwrap();
+    budget.reserve_storage(capture.retained_storage()).unwrap();
+    with_production_call_instances_v1(&owner, ROOT, &mut budget, |instances, budget| {
+        let floor = budget.storage();
+        let mut builder = SourceReferenceBuilderV29::new(instances, budget).unwrap();
+        for (ordinal, &array) in arrays.iter().enumerate() {
+            let SemanticTypeShapeV1::Array { element, length } =
+                instances.owner().source_semantic().types()[array.index() as usize].shape()
+            else { panic!("original array declaration"); };
+            let (element, count) = (*element, *length as usize);
+            let plain = builder.plain(array, budget).unwrap();
+            let first = builder.plan.children.len();
+            for _ in 0..count {
+                let child = builder.plain(element, budget).unwrap();
+                emission_push_v1(&mut builder.plan.children, child, budget).unwrap();
+            }
+            let represented = builder.node(array,
+                SourceReferenceNodeKindV29::Aggregate { first, count }, budget).unwrap();
+            let before = (builder.plan.nodes.len(), builder.plan.children.len());
+            if ordinal >= 3 {
+                for (left, right) in [(plain, represented), (represented, plain)] {
+                    assert!(matches!(builder.merge_node(left, right, budget),
+                        Err(ProductionSemanticKirErrorV1::Unsupported {
+                            detail: "source reference CFG merge changes loan identity", .. })));
+                    assert_eq!((builder.plan.nodes.len(), builder.plan.children.len()), before);
+                }
+                continue;
+            }
+            let forward = builder.merge_node(plain, represented, budget).unwrap();
+            let reverse = builder.merge_node(represented, plain, budget).unwrap();
+            assert!(builder.nodes_equal(forward, reverse, 0, budget).unwrap());
+            for joined in [forward, reverse] {
+                let root = builder.plan.nodes[joined];
+                assert_eq!(root.ty, array);
+                assert!(root.storage.is_none() && root.inactive.is_none());
+                let SourceReferenceNodeKindV29::Aggregate { first, count: actual } = root.kind
+                else { panic!("original primitive array roster"); };
+                assert_eq!(actual, count);
+                for &child in &builder.plan.children[first..first + count] {
+                    let leaf = builder.plan.nodes[child];
+                    assert_eq!(leaf.ty, element);
+                    assert_eq!(leaf.kind, SourceReferenceNodeKindV29::Plain(None));
+                    assert!(leaf.storage.is_none() && leaf.inactive.is_none());
+                }
+            }
+            // Each coherent private representation fault is tested after a
+            // genuine same-type merge, without changing source admission.
+            let original = builder.plan.nodes[represented];
+            let child = builder.plan.children[first];
+            let leaf = builder.plan.nodes[child];
+            for fault in 0..8 {
+                match fault {
+                    0 => builder.plan.nodes[represented].ty = arrays[(ordinal + 1) % 3],
+                    1 => builder.plan.nodes[represented].kind = SourceReferenceNodeKindV29::Aggregate { first, count: count - 1 },
+                    2 => builder.plan.nodes[child].ty = UNIT,
+                    3 => builder.plan.nodes[child].kind = SourceReferenceNodeKindV29::Loan(0),
+                    4 => builder.plan.nodes[child].kind = SourceReferenceNodeKindV29::Address(0),
+                    5 => builder.plan.nodes[child].kind = SourceReferenceNodeKindV29::Aggregate { first: 0, count: 0 },
+                    6 => builder.plan.nodes[child].kind = SourceReferenceNodeKindV29::Absent,
+                    _ => builder.plan.children[first] = represented,
+                }
+                let counts = (builder.plan.nodes.len(), builder.plan.children.len());
+                assert!(matches!(builder.expand_plain_scalar_array_for_merge_v29(plain, represented, budget),
+                    Err(ProductionSemanticKirErrorV1::Unsupported {
+                        detail: "source reference scalar array merge differs from its declaration", .. })),
+                    "array={ordinal}, fault={fault}");
+                assert_eq!((builder.plan.nodes.len(), builder.plan.children.len()), counts);
+                builder.plan.nodes[represented] = original;
+                builder.plan.nodes[child] = leaf;
+                builder.plan.children[first] = child;
+                assert!(builder.merge_node(plain, represented, budget).is_ok());
+            }
+        }
+        drop(builder);
+        budget.release_storage(budget.storage() - floor).unwrap();
+        Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(())
+    }).unwrap();
+    drop(owner);
+    budget.release_storage(capture.retained_storage()).unwrap();
+    assert_eq!(budget.storage(), FLOOR);
+}
+
+#[test]
+fn scalar_array_cfg_merge_headers_have_independent_exact_and_one_short_storage() {
+    use std::mem::size_of;
+    let required = 2 * size_of::<Result<usize, ProductionSemanticKirErrorV1>>()
+        + size_of::<[SourceReferenceNodeV29; 2]>()
+        + size_of::<(SemanticTypeIdV1, u64)>()
+        + size_of::<Option<&SourceReferenceNodeV29>>()
+        + size_of::<Result<&SourceReferenceNodeV29, ProductionSemanticKirErrorV1>>()
+        + size_of::<Option<&SemanticTypeDeclV1>>()
+        + size_of::<Result<&SemanticTypeDeclV1, ProductionSemanticKirErrorV1>>()
+        + size_of::<Option<&[usize]>>()
+        + size_of::<Result<&[usize], ProductionSemanticKirErrorV1>>()
+        + size_of::<std::ops::Range<usize>>()
+        + size_of::<std::slice::Iter<'_, usize>>()
+        + size_of::<Result<usize, std::num::TryFromIntError>>();
+    assert_eq!(source_reference_scalar_array_merge_headers_v29().unwrap(), required);
+    for short in [false, true] {
+        let limit = FLOOR + required - usize::from(short);
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(0);
+        let mut budget = ArgumentBudgetV1::new(&mut work, limit);
+        budget.reserve_storage(FLOOR).unwrap();
+        let result = budget.reserve_storage(source_reference_scalar_array_merge_headers_v29().unwrap());
+        if short {
+            let ArgumentResourceV1::Storage(error) = result.unwrap_err() else { panic!("header storage cut"); };
+            assert_eq!(error.limit(), limit);
+            assert_eq!(error.actual(), FLOOR + required);
+            assert_eq!(budget.storage(), FLOOR);
+        } else {
+            result.unwrap();
+            assert_eq!(budget.storage(), FLOOR + required);
+            budget.release_storage(required).unwrap();
+        }
+        assert_eq!(budget.work(), 0);
+        assert_eq!(budget.storage(), FLOOR);
+    }
+}

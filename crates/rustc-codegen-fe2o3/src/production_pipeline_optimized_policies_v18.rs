@@ -39,7 +39,7 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
         let diagnostic = DiagnosticCell::new(None);
         let result = self.consume_optimized_source_owned_v18(
             account,
-            |original, optimized, _, bindings, budget| {
+            |original, optimized, ranked_roots, bindings, budget| {
                 let (invocations, retained) =
                     crate::production_ranked_projection_v1::with_optimized_source_invocations_v18(
                         original,
@@ -68,6 +68,8 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
                     invocations,
                     currentness_roots,
                     &diagnostic,
+                    ranked_roots,
+                    &bindings.reference_effect_bindings,
                 )?;
                 Ok((
                     observation,
@@ -264,6 +266,8 @@ fn consume_actual_native_policy(
     invocations: usize,
     currentness_roots: usize,
     diagnostic: &DiagnosticCell,
+    ranked_roots: &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<OptimizedSourcePolicyObservationV18, ProductionPipelineError> {
     original.check_query_v18(budget)?;
     let layouts = original
@@ -302,55 +306,72 @@ fn consume_actual_native_policy(
                 layouts,
                 budget,
                 |policies, budget| {
-                    diagnostic.set(Some(policies.diagnostic(budget)?));
-                    #[cfg(test)]
-                    if let Some(storage_short) = lifecycle_probe::native_entry() {
-                        // Query the exact actual report before cutting this same
-                        // invocation; no separate unmodified graph is emitted.
-                        let count = policies.function_count(budget)?;
-                        assert!(count > 0);
-                        assert!(
-                            (0..count)
-                                .any(|ordinal| policies.report(ordinal, budget).unwrap().is_some())
-                        );
-                        if storage_short {
-                            let limit = crate::production_canonical_phase_policy_v1::STORAGE_LIMIT;
-                            let error = budget
-                                .reserve_storage(limit - budget.storage() + 1)
-                                .unwrap_err();
-                            return Err(NativeError::Source(
-                                original.retain_query_resource_error_v18(error),
-                            ));
-                        }
-                        let limit = usize::try_from(
-                            crate::production_canonical_phase_policy_v1::WORK_LIMIT,
-                        )
-                        .unwrap();
-                        budget.charge_work(limit - budget.work()).unwrap();
-                    }
-                    let mut defined_functions = 0usize;
-                    let mut declarations = 0usize;
-                    for ordinal in 0..policies.function_count(budget)? {
-                        if policies.report(ordinal, budget)?.is_some() {
-                            defined_functions =
-                                defined_functions.checked_add(1).ok_or_else(|| {
-                                    NativeError::Source(
-                                        original
-                                            .retain_query_resource_error_v18(Resource::Arithmetic),
-                                    )
-                                })?;
-                        } else {
-                            declarations = declarations.checked_add(1).ok_or_else(|| {
-                                NativeError::Source(
-                                    original.retain_query_resource_error_v18(Resource::Arithmetic),
+                    crate::production_ranked_projection_v1::with_source_native_ranked_roots_v18(
+                        original,
+                        optimized,
+                        policies,
+                        ranked_roots,
+                        reference_bindings,
+                        budget,
+                        |roots, budget| {
+                            for root in 0..roots.root_count(budget)? {
+                                let _ = roots.root(root, budget)?;
+                            }
+                            diagnostic.set(Some(policies.diagnostic(budget)?));
+                            #[cfg(test)]
+                            if let Some(storage_short) = lifecycle_probe::native_entry() {
+                                // Query the exact actual report before cutting this same
+                                // invocation; no separate unmodified graph is emitted.
+                                let count = policies.function_count(budget)?;
+                                assert!(count > 0);
+                                assert!((0..count).any(|ordinal| {
+                                    policies.report(ordinal, budget).unwrap().is_some()
+                                }));
+                                if storage_short {
+                                    let limit =
+                                        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT;
+                                    let error = budget
+                                        .reserve_storage(limit - budget.storage() + 1)
+                                        .unwrap_err();
+                                    return Err(NativeError::Source(
+                                        original.retain_query_resource_error_v18(error),
+                                    ));
+                                }
+                                let limit = usize::try_from(
+                                    crate::production_canonical_phase_policy_v1::WORK_LIMIT,
                                 )
-                            })?;
-                        }
-                    }
-                    counts.set((defined_functions, declarations));
-                    #[cfg(test)]
-                    lifecycle_probe::consumed();
-                    Ok(())
+                                .unwrap();
+                                budget.charge_work(limit - budget.work()).unwrap();
+                            }
+                            let mut defined_functions = 0usize;
+                            let mut declarations = 0usize;
+                            for ordinal in 0..policies.function_count(budget)? {
+                                if policies.report(ordinal, budget)?.is_some() {
+                                    defined_functions =
+                                        defined_functions.checked_add(1).ok_or_else(|| {
+                                            NativeError::Source(
+                                                original.retain_query_resource_error_v18(
+                                                    Resource::Arithmetic,
+                                                ),
+                                            )
+                                        })?;
+                                } else {
+                                    declarations =
+                                        declarations.checked_add(1).ok_or_else(|| {
+                                            NativeError::Source(
+                                                original.retain_query_resource_error_v18(
+                                                    Resource::Arithmetic,
+                                                ),
+                                            )
+                                        })?;
+                                }
+                            }
+                            counts.set((defined_functions, declarations));
+                            #[cfg(test)]
+                            lifecycle_probe::consumed();
+                            Ok(())
+                        },
+                    )
                 },
             ))
         },

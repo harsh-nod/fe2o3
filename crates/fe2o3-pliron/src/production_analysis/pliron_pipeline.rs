@@ -715,13 +715,25 @@ pub(crate) fn require_production_pliron_checks_with_observation_v1(
     limits: ProductionAnalysisResourceLimitsV1,
     receipt: &mut invocation_receipt_v1::InvocationReceiptV1,
 ) -> Result<ProductionPlironPreloweringOutcomeV1, ProductionPlironPreloweringErrorV2> {
+    require_production_pliron_checks_with_identity_observation_v18(
+        context, function, limits, receipt, None,
+    )
+}
+
+pub(crate) fn require_production_pliron_checks_with_identity_observation_v18<'a>(
+    context: &'a Context,
+    function: &'a FuncOp,
+    limits: ProductionAnalysisResourceLimitsV1,
+    receipt: &mut invocation_receipt_v1::InvocationReceiptV1,
+    identity: Option<&'a crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'a>>,
+) -> Result<ProductionPlironPreloweringOutcomeV1, ProductionPlironPreloweringErrorV2> {
     match run_shared_production_checks_v1(
         context,
         function,
         None,
         None,
         limits,
-        (PipelineFamilyV1::Ordinary, Some(receipt)),
+        (identity.map_or(PipelineFamilyV1::Ordinary, PipelineFamilyV1::LifecycleV18), Some(receipt)),
         #[cfg(test)]
         None,
     ) {

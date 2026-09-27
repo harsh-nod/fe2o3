@@ -11,6 +11,7 @@ use pliron::op::Op;
 #[derive(Clone, Copy)]
 enum PipelineFamilyV1<'a> {
     Ordinary,
+    LifecycleV18(&'a crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'a>),
     Conditional(&'a ConditionalPipelineSubjectV1<'a>),
     CanonicalPrivate(&'a crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1<'a>),
 }
@@ -225,6 +226,13 @@ impl PipelineFamilyV1<'_> {
         analyses: &mut PlironAnalysisManagerV1,
         observer: PipelineObservationV1<'_, '_, '_>,
     ) -> Result<Option<ProductionAnalysisResourceUpperBoundV1>, PipelineErrorV1> {
+        if let Self::LifecycleV18(input) = self
+            && !input.authenticate(context, function)
+        {
+            return Err(ProductionPlironPreloweringErrorV2::ReportValidation(
+                ProductionAnalysisReportValidationErrorV1::PreservationManifestInconsistent,
+            ).into());
+        }
         let Self::Conditional(input) = self else {
             return Ok(None);
         };
@@ -298,7 +306,7 @@ impl PipelineFamilyV1<'_> {
         PipelineErrorV1,
     > {
         match self {
-            Self::Ordinary | Self::CanonicalPrivate(_) => Ok((None, None)),
+            Self::Ordinary | Self::LifecycleV18(_) | Self::CanonicalPrivate(_) => Ok((None, None)),
             Self::Conditional(input) => conditional_ownership::prepare_rows_with_observation_v1(
                 input.context(),
                 input.function(),
@@ -367,7 +375,7 @@ impl PipelineFamilyV1<'_> {
         observer: PipelineObservationV1<'_, '_, '_>,
     ) -> Result<ProductionAnalysisResourceUpperBoundV1, PipelineErrorV1> {
         Ok(match self {
-            Self::Ordinary | Self::CanonicalPrivate(_) => bound,
+            Self::Ordinary | Self::LifecycleV18(_) | Self::CanonicalPrivate(_) => bound,
             Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::checked_phase(
                 phase,
                 bound.work_upper_bound(),
@@ -397,7 +405,7 @@ impl PipelineFamilyV1<'_> {
         )
         .map_err(resource_error)?;
         let effect = match self {
-            Self::Ordinary | Self::CanonicalPrivate(_) => {
+            Self::Ordinary | Self::LifecycleV18(_) | Self::CanonicalPrivate(_) => {
                 compose_effect_refinement_resource_upper_bound_v1(census, effect_local, ownership)
             }
             Self::Conditional(_) => effect_local
@@ -676,7 +684,7 @@ impl<'a> ValidationFamilyV1<'a> {
                 let transfer = observer.map(|_| session.setup());
                 Ok((Self::CanonicalPrivate(session), transfer))
             }
-            PipelineFamilyV1::Ordinary => {
+            PipelineFamilyV1::Ordinary | PipelineFamilyV1::LifecycleV18(_) => {
                 let session = begin_observed_report_validation_v1(
                     context,
                     function,

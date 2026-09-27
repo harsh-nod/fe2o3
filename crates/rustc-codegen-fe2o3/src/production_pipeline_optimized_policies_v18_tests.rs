@@ -248,6 +248,11 @@ fn actual_rust_optimized_output_reaches_fixed_policy_missing_recipe_gate() {
             assert!(observation.work > 0);
         },
     );
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src, authentic AMD SDK dependencies and source compilation"]
+fn actual_rust_lifecycle_output_runs_native_reports_and_preserves_resource_history() {
     run_actual_sources::<Observation>(
         &[
             ("context_only", "let _ = seed;"),

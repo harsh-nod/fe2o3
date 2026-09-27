@@ -151,9 +151,8 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                     let ordinal = recorder.anchors.rows.len().checked_sub(1)
                         .ok_or_else(scoped_memory_error_v29)?;
                     let anchor = &recorder.anchors.rows[ordinal];
-                    let ScopedMemoryAnchorKindV29::Access {
-                        payload: Some(ScopedMemoryPayloadV29::IndexLoad { result, read }), ..
-                    } = anchor.kind else { return Err(scoped_memory_error_v29()); };
+                    let (result, read) = scoped_original_index_payload_v29(&recorder.anchors, anchor, budget)?
+                        .ok_or_else(scoped_memory_error_v29)?;
                     check_scoped_index_read_v29(this.function, &cursor.occurrences, read, budget)?;
                     if result != original || read.event != event || read.local != row.local
                         || read.site != execution_site_v29(block, statement)
@@ -348,12 +347,10 @@ impl SourceReferenceEmissionV29<'_, '_> {
                     budget.source_reference_charge_v29(self.plan, 8)?;
                     let lowered = emitted.get(instance).and_then(Option::as_ref)
                         .ok_or_else(scoped_memory_error_v29)?;
-                    let anchor = lowered.scoped_memory_anchors.as_ref()
-                        .and_then(|anchors| anchors.rows.get(ordinal))
+                    let anchors = lowered.scoped_memory_anchors.as_ref().ok_or_else(scoped_memory_error_v29)?;
+                    let anchor = anchors.rows.get(ordinal).ok_or_else(scoped_memory_error_v29)?;
+                    let (result, read) = scoped_original_index_payload_v29(anchors, anchor, budget)?
                         .ok_or_else(scoped_memory_error_v29)?;
-                    let ScopedMemoryAnchorKindV29::Access {
-                        payload: Some(ScopedMemoryPayloadV29::IndexLoad { result, read }), ..
-                    } = anchor.kind else { return Err(scoped_memory_error_v29()); };
                     let original = self.plan.instances.instance(row.instance)
                         .ok_or_else(scoped_memory_error_v29)?;
                     let occurrences = self.plan.instances.occurrences(row.instance)

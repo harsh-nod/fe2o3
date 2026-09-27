@@ -7,6 +7,7 @@ mod initializer_relocation_tests {
 include!("production_source_partial_array_consuming_v29_tests.rs");
 include!("production_source_index_fold_consuming_v29_tests.rs");
 include!("production_source_mixed_memory_consuming_v29_tests.rs");
+include!("production_source_object_index_consuming_v29_tests.rs");
 
 thread_local! {
     static EXPECTED: std::cell::Cell<(usize, u64, u32)> = const { std::cell::Cell::new((0, 0, 1)) };

@@ -901,3 +901,6 @@ mod tile_scalar_source_tests;
 mod sdk_allocation_capture_source_tests;
 #[path = "production_source_reference_cell_source_v29_tests.rs"]
 mod source_reference_cell_source_tests;
+
+#[path = "production_pipeline_native_roots_v18_tests.rs"]
+mod native_roots_v18_tests;

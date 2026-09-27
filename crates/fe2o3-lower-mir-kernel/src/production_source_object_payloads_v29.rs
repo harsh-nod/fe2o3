@@ -72,6 +72,10 @@ enum ScopedObjectIdentityV29 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScopedObjectSourceV29 {
+    EntryArgument {
+        local: SemanticLocalIdV1,
+    },
+    ProjectionIndex(ScopedMemoryIndexReadV29),
     Place {
         site: ExecutionSiteV29,
         role: ExecutionOperandV29,
@@ -123,6 +127,7 @@ struct ScopedObjectEndpointV29 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScopedObjectReadOriginV29 {
     Original(ScopedMemoryReadV29),
+    ProjectionIndex(ScopedMemoryIndexReadV29),
     EntryComponent,
     ValueTransfer,
 }
@@ -481,6 +486,29 @@ impl ScopedMemoryAnchorsV29 {
             }
             if view_type != endpoint.projected_type { return Err(scoped_object_error_v29()); }
             let source_place = match endpoint.source {
+                ScopedObjectSourceV29::EntryArgument { local } => {
+                    budget.charge_work(8)?;
+                    if anchor.source.is_some()
+                        || !function.locals().get(local.index() as usize).is_some_and(|row|
+                            row.role().is_entry_argument() && row.ty() == endpoint.root_type)
+                        || endpoint.root_type != endpoint.projected_type
+                        || endpoint.root_schema != endpoint.projected_schema
+                        || endpoint.source_path.count != 0 || endpoint.path.count != 0
+                        || !matches!(endpoint.object, ScopedObjectIdentityV29::Local {
+                            instance, local: actual, generation: 0
+                        } if instance == self.subject.instance && actual == local)
+                    { return Err(scoped_object_error_v29()); }
+                    None
+                }
+                ScopedObjectSourceV29::ProjectionIndex(read) => {
+                    check_scoped_index_read_v29(function, occurrences, read, budget)?;
+                    if anchor.source != Some(ScopedMemoryFrameV29::operand(read.site, Some(read.role)))
+                        || !original_path.is_empty() || !view_path.is_empty()
+                        || endpoint.root_type != read.ty || endpoint.projected_type != read.ty
+                        || endpoint.root_schema != endpoint.projected_schema
+                    { return Err(scoped_object_error_v29()); }
+                    None
+                }
                 ScopedObjectSourceV29::Place { site, role, local, prefix } => {
                     if anchor.source.map(|frame| frame.site) != Some(site) { return Err(scoped_object_error_v29()); }
                     let place = scoped_object_original_place_v29(function, site, role).ok_or_else(scoped_object_error_v29)?;
@@ -607,7 +635,9 @@ impl ScopedMemoryAnchorsV29 {
         let (instance, expected) = match endpoint.object {
             ScopedObjectIdentityV29::Local { instance, local, .. } => {
                 let source_local = match endpoint.source {
-                    ScopedObjectSourceV29::Place { local, .. }
+                    ScopedObjectSourceV29::ProjectionIndex(read) => read.local,
+                    ScopedObjectSourceV29::EntryArgument { local }
+                    | ScopedObjectSourceV29::Place { local, .. }
                     | ScopedObjectSourceV29::EntryComponent { local, .. }
                     | ScopedObjectSourceV29::ReturnComponent { local, .. } => local,
                     ScopedObjectSourceV29::AggregateComponent { destination, .. } => destination,
@@ -703,6 +733,15 @@ impl ScopedMemoryAnchorsV29 {
                 if source.projected_type != destination.projected_type { return Err(scoped_object_error_v29()); }
             }
             ScopedObjectRoleV29::ReadValue { source, read } => match read {
+                ScopedObjectReadOriginV29::ProjectionIndex(read) => {
+                    check_scoped_index_read_v29(function, occurrences, read, budget)?;
+                    if source.source != ScopedObjectSourceV29::ProjectionIndex(read)
+                        || source.projected_type != read.ty
+                        || !matches!(payload.operation, ScopedObjectOperationV29::ReadValue { access, .. }
+                            if !access.volatile && access.address_space == AddressSpace::Private)
+                        || anchor.source != Some(ScopedMemoryFrameV29::operand(read.site, Some(read.role)))
+                    { return Err(scoped_object_error_v29()); }
+                }
                 ScopedObjectReadOriginV29::Original(read) => {
                     if source.source != (ScopedObjectSourceV29::Place { site: read.site, role: read.role,
                         local: scoped_object_original_place_v29(function, read.site, read.role)

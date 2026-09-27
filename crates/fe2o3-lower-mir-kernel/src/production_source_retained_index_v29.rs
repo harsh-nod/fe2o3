@@ -62,6 +62,29 @@ fn check_scoped_index_read_v29(
     Ok(())
 }
 
+fn source_retained_index_generation_v29(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    instance: ProductionCallInstanceIdV1,
+    read: ScopedMemoryIndexReadV29,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<u32, ProductionSemanticKirErrorV1> {
+    budget.source_reference_owner_v29(plan)?;
+    source_reference_owned_prepay_v29::<u32>(plan, budget)?;
+    source_reference_owned_prepay_v29::<Option<(usize, SourceReferenceSelectorV29)>>(plan, budget)?;
+    let original = plan.instances.instance(instance).ok_or_else(scoped_memory_error_v29)?;
+    let occurrences = plan.instances.occurrences(instance).ok_or_else(scoped_memory_error_v29)?;
+    check_scoped_index_read_v29(original.declaration(), &occurrences, read, budget)?;
+    let source = source_reference_selector_place_v29(original.declaration(), read.site, read.role)
+        .ok_or_else(scoped_memory_error_v29)?;
+    let (_, selector) = plan.selector_at(instance, read.site, source,
+        read.projection as usize, budget)?.ok_or_else(scoped_memory_error_v29)?;
+    budget.charge_work(4)?;
+    if selector.local != read.local
+        || selector.value != (SourceReferenceSelectorValueV29::Retained { event: read.event })
+    { return Err(scoped_memory_error_v29()); }
+    selector.retained_generation.ok_or_else(scoped_memory_error_v29)
+}
+
 fn check_scoped_index_payload_v29(
     function: &SemanticFunctionDeclV1,
     occurrences: &ProductionSemanticSsaFunctionOccurrencesV1<'_>,
@@ -76,7 +99,8 @@ fn check_scoped_index_payload_v29(
     let [actual] = operation.results.as_slice() else {
         return Err(scoped_memory_error_v29());
     };
-    if !matches!(operation.kind, OperationKind::Load { .. })
+    if !matches!(operation.kind, OperationKind::Load { .. }
+        | OperationKind::Storage(ScopedObjectOperationV29::ReadValue { .. }))
         || actual.id != result
         || anchor.source != Some(ScopedMemoryFrameV29::operand(read.site, Some(read.role)))
         || !scoped_payload_type_matches_v29(
@@ -89,6 +113,31 @@ fn check_scoped_index_payload_v29(
         return Err(scoped_memory_error_v29());
     }
     Ok(())
+}
+
+fn scoped_original_index_payload_v29(
+    anchors: &ScopedMemoryAnchorsV29,
+    anchor: &ScopedMemoryAnchorV29,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Option<(ValueId, ScopedMemoryIndexReadV29)>, ProductionSemanticKirErrorV1> {
+    source_reference_emission_prepay_v29::<Option<(ValueId, ScopedMemoryIndexReadV29)>>(budget)?;
+    budget.charge_work(2)?;
+    match anchor.kind {
+        ScopedMemoryAnchorKindV29::Access {
+            payload: Some(ScopedMemoryPayloadV29::IndexLoad { result, read }), ..
+        } => Ok(Some((result, read))),
+        ScopedMemoryAnchorKindV29::Object(_) => {
+            source_reference_emission_prepay_v29::<&ScopedObjectPayloadV29>(budget)?;
+            let payload = anchors.object_payload(anchor, budget)?;
+            match (payload.operation, payload.role, payload.result) {
+                (ScopedObjectOperationV29::ReadValue { .. },
+                    ScopedObjectRoleV29::ReadValue { source, read: ScopedObjectReadOriginV29::ProjectionIndex(read) },
+                    Some(result)) if source.source == ScopedObjectSourceV29::ProjectionIndex(read) => Ok(Some((result, read))),
+                _ => Ok(None),
+            }
+        }
+        _ => Ok(None),
+    }
 }
 
 impl SemanticFunctionLoweringV1<'_, '_> {
@@ -867,18 +916,10 @@ fn source_index_recipes_v29(
         let index_slot = match (source.value, used.memory) {
             (SourceReferenceSelectorValueV29::Promoted(_), None) => None,
             (SourceReferenceSelectorValueV29::Retained { event }, Some(anchor)) => {
-                let row = sidecar
-                    .scoped_memory_anchors
-                    .as_ref()
-                    .and_then(|rows| rows.rows.get(anchor))
+                let anchors = sidecar.scoped_memory_anchors.as_ref().ok_or_else(source_raw_physical_error_v29)?;
+                let row = anchors.rows.get(anchor).ok_or_else(source_raw_physical_error_v29)?;
+                let (result, read) = scoped_original_index_payload_v29(anchors, row, budget)?
                     .ok_or_else(source_raw_physical_error_v29)?;
-                let ScopedMemoryAnchorKindV29::Access {
-                    payload: Some(ScopedMemoryPayloadV29::IndexLoad { result, read }),
-                    ..
-                } = row.kind
-                else {
-                    return Err(source_raw_physical_error_v29());
-                };
                 let occurrences = instances
                     .occurrences(source.instance)
                     .ok_or_else(source_raw_physical_error_v29)?;
@@ -902,14 +943,14 @@ fn source_index_recipes_v29(
                 if result != used.original || read.event != event || read.local != source.local {
                     return Err(source_raw_physical_error_v29());
                 }
-                Some(source_address_original_slot_v29(
-                    instances,
-                    slots,
-                    source.instance,
-                    read.local,
-                    read.ty,
-                    budget,
-                )?)
+                let slot = if let Some((endpoint, _)) = source_address_object_payload_v29(anchors, row, budget)? {
+                    source_address_object_index_v29(instances, references.plan, slots, source.instance,
+                        read, endpoint, budget)?
+                } else {
+                    source_address_original_slot_v29(instances, slots, source.instance,
+                        read.local, read.ty, budget)?
+                };
+                Some(slot)
             }
             _ => return Err(source_raw_physical_error_v29()),
         };
