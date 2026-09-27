@@ -127,6 +127,22 @@ the separate multipart SDMA initialization gap. Direct callers that previously
 constructed `InitializedAfterDispatch(bare_allocation)` must now use a returned
 authenticated input; preserving that construction would preserve the hole.
 
+Ordinary native SDMA buffers now retain a private initialized-byte prefix,
+independent of content digests. Successful CPU writes and authenticated copy
+retirement transfer coverage without bridging gaps; unknown-source overwrites
+invalidate affected coverage before publication. Pool generation changes,
+logical resizing and bare-storage reconstruction clear it. Direct, single,
+batch and window publication also revoke stale destination digests, including
+the raw single-copy API that bypasses request construction. The shared scalar
+arithmetic has a separate Verus root; it is not a native adapter proof.
+
+This fact does not yet survive the persistent-allocation owner bridge. Sequential
+zeroing, multipart uploads and completed compute still need exact owner-bound
+propagation and a sealed quiescent conversion into typed compute input. No new
+public pending-peer launch or initialized-compute constructor is enabled here.
+See [coverage qualification](evidence/dev-sdma-initialized-prefix-2026-09-27/README.md)
+for the exact proof, tests, rejected campaign and remaining adapter boundary.
+
 ## Not Yet Supported
 
 Pending peer-copy-to-compute admission remains rejected by the KFD router. Its
