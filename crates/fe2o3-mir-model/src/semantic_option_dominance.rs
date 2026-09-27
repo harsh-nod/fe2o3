@@ -8,8 +8,9 @@ use std::{error::Error, fmt};
 #[path = "semantic_enum_payload_resources_v1.rs"]
 mod enum_payload_resources;
 pub use enum_payload_resources::{
-    SemanticEnumPayloadMeterV1, SemanticEnumPayloadMeteredErrorV1,
-    semantic_option_producers_with_meter_v1,
+    SemanticEnumPayloadDominancePreparationV1, SemanticEnumPayloadMeterV1,
+    SemanticEnumPayloadMeteredErrorV1, SemanticOptionDominancePreparationV1,
+    SemanticOptionProducerPreparationV1, semantic_option_producers_with_meter_v1,
 };
 
 use crate::semantic_mir_v1::{

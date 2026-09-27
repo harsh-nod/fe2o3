@@ -1,5 +1,11 @@
 //! Original-caller resource admission for the shared enum-payload analyzer.
 //! Logical reservations are retained by the caller until all results/scratch drop.
+#[path = "semantic_retained_preparation_v1.rs"]
+mod retained_preparation;
+pub use retained_preparation::{
+    SemanticEnumPayloadDominancePreparationV1, SemanticOptionDominancePreparationV1,
+    SemanticOptionProducerPreparationV1,
+};
 #[path = "semantic_option_resources_v1.rs"]
 mod option_resources;
 #[cfg(test)]

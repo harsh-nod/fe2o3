@@ -631,6 +631,97 @@ impl<'a> AssertionCacheV1<'a> {
     }
 }
 
+/// Drop-only storage: no source/resource lifetime, owner identity, or proof API.
+/// Created only by consuming a cache; there is deliberately no reverse path.
+#[allow(dead_code)]
+pub(super) struct RetiredAssertionCacheV1 {
+    storage: CacheStorage,
+}
+impl AssertionCacheV1<'_> {
+    /// Header-only move, including after denial. The enclosing bridge must
+    /// prepay retirement before constructing any live proof/cache payload.
+    pub(super) fn retire_payload_v1(self) -> RetiredAssertionCacheV1 {
+        let Self {
+            storage,
+            owner: _,
+            lifetime: _,
+        } = self;
+        RetiredAssertionCacheV1 { storage }
+    }
+    /// Selected source transfers for the move above, computed before payloads.
+    pub(super) fn retirement_frame_v1() -> Option<usize> {
+        size_of::<(
+            Self,
+            CacheStorage,
+            Option<Owner>,
+            PhantomData<fn(&()) -> &()>,
+        )>()
+        .checked_add(size_of::<RetiredAssertionCacheV1>().checked_mul(2)?)
+        .and_then(|n| n.checked_add(size_of::<Option<usize>>().checked_mul(2)?))
+    }
+}
+#[cfg(test)]
+impl RetiredAssertionCacheV1 {
+    pub(super) fn snapshot_for_test(&self) -> (u8, usize, usize, usize) {
+        match &self.storage {
+            CacheStorage::Legacy(rows) => (0, 0, rows.len(), rows.capacity()),
+            CacheStorage::Strict(rows) => (1, rows.as_ptr() as usize, rows.len(), rows.capacity()),
+        }
+    }
+}
+#[cfg(test)]
+impl AssertionCacheV1<'_> {
+    pub(super) fn snapshot_for_retirement_test(&self) -> (u8, usize, usize, usize) {
+        match &self.storage {
+            CacheStorage::Legacy(rows) => (0, 0, rows.len(), rows.capacity()),
+            CacheStorage::Strict(rows) => (1, rows.as_ptr() as usize, rows.len(), rows.capacity()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod retirement_cache_controls {
+    use super::*;
+    #[test]
+    fn cache_retirement_frame_is_the_selected_typed_move_and_metadata_return() {
+        type C = AssertionCacheV1<'static>;
+        let expected = size_of::<(C, CacheStorage, Option<Owner>, PhantomData<fn(&()) -> &()>)>()
+            + 2 * size_of::<RetiredAssertionCacheV1>()
+            + 2 * size_of::<Option<usize>>();
+        assert_eq!(C::retirement_frame_v1(), Some(expected));
+    }
+    #[test]
+    fn strict_cache_payload_move_keeps_exact_backing_allocation_after_lifetime_end() {
+        // Synthetic owned cache storage only: does not authenticate a strict
+        // owner or create a usable resource/proof capability.
+        let retired;
+        let expected;
+        {
+            let rows = vec![((3usize, 5usize), true), ((7, 11), false)];
+            let cache = AssertionCacheV1 {
+                storage: CacheStorage::Strict(rows),
+                owner: None,
+                lifetime: PhantomData,
+            };
+            expected = cache.snapshot_for_retirement_test();
+            retired = cache.retire_payload_v1();
+        }
+        assert_eq!(retired.snapshot_for_test(), expected);
+    }
+    #[test]
+    fn legacy_cache_payload_can_only_retire_not_rehydrate_as_strict() {
+        let retired = {
+            let mut resources = AssertionResourcesV1::legacy();
+            let mut cache = AssertionCacheV1::new(&mut resources).unwrap();
+            cache.insert((13, 17), true, &mut resources).unwrap();
+            cache.retire_payload_v1()
+        };
+        let state = retired.snapshot_for_test();
+        assert_eq!(state.0, 0);
+        assert_eq!(state.2, 1);
+    }
+}
+
 enum QueueStorage {
     Legacy(VecDeque<usize>),
     Strict { values: Vec<usize>, head: usize },

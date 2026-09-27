@@ -678,3 +678,5 @@ mod lazy_fixed_proof_controls {
         assert!(!short_storage.ok && short_storage.denied_storage);
     }
 }
+
+include!("lazy_fixed_proof_retirement_v1_tests.rs");

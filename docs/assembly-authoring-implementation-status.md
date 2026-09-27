@@ -5,6 +5,22 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Retained analysis and proof-payload prerequisites — 2026-09-27
+
+The [retained-payload checkpoint](bf16-retained-payload-prerequisites-qualification-20260927.md)
+adds opaque retained model-preparation owners and a lifetime-free lazy-proof
+retirement bridge. All 48 new controls passed, alongside 356 model and 2,980
+backend tests (189 ignored), backend build and 83 JavaScript controls.
+Both ordinary compilation ladders passed; all 38 lossless observation bodies
+and 52 artifacts match the argument-initialization checkpoint exactly.
+
+These are ownership prerequisites, not the complete authentic factory
+connection. The same-pending connector, genuine cutpoint observation, original
+Option-first prelude, later writers, joint bounds driver and production routing
+remain open. The debugger's bounded native attempt remains unaccepted.
+No compiler pin or public capture gate changes. Accepted broad exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Authentic argument initialization and native commit diagnosis — 2026-09-27
 
 The [argument-initialization checkpoint](bf16-root-argument-initialization-qualification-20260927.md)

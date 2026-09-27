@@ -759,3 +759,6 @@ impl<'a, 'b, 'w> LazyFixedProofOwnerV1<'a, 'b, 'w> {
 #[cfg(test)]
 #[path = "lazy_fixed_proof_frame_v1_tests.rs"]
 mod frame_controls;
+
+#[path = "lazy_fixed_proof_retirement_v1.rs"]
+pub(in crate::production_ranked_projection_v1) mod retirement;
