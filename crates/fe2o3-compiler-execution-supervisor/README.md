@@ -6,6 +6,27 @@ static launcher and issuer before either can enter authority-bearing custody.
 
 ## Native Custody Status
 
+`run_inherited_protected_issuer_service_v2/v3` now compose the actual native
+deployment through finite dispatch in dedicated V2/V3 binaries. The fixed eleven
+descriptor roles are consumed with bounded cleanup. Native policy, contextual
+deployment, process/namespaces, running image, root-bound lifecycle, signing key,
+program and anchor admission precede listener activation and exact readiness.
+No V1 admitted authority is upgraded. Full incoming image ownership and duplicate
+overlap are charged on the original account.
+
+Before any child launch, a separately charged lifecycle-lock alias moves into
+the existing persistent cleanup pool. Late failure, unwind, controller Drop,
+quarantine and work exhaustion cannot release it; only confirmed empty shutdown
+closes it. This is process-lifetime custody, not protection against process death
+or a substitute for the root coordinator's independent lease and recovery.
+
+Build the selected static binary with
+`scripts/build-static-compiler-execution-supervisor.sh v2` or `v3`; omitting the
+argument keeps V1. This does not provision or activate a deployment. Native
+root inherited composition and consuming supervisor launch remain unfinished,
+and successful protected native startup has not been validated. See the
+[startup checkpoint](../../docs/evidence/conditional-native-supervisor-startup-20260926.md).
+
 `ProvisionedProtectedIssuerServiceInputsV2` admits the fixed production listener
 and service-owned root on the original resource ledger. It shares the legacy
 filesystem/socket predicates, pins both objects, permits bound-to-listening

@@ -112,6 +112,22 @@ stops new reservations even when it finds the pool busy; pumping remains allowed
 
 ## Remaining Limits
 
+Native pool storage also prepays one close-only deployment-guard descriptor.
+`retain_deployment_guard` consumes the caller-authenticated lock File and debits
+both original ledgers before transfer. Only an empty, admission-open pool with
+no guard accepts it; there is no detach or replacement operation. Refusal closes
+the incoming File, not an existing guard. The caller retires its full input
+charge after return; successful transfer remains charged to the persistent pool.
+The generic cleanup API grants no deployment authority and checks no pathname.
+
+Native supervisor startup supplies a duplicate of its actual admitted lifecycle
+lease before any child launch. Controller Drop, late request failure, unwind,
+quarantine and work exhaustion preserve that alias. Verified exec releases only
+the separate artifact-spawn obligation, never this deployment guard. Empty
+shutdown closes the guard only after every slot is terminal and the pool's
+storage invariant holds. This custody lasts within the process; outer root
+custody and recovery remain necessary for service death.
+
 These are finite syscall-attempt and capacity bounds, not hard elapsed-time
 bounds. Syscalls, mutex acquisition and scheduling can take unbounded time.
 Artifact-lock release still waits for outstanding spawn obligations: code must
@@ -139,4 +155,10 @@ Native account tests cover exact/short quotas, cumulative recovery, exclusive
 modes, rotating funded turns, retained quarantine and empty shutdown. Owned
 ledger tests cover shared accounting across views, scratch rollback/unwind and
 non-escaping borrows.
+Five isolated real-flock schedules check guard transfer, exclusion, refusal,
+recovery, unwind and exhaustion with synthetic slot events. The existing real
+child subprocess cases also check lock retention after exec, request-budget
+refusal, unwind and reaping, with release only at empty shutdown. Isolation avoids
+temporary lock inheritance by unrelated concurrent test forks; strict immediate
+lock assertions remain intact.
 These are cleanup tests, not protected-runtime or GPU qualification evidence.

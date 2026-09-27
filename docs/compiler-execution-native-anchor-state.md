@@ -395,8 +395,14 @@ Compiler coordinator native preparation now owns the genuine matching trust,
 three freshly sealed images, listener/root, two root-bound lifecycle leases and
 managed anchor. Lease validity is joined to the actual retained service root,
 not accepted as an unrelated valid lock. Preparation itself spawns nothing;
-production inherited composition, supervisor startup and consuming launch still
-use V1 and remain to be migrated.
+production root inherited composition and consuming supervisor launch still use
+V1 and remain to be migrated. Dedicated native V2/V3 supervisor binaries now
+compose inherited descriptor intake, actual admission, listener activation,
+bounded readiness and dispatch. Their protected deployment is not yet validated.
+Startup transfers an actual lifecycle-lock alias into the existing charged
+cleanup pool before launch; local errors cannot retire this guard while child
+custody remains. See the
+[startup checkpoint](evidence/conditional-native-supervisor-startup-20260926.md).
 Current tests cover actual staged Files and rootless transport/refusal mechanics,
 not a successful native root deployment. Adapter-level post-clone failures and
 unwinds, including child-storage refusal and failure after endpoint receipt,
