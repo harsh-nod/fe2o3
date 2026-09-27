@@ -73,6 +73,7 @@ mod native_inherited_v2;
 mod native_inherited_v3;
 mod native_launch;
 mod native_launch_adapter;
+mod native_provisioner;
 mod native_provisioning;
 mod native_root_source;
 mod native_trust_adapter;
@@ -100,6 +101,9 @@ pub use native_inherited_v3::InheritedCompilerExecutionDeploymentV3;
 pub use native_launch::{
     CompilerExecutionLaunchErrorV2, CompilerExecutionLaunchQuotaV2,
     CompilerExecutionLaunchStorageV2,
+};
+pub use native_provisioner::{
+    CompilerExecutionProvisioningInstallErrorV3, run_compiler_execution_reference_provisioner_v3,
 };
 pub use native_provisioning::{
     CompilerExecutionProvisioningBundleV3, CompilerExecutionProvisioningErrorV3,

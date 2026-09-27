@@ -242,16 +242,7 @@ fn io(operation: &'static str, source: rustix::io::Errno) -> Failure {
 pub(crate) unsafe fn take(limits: &[usize; 11], b: &mut Budget<'_>) -> Result<[File; 14]> {
     b.with_prepaid_scope(14 * FILE_STORAGE, 8, LOCAL_WORK, INTAKE_SCRATCH, |_| {
         native::require_root()?;
-        let tasks = rustix::fs::open(
-            "/proc/self/task",
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::CLOEXEC
-                | rustix::fs::OFlags::DIRECTORY
-                | rustix::fs::OFlags::NOFOLLOW,
-            rustix::fs::Mode::empty(),
-        )
-        .map_err(|e| io("open process thread set", e))?;
-        single_thread_entries(tasks, rustix::process::getpid().as_raw_pid() as u32)?;
+        require_single_threaded()?;
         for (index, fd) in DESCRIPTORS.into_iter().enumerate() {
             // SAFETY: F_GETFD observes the scalar descriptor without taking ownership.
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
@@ -284,6 +275,20 @@ pub(crate) unsafe fn take(limits: &[usize; 11], b: &mut Budget<'_>) -> Result<[F
         }
         Ok(files)
     })
+}
+
+// The enclosing admission/installer prepays this fixed check before any I/O.
+pub(crate) fn require_single_threaded() -> Result<()> {
+    let tasks = rustix::fs::open(
+        "/proc/self/task",
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|e| io("open process thread set", e))?;
+    single_thread_entries(tasks, rustix::process::getpid().as_raw_pid() as u32)
 }
 
 // RawDir uses this fixed buffer, not libc's allocation-sized directory stream.

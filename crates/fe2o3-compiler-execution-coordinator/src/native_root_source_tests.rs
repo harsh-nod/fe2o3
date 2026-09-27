@@ -520,7 +520,9 @@ fn genuine_extended_acl_is_rejected_when_supported() {
     let mut acl = Vec::from(2u32.to_le_bytes());
     for (tag, perm, id) in [
         (1u16, 4u16, u32::MAX),
-        (2, 0, f.policy.uid ^ 1),
+        // The current UID is mapped even in a single-UID user namespace. A named
+        // entry remains an extended ACL even when it names the file owner.
+        (2, 0, f.policy.uid),
         (4, 0, u32::MAX),
         (16, 0, u32::MAX),
         (32, 0, u32::MAX),

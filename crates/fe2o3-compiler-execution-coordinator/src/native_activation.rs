@@ -109,10 +109,7 @@ impl Activation {
             },
             || {
                 // SAFETY: validation completed under the same uninterrupted contract.
-                if unsafe { libc::clearenv() } != 0 {
-                    return Err(last_error("clear activation environment"));
-                }
-                Ok(())
+                unsafe { clear_environment() }
             },
         )
     }
@@ -147,6 +144,32 @@ impl Activation {
             exact_ready_count(sent)
         })
     }
+}
+
+/// Provisioner-only environment removal under the same exclusive C-environment
+/// ownership contract as capture. It neither parses activation nor adopts FDs.
+#[allow(unsafe_code)]
+pub(crate) unsafe fn clear_for_provisioning(b: &mut Budget<'_>) -> Result<()> {
+    b.with_prepaid_scope(0, ENTRY_WORK, CAPTURE_WORK, CAPTURE_SCRATCH, |_| {
+        check_main_thread(rustix::process::getpid().as_raw_pid())?;
+        unsafe extern "C" {
+            static mut environ: *mut *mut libc::c_char;
+        }
+        // SAFETY: the dedicated provisioner exclusively owns a valid C environment.
+        let _snapshot = unsafe { snapshot_environment(environ.cast()) }?;
+        // SAFETY: the snapshot completed under the same uninterrupted contract.
+        unsafe { clear_environment() }
+    })
+}
+
+// The caller exclusively owns the valid C environment through this one attempt.
+#[allow(unsafe_code)]
+unsafe fn clear_environment() -> Result<()> {
+    // SAFETY: both startup callers retain the exclusive environment contract.
+    if unsafe { libc::clearenv() } != 0 {
+        return Err(last_error("clear startup environment"));
+    }
+    Ok(())
 }
 
 fn capture_with(

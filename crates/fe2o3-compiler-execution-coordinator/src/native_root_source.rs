@@ -18,6 +18,9 @@ use zeroize::Zeroizing;
 
 pub(crate) type Result<T> = std::result::Result<T, RootSourceErrorV2>;
 
+#[path = "native_provisioning_io.rs"]
+pub(crate) mod provisioning;
+
 /// Fixed-shape refusal from native root-provisioned source validation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RootSourceErrorV2 {

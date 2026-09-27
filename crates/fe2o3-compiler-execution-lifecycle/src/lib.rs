@@ -10,9 +10,13 @@
 #![deny(missing_docs, unsafe_code)]
 
 mod native;
+mod provisioning;
 
 pub use native::{
     CompilerExecutionServiceLifecycleLeaseV2, LifecycleLeaseErrorV2, LifecycleLeaseStorageV2,
+};
+pub use provisioning::{
+    CompilerExecutionProvisioningLifecycleLeaseV2, ProvisioningLifecycleLeaseStorageV2,
 };
 
 use std::error::Error;
