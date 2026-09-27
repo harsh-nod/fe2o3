@@ -1489,3 +1489,13 @@ This does not yet execute original queries or establish genuine nonempty proof
 comparison. Original query driver, exact nonempty DATA, genuine connector and
 later production stages remain open. Broad accepted exits remain 6/18;
 no public activation or global compiler pin change.
+
+## Original fixed-query driver — 2026-09-27
+
+The independent original oracle now runs closed bounded query schedules and
+retains nonempty payloads through postflight. All 13 controls passed; full CPU
+regression passed 356 model and 3,033 backend tests (189 ignored), plus build.
+See [the qualification record](original-fixed-query-driver-qualification-20260927.md).
+Exact cache DATA, the authentic source/Budget connector and later production
+stages remain open. Broad accepted exits remain 6/18; no public activation
+or global compiler pin change.

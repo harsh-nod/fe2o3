@@ -907,3 +907,11 @@ fn original_constructor_empty_retirement_is_lifetime_free_and_allocation_free() 
     assert!(snapshot.dominance.is_none() && snapshot.zero.is_none());
     assert_eq!(snapshot.side, [false; 6]);
 }
+
+// B1 additive cfg(test) query component; Unit A bodies above stay byte-exact.
+#[path = "original_fixed_query_driver_v1.rs"]
+mod query_driver;
+pub(in crate::production_ranked_projection_v1) use query_driver::{
+    QUERY_CAP, QueryCuts, QueryDatum, QuerySource, QueryState, QuerySummary, QueryWitness,
+    original_queries, query_added_frame, retained_queries,
+};
