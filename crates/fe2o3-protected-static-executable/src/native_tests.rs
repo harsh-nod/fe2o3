@@ -223,3 +223,28 @@ fn image_quotas_match_independent_fixture_visit_counts() {
     assert_eq!(Image::quota(m, Op::Revalidate).unwrap().work(), 17_479_825);
     assert_eq!(Image::quota(m, Op::Transfer).unwrap().work(), 26_152_149);
 }
+
+#[test]
+fn inert_length_queries_share_image_bounds_without_a_digest_or_owner() {
+    for operation in [Op::Admit, Op::Transfer, Op::Revalidate] {
+        let mut previous = (0, 0);
+        for length in [1, 4096, 4097, 128 * 1024 * 1024] {
+            let expected = Image::quota(
+                Measurement::new([1; 32], length, length).unwrap(),
+                operation,
+            )
+            .unwrap();
+            let actual = Image::quota_for_length(length, operation).unwrap();
+            assert_eq!(actual.work(), expected.work());
+            assert_eq!(actual.scratch(), expected.scratch());
+            assert!(actual.work() > previous.0);
+            assert!(actual.scratch() > previous.1);
+            previous = (actual.work(), actual.scratch());
+        }
+        assert!(Image::quota_for_length(0, operation).is_err());
+        assert!(matches!(
+            Image::quota_for_length(u64::MAX, operation),
+            Err(Error::Resource(Resource::Arithmetic))
+        ));
+    }
+}

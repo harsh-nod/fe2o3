@@ -141,6 +141,49 @@ impl CompilerExecutionRootStorageV2 {
         self.0
     }
 }
+
+/// Conservative logical admission envelope, including all raw inputs, retained
+/// native owners and nested scratch. Not a time, generated-stack or RSS bound.
+/// Consuming launch and the independent cleanup account are separate operations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompilerExecutionRootAdmissionQuotaV2 {
+    pub(crate) work: usize,
+    pub(crate) scratch: usize,
+}
+impl CompilerExecutionRootAdmissionQuotaV2 {
+    /// Complete admission work on the original account, including entry work.
+    pub const fn work(self) -> usize {
+        self.work
+    }
+    /// Additional peak above entry storage; no inherited input prepayment is needed.
+    pub const fn scratch(self) -> usize {
+        self.scratch
+    }
+}
+
+// Sum scratch conservatively rather than relying on the order of nested scopes.
+// Capability I/O scratch includes its complete retained owner; two copies cover
+// the inner decode/seal peak and the retained result in the outer admission.
+pub(crate) fn record_quota<const N: usize>(
+    decode_work: usize,
+    decode_scratch: usize,
+    capability_work: usize,
+    capability_scratch: usize,
+) -> Result<CompilerExecutionRootAdmissionQuotaV2> {
+    Ok(CompilerExecutionRootAdmissionQuotaV2 {
+        work: sum(&[8, source::record_work::<N>()?, decode_work, capability_work])?,
+        scratch: sum(&[
+            N,
+            N,
+            4096,
+            N,
+            source::record_scratch::<N>()?,
+            decode_scratch,
+            capability_scratch,
+            capability_scratch,
+        ])?,
+    })
+}
 pub(crate) fn sum(values: &[usize]) -> Result<usize> {
     values.iter().try_fold(0usize, |total, n| {
         total.checked_add(*n).ok_or(Resource::Arithmetic.into())

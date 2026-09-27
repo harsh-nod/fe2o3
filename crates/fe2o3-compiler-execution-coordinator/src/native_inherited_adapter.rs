@@ -61,6 +61,46 @@ macro_rules! inherited {
                 + MAX_SUPERVISOR as usize + 2 * MAX_LAUNCHER as usize
                 + MAX_ANCHOR as usize + MAX_HELPER as usize;
 
+            /// Complete conservative admission envelope at the fixed image ceilings.
+            /// Requires no descriptor access, seed or admitted authority. This query
+            /// includes raw input reservations and every nested operation; it does
+            /// not fund consuming launch, monitoring or persistent child cleanup.
+            /// Successful funding cannot make invalid inputs or failed I/O succeed.
+            pub fn admission_quota() -> Result<root::CompilerExecutionRootAdmissionQuotaV2> {
+                let records = [
+                    root::record_quota::<POLICY_BYTES>(POLICY_WORK, POLICY_SCRATCH,
+                        PolicyCap::IO_WORK, PolicyCap::IO_STORAGE)?,
+                    root::record_quota::<SUPERVISOR_BYTES>(SUPERVISOR_WORK, SUPERVISOR_SCRATCH,
+                        SupervisorCap::IO_WORK, SupervisorCap::IO_STORAGE)?,
+                    root::record_quota::<ANCHOR_BYTES>(ANCHOR_WORK, ANCHOR_SCRATCH,
+                        AnchorCap::IO_WORK, AnchorCap::IO_STORAGE)?,
+                    root::record_quota::<PROVISIONING_BYTES>(PROVISIONING_WORK, PROVISIONING_SCRATCH,
+                        ProvisioningCap::IO_WORK, ProvisioningCap::IO_STORAGE)?,
+                ];
+                let anchor = Anchor::maximum_preparation_quota()?;
+                Ok(root::CompilerExecutionRootAdmissionQuotaV2 {
+                    work: sum(&[3 * root::LOCAL_WORK, 3 * Lease::ADMISSION_WORK,
+                        2 * Lease::ROOT_BINDING_WORK, records[0].work(), records[1].work(),
+                        records[2].work(), records[3].work(), Inputs::WORK,
+                        2 * Inputs::LIFECYCLE_WORK, 5 * source::VALIDATE_WORK,
+                        2 * source::SEED_WORK, Key::ADMISSION_WORK, AnchorKey::ADMISSION_WORK,
+                        Trust::BIND_WORK, anchor.work()])?,
+                    // Each fixed I/O envelope includes its output owner. Keeping a
+                    // second envelope funds that owner's later outer reservation.
+                    // Summing transient peaks deliberately overestimates overlap.
+                    scratch: sum(&[Self::FRAME, Self::SOURCE_STORAGE, root::INTAKE_SCRATCH,
+                        6 * Lease::IO_STORAGE, 2 * Lease::ROOT_BINDING_SCRATCH,
+                        records[0].scratch(), records[1].scratch(), records[2].scratch(),
+                        records[3].scratch(), root::LISTENER_SCRATCH, root::LISTENER_GROWTH,
+                        Inputs::SCRATCH, Inputs::PAIR_STORAGE, Inputs::OWNER_GROWTH,
+                        2 * Inputs::LIFECYCLE_SCRATCH, source::VALIDATE_SCRATCH,
+                        2 * source::SEED_SCRATCH, 2 * source::SEED_STORAGE,
+                        2 * Key::IO_STORAGE, 2 * AnchorKey::IO_STORAGE,
+                        Trust::SCRATCH, Trust::GROWTH_STORAGE, anchor.scratch(),
+                        Anchor::GROWTH_STORAGE, Self::ENVELOPE])?,
+                })
+            }
+
             /// Admits one complete inherited native deployment, returning its FULL
             /// unreserved owner charge. All source bytes and nested native owners are
             /// funded on the supplied original ledger before access/retention. Entry

@@ -75,6 +75,50 @@ fn root_error_preserves_source_and_resource_without_secret_or_descriptor() {
 }
 
 #[test]
+fn admission_envelopes_cover_sources_and_maximum_anchor_preparation_without_io() {
+    use fe2o3_external_anchor_coordinator::{
+        PreparedExternalAnchorOccurrenceV2 as A2, PreparedExternalAnchorOccurrenceV3 as A3,
+    };
+    for (q, sources, anchor) in [
+        (
+            V2::admission_quota().unwrap(),
+            V2::SOURCE_STORAGE,
+            A2::maximum_preparation_quota().unwrap(),
+        ),
+        (
+            V3::admission_quota().unwrap(),
+            V3::SOURCE_STORAGE,
+            A3::maximum_preparation_quota().unwrap(),
+        ),
+    ] {
+        assert!(q.work() > anchor.work() + 3 * LOCAL_WORK);
+        assert!(q.scratch() > sources + anchor.scratch());
+        // Logical storage admission does not allocate the five maximum-size images.
+        let mut work = Work::new(q.work());
+        let mut b = Budget::new(&mut work, q.scratch() + 13);
+        b.reserve_storage(13).unwrap();
+        let ledger = b.work_ledger_identity_v1();
+        let result: Result<()> = b.with_prepaid_scope(0, 0, q.work(), q.scratch(), |b| {
+            assert_eq!(b.storage(), 13 + q.scratch());
+            Ok(())
+        });
+        result.unwrap();
+        assert_eq!(b.storage(), 13);
+        assert_eq!(b.work(), q.work());
+        assert_eq!(b.peak_storage(), 13 + q.scratch());
+        assert!(b.work_ledger_identity_v1() == ledger);
+    }
+}
+
+#[test]
+fn record_envelopes_refuse_zero_and_overflow_before_source_access() {
+    assert!(record_quota::<0>(0, 0, 0, 0).is_err());
+    assert!(record_quota::<32>(usize::MAX, 0, 0, 0).is_err());
+    assert!(record_quota::<32>(0, usize::MAX, 0, 0).is_err());
+    assert!(record_quota::<32>(0, 0, 0, usize::MAX / 2).is_err());
+}
+
+#[test]
 fn preflight_requires_bounded_images_exact_records_and_directory_roots() {
     use rustix::fs::FileType;
     let file = tempfile::tempfile().unwrap();

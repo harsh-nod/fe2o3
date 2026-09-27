@@ -85,7 +85,20 @@ impl ProtectedStaticExecutableV2 {
         measurement: Measurement,
         operation: ProtectedStaticExecutableOperationV2,
     ) -> Result<ProtectedStaticExecutableQuotaV2> {
-        let n = usize::try_from(measurement.byte_len()).map_err(|_| Resource::Arithmetic)?;
+        Self::quota_for_length(measurement.byte_len(), operation)
+    }
+
+    /// Queries the same envelope before an expected digest is available. A positive
+    /// representable length is inert configuration, never an admitted executable.
+    /// Callers must separately enforce their role's maximum image length.
+    pub fn quota_for_length(
+        byte_len: u64,
+        operation: ProtectedStaticExecutableOperationV2,
+    ) -> Result<ProtectedStaticExecutableQuotaV2> {
+        if byte_len == 0 {
+            return Err(ImageError::InvalidMeasurement.into());
+        }
+        let n = usize::try_from(byte_len).map_err(|_| Resource::Arithmetic)?;
         let passes = match operation {
             ProtectedStaticExecutableOperationV2::Admit => 4,
             ProtectedStaticExecutableOperationV2::Revalidate => 2,

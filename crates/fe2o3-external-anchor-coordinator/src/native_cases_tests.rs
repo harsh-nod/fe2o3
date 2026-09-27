@@ -253,6 +253,9 @@ fn exact_preparation_and_revalidation_preserve_images_lock_and_full_charge() {
     let mut f = Fixture::new();
     let floor = f.floor();
     let q = f.quota();
+    let maximum = Prepared::maximum_preparation_quota().unwrap();
+    assert!(maximum.work() >= q.work());
+    assert!(maximum.scratch() >= q.scratch());
     let i = f.input();
     assert_eq!(
         floor,

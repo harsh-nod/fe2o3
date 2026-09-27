@@ -13,6 +13,8 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionExternalAnchorDeploymentIdentityV3 as TransferDeploymentIdentity,
     CompilerExecutionIssuerPolicyIdentityV3 as TransferPolicyIdentity,
     CompilerExecutionSupervisorDeploymentIdentityV3 as TransferSupervisorIdentity,
+    MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V3 as MAX_DAEMON,
+    MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_HELPER_BYTES_V3 as MAX_HELPER,
 };
 #[cfg(test)]
 use fe2o3_compiler_execution_protocol::{

@@ -145,10 +145,21 @@ macro_rules! preparation {
                 -> Result<Quota> {
                 let helper = measurement(provisioning.provisioning().helper())?;
                 let daemon = measurement(deployment.deployment().executable())?;
-                let h = Image::quota(helper, ImageOperation::Admit)?;
-                let d = Image::quota(daemon, ImageOperation::Admit)?;
-                let hr = Image::quota(helper, ImageOperation::Revalidate)?;
-                let dr = Image::quota(daemon, ImageOperation::Revalidate)?;
+                Self::preparation_quota_for_lengths(helper.byte_len(), daemon.byte_len())
+            }
+
+            /// Conservative preparation envelope at both fixed protocol size ceilings.
+            /// Used to fund root intake before native capabilities exist. No synthetic
+            /// admitted owner, digest, descriptor or authority is constructed.
+            pub fn maximum_preparation_quota() -> Result<Quota> {
+                Self::preparation_quota_for_lengths(MAX_HELPER, MAX_DAEMON)
+            }
+
+            fn preparation_quota_for_lengths(helper: u64, daemon: u64) -> Result<Quota> {
+                let h = Image::quota_for_length(helper, ImageOperation::Admit)?;
+                let d = Image::quota_for_length(daemon, ImageOperation::Admit)?;
+                let hr = Image::quota_for_length(helper, ImageOperation::Revalidate)?;
+                let dr = Image::quota_for_length(daemon, ImageOperation::Revalidate)?;
                 Ok(Quota {
                     work: sum(&[LOCAL_WORK, CONTEXT_WORK, h.work(), d.work(),
                         CONTEXT_WORK, hr.work(), dr.work()])?,
