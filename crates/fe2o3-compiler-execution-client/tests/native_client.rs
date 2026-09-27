@@ -4,6 +4,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV2 as Subject;
 use fe2o3_compiler_execution_client::{
     CompilerExecutionClientErrorV2 as Error, CompilerExecutionClientV2 as Client,
+    CompilerExecutionReceiptRecoveryV2 as Recovery,
 };
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationReceiptV2 as Receipt,

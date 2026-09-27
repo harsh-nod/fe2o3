@@ -261,6 +261,102 @@ macro_rules! native_client_transcripts {
         }
 
         #[test]
+        fn native_recovery_only_absence_requires_cancel_at_the_exact_position() {
+            for fault in ["none", "sequence", "anchor", "kind"] {
+                let mut work = Work::new(WORK);
+                let mut b = Budget::new(&mut work, STORAGE);
+                b.reserve_storage(FIXTURE_STORAGE).unwrap();
+                let p = policy(&mut b);
+                let s = subject(&mut b);
+                let floor = b.storage();
+                let ledger = b.work_ledger_identity_v1();
+                b.reserve_storage(Client::PEER_STORAGE).unwrap();
+                let (peer, server) = pair();
+                let client = Client::admit(peer, TIMEOUT, &mut b).unwrap();
+                let worker = thread::spawn(move || {
+                    let mut work = Work::new(WORK);
+                    let mut b = Budget::new(&mut work, STORAGE);
+                    b.reserve_storage(FIXTURE_STORAGE).unwrap();
+                    let p = policy(&mut b);
+                    let recover = receive(&server, &mut b);
+                    assert_eq!(recover.kind(), QueryKind::Recover);
+                    respond(&server, &recover, &p, Reply::ReceiptAbsent {
+                        sequence: 3, prior_rollback_anchor: [0x75; 32],
+                    }, &mut b);
+                    let cancel = receive(&server, &mut b);
+                    assert_eq!(cancel.kind(), QueryKind::Cancel);
+                    let reply = if fault == "kind" {
+                        Reply::Ready { sequence: 3, prior_rollback_anchor: [0x75; 32] }
+                    } else {
+                        Reply::Cancelled {
+                            sequence: if fault == "sequence" { 4 } else { 3 },
+                            prior_rollback_anchor: if fault == "anchor" { [0x76; 32] } else { [0x75; 32] },
+                        }
+                    };
+                    respond(&server, &cancel, &p, reply, &mut b);
+                    assert_closed(&server);
+                });
+                let result = client.recover_only(&p, s);
+                worker.join().unwrap();
+                assert_eq!(b.storage(), floor);
+                assert!(b.work_ledger_identity_v1() == ledger);
+                if fault == "none" {
+                    let (recovered, charge) = result.unwrap();
+                    b.reserve_storage(charge.additional_storage()).unwrap();
+                    assert!(matches!(recovered, Recovery::Absent { sequence: 3, rollback_anchor } if rollback_anchor == [0x75; 32]));
+                } else {
+                    assert!(matches!(result, Err(Error::Mismatch(_))));
+                }
+            }
+        }
+
+        #[test]
+        fn native_recovery_only_returns_only_the_exact_existing_carriage() {
+            for changed in [false, true] {
+                let mut work = Work::new(WORK);
+                let mut b = Budget::new(&mut work, STORAGE);
+                b.reserve_storage(FIXTURE_STORAGE).unwrap();
+                let p = policy(&mut b);
+                let expected = carriage(&mut b);
+                let mut wire = fixture::subject_wire($version);
+                if changed {
+                    wire[120] ^= 1;
+                    fixture::seal(&mut wire, "INERT-COMPILER-EXECUTION-SUBJECT", $version);
+                }
+                let (s, charge) = Subject::decode(&wire, &mut b).unwrap();
+                b.reserve_storage(charge.retained_storage()).unwrap();
+                let floor = b.storage();
+                let ledger = b.work_ledger_identity_v1();
+                b.reserve_storage(Client::PEER_STORAGE).unwrap();
+                let (peer, server) = pair();
+                let client = Client::admit(peer, TIMEOUT, &mut b).unwrap();
+                let worker = thread::spawn(move || {
+                    let mut work = Work::new(WORK);
+                    let mut b = Budget::new(&mut work, STORAGE);
+                    b.reserve_storage(FIXTURE_STORAGE).unwrap();
+                    let c = carriage(&mut b);
+                    let request = receive(&server, &mut b);
+                    assert_eq!(request.kind(), QueryKind::Recover);
+                    respond(&server, &request, c.policy(), Reply::Recovered(&c), &mut b);
+                    assert_closed(&server);
+                });
+                let result = client.recover_only(&p, s);
+                worker.join().unwrap();
+                assert_eq!(b.storage(), floor);
+                assert!(b.work_ledger_identity_v1() == ledger);
+                if changed {
+                    assert!(matches!(result, Err(Error::Mismatch("recovered native carriage differs from expected source"))));
+                } else {
+                    let (recovered, charge) = result.unwrap();
+                    b.reserve_storage(charge.additional_storage()).unwrap();
+                    let Recovery::Recovered(c) = recovered else { panic!("expected recovery") };
+                    assert_eq!(c.canonical_bytes(), expected.canonical_bytes());
+                    assert!(charge.additional_storage() >= c.retained_storage());
+                }
+            }
+        }
+
+        #[test]
         fn native_rejects_request_substitution_and_v1_without_retry() {
             for mixed_version in [false, true] {
                 let mut work = Work::new(WORK);

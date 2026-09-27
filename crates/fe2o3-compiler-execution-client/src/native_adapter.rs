@@ -1,6 +1,6 @@
 // One native exchange implementation; nominal families supply actual typed records.
 macro_rules! native_client_adapter {
-    ($Error:ident, $Storage:ident, $Client:ident, $verify_current:ident) => {
+    ($Error:ident, $Storage:ident, $Client:ident, $Recovery:ident, $verify_current:ident) => {
         #[derive(Debug)]
         pub enum $Error {
             Resource(Resource),
@@ -20,6 +20,28 @@ macro_rules! native_client_adapter {
         impl $Storage {
             pub const fn additional_storage(self) -> usize {
                 self.0
+            }
+        }
+
+        /// Terminal recovery result, not compiler or currentness authority.
+        /// Absence is returned only after an acknowledged Cancel at the same
+        /// durable position. Recovery never prepares, issues or publishes a receipt.
+        #[allow(clippy::large_enum_variant)]
+        #[derive(Debug)]
+        pub enum $Recovery {
+            Recovered(Carriage),
+            Absent { sequence: u64, rollback_anchor: [u8; 32] },
+        }
+        impl $Recovery {
+            fn retained_storage(&self) -> Result<usize> {
+                let payload = match self {
+                    Self::Recovered(carriage) => carriage.retained_storage(),
+                    Self::Absent { .. } => 0,
+                };
+                // Conservatively includes the inline carriage twice: its native
+                // full-owner charge and the fixed recovery/result envelope.
+                payload.checked_add(size_of::<(Self, $Storage)>())
+                    .ok_or_else(|| Resource::Arithmetic.into())
             }
         }
         macro_rules! from_error {
@@ -244,6 +266,32 @@ macro_rules! native_client_adapter {
                 Ok((carriage, charge))
             }
 
+            /// Recover an exact existing receipt, or acknowledge Cancel on absence.
+            /// This consumes the session without any Inspect/Prepare/Issue/Publish
+            /// suffix. Policy and subject must remain prepaid on this account.
+            /// Reserve the returned full output charge before retaining/using it;
+            /// consumed input charges remain caller-owned. No V1 fallback exists.
+            pub fn recover_only(
+                self,
+                policy: &Policy,
+                subject: Subject,
+            ) -> Result<($Recovery, $Storage)> {
+                let floor = input_floor(self.retained, policy.retained_storage(), Self::SUBJECT_STORAGE)?;
+                let peer = self.peer.as_ref()
+                    .ok_or(ClientError::Mismatch("closed native peer"))?;
+                self.budget.with_prepaid_scope(floor, 8, 8, Self::SESSION_SCRATCH, |b| {
+                    let mut session = Session::new(peer, self.deadline, b);
+                    let recovered = session.recover(policy, &subject)?;
+                    if let $Recovery::Absent { sequence, rollback_anchor } = &recovered {
+                        let response = session.exchange(policy, Payload::Cancel)?;
+                        require_cancel_position(&response, (*sequence, *rollback_anchor), session.budget)?;
+                    }
+                    let charge = recovered.retained_storage()?;
+                    session.budget.reserve_storage(charge)?;
+                    Ok((recovered, $Storage(charge)))
+                })
+            }
+
             /// Consumes a ready session by exchanging one exact acknowledged Cancel.
             /// This does not authenticate readiness or a compiler result. The caller
             /// must first validate the supervisor's readiness/launch binding. Policy
@@ -383,11 +431,13 @@ macro_rules! native_client_adapter {
                 Ok(response)
             }
 
-            fn acquire(&mut self, policy: &Policy, subject: Subject) -> Result<Carriage> {
-                let recovered = self.exchange(policy, Payload::Recover(&subject))?;
+            fn recover(&mut self, policy: &Policy, subject: &Subject) -> Result<$Recovery> {
+                self.budget.reserve_storage(size_of::<$Recovery>())?;
+                let recovered = self.exchange(policy, Payload::Recover(subject))?;
                 match recovered.kind() {
                     Kind::Recovered => {
                         let carriage = retain(recovered.decode_carriage(self.budget)?, self.budget)?;
+                        self.budget.charge_work(policy.canonical_bytes().len() + subject.canonical_bytes().len())?;
                         if carriage.policy().canonical_bytes() != policy.canonical_bytes()
                             || carriage.request().subject().canonical_bytes() != subject.canonical_bytes()
                         {
@@ -395,16 +445,22 @@ macro_rules! native_client_adapter {
                                 "recovered native carriage differs from expected source",
                             ));
                         }
-                        return Ok(carriage);
+                        Ok($Recovery::Recovered(carriage))
                     }
-                    Kind::ReceiptAbsent => (),
-                    _ => {
-                        return Err(ClientError::Mismatch(
+                    Kind::ReceiptAbsent => Ok($Recovery::Absent {
+                        sequence: recovered.sequence(), rollback_anchor: recovered.rollback_anchor(),
+                    }),
+                    _ => Err(ClientError::Mismatch(
                             "expected native recovered carriage or absence",
-                        ));
-                    }
+                    )),
                 }
-                let position = (recovered.sequence(), recovered.rollback_anchor());
+            }
+
+            fn acquire(&mut self, policy: &Policy, subject: Subject) -> Result<Carriage> {
+                let position = match self.recover(policy, &subject)? {
+                    $Recovery::Recovered(carriage) => return Ok(carriage),
+                    $Recovery::Absent { sequence, rollback_anchor } => (sequence, rollback_anchor),
+                };
                 let inspected = self.exchange(policy, Payload::Inspect)?;
                 if (inspected.sequence(), inspected.rollback_anchor()) != position {
                     return Err(ClientError::Mismatch(
@@ -505,6 +561,14 @@ macro_rules! native_client_adapter {
         fn require_kind(response: &Response, expected: Kind) -> Result<()> {
             if response.kind() != expected {
                 return Err(ClientError::Mismatch("unexpected native response kind"));
+            }
+            Ok(())
+        }
+        fn require_cancel_position(response: &Response, expected: (u64, [u8; 32]), b: &mut Budget<'_>) -> Result<()> {
+            b.charge_work(1 + 8 + 32)?;
+            require_kind(response, Kind::Cancelled)?;
+            if (response.sequence(), response.rollback_anchor()) != expected {
+                return Err(ClientError::Mismatch("native cancel position changed after absence"));
             }
             Ok(())
         }

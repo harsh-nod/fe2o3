@@ -2,6 +2,89 @@
 use super::*;
 use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerMeasurementV1 as Measurement;
 
+#[allow(dead_code)]
+#[path = "../../fe2o3-compiler-execution-protocol/tests/support/native_attestation_fixture.rs"]
+mod wire_fixture;
+
+#[test]
+fn recovery_only_cancel_requires_exact_kind_sequence_anchor_and_work() {
+    const LIMIT: usize = 100_000_000;
+    for fault in ["none", "sequence", "anchor", "kind", "work"] {
+        let mut work = Work::new(LIMIT);
+        let mut b = Budget::new(&mut work, 4 * 1024 * 1024);
+        let p = policy(&mut b);
+        let request = retain(
+            ServiceRequest::new(&p, Payload::Cancel, &mut b).unwrap(),
+            &mut b,
+        )
+        .unwrap();
+        let reply = if fault == "kind" {
+            Reply::Ready {
+                sequence: 3,
+                prior_rollback_anchor: [0x75; 32],
+            }
+        } else {
+            Reply::Cancelled {
+                sequence: if fault == "sequence" { 4 } else { 3 },
+                prior_rollback_anchor: if fault == "anchor" {
+                    [0x76; 32]
+                } else {
+                    [0x75; 32]
+                },
+            }
+        };
+        let response = retain(
+            Response::new(request.identity(), &p, reply, &mut b).unwrap(),
+            &mut b,
+        )
+        .unwrap();
+        if fault == "work" {
+            b.charge_work(LIMIT - b.work() - 40).unwrap();
+        }
+        let floor = b.storage();
+        let before = b.work();
+        let ledger = b.work_ledger_identity_v1();
+        let result = require_cancel_position(&response, (3, [0x75; 32]), &mut b);
+        match fault {
+            "none" => result.unwrap(),
+            "work" => assert!(matches!(
+                result,
+                Err(ClientError::Resource(Resource::Work(_)))
+            )),
+            _ => assert!(matches!(result, Err(ClientError::Mismatch(_)))),
+        }
+        assert_eq!(b.storage(), floor);
+        assert_eq!(b.work(), before + if fault == "work" { 0 } else { 41 });
+        assert!(b.work_ledger_identity_v1() == ledger);
+    }
+}
+
+#[test]
+fn recovery_only_work_refusal_closes_peer_without_clearing_input_debt() {
+    const LIMIT: usize = 1_000_000;
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, 4 * 1024 * 1024);
+    let policy = policy(&mut budget);
+    let version = u16::from_le_bytes(policy.canonical_bytes()[8..10].try_into().unwrap());
+    let wire = wire_fixture::subject_wire(version);
+    budget.reserve_storage(wire.len()).unwrap();
+    let (subject, charge) = Subject::decode(&wire, &mut budget).unwrap();
+    budget.reserve_storage(charge.retained_storage()).unwrap();
+    budget.charge_work(LIMIT - budget.work()).unwrap();
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    let (client, reader) = accounting_client(&mut budget);
+    assert!(matches!(
+        client.recover_only(&policy, subject),
+        Err(ClientError::Resource(Resource::Work(_)))
+    ));
+    closed(reader);
+    assert_eq!(budget.storage(), floor + FLOOR);
+    assert_eq!(budget.work(), LIMIT);
+    assert_eq!(budget.failed_work(), Some(LIMIT + 8));
+    assert!(budget.work_ledger_identity_v1() == ledger);
+}
+
 fn policy(budget: &mut Budget<'_>) -> Policy {
     let key = |seed| {
         ed25519_dalek::SigningKey::from_bytes(&[seed; 32])

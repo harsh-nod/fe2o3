@@ -61,6 +61,7 @@ crate::native_adapter::native_client_adapter!(
     CompilerExecutionClientErrorV3,
     CompilerExecutionClientStorageV3,
     CompilerExecutionClientV3,
+    CompilerExecutionReceiptRecoveryV3,
     verify_native_v3
 );
 
@@ -71,6 +72,8 @@ crate::inherited_admission_adapter::inherited_admission_adapter!(
 
 #[cfg(test)]
 use CompilerExecutionClientV3 as TestClient;
+#[cfg(test)]
+use fe2o3_compiler_execution_protocol::CompilerExecutionServiceResponsePayloadV3 as Reply;
 #[cfg(test)]
 #[path = "native_admission_tests.rs"]
 mod tests;

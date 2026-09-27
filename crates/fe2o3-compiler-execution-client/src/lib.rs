@@ -36,9 +36,11 @@ pub use child_channel::{
 pub use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
 pub use native::{
     CompilerExecutionClientErrorV2, CompilerExecutionClientStorageV2, CompilerExecutionClientV2,
+    CompilerExecutionReceiptRecoveryV2,
 };
 pub use native_v3::{
     CompilerExecutionClientErrorV3, CompilerExecutionClientStorageV3, CompilerExecutionClientV3,
+    CompilerExecutionReceiptRecoveryV3,
 };
 pub use supervisor_handoff::native_v3::{
     CompilerExecutionHandoffErrorV3, CompilerExecutionHandoffStorageV3,
