@@ -40,6 +40,177 @@ impl RuntimeProducerAwareLaunchBackendV1 for MockBackend {
     }
 }
 
+impl RuntimeProducerAwareLaunchBackendV1 for ThreadBoundBackend {
+    fn submit_producer_aware_launch_v1(
+        &mut self,
+        request: BackendProducerAwareLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.record("submit_producer_aware_launch_v1");
+        self.inner.submit_producer_aware_launch_v1(request)
+    }
+}
+
+#[test]
+fn queued_producer_chain_runs_and_releases_on_the_non_send_owner_thread() {
+    for orphan in [false, true] {
+        let state = Arc::new(Mutex::new(MockState::default()));
+        let trace = Arc::new(Mutex::new(OwnerTrace::default()));
+        let (engine, handle) = start_with_context_profile(
+            state.clone(),
+            trace.clone(),
+            RuntimeAsyncEngineConfigV1::default(),
+            true,
+        );
+        let (streams, kernel, x, owner) = join_command(
+            handle
+                .observer()
+                .enqueue_with_context(|context| {
+                    let device = context.devices()[0].id();
+                    let streams =
+                        core::array::from_fn::<_, 3, _>(|_| context.create_stream(device).unwrap());
+                    let module = context.load_module(device, &[1]).unwrap();
+                    let kernel = Arc::new(context.resolve_kernel::<Args>(module, "args").unwrap());
+                    let x = context
+                        .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
+                        .unwrap();
+                    (streams, kernel, x, thread::current().id())
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        assert_ne!(owner, thread::current().id());
+        let mut events = Vec::new();
+        let mut captures = Vec::new();
+        let mut consumer = None;
+        for (stage, stream) in streams.into_iter().enumerate() {
+            let args = arguments(vec![binding(
+                x,
+                if stage == 2 {
+                    RuntimeAccessV1::Read
+                } else {
+                    RuntimeAccessV1::Write
+                },
+                0,
+            )]);
+            let request = RuntimeAsyncLaunchRequestV1::new(
+                stream,
+                kernel.clone(),
+                &args,
+                geometry(),
+                events.last().copied().into_iter().collect(),
+            )
+            .unwrap();
+            let queued = handle.enqueue_producer_launch_with_event(request).unwrap();
+            events.push(join_command(queued.event).unwrap().unwrap());
+            captures.push(args);
+            if stage == 2 && !orphan {
+                consumer = Some(queued.operation.future);
+            }
+        }
+        let [ae, be, ce]: [_; 3] = events.try_into().unwrap();
+        let counts = join_command(
+            handle
+                .observer()
+                .enqueue_with_context(move |context| {
+                    context.release_event(ae).unwrap();
+                    context.release_event(be).unwrap();
+                    (
+                        context.version_journal_read_records_v1(),
+                        context.version_journal_writer_records_v1(),
+                        context.query_event(ce).unwrap(),
+                    )
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            counts,
+            (Some(1), Some(2), RuntimeCompletionStatusV1::Pending)
+        );
+        {
+            let mut state = state.lock().unwrap();
+            assert_eq!(state.issues.len(), 3);
+            let ids: Vec<_> = state.issues.iter().map(|issue| issue.1).collect();
+            for index in 1..3 {
+                let dependencies: Vec<_> = state.submission_dependencies[&ids[index]]
+                    .iter()
+                    .map(|event| state.event_sources[event])
+                    .collect();
+                assert_eq!(dependencies, vec![ids[index - 1]]);
+            }
+            state
+                .statuses
+                .values_mut()
+                .for_each(|status| *status = BackendPollV1::Succeeded);
+        }
+        if let Some(future) = consumer {
+            assert_eq!(
+                join_command(future).unwrap().observation.unwrap(),
+                RuntimeCompletionStatusV1::Succeeded
+            );
+        }
+        let mut complete = false;
+        for _ in 0..16 {
+            let status = join_command(
+                handle
+                    .observer()
+                    .enqueue_with_context(move |context| context.poll_event(ce).unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            if status == RuntimeCompletionStatusV1::Succeeded {
+                complete = true;
+                break;
+            }
+        }
+        assert!(complete);
+        let counts = join_command(
+            handle
+                .observer()
+                .enqueue_with_context(move |context| {
+                    context.release_event(ce).unwrap();
+                    (
+                        context.version_journal_read_records_v1(),
+                        context.version_journal_writer_records_v1(),
+                    )
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(counts, (Some(0), Some(0)));
+        for args in captures {
+            assert_eq!(args.encodes.load(Ordering::SeqCst), 1);
+            assert_eq!(args.bindings.load(Ordering::SeqCst), 1);
+        }
+        assert_eq!(handle.observer().snapshot_bytes_in_use(), 0);
+        // Orphan drivers must retire while the owner is live, not just at Stop.
+        for _ in 0..16 {
+            if handle.observer().reply_cells_in_use() == 0 {
+                break;
+            }
+            join_command(handle.observer().enqueue_with_context(|_| ()).unwrap()).unwrap();
+        }
+        assert_eq!(handle.observer().reply_cells_in_use(), 0);
+        let report = engine.shutdown().unwrap();
+        assert_eq!(report.disposition, RuntimeAsyncOwnedDispositionV1::Released);
+        assert!(report.cleanup.unwrap().is_complete());
+        assert!(!report.worker_panicked);
+        assert!(report.native_failure.is_none());
+        let trace = trace.lock().unwrap();
+        assert!(trace.calls.iter().all(|(_, id)| *id == owner));
+        assert_eq!(
+            trace
+                .calls
+                .iter()
+                .filter(|(call, _)| *call == "submit_producer_aware_launch_v1")
+                .count(),
+            3
+        );
+        assert_eq!(trace.calls[trace.calls.len() - 2].0, "finalize");
+        assert_eq!(trace.calls.last().unwrap().0, "drop");
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Mode {
     Ordinary,
@@ -119,6 +290,200 @@ fn binding(
             byte_len: 8,
         },
         kernarg_byte_offset: index * 8,
+    }
+}
+
+#[test]
+fn queued_producer_async_chain_keeps_exact_frozen_dependencies_after_observer_loss() {
+    for mode in MODES {
+        for drop_consumer in [false, true] {
+            let mut h = Harness::with_journal(4096, 1, false, true);
+            let x = allocation(&mut h);
+            let device = h.context.devices()[0].id();
+            let mut events = Vec::new();
+            let mut parents = Vec::new();
+            let mut captures = Vec::new();
+            for _ in 0..2 {
+                let stream = h.context.create_stream(device).unwrap();
+                let args = arguments(vec![binding(x, RuntimeAccessV1::Write, 0)]);
+                let request = RuntimeAsyncLaunchRequestV1::new(
+                    stream,
+                    h.kernel.clone(),
+                    &args,
+                    geometry(),
+                    events.last().copied().into_iter().collect(),
+                )
+                .unwrap();
+                let bytes = request.snapshot_bytes();
+                let mut queued = enqueue(&h, request, Mode::Event).unwrap();
+                assert_eq!(h.used(), bytes);
+                let mut driver = h.pop();
+                assert!(!driver.advance(&mut h.context));
+                assert_eq!(h.used(), 0);
+                assert!(!driver.advance(&mut h.context));
+                events.push(join_command(queued.event.take().unwrap()).unwrap().unwrap());
+                captures.push(args);
+                parents.push(driver);
+                drop(queued);
+            }
+            let args = arguments(vec![binding(x, RuntimeAccessV1::Read, 0)]);
+            let request = RuntimeAsyncLaunchRequestV1::new(
+                h.stream,
+                h.kernel.clone(),
+                &args,
+                geometry(),
+                vec![events[1]],
+            )
+            .unwrap();
+            let bytes = request.snapshot_bytes();
+            let mut queued = enqueue(&h, request, mode).unwrap();
+            assert_eq!(h.used(), bytes);
+            let mut driver = h.pop();
+            assert!(!driver.advance(&mut h.context));
+            assert_eq!(h.used(), 0);
+            captures.push(args);
+            assert_eq!(h.context.version_journal_read_records_v1(), Some(1));
+            assert_eq!(h.context.version_journal_writer_records_v1(), Some(2));
+            {
+                let state = h.state.lock().unwrap();
+                assert_eq!(state.issues.len(), 3);
+                let ids: Vec<_> = state.issues.iter().map(|issue| issue.1).collect();
+                assert!(state.submission_dependencies[&ids[0]].is_empty());
+                for index in 1..3 {
+                    let deps: Vec<_> = state.submission_dependencies[&ids[index]]
+                        .iter()
+                        .map(|event| state.event_sources[event])
+                        .collect();
+                    assert_eq!(deps, vec![ids[index - 1]]);
+                }
+                for (index, issue) in state.issues.iter().enumerate() {
+                    assert_eq!(issue.2, vec![0; 8]);
+                    assert_eq!(issue.3.len(), 1);
+                    assert_eq!(
+                        issue.3[0].region.allocation,
+                        state.issues[0].3[0].region.allocation
+                    );
+                    assert_eq!(
+                        issue.3[0].region.access,
+                        if index == 2 {
+                            RuntimeAccessV1::Read
+                        } else {
+                            RuntimeAccessV1::Write
+                        }
+                    );
+                }
+            }
+            for event in events {
+                h.context.release_event(event).unwrap();
+            }
+            if let Some(event) = queued.event.take() {
+                assert!(!driver.advance(&mut h.context));
+                h.context
+                    .release_event(join_command(event).unwrap().unwrap())
+                    .unwrap();
+            }
+            drop(queued.control.take());
+            let future = (!drop_consumer).then_some(queued.future);
+            assert!(!driver.advance(&mut h.context));
+            assert_eq!(h.context.version_journal_read_records_v1(), Some(1));
+            // Supply mutually consistent device facts before producer-first logical
+            // reconciliation. A completed child with a still-Pending parent is invalid.
+            h.state
+                .lock()
+                .unwrap()
+                .statuses
+                .values_mut()
+                .for_each(|status| *status = BackendPollV1::Succeeded);
+            assert!(!driver.advance(&mut h.context));
+            assert_eq!(h.context.version_journal_read_records_v1(), Some(1));
+            let mut complete = false;
+            for _ in 0..16 {
+                if driver.advance(&mut h.context) {
+                    complete = true;
+                    break;
+                }
+            }
+            assert!(complete);
+            if let Some(future) = future {
+                assert_eq!(
+                    join_command(future).unwrap().observation.unwrap(),
+                    RuntimeCompletionStatusV1::Succeeded
+                );
+            }
+            for parent in &mut parents {
+                assert!(parent.advance(&mut h.context));
+            }
+            for args in captures {
+                assert_eq!(args.encodes.load(Ordering::SeqCst), 1);
+                assert_eq!(args.bindings.load(Ordering::SeqCst), 1);
+            }
+            assert_eq!(h.context.version_journal_read_records_v1(), Some(0));
+            assert_eq!(h.context.version_journal_writer_records_v1(), Some(0));
+            drop(driver);
+            drop(parents);
+            assert_eq!(h.handle.observer().reply_cells_in_use(), 0);
+            assert!(h.context.cleanup().is_complete());
+        }
+    }
+}
+
+#[test]
+fn queued_producer_async_preissue_cancel_never_acquires_or_refunds_parent_custody() {
+    for mode in [Mode::Tracked, Mode::Event] {
+        let mut h = Harness::with_journal(4096, 1, false, true);
+        let x = allocation(&mut h);
+        let args = arguments(vec![binding(x, RuntimeAccessV1::Write, 0)]);
+        let a = h
+            .context
+            .launch_producer_aware_v1(h.stream, &h.kernel, &args, geometry(), &[])
+            .unwrap();
+        let ae = h.context.record_event(&a).unwrap();
+        let b_args = arguments(vec![binding(x, RuntimeAccessV1::Write, 0)]);
+        let b = h
+            .context
+            .launch_producer_aware_v1(h.stream, &h.kernel, &b_args, geometry(), &[ae])
+            .unwrap();
+        let be = h.context.record_event(&b).unwrap();
+        let input = arguments(vec![binding(x, RuntimeAccessV1::Read, 0)]);
+        let request = RuntimeAsyncLaunchRequestV1::new(
+            h.stream,
+            h.kernel.clone(),
+            &input,
+            geometry(),
+            vec![be],
+        )
+        .unwrap();
+        let bytes = request.snapshot_bytes();
+        let queued = enqueue(&h, request, mode).unwrap();
+        assert_eq!(
+            queued.control.as_ref().unwrap().cancel_before_submission(),
+            crate::RuntimeAsyncCancelResultV1::CancelledBeforeSubmission
+        );
+        drop(queued);
+        assert_eq!(h.used(), bytes);
+        assert!(h.pop().advance(&mut h.context));
+        assert_eq!(h.used(), 0);
+        assert_eq!(h.state.lock().unwrap().issues.len(), 2);
+        assert_eq!(h.context.version_journal_read_records_v1(), Some(0));
+        assert_eq!(h.context.version_journal_writer_records_v1(), Some(2));
+        assert_eq!(
+            h.context.query_submission(&a).unwrap(),
+            RuntimeCompletionStatusV1::Pending
+        );
+        assert_eq!(
+            h.context.query_submission(&b).unwrap(),
+            RuntimeCompletionStatusV1::Pending
+        );
+        assert_eq!(input.encodes.load(Ordering::SeqCst), 1);
+        assert_eq!(input.bindings.load(Ordering::SeqCst), 1);
+        h.state
+            .lock()
+            .unwrap()
+            .statuses
+            .values_mut()
+            .for_each(|status| *status = BackendPollV1::Succeeded);
+        assert!(h.context.cleanup().is_complete());
+        assert_eq!(h.handle.observer().reply_cells_in_use(), 0);
     }
 }
 

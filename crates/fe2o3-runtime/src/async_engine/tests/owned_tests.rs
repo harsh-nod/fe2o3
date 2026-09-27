@@ -234,6 +234,18 @@ fn start_with_config(
     RuntimeAsyncOwnedEngineV1<ThreadBoundBackend>,
     RuntimeAsyncProgressHandleV1<ThreadBoundBackend>,
 ) {
+    start_with_context_profile(state, trace, config, false)
+}
+
+fn start_with_context_profile(
+    state: Arc<Mutex<MockState>>,
+    trace: Arc<Mutex<OwnerTrace>>,
+    config: RuntimeAsyncEngineConfigV1,
+    journal: bool,
+) -> (
+    RuntimeAsyncOwnedEngineV1<ThreadBoundBackend>,
+    RuntimeAsyncProgressHandleV1<ThreadBoundBackend>,
+) {
     RuntimeAsyncOwnedEngineV1::spawn_with_progress(
         move || {
             let backend = ThreadBoundBackend {
@@ -244,7 +256,12 @@ fn start_with_config(
             };
             backend.record("construct");
             let initially_terminal = backend.trace.lock().unwrap().initially_terminal;
-            let mut context = RuntimeContextV1::open(backend)?;
+            let mut context = if journal {
+                RuntimeContextV1::open_with_version_journal_members_v1(backend, 16, 16, 32)
+                    .map_err(|failure| failure.into_parts().1)?
+            } else {
+                RuntimeContextV1::open(backend)?
+            };
             if initially_terminal {
                 context.quarantine_after_async_command_panic_v1();
             }

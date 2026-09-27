@@ -92,8 +92,9 @@ The owner model alone is not proof of the Context composition. In particular:
   Disposal destroys allocations rather than exposing uncertain content.
 - Failed/quiescent backend results alone are not NoEffect authority. Descendant
   failure after cancellation cannot be used to silently release queued custody.
-- Queued-output reads have a CPU-tested model/Context implementation. Native
-  integration qualification, partial writes and ReadWrite integration remain open.
+- Queued-output reads have a CPU-tested model/Context implementation, scripted
+  native-owner integration and frozen async-driver coverage. Native hardware,
+  partial writes and ReadWrite integration remain open.
 - The unchanged inner journal proofs do not establish outer queue invariants.
 
 ### Queued Output Reads
@@ -132,6 +133,34 @@ writer-slot reuse. Model tests also check shared capacity, fixed storage, stale
 identities, attachment-corruption rejection and affine indexed-access scaling.
 No new formal proof, native hardware qualification or matched performance claim
 follows from these tests.
+
+### Queued Read Integration
+
+Journal-enabled Context tests exercise the KFD backend with five scripted
+persistent owners through A -> B -> C: A writes x, B overwrites x, and C reads
+the exact B output. Same-stream and cross-stream cases release public events
+after admission, complete native observations before Context reconciliation,
+and compare x's owner identity through all three active binding rosters. They
+inject distinguishable bytes into the scripted owners and inspect C's actual
+input storage. They do not execute a kernel or synchronize native memory.
+
+Cancellation coverage includes a cancelled middle writer without reader
+reparenting, cancelled consumers that retain their ancestors, and same-stream
+interior cancellation that remains TooLate until its downstream reader is
+cancelled. The tests check complete native retain/reservation release, zero
+journal records after allocation disposal, exact scripted owner recycling and
+zero allocation-credit usage. Cleanup deliberately disables native SDMA sync;
+this is not hardware teardown or native readback qualification.
+
+Frozen async-command tests cover ordinary, tracked and event-producing drivers,
+observer loss, preissue cancellation and producer-first reconciliation. A real
+non-Send owner thread checks admission, progress, reply-cell retirement before
+shutdown and owner-thread-only backend calls. Its MockBackend supplies consistent
+terminal facts; it does not establish native scheduling or byte execution.
+
+Integrated native terminal/unwind retention, the separately authorized three-phase
+hardware profile and shared-body queued-owner proofs remain open. The existing
+two-launch R57 authority and inner-journal proofs do not cover those gates.
 
 ### Unknown Group Disposal
 

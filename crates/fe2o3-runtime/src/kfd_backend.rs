@@ -14026,6 +14026,7 @@ mod tests {
     mod initialized_storage_tests;
     mod native_xgmi_creation_tests;
     mod native_xgmi_retirement_tests;
+    mod queued_producer_context_tests;
     #[cfg(feature = "hardware-qualification")]
     mod r57_v2_tests;
     mod sdma_allocation_tests;
@@ -14761,8 +14762,32 @@ mod tests {
         [crate::RuntimeAllocationIdV1; 3],
         [u64; 3],
     ) {
-        let mut context = crate::RuntimeContextV1::open(KfdRuntimeBackendV1::mock()).unwrap();
+        scripted_persistent_context_with_steps_v1::<3>(byte_len, steps, false)
+    }
+
+    fn scripted_persistent_context_with_steps_v1<const N: usize>(
+        byte_len: u64,
+        steps: impl IntoIterator<Item = ScriptedSdmaStepV1>,
+        journal: bool,
+    ) -> (
+        crate::RuntimeContextV1<KfdRuntimeBackendV1>,
+        crate::RuntimeStreamIdV1,
+        [crate::RuntimeAllocationIdV1; N],
+        [u64; N],
+    ) {
+        let backend = KfdRuntimeBackendV1::mock();
+        let mut context = if journal {
+            crate::RuntimeContextV1::open_with_version_journal_members_v1(backend, N, 16, N * 4)
+                .unwrap()
+        } else {
+            crate::RuntimeContextV1::open(backend).unwrap()
+        };
         let device = context.devices()[0].id();
+        if journal {
+            context
+                .configure_allocation_admission_v1(device, byte_len * N as u64, N)
+                .unwrap();
+        }
         let stream = context.create_stream(device).unwrap();
         let allocations = std::array::from_fn(|_| {
             context
@@ -14772,11 +14797,11 @@ mod tests {
         let backend_allocations = {
             let backend = context.backend_mut_for_test_v1();
             let driver = ScriptedSdmaDriverV1::new(steps);
-            let owners: [DirectionalSdmaDeviceOwnerV1; 3] =
+            let owners: [DirectionalSdmaDeviceOwnerV1; N] =
                 std::array::from_fn(|_| driver.test_device_owner(byte_len as usize));
             let mut backend_allocations: Vec<_> = backend.allocations.keys().copied().collect();
             backend_allocations.sort_unstable();
-            let backend_allocations: [u64; 3] = backend_allocations.try_into().unwrap();
+            let backend_allocations: [u64; N] = backend_allocations.try_into().unwrap();
             for ((index, allocation), owner) in
                 backend_allocations.into_iter().enumerate().zip(owners)
             {
