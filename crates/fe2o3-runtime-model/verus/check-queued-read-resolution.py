@@ -18,7 +18,7 @@ BODY = Path("crates/fe2o3-runtime-model/src/context_queued_writers/read_resoluti
 PROOF = V / "context_queued_read_resolution_v1.rs"
 FILES = [BODY, PROOF]
 EXPECTED = {"encountered-error": False, "encountered-vir-error": False,
-            "errors": 0, "is-verifying-entire-crate": True, "success": True, "verified": 24}
+            "errors": 0, "is-verifying-entire-crate": True, "success": True, "verified": 25}
 
 
 def need(value, message):
@@ -41,7 +41,7 @@ def mutations(body):
 
     def add(name, old, new):
         need(body.count(old) == 1, "unique mutation site: " + name)
-        cases[name] = (body.replace(old, new), "*resolve_reads*")
+        cases[name] = (body.replace(old, new), "*chain_resolution_witness*")
 
     add("omit-traversal", "let mut $index = 0usize;", "let mut $index = $root.read_count;")
     add("truncate-chain", "while $index < $root.read_count",
@@ -71,7 +71,7 @@ def selection_notes(leaf):
     return types.SimpleNamespace(LOGICAL_ERRORS=leaf.LOGICAL_ERRORS, SELECTION_NOTES={
         "verifying root module (selected functions)",
         *{"verifying root module, function context_queued_read_resolution_v1::" + name + " (selected functions)"
-          for name in ("resolve_reads",)},
+          for name in ("chain_resolution_witness",)},
     })
 
 

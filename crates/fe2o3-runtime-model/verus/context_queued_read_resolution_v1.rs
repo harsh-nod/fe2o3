@@ -5,6 +5,46 @@ use vstd::prelude::*;
 
 include!("../src/context_queued_writers/read_resolution_body.rs");
 
+macro_rules! checked_resolution {
+    ($owner:ident, $root:ident, $status:ident, $order:ident) => {
+    queued_read_resolution_body!(verus_exec_expr, $owner, $root, $status,
+        next, index, slot, entry, state, retained,
+        [let ghost before = *$owner;
+         proof { prefix_initial(before, $order, $status); reveal(ready); }],
+        [
+            invariant index <= $root.read_count, $order.len() == $root.read_count,
+                before.queued_reads@.len() <= usize::MAX,
+                ready(before, $root, $status, $order),
+                prefix(before, *$owner, $order, index as int, $status),
+                next == if index < $order.len() { Some($order[index as int]) } else { None },
+            decreases $root.read_count - index,
+        ],
+        [
+            proof {
+                prefix_entry(before, *$owner, $root, $status, $order, index as int);
+                reveal(prefix);
+                assert(slot == $order[index as int]);
+                assert($owner.queued_reads@[slot as int] == before.queued_reads@[slot as int]);
+            }
+            let ghost prior = *$owner;
+        ],
+        [
+            proof {
+                reveal(resolved);
+                assert(*entry == resolved(before.queued_reads@[slot as int].unwrap(), before.inner, $status));
+                assert($owner.queued_reads@ == prior.queued_reads@.update(slot as int,
+                    Some(resolved(before.queued_reads@[slot as int].unwrap(), before.inner, $status))));
+                prefix_advance(before, prior, *$owner, $status, $order, index as int);
+            }
+        ],
+        [
+            proof {
+                prefix_complete(before, *$owner, $root, $status, $order);
+            }
+        ], [])
+    };
+}
+
 verus! {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -269,41 +309,7 @@ fn resolve_reads(owner: &mut QueuedReadProjection, root: Root, status: ContextPr
         final(owner).roots@ == old(owner).roots@.update(root.writer.slot as int,
             Some(Root { read_head: None, read_count: 0, ..old(owner).roots@[root.writer.slot as int].unwrap() })),
 {
-    queued_read_resolution_body!(verus_exec_expr, owner, root, status,
-        next, index, slot, entry, state, retained,
-        [let ghost before = *owner;
-         proof { prefix_initial(before, order, status); reveal(ready); }],
-        [
-            invariant index <= root.read_count, order.len() == root.read_count,
-                before.queued_reads@.len() <= usize::MAX,
-                ready(before, root, status, order),
-                prefix(before, *owner, order, index as int, status),
-                next == if index < order.len() { Some(order[index as int]) } else { None },
-            decreases root.read_count - index,
-        ],
-        [
-            proof {
-                prefix_entry(before, *owner, root, status, order, index as int);
-                reveal(prefix);
-                assert(slot == order[index as int]);
-                assert(owner.queued_reads@[slot as int] == before.queued_reads@[slot as int]);
-            }
-            let ghost prior = *owner;
-        ],
-        [
-            proof {
-                reveal(resolved);
-                assert(*entry == resolved(before.queued_reads@[slot as int].unwrap(), before.inner, status));
-                assert(owner.queued_reads@ == prior.queued_reads@.update(slot as int,
-                    Some(resolved(before.queued_reads@[slot as int].unwrap(), before.inner, status))));
-                prefix_advance(before, prior, *owner, status, order, index as int);
-            }
-        ],
-        [
-            proof {
-                prefix_complete(before, *owner, root, status, order);
-            }
-        ], [])
+    checked_resolution!(owner, root, status, order)
 }
 
 fn empty_resolution_witness() {
@@ -354,7 +360,7 @@ fn chain_resolution_witness(status: ContextProducerReadStatusV1, singleton: bool
         request: Request { producer: other, ..request }, previous: None, next: None, ..head };
     let already_resolved = Reservation { reference: ReadReference { slot: 4, incarnation: 9, consumer },
         status: ContextProducerReadStatusV1::NoEffect, previous: None, next: None, ..head };
-    let mut owner = QueuedReadProjection {
+    let mut storage = QueuedReadProjection {
         inner: SettledAllocations { allocations: vec![
             Some(Allocation { reference: allocation, attempt_epoch: 5, content_lineage: 5, pending_writer: None }),
             Some(Allocation { reference: second, attempt_epoch: 11, content_lineage: 11, pending_writer: None }),
@@ -367,10 +373,13 @@ fn chain_resolution_witness(status: ContextProducerReadStatusV1, singleton: bool
         next_read_incarnation: 13, disposal_terminal: true,
     };
     let ghost order = if singleton { seq![2usize] } else { seq![2usize, 0usize, 3usize] };
-    let ghost before = owner;
-    proof { reveal(ready); }
-    resolve_reads(&mut owner, root, status, Ghost(order));
+    let owner = &mut storage;
+    let ghost before = *owner;
+    proof { reveal(ready); assert(ready(*owner, root, status, order)); }
+    checked_resolution!(owner, root, status, order);
     proof { reveal(expected_reads); reveal(resolved); }
+    assert(owner.queued_reads@ == expected_reads(before, root, status));
+    assert(custody_frame(before, *owner));
     assert(owner.queued_reads@[1] == Some(unrelated));
     assert(owner.queued_reads@[4] == Some(already_resolved));
     assert(owner.queued_reads@[2].unwrap().reference == head.reference);

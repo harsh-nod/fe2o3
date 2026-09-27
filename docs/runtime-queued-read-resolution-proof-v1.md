@@ -57,7 +57,10 @@ python3 -I -B crates/fe2o3-runtime-model/verus/check-queued-read-resolution.py \
 Its 16 negative controls cover skipped/truncated traversal, lost next cursor,
 wrong status, missing/fabricated successful versions, invented failure versions,
 retained links, wrong root, uncleared head/count, altered incarnation, early free
-slot refund and cleared terminal state. Parser/compiler errors, resource limits,
+slot refund and cleared terminal state. Negative controls execute the shared body
+directly in the concrete chain witness; they do not rely on calling the general
+resolver through an unchanged contract. Full positive runs separately prove the
+unbounded resolver and its prefix lemmas. Parser/compiler errors, resource limits,
 timeouts and foreign diagnostics are not accepted logical failures. Empty,
 singleton and noncontiguous executable witnesses exercise terminal outcomes,
 different consumers/versions, unrelated and already-resolved records, and the

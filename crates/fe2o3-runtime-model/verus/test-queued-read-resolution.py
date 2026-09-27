@@ -10,7 +10,7 @@ need = runner["need"]
 body = (runner["ROOT"] / runner["BODY"]).read_text()
 cases = runner["mutations"](body)
 need(len(cases) == len(set(cases.values())) == 16, "distinct mutation roster")
-need({focus for _, focus in cases.values()} == {"*resolve_reads*"}, "exact selected functions")
+need({focus for _, focus in cases.values()} == {"*chain_resolution_witness*"}, "exact selected functions")
 need(all(text != body and not any(token in text for token in ("assume(", "admit(", "external_body"))
          for text, _ in cases.values()), "executable mutations without proof bypass")
 for changed in (body + body, body.replace("$entry.status = $status;", "$entry.status = ContextProducerReadStatusV1::Unknown;"),
@@ -48,4 +48,3 @@ success = {"verus": verifier, "verification-results": runner["EXPECTED"]}
 need(classifier.proof_positive(0, json.dumps(success), "", verifier, runner["EXPECTED"], {path}), "exact positive accepted")
 need(not classifier.proof_positive(1, json.dumps(success), "", verifier, runner["EXPECTED"], {path}), "failed positive rejected")
 print("PASS: queued-read resolution campaign calibration (4 groups)")
-
