@@ -145,7 +145,51 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// Private consumer contract. Production implements it only with the sealed
 /// origin view and exact borrowed graph report below. Tests must identify any
 /// isolated synthetic decision inputs explicitly.
+fn shared_read_error_v1(
+    error: fe2o3_pliron::ProductionSemanticSharedReadErrorV1,
+) -> ProjectionError {
+    match error {
+        fe2o3_pliron::ProductionSemanticSharedReadErrorV1::Resource(error) => resource(error),
+        fe2o3_pliron::ProductionSemanticSharedReadErrorV1::Analysis(error) => {
+            ProjectionError::SemanticSsa(error)
+        }
+        fe2o3_pliron::ProductionSemanticSharedReadErrorV1::Binding => {
+            ProjectionError::Unsupported("exact original SSA Shared value-read binding")
+        }
+    }
+}
+
 pub(super) trait ProjectedAssertionFactsV1 {
+    fn shared_value_reads_v1<'s>(
+        &mut self,
+        _owner: &'s fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        _function: SemanticFunctionIdV1,
+    ) -> Result<fe2o3_pliron::ProductionSemanticSharedReadsV1<'s>, ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "Shared value reads require a canonical SSA owner",
+        ))
+    }
+
+    fn shared_value_read_v1(
+        &mut self,
+        _reads: &fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>,
+        _function: &super::SemanticFunctionDeclV1,
+        _site: super::ProjectedSemanticAccessSiteV1,
+        _place: &super::SemanticPlaceV1,
+    ) -> Result<bool, ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "Shared value read requires canonical source custody",
+        ))
+    }
+
+    fn release_shared_value_reads_v1(
+        &mut self,
+        _reads: fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>,
+    ) -> Result<(), ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "Shared value read release requires canonical custody",
+        ))
+    }
     #[cfg(test)]
     fn observe_conditional_bound_for_test_v1(
         &mut self,
@@ -380,6 +424,47 @@ pub(super) struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     masked: Option<&'r MaskedSourceAssertionTableV1<'g>>,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    fn shared_value_reads_v1<'s>(
+        &mut self,
+        owner: &'s fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        function: SemanticFunctionIdV1,
+    ) -> Result<fe2o3_pliron::ProductionSemanticSharedReadsV1<'s>, ProjectionError> {
+        if !std::ptr::eq(owner, self.owner.semantic_ssa()) || function != self.semantic_function {
+            return Err(ProjectionError::Unsupported(
+                "Shared read owner/source-function mismatch",
+            ));
+        }
+        self.budget.charge_work(3).map_err(resource)?;
+        fe2o3_pliron::ProductionSemanticSharedReadsV1::try_new(owner, function, self.budget)
+            .map_err(shared_read_error_v1)
+    }
+
+    fn shared_value_read_v1(
+        &mut self,
+        reads: &fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>,
+        function: &super::SemanticFunctionDeclV1,
+        site: super::ProjectedSemanticAccessSiteV1,
+        place: &super::SemanticPlaceV1,
+    ) -> Result<bool, ProjectionError> {
+        reads
+            .contains(
+                self.owner.semantic_ssa(),
+                self.semantic_function,
+                function,
+                site.block,
+                site.statement,
+                place,
+                self.budget,
+            )
+            .map_err(shared_read_error_v1)
+    }
+
+    fn release_shared_value_reads_v1(
+        &mut self,
+        reads: fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>,
+    ) -> Result<(), ProjectionError> {
+        reads.release(self.budget).map_err(shared_read_error_v1)
+    }
     fn private_array_access_index_v1(
         &mut self,
         site: super::ProjectedSemanticAccessSiteV1,

@@ -110,6 +110,7 @@ pub use production::{
     ProductionSemanticExpressionV2, ProductionSemanticLoadV2, ProductionSemanticMirErrorV1,
     ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1,
     ProductionSemanticPartialMoveCertificateV1, ProductionSemanticScalarTypeV2,
+    ProductionSemanticSharedReadErrorV1, ProductionSemanticSharedReadsV1,
     ProductionSemanticSsaConstantOccurrenceV1, ProductionSemanticSsaEdgeDefinitionOccurrenceV1,
     ProductionSemanticSsaEntryDefinitionOccurrenceV1, ProductionSemanticSsaEntryOriginV1,
     ProductionSemanticSsaErrorV1, ProductionSemanticSsaEventOccurrenceV1,

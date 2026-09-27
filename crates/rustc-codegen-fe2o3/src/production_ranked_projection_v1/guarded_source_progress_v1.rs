@@ -743,6 +743,32 @@ fn require_ranked_bound(
 }
 
 impl<F: ProjectedAssertionFactsV1> ProjectedAssertionFactsV1 for GuardedFacts<'_, '_, '_, F> {
+    fn shared_value_reads_v1<'s>(
+        &mut self,
+        owner: &'s fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        function: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+    ) -> Result<fe2o3_pliron::ProductionSemanticSharedReadsV1<'s>> {
+        self.progress.check(self.facts)?;
+        self.facts.shared_value_reads_v1(owner, function)
+    }
+    fn shared_value_read_v1(
+        &mut self,
+        reads: &fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>,
+        function: &SemanticFunctionDeclV1,
+        site: super::ProjectedSemanticAccessSiteV1,
+        place: &super::SemanticPlaceV1,
+    ) -> Result<bool> {
+        self.progress.check(self.facts)?;
+        self.facts
+            .shared_value_read_v1(reads, function, site, place)
+    }
+    fn release_shared_value_reads_v1(
+        &mut self,
+        reads: fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>,
+    ) -> Result<()> {
+        self.progress.check(self.facts)?;
+        self.facts.release_shared_value_reads_v1(reads)
+    }
     fn require_guarded_source_progress_v1(
         &mut self,
         types: &[SemanticTypeDeclV1],

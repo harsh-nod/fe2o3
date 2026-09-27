@@ -585,10 +585,12 @@ the information needed to implement Rust correctly:
 - volatile and atomic memory semantics.
 
 SSA construction uses a mixed value/memory classification. Locals whose
-storage is not observed are eligible for value SSA; address-taken, aliased,
+storage is not observed are eligible for value SSA; raw-address, escaping-alias,
 atomic, volatile, projection-mutated, and drop-observed storage is retained
-rather than forced into SSA. This boundary is conservative: retention is valid
-even when a stronger alias or escape analysis could prove promotion safe.
+rather than forced into SSA. A safe reference alone need not force storage when
+the closed borrow analysis below accounts for every use. This boundary remains
+conservative: retention is valid even when stronger analysis could prove
+promotion safe.
 
 The Pliron-independent planner computes reachable blocks, liveness, dominators,
 pruned iterated dominance-frontier merge placement, sparse block transport
@@ -612,17 +614,24 @@ identity-bound resource bounds for borrow classification, implicit entries,
 retained-local analysis, and worst-case partial-move state cloning; aggregate
 limits cover those phases as well as the generic planner.
 
-Promotion is paired with two semantic certificates. The partial-move
+Promotion is paired with semantic checks. The partial-move
 certificate tracks canonical field, constant-index, and enum-downcast paths,
 merges maybe-moved state at joins, reaches a loop fixed point, and permits an
 exact field reinitialization without clearing a moved sibling. Reading a moved
 path or its parent fails closed; unions, dynamic indices, missing layout/type
-evidence, and paths outside the closed model are rejected. The transparent
-borrow certificate is use-sensitive: a borrow may stop making its source local
-storage-observable only when its result has exactly one direct consumer at the
-exact accepted argument of a registered compiler intrinsic. Escapes, ordinary
-calls, multiple consumers, and nonmatching arguments retain the source in
-memory.
+evidence, and paths outside the closed model are rejected. The registered-
+intrinsic transparent-borrow certificate is use-sensitive: its result must have
+exactly one direct consumer at the exact accepted intrinsic argument. The
+existing nominal-call and matrix-reference checks remain separate from the
+[same-block shared primitive analysis](general-optimizing-compiler-wave1.md#shared-primitive-reference-promotion).
+That analysis can retain scalar values through ordinary reads and static
+reference-holder fields without deleting source events or bypassing replay.
+Completed-statement cleanup can end a proven unused compiler reference holder;
+it changes only logical aliases, not referent storage or lifetime events. The
+source census pins cross-block, terminator, return and cyclic-region uses rather
+than claiming full borrow-lifetime inference.
+Cases outside a promotion rule retain the existing storage classification;
+that is not, by itself, a source-language refusal.
 
 Optimized rustc MIR may erase the producer of the ambient
 `WorkgroupLdsScope` zero-sized value while retaining its intrinsic borrows. A
@@ -636,7 +645,12 @@ zero-sized type is not accepted.
 `ProductionSemanticSsaOwnerV1` adapts every admitted semantic function to that
 planner before ranked verification, retains the unchanged source owner, binds
 each function identity to its plan identity and resource report, and requires
-exact replay before custody advances. KIR lowering independently replays the
+exact replay before custody advances. Ranked projection then borrows an
+owner-bound `ProductionSemanticSharedReadsV1` view of exact original operand
+reads, filtered by final loan validity and actual referent promotion. Only an
+authenticated ordinary non-atomic read can avoid a ranked memory recipe;
+unindexed dereferences are not skipped by syntax or type alone. Explicit
+semantic `Load` remains physical on this path. KIR lowering independently replays the
 plan, creates block parameters and exact predecessor arguments from it, retains
 direct dominating definitions by SSA identity, and seeds only certified
 implicit entry values. Capability values do not lose their proof metadata at

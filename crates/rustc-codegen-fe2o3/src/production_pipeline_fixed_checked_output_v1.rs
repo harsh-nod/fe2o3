@@ -218,6 +218,22 @@ impl FixedCheckedOutputProductionCompilationV1 {
     }
 
     #[cfg(test)]
+    pub(crate) fn original_ssa_observation(
+        &self,
+    ) -> ([u8; 32], fe2o3_pliron::ProductionSemanticSsaSummaryV1) {
+        match &self.stage {
+            Stage::Direct(stage) => {
+                let source = stage.output().source_semantic_kir();
+                (*source.semantic_ssa_identity().as_bytes(), source.semantic_ssa_summary())
+            }
+            Stage::Erased(stage) => {
+                let source = stage.output().original_source().semantic_ssa();
+                (*source.identity().as_bytes(), source.summary())
+            }
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn original_module(&self) -> &fe2o3_kernel_ir::Module {
         match &self.stage {
             Stage::Direct(stage) => stage.output().source_semantic_kir().module(),

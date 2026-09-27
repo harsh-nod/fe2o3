@@ -1,3 +1,5 @@
+    include!("shared_primitive_source_v29_tests.rs");
+
     #[test]
     fn direct_parameter_transport_preserves_only_its_authenticated_carrier() {
         let semantic_type = SemanticTypeIdV1::from_index(0);

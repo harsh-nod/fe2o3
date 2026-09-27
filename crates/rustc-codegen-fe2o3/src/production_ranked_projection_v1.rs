@@ -3367,7 +3367,8 @@ fn project_ranked_roots_with_progress_v1(
                             selection.body(),
                             facts,
                             |facts| {
-                                project_and_verify_ranked_root_v1(
+                                project_and_verify_ranked_root_ssa_v1(
+                                    source.semantic_ssa(),
                                     semantic,
                                     &callable_effects,
                                     selection,
@@ -3378,7 +3379,8 @@ fn project_ranked_roots_with_progress_v1(
                                 )
                             },
                         ),
-                        None => project_and_verify_ranked_root_v1(
+                        None => project_and_verify_ranked_root_ssa_v1(
+                            source.semantic_ssa(),
                             semantic,
                             &callable_effects,
                             selection,
@@ -3428,6 +3430,38 @@ fn match_ranked_root_bindings_v1(
         .map_err(source_launch_projection_error_v1)
 }
 
+mod shared_value_reads_projection_v1;
+
+fn project_and_verify_ranked_root_ssa_v1(
+    owner: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+    semantic: &AdmittedInertSemanticMirV1,
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+    selection: SemanticKernelBodySelectionV1,
+    input: &ProductionRankedRootInputV1,
+    source_root: ProductionSourceLaunchRootV1,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
+) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
+    shared_value_reads_projection_v1::with_reads(
+        owner,
+        selection.body(),
+        assertion_facts,
+        |reads, facts| {
+            project_and_verify_ranked_root_with_shared_reads_v1(
+                semantic,
+                callable_effects,
+                selection,
+                input,
+                source_root,
+                reference_bindings,
+                facts,
+                Some(reads),
+            )
+        },
+    )
+}
+
+#[cfg(test)]
 fn project_and_verify_ranked_root_v1(
     semantic: &AdmittedInertSemanticMirV1,
     callable_effects: &DefinedCallableEmptyEffectSummariesV1,
@@ -3436,6 +3470,28 @@ fn project_and_verify_ranked_root_v1(
     source_root: ProductionSourceLaunchRootV1,
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
+) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
+    project_and_verify_ranked_root_with_shared_reads_v1(
+        semantic,
+        callable_effects,
+        selection,
+        input,
+        source_root,
+        reference_bindings,
+        assertion_facts,
+        None,
+    )
+}
+
+fn project_and_verify_ranked_root_with_shared_reads_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+    selection: SemanticKernelBodySelectionV1,
+    input: &ProductionRankedRootInputV1,
+    source_root: ProductionSourceLaunchRootV1,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
+    shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let function = semantic
         .functions()
@@ -3464,6 +3520,7 @@ fn project_and_verify_ranked_root_v1(
                         facts,
                         singletons,
                         borrows,
+                        shared_reads,
                     )
                 },
             )
@@ -3482,6 +3539,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
     singletons: &[u8],
     borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
+    shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     multi_entry_induction_v1::with_scope(assertion_facts, |scope, facts| {
         project_and_verify_ranked_root_with_induction_scope_v1(
@@ -3494,6 +3552,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
             facts,
             singletons,
             borrows,
+            shared_reads,
             scope,
         )
     })
@@ -3512,9 +3571,10 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
     singletons: &[u8],
     borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
+    shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
     induction_scope: &mut multi_entry_induction_v1::Scope,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
-    with_prepared_ranked_root_recipe_v1(
+    with_prepared_ranked_root_recipe_with_shared_reads_v1(
         semantic,
         callable_effects,
         selection,
@@ -3524,6 +3584,7 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
         assertion_facts,
         singletons,
         borrows,
+        shared_reads,
         induction_scope,
         |recipe, assertion_facts| {
             verify_prepared_ranked_root_recipe_v1(
@@ -23400,6 +23461,13 @@ fn project_place_access_with_atomic(
             operations,
             &mut PreparationResourcesV1::unmetered(),
         );
+    }
+    if access == AccessKindAttr::Read
+        && atomic.is_none()
+        && matches!(requirement, PlaceAccessRequirementV1::IfMemory)
+        && projected_views.shared_value_read(function, block_index, place)?
+    {
+        return Ok(());
     }
     let private_borrow = projected_views.scalar_private_borrow(
         types,

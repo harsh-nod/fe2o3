@@ -491,6 +491,7 @@ fn ordinary_rust_source_cases(
             OrdinarySourceCase::ConstantShift(config) => config.name(),
             OrdinarySourceCase::NumericCast(config) => config.name(),
             OrdinarySourceCase::SaturatingInteger(config) => config.name(),
+            OrdinarySourceCase::SharedPrimitivePolicy5(config) => config.name(),
             _ => String::new(),
         };
         let (name, package_path, feature, roots, reads, writes, calls) = match case {
@@ -519,6 +520,15 @@ fn ordinary_rust_source_cases(
                 } else {
                     0
                 },
+            ),
+            OrdinarySourceCase::SharedPrimitivePolicy5(_) => (
+                configuration_name.as_str(),
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("shared-primitive-policy5"),
+                &["shared_primitive_policy5"][..],
+                0,
+                1,
+                0,
             ),
             OrdinarySourceCase::ScalarBorrowPolicy5
             | OrdinarySourceCase::RetainedScalarBorrowPolicy5
@@ -758,6 +768,9 @@ fn ordinary_rust_source_cases(
         if let Some(feature) = feature {
             args.push(format!("--cfg=feature=\"{feature}\""));
         }
+        if let OrdinarySourceCase::SharedPrimitivePolicy5(config) = case {
+            config.configure(&mut args);
+        }
         if let OrdinarySourceCase::SaturatingInteger(config) = case {
             config.configure(&mut args);
         }
@@ -839,7 +852,8 @@ fn ordinary_rust_source_cases(
         let mut command = clean_command(env::current_exe().unwrap());
         let policy5_case = matches!(
             case,
-            OrdinarySourceCase::ScalarBorrowPolicy5
+            OrdinarySourceCase::SharedPrimitivePolicy5(_)
+                | OrdinarySourceCase::ScalarBorrowPolicy5
                 | OrdinarySourceCase::RetainedScalarBorrowPolicy5
                 | OrdinarySourceCase::ScalarBorrowPolicy5Barrier
         );
@@ -854,6 +868,7 @@ fn ordinary_rust_source_cases(
         let policy5_report = scratch.path().join(format!("{name}-policy5.json"));
         if checked_policy5 {
             policy5_source::configure_child(&mut command, &policy5_report);
+            policy5_source::configure_shared_child(&mut command, case);
         }
         command
             .current_dir(&workspace)
@@ -879,6 +894,7 @@ fn ordinary_rust_source_cases(
             OrdinarySourceCase::ConstantShift(config) => {
                 (!config.dynamic).then_some(simulation::Case::ConstantShift(config.batch))
             }
+            OrdinarySourceCase::SharedPrimitivePolicy5(_) => Some(simulation::Case::SharedPrimitive),
             OrdinarySourceCase::ScalarBorrowPolicy5
             | OrdinarySourceCase::RetainedScalarBorrowPolicy5
             | OrdinarySourceCase::ScalarBorrowPolicy5Barrier => {
@@ -1013,7 +1029,11 @@ fn ordinary_rust_source_cases(
                 )
             );
         }
-        if policy5_case {
+        if let OrdinarySourceCase::SharedPrimitivePolicy5(config) = case {
+            policy5_source::check_shared(&policy5_report, &result, *config);
+            assert_eq!((result.global_reads, result.other_reads, result.other_writes), (0, 0, 0));
+            assert!(result.global_writes > 0);
+        } else if policy5_case {
             policy5_source::check(
                 &policy5_report,
                 &result,

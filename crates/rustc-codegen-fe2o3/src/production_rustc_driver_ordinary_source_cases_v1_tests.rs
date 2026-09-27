@@ -12,6 +12,7 @@ pub(super) enum OrdinarySourceCase {
     ProofFill,
     MaskedShift(masked_shift_source::Config),
     ConstantShift(shift_source::Config),
+    SharedPrimitivePolicy5(super::policy5_source::SharedPrimitiveConfig),
     ScalarBorrowPolicy5,
     RetainedScalarBorrowPolicy5,
     ScalarBorrowPolicy5Barrier,

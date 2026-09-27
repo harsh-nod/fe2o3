@@ -132,6 +132,9 @@ mod wave64_capture;
 #[cfg(feature = "scalar-borrow-policy5")]
 mod scalar_borrow_policy5;
 
+#[cfg(feature = "shared-primitive-policy5")]
+mod shared_primitive_policy5;
+
 #[cfg(feature = "licm-native")]
 mod licm_native;
 #[cfg(feature = "private-cell-native")]
@@ -328,6 +331,7 @@ mod physical_entry_v20;
     feature = "constant-shift",
     feature = "masked-shift",
     feature = "scalar-borrow-policy5",
+    feature = "shared-primitive-policy5",
     feature = "private-cell-native",
     feature = "licm-native",
     feature = "defined-helper-reference",

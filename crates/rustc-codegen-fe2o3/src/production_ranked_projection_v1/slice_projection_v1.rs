@@ -21,6 +21,7 @@ struct QueriedSliceV1 {
 pub(super) struct ProjectedViewsV1<'a> {
     locals: Vec<Option<ProjectedViewV1>>,
     scalar_private_singletons: &'a [u8],
+    shared_value_reads: Option<&'a fe2o3_pliron::ProductionSemanticSharedReadsV1<'a>>,
     scalar_private_borrows: Option<(
         &'a scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'a>,
         fe2o3_mir_model::semantic_mir_v1::SemanticTargetDataLayoutV1,
@@ -87,6 +88,7 @@ impl<'a> ProjectedViewsV1<'a> {
         Self {
             locals: vec![None; locals],
             scalar_private_singletons: &[],
+            shared_value_reads: None,
             scalar_private_borrows: None,
             facts,
             site: None,
@@ -100,6 +102,42 @@ impl<'a> ProjectedViewsV1<'a> {
     pub(super) fn with_scalar_private_singletons(mut self, census: &'a [u8]) -> Self {
         self.scalar_private_singletons = census;
         self
+    }
+
+    pub(super) fn with_shared_value_reads(
+        mut self,
+        reads: Option<&'a fe2o3_pliron::ProductionSemanticSharedReadsV1<'a>>,
+    ) -> Self {
+        self.shared_value_reads = reads;
+        self
+    }
+
+    pub(super) fn shared_value_read(
+        &mut self,
+        function: &SemanticFunctionDeclV1,
+        block: usize,
+        place: &SemanticPlaceV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let Some(reads) = self.shared_value_reads else {
+            return Ok(false);
+        };
+        let site = self
+            .site
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "Shared read source site",
+            ))?;
+        if site.block != block {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "Shared read source block",
+            ));
+        }
+        let facts =
+            self.facts
+                .as_deref_mut()
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "Shared read canonical facts",
+                ))?;
+        facts.shared_value_read_v1(reads, function, site, place)
     }
 
     pub(super) fn scalar_private_singleton(

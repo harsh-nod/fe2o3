@@ -683,8 +683,13 @@ fn walk_semantic_ssa_plans_with_driver_v1<D: occurrences_v1::ReplayDriver>(
     )?;
     for (function_index, function) in semantic.functions().iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(function_index as u32);
-        let transparent_borrows =
-            reference_effects.borrow_sites(function, semantic.callables(), limits, &mut summary)?;
+        let transparent_borrows = reference_effects.borrow_sites(
+            function,
+            semantic.callables(),
+            semantic.types(),
+            limits,
+            &mut summary,
+        )?;
         let function_plan = plan_semantic_function_ssa_with_driver_v1(
             function_id,
             function,
@@ -958,6 +963,10 @@ fn enforce_function_resource_limit_v1(
 mod accounting;
 mod adapter;
 mod nominal_reference_effects_v29;
+mod shared_primitive_reads_v1;
+pub use shared_primitive_reads_v1::{
+    ProductionSemanticSharedReadErrorV1, ProductionSemanticSharedReadsV1,
+};
 mod occurrences_v1;
 mod partial_moves;
 

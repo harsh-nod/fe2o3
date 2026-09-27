@@ -16,6 +16,7 @@ struct PreparedRankedRootRecipeV1<'s> {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn with_prepared_ranked_root_recipe_v1<'s, T, F: ProjectedAssertionFactsV1>(
     semantic: &'s AdmittedInertSemanticMirV1,
     callable_effects: &DefinedCallableEmptyEffectSummariesV1,
@@ -26,6 +27,40 @@ fn with_prepared_ranked_root_recipe_v1<'s, T, F: ProjectedAssertionFactsV1>(
     assertion_facts: &mut F,
     singletons: &[u8],
     borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
+    induction_scope: &mut multi_entry_induction_v1::Scope,
+    continue_with_recipe: impl FnOnce(
+        PreparedRankedRootRecipeV1<'s>,
+        &mut F,
+    ) -> Result<T, ProductionRankedProjectionErrorV1>,
+) -> Result<T, ProductionRankedProjectionErrorV1> {
+    with_prepared_ranked_root_recipe_with_shared_reads_v1(
+        semantic,
+        callable_effects,
+        selection,
+        input,
+        source_root,
+        reference_bindings,
+        assertion_facts,
+        singletons,
+        borrows,
+        None,
+        induction_scope,
+        continue_with_recipe,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn with_prepared_ranked_root_recipe_with_shared_reads_v1<'s, T, F: ProjectedAssertionFactsV1>(
+    semantic: &'s AdmittedInertSemanticMirV1,
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+    selection: SemanticKernelBodySelectionV1,
+    input: &ProductionRankedRootInputV1,
+    source_root: ProductionSourceLaunchRootV1,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut F,
+    singletons: &[u8],
+    borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
+    shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
     induction_scope: &mut multi_entry_induction_v1::Scope,
     continue_with_recipe: impl FnOnce(
         PreparedRankedRootRecipeV1<'s>,
@@ -83,6 +118,7 @@ fn with_prepared_ranked_root_recipe_v1<'s, T, F: ProjectedAssertionFactsV1>(
     let mut incomplete = None;
     let mut projected_views = ProjectedViewsV1::new(function.locals().len(), Some(assertion_facts))
         .with_scalar_private_singletons(singletons)
+        .with_shared_value_reads(shared_reads)
         .with_scalar_private_borrows(borrows, semantic.target());
     let mut discarded_ir = String::new();
     // Fixed-size extent provenance construction visits at most one checked

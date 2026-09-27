@@ -12,6 +12,7 @@ mod canonical_assertion_graph_tests {
 
     include!("canonical_assertion_fixtures_v1_tests.rs");
     include!("materialized_callable_effect_v1_tests.rs");
+    include!("shared_value_reads_scope_v1_tests.rs");
     include!("legacy_assertion_scope_v1_tests.rs");
     include!("canonical_masked_assertion_consumers_v1_tests.rs");
 

@@ -6,10 +6,20 @@ pub(super) mod emission_v1;
 #[path = "adapter_prepared_v1.rs"]
 pub(super) mod prepared_v1;
 
+#[path = "adapter_shared_primitive_v29.rs"]
+pub(super) mod shared_primitive_v29;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct SemanticTransparentBorrowSiteV1 {
     block: u32,
     statement: u32,
+}
+
+#[cfg(test)]
+impl SemanticTransparentBorrowSiteV1 {
+    pub(super) fn test_coordinates(&self) -> (u32, u32) {
+        (self.block, self.statement)
+    }
 }
 
 #[derive(Clone, Copy)]

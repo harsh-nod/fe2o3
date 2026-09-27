@@ -180,14 +180,34 @@ impl NominalReferenceEffectsV29 {
         &mut self,
         function: &SemanticFunctionDeclV1,
         callables: &[SemanticCallableDeclV1],
+        types: &[SemanticTypeDeclV1],
         limits: ProductionSemanticSsaLimitsV1,
         summary: &mut ProductionSemanticSsaSummaryV1,
     ) -> Result<BTreeSet<SemanticTransparentBorrowSiteV1>, Error> {
-        if self.parameter_count == 0 {
-            return Ok(transparent_borrow_sites_v1(function, callables));
+        let mut meter = Meter { limits, summary };
+        let mut sites = if self.parameter_count == 0 {
+            transparent_borrow_sites_v1(function, callables)
+        } else {
+            self.prepay_scan(function, 0, &mut meter)?;
+            adapter::analyze_borrow_uses_v29(function, callables, &[], Some(self)).0
+        };
+        if adapter::shared_primitive_v29::has_candidates(function, types, &mut meter)? {
+            let (units, candidates) = scan_size(function, 0, &mut meter)?;
+            // Includes the existing nominal result, candidate records, ordered
+            // maps, three concurrent alias vectors and their bounded paths.
+            let scratch = sum(
+                sum(128, sum(product(units, 96)?, product(candidates, 64)?)?)?,
+                adapter::shared_primitive_v29::liveness_scratch_words(function)?,
+            )?;
+            if scratch > self.scratch_peak {
+                meter.storage(scratch - self.scratch_peak)?;
+                self.scratch_peak = scratch;
+            }
+            sites.extend(adapter::shared_primitive_v29::analyze(
+                function, types, units, &mut meter,
+            )?);
         }
-        self.prepay_scan(function, 0, &mut Meter { limits, summary })?;
-        Ok(adapter::analyze_borrow_uses_v29(function, callables, &[], Some(self)).0)
+        Ok(sites)
     }
 
     fn prepay_scan(
@@ -217,13 +237,23 @@ impl NominalReferenceEffectsV29 {
     }
 }
 
-struct Meter<'a> {
+pub(super) struct Meter<'a> {
     limits: ProductionSemanticSsaLimitsV1,
     summary: &'a mut ProductionSemanticSsaSummaryV1,
 }
 
-impl Meter<'_> {
+pub(super) trait BorrowWork {
+    fn work(&mut self, units: usize) -> Result<(), Error>;
+}
+
+impl BorrowWork for Meter<'_> {
     fn work(&mut self, units: usize) -> Result<(), Error> {
+        Meter::work(self, units)
+    }
+}
+
+impl Meter<'_> {
+    pub(super) fn work(&mut self, units: usize) -> Result<(), Error> {
         self.summary.work_units = sum(self.summary.work_units, units)?;
         accounting::enforce_module_resource_limits_v1(*self.summary, self.limits)
     }
@@ -233,6 +263,10 @@ impl Meter<'_> {
         accounting::enforce_module_resource_limits_v1(*self.summary, self.limits)
     }
 }
+
+#[cfg(test)]
+#[path = "adapter_shared_primitive_v29_tests.rs"]
+mod shared_primitive_tests;
 
 fn sum(left: usize, right: usize) -> Result<usize, Error> {
     left.checked_add(right).ok_or(Error::ResourceOverflow)
@@ -244,13 +278,13 @@ fn product(left: usize, right: usize) -> Result<usize, Error> {
 
 // Allocation-free sizing only. Source occurrences still come exclusively from
 // the existing adapter and its shared plain/capture emission driver.
-struct SyntaxSize<'a, 'b> {
+struct SyntaxSize<'a, M: BorrowWork> {
     units: usize,
     candidates: usize,
-    meter: &'a mut Meter<'b>,
+    meter: &'a mut M,
 }
 
-impl SyntaxSize<'_, '_> {
+impl<M: BorrowWork> SyntaxSize<'_, M> {
     fn add(&mut self, units: usize) -> Result<(), Error> {
         self.meter.work(units)?;
         self.units = sum(self.units, units)?;
@@ -361,10 +395,10 @@ impl SyntaxSize<'_, '_> {
     }
 }
 
-fn scan_size(
+pub(super) fn scan_size(
     function: &SemanticFunctionDeclV1,
     roots: usize,
-    meter: &mut Meter<'_>,
+    meter: &mut impl BorrowWork,
 ) -> Result<(usize, usize), Error> {
     let mut size = SyntaxSize {
         units: 0,
@@ -386,4 +420,45 @@ fn scan_size(
         size.terminator(block.terminator().kind())?;
     }
     Ok((size.units, size.candidates))
+}
+
+// The canonical lexical read observer pays the borrowed sizing traversal too;
+// the existing SSA planner retains its unchanged logical-word contract.
+pub(super) fn scan_headers<M: BorrowWork>() -> Result<usize, Error> {
+    use fe2o3_mir_model::semantic_mir_v1::*;
+    use std::mem::size_of;
+    [
+        size_of::<SyntaxSize<'_, M>>(),
+        size_of::<&mut SyntaxSize<'_, M>>(),
+        size_of::<&SemanticFunctionDeclV1>(),
+        size_of::<&[SemanticTypeDeclV1]>(),
+        size_of::<std::slice::Iter<'_, SemanticBasicBlockV1>>(),
+        size_of::<std::slice::Iter<'_, SemanticStatementV1>>(),
+        size_of::<std::slice::Iter<'_, SemanticOperandV1>>(),
+        size_of::<&SemanticBasicBlockV1>(),
+        size_of::<&SemanticStatementV1>(),
+        size_of::<&SemanticStatementKindV1>(),
+        size_of::<&SemanticAssignmentV1>(),
+        size_of::<&SemanticRvalueV1>(),
+        size_of::<&SemanticRvalueKindV1>(),
+        size_of::<&SemanticOperandV1>(),
+        size_of::<&SemanticPlaceV1>(),
+        size_of::<&SemanticTerminatorKindV1>(),
+        size_of::<&SemanticDirectCallV1>(),
+        size_of::<&SemanticCallDestinationV1>(),
+        size_of::<Option<&SemanticCallDestinationV1>>(),
+        size_of::<&SemanticAssertMessageV1>(),
+        size_of::<&SemanticMemoryLoadV1>(),
+        size_of::<&SemanticMemoryStoreV1>(),
+        size_of::<&SemanticPointerTypeV1>(),
+        size_of::<Option<&SemanticLocalDeclV1>>(),
+        size_of::<Option<&SemanticTypeDeclV1>>(),
+        size_of::<Option<(u32, SemanticTypeIdV1, SemanticTypeIdV1)>>(),
+        size_of::<Result<bool, Error>>(),
+        size_of::<Result<(), Error>>(),
+        size_of::<Result<(usize, usize), Error>>(),
+        size_of::<Result<Option<(usize, usize)>, Error>>(),
+    ]
+    .into_iter()
+    .try_fold(0, sum)
 }

@@ -353,7 +353,10 @@ fn original_tag_work_reaches_function_and_module_limits_with_independent_increme
     assert_eq!(fixture.function.role(), SemanticFunctionRoleV1::KernelRoot);
     assert!(fixture.function.abi().source_input_types().is_empty());
     const MODULE_REFERENCE_WORK: usize = 1 + 1;
-    let module_exact = function_exact + MODULE_REFERENCE_WORK;
+    // The allocation-free shared-loan candidate census visits this one block
+    // and all three statements. It is module work, not planner work.
+    const MODULE_SHARED_CANDIDATE_WORK: usize = 1 + 3 * 24;
+    let module_exact = function_exact + MODULE_REFERENCE_WORK + MODULE_SHARED_CANDIDATE_WORK;
     assert_eq!(unrestricted.summary().work_units(), module_exact);
     owner(
         &fixture,
