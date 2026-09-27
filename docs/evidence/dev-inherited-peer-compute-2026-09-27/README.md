@@ -89,6 +89,11 @@ Verus campaign, ELF audit, or GPU benchmark ran. Worker, device-language,
 atomic/collective, distributed execution, and release gates remain in scope.
 
 MI300X DNS failed before connection, so no remote artifacts or jobs required
-cleanup. Both requested source pushes failed resolving github.com; neither
-repository is claimed updated by this checkpoint. GitHub API reads also failed,
-so current issue state was not reverified and the issue update remains pending.
+cleanup. The frozen packet records both initial source pushes failing DNS.
+A later retry published implementation and evidence through
+`952e92bd8905a6082205bb4bded1057d380ba7e3` to origin's
+`codex/r65-runtime-drain-versions`; `ls-remote` confirmed that head. The upstream
+push still failed DNS and its independently queried head remained
+`2307ff7d88e093019208e2f8391e498956f415f6`. Dual publication remains pending.
+The [issue update](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5855020390)
+was posted on retry; a subsequent API read verified #182 remains OPEN.
