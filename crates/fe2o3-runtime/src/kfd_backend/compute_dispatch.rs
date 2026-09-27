@@ -701,7 +701,7 @@ impl KfdRuntimeBackendV1 {
                 Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
                     admissions,
                     ..
-                }) => admissions,
+                } | ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared { admissions, .. }) => admissions,
                 _ => return false,
             };
             // These receipts establish eligibility to wait, never ready backing.
@@ -1271,6 +1271,7 @@ impl KfdRuntimeBackendV1 {
                 ActiveComputeExecutionV1::PersistentPrepared {
                     allocation,
                     access,
+                    source,
                     prepared,
                     profile,
                 } => {
@@ -1306,6 +1307,7 @@ impl KfdRuntimeBackendV1 {
                                     Some(ActiveComputeExecutionV1::PersistentPrepared {
                                         allocation,
                                         access,
+                                        source,
                                         prepared,
                                         profile,
                                     });
@@ -1431,6 +1433,7 @@ impl KfdRuntimeBackendV1 {
                     access,
                     input,
                     profile,
+                    ..
                 } => {
                     active.published_at = Instant::now();
                     let device = match *input {
@@ -1457,6 +1460,31 @@ impl KfdRuntimeBackendV1 {
                     );
                     backend.active = Some(active);
                     Ok(BackendPollV1::Pending)
+                }
+                #[cfg(test)]
+                ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
+                    admissions, restore_shells, inputs, profile, ..
+                } => {
+                    let devices = inputs.map(|input| match input {
+                        KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => ready.owner.normalize(),
+                        KfdRuntimePersistentComputeInputV1::ScriptedReplay(device)
+                        | KfdRuntimePersistentComputeInputV1::ScriptedStorage(device) => device,
+                        KfdRuntimePersistentComputeInputV1::Native(_) => unreachable!("scripted prepared input"),
+                    });
+                    active.published_at = Instant::now();
+                    active.execution = Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
+                        admissions, restore_shells, devices,
+                    });
+                    backend.observe_persistent_dispatch_published_v1(
+                        active.id, active.stream, active.kernel, active.dispatch_shape_sha256, profile,
+                    );
+                    backend.active = Some(active);
+                    Ok(BackendPollV1::Pending)
+                }
+                ActiveComputeExecutionV1::PersistentCancelling(cancellation) => {
+                    active.execution = Some(ActiveComputeExecutionV1::PersistentCancelling(cancellation));
+                    backend.active = Some(active);
+                    Err(backend.terminal_error("prepared cancellation cannot resume publication"))
                 }
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedMaterialized => {
@@ -3722,6 +3750,38 @@ impl KfdRuntimeBackendV1 {
         });
         #[cfg(test)]
         if self.scripted_sdma.is_some() {
+            if self.scripted_persistent_publication_retries != 0 {
+                self.scripted_persistent_publication_retries -= 1;
+                performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
+                performance.user_data_materializations = 0;
+                self.active = Some(ActiveSubmissionV1 {
+                    id,
+                    stream,
+                    ordered_predecessor,
+                    deferred_ordered_predecessor_retain: false,
+                    kernel,
+                    dependency_depth,
+                    allocations,
+                    writebacks,
+                    resident_descriptors: persistent.descriptors,
+                    ordinary_recipe: None,
+                    dispatch_shape_sha256,
+                    published_at: Instant::now(),
+                    performance,
+                    execution: Some(
+                        ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
+                            admissions: persistent.admissions,
+                            promotions,
+                            restore_shells,
+                            inputs: persistent_inputs,
+                            profile: publication_profile
+                                .take()
+                                .expect("prepared publication profile"),
+                        },
+                    ),
+                });
+                return Ok(());
+            }
             let devices = persistent_inputs.map(|input| match input {
                 KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => ready.owner.normalize(),
                 KfdRuntimePersistentComputeInputV1::ScriptedReplay(device)
@@ -4005,6 +4065,7 @@ impl KfdRuntimeBackendV1 {
                     execution: Some(ActiveComputeExecutionV1::ScriptedPersistentPrepared {
                         allocation: persistent.allocation,
                         access: persistent.access,
+                        source: persistent.source,
                         input: Box::new(persistent_input),
                         profile: publication_profile,
                     }),
@@ -4162,6 +4223,7 @@ impl KfdRuntimeBackendV1 {
                     execution: Some(ActiveComputeExecutionV1::PersistentPrepared {
                         allocation: persistent.allocation,
                         access: persistent.access,
+                        source: persistent.source,
                         prepared,
                         profile: publication_profile,
                     }),

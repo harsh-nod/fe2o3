@@ -95,6 +95,7 @@ pub(super) enum ActiveComputeExecutionV1 {
     PersistentPrepared {
         allocation: u64,
         access: RuntimeAccessV1,
+        source: PersistentFullRangeComputeSourceV1,
         prepared: Gfx942PreparedPersistentComputeDispatchV1,
         profile: PersistentPublicationProfileV1,
     },
@@ -125,7 +126,17 @@ pub(super) enum ActiveComputeExecutionV1 {
     ScriptedPersistentPrepared {
         allocation: u64,
         access: RuntimeAccessV1,
+        source: PersistentFullRangeComputeSourceV1,
         input: Box<KfdRuntimePersistentComputeInputV1>,
+        profile: PersistentPublicationProfileV1,
+    },
+    PersistentCancelling(Box<super::prepared_cancellation::PreparedComputeCancellationV1>),
+    #[cfg(test)]
+    ScriptedThreeBindingPersistentPrepared {
+        admissions: [PersistentFullRangeComputeAdmissionV1; 3],
+        promotions: [Option<KfdRuntimeReadyPromotionPerformanceV1>; 3],
+        restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
+        inputs: [KfdRuntimePersistentComputeInputV1; 3],
         profile: PersistentPublicationProfileV1,
     },
     #[cfg(test)]

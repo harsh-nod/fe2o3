@@ -95,6 +95,7 @@ mod compute_quiescence_control;
 mod compute_settlement;
 mod peer_ancestry;
 mod peer_compute_access;
+mod prepared_cancellation;
 use peer_ancestry::PeerLaunchAncestryV1;
 use peer_compute_access::{
     PeerAccessPurposeV1, PeerComputePermitsV1, PeerCopyAccessV1, PeerCopyLegV1, PeerCopyOriginV1,
@@ -1380,6 +1381,8 @@ pub struct KfdRuntimeBackendV1 {
     #[cfg(test)]
     scripted_persistent_transition_failure: Option<ScriptedPersistentTransitionFailureV1>,
     #[cfg(test)]
+    scripted_prepared_cancel_fault: Option<prepared_cancellation::ScriptedPreparedCancelFaultV1>,
+    #[cfg(test)]
     scripted_persistent_poll_pending_observations: u64,
     #[cfg(test)]
     scripted_persistent_wait_pending_observations: u64,
@@ -1867,6 +1870,8 @@ impl KfdRuntimeBackendV1 {
             scripted_persistent_publication_retries: 0,
             #[cfg(test)]
             scripted_persistent_transition_failure: None,
+            #[cfg(test)]
+            scripted_prepared_cancel_fault: None,
             #[cfg(test)]
             scripted_persistent_poll_pending_observations: 0,
             #[cfg(test)]
@@ -2645,9 +2650,12 @@ impl KfdRuntimeBackendV1 {
                 | ActiveComputeExecutionV1::ScriptedPersistentPrepared { allocation, .. },
             ) => compute.allocations.len() == 1 && compute.allocations.contains(allocation),
             #[cfg(test)]
-            Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
-                admissions, ..
-            }) => {
+            Some(
+                ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { admissions, .. }
+                | ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
+                    admissions, ..
+                },
+            ) => {
                 compute.allocations.len() == admissions.len()
                     && admissions
                         .iter()
@@ -2763,7 +2771,9 @@ impl KfdRuntimeBackendV1 {
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedPersistent { .. }
                 | ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. }
+                | ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared { .. }
                 | ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { .. } => true,
+                ActiveComputeExecutionV1::PersistentCancelling(_) => true,
                 ActiveComputeExecutionV1::MaterializedPrepared { .. }
                 | ActiveComputeExecutionV1::Materialized(_)
                 | ActiveComputeExecutionV1::MaterializedCompleted(_) => false,
@@ -3027,7 +3037,7 @@ impl KfdRuntimeBackendV1 {
             .chain(
                 primary
                     .chain(auxiliary)
-                    .filter(|active| active.stream == stream)
+                    .filter(|active| active.stream == stream && active.id != removed)
                     .map(|active| active.id),
             )
             .max();
@@ -3042,39 +3052,6 @@ impl KfdRuntimeBackendV1 {
                 self.stream_submission_tails.remove(&stream);
             }
         }
-    }
-
-    fn settle_cancelled_persistent_prepared_v1(
-        &mut self,
-        mut active: ActiveSubmissionV1,
-    ) -> crate::BackendCancellationV1 {
-        // Native cancellation consumes the prepared dispatch owner, including
-        // any previously retained immutable control. Keep the backend marker
-        // synchronized before another launch or resource release can observe it.
-        self.retained_persistent_dispatch = None;
-        let module = self
-            .kernels
-            .get(&active.kernel)
-            .expect("prepared persistent compute retains its kernel")
-            .module;
-        self.release_compute_custody_v1(active.id, module, active.allocations.iter().copied());
-        self.submissions.insert(
-            active.id,
-            SubmissionRecordV1 {
-                stream: active.stream,
-                status: BackendPollV1::Failed { code: -2 },
-                dependency_depth: active.dependency_depth,
-                profile_dispatch_published: false,
-            },
-        );
-        self.compute_completion_reservations = self
-            .compute_completion_reservations
-            .checked_sub(1)
-            .expect("accepted prepared compute reserves one completion slot");
-        self.release_compute_lane_lease_v1(active.stream, 0);
-        self.restore_unfinished_stream_tail_v1(active.stream, active.id);
-        active.execution = None;
-        crate::BackendCancellationV1::Cancelled
     }
 
     fn compute_lane_caches_allocation_v1(&self, lane: usize, allocation: u64) -> bool {
@@ -4499,71 +4476,11 @@ impl KfdRuntimeBackendV1 {
                 "three-binding persistent restoration slots changed unexpectedly",
             ));
         }
-        let shells_match =
-            admissions
-                .iter()
-                .zip(&inputs)
-                .zip(&shells)
-                .all(
-                    |((admission, input), shell)| match (admission.source, input) {
-                        (
-                            PersistentFullRangeComputeSourceV1::InitializedStorage,
-                            KfdRuntimePersistentComputeInputV1::Native(
-                                Gfx942PersistentComputeInputV1::InitializedStorage(_),
-                            ),
-                        ) => shell.initialized.is_some(),
-                        (
-                            PersistentFullRangeComputeSourceV1::InitializedStorage,
-                            KfdRuntimePersistentComputeInputV1::Native(
-                                Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_),
-                            ),
-                        ) => shell.replay.is_some(),
-                        #[cfg(test)]
-                        (
-                            PersistentFullRangeComputeSourceV1::InitializedStorage,
-                            KfdRuntimePersistentComputeInputV1::ScriptedStorage(_),
-                        ) => shell.initialized.is_some(),
-                        #[cfg(test)]
-                        (
-                            PersistentFullRangeComputeSourceV1::InitializedStorage,
-                            KfdRuntimePersistentComputeInputV1::ScriptedReplay(_),
-                        ) => shell.device.is_some(),
-                        (
-                            PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
-                            KfdRuntimePersistentComputeInputV1::Native(
-                                Gfx942PersistentComputeInputV1::Initialized(_),
-                            ),
-                        ) => shell.ready.is_some(),
-                        (
-                            PersistentFullRangeComputeSourceV1::RetainedControlReplay,
-                            KfdRuntimePersistentComputeInputV1::Native(
-                                Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_),
-                            ),
-                        ) => shell.replay.is_some(),
-                        (
-                            PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
-                            KfdRuntimePersistentComputeInputV1::Native(
-                                Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_),
-                            ),
-                        ) if admission.access == RuntimeAccessV1::Write => shell.replay.is_some(),
-                        #[cfg(test)]
-                        (
-                            PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
-                            KfdRuntimePersistentComputeInputV1::ScriptedReady(_),
-                        ) => shell.ready.is_some(),
-                        #[cfg(test)]
-                        (
-                            PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
-                            KfdRuntimePersistentComputeInputV1::ScriptedReplay(_),
-                        ) if admission.access == RuntimeAccessV1::Write => shell.device.is_some(),
-                        #[cfg(test)]
-                        (
-                            PersistentFullRangeComputeSourceV1::RetainedControlReplay,
-                            KfdRuntimePersistentComputeInputV1::ScriptedReplay(_),
-                        ) => shell.device.is_some(),
-                        _ => false,
-                    },
-                );
+        let shells_match = admissions
+            .iter()
+            .zip(&inputs)
+            .zip(&shells)
+            .all(|((admission, input), shell)| shell.accepts_v1(*admission, input));
         if !shells_match {
             self.retain_terminal_sdma_custody_v1(
                 KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentInputs(inputs),
@@ -4583,77 +4500,7 @@ impl KfdRuntimeBackendV1 {
                 &input,
                 KfdRuntimePersistentComputeInputV1::ScriptedReplay(_)
             );
-            let storage = match input {
-                KfdRuntimePersistentComputeInputV1::Native(
-                    input @ Gfx942PersistentComputeInputV1::Initialized(_),
-                ) => {
-                    let shell = shell
-                        .ready
-                        .expect("authenticated source preallocated ready shell");
-                    KfdRuntimeSdmaStorageV1::H2dReady(fill_restore_shell_v1(
-                        shell,
-                        PersistentComputeReadyStorageV1 {
-                            owner: match input {
-                                Gfx942PersistentComputeInputV1::Initialized(ready) => {
-                                    PersistentComputeReadyOwnerV1::from_native(ready)
-                                }
-                                _ => unreachable!(),
-                            },
-                            promotion,
-                        },
-                    ))
-                }
-                KfdRuntimePersistentComputeInputV1::Native(
-                    input @ Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_),
-                ) => {
-                    let shell = shell
-                        .replay
-                        .expect("replay source preallocated replay shell");
-                    KfdRuntimeSdmaStorageV1::PersistentReplay(fill_restore_shell_v1(shell, input))
-                }
-                KfdRuntimePersistentComputeInputV1::Native(
-                    Gfx942PersistentComputeInputV1::Uninitialized(device),
-                ) => {
-                    let shell = shell
-                        .device
-                        .expect("device source preallocated device shell");
-                    KfdRuntimeSdmaStorageV1::Device(fill_restore_shell_v1(
-                        shell,
-                        DirectionalSdmaDeviceOwnerV1::Native(device),
-                    ))
-                }
-                KfdRuntimePersistentComputeInputV1::Native(
-                    Gfx942PersistentComputeInputV1::InitializedStorage(ready),
-                ) => KfdRuntimeSdmaStorageV1::InitializedStorage(fill_restore_shell_v1(
-                    shell
-                        .initialized
-                        .expect("storage source preallocated initialized shell"),
-                    InitializedStorageOwnerV1::Native(ready),
-                )),
-                #[cfg(test)]
-                KfdRuntimePersistentComputeInputV1::ScriptedStorage(device) => {
-                    KfdRuntimeSdmaStorageV1::InitializedStorage(fill_restore_shell_v1(
-                        shell
-                            .initialized
-                            .expect("scripted storage preallocated initialized shell"),
-                        InitializedStorageOwnerV1::Scripted(device),
-                    ))
-                }
-                #[cfg(test)]
-                KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => {
-                    let shell = shell
-                        .ready
-                        .expect("scripted ready source preallocated ready shell");
-                    KfdRuntimeSdmaStorageV1::H2dReady(fill_restore_shell_v1(shell, ready))
-                }
-                #[cfg(test)]
-                KfdRuntimePersistentComputeInputV1::ScriptedReplay(device) => {
-                    let shell = shell
-                        .device
-                        .expect("scripted device source preallocated device shell");
-                    KfdRuntimeSdmaStorageV1::Device(fill_restore_shell_v1(shell, device))
-                }
-            };
+            let storage = shell.restore_v1(input, promotion);
             let record = self
                 .allocations
                 .get_mut(&admission.allocation)
@@ -13015,156 +12862,15 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
                         ActiveComputeExecutionV1::PersistentPrepared { .. }
                         | ActiveComputeExecutionV1::ThreeBindingPersistentPrepared { .. } => true,
                         #[cfg(test)]
-                        ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. } => true,
+                        ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. }
+                        | ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
+                            ..
+                        } => true,
                         _ => false,
                     })
         });
         if persistent_prepared {
-            let mut active = self
-                .active
-                .take()
-                .expect("prepared persistent submission remains on the primary lane");
-            let execution = active
-                .execution
-                .take()
-                .expect("prepared persistent submission retains execution custody");
-            match execution {
-                ActiveComputeExecutionV1::PersistentPrepared {
-                    allocation,
-                    access,
-                    prepared,
-                    profile,
-                } => {
-                    let result = self
-                        .queue
-                        .as_mut()
-                        .expect("prepared persistent submission retains its queue")
-                        .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared);
-                    match result {
-                        Ok(input) => {
-                            self.restore_persistent_compute_input_v1(
-                                allocation,
-                                submission,
-                                input,
-                                active.performance.ready_promotion,
-                            )?;
-                            return Ok(self.settle_cancelled_persistent_prepared_v1(active));
-                        }
-                        Err(failure) => {
-                            let (error, custody) = failure.into_parts();
-                            match custody {
-                                Gfx942PersistentComputeTransitionFailureCustodyV1::Retryable(
-                                    prepared,
-                                ) => {
-                                    active.execution =
-                                        Some(ActiveComputeExecutionV1::PersistentPrepared {
-                                            allocation,
-                                            access,
-                                            prepared,
-                                            profile,
-                                        });
-                                    self.active = Some(active);
-                                    let detail = error.to_string();
-                                    return Err(self.terminal_error(format!(
-                                        "KFD persistent-compute prepared cancellation returned foreign retryable custody: {detail}"
-                                    )));
-                                }
-                                Gfx942PersistentComputeTransitionFailureCustodyV1::ProcessTeardown(
-                                    custody,
-                                ) => {
-                                    self.retain_terminal_sdma_custody_v1(
-                                        KfdRuntimeTerminalSdmaCustodyV1::PersistentCompute(custody),
-                                    );
-                                    let detail = error.to_string();
-                                    return Err(self.terminal_error(format!(
-                                        "KFD persistent-compute prepared cancellation: {detail}"
-                                    )));
-                                }
-                            }
-                        }
-                    }
-                }
-                ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
-                    admissions,
-                    promotions,
-                    restore_shells,
-                    prepared,
-                    profile,
-                } => {
-                    let result = self
-                        .queue
-                        .as_mut()
-                        .expect("prepared three-binding submission retains its queue")
-                        .cancel_prepared_three_binding_directional_persistent_fixed_dispatch_v1(
-                            prepared,
-                        );
-                    match result {
-                        Ok(inputs) => {
-                            self.restore_three_binding_persistent_inputs_v1(
-                                admissions,
-                                submission,
-                                inputs
-                                    .into_inputs()
-                                    .map(KfdRuntimePersistentComputeInputV1::Native),
-                                promotions,
-                                restore_shells,
-                            )?;
-                            return Ok(self.settle_cancelled_persistent_prepared_v1(active));
-                        }
-                        Err(failure) => {
-                            let (error, recovered) = failure.into_parts();
-                            if let Some(prepared) = recovered {
-                                active.execution = Some(
-                                    ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
-                                        admissions,
-                                        promotions,
-                                        restore_shells,
-                                        prepared,
-                                        profile,
-                                    },
-                                );
-                                self.active = Some(active);
-                                let detail = error.to_string();
-                                return Err(self.terminal_error(format!(
-                                    "KFD three-binding persistent prepared cancellation returned foreign retryable custody: {detail}"
-                                )));
-                            }
-                            let detail = error.to_string();
-                            return Err(self.terminal_error(format!(
-                                "KFD three-binding persistent prepared cancellation: {detail}"
-                            )));
-                        }
-                    }
-                }
-                #[cfg(test)]
-                ActiveComputeExecutionV1::ScriptedPersistentPrepared {
-                    allocation, input, ..
-                } => {
-                    match *input {
-                        input @ KfdRuntimePersistentComputeInputV1::ScriptedStorage(_) => self
-                            .restore_initialized_storage_input_v1(allocation, submission, input)?,
-                        KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => self
-                            .restore_h2d_ready_after_compute_rejection_v1(
-                                allocation, submission, ready,
-                            )?,
-                        KfdRuntimePersistentComputeInputV1::ScriptedReplay(device) => self
-                            .restore_persistent_compute_device_input_v1(
-                                allocation,
-                                submission,
-                                KfdRuntimeSdmaStorageV1::Device(Box::new(device)),
-                            )?,
-                        KfdRuntimePersistentComputeInputV1::Native(input) => self
-                            .restore_persistent_compute_input_v1(
-                                allocation,
-                                submission,
-                                input,
-                                active.performance.ready_promotion,
-                            )?,
-                    }
-                    return Ok(self.settle_cancelled_persistent_prepared_v1(active));
-                }
-                _ => unreachable!("prepared cancellation preflight selected a published launch"),
-            }
+            return self.cancel_persistent_prepared_v1(submission);
         }
         if self.active_sdma.contains_key(&submission) {
             return self.cancel_sdma_copy_v1(submission);
@@ -13615,6 +13321,7 @@ mod tests {
     mod initialized_storage_tests;
     mod native_xgmi_creation_tests;
     mod native_xgmi_retirement_tests;
+    mod prepared_cancellation_tests;
     mod queued_producer_context_tests;
     #[cfg(feature = "hardware-qualification")]
     mod r57_v2_tests;
