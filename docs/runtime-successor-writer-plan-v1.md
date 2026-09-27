@@ -204,9 +204,13 @@ and [unpublished compute settlement](evidence/dev-pending-compute-settlement-202
 These retain indexed descriptors through checked local release, preserve exact
 recipes on settlement failure, and distinguish malformed FIFO membership from
 valid interior cancellation refusal. They do not establish the complete Context
-composition, arbitrary index-corruption recovery or GPU ordering. Prepared native
-compute cancellation still needs outer descriptor retention across cancellation
-and restoration errors/unwind, including a distinct three-binding test boundary.
+composition, arbitrary index-corruption recovery or GPU ordering.
+[Prepared compute cancellation](evidence/dev-prepared-compute-cancellation-2026-09-27/README.md)
+now retains the outer descriptor through native cancellation and restoration,
+with a distinct three-binding Prepared boundary and CPU prefix-fault tests.
+Direct native outcome-mapping qualification, allocator-failure injection and
+executable formal correspondence remain open; the scripted ownership tests do
+not close those gates or the complete Context composition.
 
 ### Unknown Group Disposal
 
