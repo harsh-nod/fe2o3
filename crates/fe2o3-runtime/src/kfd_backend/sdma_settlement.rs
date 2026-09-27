@@ -176,9 +176,9 @@ impl KfdRuntimeBackendV1 {
         {
             return Ok(crate::BackendCancellationV1::TooLate);
         }
-        let (stream, prior) = (active.stream, active.prior_stream_submission);
+        let stream = active.stream;
         self.settle_sdma_copy_v1(submission, SdmaSettlementV1::Cancelled)?;
-        self.restore_stream_tail_before_v1(stream, submission, prior);
+        self.restore_unfinished_stream_tail_v1(stream, submission);
         Ok(crate::BackendCancellationV1::Cancelled)
     }
 

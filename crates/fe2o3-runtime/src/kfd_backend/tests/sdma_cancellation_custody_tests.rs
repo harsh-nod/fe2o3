@@ -73,7 +73,8 @@ fn clean(backend: &mut KfdRuntimeBackendV1, kind: usize, stream: u64, first: u64
 #[test]
 fn asynchronous_copy_cancellation_preserves_active_predecessor_and_retained_successor() {
     for kind in 0..3 {
-        for successor in [false, true] {
+        for mode in 0..3 {
+            let successor = mode != 0;
             let mut steps = vec![submit_step(kind)];
             steps.extend(completion_steps(kind));
             steps.extend(release_steps(kind));
@@ -168,10 +169,18 @@ fn asynchronous_copy_cancellation_preserves_active_predecessor_and_retained_succ
                     matches!(backend.release_submission_v1(cancelled), Err(RuntimeBackendFailureV1::Rejected(error))
                     if error.kind() == KfdRuntimeBackendErrorKindV1::Busy)
                 );
-                assert!(matches!(
-                    backend.poll_v1(dependent).unwrap(),
-                    BackendPollV1::Failed { .. }
-                ));
+                if mode == 2 {
+                    assert_eq!(
+                        backend.cancel_v1(dependent).unwrap(),
+                        crate::BackendCancellationV1::Cancelled
+                    );
+                    assert_eq!(backend.stream_submission_tails[&stream], predecessor);
+                } else {
+                    assert!(matches!(
+                        backend.poll_v1(dependent).unwrap(),
+                        BackendPollV1::Failed { .. }
+                    ));
+                }
                 assert_eq!(
                     backend.scripted_sdma.as_ref().unwrap().remaining_steps(),
                     steps
@@ -262,6 +271,89 @@ pub(super) fn inspect_partial_cancellation(kind: usize) {
 fn asynchronous_copy_partial_d2h_and_same_device_cancellation_is_too_late() {
     for kind in [1, 2] {
         inspect_partial_cancellation(kind);
+    }
+}
+
+#[test]
+fn released_tail_selects_unfinished_compute_roots_without_resurrecting_terminal_history() {
+    // Private roster controls complement the publicly admitted copy regression.
+    for root in 0..4 {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let other_stream = backend.create_stream_v1(7).unwrap();
+        let mut active = pipelined_active_for_test_v1(20);
+        active.stream = stream;
+        match root {
+            0 => backend.active = Some(active),
+            1 => {
+                backend.compute_pipeline.insert_published(active).unwrap();
+            }
+            2 => backend.auxiliary_compute_lanes[0].active = Some(active),
+            3 => {
+                backend.auxiliary_compute_lanes[0]
+                    .pipeline
+                    .insert_published(active)
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let mut foreign = pipelined_active_for_test_v1(30);
+        foreign.stream = other_stream;
+        if root < 2 {
+            backend.auxiliary_compute_lanes[0].active = Some(foreign);
+        } else {
+            backend.active = Some(foreign);
+        }
+        for (id, status) in [
+            (40, BackendPollV1::Failed { code: -1 }),
+            (41, BackendPollV1::Failed { code: -2 }),
+            (42, BackendPollV1::Succeeded),
+        ] {
+            backend.submissions.insert(
+                id,
+                SubmissionRecordV1 {
+                    stream,
+                    status,
+                    dependency_depth: 1,
+                    profile_dispatch_published: false,
+                },
+            );
+        }
+        backend.stream_submission_tails.insert(stream, 42);
+        let capacity = backend.stream_submission_tails.capacity();
+        backend.release_submission_v1(42).unwrap();
+        assert_eq!(backend.stream_submission_tails.get(&stream), Some(&20));
+        assert_eq!(backend.stream_submission_tails.capacity(), capacity);
+        backend.active = None;
+        backend.auxiliary_compute_lanes[0].active = None;
+        if root == 1 {
+            backend.compute_pipeline.take_commit_frontier().unwrap();
+        }
+        if root == 3 {
+            backend.auxiliary_compute_lanes[0]
+                .pipeline
+                .take_commit_frontier()
+                .unwrap();
+        }
+        backend.submissions.insert(
+            20,
+            SubmissionRecordV1 {
+                stream,
+                status: BackendPollV1::Succeeded,
+                dependency_depth: 1,
+                profile_dispatch_published: false,
+            },
+        );
+        backend.release_submission_v1(20).unwrap();
+        assert!(!backend.stream_submission_tails.contains_key(&stream));
+        assert!(backend.submissions.contains_key(&40));
+        assert!(backend.submissions.contains_key(&41));
+        for id in [40, 41] {
+            backend.release_submission_v1(id).unwrap();
+        }
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.destroy_stream_v1(other_stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
     }
 }
 

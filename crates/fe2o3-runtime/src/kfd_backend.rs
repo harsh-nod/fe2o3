@@ -2977,19 +2977,49 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
-    fn restore_stream_tail_before_v1(&mut self, stream: u64, removed: u64, prior: Option<u64>) {
+    fn restore_unfinished_stream_tail_v1(&mut self, stream: u64, removed: u64) {
         if self.stream_submission_tails.get(&stream) != Some(&removed) {
             return;
         }
-        let prior = prior.filter(|prior| {
-            self.submissions.contains_key(prior)
-                || self.pending_compute.contains_key(prior)
-                || self.active_compute_lane_v1(*prior).is_some()
-                || self.active_sdma.contains_key(prior)
+        // Admission IDs and the per-stream FIFOs are monotone. Terminal records
+        // are observations, not unfinished ordering nodes; resurrecting them can
+        // turn a resolved failure into a new success prerequisite.
+        let queued = [
+            self.pending_compute_streams
+                .get(&stream)
+                .and_then(|queue| queue.back())
+                .copied(),
+            self.active_sdma_streams
+                .get(&stream)
+                .and_then(|queue| queue.back())
+                .copied(),
+        ];
+        let primary = self.active.iter().chain(
+            self.compute_pipeline
+                .iter()
+                .take(self.compute_pipeline.len()),
+        );
+        let auxiliary = self.auxiliary_compute_lanes.iter().flat_map(|lane| {
+            lane.active
+                .iter()
+                .chain(lane.pipeline.iter().take(lane.pipeline.len()))
         });
+        let prior = queued
+            .into_iter()
+            .flatten()
+            .chain(
+                primary
+                    .chain(auxiliary)
+                    .filter(|active| active.stream == stream)
+                    .map(|active| active.id),
+            )
+            .max();
         match prior {
             Some(prior) => {
-                self.stream_submission_tails.insert(stream, prior);
+                *self
+                    .stream_submission_tails
+                    .get_mut(&stream)
+                    .expect("selected stream tail remains indexed") = prior;
             }
             None => {
                 self.stream_submission_tails.remove(&stream);
@@ -3053,7 +3083,7 @@ impl KfdRuntimeBackendV1 {
             .checked_sub(1)
             .expect("accepted prepared compute reserves one completion slot");
         self.release_compute_lane_lease_v1(active.stream, 0);
-        self.restore_stream_tail_before_v1(active.stream, active.id, active.ordered_predecessor);
+        self.restore_unfinished_stream_tail_v1(active.stream, active.id);
         active.execution = None;
         crate::BackendCancellationV1::Cancelled
     }
@@ -6887,9 +6917,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 "unknown KFD submission",
             )
         })?;
-        if self.stream_submission_tails.get(&removed.stream) == Some(&submission) {
-            self.stream_submission_tails.remove(&removed.stream);
-        }
+        self.restore_unfinished_stream_tail_v1(removed.stream, submission);
         self.quiescent_sdma_submissions.remove(&submission);
         self.observe_profile_v1(
             profile_dispatch
@@ -13180,9 +13208,8 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
                 .remove(&submission)
                 .expect("validated pending compute remains indexed");
             let stream = pending.launch.stream;
-            let prior = pending.ordered_predecessor;
             self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -2 });
-            self.restore_stream_tail_before_v1(stream, submission, prior);
+            self.restore_unfinished_stream_tail_v1(stream, submission);
             return Ok(crate::BackendCancellationV1::Cancelled);
         }
         Err(Self::rejected(
@@ -17682,7 +17709,7 @@ mod tests {
         assert!(backend.compute_module_retain_counts.is_empty());
         assert!(backend.compute_dependency_retain_counts.is_empty());
         assert!(!backend.stream_compute_lanes.contains_key(&stream));
-        assert_eq!(backend.stream_submission_tails.get(&stream), Some(&copy));
+        assert!(!backend.stream_submission_tails.contains_key(&stream));
         assert_eq!(
             backend.allocations[&device]
                 .sdma_storage
@@ -17967,15 +17994,15 @@ mod tests {
             .resolve_kernel_v1(module, "vecadd", [7; 32])
             .unwrap();
         let predecessor = backend.next_id().unwrap();
-        backend.submissions.insert(
-            predecessor,
-            SubmissionRecordV1 {
-                stream,
-                status: BackendPollV1::Pending,
-                dependency_depth: 1,
-                profile_dispatch_published: false,
-            },
-        );
+        let mut pending = pending_compute_for_test_v1(predecessor, stream, allocation, vec![]);
+        pending.module = module;
+        Arc::get_mut(&mut pending.launch).unwrap().kernel = kernel;
+        backend.pending_compute.insert(predecessor, pending);
+        backend
+            .pending_compute_streams
+            .insert(stream, VecDeque::from([predecessor]));
+        backend.compute_completion_reservations = 1;
+        index_pending_compute_custody_for_test_v1(&mut backend, predecessor);
         backend.stream_submission_tails.insert(stream, predecessor);
         backend.native_available = true;
         let record = backend.allocations.get_mut(&allocation).unwrap();
@@ -17998,7 +18025,10 @@ mod tests {
             Some(&predecessor)
         );
 
-        backend.submissions.get_mut(&predecessor).unwrap().status = BackendPollV1::Succeeded;
+        assert_eq!(
+            backend.cancel_v1(predecessor).unwrap(),
+            crate::BackendCancellationV1::Cancelled
+        );
         for submission in [cancelled, predecessor] {
             backend.release_submission_v1(submission).unwrap();
         }

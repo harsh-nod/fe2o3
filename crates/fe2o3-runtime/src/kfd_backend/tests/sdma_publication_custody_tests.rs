@@ -125,9 +125,12 @@ fn failed_explicit_dependency_releases_only_unstarted_successor_custody() {
     steps.extend(completion_steps(0));
     steps.push(submit_step(0, ScriptedFailureModeV1::Retryable));
     steps.extend(completion_steps(0));
+    steps.push(submit_step(0, ScriptedFailureModeV1::Success));
+    steps.extend(completion_steps(0));
     steps.extend(scripted_release_steps_v1());
     steps.extend(scripted_release_steps_v1());
-    let (mut backend, stream, host, device) = scripted_direct_backend_v1(16, steps);
+    let (backend, stream, host, device) = scripted_direct_backend_v1(16, steps);
+    let mut backend = ManuallyDrop::new(backend);
     let other_stream = backend.create_stream_v1(7).unwrap();
     let (other_host, other_device) = add_scripted_direct_pair_v1(&mut backend, 16);
     let owners = (
@@ -210,12 +213,32 @@ fn failed_explicit_dependency_releases_only_unstarted_successor_custody() {
         );
         assert_eq!(custody.owner_counts, [0, 1]);
     }
+    backend.release_submission_v1(successor).unwrap();
+    assert_eq!(
+        backend.stream_submission_tails.get(&stream),
+        Some(&predecessor),
+        "releasing a failed tail must preserve the unfinished stream prefix"
+    );
+    let next = backend
+        .copy_async_v1(stream, other_source, other_destination, &[])
+        .unwrap();
+    assert_eq!(backend.active_sdma[&next].dependencies, [predecessor]);
+    assert!(matches!(
+        backend.active_sdma[&next].phase,
+        ActiveSdmaPhaseV1::Ready
+    ));
+    assert_eq!(
+        backend.scripted_sdma.as_ref().unwrap().remaining_steps(),
+        steps_before
+    );
     assert_eq!(
         backend.poll_v1(predecessor).unwrap(),
         BackendPollV1::Succeeded
     );
+    backend.flush_stream_v1(stream).unwrap();
+    assert_eq!(backend.poll_v1(next).unwrap(), BackendPollV1::Succeeded);
     backend.release_event_v1(event).unwrap();
-    for submission in [successor, failed_dependency, first_other, predecessor] {
+    for submission in [next, failed_dependency, first_other, predecessor] {
         backend.release_submission_v1(submission).unwrap();
     }
     backend.release_allocation_v1(other_host).unwrap();
@@ -227,6 +250,7 @@ fn failed_explicit_dependency_releases_only_unstarted_successor_custody() {
     backend.release_allocation_v1(other_device).unwrap();
     backend.destroy_stream_v1(other_stream).unwrap();
     clean_scripted_direct_backend_v1(&mut backend, stream, host, device, None);
+    drop(ManuallyDrop::into_inner(backend));
 }
 
 fn inspect_bounded_prefix(kind: usize, fault: usize) {
