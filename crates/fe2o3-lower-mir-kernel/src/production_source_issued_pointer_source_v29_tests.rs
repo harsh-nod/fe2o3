@@ -242,6 +242,21 @@ fn block(
 // Original admitted semantic MIR/SSA, not a rustc source receipt. Two original
 // same-typed ExclusiveOwner inputs make physical argument identity observable.
 fn owner() -> ProductionSemanticSsaOwnerV1 {
+    owner_with_access(true)
+}
+
+pub(super) fn owner_with_access(used: bool) -> ProductionSemanticSsaOwnerV1 {
+    owner_with_shape(1, usize::from(used))
+}
+
+pub(super) fn owner_with_shape(issuer_count: usize, access_count: usize) -> ProductionSemanticSsaOwnerV1 {
+    owner_with_shape_and_read(issuer_count, access_count, false)
+}
+
+fn owner_with_shape_and_read(issuer_count: usize, access_count: usize, read: bool) -> ProductionSemanticSsaOwnerV1 {
+    // Fixture block identities are single-byte ordered tags, not a production
+    // workload limit. The scale controls stay inside that identity domain.
+    assert!((1..=32).contains(&issuer_count));
     let base = super::source_allocation_receiver_v29_tests::owner();
     let mut types = base.source_semantic().types().to_vec();
     types[BORROW.index() as usize] = mutable_reference(6, CARRIER, 16, 8);
@@ -357,7 +372,21 @@ fn owner() -> ProductionSemanticSsaOwnerV1 {
             ),
         )),
     );
-    let locals = [
+    let mut issued_access = vec![assign(
+        7,
+        REFERENCE,
+        SemanticRvalueKindV1::Use(SemanticOperandV1::Move(some)),
+    )];
+    for _ in 0..access_count {
+        if read {
+            issued_access.push(assign(8, U32, SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(7), vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32).unwrap(),
+                ], U32).unwrap(), SemanticVolatilityV1::NonVolatile, None))));
+        }
+        issued_access.push(store.clone());
+    }
+    let mut locals: Vec<_> = [
         UNIT, CARRIER, CARRIER, BORROW, WITNESS, OPTIONAL, U32, REFERENCE,
     ]
     .into_iter()
@@ -376,6 +405,38 @@ fn owner() -> ProductionSemanticSsaOwnerV1 {
         )
     })
     .collect();
+    if read {
+        locals.push(SemanticLocalDeclV1::new(SemanticLocalIdentityV1::from_sha256([48; 32]),
+            U32, SemanticLocalRoleV1::Temporary, provenance()));
+    }
+    let mut blocks = Vec::new();
+    for issuer in 0..issuer_count {
+        let base = u32::try_from(issuer * 4).unwrap();
+        blocks.push(block(base as u8, vec![assign(
+            3, BORROW, SemanticRvalueKindV1::Borrow {
+                kind: SemanticBorrowKindV1::Mutable, place: place(1, CARRIER),
+            },
+        )], call(1, vec![], 4, WITNESS, base + 1)));
+        blocks.push(block((base + 1) as u8, vec![], call(2, vec![
+            SemanticOperandV1::Move(place(3, BORROW)),
+            SemanticOperandV1::Move(place(4, WITNESS)),
+        ], 5, OPTIONAL, base + 2)));
+        blocks.push(block((base + 2) as u8, vec![assign(
+            6, U32, SemanticRvalueKindV1::Discriminant(place(5, OPTIONAL)),
+        )], SemanticTerminatorKindV1::SwitchInt {
+            discriminant: SemanticOperandV1::Copy(place(6, U32)),
+            targets: SemanticSwitchTargetsV1::new(vec![SemanticSwitchTargetV1::new(
+                1, edge(SemanticEdgeRoleV1::SwitchValue, base + 3),
+            )], edge(SemanticEdgeRoleV1::SwitchOtherwise, base + 4)).unwrap(),
+        }));
+        blocks.push(block((base + 3) as u8, issued_access.clone(),
+            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, base + 4))));
+    }
+    blocks.push(block((issuer_count * 4) as u8, vec![assign(
+        0, UNIT, SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(
+            SemanticConstantV1::new(UNIT, SemanticConstantValueV1::ZeroSized),
+        )),
+    )], SemanticTerminatorKindV1::Return));
     let function = SemanticFunctionDeclV1::new(
         SemanticFunctionIdentityV1::from_sha256([20; 32]),
         SemanticFunctionRoleV1::KernelRoot,
@@ -387,76 +448,7 @@ fn owner() -> ProductionSemanticSsaOwnerV1 {
         abi(20, true, &[CARRIER, CARRIER], UNIT),
         locals,
         SemanticBlockIdV1::from_index(0),
-        vec![
-            block(
-                0,
-                vec![assign(
-                    3,
-                    BORROW,
-                    SemanticRvalueKindV1::Borrow {
-                        kind: SemanticBorrowKindV1::Mutable,
-                        place: place(1, CARRIER),
-                    },
-                )],
-                call(1, vec![], 4, WITNESS, 1),
-            ),
-            block(
-                1,
-                vec![],
-                call(
-                    2,
-                    vec![
-                        SemanticOperandV1::Move(place(3, BORROW)),
-                        SemanticOperandV1::Move(place(4, WITNESS)),
-                    ],
-                    5,
-                    OPTIONAL,
-                    2,
-                ),
-            ),
-            block(
-                2,
-                vec![assign(
-                    6,
-                    U32,
-                    SemanticRvalueKindV1::Discriminant(place(5, OPTIONAL)),
-                )],
-                SemanticTerminatorKindV1::SwitchInt {
-                    discriminant: SemanticOperandV1::Copy(place(6, U32)),
-                    targets: SemanticSwitchTargetsV1::new(
-                        vec![SemanticSwitchTargetV1::new(
-                            1,
-                            edge(SemanticEdgeRoleV1::SwitchValue, 3),
-                        )],
-                        edge(SemanticEdgeRoleV1::SwitchOtherwise, 4),
-                    )
-                    .unwrap(),
-                },
-            ),
-            block(
-                3,
-                vec![
-                    assign(
-                        7,
-                        REFERENCE,
-                        SemanticRvalueKindV1::Use(SemanticOperandV1::Move(some)),
-                    ),
-                    store,
-                ],
-                SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 4)),
-            ),
-            block(
-                4,
-                vec![assign(
-                    0,
-                    UNIT,
-                    SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(
-                        SemanticConstantV1::new(UNIT, SemanticConstantValueV1::ZeroSized),
-                    )),
-                )],
-                SemanticTerminatorKindV1::Return,
-            ),
-        ],
+        blocks,
     )
     .unwrap()
     .with_kernel_entry(SemanticKernelEntryV1::new(
@@ -568,6 +560,10 @@ fn observe_original(
                     *predicate = ComparePredicate::GreaterThan;
                     changed += 1;
                 }
+                (OperationKind::SliceLength { slice }, 6) => {
+                    *slice = other;
+                    changed += 1;
+                }
                 _ => {}
             }
         }
@@ -625,12 +621,34 @@ impl Drop for RestoreObserver {
     }
 }
 
+pub(super) fn with_issued_source_fault_v29<T>(fault: u8, run: impl FnOnce() -> T) -> (T, bool) {
+    struct Scope(Option<RootExecutionArchiveObserverV29>, u8, bool);
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            ROOT_EXECUTION_ARCHIVE_OBSERVER_V29.set(self.0);
+            ISSUED_SOURCE_FAULT.set(self.1);
+            ISSUED_SOURCE_VISITED.set(self.2);
+        }
+    }
+    let _scope = Scope(ROOT_EXECUTION_ARCHIVE_OBSERVER_V29.replace(Some(observe_original)),
+        ISSUED_SOURCE_FAULT.replace(fault), ISSUED_SOURCE_VISITED.replace(false));
+    let result = run();
+    (result, ISSUED_SOURCE_VISITED.get())
+}
+
 fn run_original(fault: u8) {
+    run_original_with_access(fault, true)
+}
+
+fn run_original_with_access(fault: u8, used: bool) {
+    run_original_owner(fault, used, false, if used { owner() } else { owner_with_access(false) });
+}
+
+fn run_original_owner(fault: u8, used: bool, read: bool, owner: ProductionSemanticSsaOwnerV1) {
     use fe2o3_kernel_descriptor::{
         DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, LogicalArgumentV1, ScalarTypeV1,
         SourceTypeDescriptorV1, SourceTypeDescriptorV3, SourceTypeRecordV1, ValidName,
     };
-    let owner = owner();
     let occurrence_storage = owner
         .occurrence_storage()
         .expect("explicit original occurrence capture")
@@ -732,6 +750,7 @@ fn run_original(fault: u8) {
     let pending = result
         .unwrap_or_else(|error| panic!("original issued pointer full source admission: {error:?}"));
     let mut stores = 0;
+    let mut loads = 0;
     let mut gep = 0;
     for function in &pending.pending_module().functions {
         let Some(body) = &function.body else {
@@ -744,13 +763,19 @@ fn run_original(fault: u8) {
                         assert_eq!(access.address_space, AddressSpace::Global);
                         stores += 1;
                     }
+                    OperationKind::Load { access, .. } => {
+                        assert_eq!(access.address_space, AddressSpace::Global);
+                        assert!(!access.volatile);
+                        loads += 1;
+                    }
                     OperationKind::GetElementPointer { .. } => gep += 1,
                     _ => {}
                 }
             }
         }
     }
-    assert_eq!((stores, gep), (1, 1));
+    assert_eq!((stores, gep), (usize::from(used), 1));
+    assert_eq!(loads, usize::from(read));
     let retained = pending.adopted_storage();
     assert_eq!(budget.storage(), 37 + occurrence_storage + retained);
     drop(pending);
@@ -766,11 +791,110 @@ fn issued_pointer_original_get_mut_reaches_complete_pending_source() {
 }
 
 #[test]
+fn issued_pointer_original_read_and_write_keep_separate_issuer_census_from_private_loans() {
+    struct Restore(Option<ScopedSlotCustodyObserverV29>);
+    impl Drop for Restore {
+        fn drop(&mut self) { SCOPED_SLOT_CUSTODY_OBSERVER_V29.set(self.0); }
+    }
+    let _restore = Restore(SCOPED_SLOT_CUSTODY_OBSERVER_V29.replace(Some(observe_issued_holder_family)));
+    ISSUED_HOLDER_FAMILY_COUNTS.with(|counts| counts.set((0, 0)));
+    run_original_owner(0, true, true, owner_with_shape_and_read(1, 1, true));
+    let (reads, writes) = ISSUED_HOLDER_FAMILY_COUNTS.with(|counts| counts.get());
+    assert!(reads > 0 && writes > 0, "both genuine access families must reach the original archive: {reads}/{writes}");
+    for fault in 1..=5 {
+        run_original_owner(0, true, true, owner_with_shape_and_read(1, 1, true));
+        run_original_owner(fault, true, true, owner_with_shape_and_read(1, 1, true));
+    }
+}
+
+thread_local! {
+    static ISSUED_HOLDER_FAMILY_COUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+fn observe_issued_holder_family(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &[Option<LoweredFunctionResultV1>],
+    _: &mut OwnedScopedSourceSlotsV29,
+    references: Option<&SourceReferenceEmissionV29<'_, '_>>,
+    _: Option<&ExecutionIdentityPlanV1<'_, '_>>,
+    _: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let plan = references.unwrap().plan;
+    fn h<T>() -> usize { std::mem::size_of::<T>() + 2 * std::mem::size_of::<Result<T, ProductionSemanticKirErrorV1>>() }
+    let headers = h::<bool>() + h::<&SemanticValueBindingV1>() + h::<Option<&SemanticValueBindingV1>>()
+        + h::<std::slice::Iter<'_, SemanticProjectionV1>>() + h::<Option<&SemanticProjectionV1>>()
+        + h::<&SemanticProjectionV1>() + h::<&[SemanticProjectionV1]>()
+        + h::<&Vec<SemanticValueBindingV1>>() + h::<&SemanticSourceReferenceBindingV29>() + h::<Option<usize>>();
+    for lowered in emitted.iter().flatten() {
+        let instance = lowered.source_call_instance.unwrap();
+        let original = instances.instance(instance).unwrap();
+        let anchors = lowered.scoped_memory_anchors.as_ref().unwrap();
+        let archive = lowered.execution_observation.as_ref().unwrap();
+        let occurrences = instances.occurrences(instance).unwrap();
+        for anchor in &anchors.rows {
+            let ScopedMemoryAnchorKindV29::Access { payload: Some(payload), .. } = anchor.kind else { continue; };
+            let Some(frame) = anchor.source else { continue; };
+            let Some(ScopedMemoryRoleV29::Operand(role)) = frame.role else { continue; };
+            let Some(place) = scoped_source_place_v29(original.declaration(), frame.site, role) else { continue; };
+            if place.local().index() != 7 || place.projections().len() != 1 { continue; }
+            let writing = match payload {
+                ScopedMemoryPayloadV29::Load { read, .. } if read.prefix == 1 => false,
+                ScopedMemoryPayloadV29::Store { .. } => true,
+                _ => continue,
+            };
+            let mut event = None;
+            for (index, row) in occurrences.events().iter().enumerate() {
+                if row.site() == frame.site && row.operand() == role && row.role() == ExecutionEventV29::BaseUse
+                    && row.event().variable().get() == place.local().index() {
+                    assert!(event.replace(index).is_none());
+                }
+            }
+            with_canonical_call_scratch_v1(budget, |budget| {
+                let capture = source_object_base_occurrence_v29(&occurrences, frame.site, role, place, event.unwrap(), budget)?;
+                let ScopedMemoryOccurrenceV29::Promoted { definition, .. } = capture else { panic!("issued pointer is promoted"); };
+                let binding = archive.lookup_original_v29(instances, instance, definition, budget)?;
+                assert!(matches!(binding, SemanticValueBindingV1::Value { ty: Type::Pointer(pointer), .. }
+                    if pointer.address_space == AddressSpace::Global && pointer.access == AccessMode::ReadWrite
+                        && *pointer.pointee == Type::Scalar(ScalarType::U32)));
+                let before = (budget.work(), budget.storage());
+                // Candidate-only false: no object or issuer authority is returned.
+                // Ten prepay guards, entrance and charge guards, plus four work.
+                for _ in 0..16 {
+                    with_canonical_call_scratch_v1(budget, |budget| {
+                        let floor = budget.storage();
+                        assert!(!source_object_private_holder_family_v29(plan, binding, place, budget)?);
+                        assert_eq!(budget.storage() - floor, headers);
+                        Ok(())
+                    })?;
+                    assert_eq!(budget.storage(), before.1);
+                }
+                assert_eq!(budget.work() - before.0, 16 * (12 * 5 + 4 + 2));
+                Ok(())
+            })?;
+            ISSUED_HOLDER_FAMILY_COUNTS.with(|counts| {
+                let (reads, writes) = counts.get();
+                counts.set(if writing { (reads, writes + 1) } else { (reads + 1, writes) });
+            });
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn issued_pointer_original_source_rejects_changed_actual_argument_tail_and_some_edge() {
     // A complete unchanged source positive precedes every independent mutation;
     // observer panics cannot stand in for the exact final-source refusal.
     for fault in 1..=5 {
         run_original(0);
         run_original(fault);
+    }
+}
+
+#[test]
+fn issued_pointer_unused_original_issuer_still_checks_actual_input_index_and_tail() {
+    for fault in 1..=4 {
+        run_original_with_access(0, false);
+        run_original_with_access(fault, false);
     }
 }

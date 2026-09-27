@@ -1,5 +1,6 @@
 // Original issuer recipes classify a source access, not an arbitrary physical
 // pointer. The actual descriptor tail and guarded access are checked separately.
+include!("production_source_issued_roles_v29.rs");
 #[cfg(test)]
 #[path = "production_source_issued_pointer_v29_tests.rs"]
 mod source_issued_pointer_tests_v29;

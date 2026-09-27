@@ -8,9 +8,92 @@ use fe2o3_kernel_ir::{
 
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::optimized_policies_v18_tests::optimized_policy_child";
 
+mod allocation_detail {
+    include!("production_pipeline_native_allocation_observation_v18_tests.rs");
+}
+use allocation_detail::AllocationObservation;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(try_from = "UnresolvedOperationWire")]
+struct UnresolvedOperation {
+    function: u32,
+    block: u32,
+    operation: u32,
+    kind: String,
+    allocation: Option<AllocationObservation>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnresolvedOperationWire {
+    function: u32,
+    block: u32,
+    operation: u32,
+    kind: String,
+    #[serde(deserialize_with = "deserialize_allocation")]
+    allocation: Option<AllocationObservation>,
+}
+
+fn deserialize_allocation<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AllocationObservation>, D::Error> {
+    Option::<AllocationObservation>::deserialize(deserializer)
+}
+
+impl TryFrom<UnresolvedOperationWire> for UnresolvedOperation {
+    type Error = String;
+    fn try_from(value: UnresolvedOperationWire) -> Result<Self, Self::Error> {
+        if value.kind.is_empty() || (value.kind == "Alloca") != value.allocation.is_some() {
+            return Err("native unresolved kind/allocation detail mismatch".to_owned());
+        }
+        if let Some(allocation) = value.allocation {
+            allocation.validate_shape().map_err(str::to_owned)?;
+        }
+        Ok(Self {
+            function: value.function,
+            block: value.block,
+            operation: value.operation,
+            kind: value.kind,
+            allocation: value.allocation,
+        })
+    }
+}
+
+fn unresolved_operation(
+    coordinate: Option<fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1>,
+    kind: Option<&str>,
+    allocation: Option<AllocationObservation>,
+) -> Result<Option<UnresolvedOperation>, String> {
+    match (coordinate, kind, allocation) {
+        (None, None, None) => Ok(None),
+        (Some(coordinate), Some(kind), allocation) if !kind.is_empty() => Ok(Some(
+            UnresolvedOperation::try_from(UnresolvedOperationWire {
+                function: coordinate.block.function.0,
+                block: coordinate.block.block,
+                operation: coordinate.operation,
+                kind: kind.to_owned(),
+                allocation,
+            })?,
+        )),
+        _ => Err("native unresolved coordinate/kind observation is incomplete".to_owned()),
+    }
+}
+
+fn deserialize_unresolved_operation<'de, D>(
+    deserializer: D,
+) -> Result<Option<UnresolvedOperation>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<UnresolvedOperation>::deserialize(deserializer)
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 struct Observation {
     required: String,
+    #[serde(deserialize_with = "deserialize_unresolved_operation")]
+    first_unresolved_operation: Option<UnresolvedOperation>,
     preparation_refused: bool,
     execution_recipes: usize,
     lifecycle_operations: usize,
@@ -86,6 +169,15 @@ impl Callbacks for PolicyCallbacks {
                 transaction.inspect_optimized_source_policies_observed_v18(&mut account);
             let probe = probe.ok_or("actual native candidate was never observed")?;
             assert!(probe.operation_count >= probe.lifecycle && probe.lifecycle > 0);
+            let first_unresolved_operation = unresolved_operation(
+                probe.first_unresolved.map(|(coordinate, _)| coordinate),
+                probe.first_unresolved_kind,
+                serde_json::from_value(
+                    serde_json::to_value(probe.first_unresolved_allocation)
+                        .map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?,
+            )?;
             use fe2o3_lower_mir_kernel::ProductionSourceNativeLifecycleErrorV18 as NativeError;
             let (required, defined_functions) = match (result, probe.first_unresolved) {
                 (
@@ -136,6 +228,11 @@ impl Callbacks for PolicyCallbacks {
                 let cut_probe =
                     cut_probe.ok_or("resource control lost the exact actual candidate")?;
                 assert_eq!(cut_probe.first_unresolved, probe.first_unresolved);
+                assert_eq!(cut_probe.first_unresolved_kind, probe.first_unresolved_kind);
+                assert_eq!(
+                    cut_probe.first_unresolved_allocation,
+                    probe.first_unresolved_allocation
+                );
                 match (result, cut_probe.first_unresolved) {
                     (Err(ProductionPipelineError::SourceNativeLifecycle(error)), None) => {
                         let NativeError::SourceAfterNative { source, diagnostic } = error.as_ref()
@@ -186,6 +283,7 @@ impl Callbacks for PolicyCallbacks {
             assert!(transactions.next().is_none());
             Ok(Observation {
                 required,
+                first_unresolved_operation,
                 preparation_refused: true,
                 execution_recipes,
                 lifecycle_operations: probe.lifecycle,
@@ -238,6 +336,7 @@ fn actual_rust_optimized_output_reaches_fixed_policy_missing_recipe_gate() {
         source,
         |_, _, label, observation, _| {
             assert_ne!(observation.required, "lifecycle-complete");
+            assert!(observation.first_unresolved_operation.is_some());
             assert!(!observation.native_completed);
             assert_eq!(observation.native_resource_cuts, 0);
             assert!(observation.preparation_refused);
@@ -271,10 +370,235 @@ pub fn lifecycle_probe(mut ctx: KernelContext<'_>, seed: u32) {{ {body} }}
         },
         |_, _, _, observation, _| {
             assert_eq!(observation.required, "lifecycle-complete");
+            assert!(observation.first_unresolved_operation.is_none());
             assert!(observation.native_completed && observation.defined_functions > 0);
             assert_eq!(observation.native_resource_cuts, 2);
             assert!(observation.preparation_refused && observation.execution_recipes > 0);
             assert!(observation.lifecycle_operations > 0);
         },
     );
+}
+
+#[test]
+fn native_unresolved_operation_observation_requires_paired_exact_coordinate() {
+    use fe2o3_kernel_ir::{
+        CanonicalKirBlockCoordinateV1 as Block, CanonicalKirFunctionCoordinateV1 as Function,
+        CanonicalKirOperationCoordinateV1 as Coordinate,
+    };
+    let coordinate = Coordinate {
+        block: Block {
+            function: Function(2),
+            block: 3,
+        },
+        operation: 5,
+    };
+    let observed = unresolved_operation(Some(coordinate), Some("Storage.ReadValue"), None).unwrap();
+    assert_eq!(
+        observed,
+        Some(UnresolvedOperation {
+            function: 2,
+            block: 3,
+            operation: 5,
+            kind: "Storage.ReadValue".to_owned(),
+            allocation: None,
+        })
+    );
+    assert_eq!(unresolved_operation(None, None, None).unwrap(), None);
+    for (coordinate, kind) in [
+        (Some(coordinate), None),
+        (None, Some("Alloca")),
+        (Some(coordinate), Some("")),
+    ] {
+        assert_eq!(
+            unresolved_operation(coordinate, kind, None).unwrap_err(),
+            "native unresolved coordinate/kind observation is incomplete"
+        );
+    }
+}
+
+#[test]
+fn native_unresolved_operation_observation_json_is_strict_and_lossless() {
+    let mut observation = Observation {
+        required: "Memory".to_owned(),
+        first_unresolved_operation: Some(UnresolvedOperation {
+            function: 2,
+            block: 3,
+            operation: 5,
+            kind: "Storage.WriteValue".to_owned(),
+            allocation: None,
+        }),
+        preparation_refused: true,
+        execution_recipes: 3,
+        lifecycle_operations: 3,
+        native_completed: false,
+        defined_functions: 0,
+        native_resource_cuts: 0,
+        work: 101,
+        retained: 103,
+    };
+    let encoded = serde_json::to_value(&observation).unwrap();
+    assert_eq!(
+        encoded["first_unresolved_operation"],
+        serde_json::json!({
+            "function": 2, "block": 3, "operation": 5, "kind": "Storage.WriteValue", "allocation": null,
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<Observation>(encoded.clone()).unwrap(),
+        observation
+    );
+    let mut missing = encoded.clone();
+    missing
+        .as_object_mut()
+        .unwrap()
+        .remove("first_unresolved_operation");
+    assert!(serde_json::from_value::<Observation>(missing).is_err());
+    let mut extra = encoded.clone();
+    extra["first_unresolved_operation"]["unexpected"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<Observation>(extra).is_err());
+    let mut missing_kind = encoded.clone();
+    missing_kind["first_unresolved_operation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("kind");
+    assert!(serde_json::from_value::<Observation>(missing_kind).is_err());
+    let mut invalid_coordinate = encoded;
+    invalid_coordinate["first_unresolved_operation"]["operation"] = serde_json::json!(-1);
+    assert!(serde_json::from_value::<Observation>(invalid_coordinate).is_err());
+    observation.required = "lifecycle-complete".to_owned();
+    observation.first_unresolved_operation = None;
+    observation.native_completed = true;
+    observation.defined_functions = 1;
+    observation.native_resource_cuts = 2;
+    let complete = serde_json::to_value(&observation).unwrap();
+    assert!(complete["first_unresolved_operation"].is_null());
+    assert_eq!(
+        serde_json::from_value::<Observation>(complete).unwrap(),
+        observation
+    );
+}
+
+#[test]
+fn native_allocation_observation_json_requires_complete_paired_details() {
+    use allocation_detail::*;
+    let ty = TypeObservation {
+        kind: TypeTag::StorageObject,
+        scalar: None,
+        layout: Some(LayoutObservation {
+            ordinal: 7,
+            kind: LayoutTag::Scalar,
+            size: 4,
+            alignment: 4,
+            scalar: Some(ScalarTag::U32),
+            members: 0,
+        }),
+    };
+    let allocation = AllocationObservation {
+        element: ty,
+        address_space: SpaceTag::Private,
+        alignment: 4,
+        count: None,
+        result: 19,
+        result_address_space: SpaceTag::Private,
+        result_access: AccessTag::ReadWrite,
+        result_pointee: ty,
+        source: Some(AllocationSourceObservation {
+            root: 0,
+            instance: 2,
+            function: 3,
+            input: [0, 4, 5],
+            semantic_sha256: [11; 32],
+            private_slot_identity_available: false,
+        }),
+    };
+    let row = UnresolvedOperation {
+        function: 0,
+        block: 1,
+        operation: 2,
+        kind: "Alloca".to_owned(),
+        allocation: Some(allocation),
+    };
+    let encoded = serde_json::to_value(&row).unwrap();
+    assert_eq!(
+        serde_json::from_value::<UnresolvedOperation>(encoded.clone()).unwrap(),
+        row
+    );
+    for path in [
+        "allocation",
+        "allocation.element.layout",
+        "allocation.source",
+        "allocation.count",
+    ] {
+        let mut missing = encoded.clone();
+        let mut names = path.split('.').peekable();
+        let mut parent = &mut missing;
+        while let Some(name) = names.next() {
+            if names.peek().is_none() {
+                parent.as_object_mut().unwrap().remove(name);
+                break;
+            }
+            parent = &mut parent[name];
+        }
+        assert!(
+            serde_json::from_value::<UnresolvedOperation>(missing).is_err(),
+            "missing {path}"
+        );
+    }
+    for field in [
+        "kind",
+        "allocation",
+        "extra",
+        "bad_scalar",
+        "bad_layout",
+        "bad_slot",
+        "bad_enum",
+    ] {
+        let mut wrong = encoded.clone();
+        match field {
+            "kind" => wrong["kind"] = serde_json::json!("Storage.ReadValue"),
+            "allocation" => wrong["allocation"] = serde_json::Value::Null,
+            "extra" => wrong["allocation"]["source"]["unexpected"] = serde_json::json!(true),
+            "bad_scalar" => wrong["allocation"]["element"]["scalar"] = serde_json::json!("U32"),
+            "bad_layout" => {
+                wrong["allocation"]["element"]["layout"]["scalar"] = serde_json::Value::Null
+            }
+            "bad_slot" => {
+                wrong["allocation"]["source"]["private_slot_identity_available"] =
+                    serde_json::json!(true)
+            }
+            "bad_enum" => wrong["allocation"]["address_space"] = serde_json::json!("Unknown"),
+            _ => unreachable!(),
+        }
+        assert!(
+            serde_json::from_value::<UnresolvedOperation>(wrong).is_err(),
+            "wrong {field}"
+        );
+    }
+    let mut absent_source = encoded.clone();
+    absent_source["allocation"]["source"] = serde_json::Value::Null;
+    assert!(
+        serde_json::from_value::<UnresolvedOperation>(absent_source)
+            .unwrap()
+            .allocation
+            .unwrap()
+            .source
+            .is_none()
+    );
+    let coordinate = fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1 {
+        block: fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1 {
+            function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(0),
+            block: 1,
+        },
+        operation: 2,
+    };
+    assert!(unresolved_operation(Some(coordinate), Some("Alloca"), None).is_err());
+    assert!(
+        unresolved_operation(
+            Some(coordinate),
+            Some("Storage.ReadValue"),
+            Some(allocation)
+        )
+        .is_err()
+    );
+    assert!(unresolved_operation(None, None, Some(allocation)).is_err());
 }

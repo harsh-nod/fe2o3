@@ -574,8 +574,10 @@ fn source_reference_direct_holder_access_cannot_bypass_unique_outer_loan() {
                 |_, _| panic!("outer loan must protect its holder")
             ),
             Err(ProductionSemanticKirErrorV1::Unsupported {
+                function: 1,
+                block: Some(0),
+                statement: Some(2),
                 detail: "source reference access bypasses a live loan",
-                ..
             })
         ));
     }

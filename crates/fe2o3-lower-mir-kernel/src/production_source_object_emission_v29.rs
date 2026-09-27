@@ -1,5 +1,6 @@
 include!("production_source_object_aggregate_emission_v29.rs");
 include!("production_source_object_entry_v29.rs");
+include!("production_source_object_loans_v29.rs");
 
 #[cfg(test)]
 fn selected_pointer_test_owner_v29(
@@ -672,6 +673,30 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             return self.source_object_project_path_v29(place, 0, place.projections().len(), endpoint, address,
                 AccessMode::ReadWrite, memory, operations).map(Some);
         };
+        let aggregate_loan = self.with_emission_budget_v1(|this, budget| {
+            source_reference_emission_prepay_v29::<bool>(budget)?;
+            source_reference_emission_prepay_v29::<&SemanticTypeShapeV1>(budget)?;
+            source_reference_emission_prepay_v29::<&fe2o3_mir_model::semantic_mir_v1::SemanticPointerTypeV1>(budget)?;
+            budget.charge_work(6)?;
+            Ok(matches!(this.types[if first_dereference == 0 {
+                this.function.locals()[place.local().index() as usize].ty().index() as usize
+            } else { place.projections()[first_dereference - 1].result_type().index() as usize }].shape(),
+                SemanticTypeShapeV1::Pointer(pointer) if pointer.kind() == SemanticPointerKindV1::Reference
+                    && pointer.metadata() == SemanticPointerMetadataV1::None
+                    && matches!(this.types[pointer.pointee().index() as usize].shape(),
+                        SemanticTypeShapeV1::Tuple(_) | SemanticTypeShapeV1::Aggregate(_))))
+        })?;
+        if aggregate_loan
+            && let Some(endpoint) = self.source_aggregate_object_endpoint_v29(block, statement, place, access, operations)?
+        { return Ok(Some(endpoint)); }
+        if first_dereference + 1 == place.projections().len()
+            && matches!(self.types[if first_dereference == 0 {
+                self.function.locals()[place.local().index() as usize].ty().index() as usize
+            } else { place.projections()[first_dereference - 1].result_type().index() as usize }].shape(),
+                SemanticTypeShapeV1::Pointer(pointer) if pointer.kind() == SemanticPointerKindV1::Reference
+                    && pointer.metadata() == SemanticPointerMetadataV1::None)
+            && let Some(endpoint) = self.source_object_loan_endpoint_v29(block, statement, place, access)?
+        { return Ok(Some(endpoint)); }
         let selected = self.with_emission_budget_v1(|this, budget| {
             let Some(cursor) = this.execution.as_ref() else { return Ok(None); };
             let Some(references) = cursor.references else { return Ok(None); };

@@ -749,134 +749,154 @@ impl SourceReferenceCellPointerProofV29<'_, '_, '_> {
                 .body
                 .as_ref()
                 .ok_or_else(execution_call_error_v29)?;
-            for block in &body.blocks {
-                budget.charge_work(1)?;
-                for (position, operation) in block.operations.iter().enumerate() {
+            with_canonical_call_scratch_v1(budget, |budget| {
+                let mut prologue = None;
+                for block in &body.blocks {
                     budget.charge_work(1)?;
-                    let mut ordinal = 0_usize;
-                    operation.kind.try_visit_operands(|value| {
-                        let component = ordinal;
-                        ordinal = argument_sum_v1(&[ordinal, 1])?;
-                        let Some(slot) = self.cell_slot((instance, value), budget)? else {
-                            return Ok(());
-                        };
-                        if self.operand(
-                            (instance, block.id, Some(position), component),
-                            value,
-                            budget,
-                        )? {
-                            return Ok(());
-                        }
-                        match &operation.kind {
-                            OperationKind::Load { .. } | OperationKind::Store { .. }
-                                if component == 0 =>
-                            {
-                                self.ordinary_local_memory(
-                                    slots, instance, lowered, block.id, position, operation, slot,
-                                    budget,
-                                )
+                    for (position, operation) in block.operations.iter().enumerate() {
+                        budget.charge_work(1)?;
+                        let mut ordinal = 0_usize;
+                        operation.kind.try_visit_operands(|value| {
+                            let component = ordinal;
+                            ordinal = argument_sum_v1(&[ordinal, 1])?;
+                            let Some(slot) = self.cell_slot((instance, value), budget)? else {
+                                return Ok(());
+                            };
+                            if self.operand(
+                                (instance, block.id, Some(position), component),
+                                value,
+                                budget,
+                            )? {
+                                return Ok(());
                             }
-                            OperationKind::Cast {
-                                kind: CastKind::RestrictPointerAccess,
-                                value: source,
-                                to,
-                            } if component == 0 && *source == value => {
-                                let [result] = operation.results.as_slice() else {
-                                    return Err(execution_call_error_v29());
-                                };
-                                let (Type::Pointer(from), _) = source_reference_pointer_definition_lookup_v29(
-                                    &self.index.definitions, (instance, value), budget,
-                                )?
-                                    .ok_or_else(execution_call_error_v29)?
-                                else {
-                                    return Err(execution_call_error_v29());
-                                };
-                                let Type::Pointer(to_pointer) = to else {
-                                    return Err(execution_call_error_v29());
-                                };
-                                budget.charge_work(7)?;
-                                if from.address_space != AddressSpace::Private
-                                    || to_pointer.address_space != AddressSpace::Private
-                                    || from.access != AccessMode::ReadWrite
-                                    || to_pointer.access != AccessMode::ReadOnly
-                                    || !matches!(from.pointee.as_ref(), Type::Scalar(_))
-                                    || from.pointee != to_pointer.pointee
-                                    || result.ty != *to
-                                    || self.cell_slot((instance, result.id), budget)? != Some(slot)
+                            match &operation.kind {
+                                OperationKind::Load { .. } | OperationKind::Store { .. }
+                                    if component == 0 =>
+                                {
+                                    self.ordinary_local_memory(
+                                        &mut prologue,
+                                        slots,
+                                        instance,
+                                        lowered,
+                                        block.id,
+                                        position,
+                                        operation,
+                                        slot,
+                                        budget,
+                                    )
+                                }
+                                OperationKind::Cast {
+                                    kind: CastKind::RestrictPointerAccess,
+                                    value: source,
+                                    to,
+                                } if component == 0 && *source == value => {
+                                    let [result] = operation.results.as_slice() else {
+                                        return Err(execution_call_error_v29());
+                                    };
+                                    let (Type::Pointer(from), _) =
+                                        source_reference_pointer_definition_lookup_v29(
+                                            &self.index.definitions,
+                                            (instance, value),
+                                            budget,
+                                        )?
+                                        .ok_or_else(execution_call_error_v29)?
+                                    else {
+                                        return Err(execution_call_error_v29());
+                                    };
+                                    let Type::Pointer(to_pointer) = to else {
+                                        return Err(execution_call_error_v29());
+                                    };
+                                    budget.charge_work(7)?;
+                                    if from.address_space != AddressSpace::Private
+                                        || to_pointer.address_space != AddressSpace::Private
+                                        || from.access != AccessMode::ReadWrite
+                                        || to_pointer.access != AccessMode::ReadOnly
+                                        || !matches!(from.pointee.as_ref(), Type::Scalar(_))
+                                        || from.pointee != to_pointer.pointee
+                                        || result.ty != *to
+                                        || self.cell_slot((instance, result.id), budget)?
+                                            != Some(slot)
+                                    {
+                                        return Err(execution_call_error_v29());
+                                    }
+                                    Ok(())
+                                }
+                                _ => Err(source_reference_error_v29(
+                                    "source reference cell pointer has an unbound emitted use",
+                                )),
+                            }
+                        })?;
+                    }
+                    let terminator = block
+                        .terminator
+                        .as_ref()
+                        .ok_or_else(execution_call_error_v29)?;
+                    match terminator {
+                        Terminator::Return { values } => {
+                            for (component, &value) in values.iter().enumerate() {
+                                budget.charge_work(1)?;
+                                if self.cell_slot((instance, value), budget)?.is_some()
+                                    && !self.operand(
+                                        (instance, block.id, None, component),
+                                        value,
+                                        budget,
+                                    )?
                                 {
                                     return Err(execution_call_error_v29());
                                 }
-                                Ok(())
-                            }
-                            _ => Err(source_reference_error_v29(
-                                "source reference cell pointer has an unbound emitted use",
-                            )),
-                        }
-                    })?;
-                }
-                let terminator = block
-                    .terminator
-                    .as_ref()
-                    .ok_or_else(execution_call_error_v29)?;
-                match terminator {
-                    Terminator::Return { values } => {
-                        for (component, &value) in values.iter().enumerate() {
-                            budget.charge_work(1)?;
-                            if self.cell_slot((instance, value), budget)?.is_some()
-                                && !self.operand(
-                                    (instance, block.id, None, component),
-                                    value,
-                                    budget,
-                                )?
-                            {
-                                return Err(execution_call_error_v29());
                             }
                         }
+                        Terminator::ConditionalBranch { condition, .. } => {
+                            self.require_not_cell((instance, *condition), budget)?
+                        }
+                        Terminator::Switch { selector, .. }
+                        | Terminator::IntegerSwitch { selector, .. } => {
+                            self.require_not_cell((instance, *selector), budget)?
+                        }
+                        Terminator::Branch { .. } | Terminator::Unreachable => {}
                     }
-                    Terminator::ConditionalBranch { condition, .. } => {
-                        self.require_not_cell((instance, *condition), budget)?
-                    }
-                    Terminator::Switch { selector, .. }
-                    | Terminator::IntegerSwitch { selector, .. } => {
-                        self.require_not_cell((instance, *selector), budget)?
-                    }
-                    Terminator::Branch { .. } | Terminator::Unreachable => {}
-                }
-                terminator.try_visit_edges_v1(|target, arguments| {
-                    budget.charge_work(body.blocks.len())?;
-                    let target = body
-                        .blocks
-                        .iter()
-                        .find(|block| block.id == target)
-                        .ok_or_else(execution_call_error_v29)?;
-                    if target.parameters.len() != arguments.len() {
-                        return Err(execution_call_error_v29());
-                    }
-                    for (&value, parameter) in arguments.iter().zip(&target.parameters) {
-                        budget.charge_work(1)?;
-                        let from = self.cell_slot((instance, value), budget)?;
-                        let to = self.cell_slot((instance, parameter.id), budget)?;
-                        if from != to {
+                    terminator.try_visit_edges_v1(|target, arguments| {
+                        budget.charge_work(body.blocks.len())?;
+                        let target = body
+                            .blocks
+                            .iter()
+                            .find(|block| block.id == target)
+                            .ok_or_else(execution_call_error_v29)?;
+                        if target.parameters.len() != arguments.len() {
                             return Err(execution_call_error_v29());
                         }
-                        if from.is_some() {
-                            let (ty, _) = source_reference_pointer_definition_lookup_v29(
-                                &self.index.definitions, (instance, value), budget,
-                            )?
-                                .ok_or_else(execution_call_error_v29)?;
-                            if !call_splice_type_eq_v1(ty, &parameter.ty, budget).map_err(
-                                |error| match error {
-                                    CallInstanceEmissionErrorV1::Resource(error) => error.into(),
-                                    _ => execution_call_error_v29(),
-                                },
-                            )? {
+                        for (&value, parameter) in arguments.iter().zip(&target.parameters) {
+                            budget.charge_work(1)?;
+                            let from = self.cell_slot((instance, value), budget)?;
+                            let to = self.cell_slot((instance, parameter.id), budget)?;
+                            if from != to {
                                 return Err(execution_call_error_v29());
                             }
+                            if from.is_some() {
+                                let (ty, _) = source_reference_pointer_definition_lookup_v29(
+                                    &self.index.definitions,
+                                    (instance, value),
+                                    budget,
+                                )?
+                                .ok_or_else(execution_call_error_v29)?;
+                                if !call_splice_type_eq_v1(ty, &parameter.ty, budget).map_err(
+                                    |error| match error {
+                                        CallInstanceEmissionErrorV1::Resource(error) => {
+                                            error.into()
+                                        }
+                                        _ => execution_call_error_v29(),
+                                    },
+                                )? {
+                                    return Err(execution_call_error_v29());
+                                }
+                            }
                         }
-                    }
-                    Ok(())
-                })?;
-            }
+                        Ok(())
+                    })?;
+                }
+                Ok(())
+            })
+            .inspect_err(|error| source_reference_record_failure_v29(self.plan, error))?;
         }
         Ok(())
     }

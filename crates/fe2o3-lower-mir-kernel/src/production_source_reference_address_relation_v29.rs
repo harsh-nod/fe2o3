@@ -4,6 +4,7 @@ include!("production_source_address_emitted_index_v29.rs");
 include!("production_source_issued_pointer_v29.rs");
 include!("production_source_issued_pointer_actual_v29.rs");
 include!("production_source_issued_pointer_accesses_v29.rs");
+include!("production_source_scalar_loan_access_v29.rs");
 struct SourceAddressStatementV29<'source> {
     instance: usize,
     block: u32,
@@ -1202,8 +1203,9 @@ fn source_address_accesses_v29(
     source_index: &SourceAddressSourceIndexV29<'_>,
     slots: &OwnedScopedSourceSlotsV29,
     budget: &mut ArgumentBudgetV1<'_>,
-) -> Result<Vec<SourceAddressAccessSourceV29>, ProductionSemanticKirErrorV1> {
+) -> Result<(Vec<SourceAddressAccessSourceV29>, PendingSourceIssuedRolesV29), ProductionSemanticKirErrorV1> {
     references.plan.check_owner(instances, budget)?;
+    budget.reserve_storage(source_issued_census_query_headers_v29()?)?;
     let issued_header = std::mem::size_of::<Option<SourceIssuedAccessesV29<'_, '_, '_>>>();
     budget.reserve_storage(issued_header)?;
     let mut issued = None;
@@ -1362,6 +1364,42 @@ fn source_address_accesses_v29(
                             )?
                         };
                         (slot, None)
+                    } else if let Some((endpoint, _)) = object
+                        && matches!(frame.role, Some(ScopedMemoryRoleV29::Operand(_)))
+                        && let Some(checked) = source_aggregate_object_endpoint_access_v29(references.plan, site, place, access, endpoint, budget)?
+                    {
+                        let loan = checked.loan.original;
+                        (source_address_object_slot_v29(instances, references.plan, slots,
+                            loan.instance, loan.local, loan.generation, loan.ty, budget)?, None)
+                    } else if let Some((endpoint, _)) = object
+                        && prefix != 0 && prefix == place.projections().len()
+                        && place.projections()[prefix - 1].kind() == SemanticProjectionKindV1::Dereference
+                        && matches!(instances.owner().source_semantic().types()[if prefix == 1 {
+                            original.locals()[place.local().index() as usize].ty().index() as usize
+                        } else { place.projections()[prefix - 2].result_type().index() as usize }].shape(),
+                            SemanticTypeShapeV1::Pointer(pointer) if pointer.kind() == SemanticPointerKindV1::Reference
+                                && pointer.metadata() == SemanticPointerMetadataV1::None)
+                        && let Some(loan) = source_object_loan_access_v29(references.plan, site, place, access, budget)?
+                    {
+                        budget.charge_work(8)?;
+                        if prefix != place.projections().len()
+                            || endpoint.root_type != loan.original.ty || endpoint.projected_type != loan.original.ty
+                            || loan.original.kind != SourceBackingKindV29::Object(endpoint.root_schema)
+                            || endpoint.root_schema != endpoint.projected_schema || endpoint.path.count != 0
+                            || !matches!(endpoint.object, ScopedObjectIdentityV29::Reference {
+                                instance: actual, site: original, role, dereference_prefix,
+                            } if actual == instance && original == frame.site && dereference_prefix as usize == prefix
+                                && frame.role == Some(ScopedMemoryRoleV29::Operand(role)))
+                        { return Err(scoped_object_error_v29()); }
+                        (source_address_object_slot_v29(instances, references.plan, slots,
+                            loan.original.instance, loan.original.local, loan.original.generation,
+                            loan.original.ty, budget)?, None)
+                    } else if object.is_none() && prefix > 1 && prefix == place.projections().len()
+                        && matches!(frame.role, Some(ScopedMemoryRoleV29::Operand(_)))
+                        && let Some(loan) = source_scalar_loan_access_v29(references.plan, site, place, access, budget)?
+                    {
+                        (source_address_original_slot_v29(instances, slots,
+                            loan.cell.instance, loan.cell.local, loan.cell.ty, budget)?, None)
                     } else if prefix == 1 && matches!(place.projections()[0].kind(),
                         SemanticProjectionKindV1::Index(_) | SemanticProjectionKindV1::ConstantIndex { .. })
                     {
@@ -1538,7 +1576,19 @@ fn source_address_accesses_v29(
             });
         }
     }
-    if let Some(issued) = issued { issued.finish(budget)?; }
+    let issuer_count = source_issued_source_count_v29(instances, budget)?;
+    if issuer_count != 0 {
+        if issued.is_none() {
+            issued = Some(SourceIssuedAccessesV29::new(references.plan, instances, source_index, budget)?);
+        }
+        issued.as_mut().ok_or(ArgumentResourceV1::Accounting)?.census(references, issuer_count, budget)?;
+    } else if issued.as_ref().is_some_and(|rows| !rows.issuers.is_empty()) {
+        return Err(source_issued_error_v29());
+    }
+    let retained_issued = match issued {
+        Some(issued) => issued.finish(budget)?,
+        None => PendingSourceIssuedRolesV29::empty(),
+    };
     budget.release_storage(issued_header)?;
     budget.charge_work(raw_seen.len())?;
     if raw_seen.iter().any(|seen| !seen) {
@@ -1558,7 +1608,7 @@ fn source_address_accesses_v29(
     let bytes = argument_product_v1(raw_seen.capacity(), std::mem::size_of::<bool>())?;
     drop(raw_seen);
     budget.release_storage(bytes)?;
-    Ok(rows)
+    Ok((rows, retained_issued))
 }
 
 fn check_source_address_formations_v29(
@@ -1883,11 +1933,11 @@ fn check_source_address_payloads_v29(
     source_index: &SourceAddressSourceIndexV29<'_>,
     graph: &SourceAddressMemoryV29<'_>,
     rows: &[SourceAddressAccessSourceV29],
+    payload_index: &SourceObjectPayloadIndexV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    #[cfg(test)]
-    let payload_work_before = budget.work();
-    let payload_index = SourceObjectPayloadIndexV29::new(instances, source_index, budget)?;
+    source_reference_emission_prepay_v29::<Option<ScopedMemoryFrameV29>>(budget)?;
+    source_reference_emission_prepay_v29::<Option<&SemanticPlaceV1>>(budget)?;
     for source in rows {
         budget.charge_work(5)?;
         let sidecar = source_index.sidecar(source.instance, budget)?;
@@ -1940,11 +1990,22 @@ fn check_source_address_payloads_v29(
             {
                 return Err(scoped_object_error_v29());
             }
-            check_source_object_holder_value_v29(instances, source_index, source, graph, recorded, &payload_index,
+            check_source_object_holder_value_v29(instances, references.plan, source_index, source, graph, recorded, payload_index,
                 object.unwrap().0, pointer, budget)?;
         } else {
             check_scoped_payload_v29(original, &occurrences, row, operation, budget)?;
             check_scoped_array_initializer_recipe_v29(original, row, &sidecar.private_arrays.effects, budget)?;
+            budget.charge_work(4)?;
+            if matches!(payload, ScopedMemoryPayloadV29::Load { read, .. } if read.prefix > 1)
+                || matches!(payload, ScopedMemoryPayloadV29::Store { .. })
+                    && row.source.and_then(|frame| match frame.role {
+                        Some(ScopedMemoryRoleV29::Operand(role)) => scoped_source_place_v29(original, frame.site, role),
+                        _ => None,
+                    }).is_some_and(|place| place.projections().len() > 1)
+            {
+                check_source_scalar_loan_holder_v29(instances, references.plan, source_index, source,
+                    row, payload, payload_index, pointer, budget)?;
+            }
         }
         match payload {
             ScopedMemoryPayloadV29::IndexLoad { .. } => {
@@ -1955,7 +2016,9 @@ fn check_source_address_payloads_v29(
                 // A promoted holder's actual dereference must use that exact
                 // original definition, not another same-typed physical value.
                 budget.charge_work(4)?;
-                if read.prefix == 1
+                // Typed endpoints were independently rejoined for both reads
+                // and writes by the exact original holder query above.
+                if object.is_none() && read.prefix == 1
                     && scoped_payload_place_v29(original, read.site, read.role)
                         .and_then(|place| place.projections().first())
                         .is_some_and(|projection| matches!(projection.kind(), SemanticProjectionKindV1::Dereference))
@@ -2003,7 +2066,7 @@ fn check_source_address_payloads_v29(
                         let place = scoped_payload_place_v29(original, site, role)
                             .ok_or_else(source_raw_physical_error_v29)?;
                         if object.is_some() && matches!(occurrence, ScopedMemoryOccurrenceV29::Retained { .. }) {
-                            check_source_object_stored_read_v29(source_index, source, graph, recorded, &payload_index,
+                            check_source_object_stored_read_v29(source_index, source, graph, recorded, payload_index,
                                 place, site, role, occurrence, value, budget)?;
                         } else {
                             check_scoped_payload_archive_v29(&archive.bindings, place, occurrence, value, budget)?;
@@ -2062,12 +2125,6 @@ fn check_source_address_payloads_v29(
                 // producer relation; this row alone grants no source equation.
             }
         }
-    }
-    payload_index.discard(budget)?;
-    #[cfg(test)]
-    {
-        let (calls, work) = SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.get();
-        SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.set((calls.checked_add(1).unwrap(), work.checked_add(budget.work() - payload_work_before).unwrap()));
     }
     Ok(())
 }

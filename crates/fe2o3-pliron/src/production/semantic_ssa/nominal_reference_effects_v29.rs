@@ -163,14 +163,31 @@ impl NominalReferenceEffectsV29 {
         &mut self,
         function: &SemanticFunctionDeclV1,
         callables: &[SemanticCallableDeclV1],
+        types: &[SemanticTypeDeclV1],
         limits: ProductionSemanticSsaLimitsV1,
         summary: &mut ProductionSemanticSsaSummaryV1,
     ) -> Result<BTreeSet<SemanticTransparentBorrowSiteV1>, Error> {
-        if self.parameter_count == 0 {
-            return Ok(transparent_borrow_sites_v1(function, callables));
+        let mut meter = Meter { limits, summary };
+        let mut sites = if self.parameter_count == 0 {
+            transparent_borrow_sites_v1(function, callables)
+        } else {
+            self.prepay_scan(function, 0, &mut meter)?;
+            adapter::analyze_borrow_uses_v29(function, callables, &[], Some(self)).0
+        };
+        if adapter::shared_primitive_v29::has_candidates(function, types, &mut meter)? {
+            let (units, candidates) = scan_size(function, 0, &mut meter)?;
+            // Includes the existing nominal result, candidate records, ordered
+            // maps, three concurrent alias vectors and their bounded paths.
+            let scratch = sum(128, sum(product(units, 96)?, product(candidates, 64)?)?)?;
+            if scratch > self.scratch_peak {
+                meter.storage(scratch - self.scratch_peak)?;
+                self.scratch_peak = scratch;
+            }
+            sites.extend(adapter::shared_primitive_v29::analyze(
+                function, types, units, &mut meter,
+            )?);
         }
-        self.prepay_scan(function, 0, &mut Meter { limits, summary })?;
-        Ok(adapter::analyze_borrow_uses_v29(function, callables, &[], Some(self)).0)
+        Ok(sites)
     }
 
     fn prepay_scan(
@@ -200,13 +217,13 @@ impl NominalReferenceEffectsV29 {
     }
 }
 
-struct Meter<'a> {
+pub(super) struct Meter<'a> {
     limits: ProductionSemanticSsaLimitsV1,
     summary: &'a mut ProductionSemanticSsaSummaryV1,
 }
 
 impl Meter<'_> {
-    fn work(&mut self, units: usize) -> Result<(), Error> {
+    pub(super) fn work(&mut self, units: usize) -> Result<(), Error> {
         self.summary.work_units = sum(self.summary.work_units, units)?;
         accounting::enforce_module_resource_limits_v1(*self.summary, self.limits)
     }
@@ -370,3 +387,7 @@ fn scan_size(
     }
     Ok((size.units, size.candidates))
 }
+
+#[cfg(test)]
+#[path = "adapter_shared_primitive_v29_tests.rs"]
+mod shared_primitive_tests;

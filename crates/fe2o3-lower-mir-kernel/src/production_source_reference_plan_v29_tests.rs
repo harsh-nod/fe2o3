@@ -173,8 +173,10 @@ fn source_reference_diamond_discriminant_cannot_bypass_live_unique_loan() {
     assert!(matches!(
         result,
         Err(ProductionSemanticKirErrorV1::Unsupported {
+            function: 1,
+            block: Some(0),
+            statement: None,
             detail: "source reference access bypasses a live loan",
-            ..
         })
     ));
 }
@@ -695,6 +697,13 @@ fn owner_with(
     case: Case,
     mutate: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
 ) -> ProductionSemanticSsaOwnerV1 {
+    try_owner_with(case, mutate).unwrap()
+}
+
+fn try_owner_with(
+    case: Case,
+    mutate: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
+) -> Result<ProductionSemanticSsaOwnerV1, fe2o3_pliron::ProductionSemanticSsaErrorV1> {
     let unit_type = SemanticTypeDeclV1::new(
         SemanticTypeIdentityV1::from_sha256([1; 32]),
         SemanticLayoutIdentityV1::from_sha256([1; 32]),
@@ -967,14 +976,13 @@ fn owner_with(
         ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
             .unwrap();
     let mut owner =
-        ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())
-            .unwrap();
+        ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())?;
     let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
     let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
     owner
         .try_capture_occurrences_with_budget_v1(&mut budget)
         .unwrap();
-    owner
+    Ok(owner)
 }
 
 fn run(

@@ -5,6 +5,10 @@ use super::*;
 include!("production_optimized_source_allocation_v18.rs");
 include!("production_optimized_source_typed_memory_v18.rs");
 include!("production_optimized_source_currentness_v18.rs");
+include!("production_source_issued_role_replay_v18.rs");
+#[cfg(test)]
+#[path = "production_source_issued_roles_v29_tests.rs"]
+mod issued_role_tests_v29;
 
 pub(super) fn assemble_original_zero_raw_v29(
     instances: &ProductionCallInstancePlanV1<'_>,
@@ -222,6 +226,7 @@ fn assemble_pending_scoped_root_body_v29(
 // replay and the final joint consumer must check the immutable candidate.
 pub(super) struct PendingSourceMemoryV29 {
     source: ExecutionCallSourceV29,
+    issued: PendingSourceIssuedRolesV29,
     accesses: Vec<PendingSourceMemoryAccessV29>,
     projects: Vec<PendingSourceObjectProjectV29>,
     alternatives: Vec<PendingSourceMemoryAlternativeV29>,
@@ -308,6 +313,9 @@ pub(super) fn pending_memory_matches_v29(
         || left.index_failures.len() != right.index_failures.len()
         || left.index_guards.len() != right.index_guards.len()
     {
+        return Ok(false);
+    }
+    if !pending_issued_roles_match_v29(&left.issued, &right.issued, budget)? {
         return Ok(false);
     }
     // Fixed-width source keys and physical locators only. The entire source
@@ -870,6 +878,7 @@ fn check_immutable_source_memory_v29(
             .source
             .missing("physical census changed original source");
     }
+    check_immutable_issued_roles_v18(correspondence, root, &pending.issued, budget)?;
     let function = correspondence
         .inventory
         .functions()
@@ -1518,6 +1527,10 @@ pub(super) fn check_expanded_source_memory_v29(
     let floor = budget.storage();
     let header = argument_sum_v1(&[
         std::mem::size_of::<PendingSourceMemoryV29>(),
+        std::mem::size_of::<PendingSourceIssuedRolesV29>(),
+        std::mem::size_of::<Result<PendingSourceIssuedRolesV29, ProductionSemanticKirErrorV1>>(),
+        std::mem::size_of::<(Vec<SourceAddressAccessSourceV29>, PendingSourceIssuedRolesV29)>(),
+        std::mem::size_of::<Result<(Vec<SourceAddressAccessSourceV29>, PendingSourceIssuedRolesV29), ProductionSemanticKirErrorV1>>(),
         std::mem::size_of::<SourceAddressMemoryV29<'_>>(),
         std::mem::size_of::<SourceAddressLifetimesV29>(),
         std::mem::size_of::<Option<source_storage_v29::SourceStorageRootGrowthV29<'_, '_, '_>>>(),
@@ -1732,7 +1745,7 @@ fn check_expanded_source_memory_inner_v29(
             source_address_object_payload_v29(anchors, row, budget)?;
         }
     }
-    let sources = source_address_accesses_v29(instances, references, &source_index, slots, budget)?;
+    let (sources, issued) = source_address_accesses_v29(instances, references, &source_index, slots, budget)?;
     let index_failures = source_index_failures_v29(instances, references.plan, &source_index, slots, budget)?;
     check_source_object_effect_census_v29(instances, references.plan, &source_index, slots, &sources, &index_failures, budget)?;
     let mut accesses = emission_vec_v1(sources.len(), budget)?;
@@ -1775,8 +1788,17 @@ fn check_expanded_source_memory_inner_v29(
         &source_index,
         budget,
     )?;
-    let projects = check_source_static_object_projects_v29(instances, references.plan, &source_index, slots, &graph, budget)?;
-    check_source_address_payloads_v29(instances, references, slots, &source_index, &graph, &sources, budget)?;
+    #[cfg(test)]
+    let payload_work_before = budget.work();
+    let payload_index = SourceObjectPayloadIndexV29::new(instances, &source_index, budget)?;
+    let projects = check_source_static_object_projects_v29(instances, references.plan, &source_index, slots, &graph, &payload_index, budget)?;
+    check_source_address_payloads_v29(instances, references, slots, &source_index, &graph, &sources, &payload_index, budget)?;
+    payload_index.discard(budget)?;
+    #[cfg(test)]
+    {
+        let (calls, work) = SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.get();
+        SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.set((calls.checked_add(1).unwrap(), work.checked_add(budget.work() - payload_work_before).unwrap()));
+    }
     check_source_address_currentness_geometry_v29(
         &pending.function,
         &graph,
@@ -1798,6 +1820,7 @@ fn check_expanded_source_memory_inner_v29(
     let retained = retain_pending_memory_v29(
         instances,
         references.plan,
+        issued,
         &sources,
         &boundaries,
         slots,
@@ -1820,6 +1843,7 @@ fn check_expanded_source_memory_inner_v29(
 fn retain_pending_memory_v29(
     instances: &ExecutionInstancesV29<'_>,
     plan: &SourceReferencePlanV29<'_, '_>,
+    issued: PendingSourceIssuedRolesV29,
     sources: &[SourceAddressAccessSourceV29],
     boundaries: &[SourceAddressBoundaryV29],
     slots: &OwnedScopedSourceSlotsV29,
@@ -1898,6 +1922,7 @@ fn retain_pending_memory_v29(
     }
     let mut output = PendingSourceMemoryV29 {
         source: ExecutionCallSourceV29::from_instances(instances, budget)?,
+        issued,
         accesses: emission_vec_v1(sources.len(), budget)?,
         projects,
         alternatives: Vec::new(),
@@ -2099,6 +2124,7 @@ fn retain_pending_memory_v29(
         }
     }
     output.retained_storage = argument_sum_v1(&[
+        output.issued.retained_storage()?,
         argument_product_v1(output.projects.capacity(), std::mem::size_of::<PendingSourceObjectProjectV29>())?,
         argument_product_v1(
             output.accesses.capacity(),

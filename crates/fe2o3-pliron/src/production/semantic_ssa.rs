@@ -687,8 +687,13 @@ fn walk_semantic_ssa_plans_with_driver_v1<D: occurrences_v1::ReplayDriver>(
     )?;
     for (function_index, function) in semantic.functions().iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(function_index as u32);
-        let transparent_borrows =
-            reference_effects.borrow_sites(function, semantic.callables(), limits, &mut summary)?;
+        let transparent_borrows = reference_effects.borrow_sites(
+            function,
+            semantic.callables(),
+            semantic.types(),
+            limits,
+            &mut summary,
+        )?;
         let function_plan = plan_semantic_function_ssa_with_driver_v1(
             function_id,
             function,

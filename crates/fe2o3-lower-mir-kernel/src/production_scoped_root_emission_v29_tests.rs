@@ -47,6 +47,7 @@ mod module_tests {
             use super::*;
             include!("production_optimized_source_consumer_v18_tests.rs");
             include!("production_optimized_source_scalar_v18_tests.rs");
+            include!("production_optimized_source_descriptor_roles_v18_tests.rs");
             include!("production_optimized_source_assertions_v18_tests.rs");
             include!("production_optimized_source_currentness_v18_tests.rs");
             include!("production_optimized_source_effects_v18_tests.rs");

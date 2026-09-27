@@ -17776,6 +17776,8 @@ fn local_allocation_contracts(
         &mut source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy)
 }
 
+include!("production_ranked_projection_v1/by_value_reference_carrier_v18.rs");
+
 fn local_allocation_contracts_core_v18(
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1, origins: &[Option<u32>],
@@ -17837,14 +17839,14 @@ fn local_allocation_contracts_core_v18(
             source_ownership[argument_index],
             SemanticSourceArgumentOwnershipV1::ExclusiveOwner
         ) && matches!(type_decl.layout().backend_repr(), SemanticBackendReprV1::Scalar(scalar) if matches!(scalar.primitive(), SemanticBackendPrimitiveV1::Pointer { .. }));
-        arguments[argument_index] = Some(authenticated_source_allocation_contract_v1(
-            source_ownership[argument_index],
-            pointee.kind(),
+        arguments[argument_index] = source_argument_allocation_contract_v18(
+            types, ty, source_ownership[argument_index], abi_argument, pointee,
             AllocationContractV1 {
                 singleton_object,
                 ..abi_contract
             },
-        )?);
+            allocation,
+        )?;
     }
     if matches!(allocation, source_ranked_consumer_resources_v18::ProjectionAllocationV18::Legacy) {
         return Ok(origins.iter().map(|origin|

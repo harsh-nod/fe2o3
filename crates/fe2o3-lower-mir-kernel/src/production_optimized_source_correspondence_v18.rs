@@ -154,6 +154,18 @@ impl ProductionSourceCorrespondenceV18<'_> {
 }
 
 impl<'scope> ProductionOptimizedSourceCorrespondenceV18<'scope> {
+    pub(super) fn check_exact_original_v18(
+        &self,
+        original: &ProductionSourceCorrespondenceV18<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<()> {
+        original.check(budget)?;
+        if !std::ptr::eq(self.original, original) {
+            return original.source.missing("optimized source substituted its exact correspondence");
+        }
+        self.query(budget)
+    }
+
     fn observe_custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         if self.slot != std::ptr::from_ref(budget) as usize
             || self.ledger != budget.work_ledger_identity_v1()

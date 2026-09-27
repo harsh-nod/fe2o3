@@ -599,24 +599,62 @@ fn append_scoped_source_slots_v29(
             .checked_add(1)
             .ok_or(ArgumentResourceV1::Arithmetic)?;
     }
-    let (allocations, initializers) = visit_scoped_slot_initializers_v29(
-        instances,
-        id,
-        entry,
-        &slots[start..],
-        budget,
-        |_, slot, location, budget| {
-            let references = references.ok_or_else(scoped_slot_error_v29)?;
-            let initialization = private_array_operation_v1(body, location, budget)?
-                .ok_or_else(scoped_slot_error_v29)?;
-            match slot.representation {
-                ScopedSlotRepresentationV29::Object { .. } => source_reference_object_entry_store_v29(
-                    references, id, slot, lowered, location, initialization, budget),
-                ScopedSlotRepresentationV29::ScalarArray(_) => source_reference_retained_scalar_entry_store_v29(
-                    references, id, slot.origin, lowered, initialization, budget),
-            }
-        },
-    )?;
+    let mut counts = None;
+    with_canonical_call_scratch_v1(budget, |budget| {
+        let mut prologue = None;
+        counts = Some(visit_scoped_slot_initializers_v29(
+            instances,
+            id,
+            entry,
+            &slots[start..],
+            budget,
+            |_, slot, location, budget| {
+                let references = references.ok_or_else(scoped_slot_error_v29)?;
+                if prologue.is_none() {
+                    prologue = Some(SourceEntryPrologueV29::new(
+                        references, id, lowered, location, budget,
+                    )?);
+                }
+                let query = SourceEntryQueryV29::Prologue(
+                    prologue.as_ref().ok_or_else(scoped_slot_error_v29)?,
+                );
+                let initialization = private_array_operation_v1(body, location, budget)?
+                    .ok_or_else(scoped_slot_error_v29)?;
+                match slot.representation {
+                    ScopedSlotRepresentationV29::Object { .. } => {
+                        source_reference_object_entry_store_with_prologue_v29(
+                            query,
+                            references,
+                            id,
+                            slot,
+                            lowered,
+                            location,
+                            initialization,
+                            budget,
+                        )
+                    }
+                    ScopedSlotRepresentationV29::ScalarArray(_) => {
+                        source_reference_retained_scalar_entry_store_with_prologue_v29(
+                            query,
+                            references,
+                            id,
+                            slot.origin,
+                            lowered,
+                            initialization,
+                            budget,
+                        )
+                    }
+                }
+            },
+        )?);
+        Ok(())
+    })
+    .inspect_err(|error| {
+        if let Some(references) = references {
+            source_reference_record_failure_v29(references, error);
+        }
+    })?;
+    let (allocations, initializers) = counts.ok_or_else(scoped_slot_error_v29)?;
     budget.charge_work(4)?;
     if legacy_seen != legacy_count || allocations as usize != cursor
         || prologue.map_or(0, |span| span.operation_count)

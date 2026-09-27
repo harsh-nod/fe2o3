@@ -183,9 +183,12 @@ impl<'a> SourceIssuedActualV29<'a> {
 struct SourceIssuedAccessV29 {
     instance: usize,
     anchor: usize,
+    issuer: SsaValueV1,
+    access: MemoryAccess,
+    writing: bool,
     present: ValueId,
     block: BlockId,
-    checked: bool,
+    guard: Option<(BlockId, usize)>,
 }
 
 #[derive(Clone, Copy)]
@@ -275,7 +278,7 @@ impl SourceIssuedOriginalV29<'_, '_, '_> {
 
     fn actual_issuer(&self, recipe: SourceIssuedRecipeV29, references: &SourceReferenceEmissionV29<'_, '_>,
         actual: &SourceIssuedActualV29<'_>, budget: &mut ArgumentBudgetV1<'_>)
-        -> Result<SourceIssuedRootTransportV29, ProductionSemanticKirErrorV1>
+        -> Result<(SourceIssuedRootTransportV29, PendingSourceIssuedIssuerV29), ProductionSemanticKirErrorV1>
     {
         references.check(budget)?;
         budget.charge_work(10)?;
@@ -326,7 +329,17 @@ impl SourceIssuedOriginalV29<'_, '_, '_> {
         let data = source_index.emitted.operation(self.instance, span.kernel_ir_block, first as usize + 2, budget)?;
         let gep = source_index.emitted.operation(self.instance, span.kernel_ir_block, first as usize + 3, budget)?;
         check_source_issued_tail_v29(SourceIssuedPhysicalV29::from(recipe), value.id, *index, length, compare, data, gep, budget)?;
-        Ok(transport)
+        budget.charge_work(4)?;
+        let root_parameter = actual.value(transport.input, budget)?.input.ok_or_else(source_issued_error_v29)?;
+        let [length] = length.results.as_slice() else { return Err(source_issued_error_v29()); };
+        let [data] = data.results.as_slice() else { return Err(source_issued_error_v29()); };
+        let retained = PendingSourceIssuedIssuerV29 {
+            instance: self.instance, block: recipe.block, definition: recipe.issuer,
+            root_parameter, root_input: transport.input, receiver: value.id, index: *index,
+            length: length.id, present: recipe.present, data: data.id, pointer: recipe.pointer,
+            element: recipe.element, access: recipe.access,
+        };
+        Ok((transport, retained))
     }
 
     fn check_root_slice(&self, anchor: SourceReferenceAnchorV29, slice: ValueId,

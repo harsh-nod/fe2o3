@@ -41,6 +41,43 @@ enum SourceReferenceTerminatorOutcomeV29 {
     Switch(usize),
 }
 
+#[derive(Clone, Copy)]
+struct SourceReferenceDiagnosticSiteV29 {
+    function: u32,
+    block: u32,
+    statement: Option<u32>,
+}
+
+fn source_reference_locate_access_error_v29(
+    error: ProductionSemanticKirErrorV1,
+    site: Option<SourceReferenceDiagnosticSiteV29>,
+) -> ProductionSemanticKirErrorV1 {
+    match error {
+        ProductionSemanticKirErrorV1::Unsupported {
+            function: 0, block: None, statement: None,
+            detail: "source reference access bypasses a live loan",
+        } => match site {
+            Some(site) => unsupported(site.function, Some(site.block), site.statement,
+                "source reference access bypasses a live loan"),
+            None => source_reference_error_v29("source reference access bypasses a live loan"),
+        },
+        error => error,
+    }
+}
+
+fn source_reference_cfg_diagnostic_headers_v29() -> Result<usize, ArgumentResourceV1> {
+    argument_sum_v1(&[
+        std::mem::size_of::<&production_call_instances_v1::ProductionCallInstanceV1<'_>>(),
+        std::mem::size_of::<SourceReferenceDiagnosticSiteV29>(),
+        argument_product_v1(2, std::mem::size_of::<Option<SourceReferenceDiagnosticSiteV29>>())?,
+        std::mem::size_of::<Option<u32>>(),
+        std::mem::size_of::<Result<u32, std::num::TryFromIntError>>(),
+        argument_product_v1(2, std::mem::size_of::<ProductionSemanticKirErrorV1>())?,
+        source_reference_cfg_return_headers_v29::<()>()?,
+        source_reference_cfg_return_headers_v29::<SourceReferenceTerminatorOutcomeV29>()?,
+    ])
+}
+
 fn source_reference_cfg_return_headers_v29<T>() -> Result<usize, ArgumentResourceV1> {
     argument_product_v1(
         2,
@@ -57,7 +94,10 @@ fn source_reference_cfg_call_headers_v29() -> Result<usize, ArgumentResourceV1> 
 }
 
 fn source_reference_cfg_run_headers_v29() -> Result<usize, ArgumentResourceV1> {
-    argument_product_v1(2, std::mem::size_of::<Option<SourceReferenceCfgStateV29>>())
+    argument_sum_v1(&[
+        argument_product_v1(2, std::mem::size_of::<Option<SourceReferenceCfgStateV29>>())?,
+        source_reference_cfg_diagnostic_headers_v29()?,
+    ])
 }
 
 fn source_reference_cfg_exit_headers_v29() -> Result<usize, ArgumentResourceV1> {
@@ -603,13 +643,17 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         // One retained return option and one non-reentrant Some construction
         // slot. Input option cells themselves are paid in their vector backing.
         budget.reserve_storage(source_reference_cfg_run_headers_v29()?)?;
+        // At most one refusal is returned by this worklist. Its contextual
+        // decoration is prepaid, so it cannot replace the first error with a
+        // later resource refusal or introduce a new instance query afterward.
+        budget.charge_work(4)?;
         let index = self.cfg_index(instance, budget)?;
-        let function = self
+        let instance_row = self
             .plan
             .instances
             .instance(instance)
-            .ok_or_else(source_reference_cfg_obligation_v29)?
-            .declaration();
+            .ok_or_else(source_reference_cfg_obligation_v29)?;
+        let function = instance_row.declaration();
         let count = function.blocks().len();
         let mut inputs = source_reference_scratch_v29(count, budget)?;
         let mut queued = source_reference_scratch_v29(count, budget)?;
@@ -645,7 +689,15 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             self.enter_selector_block(instance, block as u32, budget)?;
             let declaration = &function.blocks()[block];
             for (ordinal, statement) in declaration.statements().iter().enumerate() {
-                budget.charge_work(1)?;
+                budget.charge_work(3)?;
+                let diagnostic = match u32::try_from(ordinal) {
+                    Ok(statement) => Some(SourceReferenceDiagnosticSiteV29 {
+                        function: instance_row.function().index(),
+                        block: block_id.index(),
+                        statement: Some(statement),
+                    }),
+                    Err(_) => return Err(ArgumentResourceV1::Arithmetic.into()),
+                };
                 let site = SourceReferenceSiteV29 {
                     instance,
                     block: block_id,
@@ -653,7 +705,10 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                 };
                 self.effect_site = Some(site);
                 self.effect_ordinal = 0;
-                self.statement(site, statement.kind(), budget)?;
+                match self.statement(site, statement.kind(), budget) {
+                    Ok(()) => {}
+                    Err(error) => return Err(source_reference_locate_access_error_v29(error, diagnostic)),
+                }
             }
             let site = SourceReferenceSiteV29 {
                 instance,
@@ -662,7 +717,16 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             };
             self.effect_site = Some(site);
             self.effect_ordinal = 0;
-            let outcome = self.terminator(site, declaration.terminator().kind(), budget)?;
+            budget.charge_work(1)?;
+            let diagnostic = Some(SourceReferenceDiagnosticSiteV29 {
+                function: instance_row.function().index(),
+                block: block_id.index(),
+                statement: None,
+            });
+            let outcome = match self.terminator(site, declaration.terminator().kind(), budget) {
+                Ok(outcome) => outcome,
+                Err(error) => return Err(source_reference_locate_access_error_v29(error, diagnostic)),
+            };
             let mut output = self.cfg_capture(budget)?;
             if let SourceReferenceTerminatorOutcomeV29::Returned(value) = outcome {
                 // Return already checked escapes and recorded its source value.

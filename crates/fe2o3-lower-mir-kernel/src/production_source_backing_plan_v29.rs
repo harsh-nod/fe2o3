@@ -643,15 +643,13 @@ fn source_reference_select_backing_v29(
                 SourceBackingKindV29::Object(schema)
             };
         }
+        if !plan.loans.is_empty() {
+            source_reference_emission_prepay_v29::<&SourceReferenceScalarCellV29>(budget)?;
+        }
         for loan in 0..plan.loans.len() {
             budget.charge_work(4)?;
             let strategy = plan.cells.strategies.get(loan)
                 .ok_or_else(source_backing_error_v29)?;
-            if matches!(strategy, SourceReferenceCellStrategyV29::Promoted)
-                && !equations.stored_loans[loan]
-            {
-                continue;
-            }
             let source = &plan.origins[plan.loans[loan].origin];
             let key = (
                 source.instance.index(),
@@ -665,6 +663,30 @@ fn source_reference_select_backing_v29(
                 }
                 continue;
             };
+            if matches!(strategy, SourceReferenceCellStrategyV29::Promoted)
+                && !equations.stored_loans[loan]
+            {
+                budget.charge_work(10)?;
+                let cell = &plan.cells.rows[index];
+                if cell.instance != source.instance || cell.local != source.local
+                    || cell.generation != source.generation
+                {
+                    return Err(source_backing_error_v29());
+                }
+                // A previously promoted loan cannot snapshot an object-backed
+                // primitive with a fabricated Read occurrence at its Borrow.
+                // Reuse only the already selected exact whole-object cell.
+                if !matches!(plan.loans[loan].kind, SemanticBorrowKindV1::Shared | SemanticBorrowKindV1::Mutable)
+                    || !source.projections.is_empty()
+                    || source.ty != cell.ty
+                    || !matches!(cell.kind, SourceBackingKindV29::Object(_))
+                    || (!matches!(types[cell.ty.index() as usize].shape(),
+                        SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+                        && !source_flat_aggregate_object_v29(types, cell.ty, budget)?)
+                {
+                    continue;
+                }
+            }
             plan.cells.strategies[loan] = match plan.cells.rows[index].kind {
                 SourceBackingKindV29::Scalar => SourceReferenceCellStrategyV29::Scalar(index),
                 SourceBackingKindV29::Object(_) => SourceReferenceCellStrategyV29::Object(index),

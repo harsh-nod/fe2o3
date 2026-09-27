@@ -6,6 +6,9 @@ pub(super) mod emission_v1;
 #[path = "adapter_prepared_v1.rs"]
 pub(super) mod prepared_v1;
 
+#[path = "adapter_shared_primitive_v29.rs"]
+pub(super) mod shared_primitive_v29;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct SemanticTransparentBorrowSiteV1 {
     block: u32,

@@ -119,6 +119,22 @@ impl ProductionSourceCorrespondenceV18<'_> {
             Option<SemanticLocalIdV1>,
         ) -> SliceResult<R>,
     ) -> SourceOwnedResultV18<R> {
+        self.with_optimized_descriptor_access_v18(optimized, root, instance, site, false, budget, use_view)
+    }
+
+    fn with_optimized_descriptor_access_v18<R>(
+        &self,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        root: usize,
+        instance: usize,
+        site: ProductionSliceAccessSiteV1,
+        write: bool,
+        budget: &mut SliceBudget<'_>,
+        use_view: impl for<'scope> FnOnce(
+            &ProductionOptimizedSliceAccessViewV18<'scope>,
+            Option<SemanticLocalIdV1>,
+        ) -> SliceResult<R>,
+    ) -> SourceOwnedResultV18<R> {
         optimized_source_endpoints_v18(self, optimized, budget)?;
         let floor = budget.storage();
         scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
@@ -137,10 +153,11 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 ])?)?;
                 Ok(())
             })())?;
-            let original = self.with_checked_slice_access_v18(
+            let original = self.with_descriptor_access_v18(
                 root,
                 instance,
                 site,
+                write,
                 budget,
                 optimized_slice_original_v18,
             )?;
@@ -224,7 +241,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                         site,
                         origins,
                     }
-                    .facts(budget)
+                    .descriptor_facts(write, budget)
                     .map_err(source_emission_error_v18)
                 },
             )?;
@@ -289,7 +306,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 .checked_sub(floor)
                 .ok_or(ArgumentResourceV1::Accounting)?;
             let result =
-                self.with_checked_slice_access_v18(root, instance, site, budget, |view, local| {
+                self.with_descriptor_access_v18(root, instance, site, write, budget, |view, local| {
                     let checked = optimized_slice_original_v18(view, local)?;
                     if checked.access != original.access
                         || checked.input != original.input

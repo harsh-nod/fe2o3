@@ -385,11 +385,12 @@ impl SourceReferenceCellPointerProofV29<'_, '_, '_> {
         Ok(())
     }
 
-    fn ordinary_local_memory(
-        &self,
+    fn ordinary_local_memory<'kir>(
+        &'kir self,
+        prologue: &mut Option<SourceEntryPrologueV29<'kir>>,
         slots: &OwnedScopedSourceSlotsV29,
         instance: usize,
-        lowered: &LoweredFunctionResultV1,
+        lowered: &'kir LoweredFunctionResultV1,
         block: BlockId,
         ordinal: usize,
         operation: &Operation,
@@ -405,23 +406,46 @@ impl SourceReferenceCellPointerProofV29<'_, '_, '_> {
             OperationKind::Store { pointer, .. } => (pointer, true),
             _ => return Err(execution_call_error_v29()),
         };
-        let anchors = &lowered
-            .scoped_memory_anchors
-            .as_ref()
-            .ok_or_else(scoped_memory_error_v29)?
-            .rows;
-        budget.charge_work(argument_product_v1(anchors.len(), 4)?)?;
-        let mut matching = anchors.iter().filter(|anchor| anchor.block == block && anchor.position == ordinal
-            && matches!(anchor.kind, ScopedMemoryAnchorKindV29::Access { pointer: value, .. } if value == pointer));
-        let frame = matching.next().ok_or_else(scoped_memory_error_v29)?.source;
-        if matching.next().is_some() {
-            return Err(scoped_memory_error_v29());
-        }
         let id = self
             .plan
             .instances
             .id_at(instance)
             .ok_or_else(execution_call_error_v29)?;
+        let location = PrivateArrayPhysicalLocationV1 {
+            block_ordinal: 0,
+            block,
+            operation: ordinal,
+        };
+        let is_initializer = writing
+            && physical.allocation.block_ordinal == 0
+            && physical.allocation.block == block
+            && self.entry_initializations.get(slot).copied().flatten() == Some(location);
+        let frame = if is_initializer {
+            if prologue.is_none() {
+                *prologue = Some(SourceEntryPrologueV29::new(
+                    self.plan, id, lowered, location, budget,
+                )?);
+            }
+            prologue
+                .as_ref()
+                .ok_or_else(execution_call_error_v29)?
+                .anchor(self.plan, id, lowered, location, Some(pointer), budget)?
+                .source
+        } else {
+            let anchors = &lowered
+                .scoped_memory_anchors
+                .as_ref()
+                .ok_or_else(scoped_memory_error_v29)?
+                .rows;
+            budget.charge_work(argument_product_v1(anchors.len(), 4)?)?;
+            let mut matching = anchors.iter().filter(|anchor| anchor.block == block && anchor.position == ordinal
+                && matches!(anchor.kind, ScopedMemoryAnchorKindV29::Access { pointer: value, .. } if value == pointer));
+            let frame = matching.next().ok_or_else(scoped_memory_error_v29)?.source;
+            if matching.next().is_some() {
+                return Err(scoped_memory_error_v29());
+            }
+            frame
+        };
         let function = self
             .plan
             .instances
@@ -448,7 +472,10 @@ impl SourceReferenceCellPointerProofV29<'_, '_, '_> {
             {
                 return Err(scoped_memory_error_v29());
             }
-            return source_reference_cell_entry_store_v29(
+            return source_reference_cell_entry_store_with_prologue_v29(
+                SourceEntryQueryV29::Prologue(
+                    prologue.as_ref().ok_or_else(scoped_memory_error_v29)?,
+                ),
                 self.plan,
                 id,
                 physical.origin,
@@ -487,171 +514,38 @@ impl SourceReferenceCellPointerProofV29<'_, '_, '_> {
             .position(|&value| value == Some(slot))
             .ok_or_else(execution_call_error_v29)?;
         let original_read = (!writing
-            && frame.role == Some(ScopedMemoryRoleV29::Operand(ExecutionOperandV29::RvaluePlace)))
-            .then_some(SourceReferenceSiteV29 {
-                instance: id,
-                block: match frame.site {
-                    ExecutionSiteV29::Statement { block, .. } | ExecutionSiteV29::Terminator { block } =>
-                        SemanticBlockIdV1::from_index(block.get()),
-                },
-                statement: match frame.site {
-                    ExecutionSiteV29::Statement { statement, .. } => Some(statement as usize),
-                    ExecutionSiteV29::Terminator { .. } => None,
-                },
-            });
-        self.check_memory(cell, (instance, pointer), operation, writing, original_read, budget)
+            && frame.role
+                == Some(ScopedMemoryRoleV29::Operand(
+                    ExecutionOperandV29::RvaluePlace,
+                )))
+        .then_some(SourceReferenceSiteV29 {
+            instance: id,
+            block: match frame.site {
+                ExecutionSiteV29::Statement { block, .. }
+                | ExecutionSiteV29::Terminator { block } => {
+                    SemanticBlockIdV1::from_index(block.get())
+                }
+            },
+            statement: match frame.site {
+                ExecutionSiteV29::Statement { statement, .. } => Some(statement as usize),
+                ExecutionSiteV29::Terminator { .. } => None,
+            },
+        });
+        self.check_memory(
+            cell,
+            (instance, pointer),
+            operation,
+            writing,
+            original_read,
+            budget,
+        )
     }
 }
 
-// A retained entry uses the original argument value, not a producer-selected
-// initialization value. Reconstruct its physical ordinal from the admitted ABI.
-fn source_reference_cell_initial_parameter_v29(
-    plan: &SourceReferencePlanV29<'_, '_>,
-    instance: ProductionCallInstanceIdV1,
-    local: SemanticLocalIdV1,
-    lowered: &LoweredFunctionResultV1,
-    budget: &mut ArgumentBudgetV1<'_>,
-) -> Result<ValueId, ProductionSemanticKirErrorV1> {
-    plan.check_owner(plan.instances, budget)?;
-    let row = plan
-        .instances
-        .instance(instance)
-        .ok_or_else(execution_call_error_v29)?;
-    let function = row.declaration();
-    let declaration = function
-        .locals()
-        .get(local.index() as usize)
-        .ok_or_else(execution_call_error_v29)?;
-    let semantic = plan.instances.owner().source_semantic();
-    let shape = semantic.types()[declaration.ty().index() as usize].shape();
-    let represented = matches!(
-        shape,
-        SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
-    ) || matches!(shape, SemanticTypeShapeV1::Pointer(_))
-        && private_retained_slot_facts_v1(semantic.types(), declaration.ty(), budget)?.is_some();
-    if !declaration.role().is_entry_argument() || !represented {
-        return Err(execution_call_error_v29());
-    }
-    let body = lowered
-        .function
-        .body
-        .as_ref()
-        .ok_or_else(execution_call_error_v29)?;
-    let floor = budget.storage();
-    let result = (|| {
-        let mut found = None;
-        if instance != plan.instances.root() {
-            let selector = plan
-                .instances
-                .parameter_source(instance, local, budget)
-                .map_err(|error| match error {
-                    production_call_instances_v1::ProductionCallInstanceErrorV1::Resource(
-                        error,
-                    ) => error.into(),
-                    _ => execution_call_error_v29(),
-                })?;
-            let layout =
-                execution_function_layout_v29(plan.instances, instance, Some(plan), budget)?;
-            if layout.parameter_types != lowered.function.signature.parameters
-                || layout.parameter_types.len() != body.parameters.len()
-            {
-                return Err(execution_call_error_v29());
-            }
-            for (ordinal, argument) in layout.call_arguments.iter().enumerate() {
-                budget.charge_work(4)?;
-                if argument.source_argument == selector.source_argument
-                    && argument.tuple_field == selector.tuple_field
-                {
-                    if !matches!(argument.component, None | Some(0))
-                        || found.replace(body.parameters[ordinal]).is_some()
-                    {
-                        return Err(execution_call_error_v29());
-                    }
-                }
-            }
-        } else {
-            check_argument_function_abi_v1(
-                function,
-                row.function(),
-                SemanticKirFunctionRoleV1::KernelEntry,
-            )?;
-            let mut ordinal = 0usize;
-            for (argument, &ty) in function.abi().source_input_types().iter().enumerate() {
-                budget.charge_work(argument_product_v1(function.locals().len(), 2)?)?;
-                let argument =
-                    u32::try_from(argument).map_err(|_| ArgumentResourceV1::Arithmetic)?;
-                let mut locals = function
-                    .locals()
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, declaration)| {
-                        declaration.role() == SemanticLocalRoleV1::Argument(argument)
-                    });
-                let (source_local, declaration) =
-                    locals.next().ok_or_else(execution_call_error_v29)?;
-                if locals.next().is_some() || declaration.ty() != ty {
-                    return Err(execution_call_error_v29());
-                }
-                let shape_floor = budget.storage();
-                source_reference_owned_prepay_v29::<KernelParameterShapeV1>(plan, budget)?;
-                prepay_argument_shape_v1(semantic, ty, budget)?;
-                let shape = kernel_parameter_shape_v1(semantic, function, argument, ty)?;
-                match &shape {
-                    KernelParameterShapeV1::Direct(expected) => {
-                        budget.charge_work(3)?;
-                        if lowered.function.signature.parameters.get(ordinal) != Some(expected) {
-                            return Err(execution_call_error_v29());
-                        }
-                        if source_local == local.index() as usize {
-                            found = Some(
-                                *body
-                                    .parameters
-                                    .get(ordinal)
-                                    .ok_or_else(execution_call_error_v29)?,
-                            );
-                        }
-                        ordinal = ordinal
-                            .checked_add(1)
-                            .ok_or(ArgumentResourceV1::Arithmetic)?;
-                    }
-                    KernelParameterShapeV1::Components(components) => {
-                        if source_local == local.index() as usize {
-                            return Err(execution_call_error_v29());
-                        }
-                        for (_, _, expected, _, _) in components {
-                            budget.charge_work(2)?;
-                            if lowered.function.signature.parameters.get(ordinal) != Some(expected)
-                            {
-                                return Err(execution_call_error_v29());
-                            }
-                            ordinal = ordinal
-                                .checked_add(1)
-                                .ok_or(ArgumentResourceV1::Arithmetic)?;
-                        }
-                    }
-                }
-                drop(shape);
-                budget.release_storage(budget.storage() - shape_floor)?;
-            }
-            if ordinal != body.parameters.len()
-                || ordinal != lowered.function.signature.parameters.len()
-            {
-                return Err(execution_call_error_v29());
-            }
-        }
-        found.ok_or_else(execution_call_error_v29)
-    })()
-    .inspect_err(|error| source_reference_record_failure_v29(plan, error));
-    budget.release_storage(
-        budget
-            .storage()
-            .checked_sub(floor)
-            .ok_or(ArgumentResourceV1::Accounting)?,
-    )?;
-    result
-}
+include!("production_source_entry_prologue_v29.rs");
 
-fn source_reference_cell_entry_store_v29(
+fn source_reference_cell_entry_store_with_prologue_v29(
+    query: SourceEntryQueryV29<'_, '_>,
     plan: &SourceReferencePlanV29<'_, '_>,
     instance: ProductionCallInstanceIdV1,
     origin: ScopedSlotOriginV29,
@@ -671,14 +565,15 @@ fn source_reference_cell_entry_store_v29(
     }) {
         return Err(scoped_slot_error_v29());
     }
-    source_reference_retained_scalar_entry_store_v29(
-        plan, instance, origin, lowered, operation, budget,
+    source_reference_retained_scalar_entry_store_with_prologue_v29(
+        query, plan, instance, origin, lowered, operation, budget,
     )
 }
 
 // Ordinary retained scalar arguments need the same ABI-bound initializer as
 // cells, but their storage does not imply a C1 scalar-cell strategy.
-fn source_reference_retained_scalar_entry_store_v29(
+fn source_reference_retained_scalar_entry_store_with_prologue_v29(
+    query: SourceEntryQueryV29<'_, '_>,
     plan: &SourceReferencePlanV29<'_, '_>,
     instance: ProductionCallInstanceIdV1,
     origin: ScopedSlotOriginV29,
@@ -700,7 +595,7 @@ fn source_reference_retained_scalar_entry_store_v29(
     {
         return Err(scoped_slot_error_v29());
     }
-    let parameter = source_reference_cell_initial_parameter_v29(
+    let parameter = query.parameter(
         plan,
         instance,
         SemanticLocalIdV1::from_index(local),
@@ -721,6 +616,46 @@ fn source_reference_retained_scalar_entry_store_v29(
         return Err(scoped_slot_error_v29());
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn source_reference_cell_entry_store_v29(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    instance: ProductionCallInstanceIdV1,
+    origin: ScopedSlotOriginV29,
+    lowered: &LoweredFunctionResultV1,
+    operation: &Operation,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    source_reference_cell_entry_store_with_prologue_v29(
+        SourceEntryQueryV29::OneShot,
+        plan,
+        instance,
+        origin,
+        lowered,
+        operation,
+        budget,
+    )
+}
+
+#[cfg(test)]
+fn source_reference_retained_scalar_entry_store_v29(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    instance: ProductionCallInstanceIdV1,
+    origin: ScopedSlotOriginV29,
+    lowered: &LoweredFunctionResultV1,
+    operation: &Operation,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    source_reference_retained_scalar_entry_store_with_prologue_v29(
+        SourceEntryQueryV29::OneShot,
+        plan,
+        instance,
+        origin,
+        lowered,
+        operation,
+        budget,
+    )
 }
 
 fn source_reference_cell_pointer_type_v29(

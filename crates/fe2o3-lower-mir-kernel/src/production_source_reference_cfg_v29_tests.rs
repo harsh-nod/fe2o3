@@ -793,7 +793,14 @@ fn borrow_reference(local: u32) -> SemanticStatementV1 {
 }
 
 fn loop_owner(case: LoopCase) -> ProductionSemanticSsaOwnerV1 {
-    owner_with(Case::Shared, |_, functions| {
+    try_loop_owner(case, true).unwrap()
+}
+
+fn try_loop_owner(
+    case: LoopCase,
+    explicit_memory_read: bool,
+) -> Result<ProductionSemanticSsaOwnerV1, fe2o3_pliron::ProductionSemanticSsaErrorV1> {
+    try_owner_with(Case::Shared, |_, functions| {
         let mut entry = vec![];
         if !matches!(
             case,
@@ -814,8 +821,8 @@ fn loop_owner(case: LoopCase) -> ProductionSemanticSsaOwnerV1 {
                 vec![read_reference()]
             }
             LoopCase::ChangingHolder => vec![borrow_reference(5), read_reference()],
-            // Retain the address-taken local so this case reaches reference CFG
-            // analysis instead of failing earlier at an undefined scalar SSA edge.
+            // The explicit exit Load below retains ordinary memory so this
+            // case reaches reference CFG initializedness, not scalar SSA.
             LoopCase::Uninitialized => vec![
                 assign(place(5, WORD), fixture_word(19)),
                 borrow_reference(5),
@@ -852,7 +859,15 @@ fn loop_owner(case: LoopCase) -> ProductionSemanticSsaOwnerV1 {
         if matches!(case, LoopCase::Uninitialized) {
             exit.push(assign(
                 place(6, WORD),
-                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(5, WORD))),
+                if explicit_memory_read {
+                    SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                        place(5, WORD),
+                        SemanticVolatilityV1::NonVolatile,
+                        None,
+                    ))
+                } else {
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(5, WORD)))
+                },
             ));
         }
         if !matches!(
@@ -1085,9 +1100,30 @@ fn source_reference_cfg_live_loan_cannot_alias_a_later_same_site_storage_epoch()
 }
 
 #[test]
-fn source_reference_cfg_zero_trip_does_not_invent_backedge_initialization() {
+fn source_reference_cfg_zero_trip_promoted_copy_is_rejected_at_original_ssa_edge() {
+    let error = try_loop_owner(LoopCase::Uninitialized, false).err().expect(
+        "the original Copy cannot obtain an entry value from the backedge",
+    );
     assert!(matches!(
-        run_owner(loop_owner(LoopCase::Uninitialized), |_, _| panic!(
+        error,
+        fe2o3_pliron::ProductionSemanticSsaErrorV1::Planner {
+            function,
+            error: fe2o3_mir_model::SsaPlannerErrorV1::UndefinedAtEdge {
+                edge, target, variable,
+            },
+        } if function.index() == 1 && edge.source().get() == 0
+            && edge.ordinal() == 0 && target.get() == 1 && variable.get() == 5
+    ), "{error:?}");
+}
+
+#[test]
+fn source_reference_cfg_zero_trip_does_not_invent_backedge_initialization() {
+    let owner = loop_owner(LoopCase::Uninitialized);
+    let worker = owner.plan_for_function(SemanticFunctionIdV1::from_index(1)).unwrap();
+    assert!(worker.plan().promoted_variables().iter().all(|variable| variable.get() != 5));
+    assert!(worker.retained_cross_edge_variables().iter().any(|variable| variable.get() == 5));
+    assert!(matches!(
+        run_owner(owner, |_, _| panic!(
             "zero-trip read is undefined"
         )),
         Err(ProductionSemanticKirErrorV1::Unsupported {
@@ -1164,6 +1200,63 @@ fn source_reference_cfg_worklist_and_index_exhaustion_never_publish_partial_owne
 }
 
 #[test]
+fn source_reference_cfg_access_context_preserves_other_errors_and_nested_sites() {
+    const DETAIL: &str = "source reference access bypasses a live loan";
+    let site = Some(SourceReferenceDiagnosticSiteV29 {
+        function: 7, block: 8, statement: Some(9),
+    });
+    for (function, block, statement, detail) in [
+        (3, Some(4), Some(5), DETAIL),
+        (0, Some(0), None, DETAIL),
+        (0, None, None, "unrelated semantic refusal"),
+    ] {
+        let error = source_reference_locate_access_error_v29(
+            unsupported(function, block, statement, detail), site,
+        );
+        assert!(matches!(error, ProductionSemanticKirErrorV1::Unsupported {
+            function: actual_function, block: actual_block,
+            statement: actual_statement, detail: actual_detail,
+        } if (actual_function, actual_block, actual_statement, actual_detail)
+            == (function, block, statement, detail)));
+    }
+    assert!(matches!(source_reference_locate_access_error_v29(
+        source_reference_error_v29(DETAIL), None,
+    ), ProductionSemanticKirErrorV1::Unsupported {
+        function: 0, block: None, statement: None, detail: DETAIL,
+    }));
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(0);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+    for resource in [
+        budget.charge_work(1).unwrap_err(),
+        budget.reserve_storage(1).unwrap_err(),
+        ArgumentResourceV1::Allocation,
+        ArgumentResourceV1::Accounting,
+        ArgumentResourceV1::Arithmetic,
+    ] {
+        let original = ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(resource);
+        let cause = std::error::Error::source(&original).map(ToString::to_string);
+        let error = source_reference_locate_access_error_v29(original, site);
+        assert_eq!(std::error::Error::source(&error).map(ToString::to_string), cause);
+        assert!(matches!(error,
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(actual)
+                if actual == resource));
+    }
+    assert_eq!((budget.work(), budget.storage()), (0, 0));
+}
+
+fn independent_cfg_diagnostic_headers_v29() -> usize {
+    use std::mem::size_of;
+    size_of::<&production_call_instances_v1::ProductionCallInstanceV1<'_>>()
+        + size_of::<SourceReferenceDiagnosticSiteV29>()
+        + 2 * size_of::<Option<SourceReferenceDiagnosticSiteV29>>()
+        + size_of::<Option<u32>>()
+        + size_of::<Result<u32, std::num::TryFromIntError>>()
+        + 2 * size_of::<ProductionSemanticKirErrorV1>()
+        + 2 * size_of::<Result<(), ProductionSemanticKirErrorV1>>()
+        + 2 * size_of::<Result<SourceReferenceTerminatorOutcomeV29, ProductionSemanticKirErrorV1>>()
+}
+
+#[test]
 fn source_reference_cfg_constructor_headers_have_independent_exact_storage_cuts() {
     use std::mem::size_of;
     let index = 2 * size_of::<Result<SourceReferenceCfgIndexV29, ProductionSemanticKirErrorV1>>();
@@ -1171,7 +1264,9 @@ fn source_reference_cfg_constructor_headers_have_independent_exact_storage_cuts(
     let call = size_of::<SourceReferenceCallSummaryV29>()
         + size_of::<Option<SourceReferenceCallSummaryV29>>()
         + 2 * size_of::<Option<Vec<usize>>>();
-    let run = 2 * size_of::<Option<SourceReferenceCfgStateV29>>();
+    let diagnostic = independent_cfg_diagnostic_headers_v29();
+    let run = 2 * size_of::<Option<SourceReferenceCfgStateV29>>() + diagnostic;
+    assert_eq!(source_reference_cfg_diagnostic_headers_v29().unwrap(), diagnostic);
     assert_eq!(
         source_reference_cfg_return_headers_v29::<SourceReferenceCfgIndexV29>().unwrap(),
         index
@@ -1182,7 +1277,7 @@ fn source_reference_cfg_constructor_headers_have_independent_exact_storage_cuts(
     );
     assert_eq!(source_reference_cfg_call_headers_v29().unwrap(), call);
     assert_eq!(source_reference_cfg_run_headers_v29().unwrap(), run);
-    for required in [index, state, call, run] {
+    for required in [index, state, call, diagnostic, run] {
         for slack in [0, 1] {
             let mut work = CanonicalKernelIrWorkBudgetV1::new(0);
             let mut budget = ArgumentBudgetV1::new(&mut work, 17 + required - slack);
@@ -1246,8 +1341,10 @@ fn source_reference_cfg_refusal_probes_reach_real_index_and_worklist_boundaries(
                     let index = 8 * 3 + 6 * b + 9 * e + 3;
                     let capture = 3 + frames;
                     let clone = 3 + 1 + 3 + locals + 2;
-                    let prelude = index + 3 * 3 + 3 * b + capture + clone;
-                    let first_statement = 5 + clone + frames + 1 + 1;
+                    // Four diagnostic-decoration units are prepaid once. Each
+                    // statement adds two units for checked source coordinates.
+                    let prelude = 4 + index + 3 * 3 + 3 * b + capture + clone;
+                    let first_statement = 5 + clone + frames + 1 + 3;
                     let allowance = prelude + first_statement;
                     budget
                         .charge_work(LIMIT - budget.work() - allowance)
@@ -1283,6 +1380,7 @@ fn source_reference_cfg_refusal_probes_reach_real_index_and_worklist_boundaries(
                     assert_eq!(
                         error.actual(),
                         LIMIT + 2 * std::mem::size_of::<Option<SourceReferenceCfgStateV29>>()
+                            + independent_cfg_diagnostic_headers_v29()
                     );
                     assert_eq!(error.limit(), LIMIT);
                     assert!(builder.effect_site.is_none());

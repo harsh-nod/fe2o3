@@ -6,7 +6,7 @@ pub(in super::super) fn build(
     try_build(types, functions, callables).unwrap()
 }
 
-fn try_build(
+pub(in super::super) fn try_build(
     types: Vec<SemanticTypeDeclV1>,
     functions: Vec<SemanticFunctionDeclV1>,
     callables: Vec<SemanticCallableDeclV1>,

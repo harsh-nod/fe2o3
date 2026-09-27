@@ -198,7 +198,8 @@ impl SemanticFunctionLoweringV1<'_, '_> {
     }
 }
 
-fn source_reference_object_entry_store_v29(
+fn source_reference_object_entry_store_with_prologue_v29(
+    query: SourceEntryQueryV29<'_, '_>,
     plan: &SourceReferencePlanV29<'_, '_>,
     instance: ProductionCallInstanceIdV1,
     slot: &ScopedSourceSlotV29,
@@ -258,13 +259,8 @@ fn source_reference_object_entry_store_v29(
             .as_ref()
             .ok_or_else(scoped_object_error_v29)?;
         anchors.check_object_ledger(budget)?;
-        budget.charge_work(argument_product_v1(anchors.rows.len(), 3)?)?;
-        let mut matching = anchors
-            .rows
-            .iter()
-            .filter(|row| row.block == location.block && row.position == location.operation);
-        let anchor = matching.next().ok_or_else(scoped_object_error_v29)?;
-        if matching.next().is_some() || anchor.source.is_some() {
+        let anchor = query.object_anchor(plan, instance, lowered, location, budget)?;
+        if anchor.source.is_some() {
             return Err(scoped_object_error_v29());
         }
         let payload = anchors.object_payload(anchor, budget)?;
@@ -289,8 +285,7 @@ fn source_reference_object_entry_store_v29(
         {
             return Err(scoped_object_error_v29());
         }
-        let parameter =
-            source_reference_cell_initial_parameter_v29(plan, instance, local, lowered, budget)?;
+        let parameter = query.parameter(plan, instance, local, lowered, budget)?;
         let access = memory_access_for_type(
             plan.instances.owner().source_semantic().types(),
             ty,
@@ -308,4 +303,26 @@ fn source_reference_object_entry_store_v29(
         Ok(())
     });
     result.inspect_err(|error| source_reference_record_failure_v29(plan, error))
+}
+
+#[cfg(test)]
+fn source_reference_object_entry_store_v29(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    instance: ProductionCallInstanceIdV1,
+    slot: &ScopedSourceSlotV29,
+    lowered: &LoweredFunctionResultV1,
+    location: PrivateArrayPhysicalLocationV1,
+    operation: &Operation,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    source_reference_object_entry_store_with_prologue_v29(
+        SourceEntryQueryV29::OneShot,
+        plan,
+        instance,
+        slot,
+        lowered,
+        location,
+        operation,
+        budget,
+    )
 }

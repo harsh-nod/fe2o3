@@ -684,3 +684,276 @@ fn original_scalar_entry_query_has_independent_headers_work_custody_and_first_re
         }
     }
 }
+
+thread_local! {
+    static SCALAR_ENTRY_STORE_MODE_V29: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static SCALAR_ENTRY_STORE_VISITS_V29: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SCALAR_ENTRY_STORE_EXPECTED_V29: std::cell::Cell<Option<ArgumentResourceV1>> = const { std::cell::Cell::new(None) };
+}
+
+fn inspect_scalar_entry_store_scratch_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &[Option<LoweredFunctionResultV1>],
+    slots: &mut OwnedScopedSourceSlotsV29,
+    references: Option<&SourceReferenceEmissionV29<'_, '_>>,
+    _: Option<&ExecutionIdentityPlanV1<'_, '_>>,
+    _: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let plan = references.expect("genuine scalar entry source plan").plan;
+    let mut selected = None;
+    for owner in &slots.instances {
+        let lowered = emitted[owner.instance.index()].as_ref().unwrap();
+        let body = lowered.function.body.as_ref().unwrap();
+        visit_scoped_slot_initializers_v29(
+            instances,
+            owner.instance,
+            body.blocks[0].id,
+            &slots.slots[owner.slots.clone()],
+            budget,
+            |index, slot, location, _| {
+                if selected.is_none()
+                    && matches!(
+                        slot.origin.identity,
+                        ScopedAllocationIdentityV29::OriginalObject { generation: 0, .. }
+                    )
+                {
+                    selected = Some((owner.instance, owner.slots.start + index, location));
+                }
+                Ok(())
+            },
+        )?;
+    }
+    let (instance, index, location) = selected.expect("actual typed entry initializer required");
+    let slot = &slots.slots[index];
+    let lowered = emitted[instance.index()].as_ref().unwrap();
+    let block = &lowered.function.body.as_ref().unwrap().blocks[location.block_ordinal];
+    assert_eq!(block.id, location.block);
+    let operation = &block.operations[location.operation];
+    assert!(matches!(
+        operation.kind,
+        OperationKind::Storage(ScopedObjectOperationV29::WriteValue { .. })
+    ));
+    let check = |location, budget: &mut ArgumentBudgetV1<'_>| {
+        source_reference_object_entry_store_v29(
+            plan, instance, slot, lowered, location, operation, budget,
+        )
+    };
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    assert!(floor > 0);
+    assert_eq!(
+        (budget.failed_work(), budget.failed_storage()),
+        (None, None)
+    );
+    assert_eq!(plan.failure.get(), None);
+    match SCALAR_ENTRY_STORE_MODE_V29.get() {
+        mode @ (0 | 1) => {
+            let before_work = budget.work();
+            check(location, budget)?;
+            let query_work = budget.work() - before_work;
+            let peak = budget.peak_storage();
+            assert!(query_work > 7);
+            assert_eq!(budget.storage(), floor);
+            let before_work = budget.work();
+            check(location, budget)?;
+            assert_eq!(budget.work() - before_work, query_work);
+            assert_eq!((budget.storage(), budget.peak_storage()), (floor, peak));
+            if mode == 1 {
+                let before_work = budget.work();
+                let refused = check(
+                    PrivateArrayPhysicalLocationV1 {
+                        operation: usize::MAX,
+                        ..location
+                    },
+                    budget,
+                );
+                assert!(
+                    matches!(
+                        refused,
+                        Err(ProductionSemanticKirErrorV1::Unsupported {
+                            detail: "typed object source payload differs from its actual operation",
+                            ..
+                        })
+                    ),
+                    "the copied impossible location must reach the entry anchor refusal: {refused:?}"
+                );
+                assert!(budget.work() - before_work > 7);
+                assert_eq!((budget.storage(), budget.peak_storage()), (floor, peak));
+                assert_eq!(plan.failure.get(), None);
+                assert_eq!(
+                    (budget.failed_work(), budget.failed_storage()),
+                    (None, None)
+                );
+                let before_work = budget.work();
+                check(location, budget)?;
+                assert_eq!(budget.work() - before_work, query_work);
+                assert_eq!((budget.storage(), budget.peak_storage()), (floor, peak));
+            }
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(plan.failure.get(), None);
+            assert_eq!(
+                (budget.failed_work(), budget.failed_storage()),
+                (None, None)
+            );
+        }
+        mode @ (2 | 3) => {
+            let first = if mode == 2 {
+                let limit = LIMIT;
+                budget.charge_work(limit.checked_sub(budget.work() + 6).unwrap())?;
+                let peak = budget.peak_storage();
+                let refused = check(location, budget)
+                    .expect_err("scope entry must exceed six remaining work units");
+                let ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(first) = refused
+                else {
+                    panic!("scope entry must report resource failure: {refused:?}");
+                };
+                let ArgumentResourceV1::Work(error) = first else {
+                    panic!("scope entry must report Work: {first:?}");
+                };
+                assert_eq!((error.actual(), error.limit()), (limit + 1, limit));
+                assert_eq!(budget.work(), limit - 1);
+                assert_eq!((budget.storage(), budget.peak_storage()), (floor, peak));
+                assert_eq!(
+                    (budget.failed_work(), budget.failed_storage()),
+                    (Some(limit + 1), None)
+                );
+                first
+            } else {
+                let first_header = source_reference_emission_headers_v29::<()>()?;
+                let second_header =
+                    source_reference_emission_headers_v29::<Option<&ScopedMemoryAnchorV29>>()?;
+                assert!(first_header > 0 && second_header > 0);
+                let limit = budget.storage_limit();
+                let padding = limit
+                    .checked_sub(floor + first_header + second_header - 1)
+                    .unwrap();
+                budget.reserve_storage(padding)?;
+                let padded_floor = budget.storage();
+                let peak = budget.peak_storage();
+                let refused = check(location, budget)
+                    .expect_err("the second prepaid header must be one byte short");
+                let ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(first) = refused
+                else {
+                    panic!("header denial must report resource failure: {refused:?}");
+                };
+                let ArgumentResourceV1::Storage(error) = first else {
+                    panic!("header denial must report Storage: {first:?}");
+                };
+                assert_eq!((error.actual(), error.limit()), (limit + 1, limit));
+                assert_eq!(budget.storage(), padded_floor);
+                assert_eq!(budget.peak_storage(), peak.max(padded_floor + first_header));
+                assert_eq!(
+                    (budget.failed_work(), budget.failed_storage()),
+                    (None, Some(limit + 1))
+                );
+                budget.release_storage(padding)?;
+                assert_eq!(budget.storage(), floor);
+                // Exhaust work only after the first Storage denial. Replay must
+                // return that same error before attempting any new work debit.
+                budget.charge_work(LIMIT - budget.work())?;
+                assert_eq!(budget.failed_work(), None);
+                first
+            };
+            assert_eq!(plan.failure.get(), Some(first));
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            let replay = check(location, budget);
+            assert!(matches!(replay,
+                Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error)) if error == first));
+            assert_eq!(
+                (
+                    budget.work(),
+                    budget.storage(),
+                    budget.peak_storage(),
+                    budget.failed_work(),
+                    budget.failed_storage()
+                ),
+                before
+            );
+            assert_eq!(budget.storage(), floor);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(plan.failure.get(), Some(first));
+            SCALAR_ENTRY_STORE_EXPECTED_V29.set(Some(first));
+        }
+        _ => panic!("entry store scratch mode"),
+    }
+    // Only completed inner assertions count. Resource failures are swallowed
+    // here so the genuine enclosing source owner must retain the first failure.
+    SCALAR_ENTRY_STORE_VISITS_V29.set(SCALAR_ENTRY_STORE_VISITS_V29.get() + 1);
+    Ok(())
+}
+
+fn run_scalar_entry_store_scratch_case_v29(mode: u8) {
+    struct Restore(Option<ScopedSlotCustodyObserverV29>, u8);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCOPED_SLOT_CUSTODY_OBSERVER_V29.set(self.0);
+            SCALAR_ENTRY_STORE_MODE_V29.set(self.1);
+        }
+    }
+    let _restore = Restore(
+        SCOPED_SLOT_CUSTODY_OBSERVER_V29.replace(Some(inspect_scalar_entry_store_scratch_v29)),
+        SCALAR_ENTRY_STORE_MODE_V29.get(),
+    );
+    let run = |mode| {
+        SCALAR_ENTRY_STORE_MODE_V29.set(mode);
+        SCALAR_ENTRY_STORE_VISITS_V29.set(0);
+        SCALAR_ENTRY_STORE_EXPECTED_V29.set(None);
+        let (result, _, _, completed) = run_scalar_entries_v29(SuffixCase::Root, 0, LIMIT, LIMIT);
+        if mode < 2 {
+            result.unwrap();
+            assert!(completed);
+            assert_eq!(SCALAR_ENTRY_STORE_VISITS_V29.get(), 3);
+            assert_eq!(SCALAR_ENTRY_VISITS_V29.get(), 3);
+            assert_eq!(SCALAR_ENTRY_STORE_EXPECTED_V29.get(), None);
+        } else {
+            assert!(!completed);
+            assert_eq!(
+                SCALAR_ENTRY_STORE_VISITS_V29.get(),
+                1,
+                "inner assertions must complete before outer refusal: {result:?}"
+            );
+            assert_eq!(SCALAR_ENTRY_VISITS_V29.get(), 1);
+            let expected = SCALAR_ENTRY_STORE_EXPECTED_V29
+                .get()
+                .expect("actual first resource denial");
+            assert_eq!(
+                original_repeated_source_resource_v29(result.unwrap_err()),
+                expected
+            );
+        }
+    };
+    run(0);
+    if mode != 0 {
+        run(mode);
+    }
+}
+
+#[test]
+fn original_scalar_entry_store_scratch_repeated_success_keeps_floor_and_peak() {
+    run_scalar_entry_store_scratch_case_v29(0);
+}
+
+#[test]
+fn original_scalar_entry_store_scratch_semantic_refusal_reclaims_headers_and_recovers() {
+    run_scalar_entry_store_scratch_case_v29(1);
+}
+
+#[test]
+fn original_scalar_entry_store_scratch_scope_entry_denial_keeps_first_work_error() {
+    run_scalar_entry_store_scratch_case_v29(2);
+}
+
+#[test]
+fn original_scalar_entry_store_scratch_partial_header_denial_keeps_first_storage_error() {
+    run_scalar_entry_store_scratch_case_v29(3);
+}
+
+include!("production_source_entry_prologue_v29_tests.rs");

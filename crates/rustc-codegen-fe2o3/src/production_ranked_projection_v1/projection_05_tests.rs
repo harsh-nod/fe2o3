@@ -1,3 +1,5 @@
+    include!("by_value_reference_carrier_v18_tests.rs");
+
     #[test]
     fn capability_alias_cycle_terminates_with_exact_edge_charge() {
         let mut edges = vec![Vec::new(); 2];

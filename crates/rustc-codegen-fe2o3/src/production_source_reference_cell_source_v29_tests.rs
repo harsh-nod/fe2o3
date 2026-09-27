@@ -120,13 +120,19 @@ fn program(case: &str) -> String {
         }
         _ => panic!("unrequested source-cell case"),
     };
+    let control_flow = if case == "loop" {
+        // The source counter starts at base & 3 and decreases without wrapping.
+        ", control_flow(loop_bounds(3))"
+    } else {
+        ""
+    };
     format!(
         r#"use fe2o3_device::{{kernel, thread, DisjointSlice, KernelContext, MaskedTile1D}};
 #[inline(never)]
 fn cell_step(value: &mut u32) {{ *value = (*value).wrapping_add(3); }}
 #[inline(never)]
 fn cell_return(value: &mut u32) -> &mut u32 {{ cell_step(value); value }}
-#[kernel(typed, launch(required=[64,1,1], max=[64,1,1]))]
+#[kernel(typed, launch(required=[64,1,1], max=[64,1,1]){control_flow})]
 pub fn source_cell_probe(mut ctx: KernelContext<'_>, input: &[u32], base: u64, mut output: DisjointSlice<u32>) {{
     ctx.with_workgroup(|workgroup| {{
         let mut value = base as u32;
@@ -440,6 +446,15 @@ fn source_cell_protocol_preserves_original_programs_and_profiles() {
         assert!(source.contains("#[inline(never)]"));
         assert!(source.contains("fn cell_step(value: &mut u32)"));
         assert!(source.contains("ctx.with_workgroup"));
+        assert_eq!(
+            source.contains("control_flow(loop_bounds(3))"),
+            *case == "loop"
+        );
+        if *case == "loop" {
+            assert!(source.contains("let mut left = (base & 3) as u32;"));
+            assert!(source.contains("while left != 0"));
+            assert!(source.contains("left = left.wrapping_sub(1);"));
+        }
         assert!(!source.contains("unsafe"));
     }
 }

@@ -13,6 +13,18 @@ use fe2o3_kernel_ir::{
 type SliceResult<T> = Result<T, ProductionSemanticKirErrorV1>;
 
 include!("production_optimized_source_slice_v18.rs");
+include!("production_optimized_source_descriptor_roles_v18.rs");
+
+fn descriptor_write_lookup_headers_v18() -> Result<usize, ArgumentResourceV1> {
+    type Definition<'a> = &'a fe2o3_kernel_analysis::CanonicalKirDefinitionRefV1<'a>;
+    argument_sum_v1(&[
+        size_of::<Definition<'_>>(),
+        size_of::<Option<Definition<'_>>>(),
+        size_of::<Result<Option<Definition<'_>>, CanonicalKirInventoryErrorV1>>(),
+        size_of::<SliceResult<Option<Definition<'_>>>>(),
+        size_of::<SliceResult<Definition<'_>>>(),
+    ])
+}
 
 /// Inert source access and controlling assertion locators, not an admitted view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +69,9 @@ impl ProductionSliceAccessSiteV1 {
 
 struct SliceFacts<'a> {
     access: SliceAccess,
+    address_operation: SliceOperation,
+    data_operation: SliceOperation,
+    length_operation: SliceOperation,
     data_carrier: SliceDefinition,
     length_carrier: SliceDefinition,
     input: SliceDefinition,
@@ -237,6 +252,21 @@ impl ProductionSourceCorrespondenceV18<'_> {
             Option<SemanticLocalIdV1>,
         ) -> SliceResult<R>,
     ) -> SourceOwnedResultV18<R> {
+        self.with_descriptor_access_v18(root, instance, site, false, budget, use_view)
+    }
+
+    fn with_descriptor_access_v18<R>(
+        &self,
+        root: usize,
+        instance: usize,
+        site: ProductionSliceAccessSiteV1,
+        write: bool,
+        budget: &mut SliceBudget<'_>,
+        use_view: impl for<'s> FnOnce(
+            &ProductionSliceAccessViewV1<'s>,
+            Option<SemanticLocalIdV1>,
+        ) -> SliceResult<R>,
+    ) -> SourceOwnedResultV18<R> {
         self.retain_query((|| {
             self.query(budget)?;
             let semantic = self.source.source_semantic(budget)?;
@@ -289,7 +319,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                         site,
                         origins,
                     }
-                    .facts(budget)
+                    .descriptor_facts(write, budget)
                     .map_err(source_argument_error_v18)
                 },
             )?;
@@ -786,16 +816,31 @@ impl<'a, O> SliceQuery<'a, '_, O> {
     }
 
     fn facts(&self, budget: &mut SliceBudget<'_>) -> SliceResult<SliceFacts<'a>> {
+        self.descriptor_facts(false, budget)
+    }
+
+    fn descriptor_facts(&self, write: bool, budget: &mut SliceBudget<'_>) -> SliceResult<SliceFacts<'a>> {
         let access = self.access(budget)?;
         let read = self.operation(access.operation, budget)?;
-        let OperationKind::Load {
-            pointer,
-            access: memory,
-        } = &read.operation.kind
-        else {
-            return Err(self
-                .site
-                .unsupported("checked slice correspondence requires a plain read"));
+        let (pointer, memory, loaded_type) = match (&read.operation.kind, write) {
+            (OperationKind::Load { pointer, access }, false) => {
+                let [result] = read.operation.results.as_slice() else {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                };
+                (pointer, access, &result.ty)
+            }
+            (OperationKind::Store { pointer, value, access }, true) if read.operation.results.is_empty() => {
+                budget.reserve_storage(descriptor_write_lookup_headers_v18()?)?;
+                let definition = self.inventory.definition_for_value(self.function.coordinate, *value, budget)
+                    .map_err(slice_inventory_error)?.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                if definition.ty.as_scalar().is_none() {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                }
+                (pointer, access, definition.ty)
+            }
+            _ => return Err(self.site.unsupported(if write {
+                "checked slice correspondence requires a plain scalar write"
+            } else { "checked slice correspondence requires a plain read" })),
         };
         if !matches!(memory.address_space, AddressSpace::Global | AddressSpace::Generic)
             || (memory.address_space == AddressSpace::Generic && matches!(self.owner, SliceOwnerV18::Legacy(_)))
@@ -804,13 +849,6 @@ impl<'a, O> SliceQuery<'a, '_, O> {
                 .site
                 .unsupported("checked slice correspondence requires a nonvolatile global read"));
         }
-        let loaded_type = &read
-            .operation
-            .results
-            .first()
-            .filter(|_| read.operation.results.len() == 1)
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
-            .ty;
         let address = self.defining_operation(*pointer, budget)?;
         let OperationKind::GetElementPointer { base, offset } = address.operation.kind else {
             return Err(self
@@ -901,6 +939,8 @@ impl<'a, O> SliceQuery<'a, '_, O> {
         if function != self.function.coordinate || root_slice.address_space != AddressSpace::Global
             || data_type.address_space != memory.address_space
             || root_slice.element != data_type.element || root_slice.access != data_type.access
+            || (write && root_slice.access != AccessMode::ReadWrite)
+            || (write && root_slice.element.as_ref() != loaded_type)
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
@@ -917,6 +957,9 @@ impl<'a, O> SliceQuery<'a, '_, O> {
         };
         Ok(SliceFacts {
             access,
+            address_operation: address.coordinate,
+            data_operation: data.coordinate,
+            length_operation: length.coordinate,
             data_carrier: carrier(data_slice, budget)?,
             length_carrier: carrier(length_slice, budget)?,
             input,

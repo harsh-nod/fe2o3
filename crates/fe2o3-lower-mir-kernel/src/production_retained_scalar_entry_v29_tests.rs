@@ -5,6 +5,82 @@ thread_local! {
     static ENTRY_OBSERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+fn retained_reference_owner() -> ProductionSemanticSsaOwnerV1 {
+    let original = super::super::fixtures::repeated_reference_owner();
+    let semantic = original.source_semantic();
+    let mut functions = semantic.functions().to_vec();
+    let helper = &functions[3];
+    assert_eq!(helper.blocks().len(), 1);
+    assert_eq!(helper.locals().len(), 3);
+    let original = &helper.blocks()[0];
+    assert_eq!(original.statements().len(), 2);
+    // Preserve both original operations, but keep the shared holder live over
+    // a real CFG edge. The same-block promotion does not remove this backing.
+    functions[3] = SemanticFunctionDeclV1::new(
+        helper.identity(),
+        helper.role(),
+        helper.item_definition_identity(),
+        helper.monomorphization_identity(),
+        helper.generic_type_arguments_identity(),
+        helper.const_generic_arguments_identity(),
+        helper.source(),
+        helper.abi().clone(),
+        helper.locals().to_vec(),
+        helper.entry(),
+        vec![
+            SemanticBasicBlockV1::new(
+                original.identity(),
+                original.source(),
+                original.statements()[..1].to_vec(),
+                SemanticTerminatorV1::new(original.terminator().source(),
+                    SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::Goto, SemanticBlockIdV1::from_index(1),
+                    ))),
+            ).unwrap(),
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([135; 32]),
+                original.source(),
+                original.statements()[1..].to_vec(),
+                original.terminator().clone(),
+            ).unwrap(),
+        ],
+    ).unwrap();
+    let owner = super::super::fixtures::build(
+        semantic.types().to_vec(), functions, semantic.callables().to_vec(),
+    );
+    assert_cross_cfg_retention(&owner, 3, 2);
+    owner
+}
+
+fn assert_cross_cfg_retention(owner: &ProductionSemanticSsaOwnerV1, function: u32, holder: u32) {
+    let id = SemanticFunctionIdV1::from_index(function);
+    let declaration = &owner.source_semantic().functions()[function as usize];
+    assert_eq!(declaration.blocks().len(), 2);
+    assert_eq!(declaration.blocks()[0].statements().len(), 1);
+    let SemanticStatementKindV1::Assign(assignment) = declaration.blocks()[0].statements()[0].kind()
+        else { panic!("original shared borrow") };
+    assert_eq!(assignment.destination().local().index(), holder);
+    assert!(matches!(assignment.value().kind(), SemanticRvalueKindV1::Borrow {
+        kind: SemanticBorrowKindV1::Shared, place,
+    } if place.local().index() == 1 && place.projections().is_empty()));
+    assert!(matches!(declaration.blocks()[0].terminator().kind(),
+        SemanticTerminatorKindV1::Goto(edge) if edge.target().index() == 1));
+    let plan = owner.plan_for_function(id).unwrap().plan();
+    assert!(plan.promoted_variables().iter().all(|variable| variable.get() != 1),
+        "the ordinary argument must still require backing");
+    assert!(plan.live_in(fe2o3_mir_model::SsaBlockIdV1::new(1)).unwrap()
+        .iter().any(|variable| variable.get() == holder),
+        "the original reference holder must remain live across the edge");
+}
+
+fn stopped_original_source(result: &SourceOwnedResultV18<()>) -> bool {
+    matches!(result, Err(ProductionSourceOwnedViewErrorV18::Source(
+        ProductionPendingScopedSourceErrorV29::Source(
+            ProductionSemanticKirErrorV1::Unsupported { detail: STOP, .. }
+        )
+    )))
+}
+
 fn ordinary_slots(
     instances: &ExecutionInstancesV29<'_>,
     receipt: &OwnedScopedSourceSlotsV29,
@@ -97,15 +173,15 @@ fn ordinary_retained_helper_arguments_complete_full_root_emission() {
         )
     }
     ENTRY_OBSERVED.set(0);
-    let (result, _, _) = run(
-        false,
-        ScopedFixture::RepeatedReferences,
+    let (result, _, _, completed) = run_original_repeated_source_v29(
+        retained_reference_owner,
         observe,
         LIMIT,
         LIMIT,
     );
     assert!(result.is_ok(), "{result:?}");
-    assert_eq!(ENTRY_OBSERVED.get(), 2);
+    assert!(completed, "the retained helper entries must reach final physical admission");
+    assert_eq!(ENTRY_OBSERVED.get(), 6, "two helpers in each of three mandatory replays");
 }
 
 #[test]
@@ -151,7 +227,7 @@ fn complete_noncell_entry_census_reconstructs_its_original_abi_without_omissions
     }
     ENTRY_OBSERVED.set(0);
     let (result, _, _, completed) = run_original_repeated_source_v29(
-        super::super::fixtures::repeated_reference_owner,
+        retained_reference_owner,
         observe,
         LIMIT,
         LIMIT,
@@ -208,14 +284,14 @@ fn ordinary_entry_validation_does_not_grant_scalar_cell_membership() {
         Err(unsupported(0, None, None, STOP))
     }
     ENTRY_OBSERVED.set(0);
-    let (result, _, _) = run(
-        false,
-        ScopedFixture::RepeatedReferences,
+    let (result, _, _, completed) = run_original_repeated_source_v29(
+        retained_reference_owner,
         observe,
         LIMIT,
         LIMIT,
     );
-    assert!(is_stopped(&result), "{result:?}");
+    assert!(stopped_original_source(&result), "{result:?}");
+    assert!(!completed);
     assert_eq!(ENTRY_OBSERVED.get(), 2);
 }
 
@@ -301,14 +377,14 @@ fn complete_ordinary_entry_census_rejects_initializer_and_instance_tampering() {
         Err(unsupported(0, None, None, STOP))
     }
     ENTRY_OBSERVED.set(0);
-    let (result, _, _) = run(
-        false,
-        ScopedFixture::RepeatedReferences,
+    let (result, _, _, completed) = run_original_repeated_source_v29(
+        retained_reference_owner,
         observe,
         LIMIT,
         LIMIT,
     );
-    assert!(is_stopped(&result), "{result:?}");
+    assert!(stopped_original_source(&result), "{result:?}");
+    assert!(!completed);
     assert_eq!(ENTRY_OBSERVED.get(), 6);
 }
 
@@ -333,16 +409,17 @@ fn root_argument_owner() -> ProductionSemanticSsaOwnerV1 {
             local(206, shared, SemanticLocalRoleV1::Temporary),
             local(207, U32, SemanticLocalRoleV1::Temporary),
         ],
-        vec![block(
-            208,
-            vec![
-                assign(
+        vec![
+            block(208, vec![assign(
                     place(3, shared),
                     SemanticRvalueKindV1::Borrow {
                         kind: SemanticBorrowKindV1::Shared,
                         place: place(1, U32),
                     },
-                ),
+                )], SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::Goto, SemanticBlockIdV1::from_index(1),
+                ))),
+            block(209, vec![
                 assign(
                     place(4, U32),
                     SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(dereference)),
@@ -376,12 +453,14 @@ fn root_argument_owner() -> ProductionSemanticSsaOwnerV1 {
     .unwrap()
     .admit_exact_v29(SemanticMirLimitsV1::default())
     .unwrap();
-    ProductionSemanticSsaOwnerV1::try_new(
+    let owner = ProductionSemanticSsaOwnerV1::try_new(
         ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
             .unwrap(),
         ProductionSemanticSsaLimitsV1::default(),
     )
-    .unwrap()
+    .unwrap();
+    assert_cross_cfg_retention(&owner, 0, 3);
+    owner
 }
 
 fn with_root_lowered(

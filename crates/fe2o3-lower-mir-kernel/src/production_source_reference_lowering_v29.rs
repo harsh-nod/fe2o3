@@ -803,6 +803,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         };
         let loan = self.with_emission_budget_v1(|this, budget| {
             references.check(budget)?;
+            source_reference_emission_prepay_v29::<Option<&SourceReferenceCellStrategyV29>>(budget)?;
             let Some(index) = references.loan_at(site, budget)? else {
                 return Ok(None);
             };
@@ -839,7 +840,9 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                     "source reference borrow occurrence differs",
                 ));
             }
-            if budget
+            if matches!(references.plan.cells.strategies.get(index), Some(SourceReferenceCellStrategyV29::Object(_))) {
+                source_object_loan_v29(references.plan, index, budget)?.ok_or_else(scoped_object_error_v29)?;
+            } else if budget
                 .source_reference_scalar_cell_v29(references.plan, index)?
                 .is_none()
             {
@@ -905,11 +908,23 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             }
             Ok(())
         })?;
-        let referent = match self
-            .source_reference_scalar_address_v29(site, statement, place, loan, operations)?
-        {
-            Some(address) => address,
-            None => self.resolve_place(block, statement, place, operations)?,
+        let referent = if matches!(references.plan.cells.strategies.get(loan),
+            Some(SourceReferenceCellStrategyV29::Object(_))) {
+            self.source_reference_object_address_v29(site, statement, place, loan, operations)?
+                .ok_or_else(scoped_object_error_v29)?
+        } else {
+            match self.source_reference_scalar_address_v29(site, statement, place, loan, operations)? {
+                Some(address) => address,
+                None => self
+                    .resolve_place_for_source_reference_access_v29(
+                        block,
+                        statement,
+                        place,
+                        SourceReferenceAccessV29::Borrow(*kind),
+                        operations,
+                    )?
+                    .0,
+            }
         };
         self.with_emission_budget_v1(|_, budget| {
             references.check(budget)?;

@@ -225,13 +225,34 @@ fn source_address_object_payload_v29(
             if matches!(role, ScopedMemoryPayloadV29::Store { source: ScopedMemoryStoreSourceV29::Operand { .. }, .. })
                 && endpoint.source_path.count == 0 && endpoint.path.count == 1 => {}
         (
-            ScopedObjectIdentityV29::Reference {
-                dereference_prefix: 1,
-                ..
-            },
-            ScopedObjectSourceV29::Place { prefix: 1, .. },
+            ScopedObjectIdentityV29::Reference { dereference_prefix, .. },
+            ScopedObjectSourceV29::Place { prefix, .. },
         ) if endpoint.root_type == endpoint.projected_type
-            && endpoint.root_schema == endpoint.projected_schema && endpoint.path.count == 0 => {}
+            && endpoint.root_schema == endpoint.projected_schema && endpoint.path.count == 0
+            && prefix == dereference_prefix && prefix != 0 => {
+                let path = anchors.object_path(endpoint.source_path, budget)?;
+                budget.charge_work(path.len())?;
+                if path.len() != prefix as usize || path.iter().enumerate().any(|(index, component)| {
+                    !matches!(component, ScopedObjectComponentV29::Original { projection, selector: None }
+                        if if index + 1 == path.len() {
+                            projection.kind() == SemanticProjectionKindV1::Dereference
+                        } else { matches!(projection.kind(), SemanticProjectionKindV1::Field(_)) })
+                }) { return Err(scoped_object_pending_v29()); }
+            }
+        (
+            ScopedObjectIdentityV29::Reference { dereference_prefix, .. },
+            ScopedObjectSourceV29::Place { prefix, .. },
+        ) if dereference_prefix != 0 && prefix.checked_sub(dereference_prefix) == Some(1)
+            && endpoint.path.count == 1 => {
+                let path = anchors.object_path(endpoint.source_path, budget)?;
+                budget.charge_work(path.len())?;
+                if path.len() != prefix as usize || path.iter().enumerate().any(|(index, component)| {
+                    !matches!(component, ScopedObjectComponentV29::Original { projection, selector: None }
+                        if if index + 1 == dereference_prefix as usize {
+                            projection.kind() == SemanticProjectionKindV1::Dereference
+                        } else { matches!(projection.kind(), SemanticProjectionKindV1::Field(_)) })
+                }) { return Err(scoped_object_pending_v29()); }
+            }
         _ => return Err(scoped_object_pending_v29()),
     }
     Ok(Some((endpoint, role)))
@@ -782,6 +803,7 @@ struct SourceObjectPayloadIndexV29 {
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     occurrences: Vec<(SourceObjectOccurrenceKeyV29, usize)>,
     reads: Vec<(SourceObjectReadKeyV29, usize)>,
+    projects: Vec<((usize, ValueId), usize)>,
 }
 
 fn source_object_read_key_v29(
@@ -811,6 +833,11 @@ thread_local! {
     static SOURCE_OBJECT_PAYLOAD_INDEX_OBSERVER_V29: std::cell::Cell<Option<SourceObjectPayloadIndexObserverV29>> = const { std::cell::Cell::new(None) };
     static SOURCE_OBJECT_PAYLOAD_INDEX_WORK_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
     static SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static SOURCE_OBJECT_PAYLOAD_CONSTRUCTION_WORK_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static SOURCE_OBJECT_PROJECT_INDEX_WORK_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static SOURCE_OBJECT_PROJECT_INDEX_STORAGE_V29: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SOURCE_OBJECT_PROJECT_CENSUS_WORK_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static SOURCE_OBJECT_PAYLOAD_SCAN_COUNTS_V29: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0)) };
 }
 
 #[cfg(test)]
@@ -828,28 +855,51 @@ impl SourceObjectPayloadIndexV29 {
         #[cfg(test)]
         let before = budget.work();
         source_reference_emission_prepay_v29::<Self>(budget)?;
-        let (mut event_count, mut read_count) = (0, 0);
+        source_reference_emission_prepay_v29::<Vec<((usize, ValueId), usize)>>(budget)?;
+        source_reference_emission_prepay_v29::<((usize, ValueId), usize)>(budget)?;
+        source_reference_emission_prepay_v29::<(usize, ValueId)>(budget)?;
+        source_reference_emission_prepay_v29::<(usize, usize, usize)>(budget)?;
+        source_reference_emission_prepay_v29::<Option<ValueId>>(budget)?;
+        source_reference_emission_prepay_v29::<std::slice::Windows<'_, ((usize, ValueId), usize)>>(budget)?;
+        source_reference_emission_prepay_v29::<Option<&[((usize, ValueId), usize)]>>(budget)?;
+        source_reference_emission_prepay_v29::<&[((usize, ValueId), usize)]>(budget)?;
+        source_reference_emission_prepay_v29::<&ScopedObjectPayloadV29>(budget)?;
+        source_reference_emission_prepay_v29::<ValueId>(budget)?;
+        source_reference_emission_prepay_v29::<usize>(budget)?;
+        let (mut event_count, mut read_count, mut project_count) = (0, 0, 0);
         for sidecar in &source_index.pending.sidecars.rows {
             budget.charge_work(3)?;
             let anchors = sidecar
                 .scoped_memory_anchors
                 .as_ref()
                 .ok_or_else(scoped_object_error_v29)?;
-            if anchors.objects.is_empty() {
-                continue;
-            }
             let instance = sidecar
                 .source_call_instance
                 .ok_or_else(scoped_object_error_v29)?;
+            if anchors.objects.is_empty()
+                && !source_scalar_static_holder_index_needed_v29(instances, instance, anchors, budget)?
+            {
+                continue;
+            }
             let occurrences = instances
                 .occurrences(instance)
                 .ok_or_else(scoped_object_error_v29)?;
             event_count = argument_sum_v1(&[event_count, occurrences.events().len()])?;
             for row in &anchors.rows {
+                #[cfg(test)]
+                { let (count, fill, events) = SOURCE_OBJECT_PAYLOAD_SCAN_COUNTS_V29.get();
+                    SOURCE_OBJECT_PAYLOAD_SCAN_COUNTS_V29.set((count + 1, fill, events)); }
                 budget.charge_work(1)?;
                 if matches!(row.kind, ScopedMemoryAnchorKindV29::Object(_)
                     | ScopedMemoryAnchorKindV29::Access { payload: Some(ScopedMemoryPayloadV29::Load { .. }), .. }) {
                     read_count = argument_sum_v1(&[read_count, 1])?;
+                }
+                if matches!(row.kind, ScopedMemoryAnchorKindV29::Object(_)) {
+                    let payload = anchors.object_payload(row, budget)?;
+                    budget.charge_work(1)?;
+                    if matches!(payload.operation, ScopedObjectOperationV29::Project { .. }) {
+                        project_count = argument_sum_v1(&[project_count, 1])?;
+                    }
                 }
             }
         }
@@ -858,6 +908,7 @@ impl SourceObjectPayloadIndexV29 {
             ledger: budget.work_ledger_identity_v1(),
             occurrences: emission_vec_v1(event_count, budget)?,
             reads: emission_vec_v1(read_count, budget)?,
+            projects: emission_vec_v1(project_count, budget)?,
         };
         for sidecar in &source_index.pending.sidecars.rows {
             budget.charge_work(3)?;
@@ -865,16 +916,21 @@ impl SourceObjectPayloadIndexV29 {
                 .scoped_memory_anchors
                 .as_ref()
                 .ok_or_else(scoped_object_error_v29)?;
-            if anchors.objects.is_empty() {
-                continue;
-            }
             let instance = sidecar
                 .source_call_instance
                 .ok_or_else(scoped_object_error_v29)?;
+            if anchors.objects.is_empty()
+                && !source_scalar_static_holder_index_needed_v29(instances, instance, anchors, budget)?
+            {
+                continue;
+            }
             let occurrences = instances
                 .occurrences(instance)
                 .ok_or_else(scoped_object_error_v29)?;
             for (event, row) in occurrences.events().iter().enumerate() {
+                #[cfg(test)]
+                { let (count, fill, events) = SOURCE_OBJECT_PAYLOAD_SCAN_COUNTS_V29.get();
+                    SOURCE_OBJECT_PAYLOAD_SCAN_COUNTS_V29.set((count, fill, events + 1)); }
                 budget.charge_work(12)?;
                 if row.role() != ExecutionEventV29::BaseUse {
                     continue;
@@ -892,7 +948,18 @@ impl SourceObjectPayloadIndexV29 {
                 ));
             }
             for (anchor, row) in anchors.rows.iter().enumerate() {
+                #[cfg(test)]
+                { let (count, fill, events) = SOURCE_OBJECT_PAYLOAD_SCAN_COUNTS_V29.get();
+                    SOURCE_OBJECT_PAYLOAD_SCAN_COUNTS_V29.set((count, fill + 1, events)); }
                 budget.charge_work(12)?;
+                if matches!(row.kind, ScopedMemoryAnchorKindV29::Object(_)) {
+                    let payload = anchors.object_payload(row, budget)?;
+                    budget.charge_work(3)?;
+                    if matches!(payload.operation, ScopedObjectOperationV29::Project { .. }) {
+                        if result.projects.len() == result.projects.capacity() { return Err(ArgumentResourceV1::Accounting.into()); }
+                        result.projects.push(((instance.index(), payload.result.ok_or_else(scoped_object_error_v29)?), anchor));
+                    }
+                }
                 if let Some((_, read)) =
                     source_object_read_payload_v29(anchors, row, budget)?
                 {
@@ -911,25 +978,42 @@ impl SourceObjectPayloadIndexV29 {
         call_splice_sort_work_v1(argument_product_v1(result.reads.len(), 10)?, budget)
             .map_err(source_address_call_error_v29)?;
         result.reads.sort_unstable_by_key(|row| row.0);
+        call_splice_sort_work_v1(argument_product_v1(result.projects.len(), 3)?, budget)
+            .map_err(source_address_call_error_v29)?;
+        result.projects.sort_unstable_by_key(|row| row.0);
         #[cfg(test)]
         if let Some(observe) = SOURCE_OBJECT_PAYLOAD_INDEX_OBSERVER_V29.get() {
             observe(&mut result, budget)?;
         }
+        #[cfg(test)]
+        let before_census = budget.work();
+        budget.charge_work(1)?;
+        if result.projects.len() != project_count {
+            return Err(scoped_object_error_v29());
+        }
+        #[cfg(test)]
+        { let (calls, work) = SOURCE_OBJECT_PROJECT_CENSUS_WORK_V29.get();
+            SOURCE_OBJECT_PROJECT_CENSUS_WORK_V29.set((calls + 1, work + budget.work() - before_census)); }
         budget.charge_work(argument_sum_v1(&[
             argument_product_v1(result.occurrences.len(), 9)?,
             argument_product_v1(result.reads.len(), 10)?,
+            argument_product_v1(result.projects.len(), 3)?,
         ])?)?;
         if result
             .occurrences
             .windows(2)
             .any(|pair| pair[0].0 >= pair[1].0)
             || result.reads.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+            || result.projects.windows(2).any(|pair| pair[0].0 >= pair[1].0)
         {
             return Err(scoped_object_error_v29());
         }
         result.check_owner(source_index, budget)?;
         #[cfg(test)]
         source_object_record_index_work_v29(before, budget);
+        #[cfg(test)]
+        { let (calls, work) = SOURCE_OBJECT_PAYLOAD_CONSTRUCTION_WORK_V29.get();
+            SOURCE_OBJECT_PAYLOAD_CONSTRUCTION_WORK_V29.set((calls + 1, work + budget.work() - before)); }
         Ok(result)
     }
 
@@ -1037,6 +1121,45 @@ impl SourceObjectPayloadIndexV29 {
         Ok(anchor)
     }
 
+    fn project_anchor(
+        &self,
+        source_index: &SourceAddressSourceIndexV29<'_>,
+        instance: ProductionCallInstanceIdV1,
+        anchors: &ScopedMemoryAnchorsV29,
+        result: ValueId,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<usize, ProductionSemanticKirErrorV1> {
+        #[cfg(test)]
+        let before = budget.work();
+        #[cfg(test)]
+        let storage_before = budget.storage();
+        self.check_owner(source_index, budget)?;
+        source_reference_emission_prepay_v29::<usize>(budget)?;
+        source_reference_emission_prepay_v29::<Result<usize, usize>>(budget)?;
+        source_reference_emission_prepay_v29::<(usize, ValueId)>(budget)?;
+        source_reference_emission_prepay_v29::<Option<ValueId>>(budget)?;
+        source_reference_emission_prepay_v29::<Option<&ScopedMemoryAnchorV29>>(budget)?;
+        source_reference_emission_prepay_v29::<&ScopedMemoryAnchorV29>(budget)?;
+        source_reference_emission_prepay_v29::<&ScopedObjectPayloadV29>(budget)?;
+        budget.charge_work(argument_sum_v1(&[6, argument_product_v1(call_splice_search_work_v1(self.projects.len()), 3)?])?)?;
+        let index = self.projects.binary_search_by_key(&(instance.index(), result), |row| row.0)
+            .map_err(|_| scoped_object_error_v29())?;
+        let anchor = self.projects[index].1;
+        let row = anchors.rows.get(anchor).ok_or_else(scoped_object_error_v29)?;
+        let payload = anchors.object_payload(row, budget)?;
+        if payload.result != Some(result) || !matches!(payload.operation, ScopedObjectOperationV29::Project { .. }) {
+            return Err(scoped_object_error_v29());
+        }
+        #[cfg(test)]
+        { let (calls, work) = SOURCE_OBJECT_PROJECT_INDEX_WORK_V29.get();
+            SOURCE_OBJECT_PROJECT_INDEX_WORK_V29.set((calls + 1, work + budget.work() - before)); }
+        #[cfg(test)]
+        SOURCE_OBJECT_PROJECT_INDEX_STORAGE_V29.set(SOURCE_OBJECT_PROJECT_INDEX_STORAGE_V29.get() + budget.storage() - storage_before);
+        #[cfg(test)]
+        source_object_record_index_work_v29(before, budget);
+        Ok(anchor)
+    }
+
     fn discard(
         self,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -1050,6 +1173,7 @@ impl SourceObjectPayloadIndexV29 {
                 self.reads.capacity(),
                 std::mem::size_of::<(SourceObjectReadKeyV29, usize)>(),
             )?,
+            argument_product_v1(self.projects.capacity(), std::mem::size_of::<((usize, ValueId), usize)>())?,
         ])?;
         drop(self);
         budget.release_storage(bytes)?;
@@ -1095,6 +1219,7 @@ fn source_object_base_occurrence_v29(
 
 fn check_source_object_holder_value_v29(
     instances: &ExecutionInstancesV29<'_>,
+    plan: &SourceReferencePlanV29<'_, '_>,
     index: &SourceAddressSourceIndexV29<'_>,
     source: &SourceAddressAccessSourceV29,
     graph: &SourceAddressMemoryV29<'_>,
@@ -1110,7 +1235,7 @@ fn check_source_object_holder_value_v29(
     let ScopedObjectSourceV29::Place {
         site,
         role,
-        prefix: 1,
+        prefix,
         ..
     } = endpoint.source
     else {
@@ -1122,6 +1247,9 @@ fn check_source_object_holder_value_v29(
         .declaration();
     let place = scoped_object_original_place_v29(function, site, role)
         .ok_or_else(scoped_object_error_v29)?;
+    source_reference_owned_prepay_v29::<Option<&SemanticTypeDeclV1>>(plan, budget)?;
+    source_reference_owned_prepay_v29::<Option<&SemanticTypeShapeV1>>(plan, budget)?;
+    budget.source_reference_charge_v29(plan, 2)?;
     let sidecar = index.sidecar(source.instance, budget)?;
     let archive = sidecar
         .execution_observation
@@ -1139,6 +1267,37 @@ fn check_source_object_holder_value_v29(
         place,
         budget,
     )?;
+    if matches!(instances.owner().source_semantic().types().get(endpoint.root_type.index() as usize).map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Tuple(_) | SemanticTypeShapeV1::Aggregate(_)))
+    {
+        return check_source_aggregate_object_value_v29(instances, plan, index, source.instance,
+            graph, anchors, payload_index, endpoint, pointer, capture, budget);
+    }
+    if prefix != 0 && prefix as usize == place.projections().len()
+        && place.projections()[prefix as usize - 1].kind() == SemanticProjectionKindV1::Dereference
+        && matches!(instances.owner().source_semantic().types()[if prefix == 1 {
+            function.locals()[place.local().index() as usize].ty().index() as usize
+        } else { place.projections()[prefix as usize - 2].result_type().index() as usize }].shape(),
+            SemanticTypeShapeV1::Pointer(pointer) if pointer.kind() == SemanticPointerKindV1::Reference
+                && pointer.metadata() == SemanticPointerMetadataV1::None)
+    {
+        let (block, statement) = scoped_memory_site_key_v29(site);
+        let original_site = SourceReferenceSiteV29 { instance: source.instance,
+            block: SemanticBlockIdV1::from_index(block), statement: statement.map(|value| value as usize) };
+        let access = source_reference_raw_original_access_v29(function, original_site, place, budget)?
+            .ok_or_else(scoped_object_error_v29)?;
+        let loan = source_object_loan_access_v29(plan, original_site, place, access, budget)?
+            .ok_or_else(scoped_object_error_v29)?;
+        // A retained safe holder cannot use a raw-holder read receipt.
+        let ScopedMemoryOccurrenceV29::Promoted { definition, .. } = capture else {
+            return Err(scoped_object_pending_v29());
+        };
+        let binding = archive.lookup_original_v29(instances, source.instance, definition, budget)?;
+        let selected = source_object_loan_holder_v29(plan, binding, place, &loan, budget)?;
+        if selected.values[0].id != pointer { return Err(scoped_object_error_v29()); }
+        return Ok(());
+    }
+    if prefix != 1 { return Err(scoped_object_pending_v29()); }
     if let ScopedMemoryOccurrenceV29::Promoted { definition, .. } = capture {
         let binding =
             archive.lookup_original_v29(instances, source.instance, definition, budget)?;

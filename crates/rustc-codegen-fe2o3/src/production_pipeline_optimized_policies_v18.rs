@@ -105,6 +105,22 @@ fn native_lifecycle_envelopes() -> Result<usize, ProductionPipelineError> {
             .checked_add(bytes)
             .ok_or_else(|| source_resource_v18(Resource::Arithmetic))?;
     }
+    #[cfg(test)]
+    for bytes in [
+        std::mem::size_of::<lifecycle_probe::Observation>() * 2,
+        std::mem::size_of::<
+            Result<
+                lifecycle_probe::Observation,
+                fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18,
+            >,
+        >() * 2,
+        std::mem::size_of::<std::cell::Cell<Option<lifecycle_probe::Observation>>>(),
+        std::mem::size_of::<Result<(), fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18>>(),
+    ] {
+        total = total
+            .checked_add(bytes)
+            .ok_or_else(|| source_resource_v18(Resource::Arithmetic))?;
+    }
     Ok(total)
 }
 
@@ -276,7 +292,7 @@ fn consume_actual_native_policy(
         .storage_layout_limits();
     let output = optimized.output_inventory(budget)?;
     #[cfg(test)]
-    lifecycle_probe::record(output);
+    lifecycle_probe::record(original, optimized, output, budget)?;
     // Empty metadata carries no source authority. The genuine original recipe
     // below must consume the complete structural role census independently.
     let metadata = CanonicalRankedMetadataV18::new(output.owner(), &[]);

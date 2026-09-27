@@ -349,11 +349,21 @@ fn original_tag_work_reaches_function_and_module_limits_with_independent_increme
     let base = plan.resources().work_units() + plan.auxiliary_resources.work_units;
     let function_exact = base + PARTIAL_WORK;
     // This argument-free root has one reference-summary roster visit and one
-    // fixed-point visit. Those module-only charges do not consume its planner.
+    // fixed-point visit. The shared-primitive candidate census also visits its
+    // one block and three statements, finding no loan and allocating no state.
+    // These module-only charges do not consume the function planner.
     assert_eq!(fixture.function.role(), SemanticFunctionRoleV1::KernelRoot);
     assert!(fixture.function.abi().source_input_types().is_empty());
     const MODULE_REFERENCE_WORK: usize = 1 + 1;
-    let module_exact = function_exact + MODULE_REFERENCE_WORK;
+    const MODULE_SHARED_PRIMITIVE_CENSUS: usize = 1 + 3 * 24;
+    let original_blocks = blocks();
+    assert_eq!(original_blocks.len(), 1);
+    assert_eq!(original_blocks[0].statements().len(), 3);
+    assert!(original_blocks[0].statements().iter().all(|statement| {
+        !matches!(statement.kind(), SemanticStatementKindV1::Assign(assignment)
+            if matches!(assignment.value().kind(), SemanticRvalueKindV1::Borrow { .. }))
+    }));
+    let module_exact = function_exact + MODULE_REFERENCE_WORK + MODULE_SHARED_PRIMITIVE_CENSUS;
     assert_eq!(unrestricted.summary().work_units(), module_exact);
     owner(
         &fixture,
