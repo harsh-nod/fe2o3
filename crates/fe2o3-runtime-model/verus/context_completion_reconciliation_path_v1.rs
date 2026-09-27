@@ -13,7 +13,7 @@ pub open spec fn selected_edge(table: CompletionTableV1, parent: RuntimeSubmissi
     &&& node.dependencies@[node.state.unwrap().cursor as int].submission == child
     &&& node.dependencies@[node.state.unwrap().cursor as int].backend_submission
         == producer.record.backend_submission
-    &&& node.root_kind == producer.root_kind
+    &&& dependency_profile(node.root_kind, producer.root_kind)
     &&& parent.context_generation == child.context_generation
     &&& child.local < parent.local
     &&& 0 < producer.state.unwrap().depth < node.state.unwrap().depth <= MAX_RUNTIME_DEPENDENCIES_V1

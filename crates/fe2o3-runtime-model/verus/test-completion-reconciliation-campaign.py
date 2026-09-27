@@ -41,9 +41,23 @@ for changed in (body + body, body.replace(".cursor += 1;", ".cursor += 3;"), bod
         raise ValueError("ambiguous or stale mutation site admitted")
 need(cases["cursor-crosses-pending"].count("RuntimeCompletionStatusV1::Pending => {") == 1)
 need(cases["cursor-crosses-pending"].count("RuntimeCompletionStatusV1::Succeeded => {") == 1)
-need(len(runner["FILES"]) == len(set(runner["FILES"])) == 8)
+need(len(runner["FILES"]) == len(set(runner["FILES"])) == 9)
 need(all((runner["ROOT"] / path).is_file() for path in runner["FILES"]))
 need(len(leaf.MUTANTS) == 4 and sum(path == runner["BODY"] for _, path, *_ in leaf.MUTANTS) == 2)
+validation = (runner["ROOT"] / runner["V"] / "context_completion_reconciliation_validation_v1.rs").read_text()
+profiles = runner["profile_mutations"](validation)
+need(set(profiles) == {"profile-deny-mixed", "profile-admit-reverse", "profile-admit-ordinary"})
+need(len(set(profiles.values())) == 3 and validation not in profiles.values())
+spec, executable = validation.split("impl CompletionTableV1 {", 1)
+need(all(text.split("impl CompletionTableV1 {", 1)[0] == spec for text in profiles.values()))
+need(all(text.count("assert(dependency_valid(*self, id, j as int));") == 1 for text in profiles.values()))
+for invalid in (validation + validation, spec):
+    try:
+        runner["profile_mutations"](invalid)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("ambiguous or absent profile guard admitted")
 
 verifier = {"version": "calibration-only"}
 path = "/snapshot/context_completion_reconciliation_planner_v1.rs"
@@ -94,11 +108,11 @@ need(positive[:7] == ["/usr/bin/timeout", "--foreground", "--signal=TERM", "--ki
 need(positive[positive.index("--multiple-errors") + 1] == "0" and positive.count("--multiple-errors") == 1)
 need("--no-cheating" in positive and "--rlimit" not in positive and "--smt-option" not in positive)
 need(positive[-1] == str(root / runner["FILES"][1]))
-success = {"verus": verifier, "verification-results": leaf.PROOF_RESULT}
+success = {"verus": verifier, "verification-results": runner["PROOF_RESULT"]}
 note = dict(message, **{"$message_type": "diagnostic", "level": "note", "message": sorted(runner["ENUMERATION_NOTES"])[0],
                        "code": None, "children": []})
 positive_check = lambda status, result, notes: runner["proof_positive"](
-    status, result, "\n".join(json.dumps(item) for item in notes), verifier, leaf.PROOF_RESULT, {path})
+    status, result, "\n".join(json.dumps(item) for item in notes), verifier, runner["PROOF_RESULT"], {path})
 need(positive_check(0, json.dumps(success), []))
 need(positive_check(0, json.dumps(success), [note]))
 for field, values in (("level", ("warning", "error")), ("message", ("unrecognized note", "Resource limit (rlimit) exceeded")),
@@ -120,4 +134,4 @@ for classifier, data in ((positive_check, success), (check, result)):
     need(not classifier(status, json.dumps(data), [dict(base, children=[dict(message, message="Resource limit (rlimit) exceeded")])]))
     need(not classifier(status, json.dumps(data), [dict(base, spans=[{"file_name": "relative.rs", "is_primary": True}])]))
 need(not check(1, json.dumps(result), [message, dict(note, message=note["message"] + "; Resource limit (rlimit) exceeded")]))
-print("PASS: production planner campaign calibration (8 groups)")
+print("PASS: production planner campaign calibration (9 groups)")

@@ -100,9 +100,10 @@ impl ProducerLaunchRootV1 {
 impl<B: RuntimeProducerAwareLaunchBackendV1> RuntimeContextV1<B> {
     /// Queue a typed consumer of exact earlier producer outputs without a graph reservation.
     ///
-    /// Requires a version journal and producers admitted through this same profile,
-    /// or scalar peer copies already reconciled as successful and quiescent.
-    /// Pending peer-copy-to-compute execution is not admitted by this profile yet.
+    /// Requires a version journal and producers admitted through this same profile
+    /// or the directed peer-copy profile. Ordinary scalar peers must already be
+    /// reconciled as successful and quiescent. Backend support is still required;
+    /// the KFD router currently rejects pending peer-to-compute execution.
     /// Pure reads retain whole-allocation custody; every original pending read
     /// range must be covered by its named producer's writable ranges. Writable aliases
     /// with pending predecessors reject. Events must remain live until admission;
@@ -209,18 +210,22 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.producer_launch {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
         }
+        if let Some(state) = &parent.directed {
+            if record.status == RuntimeCompletionStatusV1::Succeeded
+                && (!record.quiescent
+                    || state.terminal != Some(BackendPollV1::Succeeded)
+                    || state.cursor != parent.dependencies.len())
+            {
+                return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+            }
+            // Custody survives a parent's later failure or discarded result.
+            // Eligibility for a new consumer is checked separately at admission.
+            return Ok(state.depth);
+        }
         if record.status != RuntimeCompletionStatusV1::Succeeded || !record.quiescent {
             return Err(RuntimeValidationErrorV1::Unsupported);
         }
-        if parent.directed.as_ref().is_some_and(|state| {
-            state.terminal != Some(BackendPollV1::Succeeded)
-                || state.cursor != parent.dependencies.len()
-        }) {
-            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
-        }
-        // A settled ordinary copy is a leaf. Directed roots retain their original
-        // depth after settlement, so admission and later custody checks agree.
-        Ok(parent.directed.as_ref().map_or(1, |state| state.depth))
+        Ok(1)
     }
 
     fn prepare_producer_launch_root_v1(

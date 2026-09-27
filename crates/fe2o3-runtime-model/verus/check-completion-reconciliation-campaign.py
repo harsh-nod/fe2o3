@@ -19,7 +19,9 @@ LEAF = Path("docs/evidence/dev-completion-leaf-outcomes-2026-09-25/run.py")
 LEAF_SHA = "3cf248a9d642713ea738f58b882c7ccd7c38d8b5ccc6cbfbe3dfe246b03f412c"
 TEST = V / "test-completion-reconciliation-campaign.py"
 FILES = [BODY] + [V / ("context_completion_reconciliation" + suffix + "_v1.rs")
-                  for suffix in ("", "_graph", "_validation", "_effects", "_path", "_leaf", "_planner")]
+                  for suffix in ("", "_graph", "_validation", "_effects", "_path", "_leaf", "_mixed", "_planner")]
+PROOF_RESULT = {"encountered-error": False, "encountered-vir-error": False,
+                "errors": 0, "is-verifying-entire-crate": True, "success": True, "verified": 56}
 ENUMERATION_NOTES = {prefix + ": not all errors may have been reported; rerun with a higher value for "
                      "--multiple-errors to find other potential errors in this function"
                      for prefix in ("function body check", "while loop")}
@@ -191,6 +193,18 @@ def mutations(body):
     return cases
 
 
+def profile_mutations(validation):
+    old = ("|| !(node.root_kind == 1 && producer.root_kind == 1\n"
+           "                    || node.root_kind == 2 && (producer.root_kind == 1 || producer.root_kind == 2))")
+    need(validation.count(old) == 1, "unique executable profile guard")
+    replacements = {
+        "profile-deny-mixed": "|| producer.root_kind != node.root_kind",
+        "profile-admit-reverse": "|| !((node.root_kind == 1 || node.root_kind == 2) && (producer.root_kind == 1 || producer.root_kind == 2))",
+        "profile-admit-ordinary": old[:-1] + " || node.root_kind == 2 && producer.root_kind == 0)",
+    }
+    return {name: validation.replace(old, new) for name, new in replacements.items()}
+
+
 def proof_command(root, verifier, focus=None):
     # Stop counterexample enumeration after the first logical failure. Extra
     # error-search queries can exhaust the solver after it has found a witness.
@@ -246,7 +260,7 @@ def main():
 
     def positive(root):
         paths = {str((root / path).resolve()) for path in FILES}
-        return lambda s, o, e: proof_positive(s, o, e, prior.VERIFIER, leaf.PROOF_RESULT, paths)
+        return lambda s, o, e: proof_positive(s, o, e, prior.VERIFIER, PROOF_RESULT, paths)
 
     def proof(root, focus=None):
         return proof_command(root, args.verus, focus)
@@ -264,7 +278,7 @@ def main():
     phase("inherited-classifier-tests", [sys.executable, "-I", "-B", str(ROOT / LEAF.with_name("test-run.py"))],
           exact("PASS: leaf outcome negative classifier (12 groups)\n"))
     phase("campaign-tests", [sys.executable, "-I", "-B", str(ROOT / TEST)],
-          exact("PASS: production planner campaign calibration (8 groups)\n"))
+          exact("PASS: production planner campaign calibration (9 groups)\n"))
     phase("source-tests", [sys.executable, "-I", "-B", str(ROOT / V / "test-completion-reconciliation-source.py")],
           exact("PASS: completion planner source calibration (8 groups)\n"))
     phase("source-body", [sys.executable, "-I", "-B", str(ROOT / V / "check-completion-reconciliation-source.py"),
@@ -286,6 +300,9 @@ def main():
     need(leaf.tree(relocated) == expected, "relocated source unchanged")
     body = (ROOT / BODY).read_text()
     roster = [(name, BODY, data, "*plan_completion_step_v1*") for name, data in mutations(body).items()]
+    validation_path = V / "context_completion_reconciliation_validation_v1.rs"
+    roster.extend((name, validation_path, data, "*validate_custody*")
+                  for name, data in profile_mutations((ROOT / validation_path).read_text()).items())
     for name, path, old, new, focus in leaf.MUTANTS:
         raw = (ROOT / path).read_text()
         need(raw.count(old) == 1, "unique inherited mutation")

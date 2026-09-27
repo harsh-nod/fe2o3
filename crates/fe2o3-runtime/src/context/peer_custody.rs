@@ -30,6 +30,26 @@ pub(super) struct ScalarPeerCopyRootV1 {
     pub(super) directed: Option<super::peer_reconciliation::DirectedPeerStateV1>,
 }
 
+impl ScalarPeerCopyRootV1 {
+    pub(super) fn covers_input_v1(&self, source: ContextReadSourceV1) -> bool {
+        let destination = self.destination;
+        destination.region.allocation == source.region.allocation
+            && destination.record == source.record
+            && source.region.byte_offset >= destination.region.byte_offset
+            && source
+                .region
+                .byte_offset
+                .checked_add(source.region.byte_len)
+                .zip(
+                    destination
+                        .region
+                        .byte_offset
+                        .checked_add(destination.region.byte_len),
+                )
+                .is_some_and(|(end, destination_end)| end <= destination_end)
+    }
+}
+
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     pub(super) fn prepare_scalar_peer_custody_v1(
         &mut self,

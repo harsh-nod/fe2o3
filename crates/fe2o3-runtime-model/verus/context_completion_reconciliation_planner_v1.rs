@@ -97,6 +97,8 @@ impl CompletionProjectionV1 {
         ensures final(self).submissions.wf(),
             eligible_leaf(old(self).submissions, requested)
                 ==> leaf_outcome(*old(self), *final(self), requested, result, *final(steps)),
+            mixed_observation_ready(old(self).submissions, requested)
+                ==> mixed_observation_outcome(*old(self), *final(self), requested, result, *final(steps)),
             0 < *final(steps) <= 2 * MAX_RUNTIME_DEPENDENCIES_V1 + 1,
             result.is_ok() ==> final(self).rejection.is_none(),
             progressed(old(self).submissions, final(self).submissions),
@@ -134,6 +136,11 @@ impl CompletionProjectionV1 {
                 invariant
                     initial == old(self).submissions,
                     initial.wf(),
+                    mixed_observation_ready(initial, requested) ==> *steps <= 1
+                        && self.submissions.nodes@ == initial.nodes@
+                        && self.quarantined == old(self).quarantined
+                        && length == *steps
+                        && id == if *steps == 0 { requested } else { mixed_parent(initial, requested) },
                     eligible_leaf(initial, requested) ==> id == requested && length == 0 && *steps <= 1
                         && self.quarantined == old(self).quarantined
                         && if *steps == 0 { self.submissions.nodes@ == initial.nodes@ }
@@ -168,6 +175,9 @@ impl CompletionProjectionV1 {
                     if eligible_leaf(initial, requested) {
                         leaf_iteration_shape(initial, self.submissions, requested, *steps - 1);
                     }
+                    if mixed_observation_ready(initial, requested) {
+                        mixed_iteration_shape(initial, self.submissions, requested, id, *steps - 1);
+                    }
                 }
             ],
             [proof {
@@ -194,11 +204,17 @@ impl CompletionProjectionV1 {
             }],
             [proof {
                 assert(!eligible_leaf(initial, requested));
+                if mixed_observation_ready(initial, requested) {
+                    assert(*steps == 1);
+                    assert(dependency.submission == mixed_parent(initial, requested));
+                    assert(self.submissions.node(dependency.submission).record.status == RuntimeCompletionStatusV1::Pending);
+                }
                 checked_pending_shape(*self, id);
                 assert(dependency_valid(self.submissions, id, state.cursor as int));
                 checked_selected_edge(*self, id);
             }],
             [proof {
+                assert(!mixed_observation_ready(initial, requested));
                 if eligible_leaf(initial, requested) {
                     assert(*steps == 1);
                     assert(before_step.nodes@ == initial.nodes@);

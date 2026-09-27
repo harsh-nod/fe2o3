@@ -10,6 +10,10 @@ impl vstd::std_specs::cmp::PartialEqSpecImpl for BackendPollV1 {
     open spec fn eq_spec(&self, other: &Self) -> bool { *self == *other }
 }
 
+pub open spec fn dependency_profile(consumer: u8, producer: u8) -> bool {
+    consumer == 1 && producer == 1 || consumer == 2 && (producer == 1 || producer == 2)
+}
+
 pub open spec fn dependency_valid(table: CompletionTableV1, id: RuntimeSubmissionIdV1,
     index: int) -> bool {
     let node = table.node(id);
@@ -19,7 +23,7 @@ pub open spec fn dependency_valid(table: CompletionTableV1, id: RuntimeSubmissio
     &&& dependency.submission.context_generation == id.context_generation
     &&& dependency.submission.local < id.local
     &&& dependency.backend_submission == producer.record.backend_submission
-    &&& producer.root_kind == node.root_kind
+    &&& dependency_profile(node.root_kind, producer.root_kind)
     &&& producer.state.is_some()
     &&& 0 < producer.state.unwrap().depth < node.state.unwrap().depth
     &&& index < node.state.unwrap().cursor ==> producer.record.status == RuntimeCompletionStatusV1::Succeeded
@@ -149,7 +153,8 @@ impl CompletionTableV1 {
             };
             let producer = &self.nodes[slot];
             if producer.record.backend_submission != dependency.backend_submission
-                || producer.root_kind != node.root_kind {
+                || !(node.root_kind == 1 && producer.root_kind == 1
+                    || node.root_kind == 2 && (producer.root_kind == 1 || producer.root_kind == 2)) {
                 assert(!dependency_valid(*self, id, j as int));
                 return Err(invalid);
             }

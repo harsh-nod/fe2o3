@@ -176,10 +176,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .copied()
             .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
         if let Some(consumer) = launch {
-            let producer = self
-                .producer_launches
-                .get(&dependency.submission)
-                .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
             // Leases cover the allocation; native coverage must cover every original Read alias.
             let mut found = false;
             for binding in consumer
@@ -189,7 +185,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             {
                 if binding.record != source.record
                     || binding.region.access != RuntimeAccessV1::Read
-                    || !producer.covers_input_v1(*binding)
+                    || !self
+                        .producer_launches
+                        .get(&dependency.submission)
+                        .map(|producer| producer.covers_input_v1(*binding))
+                        .or_else(|| {
+                            self.scalar_peer_copies
+                                .get(&dependency.submission)
+                                .filter(|producer| producer.directed.is_some())
+                                .map(|producer| producer.covers_input_v1(*binding))
+                        })
+                        .unwrap_or(false)
                 {
                     return Err(RuntimeValidationErrorV1::ContextReserved);
                 }
@@ -198,7 +204,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             if !found {
                 return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
             }
-            let result = self.validate_pending_producer_launch_roots_v1(dependency.submission);
+            let result = if self.producer_launches.contains_key(&dependency.submission) {
+                self.validate_pending_producer_launch_roots_v1(dependency.submission)
+            } else {
+                self.validate_pending_peer_copy_roots_v1(dependency.submission)
+            };
             self.journal_result_v1(result)?;
         } else {
             let producer = self
@@ -206,22 +216,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .get(&dependency.submission)
                 .filter(|producer| producer.directed.is_some())
                 .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
-            let covered = producer.destination;
-            if covered.region.allocation != source.region.allocation
-                || covered.record != source.record
-                || source.region.byte_offset < covered.region.byte_offset
-                || source
-                    .region
-                    .byte_offset
-                    .checked_add(source.region.byte_len)
-                    .zip(
-                        covered
-                            .region
-                            .byte_offset
-                            .checked_add(covered.region.byte_len),
-                    )
-                    .is_none_or(|(end, producer_end)| end > producer_end)
-            {
+            if !producer.covers_input_v1(source) {
                 return Err(RuntimeValidationErrorV1::ContextReserved);
             }
             let result = self.validate_pending_peer_copy_roots_v1(dependency.submission);

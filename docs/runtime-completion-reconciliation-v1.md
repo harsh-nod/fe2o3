@@ -28,7 +28,7 @@ theorem for the transformations.
 
 ## Current Safety Statements
 
-The standalone development root verifies 53 obligations at the pinned default
+The standalone development root verifies 56 obligations at the pinned default
 solver limits. Its planner has no graph-validity or settlement-readiness
 precondition. It establishes:
 
@@ -57,6 +57,16 @@ precondition. It establishes:
   setting quarantine. The theorem also frames every unrelated node, directed
   state and the synthetic settlement marker. It is conditional on leaf shape,
   without strengthening the general planner's graph precondition.
+- A physically successful Pending launch with one valid Pending directed-peer
+  parent whose physical result is unobserved returns observation of that exact
+  parent/backend in two iterations. Every node and the quarantine flag remain
+  unchanged. An executable two-node constructor witnesses this conditional
+  outcome with Pending launch input; no input settlement is performed early.
+
+Dependency profiles are explicit: directed peer to directed peer, launch to
+launch, and launch to directed peer. Reverse and ordinary-record edges are not
+admitted by this finite projection. Identity, generation, local order, depth
+and successful cursor-prefix checks remain in the executable validator.
 
 Opaque predicates, isolated proof queries and explicit quantifier triggers
 control solver expansion. They do not change assertions or increase limits.
@@ -72,11 +82,11 @@ constructor witnesses, not constructor-origin real-Context theorems. In
 particular, real empty-dependency leaf input queries yield None; this model's
 Some(Success)/Some(Unknown) leaves are not established real constructor cases.
 
-The broader development campaign now checks signed-source opening/closing
+The earlier development campaign checked signed-source opening/closing
 positives, exact relocated replay and 25 logical mutations: 23 of the shared
 production body and two of projection adapters. All 35 phases pass in the
 [2026-09-26 packet](evidence/dev-planner-quiescence-2026-09-26/README.md).
-The three positives each report the same 53/0 result. The runner keeps default
+Those three positives each report the same earlier 53/0 result. The runner keeps default
 SMT limits and requests one counterexample per function uniformly; it rejects
 resource failures even alongside logical failures. The packet preserves failed
 attempts and the still-unqualified guard-form early-yield candidate, whose
@@ -85,11 +95,20 @@ mutation rejection can express invariant sensitivity, not a reachable native
 bug. This named campaign does not close protected admission or complete
 production refinement.
 
+The current controller additionally relocates the mixed proof file and checks
+three executable profile-guard mutations: rejecting the mixed edge, admitting
+the reverse edge, and admitting an ordinary kind-0 parent. Each leaves the
+profile specification and identity/depth checks unchanged. The ordinary mutant
+tests malformed finite input, not real ordinary-peer construction. The old
+35-phase packet is not evidence for the expanded 56-obligation root.
+
 The adapters deliberately omit actual HashMap allocation, full event/device/
 allocation custody metadata, journal ownership, callbacks, dependency-release
 effects and quarantine implementation. Root/input observations are fixed bounded
 inputs. Those boundaries must be composed with their separately owned production
 proofs; validation of this projection cannot supply that composition.
+Exact mixed completion/quiescence outcomes, real ordinary terminal-peer
+constructors, native publication and Context adapter refinement remain open.
 
 The projection's `settlement_prefix` is an opaque synthetic marker, not a count
 of production journal stages. Its updates are not generally monotonic and its

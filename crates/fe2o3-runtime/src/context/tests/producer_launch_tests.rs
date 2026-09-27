@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 mod completion_faults;
 mod peer_producers;
+mod pending_peers;
 
 #[test]
 fn retained_charge_producer_aware_stable_input_rejects_region_sized_credit() {
@@ -122,6 +123,24 @@ impl MockBackend {
             {
                 continue;
             }
+            if let Some((_, dependencies)) = self.directed_routes.get(&current).cloned() {
+                if !visited {
+                    stack.push((current, true));
+                    for dependency in dependencies.iter().rev() {
+                        assert!(dependency.producer_submission < current);
+                        stack.push((dependency.producer_submission, false));
+                    }
+                } else {
+                    let ready = dependencies.iter().all(|dependency| {
+                        self.producer_launch
+                            .completed_copies
+                            .get(&dependency.producer_submission)
+                            == Some(&BackendPollV1::Succeeded)
+                    });
+                    self.finish_submission(current, ready);
+                }
+                continue;
+            }
             let request = self.producer_launch.requests[&current].clone();
             if !visited {
                 stack.push((current, true));
@@ -235,6 +254,9 @@ impl RuntimeProducerAwareLaunchBackendV1 for MockBackend {
                     .producer_launch
                     .requests
                     .contains_key(&dependency.producer_submission)
+                    && !self
+                        .directed_routes
+                        .contains_key(&dependency.producer_submission)
                     && self
                         .producer_launch
                         .completed_copies

@@ -1,9 +1,10 @@
 # Peer Producers For Typed Compute
 
-`launch_producer_aware_v1` accepts scalar peer-copy events after Context has
-reconciled those copies as successful and quiescent. It still requires a version
-journal and the explicit `RuntimeProducerAwareLaunchBackendV1` contract.
-Physical completion without logical settlement is insufficient.
+`launch_producer_aware_v1` accepts pending directed peer-copy events, or ordinary
+scalar peer-copy events after Context has reconciled those copies as successful
+and quiescent. It requires a version journal and a backend implementing the
+explicit `RuntimeProducerAwareLaunchBackendV1` contract. Context admission does
+not supply missing backend execution support.
 
 ## Current Support
 
@@ -14,6 +15,21 @@ producer twice reject. Directed roots preserve their original graph depth after
 settlement. An ordinary completed copy is a terminal leaf. A producer's source
 allocation and earlier ancestors may already have been released; its retained
 historical root remains the authority for this terminal dependency.
+
+Context also accepts pending directed peers and mixed native/peer producer
+rosters. Every original Read alias must fit the exact peer destination interval
+and captured allocation record; the whole-allocation journal lease does not
+authorize reads outside that interval. Pending writable aliases reject. Journal
+reservations bind the exact producer writer, including its generation through
+slot reuse. Directed depth includes settled history and remains bounded by 256.
+Ordinary pending peers still reject.
+
+Physical consumer success is retained separately from logical success. The
+shared bounded planner reconciles exact parents first; callbacks and writer
+publication follow canonical Context order while backend request order remains
+unchanged. A later parent failure/cancellation does not invalidate structural
+custody. Discarded parent results propagate Unknown, not Success; contradictory
+Pending/Failed observations after physical consumer success seal custody.
 
 `KfdMultiDeviceRuntimeBackendV1` supports completed cooperative copies as exact
 typed-launch producers. It requires an exact event/submission pair and checks
@@ -35,34 +51,41 @@ roster; no runtime performance improvement is claimed for this checkpoint.
 
 ## Not Yet Supported
 
-Pending peer-copy-to-compute admission remains rejected. The ordinary
+Pending peer-copy-to-compute admission remains rejected by the KFD router. Its
+child compute ledger currently retains bound allocations immediately, which
+would block the cooperative producer supplying those inputs. The ordinary
 multi-device router uses host-staged cooperative peer copies, not native XGMI.
 The separate native-XGMI copy backend has not acquired compute support. This
 change adds no Worker protocol, atomic/collective authority, generated-launch
 authority or compatibility runtime.
 
-The shared completion-planner body is unchanged. Its existing finite projection
-requires same-kind edges and does not establish coverage of these newly admitted
-mixed-kind graphs or the complete Context adapters. CPU validation is not a
-formal-refinement, native-correctness or performance result.
+The shared completion-planner body is unchanged. Its finite projection now has
+explicit directed-peer and launch dependency profiles and a witnessed exact
+mixed-parent observation outcome; it does not
+establish the complete Context adapters. CPU validation is not a formal-refinement,
+native-correctness or performance result.
 
 ## Pending Composition Work
 
-1. Build pending peer-to-compute admission on the now-implemented
+1. Build native pending peer-to-compute admission on the now-implemented
    [directed router profile](runtime-directed-cooperative-peer-v1.md) and resumable
-   native-dirty preparation described below. Admit directed peer parents with
-   their existing success-gated state, preserving one graph-wide depth bound. Ordinary pending
+   native-dirty preparation described below. Context now admits directed parents
+   with their existing success-gated state and one graph-wide depth bound. Ordinary pending
    peers need an explicit compatible completion contract before admission, not
    a relaxed flag check.
-2. Check each original Read binding against the exact peer destination interval
-   and captured allocation record. Whole-allocation journal leases are not proof
-   that a smaller producer wrote every consumer input.
+2. Preserve Context's original-Read range checks in native admission. The
+   completed CPU contract checks exact intervals, mixed leases, all completion
+   ingresses, failure, cancellation, corruption, slot reuse and the depth limit.
 3. Reuse the child compute ledger's module, kernarg, allocation, stream and
    cancellation ownership. A private producer bridge is insufficient by itself:
    retaining the consumer's allocation currently blocks the cooperative copy's
    public write path. Any internal copy-access exception must authenticate that
    all conflicting consumers are unpublished and blocked on that exact producer.
-   Public host access must remain rejected.
+   Public host access must remain rejected. Capture a bounded authenticated
+   predecessor roster for each bound allocation, including transitive source
+   readers and FIFO predecessors; allocation overlap or an ID alone is not proof
+   of ancestry. Keep destination-write range authority separate from native
+   reconciliation authority for an existing dirty extent.
 4. Gate immediate, observed, ordered-successor, deadline and flush publication
    paths. Preserve transitive stream ordering, producer fan-out, cross-stream
    flush and drain progress, initialization authority and final publication-time
