@@ -20,6 +20,8 @@ pub(super) struct RetainedSubmissionWriterV1 {
     pub(super) domain: SubmissionWriterDomainV1,
     pub(super) allocations: Vec<SubmissionWriterAllocationV1>,
     pub(super) members: Vec<ContextAllocationWriteV1>,
+    // Ordinary quiescence survives release of public submission metadata.
+    pub(super) disposal_quiescent: bool,
     pub(super) disposal_started: bool,
     pub(super) disposed_count: usize,
     pub(super) journal_disposed: bool,
@@ -40,6 +42,25 @@ completion_writer_outcome_declaration!(completion_journal_rust_syntax, pub(in cr
 
 #[cfg(test)]
 impl ContextVersionsV1 {
+    pub(in crate::context) fn submission_disposal_quiescent_for_test_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Option<bool> {
+        self.submission_writers
+            .get(&id)
+            .map(|root| root.disposal_quiescent)
+    }
+
+    pub(in crate::context) fn clear_disposal_quiescence_for_test_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+    ) {
+        self.submission_writers
+            .get_mut(&id)
+            .unwrap()
+            .disposal_quiescent = false;
+    }
+
     pub(in crate::context) fn submission_disposal_member_for_test_v1(
         &self,
         id: RuntimeSubmissionIdV1,
@@ -395,6 +416,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     domain,
                     allocations: prepared.allocations,
                     members: prepared.members,
+                    disposal_quiescent: false,
                     disposal_started: false,
                     disposed_count: 0,
                     journal_disposed: false,
@@ -496,7 +518,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 completion_faults::CompletionJournalStageV1::Writer,
                 completion_faults::CompletionJournalPointV1::AfterEffect,
             )?;
-            if !matches!(outcome, SubmissionWriterOutcomeV1::Unknown) {
+            if matches!(outcome, SubmissionWriterOutcomeV1::Unknown) {
+                if domain == SubmissionWriterDomainV1::Ordinary {
+                    // Ordinary callers reached this point only from conclusive
+                    // completion/Quiescent paths, after releasing input custody.
+                    // Context-wide quarantine deliberately does not grant it.
+                    versions
+                        .submission_writers
+                        .get_mut(&id)
+                        .expect("validated retained writer")
+                        .disposal_quiescent = true;
+                }
+            } else {
                 versions.submission_writers.remove(&id);
                 if let Some(record) = self.submissions.get_mut(&id) {
                     record.journal_writer = None;

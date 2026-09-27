@@ -42,6 +42,8 @@ impl ContextQueuedWriterJournalV1 {
 
     /// Exact inner version metadata, not an availability receipt. Queued writers
     /// remain Reserved there; use validate_no_queued_writer before outside access.
+    /// Diagnostic lookups/counts remain available after terminal disposal failure;
+    /// they cannot authorize reuse or further owner mutation.
     pub fn lookup_allocation(
         &self,
         allocation: ContextAllocationReferenceV1,
@@ -76,6 +78,7 @@ impl ContextQueuedWriterJournalV1 {
         &self,
         allocation: ContextAllocationReferenceV1,
     ) -> Result<Option<ContextWriterReferenceV1>, Error> {
+        self.ensure_usable()?;
         let state = self.inner.lookup_allocation(allocation)?;
         match self.tails[allocation.slot] {
             Some(index) => {
@@ -98,16 +101,20 @@ impl ContextQueuedWriterJournalV1 {
     }
 
     pub fn validate_read_capacity(&self, count: usize) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.validate_read_capacity(count)
     }
     pub fn validate_producer_read_capacity(&self, count: usize) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.validate_producer_read_capacity(count)
     }
     pub fn validate_read(&self, read: &ContextAllocationReadV1) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.validate_read(read)?;
         self.require_unqueued(read.allocation)
     }
     pub fn validate_producer_read(&self, read: &ContextProducerReadV1) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.validate_producer_read(read)?;
         self.require_unqueued(read.read.allocation)
     }
@@ -118,6 +125,7 @@ impl ContextQueuedWriterJournalV1 {
         requests: &[ContextAllocationReadV1],
         output: &mut [Option<ContextReadLeaseReferenceV1>],
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner
             .preflight_acquire_reads_v1(consumer, requests, output)?;
         for read in requests {
@@ -131,6 +139,7 @@ impl ContextQueuedWriterJournalV1 {
         requests: &[ContextProducerReadV1],
         output: &mut [Option<ContextProducerReadReferenceV1>],
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner
             .preflight_acquire_producer_reads_v1(consumer, requests, output)?;
         for read in requests {
@@ -147,6 +156,7 @@ impl ContextQueuedWriterJournalV1 {
         producer_requests: &[ContextProducerReadV1],
         producer_output: &mut [Option<ContextProducerReadReferenceV1>],
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.preflight_acquire_mixed_reads_v1(
             consumer,
             stable_requests,
@@ -185,6 +195,7 @@ impl ContextQueuedWriterJournalV1 {
         &self,
         reference: ContextProducerReadReferenceV1,
     ) -> Result<ContextProducerReadStatusV1, Error> {
+        self.ensure_usable()?;
         self.inner.producer_read_status(reference)
     }
     pub fn release_reads(
@@ -193,6 +204,7 @@ impl ContextQueuedWriterJournalV1 {
         references: &[ContextReadLeaseReferenceV1],
         evidence: &ContextReadQuiescenceEvidenceV1,
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.release_reads(consumer, references, evidence)
     }
     pub fn release_producer_reads(
@@ -201,6 +213,7 @@ impl ContextQueuedWriterJournalV1 {
         references: &[ContextProducerReadReferenceV1],
         evidence: &ContextReadQuiescenceEvidenceV1,
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner
             .release_producer_reads(consumer, references, evidence)
     }
@@ -209,6 +222,7 @@ impl ContextQueuedWriterJournalV1 {
         &mut self,
         key: ContextWriterKeyV1,
     ) -> Result<ContextWriterReferenceV1, Error> {
+        self.ensure_usable()?;
         let writer = self.inner.register_writer(key)?;
         if self.roots[writer.slot].is_some() {
             return Err(Error::InvalidState);
@@ -216,6 +230,7 @@ impl ContextQueuedWriterJournalV1 {
         Ok(writer)
     }
     pub fn abort_reserved(&mut self, writer: ContextWriterReferenceV1) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.lookup_reserved(writer)?;
         if self.roots[writer.slot].is_some() {
             return Err(Error::AllocationBusy);
@@ -228,6 +243,7 @@ impl ContextQueuedWriterJournalV1 {
         device: ContextJournalDeviceKeyV1,
         extent: u64,
     ) -> Result<ContextAllocationReferenceV1, Error> {
+        self.ensure_usable()?;
         self.inner.enroll_allocation(key, device, extent)
     }
     pub fn enroll_allocations(
@@ -235,12 +251,14 @@ impl ContextQueuedWriterJournalV1 {
         entries: &[ContextAllocationEnrollmentV1],
         output: &mut [Option<ContextAllocationReferenceV1>],
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.enroll_allocations(entries, output)
     }
     pub fn validate_allocation_retirement(
         &self,
         allocations: &[ContextAllocationReferenceV1],
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.validate_allocation_retirement(allocations)?;
         for &allocation in allocations {
             self.require_unqueued(allocation)?;
@@ -259,6 +277,7 @@ impl ContextQueuedWriterJournalV1 {
         writer: ContextWriterReferenceV1,
         members: &[ContextAllocationWriteV1],
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.validate_unknown_disposal(writer, members)?;
         let root = self.validate_root(writer)?;
         if root.phase != Phase::Active {
@@ -274,6 +293,7 @@ impl ContextQueuedWriterJournalV1 {
         writer: ContextWriterReferenceV1,
         evidence: &ContextWriterDisposalEvidenceV1<'_>,
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         if evidence.writer != writer {
             return Err(Error::SettlementEvidenceMismatch);
         }

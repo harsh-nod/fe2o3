@@ -7,6 +7,10 @@ use crate::context_version_journal::*;
 use alloc::vec::Vec;
 
 mod forward;
+mod group_disposal;
+pub use group_disposal::{
+    ContextQueuedWriterGroupDisposalErrorV1, ContextQueuedWriterGroupDisposalEvidenceV1,
+};
 #[cfg(test)]
 mod tests;
 
@@ -92,6 +96,9 @@ pub struct ContextQueuedWriterJournalV1 {
     tails: Vec<Option<usize>>,
     queued_counts: Vec<usize>,
     scratch: Vec<ContextAllocationWriteV1>,
+    disposal_terminal: bool,
+    #[cfg(test)]
+    disposal_fault: Option<(usize, bool)>,
 }
 
 fn filled<T: Clone>(count: usize, value: T) -> Result<Vec<T>, Error> {
@@ -142,6 +149,9 @@ impl ContextQueuedWriterJournalV1 {
             tails: filled(allocations, None)?,
             queued_counts: filled(allocations, 0)?,
             scratch: filled(allocations, placeholder)?,
+            disposal_terminal: false,
+            #[cfg(test)]
+            disposal_fault: None,
         })
     }
 
@@ -154,6 +164,7 @@ impl ContextQueuedWriterJournalV1 {
     }
 
     fn root(&self, writer: ContextWriterReferenceV1) -> Result<Root, Error> {
+        self.ensure_usable()?;
         self.inner.lookup_writer(writer)?;
         self.roots
             .get(writer.slot)
@@ -167,6 +178,7 @@ impl ContextQueuedWriterJournalV1 {
         &self,
         write: ContextAllocationWriteV1,
     ) -> Result<ContextAllocationStateV1, Error> {
+        self.ensure_usable()?;
         let state = self.inner.lookup_allocation(write.allocation)?;
         if state.device != write.device {
             return Err(Error::AllocationDeviceMismatch);
@@ -178,6 +190,7 @@ impl ContextQueuedWriterJournalV1 {
     }
 
     fn require_unqueued(&self, allocation: ContextAllocationReferenceV1) -> Result<(), Error> {
+        self.ensure_usable()?;
         let state = self.inner.lookup_allocation(allocation)?;
         let slot = allocation.slot;
         let count = *self.queued_counts.get(slot).ok_or(Error::InvalidState)?;
@@ -292,6 +305,7 @@ impl ContextQueuedWriterJournalV1 {
         queued: bool,
         request: impl Fn(usize) -> ContextQueuedWriteV1,
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.lookup_reserved(writer)?;
         if self.roots[writer.slot].is_some() {
             return Err(Error::InvalidState);
@@ -436,6 +450,7 @@ impl ContextQueuedWriterJournalV1 {
         writer: ContextWriterReferenceV1,
         members: &[ContextAllocationWriteV1],
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         self.inner.preflight_begin_write_v1(writer, members)?;
         let request = |index: usize| ContextQueuedWriteV1 {
             destination: members[index],
@@ -471,6 +486,7 @@ impl ContextQueuedWriterJournalV1 {
         proposed: ContextWriterKeyV1,
         requests: &[ContextQueuedWriteV1],
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         if proposed.context_generation != self.context_generation() {
             return Err(Error::ForeignContext);
         }
@@ -632,6 +648,7 @@ impl ContextQueuedWriterJournalV1 {
         writer: ContextWriterReferenceV1,
         evidence: &ContextWriterSuccessEvidenceV1,
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         if evidence.writer != writer {
             return Err(Error::SettlementEvidenceMismatch);
         }
@@ -653,6 +670,7 @@ impl ContextQueuedWriterJournalV1 {
         writer: ContextWriterReferenceV1,
         evidence: &ContextWriterNoEffectEvidenceV1,
     ) -> Result<(), Error> {
+        self.ensure_usable()?;
         if evidence.writer != writer {
             return Err(Error::SettlementEvidenceMismatch);
         }

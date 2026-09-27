@@ -1,6 +1,8 @@
 use super::*;
 use alloc::{format, string::String, vec};
 
+mod group_disposal;
+
 type Journal = ContextQueuedWriterJournalV1;
 type Writer = ContextWriterReferenceV1;
 type Write = ContextAllocationWriteV1;

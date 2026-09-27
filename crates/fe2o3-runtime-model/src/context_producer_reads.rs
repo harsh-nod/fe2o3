@@ -132,6 +132,18 @@ fn read_key(request: &ContextProducerReadV1) -> (u64, u64, u64) {
 }
 
 impl ContextProducerReadJournalV1 {
+    pub(crate) fn has_consumer_reads_matching_v1(
+        &self,
+        selected: impl Fn(ContextWriterKeyV1) -> bool,
+    ) -> bool {
+        self.stable.has_consumer_reads_matching_v1(&selected)
+            || self
+                .reservations
+                .iter()
+                .flatten()
+                .any(|read| selected(read.reference.consumer))
+    }
+
     pub fn new(
         generation: u64,
         allocations: usize,

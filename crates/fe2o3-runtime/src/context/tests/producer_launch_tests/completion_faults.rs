@@ -132,6 +132,10 @@ fn fault_case(completion: Completion, stage: Stage, point: Point, panic: bool) {
         versions.completion_roots_for_test_v1(consumer.id),
         (stable_root, producer_root, true)
     );
+    assert_eq!(
+        versions.submission_disposal_quiescent_for_test_v1(consumer.id),
+        Some(false)
+    );
     let journal = versions.read_leases_for_test_v1();
     assert_eq!(
         journal.retained_read_count(),
@@ -368,6 +372,10 @@ fn completion_context_late_writer_identity_error_preserves_released_inputs() {
     assert_eq!(
         versions.completion_roots_for_test_v1(consumer.id),
         (false, false, true)
+    );
+    assert_eq!(
+        versions.submission_disposal_quiescent_for_test_v1(consumer.id),
+        Some(false)
     );
     assert_eq!(versions.read_leases_for_test_v1().retained_read_count(), 0);
     assert_eq!(

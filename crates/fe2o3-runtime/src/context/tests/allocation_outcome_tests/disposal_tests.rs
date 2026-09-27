@@ -112,6 +112,7 @@ impl Fixture {
                     assert_diagnostic(result, Failure::Quiescent, pointer, &drops);
                 }
                 3 => context.destroy_stream(stream).unwrap(),
+                4 => {}
                 _ => unreachable!(),
             }
             Some(submission)
@@ -145,6 +146,10 @@ impl Fixture {
 
     fn assert_unknown(&self, disposed: usize) {
         let versions = self.context.versions.as_ref().unwrap();
+        assert_eq!(
+            versions.submission_disposal_quiescent_for_test_v1(self.submission_id),
+            Some(true)
+        );
         assert_eq!(
             versions.journal_for_test().lookup_writer(self.writer),
             Ok(ContextWriterStateV1::Unknown { member_count: 3 })
@@ -508,7 +513,7 @@ fn final_unknown_disposal_preserves_reused_backend_handle_and_new_allocation_cre
 
 #[test]
 fn unknown_disposal_rejects_missing_or_substituted_custody_before_backend_entry() {
-    for mutation in 0..5 {
+    for mutation in 0..6 {
         let mut fixture = Fixture::new(true, 1, false);
         match mutation {
             0 => fixture
@@ -543,6 +548,12 @@ fn unknown_disposal_rejects_missing_or_substituted_custody_before_backend_entry(
                 .context
                 .allocation_admission
                 .quarantine(fixture.ids[2]),
+            5 => fixture
+                .context
+                .versions
+                .as_mut()
+                .unwrap()
+                .clear_disposal_quiescence_for_test_v1(fixture.submission_id),
             _ => unreachable!(),
         }
         let memory = fixture.context.backend.inner.memory.clone();
@@ -556,6 +567,82 @@ fn unknown_disposal_rejects_missing_or_substituted_custody_before_backend_entry(
         assert_eq!(fixture.context.backend.release_calls, 0);
         assert_eq!(fixture.context.backend.inner.memory, memory);
         assert!(!fixture.context.cleanup().is_complete());
+    }
+}
+
+#[test]
+fn absent_submission_still_requires_retained_disposal_quiescence() {
+    for outcome in 0..4 {
+        let mut fixture = Fixture::new(true, outcome, true);
+        assert!(
+            !fixture
+                .context
+                .submissions
+                .contains_key(&fixture.submission_id)
+        );
+        fixture
+            .context
+            .versions
+            .as_mut()
+            .unwrap()
+            .clear_disposal_quiescence_for_test_v1(fixture.submission_id);
+        let memory = fixture.context.backend.inner.memory.clone();
+        assert!(matches!(
+            fixture.context.release_allocation(fixture.ids[0]),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidBackendDescription
+            ))
+        ));
+        assert!(fixture.context.is_terminal());
+        assert_eq!(fixture.context.backend.release_calls, 0);
+        assert_eq!(fixture.context.backend.inner.memory, memory);
+    }
+}
+
+#[test]
+fn quarantine_of_pending_work_does_not_grant_disposal_quiescence() {
+    let mut fixture = Fixture::new(true, 4, false);
+    assert_eq!(
+        fixture
+            .context
+            .versions
+            .as_ref()
+            .unwrap()
+            .submission_disposal_quiescent_for_test_v1(fixture.submission_id),
+        Some(false)
+    );
+    fixture.context.quarantine_submission_writers_v1();
+    let versions = fixture.context.versions.as_ref().unwrap();
+    assert_eq!(
+        versions.journal_for_test().lookup_writer(fixture.writer),
+        Ok(ContextWriterStateV1::Unknown { member_count: 3 })
+    );
+    assert_eq!(
+        versions.submission_disposal_quiescent_for_test_v1(fixture.submission_id),
+        Some(false)
+    );
+    assert!(fixture.context.is_terminal());
+    assert!(!fixture.context.cleanup().is_complete());
+    assert_eq!(fixture.context.backend.release_calls, 0);
+}
+
+#[test]
+fn later_quarantine_preserves_known_quiescence_but_cannot_authorize_cleanup() {
+    for outcome in 0..4 {
+        let mut fixture = Fixture::new(true, outcome, true);
+        fixture.assert_unknown(0);
+        fixture.context.quarantine_submission_writers_v1();
+        assert_eq!(
+            fixture
+                .context
+                .versions
+                .as_ref()
+                .unwrap()
+                .submission_disposal_quiescent_for_test_v1(fixture.submission_id),
+            Some(true)
+        );
+        assert!(!fixture.context.cleanup().is_complete());
+        assert_eq!(fixture.context.backend.release_calls, 0);
     }
 }
 

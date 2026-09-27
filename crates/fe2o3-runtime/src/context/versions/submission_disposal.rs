@@ -12,6 +12,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         id: RuntimeSubmissionIdV1,
         writer: ContextWriterReferenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
+        let root = self
+            .versions
+            .as_ref()
+            .and_then(|versions| versions.submission_writers.get(&id))
+            .ok_or(ContextVersionJournalErrorV1::InvalidReference)?;
+        if root.writer != writer
+            || (root.domain == SubmissionWriterDomainV1::Ordinary && !root.disposal_quiescent)
+        {
+            return Err(ContextVersionJournalErrorV1::InvalidState);
+        }
         if self.submissions.get(&id).is_some_and(|record| {
             !record.quiescent
                 || record.journal_writer != Some(writer)

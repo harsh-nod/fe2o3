@@ -130,6 +130,16 @@ fn read_key(request: &ContextAllocationReadV1) -> (u64, u64, u64) {
 }
 
 impl ContextReadLeasedJournalV1 {
+    pub(crate) fn has_consumer_reads_matching_v1(
+        &self,
+        selected: impl Fn(ContextWriterKeyV1) -> bool,
+    ) -> bool {
+        self.leases
+            .iter()
+            .flatten()
+            .any(|lease| selected(lease.reference.consumer))
+    }
+
     pub fn new(
         generation: u64,
         allocations: usize,

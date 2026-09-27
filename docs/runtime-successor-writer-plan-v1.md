@@ -77,25 +77,26 @@ This is not Context support or a proof of the new owner. In particular:
 - Context must authenticate each exact latest writer and explicit success event,
   retain the queued roster, and audit all availability probes before enabling it.
 - Queued Unknown is fail-stop and cannot be refunded by a later NoEffect value.
-  Safe whole-roster queued-Unknown disposal/recovery remains unimplemented.
+  Closed-group model disposal is implemented; its Context/native integration
+  remains open. It destroys allocations rather than exposing uncertain content.
 - Failed/quiescent backend results alone are not NoEffect authority. Descendant
   failure after cancellation cannot be used to silently release queued custody.
 - Queued-output reads, partial writes and ReadWrite integration remain open.
 - The unchanged inner journal proofs do not establish outer queue invariants.
 
-### Required Unknown Disposal
+### Unknown Group Disposal
 
 Rejecting disposal while a co-owner exists is safe but cannot finish cleanup:
 an Active Unknown A and queued Unknown B on the same allocation block each other
-in either disposal order. A future disposal group must close over every selected
+in either disposal order. The model disposal group closes over every selected
 writer's complete roster and every co-owner of that allocation union. Require
 exact identities, no omitted neighbors/readers, all roots Unknown, and separately
 authenticated Context quiescence before any native release.
 
 Retain one group with unique allocation receipts. Release each native allocation
 once and keep all original writer roots/credits until the entire union is disposed.
-After complete backend release, dispose inner Active-Unknown rosters, retire
-queued-only allocations and abort queued Reserved identities as destruction
+After complete backend release, retire queued-only allocations, dispose inner
+Active-Unknown rosters and abort queued Reserved identities as destruction
 bookkeeping, not as NoEffect or success. Clear the outer group without predecessor
 success propagation. Partial model commitment must quarantine, never masquerade
 as rollback. Context's current per-writer disposal receipts assume disjoint
@@ -104,7 +105,25 @@ destinations and cannot safely implement this contract unchanged.
 Tests must cover branching/multi-allocation closure, unrelated writers, pending
 co-owner refusal before backend effects, exact identity/reader rejection, partial
 release/retry without double release, terminal/panic retention and queued-only
-Unknown groups. This group disposal is planned, not implemented by the checkpoint.
+Unknown groups. The executable model now checks both directions of group closure,
+exact canonical rosters, destination readers and selected writers' input leases
+outside the group. Neighbor inspection supports bounded component discovery.
+
+Model destruction first retires queued-only destinations, then disposes active
+Unknown writers or burns queued Reserved identities, and finally clears outer
+indexes without success propagation. Outer roots remain through all inner
+subtransitions. A preflight failure is Rejected without mutation; any error or
+unwind after starting commitment permanently makes the owner terminal. Adapters
+must retain their own full native custody through that failure. Group validation
+uses bounded member passes and binary searches plus an O(R) read-arena scan;
+ordinary hot-path admission/settlement still avoid global scans.
+
+Context now retains an Ordinary writer's conclusive quiescence marker separately
+from removable submission metadata. Successful Unknown settlement can set it;
+quarantine cannot. Both initial and final Ordinary disposal checks require it,
+including absent-submission paths. Generated receipt-based validation remains
+separate. Context still lacks shared-group receipts/credits and does not call the
+new model group disposer. Its integration and full shared-body proofs remain open.
 
 ## Entry-Point Audit
 
