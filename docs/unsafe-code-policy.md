@@ -434,6 +434,32 @@ error and unwind paths, and budget cleanup. Run the CPU codec tests and the
 source-inventory gate after integration. This allocation primitive authenticates
 no CPU source, proof, compiler artifact, or GPU launch.
 
+### Shared Compiler-Execution Input Slots
+
+The selected compiler admission and the native V3 preparation share one private
+guard for inherited policy slot 202 and service slot 195. Both must be live and
+non-CLOEXEC before policy duplication: otherwise the duplicate could occupy a
+missing service slot and acquire a second closer. Admission exclusively consumes
+these protocol slots. The two production unsafe blocks inspect scalar F_GETFD
+flags and close an owned slot once; neither fabricates a BorrowedFd or OwnedFd
+for a potentially absent input. Ownership is cleared before closing or passing
+the service slot to its consuming client, and close is never retried. The native
+path still charges its original account before inspecting either descriptor.
+
+Three test-only unsafe blocks cover isolated-child pre-exec cleanup, F_GETFD
+absence checks, and adoption of one installed live descriptor after disarming
+the guard. Pre-exec performs only scalar close/error handling on child copies.
+Each child has a finite deadline and is reaped on timeout or polling failure.
+All descriptor duplication uses the existing rustix safe API without replacing
+live owners. The native test now shares those helpers and has no unsafe blocks.
+Tests cover missing/CLOEXEC inputs, policy and client refusal, the actual
+descriptor-allocation collision, unwind cleanup and transferred ownership.
+
+The inventory adds only the three reviewed test blocks. The selected production
+file remains at two; the native production and test files now contain none.
+Unrelated inventory mismatches are not approved by this entry. These refusal
+tests grant no protected execution, native activation or GPU qualification.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

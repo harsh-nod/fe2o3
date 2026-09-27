@@ -5,6 +5,7 @@ pub(crate) mod native_v3;
 
 use std::fmt;
 use std::io;
+use std::os::fd::RawFd;
 use std::time::Duration;
 
 use fe2o3_compiler_closure_capability::{
@@ -62,14 +63,17 @@ impl AdmittedProtectedCompilerExecutionV1 {
 /// Admits both canonical compiler-execution descriptors without a fallback path.
 pub(crate) fn admit_for_production_codegen()
 -> Result<AdmittedProtectedCompilerExecutionV1, ProtectedCompilerExecutionErrorV1> {
-    let policy = retain_inherited_policy();
-    let policy = match policy {
-        Ok(policy) => policy,
-        Err(error) => {
-            close_service_child_slot();
-            return Err(error);
-        }
-    };
+    let mut slots = InheritedExecutionSlots::new();
+    slots
+        .validate()
+        .map_err(ProtectedCompilerExecutionErrorV1::Descriptor)?;
+    let policy = CompilerExecutionPolicyCapabilityV1::from_inherited_child()
+        .map_err(ProtectedCompilerExecutionErrorV1::Policy)?;
+    slots
+        .close_policy()
+        .map_err(ProtectedCompilerExecutionErrorV1::Descriptor)?;
+    // The client consumes this fixed slot on every admission exit.
+    slots.service = None;
     let client = CompilerExecutionClientV1::admit_inherited_child(RECEIPT_ACQUISITION_TIMEOUT_V1)
         .map_err(ProtectedCompilerExecutionErrorV1::Client)?;
     policy
@@ -78,26 +82,63 @@ pub(crate) fn admit_for_production_codegen()
     Ok(AdmittedProtectedCompilerExecutionV1 { policy, client })
 }
 
-fn retain_inherited_policy()
--> Result<CompilerExecutionPolicyCapabilityV1, ProtectedCompilerExecutionErrorV1> {
-    let admission = CompilerExecutionPolicyCapabilityV1::from_inherited_child();
-    // The capability retains a private CLOEXEC duplicate on success. Consume the canonical slot
-    // on every path so no rejected policy can remain available to later backend code.
-    // SAFETY: close consumes only the scalar reserved descriptor and reports absence via EBADF.
-    let close_result = unsafe { libc::close(COMPILER_EXECUTION_POLICY_CHILD_FD_V1) };
-    match (admission, close_result) {
-        (Ok(policy), 0) => Ok(policy),
-        (Ok(_), _) => Err(ProtectedCompilerExecutionErrorV1::Descriptor(
-            io::Error::last_os_error(),
-        )),
-        (Err(error), _) => Err(ProtectedCompilerExecutionErrorV1::Policy(error)),
+// Admission exclusively consumes the protocol slots. Never fabricate OwnedFd
+// for a possibly missing input, and never duplicate until both are occupied:
+// a policy duplicate in an absent service slot would otherwise get two closers.
+struct InheritedExecutionSlots {
+    policy: Option<RawFd>,
+    service: Option<RawFd>,
+}
+
+impl InheritedExecutionSlots {
+    fn new() -> Self {
+        Self {
+            policy: Some(COMPILER_EXECUTION_POLICY_CHILD_FD_V1),
+            service: Some(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1),
+        }
+    }
+
+    fn validate(&self) -> io::Result<()> {
+        for fd in [
+            COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
+            COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+        ] {
+            // SAFETY: F_GETFD observes the exclusively held admission slots.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            if flags < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if flags & libc::FD_CLOEXEC != 0 {
+                return Err(io::Error::from_raw_os_error(libc::EINVAL));
+            }
+        }
+        Ok(())
+    }
+
+    fn close_policy(&mut self) -> io::Result<()> {
+        close_slot(self.policy.take().expect("policy slot has one closer"))
     }
 }
 
-fn close_service_child_slot() {
-    // SAFETY: this failure cleanup consumes only the scalar reserved descriptor. EBADF is the
-    // expected result when the child channel was never installed.
-    unsafe { libc::close(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1) };
+impl Drop for InheritedExecutionSlots {
+    fn drop(&mut self) {
+        for fd in [self.policy.take(), self.service.take()]
+            .into_iter()
+            .flatten()
+        {
+            let _ = close_slot(fd);
+        }
+    }
+}
+
+fn close_slot(fd: RawFd) -> io::Result<()> {
+    // SAFETY: admission owns this protocol slot. Never retry close: even an
+    // error must not close a descriptor newly allocated at the same number.
+    if unsafe { libc::close(fd) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 #[derive(Debug)]
@@ -142,3 +183,7 @@ impl std::error::Error for ProtectedCompilerExecutionErrorV1 {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "protected_compiler_execution_tests.rs"]
+mod tests;

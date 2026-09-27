@@ -3151,6 +3151,7 @@ dependencies = [
  "pliron",
  "reserved-fe2o3-symbols",
  "rmpv",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.0",

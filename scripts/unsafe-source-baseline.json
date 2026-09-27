@@ -964,6 +964,9 @@
   "crates/rustc-codegen-fe2o3/src/protected_compiler_execution.rs": {
     "block": 2
   },
+  "crates/rustc-codegen-fe2o3/src/protected_compiler_execution_tests.rs": {
+    "block": 3
+  },
   "crates/rustc-codegen-fe2o3/src/protected_rustc_invocation.rs": {
     "block": 1
   },

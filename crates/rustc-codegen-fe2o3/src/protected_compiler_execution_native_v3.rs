@@ -1,5 +1,6 @@
 //! Native policy/session custody for the conditional production migration.
 //! The installed driver is switched only with its parent and artifact consumers.
+use super::InheritedExecutionSlots;
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV3 as Subject;
 use fe2o3_compiler_closure_capability::{
     COMPILER_EXECUTION_POLICY_CHILD_FD_V1 as POLICY_FD,
@@ -7,7 +8,6 @@ use fe2o3_compiler_closure_capability::{
     CompilerExecutionPolicyCapabilityV3 as Policy,
 };
 use fe2o3_compiler_execution_client::{
-    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 as SERVICE_FD,
     CompilerExecutionClientErrorV3 as ClientError, CompilerExecutionClientV3 as Client,
 };
 use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV3 as Carriage;
@@ -15,7 +15,7 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
-use std::{fmt, io, os::fd::RawFd};
+use std::{fmt, io};
 
 /// The same exclusive account borrow covers preparation through receipt transport.
 /// The public policy is trust configuration; independent parent pinning is required.
@@ -32,26 +32,12 @@ impl<'b, 'w> Admitted<'b, 'w> {
     /// charge with full capability storage; that charge remains caller-owned.
     /// The native client owns and retires its own peer reservation.
     pub(crate) fn admit(b: &'b mut Budget<'w>) -> Result<Self, Error> {
-        let mut slots = Slots::new();
+        let mut slots = InheritedExecutionSlots::new();
         if b.storage() < Self::INPUT_STORAGE {
             return Err(Resource::Accounting.into());
         }
-        // Both reserved slots must be occupied before any duplication: otherwise
-        // a private policy File could land in the missing service slot, giving
-        // service admission and that File two independent closers for one FD.
         b.charge_work(2)?;
-        for fd in [POLICY_FD, SERVICE_FD] {
-            // SAFETY: the caller exclusively owns the fixed slots during admission.
-            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-            if flags < 0 {
-                return Err(Error::Descriptor(io::Error::last_os_error()));
-            }
-            if flags & libc::FD_CLOEXEC != 0 {
-                return Err(Error::Descriptor(io::Error::from_raw_os_error(
-                    libc::EINVAL,
-                )));
-            }
-        }
+        slots.validate()?;
         let (policy, charge) = Policy::from_inherited_at(POLICY_FD, b)?;
         b.reserve_storage(charge.additional_storage())?;
         slots.close_policy()?;
@@ -89,43 +75,6 @@ impl<'b, 'w> Admitted<'b, 'w> {
                 finish(carriage, retained, b)
             },
         )
-    }
-}
-
-// No OwnedFd is fabricated for a possibly absent inherited descriptor. Each
-// fixed slot has one closer; it is disarmed before delegating consuming custody.
-struct Slots {
-    policy: Option<RawFd>,
-    service: Option<RawFd>,
-}
-impl Slots {
-    fn new() -> Self {
-        Self {
-            policy: Some(POLICY_FD),
-            service: Some(SERVICE_FD),
-        }
-    }
-    fn close_policy(&mut self) -> Result<(), Error> {
-        close(self.policy.take().expect("policy slot has one closer"))
-    }
-}
-impl Drop for Slots {
-    fn drop(&mut self) {
-        for fd in [self.policy.take(), self.service.take()]
-            .into_iter()
-            .flatten()
-        {
-            let _ = close(fd);
-        }
-    }
-}
-fn close(fd: RawFd) -> Result<(), Error> {
-    // SAFETY: admission exclusively consumes the protocol's reserved slots.
-    // Never retry close: even an error must not close a newly reused descriptor.
-    if unsafe { libc::close(fd) } == 0 {
-        Ok(())
-    } else {
-        Err(Error::Descriptor(io::Error::last_os_error()))
     }
 }
 
