@@ -5,6 +5,153 @@ use super::*;
 type Failure = RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>;
 
 impl KfdRuntimeBackendV1 {
+    fn compute_custody_index_intact_v1(&self, allocation: u64) -> bool {
+        let Some(custody) = self.allocation_custody.get(&allocation) else {
+            return false;
+        };
+        let Some(first) = custody.owners.front() else {
+            return false;
+        };
+        if custody.owners.len() > self.dispatch_capacity.custody_limit() {
+            return false;
+        }
+        let mut counts = [0; 2];
+        let mut previous = 0;
+        let mut sole_stream = Some(first.stream);
+        for entry in &custody.owners {
+            if entry.submission <= previous {
+                return false;
+            }
+            previous = entry.submission;
+            counts[entry.kind.index()] += 1;
+            if entry.stream != first.stream {
+                sole_stream = None;
+            }
+        }
+        custody.owner_counts == counts && custody.sole_stream == sole_stream
+    }
+
+    fn compute_sdma_stream_index_intact_v1(&self, stream: u64) -> bool {
+        self.active_sdma_streams.get(&stream).is_some_and(|queue| {
+            !queue.is_empty()
+                && queue.len() <= MAX_RUNTIME_SUBMISSIONS_V1
+                && queue.front().is_some_and(|id| *id != 0)
+                && queue.iter().zip(queue.iter().skip(1)).all(|(a, b)| a < b)
+        })
+    }
+
+    pub(super) fn native_sdma_binding_owner_intact_v1(
+        &self,
+        allocation: u64,
+        owner: RuntimeAllocationCustodyOwnerV1,
+    ) -> bool {
+        self.native_sdma_binding_owner_with_v1(
+            allocation,
+            owner,
+            |id| self.compute_custody_index_intact_v1(id),
+            |stream| self.compute_sdma_stream_index_intact_v1(stream),
+        )
+    }
+
+    fn native_sdma_binding_owner_with_v1(
+        &self,
+        allocation: u64,
+        owner: RuntimeAllocationCustodyOwnerV1,
+        mut custody_intact: impl FnMut(u64) -> bool,
+        mut stream_intact: impl FnMut(u64) -> bool,
+    ) -> bool {
+        let Some(active) = self.active_sdma.get(&owner.submission) else {
+            return false;
+        };
+        let Some(&device) = self.streams.get(&owner.stream) else {
+            return false;
+        };
+        if owner.kind != RuntimeAllocationCustodyKindV1::Sdma
+            || active.peer_access.is_some()
+            || active.id == 0
+            || active.id != owner.submission
+            || active.stream != owner.stream
+            || active.source == active.destination
+            || ![active.source, active.destination].contains(&allocation)
+            || active.byte_len == 0
+            || active.completed_bytes >= active.byte_len
+            || active.dependency_cursor > active.dependencies.len()
+            || !stream_intact(owner.stream)
+            || self.active_sdma_streams[&owner.stream]
+                .binary_search(&active.id)
+                .is_err()
+        {
+            return false;
+        }
+        let published = self
+            .published_sdma_submissions
+            .iter()
+            .filter(|id| **id == active.id)
+            .count();
+        let is_published = !matches!(active.phase, ActiveSdmaPhaseV1::Ready);
+        if published != usize::from(is_published)
+            || if is_published {
+                active.window_bytes == 0
+                    || active.window_requests.is_none()
+                    || active.window_bytes > active.byte_len - active.completed_bytes
+            } else {
+                active.window_bytes != 0 || active.window_requests.is_some()
+            }
+        {
+            return false;
+        }
+        let endpoints = [
+            (active.source, active.source_offset),
+            (active.destination, active.destination_offset),
+        ];
+        if !endpoints.into_iter().all(|(id, offset)| {
+            custody_intact(id)
+                && self.allocation_custody[&id].owners
+                    .binary_search_by_key(&owner.submission, |entry| entry.submission)
+                    .is_ok_and(|index| self.allocation_custody[&id].owners[index] == owner)
+                && self.allocations.get(&id).is_some_and(|record| {
+                    record.device == device
+                        && record.sdma_backed
+                        && record.sdma_initialized
+                        && !matches!(record.sdma_storage,
+                            KfdRuntimeSdmaStorageV1::ComputeInFlight(actual) if actual == active.id)
+                        && offset.checked_add(active.byte_len).is_some_and(|end| {
+                            end <= record.bytes.len() as u64
+                        })
+                        && (matches!(record.sdma_storage,
+                            KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Async(actual))
+                                if actual == active.id) == is_published)
+                })
+        }) {
+            return false;
+        }
+        let kinds = (
+            self.allocations[&active.source].kind,
+            self.allocations[&active.destination].kind,
+        );
+        let directional = matches!(
+            kinds,
+            (
+                RuntimeMemoryKindV1::HostVisible,
+                RuntimeMemoryKindV1::DeviceLocal
+            ) | (
+                RuntimeMemoryKindV1::DeviceLocal,
+                RuntimeMemoryKindV1::HostVisible
+            )
+        );
+        let same_device = kinds
+            == (
+                RuntimeMemoryKindV1::DeviceLocal,
+                RuntimeMemoryKindV1::DeviceLocal,
+            );
+        match active.phase {
+            // A queued copy may still share storage with an earlier producer.
+            ActiveSdmaPhaseV1::Ready => directional || same_device,
+            ActiveSdmaPhaseV1::DirectionalPublished(_) => directional,
+            ActiveSdmaPhaseV1::SameDevicePublished(_) => same_device,
+        }
+    }
+
     fn compute_quiescence_limit_v1(&self) -> usize {
         fe2o3_host_api::MAX_DISPATCH_BINDINGS_V1 * self.dispatch_capacity.custody_limit()
     }
@@ -145,8 +292,16 @@ impl KfdRuntimeBackendV1 {
         explicit: &[u64],
         ordered: Option<u64>,
     ) -> Result<Box<[u64]>, Failure> {
+        if ordered
+            .and_then(|id| self.native_dependency_stream_v1(id))
+            .is_some_and(|stream| stream != launch.stream)
+        {
+            return Err(self.terminal_error("compute admission lost its exact FIFO stream"));
+        }
         let mut candidates = Vec::new();
         let mut fifo_suffix = None;
+        let mut checked_custody = HashSet::new();
+        let mut checked_streams = HashSet::new();
         let quiescence_limit = self.compute_quiescence_limit_v1();
         for binding in launch.bindings {
             let allocation = binding.region.allocation;
@@ -157,13 +312,42 @@ impl KfdRuntimeBackendV1 {
                 return Err(self.terminal_error("compute binding custody exceeded its owner bound"));
             }
             for owner in &custody.owners {
-                if owner.kind != RuntimeAllocationCustodyKindV1::Compute
-                    || Some(owner.submission) == ordered
-                    || explicit.contains(&owner.submission)
-                {
+                if owner.kind == RuntimeAllocationCustodyKindV1::Sdma {
+                    let Some(active) = self.active_sdma.get(&owner.submission) else {
+                        return Err(self.terminal_error("compute binding lost its SDMA owner"));
+                    };
+                    // Routed peer DMA has separate private authority, not a native DAG edge.
+                    if active.peer_access.is_some() {
+                        continue;
+                    }
+                    // Shared indexes are validated once; exact membership then uses
+                    // binary search instead of rescanning long queued-copy rosters.
+                    checked_custody.try_reserve(2).map_err(|_| {
+                        Self::capacity("SDMA custody validation index allocation failed")
+                    })?;
+                    checked_streams.try_reserve(1).map_err(|_| {
+                        Self::capacity("SDMA stream validation index allocation failed")
+                    })?;
+                    if !self.native_sdma_binding_owner_with_v1(
+                        allocation,
+                        *owner,
+                        |id| {
+                            !checked_custody.insert(id) || self.compute_custody_index_intact_v1(id)
+                        },
+                        |stream| {
+                            !checked_streams.insert(stream)
+                                || self.compute_sdma_stream_index_intact_v1(stream)
+                        },
+                    ) {
+                        return Err(self.terminal_error("compute binding lost exact SDMA custody"));
+                    }
+                }
+                if Some(owner.submission) == ordered || explicit.contains(&owner.submission) {
                     continue;
                 }
-                let authentic = if let Some(pending) = self.pending_compute.get(&owner.submission) {
+                let authentic = if owner.kind == RuntimeAllocationCustodyKindV1::Sdma {
+                    true
+                } else if let Some(pending) = self.pending_compute.get(&owner.submission) {
                     pending.id == owner.submission
                         && pending.launch.stream == owner.stream
                         && pending.retained_allocations.contains(&allocation)
@@ -185,7 +369,9 @@ impl KfdRuntimeBackendV1 {
                         self.terminal_error("transitive compute binding lost its exact owner")
                     );
                 }
-                if owner.stream == launch.stream {
+                if owner.kind == RuntimeAllocationCustodyKindV1::Compute
+                    && owner.stream == launch.stream
+                {
                     if self.pending_compute.contains_key(&owner.submission) {
                         let start = match fifo_suffix {
                             Some(start) => start,

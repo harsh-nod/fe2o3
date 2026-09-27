@@ -512,6 +512,95 @@ fn peer_launch_public_three_binding_waits_for_each_published_peer_slot() {
 }
 
 #[test]
+fn peer_launch_private_dma_cannot_be_bypassed_by_native_event_or_fifo() {
+    let mut f = ManuallyDrop::new(fixture(
+        4096,
+        phase_steps(true, 0, 2048, true),
+        phase_steps(false, 0, 2048, true),
+    ));
+    f.source.byte_len = 2048;
+    f.destination.byte_len = 2048;
+    let producer = directed(&mut f);
+    for _ in 0..96 {
+        f.backend
+            .progress_retained_directed_peer_v1(producer)
+            .unwrap();
+        if !f.backend.children[1].published_sdma_submissions.is_empty() {
+            break;
+        }
+    }
+    let before = f.steps();
+    let child = &mut f.backend.children[1];
+    let dma = child.published_sdma_submissions[0];
+    let active = &child.active_sdma[&dma];
+    let endpoint = active.destination;
+    let private_stream = active.stream;
+    let device = child.description.backend_device;
+    let stream = child.create_stream_v1(device).unwrap();
+    let event = child.record_event_v1(private_stream, dma).unwrap();
+    let module = child
+        .load_module_v1(device, &synthetic_cov6::module())
+        .unwrap();
+    let kernel = child.resolve_kernel_v1(module, "vecadd", [7; 32]).unwrap();
+    let next = child.next_handle;
+    let custody = child.allocation_custody[&endpoint].owners.clone();
+    let retains = child.compute_dependency_retain_counts.clone();
+    let tails = child.stream_submission_tails.clone();
+    let reservations = child.compute_completion_reservations;
+    for fifo in [false, true] {
+        let mut kernarg = [0; 16];
+        kernarg[8..].copy_from_slice(&1024_u64.to_le_bytes());
+        let dependencies = [BackendLaunchProducerV1 {
+            event,
+            producer_submission: dma,
+        }];
+        let result = child.submit_producer_aware_launch_v1(BackendProducerAwareLaunchV1 {
+            stream: if fifo { private_stream } else { stream },
+            kernel,
+            explicit_kernarg: &kernarg,
+            bindings: &[BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    allocation: endpoint,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 4096,
+                },
+                kernarg_byte_offset: 0,
+            }],
+            dependencies: if fifo { &[] } else { &dependencies },
+            geometry: crate::RuntimeLaunchGeometryV1 {
+                grid: [64, 1, 1],
+                workgroup: [64, 1, 1],
+                dynamic_shared_bytes: 0,
+            },
+        });
+        assert!(
+            matches!(result, Err(RuntimeBackendFailureV1::Rejected(error))
+            if error.kind() == KfdRuntimeBackendErrorKindV1::Busy)
+        );
+        assert!(!child.terminal);
+        assert_eq!(child.next_handle, next);
+        assert!(child.pending_compute.is_empty());
+        assert_eq!(child.compute_completion_reservations, reservations);
+        assert_eq!(child.compute_dependency_retain_counts, retains);
+        assert_eq!(child.allocation_custody[&endpoint].owners, custody);
+        assert_eq!(child.stream_submission_tails, tails);
+        assert!(child.active_sdma.contains_key(&dma));
+    }
+    child.release_event_v1(event).unwrap();
+    child.unload_module_v1(module).unwrap();
+    child.destroy_stream_v1(stream).unwrap();
+    assert_eq!(f.steps(), before);
+    assert_eq!(
+        f.backend
+            .drain_v1(producer, Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        BackendPollV1::Succeeded
+    );
+    ManuallyDrop::into_inner(f).clean(&[producer]);
+}
+
+#[test]
 fn peer_launch_dma_admission_is_endpoint_scoped_and_rejects_corrupt_custody() {
     for change in 0..6 {
         let mut f = ManuallyDrop::new(fixture(

@@ -600,16 +600,22 @@ impl KfdRuntimeBackendV1 {
             self.allocation_custody
                 .get(&binding.region.allocation)
                 .is_some_and(|custody| {
-                    custody.owners.iter().any(|owner| {
-                        owner.stream != launch.stream
-                            && !dependencies.contains(&owner.submission)
-                            && match owner.kind {
-                                RuntimeAllocationCustodyKindV1::Compute => {
-                                    quiescence.binary_search(&owner.submission).is_err()
-                                }
-                                RuntimeAllocationCustodyKindV1::Sdma => !peer_dma
-                                    .authorizes(binding.region.allocation, owner.submission),
-                            }
+                    custody.owners.iter().any(|owner| match owner.kind {
+                        RuntimeAllocationCustodyKindV1::Compute => {
+                            owner.stream != launch.stream
+                                && !dependencies.contains(&owner.submission)
+                                && quiescence.binary_search(&owner.submission).is_err()
+                        }
+                        RuntimeAllocationCustodyKindV1::Sdma => {
+                            !peer_dma.authorizes(binding.region.allocation, owner.submission)
+                                && !(self
+                                    .active_sdma
+                                    .get(&owner.submission)
+                                    .is_some_and(|active| active.peer_access.is_none())
+                                    && (dependencies.contains(&owner.submission)
+                                        || ordered == Some(owner.submission)
+                                        || quiescence.binary_search(&owner.submission).is_ok()))
+                        }
                     })
                 })
         }) {
@@ -648,6 +654,27 @@ impl KfdRuntimeBackendV1 {
                 || matches!(allocation.sdma_storage, KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Async(owner)) if peer_dma.authorizes(binding.region.allocation, owner))
             {
                 return true;
+            }
+            if let KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Async(owner)) =
+                allocation.sdma_storage
+            {
+                let Some(active) = self.active_sdma.get(&owner) else {
+                    return false;
+                };
+                // Waiting eligibility is not a ready-storage receipt. Completion must
+                // restore the actual endpoint before publication rechecks admission.
+                return (dependencies.contains(&owner)
+                    || ordered == Some(owner)
+                    || quiescence.binary_search(&owner).is_ok())
+                    && (ordered != Some(owner) || active.stream == launch.stream)
+                    && self.native_sdma_binding_owner_intact_v1(
+                        binding.region.allocation,
+                        RuntimeAllocationCustodyOwnerV1 {
+                            submission: owner,
+                            stream: active.stream,
+                            kind: RuntimeAllocationCustodyKindV1::Sdma,
+                        },
+                    );
             }
             let KfdRuntimeSdmaStorageV1::ComputeInFlight(owner) = &allocation.sdma_storage else {
                 return false;

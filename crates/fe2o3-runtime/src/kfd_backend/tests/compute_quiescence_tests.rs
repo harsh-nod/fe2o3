@@ -3,6 +3,8 @@
 use super::*;
 use std::mem::ManuallyDrop;
 
+mod sdma;
+
 fn dependency(
     f: &mut ScriptedActiveProducerFixtureV1,
     stream: u64,
