@@ -267,12 +267,13 @@ fn variant_candidate(
 }
 
 fn projection_source_owner(variant: ProjectionSourceVariant) -> ProductionSemanticSsaOwnerV1 {
-    projection_source_owner_with_loan_end(variant, true)
+    projection_source_owner_with_loan_end(variant, true, false)
 }
 
 fn projection_source_owner_with_loan_end(
     variant: ProjectionSourceVariant,
     end_loan: bool,
+    future_use: bool,
 ) -> ProductionSemanticSsaOwnerV1 {
     let template = source_owner(SourceCase::Slots);
     let semantic = template.source_semantic();
@@ -358,6 +359,26 @@ fn projection_source_owner_with_loan_end(
                     SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(7)),
                 ),
             ]);
+            if future_use {
+                assert!(!end_loan);
+                statements.push(assign(
+                    place(9, U32),
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                        SemanticPlaceV1::new(
+                            SemanticLocalIdV1::from_index(8),
+                            vec![
+                                SemanticProjectionV1::new(
+                                    SemanticProjectionKindV1::Dereference,
+                                    U32,
+                                )
+                                .unwrap(),
+                            ],
+                            U32,
+                        )
+                        .unwrap(),
+                    )),
+                ));
+            }
             blocks[1] = SemanticBasicBlockV1::new(
                 blocks[1].identity(),
                 blocks[1].source(),
@@ -412,7 +433,13 @@ fn lifetime_kill_source_refuses_live_reference_before_materialization() {
     let mut budget = ArgumentBudgetV1::new(&mut work, SCHEDULE_LIMIT);
     budget.reserve_storage(SCHEDULE_FLOOR).unwrap();
     let error = scalar_pending_from_source_v29(
-        || projection_source_owner_with_loan_end(ProjectionSourceVariant::LifetimeKills, false),
+        || {
+            projection_source_owner_with_loan_end(
+                ProjectionSourceVariant::LifetimeKills,
+                false,
+                true,
+            )
+        },
         64,
         &mut budget,
     )
@@ -436,13 +463,46 @@ fn lifetime_kill_source_refuses_live_reference_before_materialization() {
     budget.release_storage(SCHEDULE_FLOOR).unwrap();
 }
 
+#[test]
+fn lifetime_kill_source_preserves_completed_statement_holder_expiry() {
+    for end_loan in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(SCHEDULE_LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, SCHEDULE_LIMIT);
+        budget.reserve_storage(SCHEDULE_FLOOR).unwrap();
+        let candidate = scalar_candidate_from_source_v29(
+            || {
+                projection_source_owner_with_loan_end(
+                    ProjectionSourceVariant::LifetimeKills,
+                    end_loan,
+                    false,
+                )
+            },
+            ScopedTileOrderV29::Blocked,
+            64,
+            &mut budget,
+        );
+        let retained = budget.storage();
+        candidate.replay_with_budget(&mut budget).unwrap();
+        assert_eq!(budget.storage(), retained);
+        drop_scalar_candidate(candidate, &mut budget);
+        assert_eq!(budget.storage(), SCHEDULE_FLOOR);
+        budget.release_storage(SCHEDULE_FLOOR).unwrap();
+    }
+}
+
 fn scalar_candidate_from_source_v29(
     owner_factory: impl Fn() -> ProductionSemanticSsaOwnerV1,
     order: ScopedTileOrderV29,
     lanes: u16,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> ScopedTileScalarCandidateV29 {
-    scalar_candidate_from_source_with_context_v29(owner_factory, order, lanes, budget, "scalar source")
+    scalar_candidate_from_source_with_context_v29(
+        owner_factory,
+        order,
+        lanes,
+        budget,
+        "scalar source",
+    )
 }
 
 fn scalar_candidate_from_source_with_context_v29(
@@ -457,9 +517,13 @@ fn scalar_candidate_from_source_with_context_v29(
     let mut donor = Some((pending, ScopedTileScheduleInputV29 { order }));
     let prepared = prepare_scoped_tile_source_v29(&mut donor, budget)
         .unwrap_or_else(|error| panic!("{context:?}: schedule preparation: {error:?}"));
-    assert!(donor.is_none(), "{context:?}: schedule preparation retained its donor");
-    materialize_scoped_tile_source_v29(prepared, budget)
-        .unwrap_or_else(|failure| panic!("{context:?}: scalar materialization: {:?}", failure.summary))
+    assert!(
+        donor.is_none(),
+        "{context:?}: schedule preparation retained its donor"
+    );
+    materialize_scoped_tile_source_v29(prepared, budget).unwrap_or_else(|failure| {
+        panic!("{context:?}: scalar materialization: {:?}", failure.summary)
+    })
 }
 
 fn scalar_pending_from_source_v29(
@@ -476,7 +540,7 @@ fn scalar_pending_from_source_with_profile_v29(
     profiled: bool,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<ProductionPendingScopedSourceOwnerV29, ProductionPendingScopedSourceErrorV29> {
-    use kernel_argument_abi_v18::tests::{fixture_descriptor_ownership_v18, FixtureKernelAbiV18};
+    use kernel_argument_abi_v18::tests::{FixtureKernelAbiV18, fixture_descriptor_ownership_v18};
     let floor = budget.storage();
     let projected = fixture_descriptor_ownership_v18(owner_factory());
     let owner = fixture_descriptor_ownership_v18(owner_factory());
@@ -557,12 +621,20 @@ fn scalar_pending_from_source_with_profile_v29(
         let profile = FixtureKernelAbiV18::new(&owner);
         let roots = profile.roots();
         ProductionPendingScopedSourceOwnerV29::try_materialize_with_kernel_abi_budget_v18(
-            owner, launch, input, ProductionKernelArgumentAbiInputV18 { roots: &roots },
-            ProductionSemanticKirLimitsV1::default(), budget,
+            owner,
+            launch,
+            input,
+            ProductionKernelArgumentAbiInputV18 { roots: &roots },
+            ProductionSemanticKirLimitsV1::default(),
+            budget,
         )
     } else {
         ProductionPendingScopedSourceOwnerV29::try_materialize_with_budget(
-            owner, launch, input, ProductionSemanticKirLimitsV1::default(), budget,
+            owner,
+            launch,
+            input,
+            ProductionSemanticKirLimitsV1::default(),
+            budget,
         )
     };
     let retained = result

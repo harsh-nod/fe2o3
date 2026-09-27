@@ -82,22 +82,30 @@ fn assemble_pending_scoped_root_body_v29(
         let mut scratch = 0;
         // append_lowered already censused reachable emitted instances. With
         // only the root, no callee operations will move; final census remains.
-        let mut storage_transport = references.filter(|plan|
-            plan.has_storage_demands && map.seeds.rows.len() > 1)
+        let mut storage_transport = references
+            .filter(|plan| plan.has_storage_demands && map.seeds.rows.len() > 1)
             .map(|plan| ScopedStorageTransportV29::new(plan, map, emitted, budget, &mut scratch))
             .transpose()?;
         // The optional owner header is live even on the no-query/root-only path.
-        call_splice_charge_storage_v1(std::mem::size_of::<Option<ScopedLaneQueryTransportV29>>(),
-            budget, &mut scratch)?;
+        call_splice_charge_storage_v1(
+            std::mem::size_of::<Option<ScopedLaneQueryTransportV29>>(),
+            budget,
+            &mut scratch,
+        )?;
         let mut lane_transport = if map.seeds.rows.len() > 1 {
-            references.map(|plan| ScopedLaneQueryTransportV29::new(plan, map, emitted, budget, &mut scratch))
-                .transpose()?.flatten()
-        } else { None };
+            references
+                .map(|plan| {
+                    ScopedLaneQueryTransportV29::new(plan, map, emitted, budget, &mut scratch)
+                })
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
         #[cfg(test)]
-        if let (Some(observer), Some(references)) =
-            (SCOPED_LANE_OBSERVER_V29.get(), references)
-        {
-            observer(references, map, emitted, lane_transport.as_ref(), budget).map_err(instance_anchor_error_v1)?;
+        if let (Some(observer), Some(references)) = (SCOPED_LANE_OBSERVER_V29.get(), references) {
+            observer(references, map, emitted, lane_transport.as_ref(), budget)
+                .map_err(instance_anchor_error_v1)?;
         }
         sidecars.reserve(emitted.len(), budget, &mut retained)?;
         functions.reserve(emitted.len(), budget, &mut scratch)?;
@@ -324,7 +332,10 @@ pub(super) fn pending_memory_matches_v29(
     // reconstruction compares these, but final physical checks still run on
     // the immutable canonical function. This is not another executable graph.
     budget.charge_work(argument_sum_v1(&[
-        argument_product_v1(left.projects.len(), std::mem::size_of::<PendingSourceObjectProjectV29>())?,
+        argument_product_v1(
+            left.projects.len(),
+            std::mem::size_of::<PendingSourceObjectProjectV29>(),
+        )?,
         argument_product_v1(
             left.accesses.len(),
             std::mem::size_of::<PendingSourceMemoryAccessV29>(),
@@ -350,9 +361,18 @@ pub(super) fn pending_memory_matches_v29(
             left.births.len(),
             std::mem::size_of::<SourceAddressBirthV29>(),
         )?,
-        argument_product_v1(left.indices.len(), std::mem::size_of::<PendingSourceIndexV29>())?,
-        argument_product_v1(left.index_failures.len(), std::mem::size_of::<SourceIndexFailureV29>())?,
-        argument_product_v1(left.index_guards.len(), std::mem::size_of::<PendingSourceIndexGuardV29>())?,
+        argument_product_v1(
+            left.indices.len(),
+            std::mem::size_of::<PendingSourceIndexV29>(),
+        )?,
+        argument_product_v1(
+            left.index_failures.len(),
+            std::mem::size_of::<SourceIndexFailureV29>(),
+        )?,
+        argument_product_v1(
+            left.index_guards.len(),
+            std::mem::size_of::<PendingSourceIndexGuardV29>(),
+        )?,
     ])?)?;
     Ok(left.accesses == right.accesses
         && left.projects == right.projects
@@ -386,6 +406,7 @@ pub(super) struct CheckedSourceMemoryAccessV29<'scope> {
 #[cfg(test)]
 thread_local! {
     pub(super) static PHYSICAL_REFUND_OBSERVER_V29: std::cell::Cell<Option<fn(&mut ArgumentBudgetV1<'_>)>> = const { std::cell::Cell::new(None) };
+    pub(super) static SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 fn physical_discard_headers_v29<T, E>() -> Result<usize, ArgumentResourceV1> {
@@ -427,9 +448,16 @@ fn immutable_memory_gap_v29(
     }
     let original = u32::try_from(operation).map_err(|_| ArgumentResourceV1::Arithmetic)?;
     let terminal = terminal_failure_ordinal_v18(
-        root.terminal_failures.as_ref(), block, original, gap, budget,
-    ).map_err(immutable_memory_error_v29)?;
-    let terminal_delta = terminal.checked_sub(original).ok_or(ArgumentResourceV1::Arithmetic)?;
+        root.terminal_failures.as_ref(),
+        block,
+        original,
+        gap,
+        budget,
+    )
+    .map_err(immutable_memory_error_v29)?;
+    let terminal_delta = terminal
+        .checked_sub(original)
+        .ok_or(ArgumentResourceV1::Arithmetic)?;
     Ok(argument_sum_v1(&[mapped, terminal_delta as usize])?)
 }
 
@@ -465,7 +493,10 @@ fn immutable_memory_access_v29(
             "physical census original anchor",
         ))?;
     if anchors.subject.instance != row.instance
-        || !matches!(anchor.kind, ScopedMemoryAnchorKindV29::Access { .. } | ScopedMemoryAnchorKindV29::Object(_))
+        || !matches!(
+            anchor.kind,
+            ScopedMemoryAnchorKindV29::Access { .. } | ScopedMemoryAnchorKindV29::Object(_)
+        )
     {
         return correspondence
             .source
@@ -498,9 +529,11 @@ fn immutable_memory_access_v29(
     let block = correspondence
         .inventory
         .block_for_id(function, row.physical.block, budget)
-        .map_err(|error| ProductionSourceOwnedViewErrorV18::from(
-            fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error),
-        ))?
+        .map_err(|error| {
+            ProductionSourceOwnedViewErrorV18::from(
+                fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error),
+            )
+        })?
         .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
             "physical census original block",
         ))?;
@@ -517,11 +550,22 @@ fn immutable_memory_access_v29(
             .missing("physical census lifecycle access mapping");
     }
     if matches!(anchor.kind, ScopedMemoryAnchorKindV29::Object(_)) {
-        let object = correspondence.retained_object_payload_at_v29(root, row.instance.index(), row.anchor, operation, budget)?;
+        let object = correspondence.retained_object_payload_at_v29(
+            root,
+            row.instance.index(),
+            row.anchor,
+            operation,
+            budget,
+        )?;
         check_immutable_static_object_value_v29(correspondence, root, &object, budget)?;
         let pointer = match object.actual.operation {
-            ScopedObjectOperationV29::ReadValue { address, .. } | ScopedObjectOperationV29::WriteValue { address, .. } => address,
-            _ => return correspondence.source.missing("physical census requires a whole typed value effect"),
+            ScopedObjectOperationV29::ReadValue { address, .. }
+            | ScopedObjectOperationV29::WriteValue { address, .. } => address,
+            _ => {
+                return correspondence
+                    .source
+                    .missing("physical census requires a whole typed value effect");
+            }
         };
         return Ok((operation, pointer));
     }
@@ -708,8 +752,16 @@ impl CheckedSourceMemoryAccessV29<'_> {
 pub(super) fn immutable_index_header_v29() -> Result<usize, ArgumentResourceV1> {
     argument_sum_v1(&[
         std::mem::size_of::<Vec<(usize, usize, usize)>>(),
-        std::mem::size_of::<(Vec<SourceIndexLocationV29>, Vec<SourceIndexGuardLocationV29>)>(),
-        std::mem::size_of::<SourceOwnedResultV18<(Vec<SourceIndexLocationV29>, Vec<SourceIndexGuardLocationV29>)>>(),
+        std::mem::size_of::<(
+            Vec<SourceIndexLocationV29>,
+            Vec<SourceIndexGuardLocationV29>,
+        )>(),
+        std::mem::size_of::<
+            SourceOwnedResultV18<(
+                Vec<SourceIndexLocationV29>,
+                Vec<SourceIndexGuardLocationV29>,
+            )>,
+        >(),
     ])
 }
 
@@ -718,124 +770,252 @@ fn immutable_index_locations_v29(
     root: usize,
     pending: &PendingSourceMemoryV29,
     budget: &mut ArgumentBudgetV1<'_>,
-) -> SourceOwnedResultV18<(Vec<SourceIndexLocationV29>, Vec<SourceIndexGuardLocationV29>)> {
+) -> SourceOwnedResultV18<(
+    Vec<SourceIndexLocationV29>,
+    Vec<SourceIndexGuardLocationV29>,
+)> {
     budget.reserve_storage(immutable_index_header_v29()?)?;
     let owner = correspondence.source.root_row(root)?;
-    let mut access_index = emission_vec_v1(pending.accesses.len(), budget).map_err(immutable_memory_error_v29)?;
+    let mut access_index =
+        emission_vec_v1(pending.accesses.len(), budget).map_err(immutable_memory_error_v29)?;
     for (ordinal, row) in pending.accesses.iter().enumerate() {
         budget.charge_work(1)?;
         access_index.push((row.instance.index(), row.anchor, ordinal));
     }
     call_splice_sort_work_v1(access_index.len(), budget)
-        .map_err(source_address_call_error_v29).map_err(immutable_memory_error_v29)?;
+        .map_err(source_address_call_error_v29)
+        .map_err(immutable_memory_error_v29)?;
     access_index.sort_unstable_by_key(|row| (row.0, row.1));
     for pair in access_index.windows(2) {
         budget.charge_work(2)?;
         if (pair[0].0, pair[0].1) == (pair[1].0, pair[1].1) {
-            return correspondence.source.missing("duplicate index memory access identity");
+            return correspondence
+                .source
+                .missing("duplicate index memory access identity");
         }
     }
-    let mut output = emission_vec_v1(pending.indices.len(), budget).map_err(immutable_memory_error_v29)?;
+    let mut output =
+        emission_vec_v1(pending.indices.len(), budget).map_err(immutable_memory_error_v29)?;
     for original in &pending.indices {
         budget.charge_work(4)?;
         let mut source = *original;
-        source.operation = immutable_memory_gap_v29(owner, source.block, source.operation, false, budget)?;
-        let load = match (source.load_anchor, source.index_slot) {
-            (None, None) => None,
-            (Some(anchor), Some(slot)) => {
-                budget.charge_work(call_splice_search_work_v1(access_index.len()))?;
-                let access = access_index.binary_search_by_key(&(source.instance.index(), anchor), |row| (row.0, row.1))
-                    .ok().map(|at| &pending.accesses[access_index[at].2])
-                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding("missing original retained index load"))?;
-                let (operation, _) = immutable_memory_access_v29(correspondence, root, access, budget)?;
-                let sidecar = correspondence.source.sidecar(root, source.instance.index(), budget)?;
-                let anchors = sidecar.scoped_memory_anchors.as_ref()
-                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding("retained index source anchors"))?;
-                let row = anchors.rows.get(anchor)
-                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding("retained index source anchor"))?;
-                // Physical replay already checked this exact mapped operation.
-                // Both original scalar and typed index reads retain the same
-                // independently authenticated source-use coordinates.
-                let payload = match scoped_original_index_payload_v29(anchors, row, budget) {
-                    Ok(payload) => payload,
-                    Err(error) => return Err(immutable_memory_error_v29(error)),
-                };
-                let Some((result, read)) = payload
-                else { return correspondence.source.missing("retained index payload role"); };
-                let (function, _) = correspondence.source.instance(root, source.instance.index(), budget)?;
-                let ssa = &correspondence.source.owner.inner.source.owner;
-                let source_occurrences = ssa.occurrences_v1()
-                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding("retained index original occurrence owner"))?;
-                let occurrences = source_occurrences.function(function)
-                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding("retained index original occurrences"))?;
-                let original_function = ssa.source_semantic().functions().get(function.index() as usize)
-                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding("retained index original function"))?;
-                check_scoped_index_read_v29(original_function, &occurrences, read, budget)
-                    .map_err(immutable_memory_error_v29)?;
-                if result != source.original || read.event != source.event || access.physical.slot != slot {
-                    return correspondence.source.missing("retained index source/load substitution");
+        source.operation =
+            immutable_memory_gap_v29(owner, source.block, source.operation, false, budget)?;
+        let load =
+            match (source.load_anchor, source.index_slot) {
+                (None, None) => None,
+                (Some(anchor), Some(slot)) => {
+                    budget.charge_work(call_splice_search_work_v1(access_index.len()))?;
+                    let access = access_index
+                        .binary_search_by_key(&(source.instance.index(), anchor), |row| {
+                            (row.0, row.1)
+                        })
+                        .ok()
+                        .map(|at| &pending.accesses[access_index[at].2])
+                        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                            "missing original retained index load",
+                        ))?;
+                    let (operation, _) =
+                        immutable_memory_access_v29(correspondence, root, access, budget)?;
+                    let sidecar =
+                        correspondence
+                            .source
+                            .sidecar(root, source.instance.index(), budget)?;
+                    let anchors = sidecar.scoped_memory_anchors.as_ref().ok_or(
+                        ProductionSourceOwnedViewErrorV18::Binding("retained index source anchors"),
+                    )?;
+                    let row = anchors.rows.get(anchor).ok_or(
+                        ProductionSourceOwnedViewErrorV18::Binding("retained index source anchor"),
+                    )?;
+                    // Physical replay already checked this exact mapped operation.
+                    // Both original scalar and typed index reads retain the same
+                    // independently authenticated source-use coordinates.
+                    let payload = match scoped_original_index_payload_v29(anchors, row, budget) {
+                        Ok(payload) => payload,
+                        Err(error) => return Err(immutable_memory_error_v29(error)),
+                    };
+                    let Some((result, read)) = payload else {
+                        return correspondence.source.missing("retained index payload role");
+                    };
+                    let (function, _) =
+                        correspondence
+                            .source
+                            .instance(root, source.instance.index(), budget)?;
+                    let ssa = &correspondence.source.owner.inner.source.owner;
+                    let source_occurrences =
+                        ssa.occurrences_v1()
+                            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                                "retained index original occurrence owner",
+                            ))?;
+                    let occurrences = source_occurrences.function(function).ok_or(
+                        ProductionSourceOwnedViewErrorV18::Binding(
+                            "retained index original occurrences",
+                        ),
+                    )?;
+                    let original_function = ssa
+                        .source_semantic()
+                        .functions()
+                        .get(function.index() as usize)
+                        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                            "retained index original function",
+                        ))?;
+                    check_scoped_index_read_v29(original_function, &occurrences, read, budget)
+                        .map_err(immutable_memory_error_v29)?;
+                    if result != source.original
+                        || read.event != source.event
+                        || access.physical.slot != slot
+                    {
+                        return correspondence
+                            .source
+                            .missing("retained index source/load substitution");
+                    }
+                    Some(operation)
                 }
-                Some(operation)
-            }
-            _ => return correspondence.source.missing("retained index incomplete load recipe"),
-        };
+                _ => {
+                    return correspondence
+                        .source
+                        .missing("retained index incomplete load recipe");
+                }
+            };
         output.push(SourceIndexLocationV29 { source, load });
     }
-    let mut guards = emission_vec_v1(pending.index_guards.len(), budget).map_err(immutable_memory_error_v29)?;
+    let mut guards =
+        emission_vec_v1(pending.index_guards.len(), budget).map_err(immutable_memory_error_v29)?;
     for original in &pending.index_guards {
         budget.charge_work(call_splice_search_work_v1(access_index.len()))?;
-        let access = access_index.binary_search_by_key(&(original.instance.index(), original.load_anchor), |row| (row.0, row.1))
-            .ok().map(|at| &pending.accesses[access_index[at].2])
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("guard original load access"))?;
+        let access = access_index
+            .binary_search_by_key(&(original.instance.index(), original.load_anchor), |row| {
+                (row.0, row.1)
+            })
+            .ok()
+            .map(|at| &pending.accesses[access_index[at].2])
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "guard original load access",
+            ))?;
         let (load, _) = immutable_memory_access_v29(correspondence, root, access, budget)?;
-        let sidecar = correspondence.source.sidecar(root, original.instance.index(), budget)?;
-        let anchor = sidecar.scoped_memory_anchors.as_ref().and_then(|rows| rows.rows.get(original.load_anchor))
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("guard original load anchor"))?;
-        let ScopedMemoryAnchorKindV29::Access { payload: Some(ScopedMemoryPayloadV29::Load { result, read }), .. } = anchor.kind
-        else { return correspondence.source.missing("guard changed load payload role"); };
-        let (function, _) = correspondence.source.instance(root, original.instance.index(), budget)?;
+        let sidecar = correspondence
+            .source
+            .sidecar(root, original.instance.index(), budget)?;
+        let anchor = sidecar
+            .scoped_memory_anchors
+            .as_ref()
+            .and_then(|rows| rows.rows.get(original.load_anchor))
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "guard original load anchor",
+            ))?;
+        let ScopedMemoryAnchorKindV29::Access {
+            payload: Some(ScopedMemoryPayloadV29::Load { result, read }),
+            ..
+        } = anchor.kind
+        else {
+            return correspondence
+                .source
+                .missing("guard changed load payload role");
+        };
+        let (function, _) =
+            correspondence
+                .source
+                .instance(root, original.instance.index(), budget)?;
         let ssa = &correspondence.source.owner.inner.source.owner;
-        let source_occurrences = ssa.occurrences_v1()
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("guard source occurrence owner"))?;
-        let occurrences = source_occurrences.function(function)
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("guard source occurrences"))?;
-        let declaration = ssa.source_semantic().functions().get(function.index() as usize)
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("guard source declaration"))?;
-        let (site, place, length, _) = source_index_guard_original_v29(declaration, &occurrences,
-            ssa.source_semantic().types(), original.assertion, original.condition_event,
-            original.comparison_event, budget).map_err(immutable_memory_error_v29)?;
-        let slot = owner.source_slots.slots.get(original.slot)
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("guard source slot"))?;
+        let source_occurrences =
+            ssa.occurrences_v1()
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "guard source occurrence owner",
+                ))?;
+        let occurrences = source_occurrences.function(function).ok_or(
+            ProductionSourceOwnedViewErrorV18::Binding("guard source occurrences"),
+        )?;
+        let declaration = ssa
+            .source_semantic()
+            .functions()
+            .get(function.index() as usize)
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "guard source declaration",
+            ))?;
+        let (site, place, length, _) = source_index_guard_original_v29(
+            declaration,
+            &occurrences,
+            ssa.source_semantic().types(),
+            original.assertion,
+            original.condition_event,
+            original.comparison_event,
+            budget,
+        )
+        .map_err(immutable_memory_error_v29)?;
+        let slot = owner.source_slots.slots.get(original.slot).ok_or(
+            ProductionSourceOwnedViewErrorV18::Binding("guard source slot"),
+        )?;
         let scalar = slot.scalar_array().map_err(immutable_memory_error_v29)?;
         let local = slot.legacy_local().map_err(immutable_memory_error_v29)?;
-        if result != original.value || read.site != site || read.role != ExecutionOperandV29::RvalueOperand(0)
-            || read.prefix != 0 || read.ty != place.ty() || !matches!(read.occurrence, ScopedMemoryOccurrenceV29::Retained { .. })
-            || access.physical.slot != original.slot || slot.instance != original.instance
-            || local != place.local().index() || scalar.element_type != place.ty()
-            || original.length != length || scalar.length != 1
-        { return correspondence.source.missing("guard source read substitution"); }
-        check_scoped_payload_occurrence_v29(&occurrences, site,
-            ExecutionOperandV29::RvalueOperand(0), place, read.occurrence, budget)
-            .map_err(immutable_memory_error_v29)?;
-        let capture = sidecar.instance_assert_origins.as_ref()
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("guard original assertion"))?;
+        if result != original.value
+            || read.site != site
+            || read.role != ExecutionOperandV29::RvalueOperand(0)
+            || read.prefix != 0
+            || read.ty != place.ty()
+            || !matches!(read.occurrence, ScopedMemoryOccurrenceV29::Retained { .. })
+            || access.physical.slot != original.slot
+            || slot.instance != original.instance
+            || local != place.local().index()
+            || scalar.element_type != place.ty()
+            || original.length != length
+            || scalar.length != 1
+        {
+            return correspondence
+                .source
+                .missing("guard source read substitution");
+        }
+        check_scoped_payload_occurrence_v29(
+            &occurrences,
+            site,
+            ExecutionOperandV29::RvalueOperand(0),
+            place,
+            read.occurrence,
+            budget,
+        )
+        .map_err(immutable_memory_error_v29)?;
+        let capture = sidecar.instance_assert_origins.as_ref().ok_or(
+            ProductionSourceOwnedViewErrorV18::Binding("guard original assertion"),
+        )?;
         budget.charge_work(capture.records.len())?;
-        let mut records = capture.records.iter().filter(|row| row.site.semantic_block == original.assertion);
-        let record = records.next().ok_or(ProductionSourceOwnedViewErrorV18::Binding("guard assertion record"))?;
-        if records.next().is_some() || record.block != original.block || record.physical_success != original.success
+        let mut records = capture
+            .records
+            .iter()
+            .filter(|row| row.site.semantic_block == original.assertion);
+        let record = records
+            .next()
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "guard assertion record",
+            ))?;
+        if records.next().is_some()
+            || record.block != original.block
+            || record.physical_success != original.success
             || !matches!(record.outcome, PendingAssertOutcomeV1::Emitted { condition, failure }
                 if condition == original.condition && failure == original.failure)
-        { return correspondence.source.missing("guard actual assertion substitution"); }
-        let mut source = *original;
-        if let Some(terminal) = checked_terminal_assertion_v18(owner.terminal_failures.as_ref(),
-            source.instance, record, budget).map_err(immutable_memory_error_v29)?
         {
-            if terminal.original_failure != source.failure { return correspondence.source.missing("guard failure substitution"); }
+            return correspondence
+                .source
+                .missing("guard actual assertion substitution");
+        }
+        let mut source = *original;
+        if let Some(terminal) = checked_terminal_assertion_v18(
+            owner.terminal_failures.as_ref(),
+            source.instance,
+            record,
+            budget,
+        )
+        .map_err(immutable_memory_error_v29)?
+        {
+            if terminal.original_failure != source.failure {
+                return correspondence.source.missing("guard failure substitution");
+            }
             source.failure = terminal.actual_failure;
         }
         guards.push(SourceIndexGuardLocationV29 { source, load });
     }
-    let bytes = argument_product_v1(access_index.capacity(), std::mem::size_of::<(usize, usize, usize)>())?;
+    let bytes = argument_product_v1(
+        access_index.capacity(),
+        std::mem::size_of::<(usize, usize, usize)>(),
+    )?;
     drop(access_index);
     budget.release_storage(bytes)?;
     Ok((output, guards))
@@ -865,10 +1045,14 @@ fn check_immutable_source_memory_v29(
     if let Some(memory) = memory
         && !memory.belongs_to(correspondence.inventory)
     {
-        return correspondence.source.missing("retained source index has a foreign memory-version owner");
+        return correspondence
+            .source
+            .missing("retained source index has a foreign memory-version owner");
     }
     if !pending.indices.is_empty() && memory.is_none() {
-        return correspondence.source.missing("retained source index memory versions remain pending");
+        return correspondence
+            .source
+            .missing("retained source index memory versions remain pending");
     }
     budget.charge_work(5)?;
     if pending.source.semantic != owner.coordinates.semantic_sha256
@@ -927,34 +1111,63 @@ fn check_immutable_source_memory_v29(
         .map_err(immutable_memory_error_v29)?;
     for row in &pending.index_failures {
         budget.charge_work(5)?;
-        let sidecar = correspondence.source.sidecar(root, row.instance.index(), budget)?;
-        let anchor = sidecar.scoped_memory_anchors.as_ref().and_then(|rows| rows.rows.get(row.anchor))
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("missing retained index diagnostic"))?;
-        let (function, _) = correspondence.source.instance(root, row.instance.index(), budget)?;
+        let sidecar = correspondence
+            .source
+            .sidecar(root, row.instance.index(), budget)?;
+        let anchor = sidecar
+            .scoped_memory_anchors
+            .as_ref()
+            .and_then(|rows| rows.rows.get(row.anchor))
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "missing retained index diagnostic",
+            ))?;
+        let (function, _) = correspondence
+            .source
+            .instance(root, row.instance.index(), budget)?;
         let ssa = &correspondence.source.owner.inner.source.owner;
-        let source_occurrences = ssa.occurrences_v1()
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("index diagnostic occurrence owner"))?;
-        let occurrences = source_occurrences.function(function)
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("index diagnostic original occurrences"))?;
-        let original = ssa.source_semantic().functions().get(function.index() as usize)
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("index diagnostic original function"))?;
+        let source_occurrences =
+            ssa.occurrences_v1()
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "index diagnostic occurrence owner",
+                ))?;
+        let occurrences = source_occurrences.function(function).ok_or(
+            ProductionSourceOwnedViewErrorV18::Binding("index diagnostic original occurrences"),
+        )?;
+        let original = ssa
+            .source_semantic()
+            .functions()
+            .get(function.index() as usize)
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "index diagnostic original function",
+            ))?;
         let place = checked_scoped_failure_read_v29(original, &occurrences, anchor, budget)
             .map_err(immutable_memory_error_v29)?;
-        let slot = owner.source_slots.slots.get(row.slot)
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("index diagnostic source slot"))?;
+        let slot = owner.source_slots.slots.get(row.slot).ok_or(
+            ProductionSourceOwnedViewErrorV18::Binding("index diagnostic source slot"),
+        )?;
         let local = match slot.origin.identity {
             ScopedAllocationIdentityV29::LegacyLocal(local)
             | ScopedAllocationIdentityV29::OriginalObject { local, .. } => local,
-            _ => return correspondence.source.missing("failure diagnostic source representation"),
+            _ => {
+                return correspondence
+                    .source
+                    .missing("failure diagnostic source representation");
+            }
         };
-        if slot.instance != row.instance || local != place.local().index()
-            || slot.origin.semantic_type != place.ty() || !place.projections().is_empty()
-            || source_failure_operand_moved_v29(original, anchor, budget).map_err(immutable_memory_error_v29)? != row.move_after
+        if slot.instance != row.instance
+            || local != place.local().index()
+            || slot.origin.semantic_type != place.ty()
+            || !place.projections().is_empty()
+            || source_failure_operand_moved_v29(original, anchor, budget)
+                .map_err(immutable_memory_error_v29)?
+                != row.move_after
             || matches!(slot.representation, ScopedSlotRepresentationV29::ScalarArray(scalar)
                 if scalar.element_type != place.ty() || scalar.length != 1
                     || !matches!(scalar.element.element, PrivateRetainedElementFactsV1::Scalar(_)))
         {
-            return correspondence.source.missing("index diagnostic source substitution");
+            return correspondence
+                .source
+                .missing("index diagnostic source substitution");
         }
         failures.push(SourceIndexFailureV29 {
             gap: immutable_memory_gap_v29(owner, row.block, row.gap, true, budget)?,
@@ -967,27 +1180,57 @@ fn check_immutable_source_memory_v29(
     let prepared = SourceAddressMemoryV29::prepare_inventory(
         correspondence.inventory,
         fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
-            u32::try_from(owner.function_ordinal).map_err(|_| ArgumentResourceV1::Arithmetic)?),
-        slots, &accesses, budget,
+            u32::try_from(owner.function_ordinal).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+        ),
+        slots,
+        &accesses,
+        budget,
     )
-        .map_err(immutable_memory_error_v29)?;
+    .map_err(immutable_memory_error_v29)?;
     let indexed = source_array_geometry_v29(slots, !pending.indices.is_empty(), budget)?;
     let (graph, geometry) = if !indexed {
-        (prepared.solve(slots, &accesses, &kills, budget).map_err(immutable_memory_error_v29)?, SourceAddressGeometryV29::Scalar)
+        (
+            prepared
+                .solve(slots, &accesses, &kills, budget)
+                .map_err(immutable_memory_error_v29)?,
+            SourceAddressGeometryV29::Scalar,
+        )
     } else {
-        let pending = prepared.solve_pending_indices(slots, &accesses, &kills, budget).map_err(immutable_memory_error_v29)?;
+        let pending = prepared
+            .solve_pending_indices(slots, &accesses, &kills, budget)
+            .map_err(immutable_memory_error_v29)?;
         (pending.graph, SourceAddressGeometryV29::PendingIndices)
     };
     check_immutable_static_object_projects_v29(correspondence, root, pending, &graph, budget)?;
     for (source, access) in pending.accesses.iter().zip(&accesses) {
         budget.charge_work(2)?;
-        let actual = graph.blocks[graph.block(access.block, budget).map_err(immutable_memory_error_v29)?].1.operations
-            .get(access.operation).ok_or(ProductionSourceOwnedViewErrorV18::Binding("final object access coordinate"))?;
-        let value = source_address_value_access_v29(actual).map_err(immutable_memory_error_v29)?
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("final object access effect"))?;
-        let location = if value.object { Some(graph.object_location(value.pointer, budget).map_err(immutable_memory_error_v29)?) } else { None };
+        let actual = graph.blocks[graph
+            .block(access.block, budget)
+            .map_err(immutable_memory_error_v29)?]
+        .1
+        .operations
+        .get(access.operation)
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "final object access coordinate",
+        ))?;
+        let value = source_address_value_access_v29(actual)
+            .map_err(immutable_memory_error_v29)?
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "final object access effect",
+            ))?;
+        let location = if value.object {
+            Some(
+                graph
+                    .object_location(value.pointer, budget)
+                    .map_err(immutable_memory_error_v29)?,
+            )
+        } else {
+            None
+        };
         if location != source.object_location {
-            return correspondence.source.missing("final object access changed original static location");
+            return correspondence
+                .source
+                .missing("final object access changed original static location");
         }
     }
     check_source_address_currentness_geometry_v29(
@@ -1007,15 +1250,30 @@ fn check_immutable_source_memory_v29(
     if !indexed {
         scoped_slot_uses_v29::check_expanded_scalar_addresses_with_failures_v29(
             function, &graph, slots, &accesses, &kills, &failures, budget,
-        ).map_err(immutable_memory_error_v29)?;
+        )
+        .map_err(immutable_memory_error_v29)?;
     } else {
-        let (selected, guards) = immutable_index_locations_v29(correspondence, root, pending, budget)?;
+        let (selected, guards) =
+            immutable_index_locations_v29(correspondence, root, pending, budget)?;
         let function_coordinate = fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
             u32::try_from(owner.function_ordinal).map_err(|_| ArgumentResourceV1::Arithmetic)?,
         );
-        scoped_slot_uses_v29::check_expanded_index_addresses_v29(function, &graph, slots,
-            &accesses, &kills, &lifetimes, &failures, &selected, &guards, correspondence.inventory, memory, function_coordinate, budget)
-            .map_err(immutable_memory_error_v29)?;
+        scoped_slot_uses_v29::check_expanded_index_addresses_v29(
+            function,
+            &graph,
+            slots,
+            &accesses,
+            &kills,
+            &lifetimes,
+            &failures,
+            &selected,
+            &guards,
+            correspondence.inventory,
+            memory,
+            function_coordinate,
+            budget,
+        )
+        .map_err(immutable_memory_error_v29)?;
         drop((selected, guards));
     }
     drop((graph, accesses, kills, lifetimes, births, failures));
@@ -1316,8 +1574,14 @@ impl SourceRootTransactionV29<'_, '_> {
         }
         let plan = plan.ok_or_else(source_raw_physical_error_v29)?;
         check_root_execution_archives_v29(&pending, self.instances, plan, budget)?;
-        check_pending_object_completion_v29(&pending, self.instances, plan, &slots,
-            kind == SourceRootKindV29::ExpandedRaw, budget)?;
+        check_pending_object_completion_v29(
+            &pending,
+            self.instances,
+            plan,
+            &slots,
+            kind == SourceRootKindV29::ExpandedRaw,
+            budget,
+        )?;
         #[cfg(test)]
         if let Some(observe) = ROOT_EXECUTION_ARCHIVE_OBSERVER_V29.get() {
             observe(&mut pending, self.instances, plan, budget)?;
@@ -1531,8 +1795,19 @@ pub(super) fn check_expanded_source_memory_v29(
         std::mem::size_of::<PendingSourceMemoryV29>(),
         std::mem::size_of::<PendingSourceIssuedRolesV29>(),
         std::mem::size_of::<Result<PendingSourceIssuedRolesV29, ProductionSemanticKirErrorV1>>(),
-        std::mem::size_of::<(Vec<SourceAddressAccessSourceV29>, PendingSourceIssuedRolesV29)>(),
-        std::mem::size_of::<Result<(Vec<SourceAddressAccessSourceV29>, PendingSourceIssuedRolesV29), ProductionSemanticKirErrorV1>>(),
+        std::mem::size_of::<(
+            Vec<SourceAddressAccessSourceV29>,
+            PendingSourceIssuedRolesV29,
+        )>(),
+        std::mem::size_of::<
+            Result<
+                (
+                    Vec<SourceAddressAccessSourceV29>,
+                    PendingSourceIssuedRolesV29,
+                ),
+                ProductionSemanticKirErrorV1,
+            >,
+        >(),
         std::mem::size_of::<SourceAddressMemoryV29<'_>>(),
         std::mem::size_of::<SourceAddressLifetimesV29>(),
         std::mem::size_of::<Option<source_storage_v29::SourceStorageRootGrowthV29<'_, '_, '_>>>(),
@@ -1635,10 +1910,16 @@ pub(super) fn test_ordinary_activation_census_v29(
 ) -> SourceOwnedResultV18<usize> {
     original.query(budget)?;
     let owner = original.source.root_row(root)?;
-    let pending = owner.source_slots.pending_memory.as_ref()
+    let pending = owner
+        .source_slots
+        .pending_memory
+        .as_ref()
         .expect("ordinary private accesses require a real completed source census");
     assert!(!pending.accesses.is_empty());
-    assert!(!pending.lifetimes.is_empty(), "helper invocation lifetimes are retained");
+    assert!(
+        !pending.lifetimes.is_empty(),
+        "helper invocation lifetimes are retained"
+    );
     assert_eq!(pending.initial.len(), owner.source_slots.slots.len());
     for access in &pending.accesses {
         assert!(!access.alternatives.is_empty());
@@ -1695,8 +1976,11 @@ fn source_array_geometry_v29(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<bool, ArgumentResourceV1> {
     budget.charge_work(slots.len())?;
-    Ok(selected || slots.iter().any(|slot| matches!(slot.representation,
-        ScopedSlotRepresentationV29::ScalarArray(scalar) if scalar.length != 1)))
+    Ok(selected
+        || slots.iter().any(|slot| {
+            matches!(slot.representation,
+        ScopedSlotRepresentationV29::ScalarArray(scalar) if scalar.length != 1)
+        }))
 }
 
 #[cfg(test)]
@@ -1706,18 +1990,34 @@ fn ordinary_scalar_profile_does_not_admit_object_or_multi_element_geometry() {
     let scalar = ScopedScalarArraySlotV29 {
         element_type: SemanticTypeIdV1::from_index(0),
         element: PrivateRetainedSlotFactsV1 {
-            element: PrivateRetainedElementFactsV1::Scalar(ScalarType::U32), size: 4, alignment: 4,
+            element: PrivateRetainedElementFactsV1::Scalar(ScalarType::U32),
+            size: 4,
+            alignment: 4,
         },
-        length: 1, bytes: 4, count: None,
+        length: 1,
+        bytes: 4,
+        count: None,
     };
-    assert!(ordinary_scalar_memory_representation_v29(ScopedSlotRepresentationV29::ScalarArray(scalar)));
-    assert!(!ordinary_scalar_memory_representation_v29(ScopedSlotRepresentationV29::ScalarArray(
-        ScopedScalarArraySlotV29 { length: 4, bytes: 16, ..scalar })));
-    assert!(!ordinary_scalar_memory_representation_v29(ScopedSlotRepresentationV29::ScalarArray(
-        ScopedScalarArraySlotV29 { bytes: 8, ..scalar })));
-    assert!(!ordinary_scalar_memory_representation_v29(ScopedSlotRepresentationV29::Object {
-        schema: fe2o3_kernel_ir::StorageLayoutIdV1(0), bytes: 4, alignment: 4,
-    }));
+    assert!(ordinary_scalar_memory_representation_v29(
+        ScopedSlotRepresentationV29::ScalarArray(scalar)
+    ));
+    assert!(!ordinary_scalar_memory_representation_v29(
+        ScopedSlotRepresentationV29::ScalarArray(ScopedScalarArraySlotV29 {
+            length: 4,
+            bytes: 16,
+            ..scalar
+        })
+    ));
+    assert!(!ordinary_scalar_memory_representation_v29(
+        ScopedSlotRepresentationV29::ScalarArray(ScopedScalarArraySlotV29 { bytes: 8, ..scalar })
+    ));
+    assert!(!ordinary_scalar_memory_representation_v29(
+        ScopedSlotRepresentationV29::Object {
+            schema: fe2o3_kernel_ir::StorageLayoutIdV1(0),
+            bytes: 4,
+            alignment: 4,
+        }
+    ));
 }
 
 fn check_expanded_source_memory_inner_v29(
@@ -1729,7 +2029,8 @@ fn check_expanded_source_memory_inner_v29(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<PendingSourceMemoryV29, ProductionSemanticKirErrorV1> {
     let original = original_census(instances, Some(references.plan), budget)?;
-    if (!original.requires_physical() && !ordinary_scalar_memory_profile_v29(references.plan, slots, budget)?)
+    if (!original.requires_physical()
+        && !ordinary_scalar_memory_profile_v29(references.plan, slots, budget)?)
         || slots.pending_memory.is_some()
     {
         return Err(source_raw_physical_error_v29());
@@ -1747,38 +2048,83 @@ fn check_expanded_source_memory_inner_v29(
             source_address_object_payload_v29(anchors, row, budget)?;
         }
     }
-    let (sources, issued) = source_address_accesses_v29(instances, references, &source_index, slots, budget)?;
-    let index_failures = source_index_failures_v29(instances, references.plan, &source_index, slots, budget)?;
-    check_source_object_effect_census_v29(instances, references.plan, &source_index, slots, &sources, &index_failures, budget)?;
+    let (sources, issued) =
+        source_address_accesses_v29(instances, references, &source_index, slots, budget)?;
+    let index_failures =
+        source_index_failures_v29(instances, references.plan, &source_index, slots, budget)?;
+    check_source_object_effect_census_v29(
+        instances,
+        references.plan,
+        &source_index,
+        slots,
+        &sources,
+        &index_failures,
+        budget,
+    )?;
     let mut accesses = emission_vec_v1(sources.len(), budget)?;
     budget.charge_work(sources.len())?;
     accesses.extend(sources.iter().map(|row| row.physical));
     budget.charge_work(slots.slots.len())?;
-    let graph = if slots.slots.iter().any(|slot| matches!(slot.representation, ScopedSlotRepresentationV29::Object { .. })) {
-        let layouts = references.plan.storage_root.as_ref().ok_or_else(source_raw_physical_error_v29)?
+    let graph = if slots.slots.iter().any(|slot| {
+        matches!(
+            slot.representation,
+            ScopedSlotRepresentationV29::Object { .. }
+        )
+    }) {
+        let layouts = references
+            .plan
+            .storage_root
+            .as_ref()
+            .ok_or_else(source_raw_physical_error_v29)?
             .source_layouts(instances, budget)?;
         let rows = layouts.rows(instances.owner(), budget)?;
-        SourceAddressMemoryV29::prepare_with_layouts(&pending.function, &slots.slots, parts, &accesses, &rows, budget)?
+        SourceAddressMemoryV29::prepare_with_layouts(
+            &pending.function,
+            &slots.slots,
+            parts,
+            &accesses,
+            &rows,
+            budget,
+        )?
     } else {
         SourceAddressMemoryV29::prepare(&pending.function, &slots.slots, parts, &accesses, budget)?
     };
     let boundaries =
         source_address_boundaries_v29(instances, &source_index, slots, &graph, budget)?;
-    let lifetimes =
-        source_address_lifetimes_v29(instances, references.plan, &source_index, slots, &graph, &boundaries, budget)?;
-    let indices = source_index_recipes_v29(instances, references, &source_index, slots, &graph, budget)?;
-    let index_guards = if original.retained_indices == 0 { Vec::new() } else {
+    let lifetimes = source_address_lifetimes_v29(
+        instances,
+        references.plan,
+        &source_index,
+        slots,
+        &graph,
+        &boundaries,
+        budget,
+    )?;
+    let indices =
+        source_index_recipes_v29(instances, references, &source_index, slots, &graph, budget)?;
+    let index_guards = if original.retained_indices == 0 {
+        Vec::new()
+    } else {
         source_index_guards_v29(instances, &source_index, slots, &graph, budget)?
     };
     budget.charge_work(indices.len())?;
-    if indices.iter().filter(|row| row.load_anchor.is_some()).count() != original.retained_indices {
+    if indices
+        .iter()
+        .filter(|row| row.load_anchor.is_some())
+        .count()
+        != original.retained_indices
+    {
         return Err(source_raw_physical_error_v29());
     }
     let indexed = source_array_geometry_v29(&slots.slots, !indices.is_empty(), budget)?;
     let (graph, geometry) = if !indexed {
-        (graph.solve(&slots.slots, &accesses, &lifetimes.kills, budget)?, SourceAddressGeometryV29::Scalar)
+        (
+            graph.solve(&slots.slots, &accesses, &lifetimes.kills, budget)?,
+            SourceAddressGeometryV29::Scalar,
+        )
     } else {
-        let pending = graph.solve_pending_indices(&slots.slots, &accesses, &lifetimes.kills, budget)?;
+        let pending =
+            graph.solve_pending_indices(&slots.slots, &accesses, &lifetimes.kills, budget)?;
         (pending.graph, SourceAddressGeometryV29::PendingIndices)
     };
     let births = check_source_address_formations_v29(
@@ -1793,13 +2139,55 @@ fn check_expanded_source_memory_inner_v29(
     #[cfg(test)]
     let payload_work_before = budget.work();
     let payload_index = SourceObjectPayloadIndexV29::new(instances, &source_index, budget)?;
-    let projects = check_source_static_object_projects_v29(instances, references.plan, &source_index, slots, &graph, &payload_index, budget)?;
-    check_source_address_payloads_v29(instances, references, slots, &source_index, &graph, &sources, &payload_index, budget)?;
+    let projects = check_source_static_object_projects_v29(
+        instances,
+        references.plan,
+        &source_index,
+        slots,
+        &graph,
+        &payload_index,
+        budget,
+    )?;
+    #[cfg(test)]
+    let payload_floor = budget.storage();
+    // This unit query only borrows the retained graph, index and source rows.
+    // Its completed query frames must end before currentness and pending rows.
+    source_object_activation_scratch_v29(instances, references.plan, budget, |budget| {
+        #[cfg(test)]
+        let query_floor = budget.storage();
+        check_source_address_payloads_v29(
+            instances,
+            references,
+            slots,
+            &source_index,
+            &graph,
+            &sources,
+            &payload_index,
+            budget,
+        )?;
+        #[cfg(test)]
+        {
+            let (calls, bytes) = SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29.get();
+            SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29.set((
+                calls.checked_add(1).unwrap(),
+                bytes
+                    .checked_add(budget.storage().checked_sub(query_floor).unwrap())
+                    .unwrap(),
+            ));
+        }
+        Ok(())
+    })?;
+    #[cfg(test)]
+    assert_eq!(budget.storage(), payload_floor);
     payload_index.discard(budget)?;
     #[cfg(test)]
     {
         let (calls, work) = SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.get();
-        SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.set((calls.checked_add(1).unwrap(), work.checked_add(budget.work() - payload_work_before).unwrap()));
+        SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.set((
+            calls.checked_add(1).unwrap(),
+            work.checked_add(budget.work() - payload_work_before)
+                .unwrap(),
+        ));
     }
     check_source_address_currentness_geometry_v29(
         &pending.function,
@@ -1816,7 +2204,13 @@ fn check_expanded_source_memory_inner_v29(
     )?;
     if !indexed {
         scoped_slot_uses_v29::check_expanded_scalar_addresses_with_failures_v29(
-            &pending.function, &graph, &slots.slots, &accesses, &lifetimes.kills, &index_failures, budget,
+            &pending.function,
+            &graph,
+            &slots.slots,
+            &accesses,
+            &lifetimes.kills,
+            &index_failures,
+            budget,
         )?;
     }
     let retained = retain_pending_memory_v29(
@@ -1844,6 +2238,7 @@ fn check_expanded_source_memory_inner_v29(
 
 include!("production_source_direct_object_activation_v29.rs");
 include!("production_source_safe_object_activation_v29.rs");
+include!("production_source_object_activation_scratch_v29.rs");
 
 fn retain_pending_memory_v29(
     instances: &ExecutionInstancesV29<'_>,
@@ -1867,9 +2262,14 @@ fn retain_pending_memory_v29(
     // This is only a may-roster of original activation boundaries for each
     // exact object. It never proves that any one site reaches an access. The
     // immutable all-path lifetime equations remain mandatory for every row.
-    let mut ordinary_activations = emission_vec_v1(if ordinary_indices {
-        argument_sum_v1(&[slots.slots.len(), boundaries.len()])?
-    } else { 0 }, budget)?;
+    let mut ordinary_activations = emission_vec_v1(
+        if ordinary_indices {
+            argument_sum_v1(&[slots.slots.len(), boundaries.len()])?
+        } else {
+            0
+        },
+        budget,
+    )?;
     if ordinary_indices {
         // `initial` describes the expanded root entry, where helper locals are
         // not live yet. Their invocation activation is the checked call
@@ -1883,20 +2283,33 @@ fn retain_pending_memory_v29(
         }
         for row in boundaries {
             budget.charge_work(3)?;
-            if row.cause != ScopedMemoryKillV29::StorageLive { continue; }
+            if row.cause != ScopedMemoryKillV29::StorageLive {
+                continue;
+            }
             let (block, statement) = scoped_memory_site_key_v29(row.frame.site);
             let statement = statement.ok_or_else(source_raw_physical_error_v29)?;
-            if slots.slots.get(row.slot).is_none_or(|slot| slot.instance != row.instance) {
+            if slots
+                .slots
+                .get(row.slot)
+                .is_none_or(|slot| slot.instance != row.instance)
+            {
                 return Err(source_raw_physical_error_v29());
             }
-            ordinary_activations.push((row.slot, SourceMemoryActivationV29::StorageLive {
-                block: SemanticBlockIdV1::from_index(block), statement: statement as usize,
-            }));
+            ordinary_activations.push((
+                row.slot,
+                SourceMemoryActivationV29::StorageLive {
+                    block: SemanticBlockIdV1::from_index(block),
+                    statement: statement as usize,
+                },
+            ));
         }
-        call_splice_sort_work_v1(ordinary_activations.len(), budget).map_err(source_address_call_error_v29)?;
+        call_splice_sort_work_v1(ordinary_activations.len(), budget)
+            .map_err(source_address_call_error_v29)?;
         ordinary_activations.sort_unstable_by_key(|(slot, activation)| match activation {
             SourceMemoryActivationV29::Invocation => (*slot, 0, 0, 0),
-            SourceMemoryActivationV29::StorageLive { block, statement } => (*slot, 1, block.index(), *statement),
+            SourceMemoryActivationV29::StorageLive { block, statement } => {
+                (*slot, 1, block.index(), *statement)
+            }
         });
         budget.charge_work(ordinary_activations.len())?;
         ordinary_activations.dedup();
@@ -1941,9 +2354,37 @@ fn retain_pending_memory_v29(
         index_guards,
         retained_storage: 0,
     };
+    // The copied loop result outlives the closed query scratch. Actual retained
+    // alternatives still pay their own vector capacity through emission_push.
+    source_reference_emission_prepay_v29::<Option<PendingSourceMemoryAlternativeV29>>(budget)?;
+    source_reference_emission_prepay_v29::<PendingSourceMemoryAlternativeV29>(budget)?;
     for source in sources {
         budget.charge_work(4)?;
         let first = output.alternatives.len();
+        let mut object_alternative = None;
+        if source.raw.is_none() && (source.direct_object.is_some() || source.safe_object.is_some())
+        {
+            source_object_activation_scratch_v29(instances, plan, budget, |budget| {
+                if source.direct_object.is_some() {
+                    object_alternative = source_direct_object_invocation_v29(
+                        instances, plan, slots, source, budget,
+                    )?;
+                    #[cfg(test)]
+                    if object_alternative.is_some() {
+                        test_direct_object_invocation_v29(instances, plan, slots, source, budget)?;
+                    }
+                }
+                if object_alternative.is_none() && source.safe_object.is_some() {
+                    object_alternative =
+                        source_safe_object_invocation_v29(instances, plan, slots, source, budget)?;
+                    #[cfg(test)]
+                    if object_alternative.is_some() {
+                        test_safe_object_invocation_v29(instances, plan, slots, source, budget)?;
+                    }
+                }
+                Ok(())
+            })?;
+        }
         if let Some(access) = source.raw {
             let set = plan
                 .raw_sets
@@ -2013,10 +2454,31 @@ fn retain_pending_memory_v29(
                             statement,
                         }
                     };
-                    let original_slot = match slots.slots.get(source.physical.slot).map(|row| row.representation) {
-                        Some(ScopedSlotRepresentationV29::Object { .. }) => source_address_object_slot_v29(
-                            instances, plan, slots, origin.instance, origin.local, origin.generation, origin.ty, budget)?,
-                        _ => source_address_original_slot_v29(instances, slots, origin.instance, origin.local, origin.ty, budget)?,
+                    let original_slot = match slots
+                        .slots
+                        .get(source.physical.slot)
+                        .map(|row| row.representation)
+                    {
+                        Some(ScopedSlotRepresentationV29::Object { .. }) => {
+                            source_address_object_slot_v29(
+                                instances,
+                                plan,
+                                slots,
+                                origin.instance,
+                                origin.local,
+                                origin.generation,
+                                origin.ty,
+                                budget,
+                            )?
+                        }
+                        _ => source_address_original_slot_v29(
+                            instances,
+                            slots,
+                            origin.instance,
+                            origin.local,
+                            origin.ty,
+                            budget,
+                        )?,
                     };
                     if original_slot != source.physical.slot {
                         return Err(source_raw_physical_error_v29());
@@ -2034,51 +2496,62 @@ fn retain_pending_memory_v29(
                     )?;
                 }
             }
-        } else if source.direct_object.is_some()
-            && let Some(alternative) = source_direct_object_invocation_v29(
-            instances, plan, slots, source, budget)?
-        {
-            #[cfg(test)]
-            test_direct_object_invocation_v29(instances, plan, slots, source, budget)?;
-            emission_push_v1(&mut output.alternatives, alternative, budget)?;
-        } else if source.safe_object.is_some()
-            && let Some(alternative) = source_safe_object_invocation_v29(
-                instances, plan, slots, source, budget)?
-        {
-            #[cfg(test)]
-            test_safe_object_invocation_v29(instances, plan, slots, source, budget)?;
+        } else if let Some(alternative) = object_alternative {
             emission_push_v1(&mut output.alternatives, alternative, budget)?;
         } else if ordinary_indices
             && matches!(
-                slots.slots.get(source.physical.slot)
-                    .ok_or_else(source_raw_physical_error_v29)?.representation,
+                slots
+                    .slots
+                    .get(source.physical.slot)
+                    .ok_or_else(source_raw_physical_error_v29)?
+                    .representation,
                 ScopedSlotRepresentationV29::ScalarArray(_)
             )
         {
             // A retained scalar index does not supply activation alternatives
             // for unrelated typed objects. Their direct accesses remain pending.
-            let slot = slots.slots.get(source.physical.slot).ok_or_else(source_raw_physical_error_v29)?;
-            budget.charge_work(argument_product_v1(2, call_splice_search_work_v1(ordinary_activations.len()))?)?;
+            let slot = slots
+                .slots
+                .get(source.physical.slot)
+                .ok_or_else(source_raw_physical_error_v29)?;
+            budget.charge_work(argument_product_v1(
+                2,
+                call_splice_search_work_v1(ordinary_activations.len()),
+            )?)?;
             let first = ordinary_activations.partition_point(|row| row.0 < source.physical.slot);
             let end = ordinary_activations.partition_point(|row| row.0 <= source.physical.slot);
-            if first == end { return Err(source_raw_physical_error_v29()); }
+            if first == end {
+                return Err(source_raw_physical_error_v29());
+            }
             for (_, activation) in &ordinary_activations[first..end] {
                 budget.charge_work(2)?;
-                emission_push_v1(&mut output.alternatives, PendingSourceMemoryAlternativeV29 {
-                    instance: slot.instance,
-                    local: SemanticLocalIdV1::from_index(slot.legacy_local()?),
-                    slot: source.physical.slot,
-                    activation: *activation,
-                    formation: None,
-                }, budget)?;
+                emission_push_v1(
+                    &mut output.alternatives,
+                    PendingSourceMemoryAlternativeV29 {
+                        instance: slot.instance,
+                        local: SemanticLocalIdV1::from_index(slot.legacy_local()?),
+                        slot: source.physical.slot,
+                        activation: *activation,
+                        formation: None,
+                    },
+                    budget,
+                )?;
             }
         }
         // A direct activation may-set is still pending until the complete
         // immutable range/history/currentness census. Empty is never proof.
-        let actual = graph.blocks[graph.block(source.physical.block, budget)?].1.operations
-            .get(source.physical.operation).ok_or_else(source_raw_physical_error_v29)?;
-        let value = source_address_value_access_v29(actual)?.ok_or_else(source_raw_physical_error_v29)?;
-        let object_location = if value.object { Some(graph.object_location(value.pointer, budget)?) } else { None };
+        let actual = graph.blocks[graph.block(source.physical.block, budget)?]
+            .1
+            .operations
+            .get(source.physical.operation)
+            .ok_or_else(source_raw_physical_error_v29)?;
+        let value =
+            source_address_value_access_v29(actual)?.ok_or_else(source_raw_physical_error_v29)?;
+        let object_location = if value.object {
+            Some(graph.object_location(value.pointer, budget)?)
+        } else {
+            None
+        };
         output.accesses.push(PendingSourceMemoryAccessV29 {
             instance: source.instance,
             anchor: source.anchor,
@@ -2109,9 +2582,14 @@ fn retain_pending_memory_v29(
     }
     for failure in &output.index_failures {
         budget.charge_work(1)?;
-        emission_push_v1(&mut output.effects, PendingSourceMemoryEffectV29::FailureRead {
-            instance: failure.instance, anchor: failure.anchor,
-        }, budget)?;
+        emission_push_v1(
+            &mut output.effects,
+            PendingSourceMemoryEffectV29::FailureRead {
+                instance: failure.instance,
+                anchor: failure.anchor,
+            },
+            budget,
+        )?;
     }
     for ordinal in 0..instances.instances().len() {
         budget.charge_work(1)?;
@@ -2145,7 +2623,10 @@ fn retain_pending_memory_v29(
     }
     output.retained_storage = argument_sum_v1(&[
         output.issued.retained_storage()?,
-        argument_product_v1(output.projects.capacity(), std::mem::size_of::<PendingSourceObjectProjectV29>())?,
+        argument_product_v1(
+            output.projects.capacity(),
+            std::mem::size_of::<PendingSourceObjectProjectV29>(),
+        )?,
         argument_product_v1(
             output.accesses.capacity(),
             std::mem::size_of::<PendingSourceMemoryAccessV29>(),
@@ -2171,12 +2652,24 @@ fn retain_pending_memory_v29(
             output.births.capacity(),
             std::mem::size_of::<SourceAddressBirthV29>(),
         )?,
-        argument_product_v1(output.indices.capacity(), std::mem::size_of::<PendingSourceIndexV29>())?,
-        argument_product_v1(output.index_failures.capacity(), std::mem::size_of::<SourceIndexFailureV29>())?,
-        argument_product_v1(output.index_guards.capacity(), std::mem::size_of::<PendingSourceIndexGuardV29>())?,
+        argument_product_v1(
+            output.indices.capacity(),
+            std::mem::size_of::<PendingSourceIndexV29>(),
+        )?,
+        argument_product_v1(
+            output.index_failures.capacity(),
+            std::mem::size_of::<SourceIndexFailureV29>(),
+        )?,
+        argument_product_v1(
+            output.index_guards.capacity(),
+            std::mem::size_of::<PendingSourceIndexGuardV29>(),
+        )?,
     ])?;
     let mut scratch = argument_sum_v1(&[
-        argument_product_v1(ordinary_activations.capacity(), std::mem::size_of::<(usize, SourceMemoryActivationV29)>())?,
+        argument_product_v1(
+            ordinary_activations.capacity(),
+            std::mem::size_of::<(usize, SourceMemoryActivationV29)>(),
+        )?,
         argument_product_v1(offsets.capacity(), std::mem::size_of::<Vec<usize>>())?,
         argument_product_v1(limits.capacity(), std::mem::size_of::<u32>())?,
     ])?;
@@ -2202,7 +2695,10 @@ struct OriginalRawCensusV29 {
 
 impl OriginalRawCensusV29 {
     fn requires_physical(self) -> bool {
-        self.raw_types != 0 || self.formations != 0 || self.retained_indices != 0 || self.typed_objects != 0
+        self.raw_types != 0
+            || self.formations != 0
+            || self.retained_indices != 0
+            || self.typed_objects != 0
     }
 }
 
@@ -2275,16 +2771,19 @@ fn original_census(
                 .instance(instance)
                 .ok_or_else(source_raw_physical_error_v29)?
                 .declaration();
-            let occurrences = instances.occurrences(instance)
+            let occurrences = instances
+                .occurrences(instance)
                 .ok_or_else(source_raw_physical_error_v29)?;
             for event in occurrences.events() {
                 budget.charge_work(3)?;
-                if !event.is_reachable() || event.is_promoted()
+                if !event.is_reachable()
+                    || event.is_promoted()
                     || !matches!(event.role(), ExecutionEventV29::ProjectionIndexUse(_))
                 {
                     continue;
                 }
-                let block = SemanticBlockIdV1::from_index(scoped_memory_site_key_v29(event.site()).0);
+                let block =
+                    SemanticBlockIdV1::from_index(scoped_memory_site_key_v29(event.site()).0);
                 match instances.block_reachable(instance, block) {
                     Some(false) => continue,
                     Some(true) => {}

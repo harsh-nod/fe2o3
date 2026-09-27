@@ -128,6 +128,7 @@ fn final_physical_census_borrows_the_actual_immutable_source_graph_and_exact_acc
                         let root = source.root(0, budget)?.1;
                         let body = inventory.functions()[root].function.body.as_ref().unwrap();
                         let mut raw = 0;
+                        let mut invocation = 0;
                         let mut ordinary = 0;
                         for (block, body) in body.blocks.iter().enumerate() {
                             for (operation, value) in body.operations.iter().enumerate() {
@@ -144,24 +145,46 @@ fn final_physical_census_borrows_the_actual_immutable_source_graph_and_exact_acc
                                 };
                                 let original = relation.retained_object_payload_v29(0, operation, budget)?
                                     .expect("every actual typed memory effect has one original Object anchor");
+                                let endpoint = match original.source.role {
+                                    ScopedObjectRoleV29::ReadValue { source, .. } => source,
+                                    ScopedObjectRoleV29::WriteValue { destination, .. } => destination,
+                                    _ => panic!("typed memory endpoint"),
+                                };
                                 let Some(access) = physical.access(original.instance, original.row, operation, pointer, budget)? else {
+                                    assert!(matches!(endpoint.object, ScopedObjectIdentityV29::Local { instance, local, generation }
+                                        if instance.index() == original.instance && matches!((local.index(), generation), (2, 1) | (6, 3))),
+                                        "only exact direct later-generation locals stay pending: {:?} at {operation:?}", endpoint.object);
                                     ordinary += 1;
                                     continue;
                                 };
-                                raw += 1;
                                 assert_eq!(access.operation_pointer(budget)?, (operation, pointer));
+                                let direct = matches!(endpoint.object, ScopedObjectIdentityV29::Local { .. });
+                                if direct {
+                                    assert!(matches!(endpoint.object, ScopedObjectIdentityV29::Local { instance, local, generation: 0 }
+                                        if instance.index() == original.instance && local.index() == 3));
+                                    invocation += 1;
+                                } else {
+                                    assert!(matches!(endpoint.object, ScopedObjectIdentityV29::Reference { instance, .. }
+                                        if instance.index() == original.instance));
+                                    raw += 1;
+                                }
                                 let mut alternatives = 0;
                                 access.visit_alternatives(budget, |instance, local, slot, activation, budget| {
                                     let row = source.root_row(0)?.source_slots.slots.get(slot).unwrap();
                                     assert_eq!(row.instance.index(), instance);
+                                    assert_eq!(instance, original.instance);
+                                    assert_eq!(local.index(), if direct { 3 } else { 2 });
                                     assert_eq!(row.origin.identity,
-                                        ScopedAllocationIdentityV29::OriginalObject { local: local.index(), generation: 1 });
-                                    assert!(activation.is_some(), "this fixture uses an actual StorageLive");
+                                        ScopedAllocationIdentityV29::OriginalObject { local: local.index(), generation: if direct { 0 } else { 1 } });
+                                    assert_eq!(activation, if direct { None } else { Some((SemanticBlockIdV1::from_index(0), 0)) });
                                     source.instance(0, instance, budget)?;
                                     alternatives += 1;
                                     Ok(())
                                 })?;
-                                assert!(alternatives > 0);
+                                assert_eq!(alternatives, 1);
+                                // Keep hostile queries on the original raw-reference
+                                // witness; newly admitted direct rows are not a substitute.
+                                if direct { continue; }
                                 if fault == 4 {
                                     // Typed objects require the complete correspondence query;
                                     // the legacy scalar query must refuse and poison this scope.
@@ -194,7 +217,7 @@ fn final_physical_census_borrows_the_actual_immutable_source_graph_and_exact_acc
                                 }
                             }
                         }
-                        assert_eq!((raw, ordinary), (1, 6));
+                        assert_eq!((raw, invocation, ordinary), (1, 4, 2));
                         let mut effects = 0;
                         physical.visit_effects(budget, |_, _| { effects += 1; Ok(()) })?;
                         assert!(effects > raw, "non-access lifetime/formation/return rows are retained");
@@ -303,26 +326,32 @@ fn physical_address_owner(case: PhysicalAddressCase) -> ProductionSemanticSsaOwn
             statements.extend([address(3, 2), stored()]);
         }
     }
-    let dereference = || assign(
-        place(5, U32),
-        SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
-            SemanticPlaceV1::new(
-                SemanticLocalIdV1::from_index(3),
-                vec![
-                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32).unwrap(),
-                ],
-                U32,
-            )
-            .unwrap(),
-            SemanticVolatilityV1::NonVolatile,
-            None,
-        )),
-    );
+    let dereference = || {
+        assign(
+            place(5, U32),
+            SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                SemanticPlaceV1::new(
+                    SemanticLocalIdV1::from_index(3),
+                    vec![
+                        SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32)
+                            .unwrap(),
+                    ],
+                    U32,
+                )
+                .unwrap(),
+                SemanticVolatilityV1::NonVolatile,
+                None,
+            )),
+        )
+    };
     if let PhysicalAddressCase::IndexedSeries(count) = case {
         for _ in 0..count {
             statements.push(stored());
             statements.push(dereference());
-            statements.push(assign(place(6, U32), SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(2, U32)))));
+            statements.push(assign(
+                place(6, U32),
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(2, U32))),
+            ));
         }
     }
     statements.push(dereference());
@@ -367,17 +396,27 @@ thread_local! {
     static OBJECT_PAYLOAD_INDEX_MUTATED_V29: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-fn object_payload_index_observer_v29(index: &mut SourceObjectPayloadIndexV29, _: &mut ArgumentBudgetV1<'_>) -> Result<(), ProductionSemanticKirErrorV1> {
+fn object_payload_index_observer_v29(
+    index: &mut SourceObjectPayloadIndexV29,
+    _: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
     let fault = OBJECT_PAYLOAD_INDEX_FAULT_V29.get();
-    if fault == 0 { return Ok(()); }
+    if fault == 0 {
+        return Ok(());
+    }
     assert!(index.occurrences.len() >= 2 && index.reads.len() >= 2);
     // The growing original fixture dereferences a retained pointer. Its exact
     // RvaluePlace/prefix-zero read is consumed by the holder-value join.
-    let holder = index.reads.iter().position(|row| row.0.1[3] == 1 && row.0.2 == 0)
+    let holder = index
+        .reads
+        .iter()
+        .position(|row| row.0.1[3] == 1 && row.0.2 == 0)
         .expect("an actual retained pointer-holder read");
     match fault {
         1 => index.occurrences[1].0 = index.occurrences[0].0,
-        2 => { index.reads.remove(holder); }
+        2 => {
+            index.reads.remove(holder);
+        }
         3 => index.reads[holder].1 = usize::MAX,
         4 => {
             let mut row = index.reads.remove(holder);
@@ -401,9 +440,19 @@ fn object_payload_index_observer_v29(index: &mut SourceObjectPayloadIndexV29, _:
     Ok(())
 }
 
-fn run_indexed_object_payloads_v29(count: usize, fault: u8, work_limit: usize, storage_limit: usize)
-    -> (Result<(), ScopedModuleErrorV29>, usize, usize, (usize, usize), (usize, usize), bool)
-{
+fn run_indexed_object_payloads_v29(
+    count: usize,
+    fault: u8,
+    work_limit: usize,
+    storage_limit: usize,
+) -> (
+    Result<(), ScopedModuleErrorV29>,
+    usize,
+    usize,
+    (usize, usize),
+    (usize, usize),
+    bool,
+) {
     struct Reset(Option<SourceObjectPayloadIndexObserverV29>, u8);
     impl Drop for Reset {
         fn drop(&mut self) {
@@ -411,10 +460,13 @@ fn run_indexed_object_payloads_v29(count: usize, fault: u8, work_limit: usize, s
             OBJECT_PAYLOAD_INDEX_FAULT_V29.set(self.1);
         }
     }
-    let _reset = Reset(SOURCE_OBJECT_PAYLOAD_INDEX_OBSERVER_V29.replace(Some(object_payload_index_observer_v29)),
-        OBJECT_PAYLOAD_INDEX_FAULT_V29.replace(fault));
+    let _reset = Reset(
+        SOURCE_OBJECT_PAYLOAD_INDEX_OBSERVER_V29.replace(Some(object_payload_index_observer_v29)),
+        OBJECT_PAYLOAD_INDEX_FAULT_V29.replace(fault),
+    );
     SOURCE_OBJECT_PAYLOAD_INDEX_WORK_V29.set((0, 0));
     SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.set((0, 0));
+    scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29.set((0, 0));
     OBJECT_PAYLOAD_INDEX_MUTATED_V29.set(false);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
@@ -422,17 +474,34 @@ fn run_indexed_object_payloads_v29(count: usize, fault: u8, work_limit: usize, s
     let mut completed = false;
     let result = (|| {
         let original = physical_address_owner(PhysicalAddressCase::IndexedSeries(count));
-        let (input, launch) = with_module_fixture_view(&original, ModuleFixture::Ordinary, &mut budget,
-            |source, budget| OwnedExecutionInputV29::capture(source, budget))?;
+        let (input, launch) = with_module_fixture_view(
+            &original,
+            ModuleFixture::Ordinary,
+            &mut budget,
+            |source, budget| OwnedExecutionInputV29::capture(source, budget),
+        )?;
         let roots = original.source_semantic().roots().len();
         let before_construction = SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.get().0;
-        let mut donor = Some(ScopedSourceInputsV29 { owner: original, launch, input: input? });
-        let owner = SourceOwnedScopedModuleV29::try_new(&mut donor, ProductionSemanticKirLimitsV1::default(), &mut budget)?;
+        let mut donor = Some(ScopedSourceInputsV29 {
+            owner: original,
+            launch,
+            input: input?,
+        });
+        let owner = SourceOwnedScopedModuleV29::try_new(
+            &mut donor,
+            ProductionSemanticKirLimitsV1::default(),
+            &mut budget,
+        )?;
         assert!(donor.is_none());
+        assert!(owner.retained_storage > 0);
+        assert_eq!(budget.storage(), MODULE_FLOOR + owner.retained_storage);
         // Construction checks the emitted candidate, then reconstructs it once.
         let after_construction = SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.get().0;
-        assert_eq!(after_construction - before_construction, 2 * roots,
-            "one admission and one reconstruction payload pass per root");
+        assert_eq!(
+            after_construction - before_construction,
+            2 * roots,
+            "one admission and one reconstruction payload pass per root"
+        );
         let floor = budget.storage();
         let identity = *owner.pending.graph.identity();
         let replay = owner.replay(&mut budget);
@@ -442,13 +511,47 @@ fn run_indexed_object_payloads_v29(count: usize, fault: u8, work_limit: usize, s
         drop(owner);
         budget.release_storage(retained)?;
         replay?;
-        assert_eq!(SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.get().0 - after_construction, roots,
-            "one explicit immutable replay payload pass per root");
+        assert_eq!(
+            SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.get().0 - after_construction,
+            roots,
+            "one explicit immutable replay payload pass per root"
+        );
+        let (queries, reclaimed) =
+            scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29.get();
+        assert_eq!(queries, 3 * roots);
+        assert!(reclaimed > 0, "real payload queries must reserve scratch");
         completed = true;
         Ok(())
     })();
     assert_eq!(budget.storage(), MODULE_FLOOR, "{result:?}");
-    (result, budget.work(), budget.peak_storage(), SOURCE_OBJECT_PAYLOAD_INDEX_WORK_V29.get(), SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.get(), completed)
+    (
+        result,
+        budget.work(),
+        budget.peak_storage(),
+        SOURCE_OBJECT_PAYLOAD_INDEX_WORK_V29.get(),
+        SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.get(),
+        completed,
+    )
+}
+
+#[test]
+fn original_object_payload_unit_query_scratch_ends_before_pending_retention() {
+    let mut previous = 0;
+    for count in [1, 4, 16] {
+        let (result, _, _, index, payloads, completed) =
+            run_indexed_object_payloads_v29(count, 0, MODULE_LIMIT, MODULE_LIMIT);
+        result.unwrap();
+        assert!(completed);
+        assert!(index.0 > count);
+        let (queries, reclaimed) =
+            scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29.get();
+        assert_eq!((queries, payloads.0), (3, 3));
+        assert!(
+            reclaimed > previous,
+            "growing query frames must be released"
+        );
+        previous = reclaimed;
+    }
 }
 
 #[test]
@@ -457,50 +560,93 @@ fn growing_original_object_payload_joins_have_subquadratic_work() {
     for count in [32, 64, 128] {
         let (result, work, peak, index, payloads, completed) =
             run_indexed_object_payloads_v29(count, 0, MODULE_LIMIT, MODULE_LIMIT);
-        assert!(result.is_ok(),
-            "count={count}, work={work}, peak={peak}, index={index:?}, payloads={payloads:?}: {result:?}");
-        assert!(completed, "actual module construction and immutable replay must succeed");
-        assert!(index.0 > count, "the growing source must exercise indexed lookups");
-        assert_eq!(payloads.0, 2 + 1, "construction checks and explicit replay of one root");
+        assert!(
+            result.is_ok(),
+            "count={count}, work={work}, peak={peak}, index={index:?}, payloads={payloads:?}: {result:?}"
+        );
+        assert!(
+            completed,
+            "actual module construction and immutable replay must succeed"
+        );
+        assert!(
+            index.0 > count,
+            "the growing source must exercise indexed lookups"
+        );
+        assert_eq!(
+            payloads.0,
+            2 + 1,
+            "construction checks and explicit replay of one root"
+        );
         measured.push((index.1, payloads.1));
     }
     for scope in 0..2 {
-        let work: Vec<_> = measured.iter().map(|pair| if scope == 0 { pair.0 } else { pair.1 }).collect();
+        let work: Vec<_> = measured
+            .iter()
+            .map(|pair| if scope == 0 { pair.0 } else { pair.1 })
+            .collect();
         let first = work[1].checked_sub(work[0]).expect("growing work");
         let second = work[2].checked_sub(work[1]).expect("growing work");
-        assert!(first > 0 && second < 3 * first, "indexed/payload work must grow subquadratically: {work:?}");
+        assert!(
+            first > 0 && second < 3 * first,
+            "indexed/payload work must grow subquadratically: {work:?}"
+        );
     }
 }
 
 #[test]
 fn original_object_payload_index_rejects_duplicate_missing_stale_and_foreign_keys() {
-    let (result, _, _, _, _, completed) = run_indexed_object_payloads_v29(4, 0, MODULE_LIMIT, MODULE_LIMIT);
+    let (result, _, _, _, _, completed) =
+        run_indexed_object_payloads_v29(4, 0, MODULE_LIMIT, MODULE_LIMIT);
     result.unwrap();
     assert!(completed);
     for fault in 1..=8 {
-        let (result, _, _, _, _, completed) = run_indexed_object_payloads_v29(4, fault, MODULE_LIMIT, MODULE_LIMIT);
-        assert!(OBJECT_PAYLOAD_INDEX_MUTATED_V29.get(), "actual indexed source must reach sabotage");
+        let (result, _, _, _, _, completed) =
+            run_indexed_object_payloads_v29(4, fault, MODULE_LIMIT, MODULE_LIMIT);
+        assert!(
+            OBJECT_PAYLOAD_INDEX_MUTATED_V29.get(),
+            "actual indexed source must reach sabotage"
+        );
         assert!(!completed);
         if fault <= 6 {
-            assert!(matches!(result, Err(ScopedModuleErrorV29::Source(ProductionSemanticKirErrorV1::Unsupported { .. }))),
-                "semantic key refusal, not a swallowed assertion or exhausted budget: {result:?}");
+            assert!(
+                matches!(
+                    result,
+                    Err(ScopedModuleErrorV29::Source(
+                        ProductionSemanticKirErrorV1::Unsupported { .. }
+                    ))
+                ),
+                "semantic key refusal, not a swallowed assertion or exhausted budget: {result:?}"
+            );
         } else {
-            assert!(matches!(result, Err(ScopedModuleErrorV29::Source(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Accounting)))),
-                "exact foreign custody refusal required: {result:?}");
+            assert!(
+                matches!(
+                    result,
+                    Err(ScopedModuleErrorV29::Source(
+                        ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                            ArgumentResourceV1::Accounting
+                        )
+                    ))
+                ),
+                "exact foreign custody refusal required: {result:?}"
+            );
         }
     }
 }
 
 #[test]
 fn indexed_object_payload_module_preserves_exact_resource_boundaries() {
-    let (result, work, storage, _, _, completed) = run_indexed_object_payloads_v29(4, 0, MODULE_LIMIT, MODULE_LIMIT);
+    let (result, work, storage, _, _, completed) =
+        run_indexed_object_payloads_v29(4, 0, MODULE_LIMIT, MODULE_LIMIT);
     result.unwrap();
     assert!(completed);
     let (result, _, _, _, _, completed) = run_indexed_object_payloads_v29(4, 0, work, storage);
     result.unwrap();
     assert!(completed);
-    for (work_limit, storage_limit, is_work) in [(work - 1, storage, true), (work, storage - 1, false)] {
-        let (result, _, _, _, _, completed) = run_indexed_object_payloads_v29(4, 0, work_limit, storage_limit);
+    for (work_limit, storage_limit, is_work) in
+        [(work - 1, storage, true), (work, storage - 1, false)]
+    {
+        let (result, _, _, _, _, completed) =
+            run_indexed_object_payloads_v29(4, 0, work_limit, storage_limit);
         assert!(!completed);
         descriptor_resource_error(result.unwrap_err(), is_work);
     }
@@ -523,7 +669,11 @@ fn physical_address_observer(
         let body = row.function.body.as_ref().unwrap();
         for operation in body.blocks.iter().flat_map(|block| &block.operations) {
             match &operation.kind {
-                OperationKind::Select { true_value, false_value, .. } => {
+                OperationKind::Select {
+                    true_value,
+                    false_value,
+                    ..
+                } => {
                     assert_eq!(true_value, false_value);
                     assert!(matches!(operation.results.as_slice(), [result]
                         if matches!(&result.ty, Type::Pointer(pointer)
@@ -541,25 +691,48 @@ fn physical_address_observer(
                     pointer_loads += 1
                 }
                 OperationKind::Storage(ScopedObjectOperationV29::ReadValue { .. }) => {
-                    assert!(matches!(operation.results.as_slice(), [result] if result.ty == Type::Scalar(ScalarType::U32)));
+                    assert!(
+                        matches!(operation.results.as_slice(), [result] if result.ty == Type::Scalar(ScalarType::U32))
+                    );
                     scalar_loads += 1;
                 }
                 OperationKind::Storage(ScopedObjectOperationV29::WriteValue { .. }) => stores += 1,
-                OperationKind::Load { .. } | OperationKind::Store { .. }
-                | OperationKind::Cast { kind: CastKind::PointerToGeneric, .. }
-                | OperationKind::Storage(_) => panic!("whole typed cells must use their selected operation family"),
+                OperationKind::Load { .. }
+                | OperationKind::Store { .. }
+                | OperationKind::Cast {
+                    kind: CastKind::PointerToGeneric,
+                    ..
+                }
+                | OperationKind::Storage(_) => {
+                    panic!("whole typed cells must use their selected operation family")
+                }
                 _ => {}
             }
         }
         let anchors = row.scoped_memory_anchors.as_ref().unwrap();
-        object_rows += anchors.rows.iter().filter(|anchor|
-            matches!(anchor.kind, ScopedMemoryAnchorKindV29::Object(_))).count();
+        object_rows += anchors
+            .rows
+            .iter()
+            .filter(|anchor| matches!(anchor.kind, ScopedMemoryAnchorKindV29::Object(_)))
+            .count();
     }
     let fresh = usize::from(PHYSICAL_ADDRESS_FRESH.get());
-    assert_eq!(aliases, 2 + fresh, "one fresh identity per original AddressOf");
-    assert_eq!(pointer_loads, 2 + fresh, "stored RHS reads plus final dereference holder read");
+    assert_eq!(
+        aliases,
+        2 + fresh,
+        "one fresh identity per original AddressOf"
+    );
+    assert_eq!(
+        pointer_loads,
+        2 + fresh,
+        "stored RHS reads plus final dereference holder read"
+    );
     assert_eq!(scalar_loads, 1, "the original final scalar read");
-    assert_eq!(stores, 4 + 3 * fresh, "scalar initialization, pointer assignment and explicit stores");
+    assert_eq!(
+        stores,
+        4 + 3 * fresh,
+        "scalar initialization, pointer assignment and explicit stores"
+    );
     assert_eq!(object_rows, pointer_loads + scalar_loads + stores);
     let fault = PHYSICAL_ADDRESS_FAULT.get();
     if fault != 0 {
@@ -590,40 +763,59 @@ fn physical_address_observer(
         {
             match (&mut operation.kind, fault) {
                 (
-                    OperationKind::Select { true_value, false_value, .. },
+                    OperationKind::Select {
+                        true_value,
+                        false_value,
+                        ..
+                    },
                     1,
                 ) if *true_value == formations[0].0 => {
                     *true_value = formations[1].0;
                     *false_value = formations[1].0;
                     changed = true;
                 }
-                (OperationKind::Storage(ScopedObjectOperationV29::WriteValue { value, .. }), 2) if *value == formations[0].1 => {
+                (OperationKind::Storage(ScopedObjectOperationV29::WriteValue { value, .. }), 2)
+                    if *value == formations[0].1 =>
+                {
                     *value = formations[1].1;
                     changed = true;
                 }
-                (OperationKind::Storage(ScopedObjectOperationV29::ReadValue { address: pointer, .. }), 3)
-                    if operation
-                        .results
-                        .iter()
-                        .any(|result| result.ty == Type::Scalar(ScalarType::U32)) =>
+                (
+                    OperationKind::Storage(ScopedObjectOperationV29::ReadValue {
+                        address: pointer,
+                        ..
+                    }),
+                    3,
+                ) if operation
+                    .results
+                    .iter()
+                    .any(|result| result.ty == Type::Scalar(ScalarType::U32)) =>
                 {
                     *pointer = formations[1].1;
                     changed = true;
                 }
-                (OperationKind::Storage(ScopedObjectOperationV29::ReadValue { .. }), 5)
-                    if matches!(operation.results.as_slice(), [result] if result.ty == Type::Scalar(ScalarType::U32)) =>
+                (OperationKind::Storage(ScopedObjectOperationV29::ReadValue { .. }), 5) if matches!(operation.results.as_slice(), [result] if result.ty == Type::Scalar(ScalarType::U32)) =>
                 {
                     operation.results[0].ty = Type::Scalar(ScalarType::I32);
                     changed = true;
                 }
-                (OperationKind::Storage(ScopedObjectOperationV29::WriteValue { access, .. }), 6) => {
+                (
+                    OperationKind::Storage(ScopedObjectOperationV29::WriteValue { access, .. }),
+                    6,
+                ) => {
                     access.volatile = true;
                     changed = true;
                 }
-                (OperationKind::Storage(ScopedObjectOperationV29::ReadValue { address, .. }), 8)
-                    if matches!(operation.results.as_slice(), [result] if result.ty == Type::Scalar(ScalarType::U32)) =>
+                (
+                    OperationKind::Storage(ScopedObjectOperationV29::ReadValue { address, .. }),
+                    8,
+                ) if matches!(operation.results.as_slice(), [result] if result.ty == Type::Scalar(ScalarType::U32)) =>
                 {
-                    assert_eq!(formations.len(), 3, "fresh restart must form a new generation's address");
+                    assert_eq!(
+                        formations.len(),
+                        3,
+                        "fresh restart must form a new generation's address"
+                    );
                     assert_ne!(formations[0].0, formations[2].0);
                     *address = formations[0].1;
                     changed = true;
@@ -650,10 +842,21 @@ fn physical_address_observer(
         }
         if fault == 7 {
             let anchors = row.scoped_memory_anchors.as_mut().unwrap();
-            let writes: Vec<_> = anchors.rows.iter().enumerate().filter_map(|(index, anchor)| {
-                let ScopedMemoryAnchorKindV29::Object(object) = anchor.kind else { return None; };
-                matches!(anchors.objects[object].role, ScopedObjectRoleV29::WriteValue { .. }).then_some(index)
-            }).collect();
+            let writes: Vec<_> = anchors
+                .rows
+                .iter()
+                .enumerate()
+                .filter_map(|(index, anchor)| {
+                    let ScopedMemoryAnchorKindV29::Object(object) = anchor.kind else {
+                        return None;
+                    };
+                    matches!(
+                        anchors.objects[object].role,
+                        ScopedObjectRoleV29::WriteValue { .. }
+                    )
+                    .then_some(index)
+                })
+                .collect();
             assert!(writes.len() >= 2);
             // Duplicate an existing original role rather than removing an IR
             // operation: the complete source census must reject the omission.
@@ -736,10 +939,14 @@ fn actual_source_stored_raw_pointer_and_fresh_restart_reach_module_and_replay() 
     ] {
         let original = physical_address_owner(case);
         let promoted = original.plans()[0].plan().promoted_variables();
-        assert!(!promoted.iter().any(|variable| variable.get() == 3),
-            "the stored raw holder must exercise retained memory, not a fabricated SSA definition");
-        assert!(promoted.iter().any(|variable| variable.get() == 4),
-            "the independent raw formation must also exercise promoted pointer admission");
+        assert!(
+            !promoted.iter().any(|variable| variable.get() == 3),
+            "the stored raw holder must exercise retained memory, not a fabricated SSA definition"
+        );
+        assert!(
+            promoted.iter().any(|variable| variable.get() == 4),
+            "the independent raw formation must also exercise promoted pointer admission"
+        );
         let result = run_physical_address_module(case, MODULE_LIMIT, MODULE_LIMIT).0;
         assert!(PHYSICAL_ADDRESS_RUN_FINISHED.get());
         assert_eq!(
@@ -824,7 +1031,11 @@ fn actual_source_raw_census_rejects_changed_formation_payload_and_access() {
     for fault in 1..=8 {
         let reset = Reset(PHYSICAL_ADDRESS_FAULT.replace(fault));
         PHYSICAL_ADDRESS_MUTATED.set(false);
-        let case = if fault == 8 { PhysicalAddressCase::FreshRestart } else { PhysicalAddressCase::Stored };
+        let case = if fault == 8 {
+            PhysicalAddressCase::FreshRestart
+        } else {
+            PhysicalAddressCase::Stored
+        };
         let result = run_physical_address_module(case, MODULE_LIMIT, MODULE_LIMIT).0;
         assert!(
             PHYSICAL_ADDRESS_RUN_FINISHED.get(),

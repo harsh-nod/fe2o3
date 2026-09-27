@@ -413,18 +413,30 @@ fn source_address_boundaries_v29(
             None => return Err(source_raw_physical_error_v29()),
         }
         budget.charge_work(call_splice_search_work_v1(slots.instances.len()))?;
-        let owner = slots.instances.binary_search_by_key(&instance.index(), |row| row.instance.index())
-            .ok().and_then(|index| slots.instances.get(index)).ok_or_else(source_raw_physical_error_v29)?;
-        let local_slots = slots.slots.get(owner.slots.clone()).ok_or_else(source_raw_physical_error_v29)?;
-        let anchors = source_index.sidecar(instance, budget)?.scoped_memory_anchors.as_ref()
+        let owner = slots
+            .instances
+            .binary_search_by_key(&instance.index(), |row| row.instance.index())
+            .ok()
+            .and_then(|index| slots.instances.get(index))
+            .ok_or_else(source_raw_physical_error_v29)?;
+        let local_slots = slots
+            .slots
+            .get(owner.slots.clone())
+            .ok_or_else(source_raw_physical_error_v29)?;
+        let anchors = source_index
+            .sidecar(instance, budget)?
+            .scoped_memory_anchors
+            .as_ref()
             .ok_or_else(source_raw_physical_error_v29)?;
         // Count only recorded boundaries and their generation-specific rows.
         // The second pass authenticates each boundary against original events.
         for row in &anchors.rows {
             budget.charge_work(1)?;
             if let ScopedMemoryAnchorKindV29::Kill { local, .. } = row.kind {
-                let (legacy, objects) = source_address_local_slot_ranges_v29(local_slots, local, budget)?;
-                capacity = argument_sum_v1(&[capacity, usize::from(legacy.is_some()), objects.len()])?;
+                let (legacy, objects) =
+                    source_address_local_slot_ranges_v29(local_slots, local, budget)?;
+                capacity =
+                    argument_sum_v1(&[capacity, usize::from(legacy.is_some()), objects.len()])?;
             }
         }
     }
@@ -486,7 +498,8 @@ fn source_address_boundaries_v29(
                 return Err(source_raw_physical_error_v29());
             }
             let local = occurrence.event().variable().get();
-            let (legacy, objects) = source_address_local_slot_ranges_v29(local_slots, local, budget)?;
+            let (legacy, objects) =
+                source_address_local_slot_ranges_v29(local_slots, local, budget)?;
             let slot = legacy.or_else(|| (!objects.is_empty()).then_some(objects.start));
             let needed = if let Some(slot) = slot {
                 let declaration = instances
@@ -552,14 +565,22 @@ fn source_address_boundaries_v29(
             {
                 return Err(source_raw_physical_error_v29());
             }
-            let (legacy, objects) = source_address_local_slot_ranges_v29(local_slots, local, budget)?;
+            let (legacy, objects) =
+                source_address_local_slot_ranges_v29(local_slots, local, budget)?;
             for slot in legacy.into_iter().chain(objects) {
                 budget.charge_work(2)?;
-                if boundaries.len() == boundaries.capacity() { return Err(ArgumentResourceV1::Accounting.into()); }
+                if boundaries.len() == boundaries.capacity() {
+                    return Err(ArgumentResourceV1::Accounting.into());
+                }
                 boundaries.push(SourceAddressBoundaryV29 {
-                    instance, anchor, event, frame,
+                    instance,
+                    anchor,
+                    event,
+                    frame,
                     slot: argument_sum_v1(&[slot_owner.slots.start, slot])?,
-                    block, gap: gap as usize, cause,
+                    block,
+                    gap: gap as usize,
+                    cause,
                 });
             }
         }
@@ -576,7 +597,15 @@ fn source_address_boundaries_v29(
     }
     call_splice_sort_work_v1(argument_product_v1(boundaries.len(), 5)?, budget)
         .map_err(source_address_call_error_v29)?;
-    boundaries.sort_unstable_by_key(|row| (row.block, row.gap, row.instance.index(), row.anchor, row.slot));
+    boundaries.sort_unstable_by_key(|row| {
+        (
+            row.block,
+            row.gap,
+            row.instance.index(),
+            row.anchor,
+            row.slot,
+        )
+    });
     Ok(boundaries)
 }
 
@@ -673,15 +702,13 @@ fn source_address_lifetimes_v29(
     let count = instances.instances().len();
     let mut initial = emission_vec_v1(slots.slots.len(), budget)?;
     budget.charge_work(slots.slots.len())?;
-    initial.extend(
-        slots
-            .slots
-            .iter()
-            .map(|slot| slot.instance == instances.root() && match slot.origin.identity {
+    initial.extend(slots.slots.iter().map(|slot| {
+        slot.instance == instances.root()
+            && match slot.origin.identity {
                 ScopedAllocationIdentityV29::OriginalObject { generation, .. } => generation == 0,
                 _ => true,
-            }),
-    );
+            }
+    }));
     let mut ranges = emission_vec_v1(count, budget)?;
     let mut entries = emission_vec_v1(count, budget)?;
     let mut preheaders = emission_vec_v1(count, budget)?;
@@ -842,7 +869,9 @@ fn source_address_lifetimes_v29(
                 .ok_or_else(source_raw_physical_error_v29)?;
             budget.charge_work(call_splice_search_work_v1(expected_returns.len()))?;
             let index = expected_returns
-                .binary_search_by_key(&(control.instance.index(), source_block.index()), |row| (row.0.index(), row.1.index()))
+                .binary_search_by_key(&(control.instance.index(), source_block.index()), |row| {
+                    (row.0.index(), row.1.index())
+                })
                 .map_err(|_| source_raw_physical_error_v29())?;
             if std::mem::replace(&mut expected_returns[index].2, true) {
                 return Err(source_raw_physical_error_v29());
@@ -975,7 +1004,9 @@ fn source_address_lifetimes_v29(
                 sequence: lifetimes.len(),
                 slot,
                 live: match slots.slots[slot].origin.identity {
-                    ScopedAllocationIdentityV29::OriginalObject { generation, .. } => generation == 0,
+                    ScopedAllocationIdentityV29::OriginalObject { generation, .. } => {
+                        generation == 0
+                    }
                     _ => true,
                 },
             });
@@ -987,22 +1018,43 @@ fn source_address_lifetimes_v29(
         budget.charge_work(2)?;
         // The boundary census still authenticates every original Move. A
         // diagnostic Move only invalidates the ordered failure shadow below.
-        if source_boundary_is_failure_move_v29(row) { continue; }
+        if source_boundary_is_failure_move_v29(row) {
+            continue;
+        }
         if let Some(mut live) = row.activation() {
-            if live && let ScopedAllocationIdentityV29::OriginalObject { local, generation } = slots.slots[row.slot].origin.identity {
-                let function = instances.instance(row.instance).ok_or_else(source_raw_physical_error_v29)?.declaration();
-                let activation = source_address_live_generation_v29(function, row.frame.site, budget)?;
-                let ScopedAllocationSourceV29::OriginalObject { cell, schema } = slots.slots[row.slot].origin.source else {
+            if live
+                && let ScopedAllocationIdentityV29::OriginalObject { local, generation } =
+                    slots.slots[row.slot].origin.identity
+            {
+                let function = instances
+                    .instance(row.instance)
+                    .ok_or_else(source_raw_physical_error_v29)?
+                    .declaration();
+                let activation =
+                    source_address_live_generation_v29(function, row.frame.site, budget)?;
+                let ScopedAllocationSourceV29::OriginalObject { cell, schema } =
+                    slots.slots[row.slot].origin.source
+                else {
                     return Err(source_raw_physical_error_v29());
                 };
                 let (representative, physical, joined) = plan.physical_object_cell(cell, budget)?;
-                if representative != cell || physical.instance != row.instance || physical.local.index() != local
-                    || physical.generation != generation || physical.kind != SourceBackingKindV29::Object(schema)
-                { return Err(source_raw_physical_error_v29()); }
+                if representative != cell
+                    || physical.instance != row.instance
+                    || physical.local.index() != local
+                    || physical.generation != generation
+                    || physical.kind != SourceBackingKindV29::Object(schema)
+                {
+                    return Err(source_raw_physical_error_v29());
+                }
                 if joined {
-                    let (_, original_representative, original_physical) = plan.physical_object_generation(
-                        row.instance, physical.local, activation, budget,
-                    )?.ok_or_else(source_raw_physical_error_v29)?;
+                    let (_, original_representative, original_physical) = plan
+                        .physical_object_generation(
+                            row.instance,
+                            physical.local,
+                            activation,
+                            budget,
+                        )?
+                        .ok_or_else(source_raw_physical_error_v29)?;
                     if original_representative != cell || original_physical != physical {
                         return Err(source_raw_physical_error_v29());
                     }
@@ -1117,13 +1169,20 @@ fn source_address_original_slot_v29(
         .ok_or_else(source_raw_physical_error_v29)?;
     budget.charge_work(call_splice_search_work_v1(rows.len()))?;
     let offset = rows
-        .binary_search_by_key(&ScopedAllocationIdentityV29::LegacyLocal(local.index()), |row| row.origin.identity)
+        .binary_search_by_key(
+            &ScopedAllocationIdentityV29::LegacyLocal(local.index()),
+            |row| row.origin.identity,
+        )
         .map_err(|_| source_raw_physical_error_v29())?;
     let row = &rows[offset];
     let scalar = row.scalar_array()?;
     budget.charge_work(5)?;
-    let (element, length) = match instances.owner().source_semantic().types()
-        .get(ty.index() as usize).map(SemanticTypeDeclV1::shape)
+    let (element, length) = match instances
+        .owner()
+        .source_semantic()
+        .types()
+        .get(ty.index() as usize)
+        .map(SemanticTypeDeclV1::shape)
     {
         Some(SemanticTypeShapeV1::Array { element, length }) => (*element, *length),
         Some(_) => (ty, 1),
@@ -1133,7 +1192,10 @@ fn source_address_original_slot_v29(
         || row.origin.semantic_type != ty
         || scalar.element_type != element
         || scalar.length != length
-        || scalar.bytes != length.checked_mul(scalar.element.size).ok_or(ArgumentResourceV1::Arithmetic)?
+        || scalar.bytes
+            != length
+                .checked_mul(scalar.element.size)
+                .ok_or(ArgumentResourceV1::Arithmetic)?
     {
         return Err(source_raw_physical_error_v29());
     }
@@ -1183,31 +1245,61 @@ fn source_address_external_descriptor_v29(
         return Ok(false);
     }
     let frame = row.source.ok_or_else(source_raw_physical_error_v29)?;
-    let Some((index, _)) = references.plan.descriptor_at(instance, frame.site, place, prefix - 1, budget)? else {
+    let Some((index, _)) =
+        references
+            .plan
+            .descriptor_at(instance, frame.site, place, prefix - 1, budget)?
+    else {
         return Ok(false);
     };
     references.check(budget)?;
     budget.charge_work(3)?;
-    let claim = references.descriptors.get(index).and_then(|claim| claim.get())
+    let claim = references
+        .descriptors
+        .get(index)
+        .and_then(|claim| claim.get())
         .ok_or_else(source_descriptor_error_v29)?;
-    let SourceReferenceSelectorProducerV29::Address { base, offset, pointer, block, operation } = claim.producer else {
+    let SourceReferenceSelectorProducerV29::Address {
+        base,
+        offset,
+        pointer,
+        block,
+        operation,
+    } = claim.producer
+    else {
         return Err(source_descriptor_error_v29());
     };
-    if !matches!(row.kind, ScopedMemoryAnchorKindV29::Access { pointer: actual, .. } if actual == pointer) {
+    if !matches!(row.kind, ScopedMemoryAnchorKindV29::Access { pointer: actual, .. } if actual == pointer)
+    {
         return Err(source_descriptor_error_v29());
     }
-    let producer = source_index.emitted.operation(instance, block, operation, budget)?;
-    let (OperationKind::GetElementPointer { base: actual_base, offset: actual_offset }, [result]) =
-        (&producer.kind, producer.results.as_slice()) else {
+    let producer = source_index
+        .emitted
+        .operation(instance, block, operation, budget)?;
+    let (
+        OperationKind::GetElementPointer {
+            base: actual_base,
+            offset: actual_offset,
+        },
+        [result],
+    ) = (&producer.kind, producer.results.as_slice())
+    else {
         return Err(source_descriptor_error_v29());
     };
-    if *actual_base != base || *actual_offset != offset || result.id != pointer
+    if *actual_base != base
+        || *actual_offset != offset
+        || result.id != pointer
         || !matches!(&result.ty, Type::Pointer(_))
     {
         return Err(source_descriptor_error_v29());
     }
-    if source_address_value_access_v29(source_index.emitted.operation(instance, row.block, row.position, budget)?)?
-        .is_none_or(|access| access.pointer != pointer || access.object)
+    if source_address_value_access_v29(source_index.emitted.operation(
+        instance,
+        row.block,
+        row.position,
+        budget,
+    )?)?
+    .is_none_or(|access| access.pointer != pointer || access.object)
     {
         return Err(source_descriptor_error_v29());
     }
@@ -1222,7 +1314,13 @@ fn source_address_accesses_v29(
     source_index: &SourceAddressSourceIndexV29<'_>,
     slots: &OwnedScopedSourceSlotsV29,
     budget: &mut ArgumentBudgetV1<'_>,
-) -> Result<(Vec<SourceAddressAccessSourceV29>, PendingSourceIssuedRolesV29), ProductionSemanticKirErrorV1> {
+) -> Result<
+    (
+        Vec<SourceAddressAccessSourceV29>,
+        PendingSourceIssuedRolesV29,
+    ),
+    ProductionSemanticKirErrorV1,
+> {
     references.plan.check_owner(instances, budget)?;
     budget.reserve_storage(source_issued_census_query_headers_v29()?)?;
     source_reference_emission_prepay_v29::<SourceDirectObjectOriginV29>(budget)?;
@@ -1231,8 +1329,14 @@ fn source_address_accesses_v29(
     source_reference_emission_prepay_v29::<Option<SourceSafeObjectOriginV29>>(budget)?;
     source_reference_emission_prepay_v29::<Option<&SourceReferenceLoanV29>>(budget)?;
     source_reference_emission_prepay_v29::<&SourceReferenceLoanV29>(budget)?;
-    source_reference_emission_prepay_v29::<(ScopedObjectEndpointV29, ScopedObjectIdentityV29,
-        ProductionCallInstanceIdV1, SemanticLocalIdV1, u32, SemanticTypeIdV1)>(budget)?;
+    source_reference_emission_prepay_v29::<(
+        ScopedObjectEndpointV29,
+        ScopedObjectIdentityV29,
+        ProductionCallInstanceIdV1,
+        SemanticLocalIdV1,
+        u32,
+        SemanticTypeIdV1,
+    )>(budget)?;
     let issued_header = std::mem::size_of::<Option<SourceIssuedAccessesV29<'_, '_, '_>>>();
     budget.reserve_storage(issued_header)?;
     let mut issued = None;
@@ -1270,8 +1374,14 @@ fn source_address_accesses_v29(
             .enumerate()
         {
             budget.charge_work(4)?;
-            let object = source_address_object_payload_v29(sidecar.scoped_memory_anchors.as_ref()
-                .ok_or_else(source_raw_physical_error_v29)?, row, budget)?;
+            let object = source_address_object_payload_v29(
+                sidecar
+                    .scoped_memory_anchors
+                    .as_ref()
+                    .ok_or_else(source_raw_physical_error_v29)?,
+                row,
+                budget,
+            )?;
             let payload = match (row.kind, object) {
                 (ScopedMemoryAnchorKindV29::Access { payload, .. }, None) => payload,
                 (ScopedMemoryAnchorKindV29::Object(_), Some((_, payload))) => Some(payload),
@@ -1282,7 +1392,8 @@ fn source_address_accesses_v29(
             let (target, raw) = match payload {
                 Some(ScopedMemoryPayloadV29::IndexLoad { read, .. }) => {
                     let frame = row.source.ok_or_else(source_raw_physical_error_v29)?;
-                    let occurrences = instances.occurrences(instance)
+                    let occurrences = instances
+                        .occurrences(instance)
                         .ok_or_else(source_raw_physical_error_v29)?;
                     check_scoped_index_read_v29(original, &occurrences, read, budget)?;
                     if frame != ScopedMemoryFrameV29::operand(read.site, Some(read.role)) {
@@ -1290,10 +1401,19 @@ fn source_address_accesses_v29(
                     }
                     source_index.frame_gap(instance, frame, row.block, row.position, budget)?;
                     let slot = if let Some((endpoint, _)) = object {
-                        source_address_object_index_v29(instances, references.plan, slots,
-                            instance, read, endpoint, budget)?
+                        source_address_object_index_v29(
+                            instances,
+                            references.plan,
+                            slots,
+                            instance,
+                            read,
+                            endpoint,
+                            budget,
+                        )?
                     } else {
-                        source_address_original_slot_v29(instances, slots, instance, read.local, read.ty, budget)?
+                        source_address_original_slot_v29(
+                            instances, slots, instance, read.local, read.ty, budget,
+                        )?
                     };
                     (slot, None)
                 }
@@ -1311,10 +1431,18 @@ fn source_address_accesses_v29(
                         return Err(source_raw_physical_error_v29());
                     }
                     let slot = if let Some((endpoint, _)) = object {
-                        source_address_object_entry_v29(instances, references.plan, slots,
-                            instance, endpoint, budget)?
+                        source_address_object_entry_v29(
+                            instances,
+                            references.plan,
+                            slots,
+                            instance,
+                            endpoint,
+                            budget,
+                        )?
                     } else {
-                        source_address_original_slot_v29(instances, slots, instance, local, ty, budget)?
+                        source_address_original_slot_v29(
+                            instances, slots, instance, local, ty, budget,
+                        )?
                     };
                     (slot, None)
                 }
@@ -1363,24 +1491,46 @@ fn source_address_accesses_v29(
                     if prefix > place.projections().len() {
                         return Err(source_raw_physical_error_v29());
                     }
-                    if object.is_none() && source_address_external_descriptor_v29(
-                        references, source_index, instance, row, place, prefix, budget,
-                    )? {
+                    if object.is_none()
+                        && source_address_external_descriptor_v29(
+                            references,
+                            source_index,
+                            instance,
+                            row,
+                            place,
+                            prefix,
+                            budget,
+                        )?
+                    {
                         continue;
                     }
                     let access = if object.is_some() && prefix < place.projections().len() {
                         source_reference_raw_original_access_v29(original, site, place, budget)?
                             .ok_or_else(source_raw_physical_error_v29)?
-                    } else { access };
-                    if prefix == 0 || object.is_some_and(|(endpoint, _)| matches!(endpoint.object, ScopedObjectIdentityV29::Local { .. })) {
+                    } else {
+                        access
+                    };
+                    if prefix == 0
+                        || object.is_some_and(|(endpoint, _)| {
+                            matches!(endpoint.object, ScopedObjectIdentityV29::Local { .. })
+                        })
+                    {
                         let ty = original
                             .locals()
                             .get(place.local().index() as usize)
                             .ok_or_else(source_raw_physical_error_v29)?
                             .ty();
                         let slot = if let Some((endpoint, _)) = object {
-                            source_address_object_direct_v29(instances, references.plan, slots, site, place,
-                                access, endpoint, budget)?
+                            source_address_object_direct_v29(
+                                instances,
+                                references.plan,
+                                slots,
+                                site,
+                                place,
+                                access,
+                                endpoint,
+                                budget,
+                            )?
                         } else {
                             source_address_original_slot_v29(
                                 instances,
@@ -1394,73 +1544,165 @@ fn source_address_accesses_v29(
                         (slot, None)
                     } else if let Some((endpoint, _)) = object
                         && matches!(frame.role, Some(ScopedMemoryRoleV29::Operand(_)))
-                        && let Some(checked) = source_aggregate_object_endpoint_access_v29(references.plan, site, place, access, endpoint, budget)?
+                        && let Some(checked) = source_aggregate_object_endpoint_access_v29(
+                            references.plan,
+                            site,
+                            place,
+                            access,
+                            endpoint,
+                            budget,
+                        )?
                     {
                         let loan = checked.loan.original;
-                        (source_address_object_slot_v29(instances, references.plan, slots,
-                            loan.instance, loan.local, loan.generation, loan.ty, budget)?, None)
+                        (
+                            source_address_object_slot_v29(
+                                instances,
+                                references.plan,
+                                slots,
+                                loan.instance,
+                                loan.local,
+                                loan.generation,
+                                loan.ty,
+                                budget,
+                            )?,
+                            None,
+                        )
                     } else if let Some((endpoint, _)) = object
-                        && prefix != 0 && prefix == place.projections().len()
-                        && place.projections()[prefix - 1].kind() == SemanticProjectionKindV1::Dereference
+                        && prefix != 0
+                        && prefix == place.projections().len()
+                        && place.projections()[prefix - 1].kind()
+                            == SemanticProjectionKindV1::Dereference
                         && matches!(instances.owner().source_semantic().types()[if prefix == 1 {
                             original.locals()[place.local().index() as usize].ty().index() as usize
                         } else { place.projections()[prefix - 2].result_type().index() as usize }].shape(),
                             SemanticTypeShapeV1::Pointer(pointer) if pointer.kind() == SemanticPointerKindV1::Reference
                                 && pointer.metadata() == SemanticPointerMetadataV1::None)
-                        && let Some(loan) = source_object_loan_access_v29(references.plan, site, place, access, budget)?
+                        && let Some(loan) = source_object_loan_access_v29(
+                            references.plan,
+                            site,
+                            place,
+                            access,
+                            budget,
+                        )?
                     {
                         budget.charge_work(8)?;
                         if prefix != place.projections().len()
-                            || endpoint.root_type != loan.original.ty || endpoint.projected_type != loan.original.ty
-                            || loan.original.kind != SourceBackingKindV29::Object(endpoint.root_schema)
-                            || endpoint.root_schema != endpoint.projected_schema || endpoint.path.count != 0
+                            || endpoint.root_type != loan.original.ty
+                            || endpoint.projected_type != loan.original.ty
+                            || loan.original.kind
+                                != SourceBackingKindV29::Object(endpoint.root_schema)
+                            || endpoint.root_schema != endpoint.projected_schema
+                            || endpoint.path.count != 0
                             || !matches!(endpoint.object, ScopedObjectIdentityV29::Reference {
                                 instance: actual, site: original, role, dereference_prefix,
                             } if actual == instance && original == frame.site && dereference_prefix as usize == prefix
                                 && frame.role == Some(ScopedMemoryRoleV29::Operand(role)))
-                        { return Err(scoped_object_error_v29()); }
+                        {
+                            return Err(scoped_object_error_v29());
+                        }
                         budget.charge_work(8)?;
-                        let record = references.plan.loans.get(loan.loan)
+                        let record = references
+                            .plan
+                            .loans
+                            .get(loan.loan)
                             .ok_or_else(source_raw_physical_error_v29)?;
                         safe_object = Some(SourceSafeObjectOriginV29 {
                             frame,
                             key: SourceReferenceAccessKeyV29 {
-                                site, source: place as *const SemanticPlaceV1 as usize, access,
+                                site,
+                                source: place as *const SemanticPlaceV1 as usize,
+                                access,
                             },
                             loan: loan.loan,
                             referent: SourceDirectObjectOriginV29 {
-                                instance: loan.original.instance, local: loan.original.local,
-                                generation: loan.original.generation, ty: loan.original.ty,
+                                instance: loan.original.instance,
+                                local: loan.original.local,
+                                generation: loan.original.generation,
+                                ty: loan.original.ty,
                             },
                             formation: record.site,
                         });
-                        (source_address_object_slot_v29(instances, references.plan, slots,
-                            loan.original.instance, loan.original.local, loan.original.generation,
-                            loan.original.ty, budget)?, None)
-                    } else if object.is_none() && prefix > 1 && prefix == place.projections().len()
+                        (
+                            source_address_object_slot_v29(
+                                instances,
+                                references.plan,
+                                slots,
+                                loan.original.instance,
+                                loan.original.local,
+                                loan.original.generation,
+                                loan.original.ty,
+                                budget,
+                            )?,
+                            None,
+                        )
+                    } else if object.is_none()
+                        && prefix > 1
+                        && prefix == place.projections().len()
                         && matches!(frame.role, Some(ScopedMemoryRoleV29::Operand(_)))
-                        && let Some(loan) = source_scalar_loan_access_v29(references.plan, site, place, access, budget)?
+                        && let Some(loan) = source_scalar_loan_access_v29(
+                            references.plan,
+                            site,
+                            place,
+                            access,
+                            budget,
+                        )?
                     {
-                        (source_address_original_slot_v29(instances, slots,
-                            loan.cell.instance, loan.cell.local, loan.cell.ty, budget)?, None)
-                    } else if prefix == 1 && matches!(place.projections()[0].kind(),
-                        SemanticProjectionKindV1::Index(_) | SemanticProjectionKindV1::ConstantIndex { .. })
+                        (
+                            source_address_original_slot_v29(
+                                instances,
+                                slots,
+                                loan.cell.instance,
+                                loan.cell.local,
+                                loan.cell.ty,
+                                budget,
+                            )?,
+                            None,
+                        )
+                    } else if prefix == 1
+                        && matches!(
+                            place.projections()[0].kind(),
+                            SemanticProjectionKindV1::Index(_)
+                                | SemanticProjectionKindV1::ConstantIndex { .. }
+                        )
                     {
                         budget.charge_work(5)?;
-                        let ty = original.locals().get(place.local().index() as usize)
-                            .ok_or_else(source_raw_physical_error_v29)?.ty();
-                        let Some(SemanticTypeShapeV1::Array { element, .. }) = instances.owner()
-                            .source_semantic().types().get(ty.index() as usize).map(SemanticTypeDeclV1::shape)
-                        else { return Err(source_raw_physical_error_v29()); };
-                        if place.projections()[0].result_type() != *element || place.ty() != *element {
+                        let ty = original
+                            .locals()
+                            .get(place.local().index() as usize)
+                            .ok_or_else(source_raw_physical_error_v29)?
+                            .ty();
+                        let Some(SemanticTypeShapeV1::Array { element, .. }) = instances
+                            .owner()
+                            .source_semantic()
+                            .types()
+                            .get(ty.index() as usize)
+                            .map(SemanticTypeDeclV1::shape)
+                        else {
+                            return Err(source_raw_physical_error_v29());
+                        };
+                        if place.projections()[0].result_type() != *element
+                            || place.ty() != *element
+                        {
                             return Err(source_raw_physical_error_v29());
                         }
                         if let SemanticProjectionKindV1::Index(_) = place.projections()[0].kind() {
-                            let (_, selector) = references.plan.selector_at(instance, frame.site, place, 0, budget)?
+                            let (_, selector) = references
+                                .plan
+                                .selector_at(instance, frame.site, place, 0, budget)?
                                 .ok_or_else(source_raw_physical_error_v29)?;
                             selector.check(instances, budget)?;
                         }
-                        (source_address_original_slot_v29(instances, slots, instance, place.local(), ty, budget)?, None)
+                        (
+                            source_address_original_slot_v29(
+                                instances,
+                                slots,
+                                instance,
+                                place.local(),
+                                ty,
+                                budget,
+                            )?,
+                            None,
+                        )
                     } else {
                         // This scalar slice does not reinterpret aggregate,
                         // indexed or descriptor subobjects as whole cells.
@@ -1517,15 +1759,32 @@ fn source_address_accesses_v29(
                                     return Err(source_raw_physical_error_v29());
                                 }
                                 let candidate = if let Some((endpoint, _)) = object {
-                                    let candidate = source_address_object_slot_v29(instances, references.plan,
-                                        slots, origin.instance, origin.local, origin.generation, origin.ty, budget)?;
+                                    let candidate = source_address_object_slot_v29(
+                                        instances,
+                                        references.plan,
+                                        slots,
+                                        origin.instance,
+                                        origin.local,
+                                        origin.generation,
+                                        origin.ty,
+                                        budget,
+                                    )?;
                                     if endpoint.projected_type != origin.ty
                                         || !matches!(slots.slots[candidate].representation, ScopedSlotRepresentationV29::Object { schema, .. }
                                             if schema == endpoint.projected_schema)
-                                    { return Err(source_raw_physical_error_v29()); }
+                                    {
+                                        return Err(source_raw_physical_error_v29());
+                                    }
                                     candidate
                                 } else {
-                                    source_address_original_slot_v29(instances, slots, origin.instance, origin.local, origin.ty, budget)?
+                                    source_address_original_slot_v29(
+                                        instances,
+                                        slots,
+                                        origin.instance,
+                                        origin.local,
+                                        origin.ty,
+                                        budget,
+                                    )?
                                 };
                                 if target
                                     .replace(candidate)
@@ -1555,10 +1814,18 @@ fn source_address_accesses_v29(
                                 .and_then(|&index| references.plan.accesses.get(index));
                             if source.is_none() && object.is_none() {
                                 if issued.is_none() {
-                                    issued = Some(SourceIssuedAccessesV29::new(references.plan, instances, source_index, budget)?);
+                                    issued = Some(SourceIssuedAccessesV29::new(
+                                        references.plan,
+                                        instances,
+                                        source_index,
+                                        budget,
+                                    )?);
                                 }
-                                if issued.as_mut().ok_or(ArgumentResourceV1::Accounting)?
-                                    .access(references, instance, anchor, row, place, budget)? {
+                                if issued
+                                    .as_mut()
+                                    .ok_or(ArgumentResourceV1::Accounting)?
+                                    .access(references, instance, anchor, row, place, budget)?
+                                {
                                     continue;
                                 }
                             }
@@ -1612,11 +1879,19 @@ fn source_address_accesses_v29(
             budget.charge_work(2)?;
             let direct_object = match object {
                 Some((endpoint, _)) if raw.is_none() => match endpoint.object {
-                    ScopedObjectIdentityV29::Local { instance: source, local, generation }
-                        if source == instance => Some(SourceDirectObjectOriginV29 {
-                            instance: source, local, generation, ty: endpoint.root_type,
-                        }),
-                    ScopedObjectIdentityV29::Local { .. } => return Err(source_raw_physical_error_v29()),
+                    ScopedObjectIdentityV29::Local {
+                        instance: source,
+                        local,
+                        generation,
+                    } if source == instance => Some(SourceDirectObjectOriginV29 {
+                        instance: source,
+                        local,
+                        generation,
+                        ty: endpoint.root_type,
+                    }),
+                    ScopedObjectIdentityV29::Local { .. } => {
+                        return Err(source_raw_physical_error_v29());
+                    }
                     _ => None,
                 },
                 _ => None,
@@ -1638,9 +1913,17 @@ fn source_address_accesses_v29(
     let issuer_count = source_issued_source_count_v29(instances, budget)?;
     if issuer_count != 0 {
         if issued.is_none() {
-            issued = Some(SourceIssuedAccessesV29::new(references.plan, instances, source_index, budget)?);
+            issued = Some(SourceIssuedAccessesV29::new(
+                references.plan,
+                instances,
+                source_index,
+                budget,
+            )?);
         }
-        issued.as_mut().ok_or(ArgumentResourceV1::Accounting)?.census(references, issuer_count, budget)?;
+        issued
+            .as_mut()
+            .ok_or(ArgumentResourceV1::Accounting)?
+            .census(references, issuer_count, budget)?;
     } else if issued.as_ref().is_some_and(|rows| !rows.issuers.is_empty()) {
         return Err(source_issued_error_v29());
     }
@@ -1732,13 +2015,29 @@ fn check_source_address_formations_v29(
         {
             return Err(source_raw_physical_error_v29());
         }
-        let selected = source_reference_assignment_pointer_v29(references.plan, origin.site, assign, budget)?;
+        let selected =
+            source_reference_assignment_pointer_v29(references.plan, origin.site, assign, budget)?;
         let object = selected.is_some();
         let slot = if object {
-            source_address_object_slot_v29(instances, references.plan, slots, origin.instance, origin.local,
-                origin.generation, origin.ty, budget)?
+            source_address_object_slot_v29(
+                instances,
+                references.plan,
+                slots,
+                origin.instance,
+                origin.local,
+                origin.generation,
+                origin.ty,
+                budget,
+            )?
         } else {
-            source_address_original_slot_v29(instances, slots, origin.instance, origin.local, origin.ty, budget)?
+            source_address_original_slot_v29(
+                instances,
+                slots,
+                origin.instance,
+                origin.local,
+                origin.ty,
+                budget,
+            )?
         };
         let backing = slots
             .slots
@@ -1783,16 +2082,34 @@ fn check_source_address_formations_v29(
         } else {
             AccessMode::ReadOnly
         };
-        if result_type.address_space != if object { AddressSpace::Private } else { lower_address_space(source_pointer.address_space())? }
+        if result_type.address_space
+            != if object {
+                AddressSpace::Private
+            } else {
+                lower_address_space(source_pointer.address_space())?
+            }
             || result_type.access != expected_access
         {
             return Err(source_raw_physical_error_v29());
         }
         if let Some((expected, _)) = selected {
-            SourceAddressMemoryV29::same_type(&expected, graph.ty(receipt.result, budget)?, budget)?;
-            let ScopedSlotRepresentationV29::Object { schema, .. } = backing.representation else { return Err(source_raw_physical_error_v29()); };
-            if result_type.pointee.as_ref() != &Type::StorageObject(schema) { return Err(source_raw_physical_error_v29()); }
-        } else if !backing.scalar_array()?.element.element.matches_borrowed(&result_type.pointee, budget)? {
+            SourceAddressMemoryV29::same_type(
+                &expected,
+                graph.ty(receipt.result, budget)?,
+                budget,
+            )?;
+            let ScopedSlotRepresentationV29::Object { schema, .. } = backing.representation else {
+                return Err(source_raw_physical_error_v29());
+            };
+            if result_type.pointee.as_ref() != &Type::StorageObject(schema) {
+                return Err(source_raw_physical_error_v29());
+            }
+        } else if !backing
+            .scalar_array()?
+            .element
+            .element
+            .matches_borrowed(&result_type.pointee, budget)?
+        {
             return Err(source_raw_physical_error_v29());
         }
         let mut current = receipt.base;
@@ -1833,62 +2150,88 @@ fn check_source_address_formations_v29(
             && result_type.address_space == AddressSpace::Private
         {
             if object {
-                let condition = source_address_original_operation_v29(pending, graph, origin.site.instance,
-                    receipt.block, operation, budget)?;
-                let (OperationKind::Constant(Constant::Bool(true)), [condition]) = (&condition.kind, condition.results.as_slice())
-                    else { return Err(source_raw_physical_error_v29()); };
+                let condition = source_address_original_operation_v29(
+                    pending,
+                    graph,
+                    origin.site.instance,
+                    receipt.block,
+                    operation,
+                    budget,
+                )?;
+                let (OperationKind::Constant(Constant::Bool(true)), [condition]) =
+                    (&condition.kind, condition.results.as_slice())
+                else {
+                    return Err(source_raw_physical_error_v29());
+                };
                 SourceAddressMemoryV29::same_type(&condition.ty, &Type::BOOL, budget)?;
                 operation = argument_sum_v1(&[operation, 1])?;
-                let alias = source_address_original_operation_v29(pending, graph, origin.site.instance,
-                    receipt.block, operation, budget)?;
-                let (OperationKind::Select { condition: actual, true_value, false_value }, [result]) = (&alias.kind, alias.results.as_slice())
-                    else { return Err(source_raw_physical_error_v29()); };
+                let alias = source_address_original_operation_v29(
+                    pending,
+                    graph,
+                    origin.site.instance,
+                    receipt.block,
+                    operation,
+                    budget,
+                )?;
+                let (
+                    OperationKind::Select {
+                        condition: actual,
+                        true_value,
+                        false_value,
+                    },
+                    [result],
+                ) = (&alias.kind, alias.results.as_slice())
+                else {
+                    return Err(source_raw_physical_error_v29());
+                };
                 budget.charge_work(4)?;
-                if *actual != condition.id || *true_value != current || *false_value != current { return Err(source_raw_physical_error_v29()); }
+                if *actual != condition.id || *true_value != current || *false_value != current {
+                    return Err(source_raw_physical_error_v29());
+                }
                 SourceAddressMemoryV29::same_type(graph.ty(current, budget)?, &result.ty, budget)?;
                 current = result.id;
                 operation = argument_sum_v1(&[operation, 1])?;
             } else {
-            let zero = source_address_original_operation_v29(
-                pending,
-                graph,
-                origin.site.instance,
-                receipt.block,
-                operation,
-                budget,
-            )?;
-            let (OperationKind::Constant(Constant::Index(0)), [offset]) =
-                (&zero.kind, zero.results.as_slice())
-            else {
-                return Err(source_raw_physical_error_v29());
-            };
-            SourceAddressMemoryV29::same_type(&offset.ty, &Type::INDEX, budget)?;
-            operation = argument_sum_v1(&[operation, 1])?;
-            let gep = source_address_original_operation_v29(
-                pending,
-                graph,
-                origin.site.instance,
-                receipt.block,
-                operation,
-                budget,
-            )?;
-            let (
-                OperationKind::GetElementPointer {
-                    base,
-                    offset: actual,
-                },
-                [result],
-            ) = (&gep.kind, gep.results.as_slice())
-            else {
-                return Err(source_raw_physical_error_v29());
-            };
-            budget.charge_work(3)?;
-            if *base != current || *actual != offset.id {
-                return Err(source_raw_physical_error_v29());
-            }
-            graph.check_zero_gep(gep, budget)?;
-            current = result.id;
-            operation = argument_sum_v1(&[operation, 1])?;
+                let zero = source_address_original_operation_v29(
+                    pending,
+                    graph,
+                    origin.site.instance,
+                    receipt.block,
+                    operation,
+                    budget,
+                )?;
+                let (OperationKind::Constant(Constant::Index(0)), [offset]) =
+                    (&zero.kind, zero.results.as_slice())
+                else {
+                    return Err(source_raw_physical_error_v29());
+                };
+                SourceAddressMemoryV29::same_type(&offset.ty, &Type::INDEX, budget)?;
+                operation = argument_sum_v1(&[operation, 1])?;
+                let gep = source_address_original_operation_v29(
+                    pending,
+                    graph,
+                    origin.site.instance,
+                    receipt.block,
+                    operation,
+                    budget,
+                )?;
+                let (
+                    OperationKind::GetElementPointer {
+                        base,
+                        offset: actual,
+                    },
+                    [result],
+                ) = (&gep.kind, gep.results.as_slice())
+                else {
+                    return Err(source_raw_physical_error_v29());
+                };
+                budget.charge_work(3)?;
+                if *base != current || *actual != offset.id {
+                    return Err(source_raw_physical_error_v29());
+                }
+                graph.check_zero_gep(gep, budget)?;
+                current = result.id;
+                operation = argument_sum_v1(&[operation, 1])?;
             }
         }
         if operation != receipt.end || current != receipt.result || current == receipt.base {
@@ -1959,14 +2302,26 @@ fn check_source_cell_dereference_payload_v29(
         let plan = references.plan;
         source_reference_validate_binding_v29(plan, binding, budget)?;
         let access = source_reference_access_at_v29(
-            plan, site, place, SourceReferenceAccessV29::Read, budget,
+            plan,
+            site,
+            place,
+            SourceReferenceAccessV29::Read,
+            budget,
         )?;
         let loan = binding.origin.single_loan()?;
-        let (_, cell) = plan.scalar_cell(loan, budget)?
+        let (_, cell) = plan
+            .scalar_cell(loan, budget)?
             .ok_or_else(source_raw_physical_error_v29)?;
         budget.source_reference_charge_v29(plan, 10)?;
-        let declaration = plan.instances.instance(site.instance)
-            .and_then(|instance| instance.declaration().locals().get(place.local().index() as usize))
+        let declaration = plan
+            .instances
+            .instance(site.instance)
+            .and_then(|instance| {
+                instance
+                    .declaration()
+                    .locals()
+                    .get(place.local().index() as usize)
+            })
             .ok_or_else(source_raw_physical_error_v29)?;
         if access.loan != Some(loan)
             || access.instance != cell.instance
@@ -2022,11 +2377,24 @@ fn check_source_address_payloads_v29(
             .ok_or_else(source_raw_physical_error_v29)?;
         let object = source_address_object_payload_v29(recorded, row, budget)?;
         let (pointer, payload) = match (row.kind, object) {
-            (ScopedMemoryAnchorKindV29::Access { pointer, payload: Some(payload) }, None) => (pointer, payload),
+            (
+                ScopedMemoryAnchorKindV29::Access {
+                    pointer,
+                    payload: Some(payload),
+                },
+                None,
+            ) => (pointer, payload),
             (ScopedMemoryAnchorKindV29::Object(_), Some((_, payload))) => {
                 let object = recorded.object_payload(row, budget)?;
                 let pointer = object.operands()[0].ok_or_else(scoped_object_error_v29)?;
-                recorded.check_object_source(original, &occurrences, source.anchor, row, object, budget)?;
+                recorded.check_object_source(
+                    original,
+                    &occurrences,
+                    source.anchor,
+                    row,
+                    object,
+                    budget,
+                )?;
                 (pointer, payload)
             }
             _ => return Err(source_raw_physical_error_v29()),
@@ -2042,28 +2410,64 @@ fn check_source_address_payloads_v29(
             return Err(source_raw_physical_error_v29());
         }
         if object.is_some() {
-            recorded.object_payload(row, budget)?.check_operation(operation, budget)?;
-            if let Some(expected) = source_static_object_expected_location_v29(instances, references.plan,
-                source_index, slots, object.unwrap().0, budget)?
-                && graph.object_location(pointer, budget)? != expected
+            recorded
+                .object_payload(row, budget)?
+                .check_operation(operation, budget)?;
+            if let Some(expected) = source_static_object_expected_location_v29(
+                instances,
+                references.plan,
+                source_index,
+                slots,
+                object.unwrap().0,
+                budget,
+            )? && graph.object_location(pointer, budget)? != expected
             {
                 return Err(scoped_object_error_v29());
             }
-            check_source_object_holder_value_v29(instances, references.plan, source_index, source, graph, recorded, payload_index,
-                object.unwrap().0, pointer, budget)?;
+            check_source_object_holder_value_v29(
+                instances,
+                references.plan,
+                source_index,
+                source,
+                graph,
+                recorded,
+                payload_index,
+                object.unwrap().0,
+                pointer,
+                budget,
+            )?;
         } else {
             check_scoped_payload_v29(original, &occurrences, row, operation, budget)?;
-            check_scoped_array_initializer_recipe_v29(original, row, &sidecar.private_arrays.effects, budget)?;
+            check_scoped_array_initializer_recipe_v29(
+                original,
+                row,
+                &sidecar.private_arrays.effects,
+                budget,
+            )?;
             budget.charge_work(4)?;
             if matches!(payload, ScopedMemoryPayloadV29::Load { read, .. } if read.prefix > 1)
                 || matches!(payload, ScopedMemoryPayloadV29::Store { .. })
-                    && row.source.and_then(|frame| match frame.role {
-                        Some(ScopedMemoryRoleV29::Operand(role)) => scoped_source_place_v29(original, frame.site, role),
-                        _ => None,
-                    }).is_some_and(|place| place.projections().len() > 1)
+                    && row
+                        .source
+                        .and_then(|frame| match frame.role {
+                            Some(ScopedMemoryRoleV29::Operand(role)) => {
+                                scoped_source_place_v29(original, frame.site, role)
+                            }
+                            _ => None,
+                        })
+                        .is_some_and(|place| place.projections().len() > 1)
             {
-                check_source_scalar_loan_holder_v29(instances, references.plan, source_index, source,
-                    row, payload, payload_index, pointer, budget)?;
+                check_source_scalar_loan_holder_v29(
+                    instances,
+                    references.plan,
+                    source_index,
+                    source,
+                    row,
+                    payload,
+                    payload_index,
+                    pointer,
+                    budget,
+                )?;
             }
         }
         match payload {
@@ -2077,10 +2481,13 @@ fn check_source_address_payloads_v29(
                 budget.charge_work(4)?;
                 // Typed endpoints were independently rejoined for both reads
                 // and writes by the exact original holder query above.
-                if object.is_none() && read.prefix == 1
+                if object.is_none()
+                    && read.prefix == 1
                     && scoped_payload_place_v29(original, read.site, read.role)
                         .and_then(|place| place.projections().first())
-                        .is_some_and(|projection| matches!(projection.kind(), SemanticProjectionKindV1::Dereference))
+                        .is_some_and(|projection| {
+                            matches!(projection.kind(), SemanticProjectionKindV1::Dereference)
+                        })
                     && let ScopedMemoryOccurrenceV29::Promoted { definition, .. } = read.occurrence
                 {
                     let binding = archive.lookup_original_v29(
@@ -2091,7 +2498,7 @@ fn check_source_address_payloads_v29(
                     )?;
                     match binding {
                         SemanticValueBindingV1::Value { id, ty }
-                            if *id == pointer && matches!(ty, Type::Pointer(_)) => {},
+                            if *id == pointer && matches!(ty, Type::Pointer(_)) => {}
                         SemanticValueBindingV1::SourceReference(binding) => {
                             let place = scoped_payload_place_v29(original, read.site, read.role)
                                 .ok_or_else(source_raw_physical_error_v29)?;
@@ -2103,9 +2510,12 @@ fn check_source_address_payloads_v29(
                                     block: SemanticBlockIdV1::from_index(block),
                                     statement: statement.map(|value| value as usize),
                                 },
-                                place, binding, pointer, budget,
+                                place,
+                                binding,
+                                pointer,
+                                budget,
                             )?;
-                        },
+                        }
                         _ => return Err(source_raw_physical_error_v29()),
                     }
                 }
@@ -2124,11 +2534,30 @@ fn check_source_address_payloads_v29(
                     ScopedMemoryOperandSourceV29::Place(occurrence) => {
                         let place = scoped_payload_place_v29(original, site, role)
                             .ok_or_else(source_raw_physical_error_v29)?;
-                        if object.is_some() && matches!(occurrence, ScopedMemoryOccurrenceV29::Retained { .. }) {
-                            check_source_object_stored_read_v29(source_index, source, graph, recorded, payload_index,
-                                place, site, role, occurrence, value, budget)?;
+                        if object.is_some()
+                            && matches!(occurrence, ScopedMemoryOccurrenceV29::Retained { .. })
+                        {
+                            check_source_object_stored_read_v29(
+                                source_index,
+                                source,
+                                graph,
+                                recorded,
+                                payload_index,
+                                place,
+                                site,
+                                role,
+                                occurrence,
+                                value,
+                                budget,
+                            )?;
                         } else {
-                            check_scoped_payload_archive_v29(&archive.bindings, place, occurrence, value, budget)?;
+                            check_scoped_payload_archive_v29(
+                                &archive.bindings,
+                                place,
+                                occurrence,
+                                value,
+                                budget,
+                            )?;
                         }
                     }
                     ScopedMemoryOperandSourceV29::Memory { occurrence, access } => {
@@ -2156,8 +2585,13 @@ fn check_source_address_payloads_v29(
                             prior.position,
                             budget,
                         )?;
-                        if !matches!(previous.kind, OperationKind::Load { .. } | OperationKind::Storage(ScopedObjectOperationV29::ReadValue { .. }))
-                            || !matches!(previous.results.as_slice(), [result] if result.id == value)
+                        if !matches!(
+                            previous.kind,
+                            OperationKind::Load { .. }
+                                | OperationKind::Storage(
+                                    ScopedObjectOperationV29::ReadValue { .. }
+                                )
+                        ) || !matches!(previous.results.as_slice(), [result] if result.id == value)
                         {
                             return Err(source_raw_physical_error_v29());
                         }
@@ -2264,11 +2698,16 @@ fn check_source_address_destination_v29(
             budget.charge_work(3)?;
             let payload = match row.kind {
                 ScopedMemoryAnchorKindV29::Access { payload, .. } => payload,
-                ScopedMemoryAnchorKindV29::Object(_) => source_address_object_payload_v29(anchors, row, budget)?.map(|(_, payload)| payload),
+                ScopedMemoryAnchorKindV29::Object(_) => {
+                    source_address_object_payload_v29(anchors, row, budget)?
+                        .map(|(_, payload)| payload)
+                }
                 _ => None,
             };
-            if let Some(ScopedMemoryPayloadV29::Store { value,
-                source: ScopedMemoryStoreSourceV29::Assignment { site: actual, ty } }) = payload
+            if let Some(ScopedMemoryPayloadV29::Store {
+                value,
+                source: ScopedMemoryStoreSourceV29::Assignment { site: actual, ty },
+            }) = payload
                 && actual == site
                 && ty == result_type
             {

@@ -12,7 +12,9 @@ enum AddressFlow {
     LoopFresh,
     SharedWrite,
     LiveReferenceKill,
+    DeadReferenceKill,
     LaterLiveLoan,
+    DeadLaterLoan,
     ReferenceCast,
 }
 
@@ -130,11 +132,18 @@ fn address_owner(flow: AddressFlow) -> ProductionSemanticSsaOwnerV1 {
     }
     if matches!(
         flow,
-        AddressFlow::LiveReferenceKill | AddressFlow::ReferenceCast | AddressFlow::LaterLiveLoan
+        AddressFlow::LiveReferenceKill
+            | AddressFlow::DeadReferenceKill
+            | AddressFlow::ReferenceCast
+            | AddressFlow::LaterLiveLoan
+            | AddressFlow::DeadLaterLoan
     ) {
         let reference = reference(&mut types, U32, SemanticMutabilityV1::Mutable, false);
         locals.push(local(227, reference, SemanticLocalRoleV1::Temporary));
-        if flow == AddressFlow::LaterLiveLoan {
+        if matches!(
+            flow,
+            AddressFlow::LaterLiveLoan | AddressFlow::DeadLaterLoan
+        ) {
             setup.push(address());
         }
         setup.push(assign(
@@ -152,7 +161,10 @@ fn address_owner(flow: AddressFlow) -> ProductionSemanticSsaOwnerV1 {
                     operand: SemanticOperandV1::Copy(place(6, reference)),
                 },
             ));
-        } else if flow != AddressFlow::LaterLiveLoan {
+        } else if !matches!(
+            flow,
+            AddressFlow::LaterLiveLoan | AddressFlow::DeadLaterLoan
+        ) {
             setup.push(address());
         }
     } else {
@@ -203,17 +215,35 @@ fn address_owner(flow: AddressFlow) -> ProductionSemanticSsaOwnerV1 {
                     }
                 }
                 AddressFlow::SharedWrite => setup.push(write(4)),
-                AddressFlow::LiveReferenceKill => setup.push(dead(2)),
+                AddressFlow::LiveReferenceKill | AddressFlow::DeadReferenceKill => {
+                    setup.push(dead(2))
+                }
                 _ => {}
             }
             if flow == AddressFlow::InertExpiredCopy {
                 setup.push(copy());
-            } else if flow != AddressFlow::LiveReferenceKill {
+            } else if !matches!(
+                flow,
+                AddressFlow::LiveReferenceKill | AddressFlow::DeadReferenceKill
+            ) {
                 setup.push(read(if flow == AddressFlow::RestartFresh {
                     3
                 } else {
                     4
                 }));
+            }
+            // A genuinely future use keeps the safe holder live across the
+            // forbidden kill/raw access. Unused holders now expire at their
+            // final completed statement; the paired dead controls keep that
+            // earlier source program and must complete.
+            if matches!(
+                flow,
+                AddressFlow::LiveReferenceKill | AddressFlow::LaterLiveLoan
+            ) {
+                setup.push(assign(
+                    place(5, U32),
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(target(6))),
+                ));
             }
             vec![block(231, setup, SemanticTerminatorKindV1::Return)]
         }
@@ -345,6 +375,28 @@ fn raw_formation_does_not_initialize_or_widen_or_override_a_live_reference() {
             "{flow:?}: {result:?}"
         );
         assert!(!entered);
+    }
+}
+
+#[test]
+fn raw_formation_with_an_unused_reference_holder_keeps_completed_statement_expiry() {
+    for flow in [AddressFlow::DeadReferenceKill, AddressFlow::DeadLaterLoan] {
+        let mut completed = false;
+        with_address_plan(flow, |plan, budget| {
+            assert_eq!(plan.loans.len(), 1);
+            assert_eq!(plan.raw_origins.len(), 1);
+            let origin = plan.raw_origins[0];
+            assert_eq!(
+                (origin.instance, origin.local.index(), origin.generation),
+                (plan.root, 2, 1)
+            );
+            assert!(origin.mutable);
+            plan.check_owner(plan.instances, budget)?;
+            completed = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(completed, "{flow:?}");
     }
 }
 
@@ -526,28 +578,24 @@ fn numeric_address_owner(reconstruct: Option<bool>) -> ProductionSemanticSsaOwne
 #[test]
 fn original_numeric_address_exposure_is_an_observation_not_pointer_provenance() {
     let mut completed = false;
-    let result =
-        with_live_projection_builder(
-            numeric_address_owner(None),
-            |builder, budget| {
-                let plan = &builder.plan;
-                let scalar = SemanticTypeIdV1::from_index(3);
-                assert!(plan.address_observed);
-                assert_eq!(plan.raw_origins.len(), 1);
-                assert!(plan.loans.is_empty());
-                let numeric: Vec<_> = plan.nodes.iter().filter(|node| node.ty == scalar).collect();
-                assert!(!numeric.is_empty());
-                assert!(
-                    numeric
-                        .iter()
-                        .all(|node| matches!(node.kind, SourceReferenceNodeKindV29::Plain(_)))
-                );
-                assert!(plan.raw_sets.iter().all(|set| set.ty != scalar));
-                plan.check_owner(plan.instances, budget)?;
-                completed = true;
-                Ok(())
-            },
+    let result = with_live_projection_builder(numeric_address_owner(None), |builder, budget| {
+        let plan = &builder.plan;
+        let scalar = SemanticTypeIdV1::from_index(3);
+        assert!(plan.address_observed);
+        assert_eq!(plan.raw_origins.len(), 1);
+        assert!(plan.loans.is_empty());
+        let numeric: Vec<_> = plan.nodes.iter().filter(|node| node.ty == scalar).collect();
+        assert!(!numeric.is_empty());
+        assert!(
+            numeric
+                .iter()
+                .all(|node| matches!(node.kind, SourceReferenceNodeKindV29::Plain(_)))
         );
+        assert!(plan.raw_sets.iter().all(|set| set.ty != scalar));
+        plan.check_owner(plan.instances, budget)?;
+        completed = true;
+        Ok(())
+    });
     assert!(result.is_ok(), "{result:?}");
     assert!(completed);
 }
@@ -556,14 +604,10 @@ fn original_numeric_address_exposure_is_an_observation_not_pointer_provenance() 
 fn original_numeric_address_reconstruction_rejects_plain_values_and_constants() {
     for constant in [false, true] {
         let mut entered = false;
-        let result =
-            with_live_projection_builder(
-                numeric_address_owner(Some(constant)),
-                |_, _| {
-                    entered = true;
-                    Ok(())
-                },
-            );
+        let result = with_live_projection_builder(numeric_address_owner(Some(constant)), |_, _| {
+            entered = true;
+            Ok(())
+        });
         assert!(
             matches!(
                 result,
@@ -771,112 +815,227 @@ fn current_projection_owner() -> ProductionSemanticSsaOwnerV1 {
     let base = address_owner(AddressFlow::Read);
     let semantic = base.source_semantic();
     let mut types = semantic.types().to_vec();
-    let pair = declaration(&mut types,
-        SemanticTypeLayoutV1::with_exact_rustc_layout(8, 4,
+    let pair = declaration(
+        &mut types,
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            8,
+            4,
             SemanticFieldsShapeV1::arbitrary(vec![0, 4], vec![0, 1]).unwrap(),
-            SemanticRustcVariantsV1::Single { index: 0 }, SemanticBackendReprV1::memory(true),
-            None, false, None, 4, 0, SemanticTypeLayoutDetailsV1::Aggregate(
-                SemanticAggregateLayoutV1::new(vec![0, 4], vec![]).unwrap())).unwrap(),
-        SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![U32, U32]).unwrap()), None);
-    let array = declaration(&mut types,
-        SemanticTypeLayoutV1::with_exact_rustc_layout(16, 4, SemanticFieldsShapeV1::array(8, 2),
-            SemanticRustcVariantsV1::Single { index: 0 }, SemanticBackendReprV1::memory(true),
-            None, false, None, 4, 0, SemanticTypeLayoutDetailsV1::None).unwrap(),
-        SemanticTypeShapeV1::Array { element: pair, length: 2 }, None);
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(true),
+            None,
+            false,
+            None,
+            4,
+            0,
+            SemanticTypeLayoutDetailsV1::Aggregate(
+                SemanticAggregateLayoutV1::new(vec![0, 4], vec![]).unwrap(),
+            ),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![U32, U32]).unwrap()),
+        None,
+    );
+    let array = declaration(
+        &mut types,
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            16,
+            4,
+            SemanticFieldsShapeV1::array(8, 2),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(true),
+            None,
+            false,
+            None,
+            4,
+            0,
+            SemanticTypeLayoutDetailsV1::None,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Array {
+            element: pair,
+            length: 2,
+        },
+        None,
+    );
     let root = &semantic.functions()[0];
     let mut locals = root.locals().to_vec();
     locals[2] = local(223, array, SemanticLocalRoleV1::Temporary);
     locals.push(local(227, pair, SemanticLocalRoleV1::Temporary));
     let raw = SemanticTypeIdV1::from_index(2);
-    let path = SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![
-        SemanticProjectionV1::new(SemanticProjectionKindV1::ConstantIndex {
-            offset: 1, minimum_length: 2, from_end: false,
-        }, pair).unwrap(),
-        SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U32).unwrap(),
-    ], U32).unwrap();
+    let path = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(2),
+        vec![
+            SemanticProjectionV1::new(
+                SemanticProjectionKindV1::ConstantIndex {
+                    offset: 1,
+                    minimum_length: 2,
+                    from_end: false,
+                },
+                pair,
+            )
+            .unwrap(),
+            SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U32).unwrap(),
+        ],
+        U32,
+    )
+    .unwrap();
     let statements = vec![
         root.blocks()[0].statements()[0].clone(),
-        assign(place(6, pair), SemanticRvalueKindV1::Aggregate(SemanticAggregateRvalueV1::new(
-            SemanticAggregateKindV1::Tuple, vec![address_literal(7), address_literal(9)]).unwrap())),
-        assign(place(2, array), SemanticRvalueKindV1::Aggregate(SemanticAggregateRvalueV1::new(
-            SemanticAggregateKindV1::Array, vec![SemanticOperandV1::Copy(place(6, pair)),
-                SemanticOperandV1::Copy(place(6, pair))]).unwrap())),
-        assign(place(3, raw), SemanticRvalueKindV1::AddressOf {
-            mutability: SemanticMutabilityV1::Mutable, place: path.clone(),
-        }),
+        assign(
+            place(6, pair),
+            SemanticRvalueKindV1::Aggregate(
+                SemanticAggregateRvalueV1::new(
+                    SemanticAggregateKindV1::Tuple,
+                    vec![address_literal(7), address_literal(9)],
+                )
+                .unwrap(),
+            ),
+        ),
+        assign(
+            place(2, array),
+            SemanticRvalueKindV1::Aggregate(
+                SemanticAggregateRvalueV1::new(
+                    SemanticAggregateKindV1::Array,
+                    vec![
+                        SemanticOperandV1::Copy(place(6, pair)),
+                        SemanticOperandV1::Copy(place(6, pair)),
+                    ],
+                )
+                .unwrap(),
+            ),
+        ),
+        assign(
+            place(3, raw),
+            SemanticRvalueKindV1::AddressOf {
+                mutability: SemanticMutabilityV1::Mutable,
+                place: path.clone(),
+            },
+        ),
         root.blocks()[0].statements()[3].clone(),
         assign(path, SemanticRvalueKindV1::Use(address_literal(11))),
         root.blocks()[0].statements()[4].clone(),
     ];
-    let admitted = InertSemanticMirRequestV1::new_with_callables(semantic.target(), types,
-        vec![], vec![], vec![], vec![function(220, SemanticFunctionRoleV1::KernelRoot,
-            root.abi().clone(), locals, vec![block(231, statements, SemanticTerminatorKindV1::Return)])],
-        vec![SemanticCallableDeclV1::defined(ROOT)], vec![ROOT]).unwrap()
-        .admit_exact_v29(SemanticMirLimitsV1::default()).unwrap();
-    ProductionSemanticSsaOwnerV1::try_new(ProductionSemanticMirOwnerV1::try_new(admitted,
-        ProductionSemanticMirLimitsV1::default()).unwrap(), ProductionSemanticSsaLimitsV1::default()).unwrap()
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        vec![function(
+            220,
+            SemanticFunctionRoleV1::KernelRoot,
+            root.abi().clone(),
+            locals,
+            vec![block(231, statements, SemanticTerminatorKindV1::Return)],
+        )],
+        vec![SemanticCallableDeclV1::defined(ROOT)],
+        vec![ROOT],
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
 }
 
 fn with_current_projection_builder(
     mut owner: ProductionSemanticSsaOwnerV1,
     evaluate: bool,
-    consume: impl FnOnce(&mut SourceReferenceBuilderV29<'_, '_, '_>, &mut ArgumentBudgetV1<'_>)
-        -> Result<(), ProductionSemanticKirErrorV1>,
+    consume: impl FnOnce(
+        &mut SourceReferenceBuilderV29<'_, '_, '_>,
+        &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    if evaluate { return with_live_projection_builder(owner, consume); }
+    if evaluate {
+        return with_live_projection_builder(owner, consume);
+    }
     let mut work = CanonicalKernelIrWorkBudgetV1::new(ADDRESS_TEST_LIMIT);
     let mut budget = ArgumentBudgetV1::new(&mut work, ADDRESS_TEST_LIMIT);
     budget.reserve_storage(101)?;
-    let capture = owner.try_capture_occurrences_with_budget_v1(&mut budget).unwrap();
+    let capture = owner
+        .try_capture_occurrences_with_budget_v1(&mut budget)
+        .unwrap();
     budget.reserve_storage(capture.retained_storage())?;
-    let result = with_production_call_instances_v1(&owner, ROOT, &mut budget, |instances, budget| {
-        let floor = budget.storage();
-        let ledger = budget.work_ledger_identity_v1();
-        let mut builder = SourceReferenceBuilderV29::new(instances, budget).unwrap();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            builder.cfg_index(instances.root(), budget)?;
-            consume(&mut builder, budget)
-        }));
-        drop(builder);
-        assert!(ledger == budget.work_ledger_identity_v1());
-        budget.release_storage(budget.storage() - floor).unwrap();
-        assert_eq!(budget.storage(), floor);
-        Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(result)
-    }).unwrap();
+    let result =
+        with_production_call_instances_v1(&owner, ROOT, &mut budget, |instances, budget| {
+            let floor = budget.storage();
+            let ledger = budget.work_ledger_identity_v1();
+            let mut builder = SourceReferenceBuilderV29::new(instances, budget).unwrap();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                builder.cfg_index(instances.root(), budget)?;
+                consume(&mut builder, budget)
+            }));
+            drop(builder);
+            assert!(ledger == budget.work_ledger_identity_v1());
+            budget.release_storage(budget.storage() - floor).unwrap();
+            assert_eq!(budget.storage(), floor);
+            Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(result)
+        })
+        .unwrap();
     drop(owner);
     budget.release_storage(capture.retained_storage())?;
     assert_eq!(budget.storage(), 101);
-    match result { Ok(result) => result, Err(panic) => std::panic::resume_unwind(panic) }
+    match result {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
 }
 
 fn with_live_projection_builder(
     mut owner: ProductionSemanticSsaOwnerV1,
-    consume: impl FnOnce(&mut SourceReferenceBuilderV29<'_, '_, '_>, &mut ArgumentBudgetV1<'_>)
-        -> Result<(), ProductionSemanticKirErrorV1>,
+    consume: impl FnOnce(
+        &mut SourceReferenceBuilderV29<'_, '_, '_>,
+        &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(ADDRESS_TEST_LIMIT);
     let mut budget = ArgumentBudgetV1::new(&mut work, ADDRESS_TEST_LIMIT);
     budget.reserve_storage(101)?;
-    let capture = owner.try_capture_occurrences_with_budget_v1(&mut budget).unwrap();
+    let capture = owner
+        .try_capture_occurrences_with_budget_v1(&mut budget)
+        .unwrap();
     budget.reserve_storage(capture.retained_storage())?;
-    let demands = source_storage_demands_v29::SourceStorageDemandsV29::collect(&owner, &mut budget)?;
-    let mut layouts = source_storage_v29::SourceStorageLayoutsV29::new_with_limits(&owner,
-        demands.types(&owner, &mut budget)?, ProductionSemanticKirLimitsV1::default().storage_layout_limits(), &mut budget)?;
+    let demands =
+        source_storage_demands_v29::SourceStorageDemandsV29::collect(&owner, &mut budget)?;
+    let mut layouts = source_storage_v29::SourceStorageLayoutsV29::new_with_limits(
+        &owner,
+        demands.types(&owner, &mut budget)?,
+        ProductionSemanticKirLimitsV1::default().storage_layout_limits(),
+        &mut budget,
+    )?;
     let credit = layouts.capture_emission_credit(&owner, &mut budget)?;
-    let result = with_production_call_instances_v1(&owner, ROOT, &mut budget, |instances, budget| {
-        let lens = demands.root_lens(&owner, 0, budget).unwrap();
-        let result = with_source_reference_descriptor_demands_scope_v29(instances,
-            SourceReferenceStorageV29::ScalarCells, Some(&mut layouts), None, Some(lens), budget,
-            |plan, root, budget| {
-                let mut builder = SourceReferenceBuilderV29::new_with_descriptor_demands(
-                    plan.instances, SourceReferenceStorageV29::ScalarCells, root, None,
-                    plan.storage_demands, budget)?;
-                builder.collect_storage_selectors(budget)?;
-                builder.function(builder.plan.root, None, budget)?;
-                consume(&mut builder, budget).map_err(Into::into)
-            });
-        Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(result)
-    }).unwrap();
+    let result =
+        with_production_call_instances_v1(&owner, ROOT, &mut budget, |instances, budget| {
+            let lens = demands.root_lens(&owner, 0, budget).unwrap();
+            let result = with_source_reference_descriptor_demands_scope_v29(
+                instances,
+                SourceReferenceStorageV29::ScalarCells,
+                Some(&mut layouts),
+                None,
+                Some(lens),
+                budget,
+                |plan, root, budget| {
+                    let mut builder = SourceReferenceBuilderV29::new_with_descriptor_demands(
+                        plan.instances,
+                        SourceReferenceStorageV29::ScalarCells,
+                        root,
+                        None,
+                        plan.storage_demands,
+                        budget,
+                    )?;
+                    builder.collect_storage_selectors(budget)?;
+                    builder.function(builder.plan.root, None, budget)?;
+                    consume(&mut builder, budget).map_err(Into::into)
+                },
+            );
+            Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(result)
+        })
+        .unwrap();
     let scratch = credit.into_root_credit(&layouts, &budget).unwrap();
     assert!(layouts.permits_root_emission_refund(&owner, scratch, &budget));
     budget.release_storage(scratch)?;
@@ -893,17 +1052,23 @@ fn original_nested_raw_path_replays_the_retained_record_and_array_children() {
     let owner = current_projection_owner();
     let reached = std::cell::Cell::new(false);
     let result = with_live_projection_builder(owner, |builder, budget| {
-            let plan = &builder.plan;
-            assert_eq!(plan.raw_origins.len(), 1);
-            assert_eq!(plan.raw_accesses.len(), 1);
-            let access = plan.raw_accesses.values().next().unwrap();
-            let path = plan.raw_projection_range(access.set, U32, budget)?;
-            assert_eq!(path.len(), 2);
-            assert!(matches!(plan.projections[path.start].kind(), SemanticProjectionKindV1::ConstantIndex { offset: 1, .. }));
-            assert_eq!(plan.projections[path.start + 1].kind(), SemanticProjectionKindV1::Field(0));
-            reached.set(true);
-            Ok(())
-        });
+        let plan = &builder.plan;
+        assert_eq!(plan.raw_origins.len(), 1);
+        assert_eq!(plan.raw_accesses.len(), 1);
+        let access = plan.raw_accesses.values().next().unwrap();
+        let path = plan.raw_projection_range(access.set, U32, budget)?;
+        assert_eq!(path.len(), 2);
+        assert!(matches!(
+            plan.projections[path.start].kind(),
+            SemanticProjectionKindV1::ConstantIndex { offset: 1, .. }
+        ));
+        assert_eq!(
+            plan.projections[path.start + 1].kind(),
+            SemanticProjectionKindV1::Field(0)
+        );
+        reached.set(true);
+        Ok(())
+    });
     assert!(result.is_ok(), "{result:?}");
     assert!(reached.get());
 }
@@ -918,39 +1083,78 @@ fn current_projection_keeps_actual_children_and_rejects_absent_or_forged_shapes(
         let children = builder.plan.children.len();
         emission_push_v1(&mut builder.plan.children, first, budget)?;
         emission_push_v1(&mut builder.plan.children, replacement, budget)?;
-        let record = builder.node(pair, SourceReferenceNodeKindV29::Aggregate { first: children, count: 2 }, budget)?;
+        let record = builder.node(
+            pair,
+            SourceReferenceNodeKindV29::Aggregate {
+                first: children,
+                count: 2,
+            },
+            budget,
+        )?;
         let path = builder.plan.projections.len();
-        emission_push_v1(&mut builder.plan.projections,
-            SemanticProjectionV1::new(SemanticProjectionKindV1::Field(1), U32).unwrap(), budget)?;
-        assert_eq!(builder.current_projection_node(record, path..path + 1, U32, budget)?, replacement);
+        emission_push_v1(
+            &mut builder.plan.projections,
+            SemanticProjectionV1::new(SemanticProjectionKindV1::Field(1), U32).unwrap(),
+            budget,
+        )?;
+        assert_eq!(
+            builder.current_projection_node(record, path..path + 1, U32, budget)?,
+            replacement
+        );
         builder.plan.children[children + 1] = first;
-        assert_eq!(builder.current_projection_node(record, path..path + 1, U32, budget)?, first);
+        assert_eq!(
+            builder.current_projection_node(record, path..path + 1, U32, budget)?,
+            first
+        );
         let absent = builder.node(pair, SourceReferenceNodeKindV29::Absent, budget)?;
-        assert_eq!(builder.current_projection_node(absent, path..path, pair, budget)?, absent);
-        assert!(builder.current_projection_node(absent, path..path + 1, U32, budget).is_err());
+        assert_eq!(
+            builder.current_projection_node(absent, path..path, pair, budget)?,
+            absent
+        );
+        assert!(
+            builder
+                .current_projection_node(absent, path..path + 1, U32, budget)
+                .is_err()
+        );
         assert_eq!(builder.plan.nodes[absent].ty, pair);
         let opaque = builder.plain(pair, budget)?;
         let projected = builder.current_projection_node(opaque, path..path + 1, U32, budget)?;
-        assert!(matches!(builder.plan.nodes[projected].kind, SourceReferenceNodeKindV29::Plain(None)));
+        assert!(matches!(
+            builder.plan.nodes[projected].kind,
+            SourceReferenceNodeKindV29::Plain(None)
+        ));
         assert!(builder.plan.nodes[projected].storage.is_none());
         assert!(builder.plan.nodes[projected].inactive.is_none());
         assert!(builder.plan.nodes[projected].descriptor.is_none());
-        for (kind, ty) in [(SemanticProjectionKindV1::Field(2), U32),
+        for (kind, ty) in [
+            (SemanticProjectionKindV1::Field(2), U32),
             (SemanticProjectionKindV1::Field(1), pair),
             (SemanticProjectionKindV1::Dereference, U32),
             (SemanticProjectionKindV1::OpaqueCast, array),
-            (SemanticProjectionKindV1::Subtype, array)] {
+            (SemanticProjectionKindV1::Subtype, array),
+        ] {
             builder.plan.projections[path] = SemanticProjectionV1::new(kind, ty).unwrap();
             let before = builder.plan.nodes.len();
-            assert!(builder.current_projection_node(opaque, path..path + 1, ty, budget).is_err());
+            assert!(
+                builder
+                    .current_projection_node(opaque, path..path + 1, ty, budget)
+                    .is_err()
+            );
             assert_eq!(builder.plan.nodes.len(), before);
         }
-        for kind in [SemanticProjectionKindV1::OpaqueCast, SemanticProjectionKindV1::Subtype] {
+        for kind in [
+            SemanticProjectionKindV1::OpaqueCast,
+            SemanticProjectionKindV1::Subtype,
+        ] {
             builder.plan.projections[path] = SemanticProjectionV1::new(kind, pair).unwrap();
-            assert_eq!(builder.current_projection_node(opaque, path..path + 1, pair, budget)?, opaque);
+            assert_eq!(
+                builder.current_projection_node(opaque, path..path + 1, pair, budget)?,
+                opaque
+            );
         }
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
 }
 
 #[test]
@@ -958,87 +1162,155 @@ fn raw_path_query_rejects_changed_rosters_paths_types_and_owner_without_publicat
     for fault in 0..10 {
         let reached = std::cell::Cell::new(false);
         let poisoned = std::cell::Cell::new(false);
-        let result = with_current_projection_builder(address_owner(AddressFlow::BranchGenerations), true, |builder, budget| {
-            let set = builder.plan.raw_sets.iter().position(|set| set.count == 2).unwrap();
-            let range = builder.plan.raw_sets[set];
-            let origin = builder.plan.raw_choices[range.first + 1].origin;
-            match fault {
-                0 => builder.plan.raw_sets[set].count = 0,
-                1 => builder.plan.raw_sets[set].first = usize::MAX,
-                2 => builder.plan.raw_choices[range.first + 1].origin = builder.plan.raw_choices[range.first].origin,
-                3 => builder.plan.raw_origins[origin].local = SemanticLocalIdV1::from_index(1),
-                4 => builder.plan.raw_origins[origin].ty = UNIT,
-                5 => builder.plan.raw_origins[origin].pointer_type = U32,
-                6 => builder.plan.raw_origins[origin].mutable = false,
-                7 => builder.plan.raw_origins[origin].parent = Some(0),
-                8 => builder.plan.raw_origins[origin].count = 1,
-                9 => builder.plan.raw_origins[origin].first = usize::MAX,
-                _ => unreachable!(),
-            }
-            let counts = (builder.plan.nodes.len(), builder.plan.raw_origins.len(),
-                builder.plan.raw_sets.len(), builder.plan.raw_choices.len(), builder.plan.projections.len());
-            assert!(builder.plan.raw_projection_range(set, U32, budget).is_err(), "{fault}");
-            assert_eq!(counts, (builder.plan.nodes.len(), builder.plan.raw_origins.len(),
-                builder.plan.raw_sets.len(), builder.plan.raw_choices.len(), builder.plan.projections.len()));
-            poisoned.set(builder.plan.failure.first_error().is_some());
-            reached.set(true);
-            Ok(())
-        });
+        let result = with_current_projection_builder(
+            address_owner(AddressFlow::BranchGenerations),
+            true,
+            |builder, budget| {
+                let set = builder
+                    .plan
+                    .raw_sets
+                    .iter()
+                    .position(|set| set.count == 2)
+                    .unwrap();
+                let range = builder.plan.raw_sets[set];
+                let origin = builder.plan.raw_choices[range.first + 1].origin;
+                match fault {
+                    0 => builder.plan.raw_sets[set].count = 0,
+                    1 => builder.plan.raw_sets[set].first = usize::MAX,
+                    2 => {
+                        builder.plan.raw_choices[range.first + 1].origin =
+                            builder.plan.raw_choices[range.first].origin
+                    }
+                    3 => builder.plan.raw_origins[origin].local = SemanticLocalIdV1::from_index(1),
+                    4 => builder.plan.raw_origins[origin].ty = UNIT,
+                    5 => builder.plan.raw_origins[origin].pointer_type = U32,
+                    6 => builder.plan.raw_origins[origin].mutable = false,
+                    7 => builder.plan.raw_origins[origin].parent = Some(0),
+                    8 => builder.plan.raw_origins[origin].count = 1,
+                    9 => builder.plan.raw_origins[origin].first = usize::MAX,
+                    _ => unreachable!(),
+                }
+                let counts = (
+                    builder.plan.nodes.len(),
+                    builder.plan.raw_origins.len(),
+                    builder.plan.raw_sets.len(),
+                    builder.plan.raw_choices.len(),
+                    builder.plan.projections.len(),
+                );
+                assert!(
+                    builder.plan.raw_projection_range(set, U32, budget).is_err(),
+                    "{fault}"
+                );
+                assert_eq!(
+                    counts,
+                    (
+                        builder.plan.nodes.len(),
+                        builder.plan.raw_origins.len(),
+                        builder.plan.raw_sets.len(),
+                        builder.plan.raw_choices.len(),
+                        builder.plan.projections.len()
+                    )
+                );
+                poisoned.set(builder.plan.failure.first_error().is_some());
+                reached.set(true);
+                Ok(())
+            },
+        );
         assert!(reached.get(), "{fault}: {result:?}");
         assert_eq!(result.is_err(), poisoned.get(), "{fault}: {result:?}");
     }
     let reached = std::cell::Cell::new(false);
-    let result = with_current_projection_builder(address_owner(AddressFlow::Read), true, |builder, _| {
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(ADDRESS_TEST_LIMIT);
-        let mut foreign = ArgumentBudgetV1::new(&mut work, ADDRESS_TEST_LIMIT);
-        assert!(builder.plan.raw_projection_range(0, U32, &mut foreign).is_err());
-        assert_eq!(foreign.work(), 0);
-        reached.set(true);
-        Ok(())
-    });
+    let result =
+        with_current_projection_builder(address_owner(AddressFlow::Read), true, |builder, _| {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(ADDRESS_TEST_LIMIT);
+            let mut foreign = ArgumentBudgetV1::new(&mut work, ADDRESS_TEST_LIMIT);
+            assert!(
+                builder
+                    .plan
+                    .raw_projection_range(0, U32, &mut foreign)
+                    .is_err()
+            );
+            assert_eq!(foreign.work(), 0);
+            reached.set(true);
+            Ok(())
+        });
     assert!(reached.get());
-    assert!(matches!(result, Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Accounting))));
+    assert!(matches!(
+        result,
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Accounting
+            )
+        )
+    ));
 }
 
 #[test]
 fn raw_unanimous_path_has_independent_work_and_actual_header_boundaries() {
     use std::mem::size_of;
     #[allow(dead_code)]
-    struct QueryFrame { previous: Option<usize>, first: Option<usize>, pointer: Option<SemanticTypeIdV1> }
+    struct QueryFrame {
+        previous: Option<usize>,
+        first: Option<usize>,
+        pointer: Option<SemanticTypeIdV1>,
+    }
     let range_headers = size_of::<std::ops::Range<usize>>()
         + 2 * size_of::<Result<std::ops::Range<usize>, ProductionSemanticKirErrorV1>>();
-    let frame_headers = size_of::<QueryFrame>() + 2 * size_of::<Result<QueryFrame, ProductionSemanticKirErrorV1>>();
+    let frame_headers =
+        size_of::<QueryFrame>() + 2 * size_of::<Result<QueryFrame, ProductionSemanticKirErrorV1>>();
     for storage in [false, true] {
         for short in [0, 1] {
             let reached = std::cell::Cell::new(false);
-            let result = with_current_projection_builder(address_owner(AddressFlow::BranchGenerations), true, |builder, budget| {
-                let set = builder.plan.raw_sets.iter().position(|set| set.count == 2).unwrap();
-                // Five owner checks, three range checks and twelve checks for
-                // each of the two original zero-projection alternatives.
-                const WORK: usize = 5 + 3 + 12 * 2;
-                let headers = range_headers + frame_headers;
-                if storage {
-                    budget.reserve_storage(ADDRESS_TEST_LIMIT - budget.storage() - (headers - short))?;
-                } else {
-                    budget.charge_work(ADDRESS_TEST_LIMIT - budget.work() - (WORK - short))?;
-                }
-                let before = (budget.work(), budget.storage());
-                let result = builder.plan.raw_projection_range(set, U32, budget);
-                if short == 0 {
-                    assert!(result.as_ref().is_ok_and(|range| range.is_empty()), "{result:?}");
-                    assert_eq!(budget.work() - before.0, WORK);
-                    assert_eq!(budget.storage() - before.1, headers);
-                } else {
-                    assert!(matches!(result, Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(_))));
-                    assert_eq!(budget.work() - before.0, if storage { 5 } else { 20 });
-                    assert_eq!(budget.storage() - before.1, if storage { range_headers } else { headers });
-                    let error = format!("{result:?}");
-                    let retry = builder.plan.raw_projection_range(set, U32, budget);
-                    assert_eq!(format!("{retry:?}"), error);
-                }
-                reached.set(true);
-                Err(source_reference_error_v29("raw query boundary callback stop"))
-            });
+            let result = with_current_projection_builder(
+                address_owner(AddressFlow::BranchGenerations),
+                true,
+                |builder, budget| {
+                    let set = builder
+                        .plan
+                        .raw_sets
+                        .iter()
+                        .position(|set| set.count == 2)
+                        .unwrap();
+                    // Five owner checks, three range checks and twelve checks for
+                    // each of the two original zero-projection alternatives.
+                    const WORK: usize = 5 + 3 + 12 * 2;
+                    let headers = range_headers + frame_headers;
+                    if storage {
+                        budget.reserve_storage(
+                            ADDRESS_TEST_LIMIT - budget.storage() - (headers - short),
+                        )?;
+                    } else {
+                        budget.charge_work(ADDRESS_TEST_LIMIT - budget.work() - (WORK - short))?;
+                    }
+                    let before = (budget.work(), budget.storage());
+                    let result = builder.plan.raw_projection_range(set, U32, budget);
+                    if short == 0 {
+                        assert!(
+                            result.as_ref().is_ok_and(|range| range.is_empty()),
+                            "{result:?}"
+                        );
+                        assert_eq!(budget.work() - before.0, WORK);
+                        assert_eq!(budget.storage() - before.1, headers);
+                    } else {
+                        assert!(matches!(
+                            result,
+                            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(_))
+                        ));
+                        assert_eq!(budget.work() - before.0, if storage { 5 } else { 20 });
+                        assert_eq!(
+                            budget.storage() - before.1,
+                            if storage { range_headers } else { headers }
+                        );
+                        let error = format!("{result:?}");
+                        let retry = builder.plan.raw_projection_range(set, U32, budget);
+                        assert_eq!(format!("{retry:?}"), error);
+                    }
+                    reached.set(true);
+                    Err(source_reference_error_v29(
+                        "raw query boundary callback stop",
+                    ))
+                },
+            );
             assert!(reached.get(), "{storage}/{short}: {result:?}");
             assert!(result.is_err());
         }
@@ -1049,67 +1321,146 @@ fn projected_reference_cast_owner(mode: u8) -> ProductionSemanticSsaOwnerV1 {
     let base = current_projection_owner();
     let semantic = base.source_semantic();
     let mut types = semantic.types().to_vec();
-    let kind = if mode == 2 { SemanticBorrowKindV1::Mutable } else { SemanticBorrowKindV1::Shared };
-    let reference = reference(&mut types, U32, if mode == 2 {
-        SemanticMutabilityV1::Mutable
-    } else { SemanticMutabilityV1::Immutable }, false);
+    let kind = if mode >= 2 {
+        SemanticBorrowKindV1::Mutable
+    } else {
+        SemanticBorrowKindV1::Shared
+    };
+    let reference = reference(
+        &mut types,
+        U32,
+        if mode >= 2 {
+            SemanticMutabilityV1::Mutable
+        } else {
+            SemanticMutabilityV1::Immutable
+        },
+        false,
+    );
     let raw = SemanticTypeIdV1::from_index(2);
     let root = &semantic.functions()[0];
     let mut locals = root.locals().to_vec();
     locals.push(local(228, reference, SemanticLocalRoleV1::Temporary));
-    if mode == 2 { locals.push(local(229, reference, SemanticLocalRoleV1::Temporary)); }
+    if mode >= 2 {
+        locals.push(local(229, reference, SemanticLocalRoleV1::Temporary));
+    }
     let old = root.blocks()[0].statements();
-    let SemanticStatementKindV1::Assign(formation) = old[3].kind() else { panic!("original raw formation"); };
+    let SemanticStatementKindV1::Assign(formation) = old[3].kind() else {
+        panic!("original raw formation");
+    };
     let SemanticRvalueKindV1::AddressOf { place: target, .. } = formation.value().kind() else {
         panic!("original projected target");
     };
     let mut statements = old[..3].to_vec();
-    statements.push(assign(place(7, reference), SemanticRvalueKindV1::Borrow { kind, place: target.clone() }));
-    statements.push(assign(place(3, raw), SemanticRvalueKindV1::Cast {
-        kind: SemanticCastKindV1::Pointer,
-        operand: SemanticOperandV1::Copy(place(7, reference)),
-    }));
+    statements.push(assign(
+        place(7, reference),
+        SemanticRvalueKindV1::Borrow {
+            kind,
+            place: target.clone(),
+        },
+    ));
+    statements.push(assign(
+        place(3, raw),
+        SemanticRvalueKindV1::Cast {
+            kind: SemanticCastKindV1::Pointer,
+            operand: SemanticOperandV1::Copy(place(7, reference)),
+        },
+    ));
     statements.push(old[4].clone());
-    let dereference = |local| SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local),
-        vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32).unwrap()], U32).unwrap();
+    let dereference = |local| {
+        SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(local),
+            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32).unwrap()],
+            U32,
+        )
+        .unwrap()
+    };
     if mode == 1 {
-        statements.push(assign(dereference(4), SemanticRvalueKindV1::Use(address_literal(17))));
-    } else if mode == 2 {
-        statements.push(assign(place(8, reference), SemanticRvalueKindV1::Borrow {
-            kind: SemanticBorrowKindV1::Mutable, place: dereference(7),
-        }));
+        statements.push(assign(
+            dereference(4),
+            SemanticRvalueKindV1::Use(address_literal(17)),
+        ));
+    } else if mode >= 2 {
+        statements.push(assign(
+            place(8, reference),
+            SemanticRvalueKindV1::Borrow {
+                kind: SemanticBorrowKindV1::Mutable,
+                place: dereference(7),
+            },
+        ));
+    }
+    if mode == 3 {
+        statements.push(SemanticStatementV1::new(
+            source(),
+            SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(8)),
+        ));
     }
     statements.push(old[6].clone());
-    let admitted = InertSemanticMirRequestV1::new_with_callables(semantic.target(), types,
-        vec![], vec![], vec![], vec![function(220, SemanticFunctionRoleV1::KernelRoot,
-            root.abi().clone(), locals, vec![block(231, statements, SemanticTerminatorKindV1::Return)])],
-        vec![SemanticCallableDeclV1::defined(ROOT)], vec![ROOT]).unwrap()
-        .admit_exact_v29(SemanticMirLimitsV1::default()).unwrap();
-    ProductionSemanticSsaOwnerV1::try_new(ProductionSemanticMirOwnerV1::try_new(admitted,
-        ProductionSemanticMirLimitsV1::default()).unwrap(), ProductionSemanticSsaLimitsV1::default()).unwrap()
+    if mode == 2 {
+        statements.push(assign(
+            place(5, U32),
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(dereference(8))),
+        ));
+    }
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        vec![function(
+            220,
+            SemanticFunctionRoleV1::KernelRoot,
+            root.abi().clone(),
+            locals,
+            vec![block(231, statements, SemanticTerminatorKindV1::Return)],
+        )],
+        vec![SemanticCallableDeclV1::defined(ROOT)],
+        vec![ROOT],
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
 }
 
 #[test]
 fn projected_raw_reference_cast_keeps_shared_permission_and_parent_reborrow_suspension() {
-    for mode in 0..3 {
+    for mode in 0..4 {
         let reached = std::cell::Cell::new(false);
-        let result = with_live_projection_builder(projected_reference_cast_owner(mode), |builder, budget| {
+        let result = with_live_projection_builder(
+            projected_reference_cast_owner(mode),
+            |builder, budget| {
                 let plan = &builder.plan;
                 assert_eq!(plan.raw_origins.len(), 1);
                 let origin = plan.raw_origins[0];
                 assert!(origin.parent.is_some());
-                assert!(!origin.mutable);
-                assert_eq!(origin.formation, SourceReferenceRawFormationV29::ReferenceCast);
+                assert_eq!(origin.mutable, mode >= 2);
+                assert_eq!(
+                    origin.formation,
+                    SourceReferenceRawFormationV29::ReferenceCast
+                );
                 assert_eq!(plan.raw_projection_range(0, U32, budget)?.len(), 2);
                 reached.set(true);
                 Ok(())
-            });
-        assert_eq!(result.is_ok(), mode == 0, "{mode}: {result:?}");
-        assert_eq!(reached.get(), mode == 0);
+            },
+        );
+        assert_eq!(result.is_ok(), mode == 0 || mode == 3, "{mode}: {result:?}");
+        assert_eq!(reached.get(), mode == 0 || mode == 3);
         if mode == 1 {
-            assert!(format!("{result:?}").contains("source raw pointer access widens its original permission"));
+            assert!(
+                format!("{result:?}")
+                    .contains("source raw pointer access widens its original permission")
+            );
         } else if mode == 2 {
-            assert!(format!("{result:?}").contains("source reference parent is suspended by a live reborrow"));
+            assert!(
+                format!("{result:?}")
+                    .contains("source reference parent is suspended by a live reborrow")
+            );
         }
     }
 }
@@ -1118,52 +1469,104 @@ fn projected_raw_reference_cast_keeps_shared_permission_and_parent_reborrow_susp
 fn current_projection_has_independent_empty_and_retained_field_work_and_storage_boundaries() {
     use std::mem::size_of;
     #[allow(dead_code)]
-    struct CurrentFrame { node: usize, range: std::ops::Range<usize>, expected: SemanticTypeIdV1 }
-    let headers = size_of::<CurrentFrame>() + 2 * size_of::<Result<CurrentFrame, ProductionSemanticKirErrorV1>>()
+    struct CurrentFrame {
+        node: usize,
+        range: std::ops::Range<usize>,
+        expected: SemanticTypeIdV1,
+    }
+    let headers = size_of::<CurrentFrame>()
+        + 2 * size_of::<Result<CurrentFrame, ProductionSemanticKirErrorV1>>()
         + size_of::<(SourceReferenceNodeV29, SemanticProjectionV1)>()
-        + 2 * size_of::<Result<(SourceReferenceNodeV29, SemanticProjectionV1), ProductionSemanticKirErrorV1>>()
-        + size_of::<usize>() + 2 * size_of::<Result<usize, ProductionSemanticKirErrorV1>>();
+        + 2 * size_of::<
+            Result<(SourceReferenceNodeV29, SemanticProjectionV1), ProductionSemanticKirErrorV1>,
+        >()
+        + size_of::<usize>()
+        + 2 * size_of::<Result<usize, ProductionSemanticKirErrorV1>>();
     for field in [false, true] {
         for storage in [false, true] {
             for short in [0, 1] {
-                with_current_projection_builder(current_projection_owner(), false, |builder, budget| {
-                    let pair = SemanticTypeIdV1::from_index(3);
-                    let child = builder.plain(U32, budget)?;
-                    let first = builder.plan.children.len();
-                    emission_push_v1(&mut builder.plan.children, child, budget)?;
-                    emission_push_v1(&mut builder.plan.children, child, budget)?;
-                    let root = builder.node(pair, SourceReferenceNodeKindV29::Aggregate { first, count: 2 }, budget)?;
-                    let path = builder.plan.projections.len();
-                    emission_push_v1(&mut builder.plan.projections,
-                        SemanticProjectionV1::new(SemanticProjectionKindV1::Field(1), U32).unwrap(), budget)?;
-                    // Owner5, range2, final type1; a retained field adds
-                    // row/projection2, original shape4, child2, child type1.
-                    let work = if field { 17 } else { 8 };
-                    let headers = headers + if field {
-                        2 * size_of::<Result<(), ProductionSemanticKirErrorV1>>()
-                    } else { 0 };
-                    if storage {
-                        budget.reserve_storage(ADDRESS_TEST_LIMIT - budget.storage() - (headers - short))?;
-                    } else {
-                        budget.charge_work(ADDRESS_TEST_LIMIT - budget.work() - (work - short))?;
-                    }
-                    let before = (budget.work(), budget.storage(), builder.plan.nodes.len());
-                    let result = builder.current_projection_node(root, path..path + usize::from(field),
-                        if field { U32 } else { pair }, budget);
-                    if short == 0 {
-                        assert_eq!(result?, if field { child } else { root });
-                        assert_eq!(budget.work() - before.0, work);
-                        assert_eq!(budget.storage() - before.1, headers);
-                    } else {
-                        assert!(matches!(result, Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(_))));
-                        assert_eq!(budget.work() - before.0,
-                            if storage { if field { 9 } else { 5 } } else { work - 1 });
-                        assert_eq!(format!("{result:?}"), format!("{:?}", builder.current_projection_node(root,
-                            path..path + usize::from(field), if field { U32 } else { pair }, budget)));
-                    }
-                    assert_eq!(builder.plan.nodes.len(), before.2);
-                    Ok(())
-                }).unwrap();
+                with_current_projection_builder(
+                    current_projection_owner(),
+                    false,
+                    |builder, budget| {
+                        let pair = SemanticTypeIdV1::from_index(3);
+                        let child = builder.plain(U32, budget)?;
+                        let first = builder.plan.children.len();
+                        emission_push_v1(&mut builder.plan.children, child, budget)?;
+                        emission_push_v1(&mut builder.plan.children, child, budget)?;
+                        let root = builder.node(
+                            pair,
+                            SourceReferenceNodeKindV29::Aggregate { first, count: 2 },
+                            budget,
+                        )?;
+                        let path = builder.plan.projections.len();
+                        emission_push_v1(
+                            &mut builder.plan.projections,
+                            SemanticProjectionV1::new(SemanticProjectionKindV1::Field(1), U32)
+                                .unwrap(),
+                            budget,
+                        )?;
+                        // Owner5, range2, final type1; a retained field adds
+                        // row/projection2, original shape4, child2, child type1.
+                        let work = if field { 17 } else { 8 };
+                        let headers = headers
+                            + if field {
+                                2 * size_of::<Result<(), ProductionSemanticKirErrorV1>>()
+                            } else {
+                                0
+                            };
+                        if storage {
+                            budget.reserve_storage(
+                                ADDRESS_TEST_LIMIT - budget.storage() - (headers - short),
+                            )?;
+                        } else {
+                            budget
+                                .charge_work(ADDRESS_TEST_LIMIT - budget.work() - (work - short))?;
+                        }
+                        let before = (budget.work(), budget.storage(), builder.plan.nodes.len());
+                        let result = builder.current_projection_node(
+                            root,
+                            path..path + usize::from(field),
+                            if field { U32 } else { pair },
+                            budget,
+                        );
+                        if short == 0 {
+                            assert_eq!(result?, if field { child } else { root });
+                            assert_eq!(budget.work() - before.0, work);
+                            assert_eq!(budget.storage() - before.1, headers);
+                        } else {
+                            assert!(matches!(
+                                result,
+                                Err(
+                                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(_)
+                                )
+                            ));
+                            assert_eq!(
+                                budget.work() - before.0,
+                                if storage {
+                                    if field { 9 } else { 5 }
+                                } else {
+                                    work - 1
+                                }
+                            );
+                            assert_eq!(
+                                format!("{result:?}"),
+                                format!(
+                                    "{:?}",
+                                    builder.current_projection_node(
+                                        root,
+                                        path..path + usize::from(field),
+                                        if field { U32 } else { pair },
+                                        budget
+                                    )
+                                )
+                            );
+                        }
+                        assert_eq!(builder.plan.nodes.len(), before.2);
+                        Ok(())
+                    },
+                )
+                .unwrap();
             }
         }
     }
@@ -1172,23 +1575,36 @@ fn current_projection_has_independent_empty_and_retained_field_work_and_storage_
 #[test]
 fn opaque_projection_never_synthesizes_pointer_facts_and_replay_cleanup_covers_error_and_panic() {
     for mode in 0..3 {
-        let result = std::panic::catch_unwind(|| with_current_projection_builder(
-            current_projection_owner(), false, |builder, budget| {
-                assert!(source_reference_check_opaque_projection_v29(
-                    builder.plan.instances.owner().source_semantic().types(),
-                    SemanticTypeIdV1::from_index(2), budget).is_err());
+        let result = std::panic::catch_unwind(|| {
+            with_current_projection_builder(current_projection_owner(), false, |builder, budget| {
+                assert!(
+                    source_reference_check_opaque_projection_v29(
+                        builder.plan.instances.owner().source_semantic().types(),
+                        SemanticTypeIdV1::from_index(2),
+                        budget
+                    )
+                    .is_err()
+                );
                 let node = builder.plain(U32, budget)?;
                 let end = builder.plan.projections.len();
-                assert_eq!(builder.current_projection_node(node, end..end, U32, budget)?, node);
+                assert_eq!(
+                    builder.current_projection_node(node, end..end, U32, budget)?,
+                    node
+                );
                 match mode {
                     0 => Ok(()),
-                    1 => Err(source_reference_error_v29("current projection callback sentinel")),
+                    1 => Err(source_reference_error_v29(
+                        "current projection callback sentinel",
+                    )),
                     _ => panic!("current projection cleanup probe"),
                 }
-            }));
+            })
+        });
         match mode {
             0 => result.unwrap().unwrap(),
-            1 => assert!(format!("{:?}", result.unwrap()).contains("current projection callback sentinel")),
+            1 => assert!(
+                format!("{:?}", result.unwrap()).contains("current projection callback sentinel")
+            ),
             _ => assert!(result.is_err()),
         }
     }
@@ -1202,41 +1618,87 @@ fn current_projection_path_copy_prepays_its_exact_capacity_before_publication() 
     for count in [0, 2] {
         for storage in [false, true] {
             for short in [0, 1] {
-                with_current_projection_builder(current_projection_owner(), false, |builder, budget| {
-                    let first = builder.plan.projections.len();
-                    for _ in 0..count {
-                        emission_push_v1(&mut builder.plan.projections,
-                            SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U32).unwrap(), budget)?;
-                    }
-                    let bytes = headers + count * size_of::<SemanticProjectionV1>();
-                    // Owner5, bounds2, vector allocation3, copied components P.
-                    let work = 10 + count;
-                    if storage {
-                        budget.reserve_storage(ADDRESS_TEST_LIMIT - budget.storage() - (bytes - short))?;
-                    } else {
-                        budget.charge_work(ADDRESS_TEST_LIMIT - budget.work() - (work - short))?;
-                    }
-                    let before = (budget.work(), budget.storage(), builder.plan.projections.len());
-                    let result = builder.plan.current_projection_path(first..first + count, budget);
-                    if short == 0 {
-                        let path = result?;
-                        assert_eq!(path.as_slice(), &builder.plan.projections[first..first + count]);
-                        assert_eq!(path.capacity(), count);
-                        assert_eq!(budget.work() - before.0, work);
-                        assert_eq!(budget.storage() - before.1, bytes);
-                    } else {
-                        assert!(matches!(result, Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(_))));
-                        assert_eq!(budget.work() - before.0,
-                            if storage && count == 0 { 7 } else if !storage && count == 0 { 7 } else { 10 });
-                        assert_eq!(budget.storage() - before.1,
-                            if storage { if count == 0 { 0 } else { headers } }
-                            else { if count == 0 { headers } else { bytes } });
-                        assert_eq!(format!("{result:?}"), format!("{:?}",
-                            builder.plan.current_projection_path(first..first + count, budget)));
-                    }
-                    assert_eq!(builder.plan.projections.len(), before.2);
-                    Ok(())
-                }).unwrap();
+                with_current_projection_builder(
+                    current_projection_owner(),
+                    false,
+                    |builder, budget| {
+                        let first = builder.plan.projections.len();
+                        for _ in 0..count {
+                            emission_push_v1(
+                                &mut builder.plan.projections,
+                                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U32)
+                                    .unwrap(),
+                                budget,
+                            )?;
+                        }
+                        let bytes = headers + count * size_of::<SemanticProjectionV1>();
+                        // Owner5, bounds2, vector allocation3, copied components P.
+                        let work = 10 + count;
+                        if storage {
+                            budget.reserve_storage(
+                                ADDRESS_TEST_LIMIT - budget.storage() - (bytes - short),
+                            )?;
+                        } else {
+                            budget
+                                .charge_work(ADDRESS_TEST_LIMIT - budget.work() - (work - short))?;
+                        }
+                        let before = (
+                            budget.work(),
+                            budget.storage(),
+                            builder.plan.projections.len(),
+                        );
+                        let result = builder
+                            .plan
+                            .current_projection_path(first..first + count, budget);
+                        if short == 0 {
+                            let path = result?;
+                            assert_eq!(
+                                path.as_slice(),
+                                &builder.plan.projections[first..first + count]
+                            );
+                            assert_eq!(path.capacity(), count);
+                            assert_eq!(budget.work() - before.0, work);
+                            assert_eq!(budget.storage() - before.1, bytes);
+                        } else {
+                            assert!(matches!(
+                                result,
+                                Err(
+                                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(_)
+                                )
+                            ));
+                            assert_eq!(
+                                budget.work() - before.0,
+                                if storage && count == 0 {
+                                    7
+                                } else if !storage && count == 0 {
+                                    7
+                                } else {
+                                    10
+                                }
+                            );
+                            assert_eq!(
+                                budget.storage() - before.1,
+                                if storage {
+                                    if count == 0 { 0 } else { headers }
+                                } else {
+                                    if count == 0 { headers } else { bytes }
+                                }
+                            );
+                            assert_eq!(
+                                format!("{result:?}"),
+                                format!(
+                                    "{:?}",
+                                    builder
+                                        .plan
+                                        .current_projection_path(first..first + count, budget)
+                                )
+                            );
+                        }
+                        assert_eq!(builder.plan.projections.len(), before.2);
+                        Ok(())
+                    },
+                )
+                .unwrap();
             }
         }
     }
@@ -1247,35 +1709,71 @@ fn current_projection_branch_owner() -> ProductionSemanticSsaOwnerV1 {
     let semantic = base.source_semantic();
     let original = &semantic.functions()[0];
     let statements = original.blocks()[0].statements();
-    let go = |target| SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
-        SemanticEdgeRoleV1::Goto, SemanticBlockIdV1::from_index(target)));
+    let go = |target| {
+        SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::Goto,
+            SemanticBlockIdV1::from_index(target),
+        ))
+    };
     let switch = SemanticTerminatorKindV1::SwitchInt {
         discriminant: SemanticOperandV1::Copy(place(1, U32)),
-        targets: SemanticSwitchTargetsV1::new(vec![SemanticSwitchTargetV1::new(0,
-            SemanticControlFlowEdgeV1::new(SemanticEdgeRoleV1::SwitchValue,
-                SemanticBlockIdV1::from_index(1)))],
-            SemanticControlFlowEdgeV1::new(SemanticEdgeRoleV1::SwitchOtherwise,
-                SemanticBlockIdV1::from_index(2))).unwrap(),
+        targets: SemanticSwitchTargetsV1::new(
+            vec![SemanticSwitchTargetV1::new(
+                0,
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::SwitchValue,
+                    SemanticBlockIdV1::from_index(1),
+                ),
+            )],
+            SemanticControlFlowEdgeV1::new(
+                SemanticEdgeRoleV1::SwitchOtherwise,
+                SemanticBlockIdV1::from_index(2),
+            ),
+        )
+        .unwrap(),
     };
     let blocks = vec![
         block(231, statements[..3].to_vec(), switch),
         block(232, statements[3..5].to_vec(), go(3)),
         block(233, statements[3..5].to_vec(), go(3)),
-        block(234, statements[5..].to_vec(), SemanticTerminatorKindV1::Return),
+        block(
+            234,
+            statements[5..].to_vec(),
+            SemanticTerminatorKindV1::Return,
+        ),
     ];
-    let admitted = InertSemanticMirRequestV1::new_with_callables(semantic.target(),
-        semantic.types().to_vec(), vec![], vec![], vec![], vec![function(220,
-            SemanticFunctionRoleV1::KernelRoot, original.abi().clone(),
-            original.locals().to_vec(), blocks)], vec![SemanticCallableDeclV1::defined(ROOT)], vec![ROOT])
-        .unwrap().admit_exact_v29(SemanticMirLimitsV1::default()).unwrap();
-    ProductionSemanticSsaOwnerV1::try_new(ProductionSemanticMirOwnerV1::try_new(admitted,
-        ProductionSemanticMirLimitsV1::default()).unwrap(), ProductionSemanticSsaLimitsV1::default()).unwrap()
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        semantic.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        vec![function(
+            220,
+            SemanticFunctionRoleV1::KernelRoot,
+            original.abi().clone(),
+            original.locals().to_vec(),
+            blocks,
+        )],
+        vec![SemanticCallableDeclV1::defined(ROOT)],
+        vec![ROOT],
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
 }
 
 #[test]
 fn raw_projected_alternatives_validate_every_original_full_path_before_selecting_one() {
     let reached = std::cell::Cell::new(false);
-    let result = with_live_projection_builder(current_projection_branch_owner(), |builder, budget| {
+    let result =
+        with_live_projection_builder(current_projection_branch_owner(), |builder, budget| {
             let plan = &builder.plan;
             let access = plan.raw_accesses.values().next().unwrap();
             assert_eq!(plan.raw_sets[access.set].count, 2);
@@ -1290,25 +1788,43 @@ fn raw_projected_alternatives_validate_every_original_full_path_before_selecting
     assert!(result.is_ok(), "{result:?}");
     assert!(reached.get());
     let reached = std::cell::Cell::new(false);
-    let result = with_live_projection_builder(current_projection_branch_owner(), |builder, budget| {
-        let set = builder.plan.raw_sets.iter().position(|set| set.count == 2).unwrap();
-        let row = builder.plan.raw_sets[set];
-        let first = builder.plan.raw_choices[row.first].origin;
-        let second = builder.plan.raw_choices[row.first + 1].origin;
-        let first_path = builder.plan.raw_origins[first].first;
-        let second_path = builder.plan.raw_origins[second].first;
-        assert_ne!(first_path, second_path);
-        assert_eq!(builder.plan.raw_projection_range(set, U32, budget)?.len(), 2);
-        builder.plan.projections[second_path + 1] = SemanticProjectionV1::new(
-            SemanticProjectionKindV1::Field(1), U32).unwrap();
-        let before = (builder.plan.nodes.len(), builder.plan.projections.len());
-        let result = builder.plan.raw_projection_range(set, U32, budget);
-        assert!(format!("{result:?}").contains("alternatives do not retain one original target path"));
-        assert_eq!(before, (builder.plan.nodes.len(), builder.plan.projections.len()));
-        assert_eq!(builder.plan.projections[first_path + 1].kind(), SemanticProjectionKindV1::Field(0));
-        reached.set(true);
-        Ok(())
-    });
+    let result =
+        with_live_projection_builder(current_projection_branch_owner(), |builder, budget| {
+            let set = builder
+                .plan
+                .raw_sets
+                .iter()
+                .position(|set| set.count == 2)
+                .unwrap();
+            let row = builder.plan.raw_sets[set];
+            let first = builder.plan.raw_choices[row.first].origin;
+            let second = builder.plan.raw_choices[row.first + 1].origin;
+            let first_path = builder.plan.raw_origins[first].first;
+            let second_path = builder.plan.raw_origins[second].first;
+            assert_ne!(first_path, second_path);
+            assert_eq!(
+                builder.plan.raw_projection_range(set, U32, budget)?.len(),
+                2
+            );
+            builder.plan.projections[second_path + 1] =
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(1), U32).unwrap();
+            let before = (builder.plan.nodes.len(), builder.plan.projections.len());
+            let result = builder.plan.raw_projection_range(set, U32, budget);
+            assert!(
+                format!("{result:?}")
+                    .contains("alternatives do not retain one original target path")
+            );
+            assert_eq!(
+                before,
+                (builder.plan.nodes.len(), builder.plan.projections.len())
+            );
+            assert_eq!(
+                builder.plan.projections[first_path + 1].kind(),
+                SemanticProjectionKindV1::Field(0)
+            );
+            reached.set(true);
+            Ok(())
+        });
     assert!(reached.get(), "{result:?}");
     assert!(result.is_ok(), "{result:?}");
 }
@@ -1317,54 +1833,95 @@ fn raw_projected_alternatives_validate_every_original_full_path_before_selecting
 fn raw_empty_absent_target_keeps_original_root_type_and_projected_failure_is_atomic() {
     for projected in [false, true] {
         let reached = std::cell::Cell::new(false);
-        let owner = if projected { current_projection_branch_owner() }
-            else { address_owner(AddressFlow::BranchGenerations) };
+        let owner = if projected {
+            current_projection_branch_owner()
+        } else {
+            address_owner(AddressFlow::BranchGenerations)
+        };
         let result = with_live_projection_builder(owner, |builder, budget| {
             let root = builder.plan.root;
-            let source = builder.plan.states.iter().position(|state| state.get(4)
-                .and_then(|local| local.node).is_some_and(|node| {
-                    let SourceReferenceNodeKindV29::Address(set) = builder.plan.nodes[node].kind else {
-                        return false;
-                    };
-                    let row = builder.plan.raw_sets[set];
-                    builder.plan.raw_choices[row.first..row.first + row.count].iter()
-                        .all(|choice| !choice.expired)
-                })).expect("original pre-return raw holder state");
+            let source = builder
+                .plan
+                .states
+                .iter()
+                .position(|state| {
+                    state
+                        .get(4)
+                        .and_then(|local| local.node)
+                        .is_some_and(|node| {
+                            let SourceReferenceNodeKindV29::Address(set) =
+                                builder.plan.nodes[node].kind
+                            else {
+                                return false;
+                            };
+                            let row = builder.plan.raw_sets[set];
+                            builder.plan.raw_choices[row.first..row.first + row.count]
+                                .iter()
+                                .all(|choice| !choice.expired)
+                        })
+                })
+                .expect("original pre-return raw holder state");
             let state = builder.clone_state(source, budget)?;
             builder.frames[root.index()] = Some(state);
             let holder = builder.plan.states[state][4];
             let holder_node = holder.node.unwrap();
-            let SourceReferenceNodeKindV29::Address(set) = builder.plan.nodes[holder_node].kind else {
+            let SourceReferenceNodeKindV29::Address(set) = builder.plan.nodes[holder_node].kind
+            else {
                 unreachable!();
             };
             builder.plan.states[state][2].node = None;
             source_reference_emission_prepay_v29::<SourceReferencePlaceV29>(budget)?;
             let mut place = SourceReferencePlaceV29 {
-                instance: root, local: SemanticLocalIdV1::from_index(4), generation: holder.generation,
-                value: holder_node, representation_root: holder_node, node: holder_node,
-                projections: Vec::new(), selector_source: None, anchor: None,
-                loan: None, shared_path: false, traversed: Vec::new(),
+                instance: root,
+                local: SemanticLocalIdV1::from_index(4),
+                generation: holder.generation,
+                value: holder_node,
+                representation_root: holder_node,
+                node: holder_node,
+                projections: Vec::new(),
+                selector_source: None,
+                anchor: None,
+                loan: None,
+                shared_path: false,
+                traversed: Vec::new(),
             };
             let count = builder.plan.nodes.len();
-            let result = builder.resolve_raw_target(&mut place, set, U32,
-                SourceReferenceAccessV29::Address, budget);
-            let root_type = if projected { SemanticTypeIdV1::from_index(4) } else { U32 };
+            let result = builder.resolve_raw_target(
+                &mut place,
+                set,
+                U32,
+                SourceReferenceAccessV29::Address,
+                budget,
+            );
+            let root_type = if projected {
+                SemanticTypeIdV1::from_index(4)
+            } else {
+                U32
+            };
             assert_eq!(builder.plan.nodes.len(), count + 1);
             assert_eq!(builder.plan.nodes[count].ty, root_type);
-            assert!(matches!(builder.plan.nodes[count].kind, SourceReferenceNodeKindV29::Absent));
+            assert!(matches!(
+                builder.plan.nodes[count].kind,
+                SourceReferenceNodeKindV29::Absent
+            ));
             assert!(builder.plan.states[state][2].node.is_none());
             if projected {
                 assert!(result.is_err());
                 assert_eq!(place.local.index(), 4);
                 assert_eq!(place.generation, holder.generation);
-                assert_eq!((place.value, place.representation_root, place.node),
-                    (holder_node, holder_node, holder_node));
+                assert_eq!(
+                    (place.value, place.representation_root, place.node),
+                    (holder_node, holder_node, holder_node)
+                );
                 assert!(place.projections.is_empty());
                 assert!(place.anchor.is_none() && place.loan.is_none() && !place.shared_path);
             } else {
                 result?;
                 assert_eq!(place.local.index(), 2);
-                assert_eq!((place.value, place.representation_root, place.node), (count, count, count));
+                assert_eq!(
+                    (place.value, place.representation_root, place.node),
+                    (count, count, count)
+                );
                 assert!(place.projections.is_empty());
             }
             builder.frames[root.index()] = None;
@@ -1385,3 +1942,5 @@ mod original_access_query_tests {
     use super::*;
     include!("production_source_reference_original_access_resources_v29_tests.rs");
 }
+
+include!("production_source_object_activation_scratch_v29_tests.rs");

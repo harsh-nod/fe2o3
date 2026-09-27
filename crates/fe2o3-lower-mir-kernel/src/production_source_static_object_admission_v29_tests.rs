@@ -52,10 +52,18 @@ fn static_field_owner_v29() -> ProductionSemanticSsaOwnerV1 {
     };
     let statements = vec![
         if STATIC_FIELD_OPERAND_V29.get() >= 3 {
-            SemanticStatementV1::new(source(), SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
-                place(4, U32), literal(11), SemanticVolatilityV1::NonVolatile, None,
-            )))
-        } else { assign(place(4, U32), SemanticRvalueKindV1::Use(literal(11))) },
+            SemanticStatementV1::new(
+                source(),
+                SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                    place(4, U32),
+                    literal(11),
+                    SemanticVolatilityV1::NonVolatile,
+                    None,
+                )),
+            )
+        } else {
+            assign(place(4, U32), SemanticRvalueKindV1::Use(literal(11)))
+        },
         assign(
             place(2, pair),
             SemanticRvalueKindV1::Aggregate(
@@ -135,7 +143,12 @@ fn static_field_observer_v29(
     let mut retained_counts = [0; 3];
     for row in &anchors.objects {
         let endpoint = static_field_endpoint_v29(row.role);
-        let ScopedObjectIdentityV29::Local { instance, local, .. } = endpoint.object else { panic!("original local object"); };
+        let ScopedObjectIdentityV29::Local {
+            instance, local, ..
+        } = endpoint.object
+        else {
+            panic!("original local object");
+        };
         assert_eq!(instance, instances.root());
         let counts = if local.index() == 4 {
             assert!(STATIC_FIELD_OPERAND_V29.get() >= 3);
@@ -153,31 +166,62 @@ fn static_field_observer_v29(
     }
     assert_eq!(counts, [4, 1, 3]);
     if STATIC_FIELD_OPERAND_V29.get() >= 3 {
-        let slot = slots.slots.iter().find(|slot| slot.instance == instances.root()
-            && slot.origin.identity.original_local() == Some(4)).unwrap();
-        assert_eq!(retained_counts, match slot.representation {
-            ScopedSlotRepresentationV29::Object { .. } => [0, 1, 1],
-            ScopedSlotRepresentationV29::ScalarArray(_) => [0, 0, 0],
-        });
+        let slot = slots
+            .slots
+            .iter()
+            .find(|slot| {
+                slot.instance == instances.root()
+                    && slot.origin.identity.original_local() == Some(4)
+            })
+            .unwrap();
+        assert_eq!(
+            retained_counts,
+            match slot.representation {
+                ScopedSlotRepresentationV29::Object { .. } => [0, 1, 1],
+                ScopedSlotRepresentationV29::ScalarArray(_) => [0, 0, 0],
+            }
+        );
         let site = execution_site_v29(SemanticBlockIdV1::from_index(0), Some(1));
         let occurrences = instances.occurrences(instances.root()).unwrap();
         let declaration = instances.instance(instances.root()).unwrap().declaration();
         let mut read_count = 0;
         for (ordinal, row) in anchors.rows.iter().enumerate() {
-            let Some((value, read)) = source_object_read_payload_v29(anchors, row, budget)? else { continue; };
-            if read.site != site || read.role != ExecutionOperandV29::RvalueOperand(0) { continue; }
+            let Some((value, read)) = source_object_read_payload_v29(anchors, row, budget)? else {
+                continue;
+            };
+            if read.site != site || read.role != ExecutionOperandV29::RvalueOperand(0) {
+                continue;
+            }
             read_count += 1;
             assert_eq!(read.ty, U32);
             assert_eq!(read.prefix, 0);
-            assert!(matches!(read.occurrence, ScopedMemoryOccurrenceV29::Retained { .. }));
-            let body = lowered.function.body.as_ref().unwrap().blocks.iter().find(|block| block.id == row.block).unwrap();
+            assert!(matches!(
+                read.occurrence,
+                ScopedMemoryOccurrenceV29::Retained { .. }
+            ));
+            let body = lowered
+                .function
+                .body
+                .as_ref()
+                .unwrap()
+                .blocks
+                .iter()
+                .find(|block| block.id == row.block)
+                .unwrap();
             let actual = &body.operations[row.position];
             assert!(matches!(actual.results.as_slice(), [result] if result.id == value));
             match slot.representation {
                 ScopedSlotRepresentationV29::Object { .. } => {
                     let payload = anchors.object_payload(row, budget)?;
                     payload.check_operation(actual, budget)?;
-                    anchors.check_object_source(declaration, &occurrences, ordinal, row, payload, budget)?;
+                    anchors.check_object_source(
+                        declaration,
+                        &occurrences,
+                        ordinal,
+                        row,
+                        payload,
+                        budget,
+                    )?;
                 }
                 ScopedSlotRepresentationV29::ScalarArray(_) => {
                     assert!(matches!(row.kind, ScopedMemoryAnchorKindV29::Access { .. }));
@@ -186,7 +230,9 @@ fn static_field_observer_v29(
             }
         }
         assert_eq!(read_count, 1);
-    } else { assert_eq!(retained_counts, [0; 3]); }
+    } else {
+        assert_eq!(retained_counts, [0; 3]);
+    }
     let fault = STATIC_FIELD_FAULT_V29.get();
     if fault != 0 {
         let body = lowered.function.body.as_mut().unwrap();
@@ -380,19 +426,46 @@ fn static_field_observer_v29(
             }
             8 => {
                 assert!(STATIC_FIELD_OPERAND_V29.get() >= 3);
-                let replacement = block.operations.iter().find_map(|operation| {
-                    matches!(operation.kind, OperationKind::Constant(Constant::U32(17)))
-                        .then(|| operation.results[0].id)
-                }).unwrap();
+                let replacement = block
+                    .operations
+                    .iter()
+                    .find_map(|operation| {
+                        matches!(operation.kind, OperationKind::Constant(Constant::U32(17)))
+                            .then(|| operation.results[0].id)
+                    })
+                    .unwrap();
                 let anchors = lowered.scoped_memory_anchors.as_mut().unwrap();
-                let (index, payload) = anchors.objects.iter_mut().enumerate().find(|(_, payload)| matches!(payload.role,
-                    ScopedObjectRoleV29::WriteValue { destination: ScopedObjectEndpointV29 {
-                        source: ScopedObjectSourceV29::AggregateComponent { operand: 0, .. }, ..
-                    }, .. })).unwrap();
-                let ScopedObjectOperationV29::WriteValue { value, .. } = &mut payload.operation else { unreachable!() };
+                let (index, payload) = anchors
+                    .objects
+                    .iter_mut()
+                    .enumerate()
+                    .find(|(_, payload)| {
+                        matches!(
+                            payload.role,
+                            ScopedObjectRoleV29::WriteValue {
+                                destination: ScopedObjectEndpointV29 {
+                                    source: ScopedObjectSourceV29::AggregateComponent {
+                                        operand: 0,
+                                        ..
+                                    },
+                                    ..
+                                },
+                                ..
+                            }
+                        )
+                    })
+                    .unwrap();
+                let ScopedObjectOperationV29::WriteValue { value, .. } = &mut payload.operation
+                else {
+                    unreachable!()
+                };
                 assert_ne!(*value, replacement);
                 *value = replacement;
-                let row = anchors.rows.iter().find(|row| row.kind == ScopedMemoryAnchorKindV29::Object(index)).unwrap();
+                let row = anchors
+                    .rows
+                    .iter()
+                    .find(|row| row.kind == ScopedMemoryAnchorKindV29::Object(index))
+                    .unwrap();
                 assert_eq!(row.block, block.id);
                 // Coherent operation/payload mutation leaves the original
                 // operand read receipt unchanged. Final read-source equality
@@ -405,9 +478,16 @@ fn static_field_observer_v29(
             // The unchanged source spans still describe the deleted effects.
             // Assembly rejects this mismatch before any final field proof.
             let original = instances.instance(instances.root()).unwrap();
-            assert!(matches!(instance_check_source_rows_with_control_v1(
-                instances, instances.root(), original.function(), lowered, budget,
-            ), Err(InstanceCorrespondenceErrorV1::Source)));
+            assert!(matches!(
+                instance_check_source_rows_with_control_v1(
+                    instances,
+                    instances.root(),
+                    original.function(),
+                    lowered,
+                    budget,
+                ),
+                Err(InstanceCorrespondenceErrorV1::Source)
+            ));
         }
         STATIC_FIELD_MUTATED_V29.set(true);
     }
@@ -417,7 +497,8 @@ fn static_field_observer_v29(
 
 fn static_field_endpoint_v29(role: ScopedObjectRoleV29) -> ScopedObjectEndpointV29 {
     match role {
-        ScopedObjectRoleV29::Project { source, .. } | ScopedObjectRoleV29::ReadValue { source, .. } => source,
+        ScopedObjectRoleV29::Project { source, .. }
+        | ScopedObjectRoleV29::ReadValue { source, .. } => source,
         ScopedObjectRoleV29::WriteValue { destination, .. } => destination,
         _ => panic!("unexpected static field role"),
     }
@@ -495,18 +576,41 @@ fn run_static_field_admission_v29(
                                         assert!(!matches!(kind, ScopedObjectOperationV29::Project { .. }));
                                         continue;
                                     }
-                                    match (kind, payload.source.role) {
-                                        (ScopedObjectOperationV29::Project { .. }, ScopedObjectRoleV29::Project { .. }) => counts[0] += 1,
-                                        (ScopedObjectOperationV29::ReadValue { address, .. }, ScopedObjectRoleV29::ReadValue { .. }) => {
-                                            counts[1] += 1;
-                                            assert!(physical.access(payload.instance, payload.row, coordinate, address, budget)?.is_none());
+                                    let (address, endpoint) = match (kind, payload.source.role) {
+                                        (ScopedObjectOperationV29::Project { .. }, ScopedObjectRoleV29::Project { .. }) => {
+                                            counts[0] += 1;
+                                            continue;
                                         }
-                                        (ScopedObjectOperationV29::WriteValue { address, .. }, ScopedObjectRoleV29::WriteValue { .. }) => {
+                                        (ScopedObjectOperationV29::ReadValue { address, .. }, ScopedObjectRoleV29::ReadValue { source, .. }) => {
+                                            counts[1] += 1;
+                                            (address, source)
+                                        }
+                                        (ScopedObjectOperationV29::WriteValue { address, .. }, ScopedObjectRoleV29::WriteValue { destination, .. }) => {
                                             counts[2] += 1;
-                                            assert!(physical.access(payload.instance, payload.row, coordinate, address, budget)?.is_none());
+                                            (address, destination)
                                         }
                                         _ => panic!("actual/source field role mismatch"),
-                                    }
+                                    };
+                                    let ScopedObjectIdentityV29::Local { instance, local, generation } = endpoint.object
+                                        else { panic!("exact direct source field object"); };
+                                    assert_eq!((instance.index(), local.index(), generation), (payload.instance, 2, 0));
+                                    let access = physical.access(payload.instance, payload.row, coordinate, address, budget)?
+                                        .expect("exact gen0 direct field has an invocation activation");
+                                    assert_eq!(access.operation_pointer(budget)?, (coordinate, address));
+                                    let mut alternatives = 0;
+                                    access.visit_alternatives(budget, |actual_instance, actual_local, slot, activation, _| {
+                                        assert_eq!((actual_instance, actual_local), (instance.index(), local));
+                                        assert!(activation.is_none(), "no StorageLive is present for the original aggregate");
+                                        let row = &source.root_row(0)?.source_slots.slots[slot];
+                                        assert_eq!(row.instance, instance);
+                                        assert_eq!(row.origin.identity, ScopedAllocationIdentityV29::OriginalObject {
+                                            local: local.index(), generation });
+                                        assert!(matches!(row.representation, ScopedSlotRepresentationV29::Object { schema, .. }
+                                            if schema == endpoint.root_schema));
+                                        alternatives += 1;
+                                        Ok(())
+                                    })?;
+                                    assert_eq!(alternatives, 1);
                                 }
                             }
                             assert_eq!(counts, [4, 1, 3]);
@@ -540,7 +644,8 @@ fn original_flat_scalar_fields_reach_final_memory_with_constant_copy_and_move_op
 #[test]
 fn original_flat_scalar_fields_reach_final_memory_with_retained_copy_and_move_reads() {
     for mode in 3..=4 {
-        let (result, _, _, completed) = run_static_field_admission_v29(mode, 0, MODULE_LIMIT, MODULE_LIMIT);
+        let (result, _, _, completed) =
+            run_static_field_admission_v29(mode, 0, MODULE_LIMIT, MODULE_LIMIT);
         result.unwrap_or_else(|error| panic!("retained mode {mode}: {error:?}"));
         assert!(completed);
         assert!(STATIC_FIELD_OBSERVED_V29.get() >= 2);
@@ -550,17 +655,29 @@ fn original_flat_scalar_fields_reach_final_memory_with_retained_copy_and_move_re
 #[test]
 fn retained_aggregate_field_value_must_equal_its_exact_original_read_result() {
     for mode in 3..=4 {
-        let (positive, _, _, completed) = run_static_field_admission_v29(mode, 0, MODULE_LIMIT, MODULE_LIMIT);
+        let (positive, _, _, completed) =
+            run_static_field_admission_v29(mode, 0, MODULE_LIMIT, MODULE_LIMIT);
         positive.unwrap();
         assert!(completed);
-        let (result, _, _, completed) = run_static_field_admission_v29(mode, 8, MODULE_LIMIT, MODULE_LIMIT);
+        let (result, _, _, completed) =
+            run_static_field_admission_v29(mode, 8, MODULE_LIMIT, MODULE_LIMIT);
         assert!(STATIC_FIELD_MUTATED_V29.get());
         assert!(STATIC_FIELD_OBSERVED_V29.get() > 0);
         assert!(!completed);
-        assert!(matches!(result, Err(ProductionSourceOwnedViewErrorV18::Source(
-            ProductionPendingScopedSourceErrorV29::Source(ProductionSemanticKirErrorV1::Unsupported {
-                detail: "typed object source payload differs from its actual operation", ..
-            })))), "{result:?}");
+        assert!(
+            matches!(
+                result,
+                Err(ProductionSourceOwnedViewErrorV18::Source(
+                    ProductionPendingScopedSourceErrorV29::Source(
+                        ProductionSemanticKirErrorV1::Unsupported {
+                            detail: "typed object source payload differs from its actual operation",
+                            ..
+                        }
+                    )
+                ))
+            ),
+            "{result:?}"
+        );
     }
 }
 
@@ -587,7 +704,9 @@ fn original_flat_scalar_fields_reject_same_candidate_field_value_effect_source_g
             Err(ProductionSourceOwnedViewErrorV18::Source(
                 ProductionPendingScopedSourceErrorV29::Source(
                     ProductionSemanticKirErrorV1::Unsupported {
-                        function: 0, block: None, statement: None,
+                        function: 0,
+                        block: None,
+                        statement: None,
                         detail: "execution call parameters differ from their source instance",
                     },
                 ),
@@ -615,31 +734,31 @@ fn original_flat_scalar_fields_reject_same_candidate_field_value_effect_source_g
 #[test]
 fn original_flat_scalar_field_final_admission_exact_measured_work_and_storage_boundaries() {
     for mode in [0, 3] {
-    let (result, work, storage, completed) =
-        run_static_field_admission_v29(mode, 0, MODULE_LIMIT, MODULE_LIMIT);
-    result.unwrap();
-    assert!(completed);
-    let (result, _, _, completed) = run_static_field_admission_v29(mode, 0, work, storage);
-    result.unwrap();
-    assert!(completed);
-    for (work, storage, work_short) in [(work - 1, storage, true), (work, storage - 1, false)] {
-        // A one-short postflight may run after the callback. Only a fully
-        // completed consuming scope publishes success, so check its exact error.
-        let (result, _, _, _) = run_static_field_admission_v29(mode, 0, work, storage);
-        let error = match result {
-            Err(ProductionSourceOwnedViewErrorV18::Resource(error)) => error,
-            Err(ProductionSourceOwnedViewErrorV18::Source(
-                ProductionPendingScopedSourceErrorV29::Source(
-                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error),
-                ),
-            )) => error,
-            other => panic!("exact resource refusal: {other:?}"),
-        };
-        if work_short {
-            assert!(matches!(error, ArgumentResourceV1::Work(_)));
-        } else {
-            assert!(matches!(error, ArgumentResourceV1::Storage(_)));
+        let (result, work, storage, completed) =
+            run_static_field_admission_v29(mode, 0, MODULE_LIMIT, MODULE_LIMIT);
+        result.unwrap();
+        assert!(completed);
+        let (result, _, _, completed) = run_static_field_admission_v29(mode, 0, work, storage);
+        result.unwrap();
+        assert!(completed);
+        for (work, storage, work_short) in [(work - 1, storage, true), (work, storage - 1, false)] {
+            // A one-short postflight may run after the callback. Only a fully
+            // completed consuming scope publishes success, so check its exact error.
+            let (result, _, _, _) = run_static_field_admission_v29(mode, 0, work, storage);
+            let error = match result {
+                Err(ProductionSourceOwnedViewErrorV18::Resource(error)) => error,
+                Err(ProductionSourceOwnedViewErrorV18::Source(
+                    ProductionPendingScopedSourceErrorV29::Source(
+                        ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error),
+                    ),
+                )) => error,
+                other => panic!("exact resource refusal: {other:?}"),
+            };
+            if work_short {
+                assert!(matches!(error, ArgumentResourceV1::Work(_)));
+            } else {
+                assert!(matches!(error, ArgumentResourceV1::Storage(_)));
+            }
         }
-    }
     }
 }

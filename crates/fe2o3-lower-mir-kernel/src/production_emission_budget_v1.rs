@@ -130,7 +130,10 @@ trait SemanticEmissionBudgetV1 {
         ty: SemanticTypeIdV1,
         schema: fe2o3_kernel_ir::StorageLayoutIdV1,
         path: &'path [SemanticProjectionV1],
-    ) -> Result<Vec<source_storage_v29::SourceSelectedComponentV29<'path>>, ProductionSemanticKirErrorV1> {
+    ) -> Result<
+        Vec<source_storage_v29::SourceSelectedComponentV29<'path>>,
+        ProductionSemanticKirErrorV1,
+    > {
         let _ = (ty, schema, path);
         self.source_reference_owner_v29(plan)?;
         Err(ArgumentResourceV1::Accounting.into())
@@ -189,7 +192,9 @@ impl SemanticEmissionBudgetV1 for ArgumentBudgetV1<'_> {
         schema: fe2o3_kernel_ir::StorageLayoutIdV1,
         extent: Option<(u64, u32)>,
     ) -> Result<bool, ProductionSemanticKirErrorV1> {
-        source_object_storage_matches_v29(plan, cell, instance, local, generation, schema, extent, self)
+        source_object_storage_matches_v29(
+            plan, cell, instance, local, generation, schema, extent, self,
+        )
     }
 
     fn source_physical_object_count_v29(
@@ -205,7 +210,10 @@ impl SemanticEmissionBudgetV1 for ArgumentBudgetV1<'_> {
         ty: SemanticTypeIdV1,
         schema: fe2o3_kernel_ir::StorageLayoutIdV1,
         path: &'path [SemanticProjectionV1],
-    ) -> Result<Vec<source_storage_v29::SourceSelectedComponentV29<'path>>, ProductionSemanticKirErrorV1> {
+    ) -> Result<
+        Vec<source_storage_v29::SourceSelectedComponentV29<'path>>,
+        ProductionSemanticKirErrorV1,
+    > {
         source_object_projection_v29(plan, ty, schema, path, self)
     }
     fn emission_service_work_v1(&self) -> Option<usize> {
