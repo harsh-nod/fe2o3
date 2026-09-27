@@ -1,11 +1,60 @@
+use std::cell::Cell;
 use std::mem::{align_of, size_of};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, TryLockError};
 
-use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+    CanonicalKernelIrWorkBudgetV1 as Work,
+};
 
-use crate::retained_resources::{RetainedPayload, RetainedResourcesV2};
+use crate::retained_resources::{
+    RetainedPayload, RetainedResourceAccessErrorV2 as Access, RetainedResourcesV2,
+};
+
+#[derive(Debug, Eq, PartialEq)]
+enum Error {
+    Resource(Resource),
+    Access(Access),
+    Callback,
+}
+
+impl From<Resource> for Error {
+    fn from(error: Resource) -> Self {
+        Self::Resource(error)
+    }
+}
+
+impl From<Access> for Error {
+    fn from(error: Access) -> Self {
+        Self::Access(error)
+    }
+}
+
+// Independent by-value layout witness for reference counts and the mutex payload.
+#[repr(C)]
+struct SharedAllocation<T> {
+    _strong: AtomicUsize,
+    _weak: AtomicUsize,
+    _value: Mutex<T>,
+}
+
+fn observe<T: Send + 'static, R>(
+    handle: &RetainedResourcesV2<T>,
+    operation: impl FnOnce(&T) -> R,
+) -> R {
+    let mut work = Work::new(RetainedResourcesV2::<T>::ACCESS_WORK);
+    let mut budget = Budget::new(
+        &mut work,
+        handle.retained_storage() + RetainedResourcesV2::<T>::ACCESS_SCRATCH,
+    );
+    budget.reserve_storage(handle.retained_storage()).unwrap();
+    handle
+        .with::<_, Error>(&mut budget, |value, _| Ok(operation(value)))
+        .unwrap()
+}
 
 struct DropWitness(Arc<AtomicUsize>);
 
@@ -49,7 +98,7 @@ fn retiring_slot_retains_value_until_handle_drops() {
     drop(payload);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     assert_eq!(Arc::strong_count(&handle.owner), 1);
-    assert!(Arc::ptr_eq(&handle.get().0, &drops));
+    assert!(observe(&handle, |value| Arc::ptr_eq(&value.0, &drops)));
     drop(handle);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
@@ -76,7 +125,7 @@ fn unwinding_slot_preserves_typed_owner() {
     }));
     assert!(result.is_err());
     assert_eq!(drops.load(Ordering::SeqCst), 0);
-    assert!(Arc::ptr_eq(&handle.get().0, &drops));
+    assert!(observe(&handle, |value| Arc::ptr_eq(&value.0, &drops)));
     drop(handle);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
@@ -99,9 +148,12 @@ fn charges_cover_full_owned_capacity_and_request_header() {
     let declared = size_of::<Vec<u8>>() + value.capacity();
     let quoted = RetainedResourcesV2::<Vec<u8>>::payload_storage(declared).unwrap();
     let full = RetainedResourcesV2::<Vec<u8>>::storage_for(declared).unwrap();
-    assert!(quoted >= declared + size_of::<[AtomicUsize; 2]>());
+    assert_eq!(
+        quoted,
+        size_of::<SharedAllocation<Vec<u8>>>() + value.capacity()
+    );
     let (handle, payload) = RetainedResourcesV2::pair(value, declared).unwrap();
-    assert_eq!(handle.get().as_slice(), b"retained");
+    assert!(observe(&handle, |value| value.as_slice() == b"retained"));
     assert_eq!(payload.storage(), quoted);
     assert_eq!(
         full,
@@ -177,7 +229,6 @@ fn largest_full_request_charge_is_checked_without_wrapping() {
         Err(Resource::Arithmetic)
     );
     let (handle, payload) = RetainedResourcesV2::pair(7_u8, declared).unwrap();
-    assert_eq!(*handle.get(), 7);
     assert_eq!(handle.retained_storage(), usize::MAX);
     assert_eq!(
         payload.storage(),
@@ -187,6 +238,16 @@ fn largest_full_request_charge_is_checked_without_wrapping() {
         RetainedResourcesV2::pair(7_u8, declared + 1),
         Err(Resource::Arithmetic)
     ));
+    // This boundary leaves no representable room for the access frame.
+    let mut work = Work::new(RetainedResourcesV2::<u8>::ACCESS_WORK);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    budget.reserve_storage(usize::MAX).unwrap();
+    assert!(matches!(
+        handle.with::<(), Error>(&mut budget, |_, _| panic!("unfunded access")),
+        Err(Error::Resource(Resource::Storage(_)))
+    ));
+    assert_eq!(budget.failed_storage(), Some(usize::MAX));
+    assert_eq!(budget.storage(), usize::MAX);
 }
 
 #[test]
@@ -199,19 +260,23 @@ fn alignment_padding_covers_large_alignment_tail_and_zero_sized_values() {
     let declared = size_of::<Aligned>() + 23;
     let quote = RetainedResourcesV2::<Aligned>::payload_storage(declared).unwrap();
     assert!(quote >= declared + align_of::<Aligned>());
+    assert_eq!(quote, size_of::<SharedAllocation<Aligned>>() + 23);
     let (handle, payload) = RetainedResourcesV2::pair(Aligned([1, 2, 3]), declared).unwrap();
-    assert_eq!(handle.get().0, [1, 2, 3]);
+    assert_eq!(observe(&handle, |value| value.0), [1, 2, 3]);
     assert_eq!(payload.storage(), quote);
 
-    assert!(
-        RetainedResourcesV2::<u8>::payload_storage(1).unwrap() >= size_of::<[AtomicUsize; 3]>()
+    assert_eq!(
+        RetainedResourcesV2::<u8>::payload_storage(1).unwrap(),
+        size_of::<SharedAllocation<u8>>()
     );
-    assert!(
-        RetainedResourcesV2::<()>::payload_storage(0).unwrap() >= size_of::<[AtomicUsize; 2]>()
+    assert_eq!(
+        RetainedResourcesV2::<()>::payload_storage(0).unwrap(),
+        size_of::<SharedAllocation<()>>()
     );
     assert_eq!(size_of::<AlignedZst>(), 0);
     let (handle, payload) = RetainedResourcesV2::pair(AlignedZst, 0).unwrap();
     assert!(payload.storage() >= align_of::<AlignedZst>());
+    assert_eq!(payload.storage(), size_of::<SharedAllocation<AlignedZst>>());
     assert_eq!(
         handle.retained_storage(),
         payload.storage() + size_of::<(RetainedResourcesV2<AlignedZst>, usize)>()
@@ -229,5 +294,172 @@ fn debug_is_opaque_without_requiring_value_debug() {
         )
     );
     drop((handle, payload));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn nonsync_cell_access_uses_exact_original_budget_and_preserves_history() {
+    type Handle = RetainedResourcesV2<Cell<usize>>;
+    fn require_send_sync<T: Send + Sync>() {}
+    require_send_sync::<Handle>();
+    require_send_sync::<RetainedPayload>();
+    let (handle, payload) = Handle::pair(Cell::new(11), size_of::<Cell<usize>>()).unwrap();
+    let floor = handle.retained_storage() + 29;
+    let work_limit = 13 + Handle::ACCESS_WORK + 17;
+    let storage_limit = floor + Handle::ACCESS_SCRATCH + 37;
+    let mut work = Work::new(work_limit);
+    let mut budget = Budget::new(&mut work, storage_limit);
+    budget.charge_work(13).unwrap();
+    budget.reserve_storage(floor).unwrap();
+    assert!(budget.charge_work(work_limit + 1).is_err());
+    assert!(budget.reserve_storage(storage_limit + 1).is_err());
+    let failed_work = budget.failed_work();
+    let failed_storage = budget.failed_storage();
+    let ledger = budget.work_ledger_identity_v1();
+    assert_eq!(
+        handle.with::<_, Error>(&mut budget, |value, b| {
+            assert!(ledger == b.work_ledger_identity_v1());
+            assert_eq!(b.work(), 13 + Handle::ACCESS_WORK);
+            assert_eq!(b.storage(), floor + Handle::ACCESS_SCRATCH);
+            assert!(matches!(
+                handle.owner.try_lock(),
+                Err(TryLockError::WouldBlock)
+            ));
+            b.charge_work(17)?;
+            b.reserve_storage(37)?;
+            value.set(value.get() + 1);
+            Ok(value.get())
+        }),
+        Ok(12)
+    );
+    assert!(ledger == budget.work_ledger_identity_v1());
+    assert_eq!(budget.work(), work_limit);
+    assert_eq!(budget.storage(), floor);
+    assert_eq!(budget.peak_storage(), storage_limit);
+    assert_eq!(budget.failed_work(), failed_work);
+    assert_eq!(budget.failed_storage(), failed_storage);
+    assert!(handle.owner.try_lock().is_ok());
+    drop(payload);
+    assert_eq!(observe(&handle, Cell::get), 12);
+}
+
+#[test]
+fn short_floor_work_or_scratch_refuses_before_callback() {
+    #[derive(Clone, Copy)]
+    enum Short {
+        Floor,
+        EntryWork,
+        Work,
+        Scratch,
+    }
+    type Handle = RetainedResourcesV2<u8>;
+    let (handle, _payload) = Handle::pair(7, 1).unwrap();
+    let full = handle.retained_storage();
+    for short in [Short::Floor, Short::EntryWork, Short::Work, Short::Scratch] {
+        let (floor, work_limit, storage_limit, charged) = match short {
+            Short::Floor => (
+                full - 1,
+                Handle::ACCESS_WORK,
+                full + Handle::ACCESS_SCRATCH,
+                8,
+            ),
+            Short::EntryWork => (full, 7, full + Handle::ACCESS_SCRATCH, 0),
+            Short::Work => (
+                full,
+                Handle::ACCESS_WORK - 1,
+                full + Handle::ACCESS_SCRATCH,
+                8,
+            ),
+            Short::Scratch => (
+                full,
+                Handle::ACCESS_WORK,
+                full + Handle::ACCESS_SCRATCH - 1,
+                Handle::ACCESS_WORK,
+            ),
+        };
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(floor).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let result = handle.with::<(), Error>(&mut budget, |_, _| panic!("unfunded callback"));
+        match short {
+            Short::Floor => assert_eq!(result, Err(Error::Resource(Resource::Accounting))),
+            Short::EntryWork | Short::Work => {
+                assert!(matches!(result, Err(Error::Resource(Resource::Work(_)))));
+            }
+            Short::Scratch => {
+                assert!(matches!(result, Err(Error::Resource(Resource::Storage(_)))));
+            }
+        }
+        assert!(ledger == budget.work_ledger_identity_v1());
+        assert_eq!(budget.work(), charged);
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.peak_storage(), floor);
+        assert!(!handle.owner.is_poisoned());
+        assert!(handle.owner.try_lock().is_ok());
+    }
+}
+
+#[test]
+fn callback_error_restores_storage_and_unlocks_without_poisoning() {
+    type Handle = RetainedResourcesV2<u8>;
+    let (handle, _payload) = Handle::pair(7, 1).unwrap();
+    let floor = handle.retained_storage();
+    let mut work = Work::new(2 * Handle::ACCESS_WORK + 17);
+    let mut budget = Budget::new(&mut work, floor + Handle::ACCESS_SCRATCH + 37);
+    budget.reserve_storage(floor).unwrap();
+    assert_eq!(
+        handle.with::<(), Error>(&mut budget, |_, b| {
+            b.charge_work(17)?;
+            b.reserve_storage(37)?;
+            Err(Error::Callback)
+        }),
+        Err(Error::Callback)
+    );
+    assert_eq!(budget.storage(), floor);
+    assert!(!handle.owner.is_poisoned());
+    assert_eq!(
+        handle.with::<_, Error>(&mut budget, |value, _| Ok(*value)),
+        Ok(7)
+    );
+    assert_eq!(budget.work(), 2 * Handle::ACCESS_WORK + 17);
+    assert_eq!(budget.storage(), floor);
+    assert_eq!(budget.peak_storage(), floor + Handle::ACCESS_SCRATCH + 37);
+}
+
+#[test]
+fn callback_panic_restores_budget_and_poison_refuses_without_dropping_value() {
+    type Handle = RetainedResourcesV2<DropWitness>;
+    let (handle, payload, drops) = tracked_pair();
+    let floor = handle.retained_storage();
+    let mut work = Work::new(2 * Handle::ACCESS_WORK + 17);
+    let mut budget = Budget::new(&mut work, floor + Handle::ACCESS_SCRATCH + 37);
+    budget.reserve_storage(floor).unwrap();
+    let ledger = budget.work_ledger_identity_v1();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        handle.with::<(), Error>(&mut budget, |_, b| {
+            b.charge_work(17)?;
+            b.reserve_storage(37)?;
+            panic!("retained callback unwind");
+        })
+    }));
+    assert!(result.is_err());
+    assert!(ledger == budget.work_ledger_identity_v1());
+    assert_eq!(budget.work(), Handle::ACCESS_WORK + 17);
+    assert_eq!(budget.storage(), floor);
+    assert!(handle.owner.is_poisoned());
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        handle.with::<(), Error>(&mut budget, |_, _| panic!("poisoned callback")),
+        Err(Error::Access(Access::Poisoned))
+    );
+    assert!(ledger == budget.work_ledger_identity_v1());
+    assert_eq!(budget.work(), 2 * Handle::ACCESS_WORK + 17);
+    assert_eq!(budget.storage(), floor);
+    assert_eq!(budget.peak_storage(), floor + Handle::ACCESS_SCRATCH + 37);
+    assert!(handle.owner.is_poisoned());
+    drop(handle);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(payload);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }

@@ -2,14 +2,37 @@
 
 use std::alloc::Layout;
 use std::any::Any;
+use std::error::Error;
 use std::fmt;
 use std::mem::size_of;
-use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 
-use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+};
 
-/// Move-only, read-only handle sharing resources with an existing cleanup slot.
+const ENTRY: usize = 8;
+
+/// Fixed refusal for scoped access to retained resources.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetainedResourceAccessErrorV2 {
+    /// A previous panic while holding the owner lock prevents further access.
+    Poisoned,
+}
+
+impl fmt::Display for RetainedResourceAccessErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Poisoned => formatter.write_str("retained resource owner is poisoned"),
+        }
+    }
+}
+
+impl Error for RetainedResourceAccessErrorV2 {}
+
+/// Move-only handle providing scoped shared access under an owner mutex.
 ///
 /// The typed handle may outlive terminal cleanup; the last owner drops `T`.
 /// This handle neither admits resources nor supplies accounting or execution
@@ -32,15 +55,77 @@ use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
 /// use fe2o3_protected_service_spawn::RetainedResourcesV2;
 /// fn extract(value: RetainedResourcesV2<String>) -> String { value.into_inner() }
 /// ```
-pub struct RetainedResourcesV2<T: Send + Sync + 'static> {
-    owner: Arc<T>,
+///
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::RetainedResourcesV2;
+/// fn unlocked(value: &RetainedResourcesV2<String>) -> &String { value.get() }
+/// ```
+pub struct RetainedResourcesV2<T: Send + 'static> {
+    owner: Arc<Mutex<T>>,
     charge: usize,
 }
 
-impl<T: Send + Sync + 'static> RetainedResourcesV2<T> {
-    /// Borrows the retained value without exposing or transferring its shared owner.
-    pub fn get(&self) -> &T {
-        &self.owner
+impl<T: Send + 'static> RetainedResourcesV2<T> {
+    /// Fixed lock/unlock allowance on the original request ledger; excludes callback work.
+    pub const ACCESS_WORK: usize = ENTRY + 2 * 1088;
+    /// Fixed guard/result metadata and control frame; excludes callback scratch and output.
+    pub const ACCESS_SCRATCH: usize = size_of::<MutexGuard<'static, T>>()
+        + size_of::<LockResult<MutexGuard<'static, T>>>()
+        + size_of::<Result<(), RetainedResourceAccessErrorV2>>()
+        + 1024;
+
+    /// Calls a metered operation with `&T` while exclusively holding the owner mutex.
+    ///
+    /// The full request charge must remain prepaid. The callback receives the
+    /// ORIGINAL budget and funds its own work, scratch and any returned owner.
+    /// Entry storage is restored on success, error and unwind; work, peak and
+    /// denial history remain. A panic poisons the owner and later access refuses
+    /// without invoking the callback. Mutex waiting time is not bounded by quota.
+    ///
+    /// Never recursively access this same owner, including through another
+    /// reference: the mutex is not reentrant. No mutable reference, guard or
+    /// borrowed view may escape the callback; `T` may have interior mutability.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_protected_service_spawn::{RetainedResourcesV2, RetainedResourceAccessErrorV2 as Access};
+    /// use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    ///     CanonicalKernelIrVerificationResourceErrorV1 as Resource};
+    /// fn escape<'a, E>(owner: &'a RetainedResourcesV2<String>, b: &mut Budget<'_>)
+    ///     -> Result<&'a String, E> where E: From<Resource> + From<Access> {
+    ///     owner.with(b, |value, _| Ok(value))
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use fe2o3_protected_service_spawn::{RetainedResourcesV2, RetainedResourceAccessErrorV2 as Access};
+    /// use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    ///     CanonicalKernelIrVerificationResourceErrorV1 as Resource};
+    /// fn mutate<E>(owner: &RetainedResourcesV2<String>, b: &mut Budget<'_>)
+    ///     -> Result<(), E> where E: From<Resource> + From<Access> {
+    ///     owner.with(b, |value, _| { value.clear(); Ok(()) })
+    /// }
+    /// ```
+    pub fn with<R, E>(
+        &self,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(&T, &mut Budget<'_>) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<Resource> + From<RetainedResourceAccessErrorV2>,
+    {
+        b.with_prepaid_scope(
+            self.charge,
+            ENTRY,
+            Self::ACCESS_WORK,
+            Self::ACCESS_SCRATCH,
+            |b| {
+                let owner = self
+                    .owner
+                    .lock()
+                    .map_err(|_| RetainedResourceAccessErrorV2::Poisoned)?;
+                operation(&owner, b)
+            },
+        )
     }
 
     /// Full request charge: payload storage plus `size_of::<(Self, usize)>()`.
@@ -48,7 +133,7 @@ impl<T: Send + Sync + 'static> RetainedResourcesV2<T> {
         self.charge
     }
 
-    /// Inert checked payload quota, including the Arc header and alignment padding.
+    /// Inert checked payload quota, including Mutex/Arc overhead and alignment padding.
     ///
     /// `retained_storage` must cover `T` and ALL transitively owned storage. A
     /// declaration below `size_of::<T>()` returns `Resource::Accounting`; layout
@@ -60,10 +145,10 @@ impl<T: Send + Sync + 'static> RetainedResourcesV2<T> {
         if retained_storage < size_of::<T>() {
             return Err(Resource::Accounting);
         }
-        // Arc stores two atomic reference counts before T. Include both prefix
-        // and tail padding; T can be more aligned than either reference count.
+        // The allocation contains two reference counts and Mutex<T>. Subtract
+        // only T, so the mutex and all prefix/tail padding remain fully charged.
         let (allocation, _) = Layout::new::<[AtomicUsize; 2]>()
-            .extend(Layout::new::<T>())
+            .extend(Layout::new::<Mutex<T>>())
             .map_err(|_| Resource::Arithmetic)?;
         allocation
             .pad_to_align()
@@ -107,8 +192,8 @@ impl<T: Send + Sync + 'static> RetainedResourcesV2<T> {
     ) -> Result<(Self, RetainedPayload), Resource> {
         let charge = Self::storage_for(retained_storage)?;
         let payload_charge = Self::payload_storage(retained_storage)?;
-        let owner = Arc::new(value);
-        let erased: Arc<dyn Any + Send + Sync> = Arc::<T>::clone(&owner);
+        let owner = Arc::new(Mutex::new(value));
+        let erased: Arc<dyn Any + Send + Sync> = Arc::<Mutex<T>>::clone(&owner);
         Ok((
             Self { owner, charge },
             RetainedPayload {
@@ -119,7 +204,7 @@ impl<T: Send + Sync + 'static> RetainedResourcesV2<T> {
     }
 }
 
-impl<T: Send + Sync + 'static> fmt::Debug for RetainedResourcesV2<T> {
+impl<T: Send + 'static> fmt::Debug for RetainedResourcesV2<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RetainedResourcesV2")
