@@ -169,6 +169,7 @@ mod sdma_allocation;
 mod sdma_demotion;
 mod sdma_host_read;
 mod sdma_host_write;
+mod sdma_observation;
 mod sdma_promotion;
 use initialized_storage::InitializedStorageOwnerV1;
 mod sdma_recycle;
@@ -925,8 +926,28 @@ struct ActiveSdmaCopyV1 {
 #[derive(Debug)]
 enum ActiveSdmaPhaseV1 {
     Ready,
+    // The exact descriptor stays indexed while native custody is lower-owned.
+    // Failure leaves this phase sealed behind the terminal backend gate.
+    Quarantined,
     DirectionalPublished(Box<DirectionalSdmaSubmissionOwnerV1>),
     SameDevicePublished(Box<SameDeviceSdmaSubmissionOwnerV1>),
+}
+
+#[derive(Clone, Copy)]
+struct SdmaStorageBindingV1 {
+    id: u64,
+    source: u64,
+    destination: u64,
+}
+
+impl From<&ActiveSdmaCopyV1> for SdmaStorageBindingV1 {
+    fn from(active: &ActiveSdmaCopyV1) -> Self {
+        Self {
+            id: active.id,
+            source: active.source,
+            destination: active.destination,
+        }
+    }
 }
 
 // Terminal transitions must retain native custody without allocating in the
@@ -1079,7 +1100,7 @@ fn direct_sdma_copy_kind_v1(
 }
 
 fn directional_sdma_allocation_ids_v1(
-    active: &ActiveSdmaCopyV1,
+    active: SdmaStorageBindingV1,
     direction: Gfx942PersistentSdmaDirectionV1,
 ) -> (u64, u64) {
     match direction {
@@ -3436,7 +3457,7 @@ impl KfdRuntimeBackendV1 {
         direction: Gfx942PersistentSdmaDirectionV1,
         owner: KfdRuntimeSdmaInFlightV1,
     ) -> Result<DirectionalSdmaPairOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let (host_id, device_id) = directional_sdma_allocation_ids_v1(active, direction);
+        let (host_id, device_id) = directional_sdma_allocation_ids_v1(active.into(), direction);
         let host_ready = self.allocations.get(&host_id).is_some_and(|record| {
             record
                 .sdma_storage
@@ -3480,7 +3501,7 @@ impl KfdRuntimeBackendV1 {
 
     fn restore_directional_sdma_storage_v1(
         &mut self,
-        active: &ActiveSdmaCopyV1,
+        active: SdmaStorageBindingV1,
         direction: Gfx942PersistentSdmaDirectionV1,
         owner: KfdRuntimeSdmaInFlightV1,
         pair: DirectionalSdmaPairOwnerV1,
@@ -3582,7 +3603,7 @@ impl KfdRuntimeBackendV1 {
 
     fn restore_same_device_sdma_storage_v1(
         &mut self,
-        active: &ActiveSdmaCopyV1,
+        active: SdmaStorageBindingV1,
         owner: KfdRuntimeSdmaInFlightV1,
         pair: SameDeviceSdmaPairOwnerV1,
         destination_dirty: bool,
@@ -3663,7 +3684,7 @@ impl KfdRuntimeBackendV1 {
     #[allow(clippy::too_many_arguments)]
     fn restore_h2d_ready_storage_v1(
         &mut self,
-        active: &ActiveSdmaCopyV1,
+        active: SdmaStorageBindingV1,
         ready: PersistentComputeReadyOwnerV1,
         promotion: Option<KfdRuntimeReadyPromotionPerformanceV1>,
         host: SdmaBufferOwnerV1,
@@ -3728,10 +3749,12 @@ impl KfdRuntimeBackendV1 {
 
     fn finish_sdma_copy_v1(
         &mut self,
-        active: ActiveSdmaCopyV1,
+        submission: u64,
         completed: DirectionalSdmaCompletedOwnerV1,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let direction = match self.direct_sdma_direction_for_active_v1(&active) {
+        let active = &self.active_sdma[&submission];
+        let binding = SdmaStorageBindingV1::from(active);
+        let direction = match self.direct_sdma_direction_for_active_v1(active) {
             Ok(direction) => direction,
             Err(detail) => {
                 self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Completed(
@@ -3770,8 +3793,7 @@ impl KfdRuntimeBackendV1 {
                 "directional persistent SDMA completion metadata changed unexpectedly",
             ));
         }
-        if let Some((content, bytes, sha256)) =
-            self.full_h2d_ready_provenance_v1(&active, direction)
+        if let Some((content, bytes, sha256)) = self.full_h2d_ready_provenance_v1(active, direction)
         {
             let promotion_started = Instant::now();
             match self
@@ -3784,19 +3806,19 @@ impl KfdRuntimeBackendV1 {
                         promotion_started.elapsed(),
                     );
                     self.restore_h2d_ready_storage_v1(
-                        &active, ready, promotion, host, bytes, sha256,
+                        binding, ready, promotion, host, bytes, sha256,
                     )?;
-                    return self.finish_sdma_window_progress_v1(active);
+                    return self.finish_sdma_window_progress_v1(submission);
                 }
                 Err(PersistentComputeReadyTransitionFailureV1::Recovered { pair }) => {
                     self.restore_directional_sdma_storage_v1(
-                        &active,
+                        binding,
                         direction,
-                        KfdRuntimeSdmaInFlightV1::Async(active.id),
+                        KfdRuntimeSdmaInFlightV1::Async(submission),
                         pair,
                         true,
                     )?;
-                    return self.finish_sdma_window_progress_v1(active);
+                    return self.finish_sdma_window_progress_v1(submission);
                 }
                 Err(PersistentComputeReadyTransitionFailureV1::ForeignQueue {
                     detail,
@@ -3845,20 +3867,22 @@ impl KfdRuntimeBackendV1 {
                 }
             };
         self.restore_directional_sdma_storage_v1(
-            &active,
+            binding,
             direction,
-            KfdRuntimeSdmaInFlightV1::Async(active.id),
+            KfdRuntimeSdmaInFlightV1::Async(submission),
             pair,
             true,
         )?;
-        self.finish_sdma_window_progress_v1(active)
+        self.finish_sdma_window_progress_v1(submission)
     }
 
     fn finish_same_device_sdma_copy_v1(
         &mut self,
-        active: ActiveSdmaCopyV1,
+        submission: u64,
         completed: SameDeviceSdmaCompletedOwnerV1,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let active = &self.active_sdma[&submission];
+        let binding = SdmaStorageBindingV1::from(active);
         let Some(expected_requests) = active.window_requests.as_ref() else {
             self.retain_terminal_sdma_custody_v1(
                 KfdRuntimeTerminalSdmaCustodyV1::SameDeviceCompleted(completed),
@@ -3868,7 +3892,7 @@ impl KfdRuntimeBackendV1 {
             ));
         };
         let expected = expected_requests.first();
-        if self.direct_sdma_copy_kind_for_active_v1(&active) != Ok(DirectSdmaCopyKindV1::SameDevice)
+        if self.direct_sdma_copy_kind_for_active_v1(active) != Ok(DirectSdmaCopyKindV1::SameDevice)
             || u64::from(completed.copy_bytes()) != active.window_bytes
             || completed.packet_count() != expected_requests.packet_count()
             || completed.source_offset() != expected.source_offset
@@ -3898,64 +3922,88 @@ impl KfdRuntimeBackendV1 {
                 }
             };
         self.restore_same_device_sdma_storage_v1(
-            &active,
-            KfdRuntimeSdmaInFlightV1::Async(active.id),
+            binding,
+            KfdRuntimeSdmaInFlightV1::Async(submission),
             pair,
             true,
         )?;
-        self.finish_sdma_window_progress_v1(active)
+        self.finish_sdma_window_progress_v1(submission)
     }
 
     fn finish_sdma_window_progress_v1(
         &mut self,
-        mut active: ActiveSdmaCopyV1,
+        submission: u64,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        active.completed_bytes = active
+        let active = &self.active_sdma[&submission];
+        let completed_bytes = active
             .completed_bytes
             .checked_add(active.window_bytes)
-            .ok_or_else(|| self.terminal_error("SDMA copy progress overflow"))?;
-        if active.completed_bytes < active.byte_len {
+            .filter(|bytes| *bytes <= active.byte_len);
+        let Some(completed_bytes) = completed_bytes else {
+            return Err(self.terminal_error("SDMA copy progress overflow"));
+        };
+        if completed_bytes < active.byte_len {
             // Poll only observes and returns exact custody. Explicit flush owns
             // every continuation publication.
+            let active = self
+                .active_sdma
+                .get_mut(&submission)
+                .expect("retained SDMA copy");
+            active.completed_bytes = completed_bytes;
             active.phase = ActiveSdmaPhaseV1::Ready;
             active.window_bytes = 0;
             active.window_requests = None;
-            self.active_sdma.insert(active.id, active);
             return Ok(BackendPollV1::Pending);
         }
-        self.release_sdma_dependency_retains_v1(&active.dependencies);
-        self.release_allocation_custody_v1(active.source, active.id);
-        self.release_allocation_custody_v1(active.destination, active.id);
-        self.release_active_sdma_stream_v1(active.stream, active.id);
+        if !self.sdma_completion_custody_is_intact_v1(submission) {
+            return Err(self.terminal_error("SDMA completion custody changed before release"));
+        }
+        let (source, destination, stream, dependency_depth) = (
+            active.source,
+            active.destination,
+            active.stream,
+            active.dependency_depth,
+        );
+        Self::release_sdma_dependency_counts_v1(
+            &mut self.sdma_dependency_retain_counts,
+            &active.dependencies,
+        );
+        self.release_allocation_custody_v1(source, submission);
+        self.release_allocation_custody_v1(destination, submission);
+        self.release_active_sdma_stream_v1(stream, submission);
         let status = BackendPollV1::Succeeded;
         self.submissions.insert(
-            active.id,
+            submission,
             SubmissionRecordV1 {
-                stream: active.stream,
+                stream,
                 status,
-                dependency_depth: active.dependency_depth,
+                dependency_depth,
                 profile_dispatch_published: false,
             },
         );
-        self.sdma_completion_reservations = self
-            .sdma_completion_reservations
-            .checked_sub(1)
-            .expect("accepted SDMA copy reserves one completion slot");
+        self.sdma_completion_reservations -= 1;
+        self.active_sdma.remove(&submission);
         Ok(status)
     }
 
     fn release_sdma_dependency_retains_v1(&mut self, dependencies: &[u64]) {
+        Self::release_sdma_dependency_counts_v1(
+            &mut self.sdma_dependency_retain_counts,
+            dependencies,
+        );
+    }
+
+    fn release_sdma_dependency_counts_v1(counts: &mut HashMap<u64, usize>, dependencies: &[u64]) {
         for dependency in dependencies {
             let remove = {
-                let count = self
-                    .sdma_dependency_retain_counts
+                let count = counts
                     .get_mut(dependency)
                     .expect("active SDMA dependency remains retained");
                 *count = count.checked_sub(1).expect("positive SDMA retain count");
                 *count == 0
             };
             if remove {
-                self.sdma_dependency_retain_counts.remove(dependency);
+                counts.remove(dependency);
             }
         }
     }
@@ -4116,7 +4164,7 @@ impl KfdRuntimeBackendV1 {
                 SdmaTransitionFailureV1::Retryable { detail, custody } => {
                     let detail = format!("KFD directional SDMA publication: {detail}");
                     self.restore_directional_sdma_storage_v1(
-                        &active,
+                        (&active).into(),
                         direction,
                         KfdRuntimeSdmaInFlightV1::Async(active.id),
                         custody,
@@ -4179,7 +4227,7 @@ impl KfdRuntimeBackendV1 {
             Err(SdmaTransitionFailureV1::Retryable { detail, custody }) => {
                 let detail = format!("KFD same-device SDMA publication: {detail}");
                 self.restore_same_device_sdma_storage_v1(
-                    &active,
+                    (&active).into(),
                     KfdRuntimeSdmaInFlightV1::Async(active.id),
                     custody,
                     false,
@@ -4204,70 +4252,80 @@ impl KfdRuntimeBackendV1 {
 
     fn progress_unpublished_sdma_copy_v1(
         &mut self,
-        mut active: ActiveSdmaCopyV1,
+        submission: u64,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        while let Some(dependency) = active.dependencies.get(active.dependency_cursor).copied() {
-            let status = match self.poll_v1(dependency) {
-                Ok(status) => status,
-                Err(failure @ RuntimeBackendFailureV1::Rejected(_))
-                | Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
-                    self.active_sdma.insert(active.id, active);
-                    return Err(failure);
-                }
-                Err(failure @ RuntimeBackendFailureV1::Quiescent(_)) => {
-                    self.fail_quiescent_sdma_copy_v1(active);
-                    return Err(failure);
-                }
-            };
-            match status {
-                BackendPollV1::Succeeded => active.dependency_cursor += 1,
-                BackendPollV1::Pending => {
-                    self.active_sdma.insert(active.id, active);
-                    return Ok(BackendPollV1::Pending);
-                }
-                BackendPollV1::Failed { .. } => {
-                    return Ok(self.fail_unpublished_sdma_copy_v1(active));
-                }
-            }
+        self.observe_sdma_dependencies_v1(submission, true)?;
+        let Some(active) = self.active_sdma.get(&submission) else {
+            return Ok(self.submissions[&submission].status);
+        };
+        if active.dependency_cursor != active.dependencies.len() {
+            return Ok(BackendPollV1::Pending);
         }
+        let active = self
+            .active_sdma
+            .remove(&submission)
+            .expect("dependency-ready copy remains indexed");
         self.publish_sdma_copy_v1(active)
     }
 
     fn observe_unpublished_sdma_copy_v1(
         &mut self,
-        mut active: ActiveSdmaCopyV1,
+        submission: u64,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        while let Some(dependency) = active.dependencies.get(active.dependency_cursor).copied() {
-            let dependency_status = match self.poll_v1(dependency) {
-                Ok(status) => status,
-                Err(RuntimeBackendFailureV1::Rejected(error)) => {
-                    self.active_sdma.insert(active.id, active);
+        self.observe_sdma_dependencies_v1(submission, false)
+    }
+
+    fn observe_sdma_dependencies_v1(
+        &mut self,
+        submission: u64,
+        progress: bool,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        loop {
+            let active = &self.active_sdma[&submission];
+            let Some(dependency) = active.dependencies.get(active.dependency_cursor).copied()
+            else {
+                return Ok(BackendPollV1::Pending);
+            };
+            // Every ancestor remains indexed throughout recursive observation.
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.poll_v1(dependency)));
+            let status = match outcome {
+                Err(payload) => sdma_host_write::resume_sdma_owner_panic_v1(payload, || {
+                    self.poison_terminal_v1()
+                }),
+                Ok(Ok(status)) => status,
+                Ok(Err(RuntimeBackendFailureV1::Rejected(error))) if !progress => {
                     return Err(self.terminal_error(format!(
                         "KFD unpublished SDMA copy retained an exact dependency that was rejected during observation: {error}"
                     )));
                 }
-                Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
-                    self.active_sdma.insert(active.id, active);
-                    return Err(failure);
-                }
-                Err(failure @ RuntimeBackendFailureV1::Quiescent(_)) => {
+                Ok(Err(failure @ RuntimeBackendFailureV1::Quiescent(_))) => {
+                    let active = self
+                        .active_sdma
+                        .remove(&submission)
+                        .expect("quiescent copy remains indexed");
                     self.fail_quiescent_sdma_copy_v1(active);
                     return Err(failure);
                 }
+                Ok(Err(failure)) => return Err(failure),
             };
-            match dependency_status {
-                BackendPollV1::Succeeded => active.dependency_cursor += 1,
-                BackendPollV1::Pending => {
-                    self.active_sdma.insert(active.id, active);
-                    return Ok(BackendPollV1::Pending);
+            match status {
+                BackendPollV1::Succeeded => {
+                    self.active_sdma
+                        .get_mut(&submission)
+                        .expect("retained copy")
+                        .dependency_cursor += 1;
                 }
+                BackendPollV1::Pending => return Ok(BackendPollV1::Pending),
                 BackendPollV1::Failed { .. } => {
+                    let active = self
+                        .active_sdma
+                        .remove(&submission)
+                        .expect("failed copy remains indexed");
                     return Ok(self.fail_unpublished_sdma_copy_v1(active));
                 }
             }
         }
-        self.active_sdma.insert(active.id, active);
-        Ok(BackendPollV1::Pending)
     }
 
     fn recycle_transient_sdma_buffer_v1(
@@ -6284,110 +6342,10 @@ impl KfdRuntimeBackendV1 {
         submission: u64,
         timeout: Duration,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let Some(mut active) = self.active_sdma.remove(&submission) else {
-            return self.poll_v1(submission);
-        };
-        self.unindex_published_sdma_v1(submission);
-        let phase = std::mem::replace(&mut active.phase, ActiveSdmaPhaseV1::Ready);
-        match phase {
-            ActiveSdmaPhaseV1::Ready => self.observe_unpublished_sdma_copy_v1(active),
-            ActiveSdmaPhaseV1::DirectionalPublished(native_submission) => {
-                #[cfg(feature = "hardware-diagnostic")]
-                let (outcome, diagnostic) = if let Some(policy) = self
-                    .directional_wait_diagnostic
-                    .as_ref()
-                    .map(|recorder| recorder.policy())
-                {
-                    self.directional_sdma_ops_v1().wait_with_diagnostics_v1(
-                        *native_submission,
-                        timeout,
-                        policy,
-                    )
-                } else {
-                    (
-                        self.directional_sdma_ops_v1()
-                            .wait(*native_submission, timeout),
-                        None,
-                    )
-                };
-                #[cfg(not(feature = "hardware-diagnostic"))]
-                let outcome = self
-                    .directional_sdma_ops_v1()
-                    .wait(*native_submission, timeout);
-                match outcome {
-                    Ok(DirectionalSdmaWaitV1::Timeout(native_submission)) => {
-                        active.phase =
-                            ActiveSdmaPhaseV1::DirectionalPublished(Box::new(native_submission));
-                        self.index_published_sdma_v1(submission);
-                        self.active_sdma.insert(submission, active);
-                        Ok(BackendPollV1::Pending)
-                    }
-                    Ok(DirectionalSdmaWaitV1::Completed(completed)) => {
-                        #[cfg(feature = "hardware-diagnostic")]
-                        let observation = diagnostic.map(|observed| {
-                            KfdRuntimeDirectionalWaitObservationV1::new(
-                                &active, &completed, observed,
-                            )
-                        });
-                        let result = self.finish_sdma_copy_v1(active, completed);
-                        #[cfg(feature = "hardware-diagnostic")]
-                        self.record_directional_wait_settlement_v1(result.is_ok(), observation);
-                        result
-                    }
-                    Err(DirectionalSdmaExecutionFailureV1::Retryable {
-                        detail,
-                        submission: native_submission,
-                    }) => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::Pending(native_submission),
-                        );
-                        Err(self.terminal_error(format!(
-                            "KFD directional SDMA bounded wait returned non-timeout retryable custody: {detail}"
-                        )))
-                    }
-                    Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown { detail, custody }) => {
-                        self.retain_sdma_seam_terminal_v1(custody);
-                        Err(self
-                            .terminal_error(format!("KFD directional SDMA bounded wait: {detail}")))
-                    }
-                }
-            }
-            ActiveSdmaPhaseV1::SameDevicePublished(native_submission) => {
-                match self
-                    .directional_sdma_ops_v1()
-                    .wait_same_device(*native_submission, timeout)
-                {
-                    Ok(SameDeviceSdmaWaitV1::Timeout(native_submission)) => {
-                        active.phase =
-                            ActiveSdmaPhaseV1::SameDevicePublished(Box::new(native_submission));
-                        self.index_published_sdma_v1(submission);
-                        self.active_sdma.insert(submission, active);
-                        Ok(BackendPollV1::Pending)
-                    }
-                    Ok(SameDeviceSdmaWaitV1::Completed(completed)) => {
-                        let result = self.finish_same_device_sdma_copy_v1(active, completed);
-                        #[cfg(feature = "hardware-diagnostic")]
-                        self.record_directional_wait_settlement_v1(result.is_ok(), None);
-                        result
-                    }
-                    Err(SameDeviceSdmaExecutionFailureV1::Retryable {
-                        detail,
-                        submission: native_submission,
-                    }) => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::SameDevicePending(native_submission),
-                        );
-                        Err(self.terminal_error(format!(
-                            "KFD same-device SDMA bounded wait returned non-timeout retryable custody: {detail}"
-                        )))
-                    }
-                    Err(SameDeviceSdmaExecutionFailureV1::ProcessTeardown { detail, custody }) => {
-                        self.retain_sdma_seam_terminal_v1(custody);
-                        Err(self
-                            .terminal_error(format!("KFD same-device SDMA bounded wait: {detail}")))
-                    }
-                }
-            }
+        if self.active_sdma.contains_key(&submission) {
+            self.observe_sdma_copy_v1(submission, Some(timeout))
+        } else {
+            self.poll_v1(submission)
         }
     }
 }
@@ -7080,93 +7038,8 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 .expect("known pending compute remains indexed");
             return self.observe_pending_compute_v1(pending);
         }
-        if let Some(mut active) = self.active_sdma.remove(&submission) {
-            self.unindex_published_sdma_v1(submission);
-            let phase = std::mem::replace(&mut active.phase, ActiveSdmaPhaseV1::Ready);
-            return match phase {
-                ActiveSdmaPhaseV1::Ready => self.observe_unpublished_sdma_copy_v1(active),
-                ActiveSdmaPhaseV1::DirectionalPublished(native_submission) => {
-                    let poll = self.directional_sdma_ops_v1().poll(*native_submission);
-                    match poll {
-                        Ok(DirectionalSdmaPollV1::Pending(native_submission)) => {
-                            active.phase = ActiveSdmaPhaseV1::DirectionalPublished(Box::new(
-                                native_submission,
-                            ));
-                            self.index_published_sdma_v1(submission);
-                            self.active_sdma.insert(submission, active);
-                            Ok(BackendPollV1::Pending)
-                        }
-                        Ok(DirectionalSdmaPollV1::Completed(completed)) => {
-                            let result = self.finish_sdma_copy_v1(active, completed);
-                            #[cfg(feature = "hardware-diagnostic")]
-                            self.record_directional_wait_settlement_v1(result.is_ok(), None);
-                            result
-                        }
-                        Err(DirectionalSdmaExecutionFailureV1::Retryable {
-                            detail,
-                            submission: native_submission,
-                        }) => {
-                            self.retain_terminal_sdma_custody_v1(
-                                KfdRuntimeTerminalSdmaCustodyV1::Pending(native_submission),
-                            );
-                            Err(self.terminal_error(format!(
-                                "KFD directional SDMA completion observation returned foreign retryable custody: {detail}"
-                            )))
-                        }
-                        Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown {
-                            detail,
-                            custody,
-                        }) => {
-                            self.retain_sdma_seam_terminal_v1(custody);
-                            Err(self.terminal_error(format!(
-                                "KFD directional SDMA completion observation: {detail}"
-                            )))
-                        }
-                    }
-                }
-                ActiveSdmaPhaseV1::SameDevicePublished(native_submission) => {
-                    let poll = self
-                        .directional_sdma_ops_v1()
-                        .poll_same_device(*native_submission);
-                    match poll {
-                        Ok(SameDeviceSdmaPollV1::Pending(native_submission)) => {
-                            active.phase =
-                                ActiveSdmaPhaseV1::SameDevicePublished(Box::new(native_submission));
-                            self.index_published_sdma_v1(submission);
-                            self.active_sdma.insert(submission, active);
-                            Ok(BackendPollV1::Pending)
-                        }
-                        Ok(SameDeviceSdmaPollV1::Completed(completed)) => {
-                            let result = self.finish_same_device_sdma_copy_v1(active, completed);
-                            #[cfg(feature = "hardware-diagnostic")]
-                            self.record_directional_wait_settlement_v1(result.is_ok(), None);
-                            result
-                        }
-                        Err(SameDeviceSdmaExecutionFailureV1::Retryable {
-                            detail,
-                            submission: native_submission,
-                        }) => {
-                            self.retain_terminal_sdma_custody_v1(
-                                KfdRuntimeTerminalSdmaCustodyV1::SameDevicePending(
-                                    native_submission,
-                                ),
-                            );
-                            Err(self.terminal_error(format!(
-                                "KFD same-device SDMA completion observation returned foreign retryable custody: {detail}"
-                            )))
-                        }
-                        Err(SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
-                            detail,
-                            custody,
-                        }) => {
-                            self.retain_sdma_seam_terminal_v1(custody);
-                            Err(self.terminal_error(format!(
-                                "KFD same-device SDMA completion observation: {detail}"
-                            )))
-                        }
-                    }
-                }
-            };
+        if self.active_sdma.contains_key(&submission) {
+            return self.observe_sdma_copy_v1(submission, None);
         }
         let lane = self.active_compute_lane_v1(submission).ok_or_else(|| {
             Self::rejected(
@@ -13293,11 +13166,7 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
             return Ok(());
         };
         if sdma == Some(submission) {
-            let active = self
-                .active_sdma
-                .remove(&submission)
-                .expect("selected unpublished SDMA submission remains indexed");
-            let status = self.progress_unpublished_sdma_copy_v1(active)?;
+            let status = self.progress_unpublished_sdma_copy_v1(submission)?;
             if matches!(status, BackendPollV1::Failed { .. }) {
                 return Err(Self::quiescent_error(
                     KfdRuntimeBackendErrorKindV1::Native,
@@ -14033,6 +13902,7 @@ mod tests {
     mod sdma_demotion_tests;
     mod sdma_host_read_tests;
     mod sdma_host_write_tests;
+    mod sdma_observation_custody_tests;
     mod sdma_pending_allocation_tests;
     mod sdma_promotion_tests;
     mod sdma_readiness_tests;
@@ -15557,7 +15427,10 @@ mod tests {
             Some(prior_promotion)
         );
         assert_eq!(backend.next_ready_promotion_ordinal, Some(41));
-        assert!(!backend.active_sdma.contains_key(&submission));
+        assert!(matches!(
+            backend.active_sdma[&submission].phase,
+            ActiveSdmaPhaseV1::Quarantined
+        ));
         assert!(backend.published_sdma_submissions.is_empty());
         assert!(backend.published_sdma_index_is_consistent_v1());
         assert!(matches!(
@@ -15620,7 +15493,10 @@ mod tests {
                 DirectionalSdmaCompletedOwnerV1::Scripted(_)
             ))
         ));
-        assert!(!backend.active_sdma.contains_key(&submission));
+        assert!(matches!(
+            backend.active_sdma[&submission].phase,
+            ActiveSdmaPhaseV1::Quarantined
+        ));
         assert!(backend.published_sdma_submissions.is_empty());
         assert!(matches!(
             backend.allocations[&host].sdma_storage,
@@ -15690,7 +15566,10 @@ mod tests {
                 DirectionalSdmaCompletedOwnerV1::Scripted(_)
             ))
         ));
-        assert!(!backend.active_sdma.contains_key(&submission));
+        assert!(matches!(
+            backend.active_sdma[&submission].phase,
+            ActiveSdmaPhaseV1::Quarantined
+        ));
         assert!(backend.published_sdma_submissions.is_empty());
         assert!(backend.published_sdma_index_is_consistent_v1());
         assert!(matches!(
@@ -20314,7 +20193,10 @@ mod tests {
                 if error.kind() == KfdRuntimeBackendErrorKindV1::Terminal
         ));
         assert!(backend.terminal);
-        assert!(!backend.active_sdma.contains_key(&submission));
+        assert!(matches!(
+            backend.active_sdma[&submission].phase,
+            ActiveSdmaPhaseV1::Quarantined
+        ));
         assert!(backend.published_sdma_submissions.is_empty());
         assert!(backend.published_sdma_index_is_consistent_v1());
         assert!(matches!(
@@ -21157,7 +21039,10 @@ mod tests {
                     if error.kind() == KfdRuntimeBackendErrorKindV1::Terminal
             ));
             assert!(backend.terminal);
-            assert!(!backend.active_sdma.contains_key(&submission));
+            assert!(matches!(
+                backend.active_sdma[&submission].phase,
+                ActiveSdmaPhaseV1::Quarantined
+            ));
             assert!(backend.published_sdma_submissions.is_empty());
             assert!(backend.published_sdma_index_is_consistent_v1());
             assert!(backend.terminal_sdma_custody.is_some());
@@ -21204,7 +21089,10 @@ mod tests {
                     if error.kind() == KfdRuntimeBackendErrorKindV1::Terminal
             ));
             assert!(backend.terminal);
-            assert!(!backend.active_sdma.contains_key(&submission));
+            assert!(matches!(
+                backend.active_sdma[&submission].phase,
+                ActiveSdmaPhaseV1::Quarantined
+            ));
             assert!(backend.published_sdma_submissions.is_empty());
             assert!(backend.published_sdma_index_is_consistent_v1());
             assert!(backend.terminal_sdma_custody.is_some());
@@ -21255,7 +21143,10 @@ mod tests {
                 DirectionalSdmaCompletedOwnerV1::Scripted(_)
             ))
         ));
-        assert!(!backend.active_sdma.contains_key(&submission));
+        assert!(matches!(
+            backend.active_sdma[&submission].phase,
+            ActiveSdmaPhaseV1::Quarantined
+        ));
         assert!(backend.published_sdma_submissions.is_empty());
         assert!(backend.published_sdma_index_is_consistent_v1());
         let driver = backend.scripted_sdma.as_ref().unwrap();
@@ -21379,7 +21270,10 @@ mod tests {
                 if error.kind() == KfdRuntimeBackendErrorKindV1::Terminal
         ));
         assert!(backend.terminal);
-        assert!(!backend.active_sdma.contains_key(&submission));
+        assert!(matches!(
+            backend.active_sdma[&submission].phase,
+            ActiveSdmaPhaseV1::Quarantined
+        ));
         assert!(backend.published_sdma_submissions.is_empty());
         assert!(backend.published_sdma_index_is_consistent_v1());
         assert!(matches!(

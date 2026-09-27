@@ -261,7 +261,7 @@ impl KfdRuntimeBackendV1 {
                         self.allocations.get(&id).is_some_and(|record| matches!(record.sdma_storage,
                             KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Async(actual)) if actual == active.id))
                     }),
-                    ActiveSdmaPhaseV1::SameDevicePublished(_) => false,
+                    ActiveSdmaPhaseV1::SameDevicePublished(_) | ActiveSdmaPhaseV1::Quarantined => false,
                 };
                 if active.id != owner.submission
                     || active.stream != owner.stream

@@ -406,8 +406,7 @@ fn progress_leaf_v1(
                         child.terminal_error("private cooperative SDMA head changed authority")
                     );
                 }
-                let active = child.active_sdma.remove(&submission).unwrap();
-                child.progress_unpublished_sdma_copy_v1(active)?;
+                child.progress_unpublished_sdma_copy_v1(submission)?;
                 return Ok(
                     if child
                         .active_sdma

@@ -77,6 +77,7 @@ impl KfdRuntimeBackendV1 {
             || active.byte_len == 0
             || active.completed_bytes >= active.byte_len
             || active.dependency_cursor > active.dependencies.len()
+            || matches!(active.phase, ActiveSdmaPhaseV1::Quarantined)
             || !stream_intact(owner.stream)
             || self.active_sdma_streams[&owner.stream]
                 .binary_search(&active.id)
@@ -150,6 +151,7 @@ impl KfdRuntimeBackendV1 {
             ActiveSdmaPhaseV1::Ready => directional || same_device,
             ActiveSdmaPhaseV1::DirectionalPublished(_) => directional,
             ActiveSdmaPhaseV1::SameDevicePublished(_) => same_device,
+            ActiveSdmaPhaseV1::Quarantined => false,
         }
     }
 
