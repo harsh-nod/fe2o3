@@ -4,6 +4,7 @@
 //! S5A joins source-call/guard/reference-origin DATA in this same owner.
 //! Semantic sites/Final/full CFG assembly and normal routing remain pending.
 use super::*;
+use crate::production_ranked_projection_v1::assertion_analyzer_resources_v1::lazy_fixed_proof_owner_v1::retirement::RetiredLazyProofPayloadsV1;
 use crate::production_ranked_projection_v1::root_guarded_access_preparation_v1::{
     RootGuardedAccessStorageV1, RootGuardedSourceCallV1, prepare_root_guarded_accesses_v1,
 };
@@ -36,6 +37,7 @@ pub(in crate::production_ranked_projection_v1) struct PendingActualRootPrefixInd
     guarded: RootGuardedAccessStorageV1,
     origins: ActualRootReferenceOriginsStorageV1,
     arguments: argument_initialization::PendingArgumentProducersV1,
+    retired_fixed_proof: Option<RetiredLazyProofPayloadsV1>,
     ledger: Option<(usize, CanonicalKernelIrWorkLedgerIdentityV1)>,
     started: bool,
     completed: bool,
@@ -50,6 +52,7 @@ impl PendingActualRootPrefixIndicesV1 {
             guarded: RootGuardedAccessStorageV1::empty(),
             origins: ActualRootReferenceOriginsStorageV1::empty(),
             arguments: argument_initialization::PendingArgumentProducersV1::new(),
+            retired_fixed_proof: None,
             ledger: None,
             started: false,
             completed: false,
@@ -420,6 +423,7 @@ fn assembly_frame<R, F>() -> Result<usize> {
     for amount in [
         size_of::<PendingActualRootPrefixIndicesV1>(),
         argument_initialization::construction_frame_v1()?,
+        argument_initialization::slot_construction_frame_v1()?,
         size_of::<ActualRootPrefixIndicesV1<'static>>(),
         size_of::<ActualSelectedInputsV1<'static>>(),
         size_of::<ActualRootAssemblyPartsV1<'static>>(),
@@ -789,6 +793,7 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
             if pending.started
                 || pending.ledger.is_some()
                 || pending.completed
+                || !argument_initialization::retirement_slot_vacant_v1(&pending.retired_fixed_proof)
                 || !matches!(
                     pending.arguments.phase,
                     argument_initialization::Phase::Dormant
@@ -903,5 +908,7 @@ pub(crate) use genuine::observe_actual_root_prefix_indices_for_test_v1;
 mod guarded_genuine_v1;
 #[cfg(test)]
 pub(crate) use argument_initialization::observe_actual_root_argument_initialization_for_test_v1;
+#[cfg(test)]
+pub(crate) use argument_initialization::observe_actual_root_retired_fixed_proof_for_test_v1;
 #[cfg(test)]
 pub(crate) use guarded_genuine_v1::observe_actual_root_guarded_accesses_for_test_v1;

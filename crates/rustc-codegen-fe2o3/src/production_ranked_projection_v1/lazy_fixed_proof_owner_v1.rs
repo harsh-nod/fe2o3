@@ -762,3 +762,27 @@ mod frame_controls;
 
 #[path = "lazy_fixed_proof_retirement_v1.rs"]
 pub(in crate::production_ranked_projection_v1) mod retirement;
+
+// cfg(test)-only source policy for the genuine observer's existing state getter.
+// This is a logical frame envelope, never a measured native stack size.
+#[cfg(test)]
+pub(in crate::production_ranked_projection_v1) fn lazy_state_observer_frame_for_test_v1()
+-> Result<usize> {
+    type State = (u8, usize, bool, usize, usize, usize);
+    type O = LazyFixedProofOwnerV1<'static, 'static, 'static>;
+    const N: usize = 5;
+    let rows: [usize; N] = [
+        frame::<State>(size_of::<(&O, &Phase<'static, 'static, 'static>)>())?,
+        frame::<[usize; N]>(size_of::<([usize; N], Option<usize>)>())?,
+        frame::<usize>(size_of::<([usize; N], &[usize], Result<usize>)>())?,
+        frame::<usize>(size_of::<(
+            &[usize],
+            std::slice::Iter<'static, usize>,
+            usize,
+            &usize,
+            Option<usize>,
+        )>())?,
+        frame::<usize>(size_of::<(usize, usize, Option<usize>, Result<usize>, Error)>())?,
+    ];
+    sum(&rows)
+}

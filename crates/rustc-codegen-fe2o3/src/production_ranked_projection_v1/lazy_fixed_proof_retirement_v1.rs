@@ -442,3 +442,71 @@ pub(in crate::production_ranked_projection_v1) fn retire_legacy_proof_for_test(
 #[cfg(test)]
 #[path = "lazy_fixed_proof_retirement_frame_v1_tests.rs"]
 mod frame_controls;
+
+// cfg(test)-only envelope for the genuine Pending/empty snapshot observation.
+// No fixed activation is visited by that observer. Cache snapshot callbacks
+// are NOT reached for None caches; their map borrow/return shapes are named,
+// not promoted to coverage of private ready/cache-storage inspection.
+#[cfg(test)]
+pub(in crate::production_ranked_projection_v1) fn empty_observation_snapshot_frame_for_test_v1()
+-> Result<usize> {
+    type O = LazyFixedProofOwnerV1<'static, 'static, 'static>;
+    type P = RetiredLazyProofPayloadsV1;
+    type C = AssertionCacheV1<'static>;
+    type RC = RetiredAssertionCacheV1;
+    type Triple = (usize, usize, usize);
+    type CacheSnapshot = (u8, usize, usize, usize);
+    const N: usize = 11;
+    let rows: [usize; N] = [
+        // live_snapshot match/borrow tuple, including every named branch borrow.
+        frame::<Snapshot>(size_of::<(
+            &O,
+            &Phase<'static, 'static, 'static>,
+            &Building<'static>,
+            &PreparedFixedGuardSessionV1<'static>,
+            &Vec<Vec<usize>>,
+            Option<&C>,
+            Option<&C>,
+            (&Vec<Vec<usize>>, Option<&C>, Option<&C>),
+            P,
+            Snapshot,
+        )>())?,
+        // Pending fallback owns a temporary empty payload and its actual side.
+        frame::<P>(size_of::<(P, SideOwners, Vec<Vec<usize>>)>())?,
+        frame::<SideOwners>(size_of::<SideOwners>())?,
+        // Retired snapshot; pointer/length/capacity, map receivers/results and
+        // every side predicate live entirely in these concrete representations.
+        frame::<Snapshot>(size_of::<(
+            &P,
+            Snapshot,
+            Triple,
+            Option<Triple>,
+            Option<CacheSnapshot>,
+            Option<CacheSnapshot>,
+            Option<&Vec<usize>>,
+            Option<&RC>,
+            Option<&RC>,
+            [bool; 6],
+        )>())?,
+        frame::<Triple>(size_of::<(&Vec<usize>, *const usize, usize, usize, usize)>())?,
+        frame::<Option<Triple>>(size_of::<(Option<&Vec<usize>>, Option<Triple>, &Vec<usize>)>())?,
+        frame::<Option<CacheSnapshot>>(size_of::<(
+            Option<&C>,
+            Option<&RC>,
+            Option<CacheSnapshot>,
+            fn(&C) -> CacheSnapshot,
+            fn(&RC) -> CacheSnapshot,
+        )>())?,
+        frame::<[usize; N]>(size_of::<([usize; N], Option<usize>)>())?,
+        frame::<usize>(size_of::<([usize; N], &[usize], Result<usize>)>())?,
+        frame::<usize>(size_of::<(
+            &[usize],
+            std::slice::Iter<'static, usize>,
+            usize,
+            &usize,
+            Option<usize>,
+        )>())?,
+        frame::<usize>(size_of::<(usize, usize, Option<usize>, Result<usize>, Error)>())?,
+    ];
+    sum(&rows)
+}

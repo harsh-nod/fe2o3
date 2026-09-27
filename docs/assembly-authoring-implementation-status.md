@@ -5,6 +5,24 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Authentic proof-retirement connection — 2026-09-27
+
+The [authentic retirement checkpoint](bf16-authentic-proof-retirement-qualification-20260927.md)
+connects the retired payload to the original factory's pending owner and
+original Budget. Thirty new controls passed, alongside 356 model and 3,010
+backend tests (189 ignored), backend build and 83 JavaScript controls.
+The genuine-source ladder passed all five compilation sessions and expected
+numerical/refusal checks. Both ordinary ladders passed; all 38 lossless
+observation bodies and 52 artifacts match the retained-payload checkpoint.
+
+Genuine observation covers Empty/Error/Panic/Reentry and the independently
+classified source prefix. It stops before an unsupported fixed-query candidate;
+it does not claim genuine nonempty proof coverage. The independent original
+fixed-query oracle, Option-first prelude, later writers, joint bounds driver,
+mandatory verification and production routing remain open.
+No compiler pin or public capture gate changes. Accepted broad exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Retained analysis and proof-payload prerequisites — 2026-09-27
 
 The [retained-payload checkpoint](bf16-retained-payload-prerequisites-qualification-20260927.md)

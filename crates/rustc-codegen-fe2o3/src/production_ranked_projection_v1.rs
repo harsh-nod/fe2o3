@@ -40409,3 +40409,5 @@ pub(crate) use canonical_assertion_facts_v1::observe_actual_root_argument_initia
 pub(crate) use canonical_assertion_facts_v1::observe_actual_root_guarded_accesses_for_test_v1;
 #[cfg(test)]
 pub(crate) use canonical_assertion_facts_v1::observe_actual_root_prefix_indices_for_test_v1;
+#[cfg(test)]
+pub(crate) use canonical_assertion_facts_v1::observe_actual_root_retired_fixed_proof_for_test_v1;

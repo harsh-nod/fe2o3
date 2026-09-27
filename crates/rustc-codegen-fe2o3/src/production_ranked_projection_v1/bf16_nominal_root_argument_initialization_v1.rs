@@ -433,11 +433,40 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
     where
         F: for<'a> FnOnce(ActualRootArgumentInitializationV1<'a>, &mut Self) -> Result<R>,
     {
+        self.with_actual_root_argument_initialization_parts_v1(
+            checked,
+            rich,
+            actual_inputs,
+            pending,
+            retired_fixed_observation::compatibility_entry_frame_v1::<R, F>,
+            move |view, context, _retired| inspect(view, context),
+        )
+    }
+
+    // Only these two lexical entries can supply the frame function or slot
+    // continuation. No external caller can assemble an alternative authority.
+    fn with_actual_root_argument_initialization_parts_v1<R, F>(
+        &mut self,
+        checked: &CheckedBf16NominalCallV1<'_>,
+        rich: &RichNominalSourceTablesV1<'_>,
+        actual_inputs: &crate::production_pipeline::ActualRetainedRankedInputsV1<'_>,
+        pending: &mut PendingActualRootPrefixIndicesV1,
+        entry_frame: fn() -> Result<usize>,
+        inspect: F,
+    ) -> Result<R>
+    where
+        F: for<'a> FnOnce(
+            ActualRootArgumentInitializationV1<'a>,
+            &mut Self,
+            &mut Option<RetiredLazyProofPayloadsV1>,
+        ) -> Result<R>,
+    {
         let fresh = !pending.started
             && !pending.completed
             && pending.ledger.is_none()
             && pending.frame_credits == 0
-            && pending.arguments.vacant();
+            && pending.arguments.vacant()
+            && retirement_slot_vacant_v1(&pending.retired_fixed_proof);
         // Failure and unwind cannot leave an initializer or old-factory retry.
         pending.arguments.phase = Phase::Terminal;
         if !fresh {
@@ -459,14 +488,25 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
             }
             // The old assembly envelope covers unchanged source-selection helpers;
             // all added slots/callees are named separately above, not residual slack.
-            let bytes = assembly_frame::<R, F>()?
-                .checked_add(additional_frame::<R, F>()?)
-                .ok_or_else(arithmetic)?;
-            resources.work(bytes)?;
-            resources.reserve_storage(bytes)?;
+            let assembly = assembly_frame::<R, F>()?;
+            let initialization = additional_frame::<R, F>()?;
+            let continuation = retired_fixed_observation::continuation_frame_v1::<R, F>()?;
+            let entry = entry_frame()?;
+            let bytes = retired_fixed_observation::admit_factory_frame_v1(
+                resources,
+                [assembly, initialization, continuation, entry],
+            )?;
             pending.frame_credits = bytes;
             pending.ledger = Some(expected);
             pending.started = true;
+            #[cfg(test)]
+            retired_fixed_observation::genuine::record_factory_frames_for_test_v1([
+                assembly,
+                initialization,
+                continuation,
+                entry,
+                bytes,
+            ]);
             Ok(())
         })?;
         let result = {
@@ -474,6 +514,7 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
                 graph,
                 prefix,
                 arguments,
+                retired_fixed_proof,
                 ..
             } = pending;
             self.with_complete_for_profile_graph_v1(checked, rich, graph, |graph, context| {
@@ -515,6 +556,7 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
                         arguments,
                     },
                     context,
+                    retired_fixed_proof,
                 )
             })
         };
@@ -525,6 +567,12 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
     }
 }
 
+#[path = "bf16_nominal_root_retired_fixed_observation_v1.rs"]
+mod retired_fixed_observation;
+pub(super) use retired_fixed_observation::{
+    slot_construction_frame_v1, slot_vacant_v1 as retirement_slot_vacant_v1,
+};
+
 #[cfg(test)]
 #[path = "bf16_nominal_root_argument_initialization_genuine_v1_tests.rs"]
 mod genuine;
@@ -533,3 +581,6 @@ mod genuine;
 mod tests;
 #[cfg(test)]
 pub(crate) use genuine::observe_actual_root_argument_initialization_for_test_v1;
+
+#[cfg(test)]
+pub(crate) use retired_fixed_observation::observe_actual_root_retired_fixed_proof_for_test_v1;
