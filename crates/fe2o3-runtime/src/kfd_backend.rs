@@ -90,7 +90,11 @@ mod multi_admission;
 mod multi_allocation;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
+mod compute_peer_gate;
 mod compute_state;
+use compute_peer_gate::{
+    PeerComputeActionV1, PeerComputeGateV1, PeerComputeResultV1, PeerComputeStepV1,
+};
 mod cooperative_sdma;
 use cooperative_sdma::CooperativeSdmaLeafV1;
 mod cooperative_directed;
@@ -839,6 +843,7 @@ struct CollectedComputeDependenciesV1 {
     ordered_predecessor: Option<u64>,
     explicit_success_dependencies: Box<[u64]>,
     input_admission: ComputeInputAdmissionV1,
+    peer_gate: Option<PeerComputeGateV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5817,6 +5822,7 @@ impl KfdRuntimeBackendV1 {
             ordered_predecessor,
             explicit_success_dependencies,
             input_admission,
+            peer_gate: None,
         })
     }
 
@@ -5829,7 +5835,16 @@ impl KfdRuntimeBackendV1 {
             ordered_predecessor,
             explicit_success_dependencies,
             input_admission,
+            peer_gate,
         } = collected;
+        if peer_gate.is_some_and(|gate| {
+            gate.action(self.next_handle, false, false) == PeerComputeActionV1::Invalid
+        }) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "KFD compute peer gate names another consumer",
+            ));
+        }
         let dependency_depth = self
             .next_dependency_depth_v1(ordered_predecessor, &explicit_success_dependencies)
             .map_err(|error| {
@@ -5996,6 +6011,7 @@ impl KfdRuntimeBackendV1 {
                 explicit_success_dependencies,
                 explicit_dependency_cursor: 0,
                 dependency_depth,
+                peer_gate,
             },
         );
         if self.pending_compute_can_publish_under_deadline_v1(id) {
@@ -6757,6 +6773,13 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             return Ok(record.status);
         }
         if self.pending_compute.contains_key(&submission) {
+            if !self.pending_compute[&submission].peer_gate_allows_native_checks_v1() {
+                let pending = self
+                    .pending_compute
+                    .remove(&submission)
+                    .expect("peer-gated pending compute remains indexed");
+                return self.observe_pending_compute_v1(pending);
+            }
             let persistent_pending = self
                 .pending_compute
                 .get(&submission)
@@ -6774,7 +6797,14 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                     .get(&submission)
                     .and_then(|pending| self.persistent_compute_sdma_blocker_v1(pending))
             {
-                let _ = self.poll_v1(copy)?;
+                match self.poll_v1(copy) {
+                    Ok(_) => {}
+                    // This error describes the blocker, not the retained consumer.
+                    Err(RuntimeBackendFailureV1::Quiescent(_)) => {
+                        return Ok(BackendPollV1::Pending);
+                    }
+                    Err(failure) => return Err(failure),
+                }
             }
             let no_lane_is_free = self.free_compute_lane_v1().is_none();
             let active_lanes = self.active_compute_progress_roster_v1();
@@ -6788,7 +6818,13 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             if no_lane_is_free || exclusive_blocker.is_some() {
                 for (lane, active) in active_lanes.into_iter().enumerate() {
                     if active && (no_lane_is_free || exclusive_blocker == Some(lane)) {
-                        let _ = self.poll_compute_lane_v1(lane)?;
+                        match self.poll_compute_lane_v1(lane) {
+                            Ok(_) => {}
+                            Err(RuntimeBackendFailureV1::Quiescent(_)) => {
+                                return Ok(BackendPollV1::Pending);
+                            }
+                            Err(failure) => return Err(failure),
+                        }
                     }
                 }
             }
@@ -12494,7 +12530,7 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             child_launch,
             ComputeDependencyRosterV1::Exact(&dependencies),
         );
-        let collected = self.latch(child_preflight)?;
+        let mut collected = self.latch(child_preflight)?;
         self.peer_launch_retains.prepare(&peer_producers)?;
         self.reserve_native_stream_submission_v1(request.stream)?;
         Self::reserve_route(
@@ -12502,6 +12538,14 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             "multi-device submission route allocation failed",
         )?;
         let id = self.next_id()?;
+        if !peer_producers.is_empty() {
+            let child_id = self.children[stream.child].next_handle;
+            collected.peer_gate = Some(
+                PeerComputeGateV1::waiting(id, child_id, true)
+                    .resolve(id, child_id, PeerComputeResultV1::Succeeded, true)
+                    .expect("exact completed peer producers retain their child consumer identity"),
+            );
+        }
         let local = self.with_peer_launch_custody_v1(id, peer_producers, |backend| {
             backend.children[stream.child].submit_collected_compute_v1(child_launch, collected)
         })?;
@@ -12935,6 +12979,31 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
             .pending_compute
             .get(&submission)
             .expect("compute stream FIFO head remains pending");
+        if pending.peer_gate.is_some() {
+            let pending = self
+                .pending_compute
+                .remove(&submission)
+                .expect("peer-gated stream head remains pending");
+            match self.observe_peer_compute_gate_v1(pending)? {
+                PeerComputeStepV1::Continue(pending) => {
+                    self.pending_compute.insert(submission, pending);
+                }
+                PeerComputeStepV1::Observed(BackendPollV1::Pending) => return Ok(()),
+                PeerComputeStepV1::Observed(BackendPollV1::Failed { .. }) => {
+                    return Err(Self::quiescent_error(
+                        KfdRuntimeBackendErrorKindV1::Native,
+                        "KFD peer-gated compute failed before publication",
+                    ));
+                }
+                PeerComputeStepV1::Observed(BackendPollV1::Succeeded) => {
+                    unreachable!("unpublished gate cannot succeed")
+                }
+            }
+        }
+        let pending = self
+            .pending_compute
+            .get(&submission)
+            .expect("successful peer gate retains its real compute stream head");
         let ordered_predecessor_lane = pending.ordered_predecessor.and_then(|predecessor| {
             let lane = self.active_compute_lane_v1(predecessor)?;
             ordered_successor_lane_matches_v1(
@@ -12992,7 +13061,9 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
             .pending_compute
             .get(&submission)
             .is_some_and(|pending| {
-                pending.explicit_dependency_cursor == pending.explicit_success_dependencies.len()
+                pending.peer_gate_allows_native_checks_v1()
+                    && pending.explicit_dependency_cursor
+                        == pending.explicit_success_dependencies.len()
                     && pending.ordered_predecessor.is_none_or(|predecessor| {
                         self.submissions
                             .get(&predecessor)
@@ -13582,6 +13653,7 @@ mod retained_release_tests;
 
 #[cfg(test)]
 mod tests {
+    mod compute_peer_gate_tests;
     mod cooperative_directed_tests;
     mod cooperative_sdma_tests;
     #[cfg(feature = "hardware-diagnostic")]
@@ -22218,6 +22290,7 @@ mod tests {
             explicit_success_dependencies: dependencies.into_boxed_slice(),
             explicit_dependency_cursor: 0,
             dependency_depth,
+            peer_gate: None,
         }
     }
 

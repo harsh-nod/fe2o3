@@ -1738,10 +1738,7 @@ impl KfdRuntimeBackendV1 {
         // A failed unpublished node still orders its successor after the entire
         // stream prefix. Keep its custody until that predecessor has completed.
         if let Some(predecessor) = pending.ordered_predecessor
-            && !self
-                .submissions
-                .get(&predecessor)
-                .is_some_and(|record| ordered_predecessor_completed_v1(record.status))
+            && !self.exact_submission_quiescent_v1(predecessor)
         {
             match self.poll_v1(predecessor) {
                 Ok(BackendPollV1::Pending) => {
@@ -1754,6 +1751,10 @@ impl KfdRuntimeBackendV1 {
                     self.pending_compute.insert(pending.id, pending);
                     return Err(failure);
                 }
+            }
+            if !self.exact_submission_quiescent_v1(predecessor) {
+                self.pending_compute.insert(pending.id, pending);
+                return Ok(BackendPollV1::Pending);
             }
         }
         Ok(self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 }))
@@ -1772,6 +1773,10 @@ impl KfdRuntimeBackendV1 {
             self.pending_compute.insert(pending.id, pending);
             return Ok(BackendPollV1::Pending);
         }
+        pending = match self.observe_peer_compute_gate_v1(pending)? {
+            PeerComputeStepV1::Continue(pending) => pending,
+            PeerComputeStepV1::Observed(status) => return Ok(status),
+        };
         while let Some(dependency) = pending
             .explicit_success_dependencies
             .get(pending.explicit_dependency_cursor)
@@ -1861,6 +1866,10 @@ impl KfdRuntimeBackendV1 {
             let status = match self.poll_v1(predecessor) {
                 Ok(status) => status,
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => {
+                    if !self.exact_submission_quiescent_v1(predecessor) {
+                        self.pending_compute.insert(pending.id, pending);
+                        return Ok(BackendPollV1::Pending);
+                    }
                     return Ok(self.settle_unpublished_compute_v1(
                         pending,
                         BackendPollV1::Failed { code: -1 },
@@ -2017,6 +2026,11 @@ impl KfdRuntimeBackendV1 {
         self.lease_compute_lane_v1(pending.launch.stream, lane);
         let publication = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.with_compute_lane_state_v1(lane, |backend| {
+                if !pending.peer_gate_allows_native_checks_v1() {
+                    return Err(
+                        backend.terminal_error("KFD compute publication lost its peer gate")
+                    );
+                }
                 let prepared = backend.prepare_launch(
                     pending.launch.borrowed(),
                     persistent_selected,
@@ -2076,6 +2090,10 @@ impl KfdRuntimeBackendV1 {
             self.pending_compute.insert(pending.id, pending);
             return Ok(BackendPollV1::Pending);
         }
+        pending = match self.observe_peer_compute_gate_v1(pending)? {
+            PeerComputeStepV1::Continue(pending) => pending,
+            PeerComputeStepV1::Observed(status) => return Ok(status),
+        };
         while let Some(dependency) = pending
             .explicit_success_dependencies
             .get(pending.explicit_dependency_cursor)
@@ -2117,6 +2135,10 @@ impl KfdRuntimeBackendV1 {
             match self.poll_v1(predecessor) {
                 Ok(_) => {}
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => {
+                    if !self.exact_submission_quiescent_v1(predecessor) {
+                        self.pending_compute.insert(pending.id, pending);
+                        return Ok(BackendPollV1::Pending);
+                    }
                     return Ok(self.settle_unpublished_compute_v1(
                         pending,
                         BackendPollV1::Failed { code: -1 },
@@ -2143,7 +2165,8 @@ impl KfdRuntimeBackendV1 {
         pending: &PendingComputeSubmissionV1,
         predecessor: u64,
     ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if !self.compute_pipeline.has_successor_capacity()
+        if !pending.peer_gate_allows_native_checks_v1()
+            || !self.compute_pipeline.has_successor_capacity()
             || three_binding_requires_persistent_admission_v1(
                 pending.launch.semantic_launch,
                 &pending.launch.bindings,
@@ -2369,7 +2392,8 @@ impl KfdRuntimeBackendV1 {
         let Some(pending) = self.pending_compute.get(&submission) else {
             return false;
         };
-        if pending.explicit_dependency_cursor != pending.explicit_success_dependencies.len()
+        if !pending.peer_gate_allows_native_checks_v1()
+            || pending.explicit_dependency_cursor != pending.explicit_success_dependencies.len()
             || self.native_dirty_extents != 0
             || !pending.launch.bindings.iter().all(|binding| {
                 self.allocations

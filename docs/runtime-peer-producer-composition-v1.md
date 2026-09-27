@@ -49,6 +49,23 @@ the existing submission and dependency limits. Native-only dependency rosters
 do not allocate a peer-producer vector. Flush scans the retained peer-consumer
 roster; no runtime performance improvement is claimed for this checkpoint.
 
+The child compute record now carries a private external-input gate before any
+opportunistic publication. Completed peer producers enter through a successful
+gate. Waiting gates retain the genuine pending compute record, allocation/module
+retains, completion reservation and stream position while observing native
+dependencies. Failed inputs still wait for both external and native stream
+prefixes before unpublished settlement. Successful gates continue through the
+existing backing and native-order checks; they do not supply initialized bytes.
+Terminal observation or unwind reinstalls the pending owner and seals execution.
+
+The scalar resolve/action bodies are shared with `compute_peer_gate_v1.rs`.
+Their proof boundary is exact gate identity, monotonic resolution, separate
+input-success/order conditions and sticky failure. Concrete custody maps,
+router ancestry, allocation-access permits and native publication are outside
+that proof. Scripted tests exercise retained ownership and three-binding
+persistent continuation; an ordered-successor control reaches the native
+publication attempt but does not execute a native queue.
+
 ## Not Yet Supported
 
 Pending peer-copy-to-compute admission remains rejected by the KFD router. Its
@@ -86,8 +103,9 @@ native-correctness or performance result.
    readers and FIFO predecessors; allocation overlap or an ID alone is not proof
    of ancestry. Keep destination-write range authority separate from native
    reconciliation authority for an existing dirty extent.
-4. Gate immediate, observed, ordered-successor, deadline and flush publication
-   paths. Preserve transitive stream ordering, producer fan-out, cross-stream
+4. Integrate the implemented child gate across the router's pending-peer
+   lifecycle. Immediate, observed, ordered-successor, deadline and flush child
+   publication paths now check it. Preserve transitive stream ordering, producer fan-out, cross-stream
    flush and drain progress, initialization authority and final publication-time
    checks. Failure, cancellation and unknown results must not publish compute.
    Poll/wait must not silently acquire cooperative-copy progress semantics.

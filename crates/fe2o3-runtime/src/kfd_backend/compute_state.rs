@@ -180,6 +180,7 @@ pub(super) struct PendingComputeSubmissionV1 {
     pub(super) explicit_success_dependencies: Box<[u64]>,
     pub(super) explicit_dependency_cursor: usize,
     pub(super) dependency_depth: usize,
+    pub(super) peer_gate: Option<PeerComputeGateV1>,
 }
 
 #[cfg(test)]
