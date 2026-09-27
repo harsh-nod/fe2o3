@@ -915,3 +915,9 @@ pub(in crate::production_ranked_projection_v1) use query_driver::{
     QUERY_CAP, QueryCuts, QueryDatum, QuerySource, QueryState, QuerySummary, QueryWitness,
     original_queries, query_added_frame, retained_queries,
 };
+
+pub(in crate::production_ranked_projection_v1) use query_driver::{
+    CHECKED_ENTRY_CAP, CHECKED_ROW_CAP, CheckedContent, ContentRefusal, ContentWitness,
+    ProofContent, content_added_frame, content_added_work, exact_content_matches,
+    original_content_queries, retained_content, retained_content_queries,
+};

@@ -854,3 +854,7 @@ mod preparation_policy_tests;
 #[cfg(test)]
 #[path = "original_assertion_nested_retention_v1.rs"]
 pub(super) mod original_nested_retention;
+
+#[cfg(test)]
+#[path = "original_assertion_cache_content_v1.rs"]
+pub(super) mod original_cache_content;

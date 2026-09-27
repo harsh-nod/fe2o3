@@ -1499,3 +1499,14 @@ See [the qualification record](original-fixed-query-driver-qualification-2026092
 Exact cache DATA, the authentic source/Budget connector and later production
 stages remain open. Broad accepted exits remain 6/18; no public activation
 or global compiler pin change.
+
+## Complete bounded original-query DATA — 2026-09-27
+
+The test-only original oracle now compares complete bounded checked rows and
+cache keys, values and insertion order through live, retired and final postflight
+observations. All 21 new controls passed; full regression passed 356 model and
+3,054 backend tests (189 ignored), plus build.
+See [the qualification record](original-fixed-query-content-qualification-20260927.md).
+The authentic same-source/shared-Budget connector and later production stages
+remain open. Broad accepted exits remain 6/18; no public activation or global
+compiler pin change.

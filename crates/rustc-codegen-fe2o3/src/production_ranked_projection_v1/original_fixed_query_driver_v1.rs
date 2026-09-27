@@ -509,3 +509,12 @@ fn original_query_driver_closed_cut_recording_has_no_reused_or_unbounded_start()
     cuts.original_address = Some(1);
     assert!(!cuts.is_fresh());
 }
+
+// B2 additive cfg(test) content component; B1 bodies remain unchanged.
+#[path = "original_fixed_query_content_v1.rs"]
+mod content;
+pub(in crate::production_ranked_projection_v1) use content::{
+    CHECKED_ENTRY_CAP, CHECKED_ROW_CAP, CheckedContent, ContentRefusal, ContentWitness,
+    ProofContent, content_added_frame, content_added_work, exact_content_matches,
+    original_content_queries, retained_content, retained_content_queries,
+};
