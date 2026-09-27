@@ -488,6 +488,44 @@ impl Gfx942SdmaDeviceBackingV1 {
         })
     }
 
+    pub(crate) fn matches_detached_compute_scope(
+        &self,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+        physical_bytes: u64,
+    ) -> bool {
+        self.lease.is_none()
+            && logical_bytes != 0
+            && logical_bytes <= physical_bytes
+            && self.initialization.as_ref().is_none_or(|fact| {
+                exact_queue_owner(fact.queue, queue)
+                    && fact.pool_generation == generation
+                    && fact.logical_bytes == logical_bytes
+                    && fact.physical_bytes == physical_bytes
+            })
+    }
+
+    pub(crate) fn from_completed_compute_data(
+        data: crate::queue::Gfx942FixedDispatchDataV1,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+        _permit: crate::persistent_allocation::PersistentComputeCompletionPermitV1,
+    ) -> Self {
+        let initialized = data.is_fully_initialized();
+        let mut buffer = Gfx942SdmaBufferV1::from_bridge_parts(
+            data.into_sdma_storage(),
+            queue,
+            generation,
+            logical_bytes,
+        );
+        if initialized {
+            buffer.record_initialized_write(0, logical_bytes, true);
+        }
+        Self::from_buffer(buffer).expect("preflighted completed device data")
+    }
+
     pub(crate) fn into_buffer(
         self,
         queue: QueueKeyV1,

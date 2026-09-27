@@ -253,6 +253,9 @@ impl PreparationMemoryFixtureV1 {
     pub(crate) fn primary_device(&self) -> ModelDeviceAdmissionV1 {
         self.fixture.device
     }
+    pub(crate) fn primary_vm(&self) -> VmKeyV1 {
+        self.fixture.vm
+    }
     pub(crate) fn primary_session_id(&self) -> u64 {
         self.fixture.engine.session_id
     }

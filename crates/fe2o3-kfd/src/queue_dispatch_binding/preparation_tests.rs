@@ -17,6 +17,29 @@ pub(in crate::queue) fn control_release_fixture_v1() -> (Memory, DispatchResourc
     (memory, custody.take_completed().unwrap())
 }
 
+/// Simulated process teardown for CPU fixture storage, never a recovery transition.
+pub(in crate::queue) fn teardown_completed_restore_fixture_v1(
+    owner: DispatchResourceOwnerV1,
+    memory: &mut Memory,
+) {
+    use crate::queue::dispatch_binding::pristine_abort::PristineControlReleaseV1;
+    use crate::shared_memory::ControlCleanupCustodyV1;
+
+    assert!(owner.data.is_empty());
+    assert!(matches!(
+        owner.persistent_control,
+        PersistentFixedDispatchControlStateV1::DataDetached(_)
+    ));
+    let mut cleanup = ControlCleanupCustodyV1::kernarg(owner.kernarg.into_token());
+    memory.release_control(&mut cleanup).unwrap();
+    assert!(cleanup.is_complete());
+    for code in owner.code {
+        let mut cleanup = ControlCleanupCustodyV1::code(code.into_token());
+        memory.release_control(&mut cleanup).unwrap();
+        assert!(cleanup.is_complete());
+    }
+}
+
 pub(in crate::queue) type RecycledDataExpectationV1 = (
     Gfx942SdmaBufferStorageIdentityV1,
     Gfx942FixedDispatchDataLayoutV1,

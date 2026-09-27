@@ -826,6 +826,11 @@ impl PersistentComputeTerminalDataV1 {
     pub(crate) const fn len(&self) -> usize {
         self.data.len()
     }
+
+    #[cfg(test)]
+    pub(crate) fn into_data_for_test(self) -> impl Iterator<Item = Gfx942FixedDispatchDataV1> {
+        self.data.into_iter()
+    }
 }
 
 impl Deref for PersistentComputeTerminalDataV1 {

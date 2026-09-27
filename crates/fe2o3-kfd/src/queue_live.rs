@@ -290,6 +290,9 @@ pub(in crate::queue) mod data_insertion;
 
 #[path = "queue_live/data_release.rs"]
 pub(in crate::queue) mod data_release;
+#[cfg(test)]
+#[path = "queue_live/persistent_restore_tests.rs"]
+mod persistent_restore_tests;
 #[path = "queue_live/rebind.rs"]
 pub(in crate::queue) mod rebind;
 #[cfg(test)]

@@ -3629,47 +3629,33 @@ impl ComputeAqlQueueSessionV1 {
             .try_into()
             .unwrap_or_else(|_| unreachable!("validated three-binding data cardinality"));
         let fully_initialized = std::array::from_fn(|index| data[index].is_fully_initialized());
-        let leases = data.map(|data| {
-            let Gfx942SdmaBufferStorageV1::Device(lease) = data.into_sdma_storage() else {
-                unreachable!("validated three-binding device storage")
-            };
-            lease
-        });
         let restore_preflight =
             attachment
                 .entries
                 .iter()
-                .zip(&leases)
-                .try_for_each(|(entry, lease)| {
+                .zip(&data)
+                .try_for_each(|(entry, data)| {
                     let PersistentComputeUseStateV1::Recycled(completed) = &entry.state else {
                         return Err(Gfx942PersistentUseErrorV1::WrongState);
                     };
                     entry
                         .allocation
                         .owner
-                        .preflight_restore_local_native_from_compute(completed, lease)
+                        .preflight_restore_completed_compute_data(
+                            completed,
+                            data,
+                            entry.allocation.attachment.queue,
+                            entry.allocation.attachment.pool_generation,
+                            entry.allocation.attachment.logical_bytes,
+                        )
                 });
         if restore_preflight.is_err() {
-            let [lease0, lease1, lease2] = leases;
-            let [initialized0, initialized1, initialized2] = fully_initialized;
-            let restore_data = |lease, initialized| {
-                if initialized {
-                    Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease)
-                } else {
-                    Gfx942FixedDispatchDataV1::uninitialized(lease)
-                }
-            };
-            let retained = [
-                restore_data(lease0, initialized0),
-                restore_data(lease1, initialized1),
-                restore_data(lease2, initialized2),
-            ];
             quarantine_persistent_compute_entries_v1(
                 attachment.entries.each_mut(),
                 Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
             );
             attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Data(
-                PersistentComputeTerminalDataV1::from_three(retained),
+                PersistentComputeTerminalDataV1::from_three(data),
             ));
             self.set_three_binding_persistent_compute_attachment_v1(attachment);
             self.poison_terminal();
@@ -3681,14 +3667,20 @@ impl ComputeAqlQueueSessionV1 {
                 recovered: None,
             });
         }
-        for (entry, lease) in attachment.entries.iter_mut().zip(leases) {
+        for (entry, data) in attachment.entries.iter_mut().zip(data) {
             let PersistentComputeUseStateV1::Recycled(completed) = &entry.state else {
                 unreachable!("preflighted three-binding recycled state")
             };
             entry
                 .allocation
                 .owner
-                .restore_local_native_from_compute(completed, lease)
+                .restore_completed_compute_data(
+                    completed,
+                    data,
+                    entry.allocation.attachment.queue,
+                    entry.allocation.attachment.pool_generation,
+                    entry.allocation.attachment.logical_bytes,
+                )
                 .unwrap_or_else(|_| unreachable!("preflighted three-binding native restore"));
         }
         let settle_preflight = attachment.entries.iter().try_for_each(|entry| {
@@ -3897,21 +3889,20 @@ impl ComputeAqlQueueSessionV1 {
         }
         let data = data.pop().expect("validated one detached data authority");
         let fully_initialized = data.is_fully_initialized();
-        let Gfx942SdmaBufferStorageV1::Device(lease) = data.into_sdma_storage() else {
-            unreachable!("validated device storage identity")
-        };
-        if let Err((_error, lease)) = attachment
-            .allocation
-            .owner
-            .restore_local_native_from_compute(&completed_use, lease)
-        {
+        if let Err((_error, data)) = attachment.allocation.owner.restore_completed_compute_data(
+            &completed_use,
+            data,
+            attachment.allocation.attachment.queue,
+            attachment.allocation.attachment.pool_generation,
+            attachment.allocation.attachment.logical_bytes,
+        ) {
             attachment.state = quarantine_persistent_compute_recycled_v1(
                 &mut attachment.allocation.owner,
                 completed_use,
                 Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
             );
-            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Storage(
-                Gfx942SdmaBufferStorageV1::Device(lease),
+            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Data(
+                PersistentComputeTerminalDataV1::from_one(data),
             ));
             self.set_single_persistent_compute_attachment_v1(attachment);
             self.poison_terminal();

@@ -9,6 +9,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use crate::queue::dispatch_binding::{DispatchDataStorageRefV1, Gfx942FixedDispatchDataV1};
 use crate::sdma::{
     Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferV1, Gfx942SdmaDeviceBackingV1,
 };
@@ -38,6 +39,11 @@ enum PersistentBackingV1 {
 
 /// Minted only after exact never-published compute restoration preflight.
 pub(crate) struct PersistentComputeCancellationPermitV1 {
+    _private: (),
+}
+
+/// Minted only after exact completed-use and original typed-data preflight.
+pub(crate) struct PersistentComputeCompletionPermitV1 {
     _private: (),
 }
 
@@ -1054,6 +1060,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
     }
 
     /// Restores only the exact mapping returned by the completed compute use.
+    #[cfg(test)]
     #[allow(clippy::result_large_err)]
     pub(crate) fn restore_local_native_from_compute(
         &mut self,
@@ -1092,6 +1099,59 @@ impl Gfx942PersistentDeviceAllocationV1 {
         {
             return Err(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
         }
+        Ok(())
+    }
+
+    pub(crate) fn preflight_restore_completed_compute_data(
+        &self,
+        completed: &Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+        data: &Gfx942FixedDispatchDataV1,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+    ) -> Result<(), Gfx942PersistentUseErrorV1> {
+        let DispatchDataStorageRefV1::Device(lease) = data.storage_ref() else {
+            return Err(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
+        };
+        self.preflight_restore_local_native_from_compute(completed, lease)?;
+        let Some(PersistentBackingV1::Local(backing)) = self.state.native.as_ref() else {
+            return Err(Gfx942PersistentUseErrorV1::WrongState);
+        };
+        if !backing.matches_detached_compute_scope(queue, generation, logical_bytes, self.byte_len)
+        {
+            return Err(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn restore_completed_compute_data(
+        &mut self,
+        completed: &Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+        data: Gfx942FixedDispatchDataV1,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+    ) -> Result<(), (Gfx942PersistentUseErrorV1, Gfx942FixedDispatchDataV1)> {
+        if let Err(error) = self.preflight_restore_completed_compute_data(
+            completed,
+            &data,
+            queue,
+            generation,
+            logical_bytes,
+        ) {
+            return Err((error, data));
+        }
+        self.state.native = Some(PersistentBackingV1::Local(
+            Gfx942SdmaDeviceBackingV1::from_completed_compute_data(
+                data,
+                queue,
+                generation,
+                logical_bytes,
+                PersistentComputeCompletionPermitV1 { _private: () },
+            ),
+        ));
+        self.state.detached_compute = None;
         Ok(())
     }
 
@@ -1218,6 +1278,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
     }
 
     /// Restores only the exact local mapping detached from this owner.
+    #[cfg(test)]
     #[allow(clippy::result_large_err)]
     pub(crate) fn restore_local_native_from_sdma(
         &mut self,

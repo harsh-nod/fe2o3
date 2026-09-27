@@ -1,6 +1,7 @@
 //! Native-neutral coverage transitions, not GPU completion evidence.
 
 use super::*;
+use crate::Gfx942InitializedDeviceMemoryV1;
 use crate::persistent_allocation::{
     Gfx942PersistentDeviceAllocationV1 as PersistentOwner,
     Gfx942PersistentNativeAllocationV1 as Native, Gfx942PersistentOperationV1 as Operation,
@@ -522,6 +523,152 @@ fn initialized_prefix_compute_cancellation_is_bound_to_detaching_use() {
             .initialized_prefix,
         0
     );
+}
+
+#[test]
+fn initialized_prefix_completed_compute_import_uses_original_typed_data() {
+    use crate::queue::Gfx942FixedDispatchDataV1 as Data;
+    use crate::shared_memory::{
+        DataCleanupCustodyV1, DispatchDataReleaseV1, PreparationMemoryFixtureV1,
+    };
+
+    for variant in 0..2 {
+        let mut memory = PreparationMemoryFixtureV1::new(true);
+        let original = memory.device(variant == 1);
+        let content = original.initialized_content();
+        let queue = super::tests::queue_key(7, 11, 13);
+        let mut buffer =
+            Gfx942SdmaBufferV1::from_bridge_parts(original.into_sdma_storage(), queue, 9, 4096);
+        // Deliberately retain an old prefix: returned cold data must revoke it.
+        buffer.record_initialized_write(0, 2048, true);
+        let mut owner = PersistentOwner::from_sdma_buffer(buffer).unwrap();
+        let prepared = owner
+            .reserve(
+                UseRequest::new(Operation::ComputeWrite, 0, 4096).unwrap(),
+                None,
+            )
+            .unwrap();
+        let prepared = owner.prepare(prepared).unwrap();
+        let lease = owner.detach_local_native_for_compute(&prepared).unwrap();
+        let data = match variant {
+            0 => Data::uninitialized(lease),
+            1 => Data::initialized(
+                Gfx942InitializedDeviceMemoryV1::from_authenticated_full_transfer(
+                    lease,
+                    content.unwrap(),
+                )
+                .unwrap(),
+            ),
+            _ => unreachable!(),
+        };
+        // Synthetic completion is only a ledger transition, not GPU evidence.
+        let published = owner.publish(prepared).unwrap();
+        let completed = owner.complete(published).unwrap();
+        owner
+            .restore_completed_compute_data(&completed, data, queue, 9, 4096)
+            .unwrap();
+        let frontier = owner.settle(completed).unwrap();
+        owner.retire_settled_frontier(frontier).unwrap();
+        let buffer = owner.detach_sdma_buffer(queue, 9, 4096).unwrap();
+        assert_eq!(
+            buffer.initialized_prefix,
+            if variant == 0 { 0 } else { 4096 }
+        );
+        assert_eq!(buffer.certified_full_host_content_sha256(4096), None);
+        let mut cleanup = DataCleanupCustodyV1::from_sdma(buffer);
+        memory.release_data(&mut cleanup).unwrap();
+        assert!(cleanup.is_complete());
+        memory.primary_assert_all_released_v1();
+    }
+}
+
+#[test]
+fn initialized_prefix_completed_compute_rejections_preserve_original_data() {
+    use crate::queue::Gfx942FixedDispatchDataV1 as Data;
+    use crate::shared_memory::{
+        DataCleanupCustodyV1, DispatchDataReleaseV1, PreparationMemoryFixtureV1,
+    };
+
+    let mut memory = PreparationMemoryFixtureV1::new(true);
+    let original = memory.device(true);
+    let content = original.initialized_content().unwrap();
+    let queue = super::tests::queue_key(7, 11, 13);
+    let buffer =
+        Gfx942SdmaBufferV1::from_bridge_parts(original.into_sdma_storage(), queue, 9, 4096);
+    let mut owner = PersistentOwner::from_sdma_buffer(buffer).unwrap();
+    let a = owner
+        .reserve(UseRequest::new(Operation::ComputeRead, 0, 8).unwrap(), None)
+        .unwrap();
+    let a = owner.prepare(a).unwrap();
+    let b = owner
+        .reserve(UseRequest::new(Operation::ComputeRead, 8, 8).unwrap(), None)
+        .unwrap();
+    let b = owner.prepare(b).unwrap();
+    let lease = owner.detach_local_native_for_compute(&a).unwrap();
+    let mut data = Data::initialized(
+        Gfx942InitializedDeviceMemoryV1::from_authenticated_full_transfer(lease, content).unwrap(),
+    );
+    let a = owner.publish(a).unwrap();
+    let a = owner.complete(a).unwrap();
+    let b = owner.publish(b).unwrap();
+    let b = owner.complete(b).unwrap();
+    let snapshot = owner.ownership_snapshot_for_test_v1();
+    let identity = data.storage_identity();
+    let layout = data.layout();
+    for (use_lease, key, generation, logical) in [
+        (&b, queue, 9, 4096),
+        (&a, super::tests::queue_key(8, 11, 13), 9, 4096),
+        (&a, super::tests::queue_key(7, 12, 13), 9, 4096),
+        (&a, super::tests::queue_key(7, 11, 14), 9, 4096),
+        (&a, queue, 10, 4096),
+        (&a, queue, 9, 2048),
+        (&a, queue, 9, 0),
+        (&a, queue, 9, 4097),
+    ] {
+        let (error, returned) = owner
+            .restore_completed_compute_data(use_lease, data, key, generation, logical)
+            .unwrap_err();
+        assert_eq!(error, UseError::WrongOwnerOrGeneration);
+        assert_eq!(returned.storage_identity(), identity);
+        assert_eq!(returned.layout(), layout);
+        assert_eq!(
+            returned.initialized_content().unwrap().sha256(),
+            content.sha256()
+        );
+        assert_eq!(owner.ownership_snapshot_for_test_v1(), snapshot);
+        data = returned;
+    }
+    for foreign in [memory.host(true), memory.device(true), memory.device(false)] {
+        let identity = foreign.storage_identity();
+        let layout = foreign.layout();
+        let content = foreign.initialized_content();
+        let (error, returned) = owner
+            .restore_completed_compute_data(&a, foreign, queue, 9, 4096)
+            .unwrap_err();
+        assert_eq!(error, UseError::WrongOwnerOrGeneration);
+        assert_eq!(returned.storage_identity(), identity);
+        assert_eq!(returned.layout(), layout);
+        assert_eq!(
+            returned.initialized_content().map(|c| c.sha256()),
+            content.map(|c| c.sha256())
+        );
+        assert_eq!(owner.ownership_snapshot_for_test_v1(), snapshot);
+        let mut cleanup = DataCleanupCustodyV1::new(returned);
+        memory.release_data(&mut cleanup).unwrap();
+        assert!(cleanup.is_complete());
+    }
+    owner
+        .restore_completed_compute_data(&a, data, queue, 9, 4096)
+        .unwrap();
+    let _a_frontier = owner.settle(a).unwrap();
+    let b_frontier = owner.settle(b).unwrap();
+    owner.retire_settled_frontier(b_frontier).unwrap();
+    let buffer = owner.detach_sdma_buffer(queue, 9, 4096).unwrap();
+    assert_eq!(buffer.initialized_prefix, 4096);
+    let mut cleanup = DataCleanupCustodyV1::from_sdma(buffer);
+    memory.release_data(&mut cleanup).unwrap();
+    assert!(cleanup.is_complete());
+    memory.primary_assert_all_released_v1();
 }
 
 #[test]
