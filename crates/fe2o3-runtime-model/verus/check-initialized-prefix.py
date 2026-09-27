@@ -38,7 +38,7 @@ def mutations(body):
     add("covers-misses-last-byte", "$len <= $prefix - $offset", "$len < $prefix - $offset", "covers")
     add("write-invalid-prefix", "$prefix > $extent || ", "", "after_write")
     add("write-empty", "$len == 0 || ", "", "after_write")
-    add("write-outside-extent", "$len > $extent - $offset", "false", "after_write")
+    add("write-outside-extent", "$len > $extent - $offset", "$len > u64::MAX - $offset", "after_write")
     add("bridge-gap", "$offset <= $prefix && end > $prefix", "end > $prefix", "after_write")
     add("known-becomes-unknown", "if $known {", "if false {", "after_write")
     add("unknown-becomes-known", "if $known {", "if true {", "after_write")
