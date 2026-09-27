@@ -79,6 +79,9 @@ fn typed_roots_for_source(
                 semantic_type_identity: semantic.types()
                     [SemanticTypeIdV1::from_index(1).index() as usize]
                     .identity(),
+                semantic_layout_identity: semantic.types()
+                    [SemanticTypeIdV1::from_index(1).index() as usize]
+                    .layout_identity(),
             };
             TypedDescriptorRootV1 {
                 logical_name: format!("logical_{i}"),

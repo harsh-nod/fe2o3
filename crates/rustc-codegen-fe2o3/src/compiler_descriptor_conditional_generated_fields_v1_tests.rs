@@ -307,6 +307,8 @@ fn field(role: Role) -> (TypedDescriptorArgumentV1, Type) {
             source_alignment: 8,
             rustc_abi_class: RustcAbiClassV1::ScalarPair,
             semantic_type_identity: SemanticTypeIdentityV1::from_sha256([8; 32]),
+            semantic_layout_identity:
+                fe2o3_mir_model::semantic_mir_v1::SemanticLayoutIdentityV1::from_sha256([0; 32]),
         },
         Type::Slice(SliceType::new(
             Type::Scalar(ScalarType::F32),

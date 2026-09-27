@@ -48,6 +48,8 @@ mod manifest_fill_proof;
 mod private_cell_native_source;
 #[path = "production_rustc_driver_redundant_store_source_v1_tests.rs"]
 mod redundant_store_source;
+#[path = "production_rustc_driver_source_abi_v1_tests.rs"]
+mod source_abi;
 #[path = "production_rustc_driver_wave64_capture_source_v1_tests.rs"]
 mod wave64_capture_source;
 

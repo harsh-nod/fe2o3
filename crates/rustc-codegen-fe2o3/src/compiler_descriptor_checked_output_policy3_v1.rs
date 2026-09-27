@@ -84,6 +84,16 @@ pub(crate) fn construct_checked_output_policy4_descriptor_source_v1(
     admitted
         .verify_equivalence(budget)
         .map_err(|error| CompilerDescriptorError::CheckedOutputPolicy4(Box::new(error)))?;
+    source_abi_v1::check_if_aggregate(
+        nominal_policy4_v3::OwnerRef::Direct(admitted),
+        typed_roots,
+        ProductionAmdTargetProfileV1::from_device_target(&envelope.target().to_string())
+            .ok_or_else(|| {
+                CompilerDescriptorError::UnsupportedTarget(envelope.target().to_string())
+            })?,
+        budget,
+    )
+    .map_err(CompilerDescriptorError::SourceAbi)?;
     construct_checked_descriptor_v1(
         envelope,
         compiler_module,
@@ -121,6 +131,16 @@ pub(crate) fn construct_erased_checked_output_policy4_descriptor_source_v1(
     admitted
         .verify_equivalence(budget)
         .map_err(|error| CompilerDescriptorError::CheckedOutputPolicy4(Box::new(error)))?;
+    source_abi_v1::check_if_aggregate(
+        nominal_policy4_v3::OwnerRef::Erased(admitted),
+        typed_roots,
+        ProductionAmdTargetProfileV1::from_device_target(&envelope.target().to_string())
+            .ok_or_else(|| {
+                CompilerDescriptorError::UnsupportedTarget(envelope.target().to_string())
+            })?,
+        budget,
+    )
+    .map_err(CompilerDescriptorError::SourceAbi)?;
     construct_checked_descriptor_v1(
         envelope,
         compiler_module,

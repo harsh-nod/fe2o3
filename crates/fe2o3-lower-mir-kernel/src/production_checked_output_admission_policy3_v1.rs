@@ -73,6 +73,8 @@ enum OutputAdmissionKindV1 {
     GuardedGlobal,
 }
 
+include!("production_checked_output_census_context_v1.rs");
+
 /// Failure to close an explicitly supported Policy3 admission grammar.
 #[derive(Debug)]
 pub enum ProductionCheckedOutputAdmissionErrorPolicy3V1 {
@@ -95,6 +97,15 @@ pub enum ProductionCheckedOutputAdmissionErrorPolicy3V1 {
         /// The refused contract, not a detached permission flag.
         detail: &'static str,
     },
+    /// The same closed-subset refusal with its exact operation diagnostic.
+    UnsupportedOperation {
+        /// The exact graph phase being checked.
+        phase: &'static str,
+        /// The original refused contract, unchanged by diagnostic enrichment.
+        detail: &'static str,
+        /// Fixed context from the actual operation, never admission authority.
+        context: ProductionCheckedOutputCensusContextV1,
+    },
 }
 
 impl fmt::Display for ProductionCheckedOutputAdmissionErrorPolicy3V1 {
@@ -114,7 +125,9 @@ impl Error for ProductionCheckedOutputAdmissionErrorPolicy3V1 {
             Self::SourceOutput(error) => Some(error),
             Self::Coordinates(error) => Some(error),
             Self::Formal(error) => Some(error),
-            Self::PrivateAddressR2 | Self::Unsupported { .. } => None,
+            Self::PrivateAddressR2
+            | Self::Unsupported { .. }
+            | Self::UnsupportedOperation { .. } => None,
         }
     }
 }

@@ -61,6 +61,9 @@ mod nominal_policy4_v3;
 mod pre_ranked_observation_v1;
 #[path = "production_pipeline_private_cell_native_v1.rs"]
 pub(crate) mod private_cell_native_v1;
+#[cfg(test)]
+#[path = "production_pipeline_source_abi_v1_tests.rs"]
+mod source_abi_v1_tests;
 #[path = "production_pipeline_source_local_order_v1.rs"]
 pub(crate) mod source_local_order_v1;
 #[path = "production_pipeline/tiled_region_v1.rs"]

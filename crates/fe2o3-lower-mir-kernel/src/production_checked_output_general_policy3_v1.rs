@@ -8,6 +8,8 @@ mod census;
 mod constant_shifts;
 #[path = "production_checked_output_exp_v1.rs"]
 mod exp;
+#[path = "production_checked_output_invocation_indices_v1.rs"]
+mod invocation_indices;
 #[path = "production_checked_output_masked_shifts_v1.rs"]
 mod masked_shifts;
 #[path = "production_checked_output_numeric_casts_v1.rs"]
