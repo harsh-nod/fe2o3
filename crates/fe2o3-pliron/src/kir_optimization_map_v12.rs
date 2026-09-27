@@ -224,7 +224,22 @@ impl fmt::Display for KirOptimizationMapErrorV12 {
         write!(f, "V12 optimizer mapping: {self:?}")
     }
 }
-impl Error for KirOptimizationMapErrorV12 {}
+impl Error for KirOptimizationMapErrorV12 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Resources(error) => Some(error),
+            Self::Arithmetic
+            | Self::Allocation
+            | Self::Limit
+            | Self::Identity
+            | Self::Lifecycle
+            | Self::Coverage
+            | Self::Passes
+            | Self::Relation
+            | Self::UnsupportedMutation => None,
+        }
+    }
+}
 impl From<ResourceError> for KirOptimizationMapErrorV12 {
     fn from(e: ResourceError) -> Self {
         Self::Resources(e)

@@ -143,3 +143,143 @@ fn exact_and_short_reader_work_leave_the_inherited_storage_unchanged() {
         }
     });
 }
+
+fn claim_cause_borrow<T: std::error::Error + 'static>(parent: &dyn std::error::Error, child: &T) {
+    assert!(std::ptr::eq(
+        parent.source().unwrap().downcast_ref::<T>().unwrap(),
+        child
+    ));
+}
+
+#[test]
+fn claim_and_map_cause_links_borrow_resources_without_relabeling_markers() {
+    use crate::{
+        KirOptimizationMapErrorV12 as MapError, Policy3ExecutionClaimErrorV1 as Policy3Error,
+    };
+    let mut work = Work::new(3);
+    let mut budget = Budget::new(&mut work, 5);
+    let work_error = budget.charge_work(4).unwrap_err();
+    let storage_error = budget.reserve_storage(6).unwrap_err();
+    let accounting = budget.release_storage(1).unwrap_err();
+    assert_eq!(accounting, Resource::Accounting);
+    assert_eq!(
+        (budget.work(), budget.storage(), budget.peak_storage()),
+        (0, 0, 0)
+    );
+    assert_eq!(budget.failed_storage(), Some(6));
+    drop(budget);
+    assert_eq!(work.failed_work(), Some(4));
+    // Typed diagnostic cases are separate from the actual reader failure test.
+    for resource in [
+        work_error,
+        storage_error,
+        accounting,
+        Resource::Allocation,
+        Resource::Arithmetic,
+    ] {
+        macro_rules! check {
+            ($ty:ident, $variant:ident) => {{
+                let error = $ty::$variant(resource);
+                let $ty::$variant(child) = &error else {
+                    unreachable!()
+                };
+                claim_cause_borrow(&error, child);
+                assert_eq!(*child, resource);
+                match child {
+                    Resource::Work(leaf) => {
+                        claim_cause_borrow(child, leaf);
+                        assert_eq!((leaf.actual(), leaf.limit()), (4, 3));
+                    }
+                    Resource::Storage(leaf) => {
+                        claim_cause_borrow(child, leaf);
+                        assert_eq!((leaf.actual(), leaf.limit()), (6, 5));
+                    }
+                    Resource::Allocation | Resource::Accounting | Resource::Arithmetic => {
+                        assert!(std::error::Error::source(child).is_none())
+                    }
+                }
+            }};
+        }
+        check!(Error, Resource);
+        check!(Policy3Error, Resource);
+        check!(MapError, Resources);
+    }
+    for error in [Error::Framing, Error::Endpoint, Error::Profile, Error::Pass] {
+        assert!(std::error::Error::source(&error).is_none());
+    }
+    for error in [
+        Policy3Error::Framing,
+        Policy3Error::Endpoint,
+        Policy3Error::Profile,
+        Policy3Error::Pass,
+    ] {
+        assert!(std::error::Error::source(&error).is_none());
+    }
+    for error in [
+        MapError::Arithmetic,
+        MapError::Allocation,
+        MapError::Limit,
+        MapError::Identity,
+        MapError::Lifecycle,
+        MapError::Coverage,
+        MapError::Passes,
+        MapError::Relation,
+        MapError::UnsupportedMutation,
+    ] {
+        assert!(std::error::Error::source(&error).is_none());
+    }
+}
+
+#[test]
+fn reached_integer_claim_cause_keeps_literal_work_schedule_and_caller_floor() {
+    const PRIOR: usize = 11;
+    actual(|input, output, bytes, _| {
+        for allowance in [1, 417, 418] {
+            let mut work = Work::new(PRIOR + allowance);
+            work.charge_work(PRIOR).unwrap();
+            let mut budget = Budget::new(&mut work, 19);
+            budget.reserve_storage(19).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let result = read_unauthenticated_integer_continuation_claim_v1(
+                input,
+                output,
+                bytes,
+                &mut budget,
+            );
+            if allowance == 418 {
+                let claim = result.unwrap();
+                assert!(std::ptr::eq(claim.canonical_bytes(), bytes));
+                assert!(!claim.grants_authority());
+                assert_eq!(budget.work(), PRIOR + 418);
+            } else {
+                let error = result.err().expect("fixed reader work denial");
+                let Error::Resource(child) = &error else {
+                    panic!("{error:?}")
+                };
+                claim_cause_borrow(&error, child);
+                let Resource::Work(leaf) = child else {
+                    panic!("{child:?}")
+                };
+                claim_cause_borrow(child, leaf);
+                let attempted = PRIOR + if allowance == 1 { 2 } else { 418 };
+                assert_eq!(
+                    (leaf.actual(), leaf.limit()),
+                    (attempted, PRIOR + allowance)
+                );
+                assert_eq!(budget.work(), PRIOR + if allowance == 1 { 0 } else { 2 });
+            }
+            assert_eq!((budget.storage(), budget.peak_storage()), (19, 19));
+            assert_eq!(budget.failed_storage(), None);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            drop(budget);
+            assert_eq!(
+                work.failed_work(),
+                match allowance {
+                    1 => Some(PRIOR + 2),
+                    417 => Some(PRIOR + 418),
+                    _ => None,
+                }
+            );
+        }
+    });
+}
