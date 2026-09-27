@@ -71,7 +71,7 @@ persistent continuation; an ordered-successor control reaches the native
 publication attempt but does not execute a native queue.
 
 Private directed-copy origins now capture the exact producer, child, endpoint,
-leg and original interval. The bounded direct-parent permit roster is attached
+leg and original interval. The bounded predecessor permit roster is attached
 to the real pending child compute record and searched by exact key. A copy can
 access an endpoint only when every conflicting compute owner individually
 authorizes it and remains unpublished behind its gate. Public host operations
@@ -87,6 +87,21 @@ Common leaf entry authenticates the retained origin for progress and disposal.
 Consumer cancellation removes its access exception without cancelling live
 producer DMA or releasing that DMA's custody.
 
+The router now captures an immutable, deduplicated predecessor closure before
+child admission. Explicit success roots and the original cooperative FIFO tail
+remain distinct. Each directed node retains its exact original event/submission
+roster, stream, endpoints, intervals, extents and depth. Live ancestry follows
+earlier directed parents; terminal roots are history boundaries whose public
+events, grandparents and old source allocations need not remain present. A later
+stream tail cannot extend the capture. Ordinary completed roots are depth-one
+leaves. Capture is bounded independently by 32,768 nodes, 262,144 explicit/implicit
+edges (including stored terminal history), and depth 256. Permits are bounded by
+65,536 entries. Every cooperative owner of a bound allocation must belong to the
+capture; unrelated shared-read siblings still reject. All captured submissions
+are retained transactionally before child entry, including ancestors that settle
+before their consumer. A captured success depth supplies the child admission
+floor; durable mixed-kind depth after child settlement remains unimplemented.
+
 CPU tests exercise genuine accepted child consumers with multipart directed
 DMA, both host reconciliation endpoints, synthetic host/device storage, public
 access exclusion, consumer cancellation with live DMA and corruption before
@@ -95,12 +110,29 @@ directly with an already accepted record; they are not a hardware retry result.
 These tests do not admit pending producers through the public router API or
 execute the consumer kernel.
 
+Additional CPU tests cover diamonds, independent node/edge bounds, released
+events and history, immutable roster corruption before/after settlement, FIFO
+tail changes, terminal depth limits and uncertain-admission rollback. A scripted
+two-copy chain progresses under genuine child compute custody, preserving both
+ancestor retains, with source- and destination-endpoint permits. The source-device
+case tests private access, not the public destination-device admission rule.
+The consumer stays gated and is cancelled; this is not successful native compute.
+
+The KFD initialized-after-dispatch input now carries an opaque move-only payload,
+not a publicly constructible bare allocation. Only internal authenticated
+completion/recovery paths mint or preserve it. Compile-fail controls prohibit
+bare construction, internal-constructor access, field construction/mutation,
+cloning and reuse after normalization. This closes an API authority hole, not
+the separate multipart SDMA initialization gap. Direct callers that previously
+constructed `InitializedAfterDispatch(bare_allocation)` must now use a returned
+authenticated input; preserving that construction would preserve the hole.
+
 ## Not Yet Supported
 
 Pending peer-copy-to-compute admission remains rejected by the KFD router. Its
-child compute ledger retains bound allocations immediately. Private direct-root
-copy access is implemented, but bounded transitive/FIFO ancestry construction,
-router-driven gate resolution and full lifecycle integration remain required
+child compute ledger retains bound allocations immediately. Private ancestor
+copy access and bounded transitive/FIFO capture are implemented, but exact
+already-active DMA owner admission, router-driven gate resolution and full lifecycle integration remain required
 before opening pending admission. The ordinary
 multi-device router uses host-staged cooperative peer copies, not native XGMI.
 The separate native-XGMI copy backend has not acquired compute support. This
@@ -125,19 +157,26 @@ native-correctness or performance result.
    completed CPU contract checks exact intervals, mixed leases, all completion
    ingresses, failure, cancellation, corruption, slot reuse and the depth limit.
 3. Reuse the child compute ledger's module, kernarg, allocation, stream and
-   cancellation ownership. The implemented private direct-root access bypasses
+   cancellation ownership. The implemented private ancestor access bypasses
    consumer custody only for individually authorized unpublished owners;
-   the cooperative copy's public write path remains blocked. Extend this to a bounded authenticated
-   predecessor roster for each bound allocation, including transitive source
-   readers and FIFO predecessors; allocation overlap or an ID alone is not proof
-   of ancestry. Keep destination-write range authority separate from native
-   reconciliation authority for an existing dirty extent.
+   the cooperative copy's public write path remains blocked. The captured roster
+   includes transitive source readers and FIFO predecessors; allocation overlap
+   or an ID alone is not proof of ancestry. Authenticate already-Ready/Published
+   child DMA owners against their exact retained origin, stream, scratch and
+   endpoint before accepting a new gated consumer. Keep destination-write range
+   authority separate from native reconciliation authority.
 4. Integrate the implemented child gate across the router's pending-peer
    lifecycle. Immediate, observed, ordered-successor, deadline and flush child
    publication paths now check it. Preserve transitive stream ordering, producer fan-out, cross-stream
    flush and drain progress, initialization authority and final publication-time
    checks. Failure, cancellation and unknown results must not publish compute.
    Poll/wait must not silently acquire cooperative-copy progress semantics.
+   Preserve native initialized-byte authority through authenticated completed
+   SDMA windows, including sequential allocation zeroing and partial overwrites.
+   Runtime `sdma_initialized` and peer success are not native readiness witnesses.
+   Generic owner bookkeeping completion cannot mint this authority. Logical
+   versus physical typed-binding extent restrictions remain separate. Add durable
+   mixed-depth history and stream-indexed gated-consumer progress/retirement.
 5. Extend and requalify the mixed-kind finite projection, terminal-leaf model and
    production adapters. Then qualify actual copy/compute execution, native XGMI
    composition and matched HIP/HSA workloads separately.
