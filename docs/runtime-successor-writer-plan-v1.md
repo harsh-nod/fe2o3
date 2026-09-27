@@ -162,6 +162,12 @@ Integrated native terminal/unwind retention, the separately authorized three-pha
 hardware profile and shared-body queued-owner proofs remain open. The existing
 two-launch R57 authority and inner-journal proofs do not cover those gates.
 
+The shared queued-read resolution body now has a dedicated
+[conditional proof boundary](runtime-queued-read-resolution-proof-v1.md).
+Complete producer membership, selected-storage representation and authentic
+settled outcomes remain premises. It does not close full outer-owner invariants,
+reader release/refunds or the active-then-queued Context release composition.
+
 ### Unknown Group Disposal
 
 Rejecting disposal while a co-owner exists is safe but cannot finish cleanup:

@@ -1,6 +1,108 @@
 use super::*;
 
 #[test]
+fn queued_read_shared_resolution_matches_frozen_state_storage_and_accesses() {
+    fn prepared(status: ContextProducerReadStatusV1, count: usize) -> (Fixture, Root) {
+        let mut f = Fixture::new(3, 12);
+        let earlier = f.active(&[1]);
+        f.success(earlier);
+        let a = f.active(&[0, 1]);
+        let b = f.queued(&[(0, Some(a)), (1, Some(a))]);
+        let other_a = f.active(&[2]);
+        let other_b = f.queued(&[(2, Some(other_a))]);
+        for index in 0..count {
+            let req = request(&f, index % 2, b);
+            acquire(&mut f, 20 + index as u64, req);
+            if index == 0 {
+                let unrelated = request(&f, 2, other_b);
+                acquire(&mut f, 30, unrelated);
+            }
+        }
+        f.success(a);
+        let root = match status {
+            ContextProducerReadStatusV1::Success => {
+                f.journal.activate_queued_writer(b).unwrap();
+                let root = f.journal.validate_root(b).unwrap();
+                f.journal.validate_attached_reads(root).unwrap();
+                f.journal
+                    .inner
+                    .settle_success(b, &ContextWriterSuccessEvidenceV1 { writer: b })
+                    .unwrap();
+                root
+            }
+            ContextProducerReadStatusV1::NoEffect => {
+                let root = f.journal.validate_root(b).unwrap();
+                f.journal.validate_attached_reads(root).unwrap();
+                f.journal.inner.abort_reserved(b).unwrap();
+                root
+            }
+            ContextProducerReadStatusV1::Unknown => {
+                let root = f.journal.validate_root(b).unwrap();
+                f.journal.validate_attached_reads(root).unwrap();
+                f.journal.roots[b.slot].as_mut().unwrap().phase = Phase::Unknown;
+                root
+            }
+            ContextProducerReadStatusV1::Pending => unreachable!(),
+        };
+        f.journal.disposal_terminal = true;
+        (f, root)
+    }
+
+    fn storage(j: &Journal) -> (usize, usize, usize, usize, usize, usize) {
+        (
+            j.queued_reads.as_ptr() as usize,
+            j.queued_reads.capacity(),
+            j.free_reads.as_ptr() as usize,
+            j.free_reads.capacity(),
+            j.read_counts.as_ptr() as usize,
+            j.read_counts.capacity(),
+        )
+    }
+
+    for status in [
+        ContextProducerReadStatusV1::Success,
+        ContextProducerReadStatusV1::NoEffect,
+        ContextProducerReadStatusV1::Unknown,
+    ] {
+        for count in [0, 1, 3, 8] {
+            let (mut actual, root) = prepared(status, count);
+            let (mut frozen, frozen_root) = prepared(status, count);
+            assert_eq!(snapshot(&actual.journal), snapshot(&frozen.journal));
+            let pointers = storage(&actual.journal);
+            let custody = (
+                actual.journal.free_reads.clone(),
+                actual.journal.read_counts.clone(),
+                actual.journal.next_read_incarnation,
+            );
+            actual.journal.resolve_reads(root, status);
+            frozen.journal.resolve_reads_baseline(frozen_root, status);
+            assert_eq!(
+                actual.journal.inner.guard_accesses_for_test_v1(),
+                frozen.journal.inner.guard_accesses_for_test_v1()
+            );
+            assert_eq!(snapshot(&actual.journal), snapshot(&frozen.journal));
+            assert_eq!(storage(&actual.journal), pointers);
+            assert_eq!(
+                (
+                    actual.journal.free_reads.clone(),
+                    actual.journal.read_counts.clone(),
+                    actual.journal.next_read_incarnation,
+                ),
+                custody
+            );
+            assert!(actual.journal.disposal_terminal);
+            if status == ContextProducerReadStatusV1::Unknown {
+                assert!(matches!(root.phase, Phase::Queued));
+                assert!(matches!(
+                    actual.journal.roots[root.writer.slot].unwrap().phase,
+                    Phase::Unknown
+                ));
+            }
+        }
+    }
+}
+
+#[test]
 fn queued_read_indexed_work_is_affine_in_same_producer_roster_size() {
     let mut work = Vec::new();
     for size in [4, 8, 16] {
