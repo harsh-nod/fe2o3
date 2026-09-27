@@ -232,8 +232,7 @@ impl ContextVersionJournalV1 {
         )
     }
 
-    #[cfg(test)]
-    fn preflight_begin_write(
+    pub(crate) fn preflight_begin_write(
         &self,
         writer: ContextWriterReferenceV1,
         canonical: &[ContextAllocationWriteV1],

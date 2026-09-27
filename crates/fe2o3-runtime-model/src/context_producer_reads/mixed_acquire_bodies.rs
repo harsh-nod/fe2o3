@@ -1,10 +1,10 @@
 // Both complete preflights precede either mutation. Proof hooks add no Rust work.
-macro_rules! mixed_acquire_execution_body {
+macro_rules! mixed_acquire_preflight_body {
     ($syntax:ident, $contents:ident, $generation:expr, $consumer:ident,
      $stable_requests:ident, $stable_output:ident, $producer_requests:ident, $producer_output:ident,
-     $stable_preflight:path, $stable_commit:path, $producer_preflight:path, $producer_commit:path,
+     $stable_preflight:path, $producer_preflight:path,
      $value:ident, [$($setup:tt)*], [$($stable_passed:tt)*], [$($producer_passed:tt)*],
-     [$($ready:tt)*], [$($stable_committed:tt)*], [$($finish:tt)*]) => {
+     [$($finish:tt)*]) => {
         $syntax!({
             $($setup)*
             if $consumer.context_generation != $generation {
@@ -39,7 +39,23 @@ macro_rules! mixed_acquire_execution_body {
                     Err(error) => return Err(error),
                 }
             }
-            $($ready)*
+            $($finish)*
+        })
+    };
+}
+
+macro_rules! mixed_acquire_execution_body {
+    ($syntax:ident, $contents:ident, $generation:expr, $consumer:ident,
+     $stable_requests:ident, $stable_output:ident, $producer_requests:ident, $producer_output:ident,
+     $stable_preflight:path, $stable_commit:path, $producer_preflight:path, $producer_commit:path,
+     $value:ident, [$($setup:tt)*], [$($stable_passed:tt)*], [$($producer_passed:tt)*],
+     [$($ready:tt)*], [$($stable_committed:tt)*], [$($finish:tt)*]) => {
+        mixed_acquire_preflight_body!(
+            $syntax, $contents, $generation, $consumer,
+            $stable_requests, $stable_output, $producer_requests, $producer_output,
+            $stable_preflight, $producer_preflight, $value,
+            [$($setup)*], [$($stable_passed)*], [$($producer_passed)*],
+            [$($ready)*
             if !$stable_requests.is_empty() {
                 $stable_commit(&mut $contents.stable, $consumer, $stable_requests, $stable_output);
             }
@@ -48,7 +64,7 @@ macro_rules! mixed_acquire_execution_body {
                 $producer_commit($contents, $consumer, $producer_requests, $producer_output);
             }
             $($finish)*
-            Ok(())
-        })
+            Ok(())]
+        )
     };
 }

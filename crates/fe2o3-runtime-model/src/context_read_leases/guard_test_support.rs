@@ -47,6 +47,14 @@ impl StableReadResetV1 {
 }
 
 impl ContextReadLeasedJournalV1 {
+    pub(crate) fn seed_idle_epoch_for_test_v1(
+        &mut self,
+        allocation: ContextAllocationReferenceV1,
+        epoch: u64,
+    ) {
+        self.journal.seed_idle_epoch_for_test_v1(allocation, epoch);
+    }
+
     pub(crate) fn restore_disposal_for_test_v1(
         &mut self,
         before: &ContextVersionJournalV1,

@@ -1,6 +1,17 @@
 use super::*;
 
 impl ContextVersionJournalV1 {
+    pub(crate) fn seed_idle_epoch_for_test_v1(
+        &mut self,
+        allocation: ContextAllocationReferenceV1,
+        epoch: u64,
+    ) {
+        let entry = self.allocations[allocation.slot].as_mut().unwrap();
+        assert_eq!(entry.key, allocation.key);
+        assert!(entry.pending_member.is_none());
+        entry.attempt_epoch = epoch;
+    }
+
     // Use only after successful disposal of the saved, validated Unknown chain.
     pub(crate) fn restore_disposal_for_test_v1(
         &mut self,

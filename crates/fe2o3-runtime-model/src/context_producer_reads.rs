@@ -31,6 +31,8 @@ mod acquire;
 
 include!("context_producer_reads/mixed_acquire_bodies.rs");
 
+mod preflight;
+
 #[macro_use]
 mod release;
 

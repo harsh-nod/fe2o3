@@ -6,8 +6,10 @@ a writable destination with a pending predecessor, including an exact event.
 
 ## Ownership Boundary
 
-Add a bounded queued-writer owner around `ContextProducerReadJournalV1`, following
-the existing immutable-only owner layering. Do not replace or bypass the inner
+The executable model now has `ContextQueuedWriterJournalV1`, a bounded queued-writer
+owner around `ContextProducerReadJournalV1`. It deliberately exposes neither mutable
+nor immutable dereferencing: inherited availability queries could bypass queue
+custody. The Context adapter still uses the previous owner. Do not replace or bypass the inner
 single-pending-writer invariant. Existing core proofs continue to describe the
 inner journal; the new composition needs its own proof and concrete integration
 qualification. An immutable projection must not expose an availability API that
@@ -47,12 +49,62 @@ split into separately settled immediate and queued subsets.
 5. Cancellation or backend Rejected must release only the cancelled successor's
    complete reservation. Prevalidate the whole roster before any removal. A
    cancelled middle writer must never make a descendant inherit its predecessor:
-   descendants remain success-dependent on the cancelled identity. Specify and
-   test retained failed-node bookkeeping or a pre-effect TooLate response before
-   choosing a concrete cancellation representation.
+   descendants remain success-dependent on the cancelled identity. The model
+   unlinks only the cancelled member and retains its immutable predecessor identity
+   in each descendant, with a Failed prerequisite. Later ancestor success cannot
+   rewrite this prerequisite. Concrete backend cancellation still needs qualification.
 6. Terminal backend results, unknown ownership and unwind retain all affected
    allocation credits, writer nodes and dependency roots. Cleanup/drop and the
    Context-wide quarantine path must account for queued as well as active writers.
+
+## Model Checkpoint
+
+The fixed member arena reserves complete destination rosters, including idle
+members of a multi-parent join. Each unactivated successor consumes epoch
+headroom at admission. Activation uses actual reconciled epoch/lineage values,
+not predicted versions. Public proposed-key admission is borrowed and consumes
+no ID; registration and Begin recheck their respective state before commitment.
+
+The wrapper calls shared inner preflights before added queue exclusion checks,
+preserving ordinary-path error precedence. It has no heap allocation after
+construction; roster operations are O(k), independent of total queue depth.
+Model tests exercise arena conservation, fixed storage addresses/capacities,
+three-deep success, cancellation permutations, multi-parent/idle joins, readers,
+stale identities, epoch exhaustion and fail-stop Unknown custody.
+
+This is not Context support or a proof of the new owner. In particular:
+
+- Context must authenticate each exact latest writer and explicit success event,
+  retain the queued roster, and audit all availability probes before enabling it.
+- Queued Unknown is fail-stop and cannot be refunded by a later NoEffect value.
+  Safe whole-roster queued-Unknown disposal/recovery remains unimplemented.
+- Failed/quiescent backend results alone are not NoEffect authority. Descendant
+  failure after cancellation cannot be used to silently release queued custody.
+- Queued-output reads, partial writes and ReadWrite integration remain open.
+- The unchanged inner journal proofs do not establish outer queue invariants.
+
+### Required Unknown Disposal
+
+Rejecting disposal while a co-owner exists is safe but cannot finish cleanup:
+an Active Unknown A and queued Unknown B on the same allocation block each other
+in either disposal order. A future disposal group must close over every selected
+writer's complete roster and every co-owner of that allocation union. Require
+exact identities, no omitted neighbors/readers, all roots Unknown, and separately
+authenticated Context quiescence before any native release.
+
+Retain one group with unique allocation receipts. Release each native allocation
+once and keep all original writer roots/credits until the entire union is disposed.
+After complete backend release, dispose inner Active-Unknown rosters, retire
+queued-only allocations and abort queued Reserved identities as destruction
+bookkeeping, not as NoEffect or success. Clear the outer group without predecessor
+success propagation. Partial model commitment must quarantine, never masquerade
+as rollback. Context's current per-writer disposal receipts assume disjoint
+destinations and cannot safely implement this contract unchanged.
+
+Tests must cover branching/multi-allocation closure, unrelated writers, pending
+co-owner refusal before backend effects, exact identity/reader rejection, partial
+release/retry without double release, terminal/panic retention and queued-only
+Unknown groups. This group disposal is planned, not implemented by the checkpoint.
 
 ## Entry-Point Audit
 
