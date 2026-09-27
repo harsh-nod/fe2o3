@@ -106,7 +106,8 @@ indefinitely; finite cleanup funding does not guarantee eventual reaping.
 The native external-anchor coordinator now calls these primitives after deriving
 full charges and validating staged Files, and owns gated readiness/exec/endpoint
 admission and managed lifetime. The native compiler coordinator now also composes
-retained spawn, nominal readiness and continuity. Protected startup and native
-inherited root composition remain unvalidated/unfinished. Rootless clone and
+retained spawn, nominal readiness and continuity. Native inherited root descriptor
+composition also exists; installed native activation and protected startup remain
+unfinished/unvalidated. Rootless clone and
 cleanup tests do not establish successful protected startup. See the
 [compiler launch checkpoint](../../docs/evidence/conditional-native-compiler-launch-20260926.md).

@@ -410,7 +410,7 @@ Compiler coordinator native preparation now owns the genuine matching trust,
 three freshly sealed images, listener/root, two root-bound lifecycle leases and
 managed anchor. Lease validity is joined to the actual retained service root,
 not accepted as an unrelated valid lock. Preparation itself spawns nothing;
-production root inherited composition still uses V1 and remains to be migrated.
+the installed root entrypoint still uses V1 and remains to be migrated.
 Consuming native supervisor launch now exists as described below. Dedicated
 native V2/V3 supervisor binaries now
 compose inherited descriptor intake, actual admission, listener activation,
@@ -442,6 +442,10 @@ exec. Managed continuity retains the same owners and original request ledger.
 This composition is implemented but not validated as a protected deployment.
 Genuine-preparation quota boundaries, complete-path staged substitutions and
 post-spawn refusal/unwind schedules still need coverage. Native inherited root
-composition also remains outstanding. Neither `cancel`, field-drop order, a
+descriptor admission and anchor-first composition now exist, with bounded source
+preflight, contextual records, zeroizing seed reads and shared listener mechanics.
+Installed activation, complete startup quota queries and protected validation
+remain outstanding; see the [root admission checkpoint](evidence/conditional-native-root-admission-20260926.md).
+Neither `cancel`, field-drop order, a
 persistent guard nor passing component tests establish successful production
 startup. See the [compiler launch checkpoint](evidence/conditional-native-compiler-launch-20260926.md).

@@ -153,8 +153,9 @@ These mechanical APIs do not validate a caller's declared charge or deployment.
 The native compiler coordinator now transfers its actual prepared owner, live
 anchor and both lifecycle leases through this path. It validates the final
 staged Files and uses nominal readiness, EOF and continuity checks before exec
-confirmation. Its inherited root composition and protected deployment validation
-remain outstanding; the generic wrapper alone establishes neither provenance
+confirmation. Native inherited descriptor composition now uses the same guard
+before anchor launch; installed native activation and protected deployment
+validation remain outstanding. The generic wrapper alone establishes neither provenance
 nor successful startup. See the
 [compiler launch checkpoint](evidence/conditional-native-compiler-launch-20260926.md).
 

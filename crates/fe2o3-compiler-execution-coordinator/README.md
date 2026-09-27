@@ -5,9 +5,11 @@ and preparation now compose genuine deployment/policy/key custody, three freshly
 sealed images, listener/root inputs, root-bound lifecycle leases and a managed
 anchor on the original resource ledger. Consuming native supervisor launch now
 transfers that complete preparation into ordered child custody before clone.
-Native inherited root composition and protected deployment validation remain
-unfinished. These APIs do not establish 47/47 safe GPU launch. See the
-[native launch checkpoint](../../docs/evidence/conditional-native-compiler-launch-20260926.md).
+Native inherited descriptor admission and anchor-first composition now exist.
+The installed entrypoint still uses V1; native activation, complete startup quota
+queries and protected deployment validation remain unfinished. These APIs do not
+establish 47/47 safe GPU launch. See the
+[native root checkpoint](../../docs/evidence/conditional-native-root-admission-20260926.md).
 
 ## Native Preparation
 
@@ -45,6 +47,28 @@ pool locks; that cancellation may itself defer. The original persistent cleanup
 account funds the complete payload independently of the original request ledger.
 No new pool or budget reset is introduced. Component tests and compile checks
 are not a successful protected deployment or a completed production GPU path.
+
+## Native Inherited Inputs
+
+`InheritedCompilerExecutionDeploymentV2/V3::admit` consumes the fixed fourteen
+source descriptors under an explicit unsafe ownership contract. Before adoption,
+the coordinator checks descriptor flags, directory roles, bounded executable
+lengths and exact record/seed sizes. A fixed-buffer thread check requires only
+the main PID. Three independent leases bind both state roots to the same
+canonical lifecycle before either signing seed is read.
+
+Actual root-owned canonical records are read twice and decoded against their
+same-family contexts before fresh capabilities are sealed. Seed buffers are
+zeroizing on success, refusal and unwind. Shared filesystem mechanics construct
+the exact non-listening listener; cleanup checks an established inode identity
+before unlinking. All five declared image lengths are bounded before seed reads.
+
+Consuming `launch` installs the canonical cleanup guard before the anchor, then
+uses native compiler preparation and retained supervisor launch on the original
+request and cleanup accounts. `SOURCE_STORAGE` covers the raw inputs only, not
+the complete successful startup envelope. Full quota queries, genuine root-path
+failure tests and installed native activation remain required. Component tests
+are not a successful protected deployment.
 
 ## Existing V1 Deployment
 
