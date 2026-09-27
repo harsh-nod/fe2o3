@@ -145,10 +145,12 @@ pub use link_plan::{
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
 };
 pub use native_worker_compact_replay::{
-    MAX_NATIVE_WORKER_COMPACT_FINALIZER_REPLAY_BYTES_V1,
+    ConditionalWorkerCompactFinalizerReplayV5, ConditionalWorkerCompactReplayIdentityV5,
+    ConditionalWorkerReplayCoordinatesV5, MAX_NATIVE_WORKER_COMPACT_FINALIZER_REPLAY_BYTES_V1,
     NativeWorkerCompactFinalizerReplayIdentityV1, NativeWorkerCompactFinalizerReplayV1,
     NativeWorkerCompactReplayErrorV1, NativeWorkerCompactReplayResourcesV1,
     NativeWorkerCompactReplayStorageV1, NativeWorkerReplayCoordinatesV1,
+    prepare_conditional_worker_compact_finalizer_replay_v5,
     prepare_native_worker_compact_finalizer_replay_v1,
     prepare_native_worker_compact_finalizer_replay_v4,
 };

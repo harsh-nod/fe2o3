@@ -19,11 +19,13 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5 as Handoff;
 use fe2o3_hsaco_finalize::{
-    NativeFirstBuildWorkerErrorV1, NativeWorkerFinalizationErrorV1,
+    ConditionalWorkerCompactFinalizerReplayV5 as Transcript, NativeFirstBuildWorkerErrorV1,
+    NativeWorkerCompactReplayErrorV1 as TranscriptError, NativeWorkerFinalizationErrorV1,
     PreparedFinalizedConditionalWorkerHsacoV5 as Artifact,
     execute_preflighted_conditional_reproducible_first_build_worker_v2 as execute,
     finalize_conditional_worker_hsaco_v5 as finalize,
     preflight_conditional_reproducible_first_build_worker_v2 as preflight,
+    prepare_conditional_worker_compact_finalizer_replay_v5 as prepare_transcript,
 };
 use fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1;
 use fe2o3_verifier::{
@@ -47,6 +49,7 @@ pub(crate) struct ConditionalRecoveryPolicy<'a> {
 /// Publication and the sealed verifier/host authority gate remain separate.
 pub(crate) struct ParentPreparedConditionalArtifact<'a, 'b, 'w> {
     artifact: Artifact,
+    transcript: Transcript,
     compiler_execution: Carriage,
     readiness: Readiness<'b, 'w>,
     invocation: &'a Invocation,
@@ -55,6 +58,7 @@ pub(crate) struct ParentPreparedConditionalArtifact<'a, 'b, 'w> {
 impl ParentPreparedConditionalArtifact<'_, '_, '_> {
     const HEADER: usize = size_of::<Self>()
         - size_of::<Artifact>()
+        - size_of::<Transcript>()
         - size_of::<Carriage>()
         - size_of::<Readiness<'static, 'static>>();
 
@@ -64,18 +68,26 @@ impl ParentPreparedConditionalArtifact<'_, '_, '_> {
     pub(crate) fn compiler_execution(&self) -> &Carriage {
         &self.compiler_execution
     }
+    pub(crate) fn transcript(&self) -> &Transcript {
+        &self.transcript
+    }
     pub(crate) fn revalidate(&mut self) -> Result<()> {
         let parent_storage = self.invocation.native_retained_storage()?;
         let floor = self
             .artifact
             .required_retained_storage()
-            .checked_add(self.compiler_execution.retained_storage())
+            .checked_add(self.transcript.storage().retained_storage())
+            .and_then(|n| n.checked_add(self.compiler_execution.retained_storage()))
             .and_then(|n| n.checked_add(self.readiness.retained_storage()))
             .and_then(|n| n.checked_add(Self::HEADER))
             .and_then(|n| n.checked_add(parent_storage))
             .and_then(|n| n.checked_add(self.configuration_storage))
             .ok_or(Resource::Arithmetic)?;
         check_account_floor(self.readiness.budget, floor)?;
+        // Fixed comparisons of the occurrence, source and finalization coordinates.
+        self.readiness.budget.charge_work(1024)?;
+        self.transcript
+            .verify_finalized_coordinates(&self.artifact)?;
         self.readiness.revalidate()?;
         check_pair(
             &mut self.readiness,
@@ -171,6 +183,8 @@ impl<'b, 'w> Readiness<'b, 'w> {
         self.budget.reserve_storage(storage.retained_storage())?;
         let (artifact, storage) = finalize(evidence, self.budget)?;
         self.budget.reserve_storage(storage.retained_storage())?;
+        let (transcript, storage) = prepare_transcript(&artifact, self.budget)?;
+        self.budget.reserve_storage(storage.retained_storage())?;
 
         // Only known success-only scratch is released. Source/preflight/worker
         // reservations remain with the actual retained artifact and receipt.
@@ -181,6 +195,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
             .release_storage(FRAME - ParentPreparedConditionalArtifact::HEADER)?;
         let mut prepared = ParentPreparedConditionalArtifact {
             artifact,
+            transcript,
             compiler_execution,
             readiness: self,
             invocation,
@@ -259,6 +274,7 @@ pub(crate) enum ContinuationError {
     Subject(SubjectError),
     Worker(NativeFirstBuildWorkerErrorV1),
     Finalizer(NativeWorkerFinalizationErrorV1),
+    Transcript(TranscriptError),
 }
 macro_rules! causes {
     ($($ty:ty => $variant:ident),+ $(,)?) => {
@@ -280,4 +296,5 @@ macro_rules! causes {
 causes!(Resource => Resource, Failure => Readiness, CapabilityError => Invocation,
     CompilerModuleHandoffAdmissionErrorV5<RecoveryError> => Recovery,
     HandoffError => Transaction, SubjectError => Subject,
-    NativeFirstBuildWorkerErrorV1 => Worker, NativeWorkerFinalizationErrorV1 => Finalizer);
+    NativeFirstBuildWorkerErrorV1 => Worker, NativeWorkerFinalizationErrorV1 => Finalizer,
+    TranscriptError => Transcript);

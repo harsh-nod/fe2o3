@@ -46,6 +46,14 @@ const MAGIC: &[u8; 8] = b"F2NCFR01";
 const VERSION: u16 = 1;
 const CHECKSUM_DOMAIN: &[u8] = b"FE2O3/NATIVE-WORKER-COMPACT-FINALIZER-REPLAY-CHECKSUM/V1\0";
 const IDENTITY_DOMAIN: &[u8] = b"FE2O3/NATIVE-WORKER-COMPACT-FINALIZER-REPLAY-IDENTITY/V1\0";
+#[path = "native_worker_replay_codec.rs"]
+mod codec;
+#[path = "conditional_worker_compact_replay.rs"]
+mod conditional;
+pub use conditional::{
+    ConditionalWorkerCompactFinalizerReplayV5, ConditionalWorkerCompactReplayIdentityV5,
+    ConditionalWorkerReplayCoordinatesV5, prepare_conditional_worker_compact_finalizer_replay_v5,
+};
 // Magic/version, three identities, native outer digest/length, attempt, slot, transaction.
 const HEADER_BYTES: usize = 8 + 2 + 3 * 32 + 40 + 8 + 16 + 32 + 1 + 32;
 const LEGACY_V3_HEADER_BYTES: usize = 8 + 2 + 2 * 32 + 1 + 32;
@@ -110,41 +118,39 @@ impl NativeWorkerCompactReplayStorageV1 {
 /// fn forge() -> Replay { Replay::default() }
 /// ```
 pub struct NativeWorkerCompactFinalizerReplayV1 {
-    identity: NativeWorkerCompactFinalizerReplayIdentityV1,
-    expected_finalization_identity: [u8; 32],
-    source_evidence_identity: [u8; 32],
-    binding_identity: [u8; 32],
-    coordinates: NativeWorkerReplayCoordinatesV1,
-    tail: DecodedCompactReplayTailV1,
-    canonical_bytes: Vec<u8>,
-    storage: NativeWorkerCompactReplayStorageV1,
+    core: codec::Core,
 }
 
 impl fmt::Debug for NativeWorkerCompactFinalizerReplayV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NativeWorkerCompactFinalizerReplayV1")
-            .field("identity", &self.identity)
-            .field("coordinates", &self.coordinates)
-            .field("bytes", &self.canonical_bytes.len())
+            .field("identity", &self.identity())
+            .field("coordinates", &self.coordinates())
+            .field("bytes", &self.canonical_bytes().len())
             .finish_non_exhaustive()
     }
 }
 
 impl NativeWorkerCompactFinalizerReplayV1 {
     pub const fn identity(&self) -> NativeWorkerCompactFinalizerReplayIdentityV1 {
-        self.identity
+        NativeWorkerCompactFinalizerReplayIdentityV1(self.core.identity)
     }
     pub const fn coordinates(&self) -> NativeWorkerReplayCoordinatesV1 {
-        self.coordinates
+        NativeWorkerReplayCoordinatesV1 {
+            outer: self.core.header.outer,
+            attempt: self.core.header.attempt,
+            slot: CompilerModuleHandoffSlotV4::Production,
+            transaction: self.core.header.transaction,
+        }
     }
     pub const fn attempt(&self) -> BuildAttempt {
-        self.coordinates.attempt()
+        self.core.header.attempt
     }
     pub const fn handoff_slot(&self) -> CompilerModuleHandoffSlotV4 {
-        self.coordinates.slot()
+        self.coordinates().slot()
     }
     pub const fn transaction_identity(&self) -> CompilerModuleHandoffTransactionIdentityV4 {
-        self.coordinates.transaction_identity()
+        self.coordinates().transaction_identity()
     }
     /// Checks coordinates of a separately decoded outer; never rehashes the
     /// payload as raw content or constructs an outer identity/receipt.
@@ -152,33 +158,31 @@ impl NativeWorkerCompactFinalizerReplayV1 {
         &self,
         actual: InertSemanticCompilerModuleHandoffIdentityV4,
     ) -> Result<()> {
-        let expected = self.coordinates.outer;
-        if expected.sha256() != actual.sha256() || expected.byte_len() != actual.byte_len() {
-            return Err(NativeWorkerCompactReplayErrorV1::Coordinates);
-        }
-        Ok(())
+        self.core
+            .header
+            .verify_outer(actual.sha256(), actual.byte_len())
     }
     pub const fn expected_finalization_identity(&self) -> &[u8; 32] {
-        &self.expected_finalization_identity
+        &self.core.header.finalization
     }
     pub const fn source_evidence_identity(&self) -> &[u8; 32] {
-        &self.source_evidence_identity
+        &self.core.header.source
     }
     pub const fn binding_identity(&self) -> &[u8; 32] {
-        &self.binding_identity
+        &self.core.header.binding
     }
     pub fn canonical_bytes(&self) -> &[u8] {
-        &self.canonical_bytes
+        &self.core.bytes
     }
     /// Transfers the sole canonical byte allocation without copying it.
     pub fn into_canonical_bytes(self) -> Vec<u8> {
-        self.canonical_bytes
+        self.core.bytes
     }
     pub const fn storage(&self) -> NativeWorkerCompactReplayStorageV1 {
-        self.storage
+        self.core.storage
     }
     pub(crate) fn replay_view(&self) -> ProtectedWorkerV3CompactFinalizerReplayViewV2<'_> {
-        self.tail.replay_view(&self.canonical_bytes)
+        self.core.tail.replay_view(&self.core.bytes)
     }
 
     /// Caller must already reserve `bytes.len()` for the borrowed input. That
@@ -189,79 +193,9 @@ impl NativeWorkerCompactFinalizerReplayV1 {
         bytes: &[u8],
         budget: &mut Budget<'_>,
     ) -> Result<(Self, NativeWorkerCompactReplayStorageV1)> {
-        let quote = NativeWorkerCompactReplayResourcesV1::for_wire_length(bytes.len())?;
-        budget.with_prepaid_scope(bytes.len(), 8, quote.work, quote.scratch, |_| {
-            let mut owned = Vec::new();
-            owned
-                .try_reserve_exact(bytes.len())
-                .map_err(|_| Resource::Allocation)?;
-            owned.extend_from_slice(bytes);
-            Self::decode_owned(owned)
-        })
-    }
-
-    fn decode_owned(bytes: Vec<u8>) -> Result<(Self, NativeWorkerCompactReplayStorageV1)> {
-        check_length(bytes.len())?;
-        let (body, checksum) = bytes.split_at(bytes.len() - 32);
-        let mut reader = CompactReplayReaderV1::new(body);
-        if reader.take(8)? != MAGIC {
-            return Err(NativeWorkerCompactReplayErrorV1::Magic);
-        }
-        if reader.u16()? != VERSION {
-            return Err(NativeWorkerCompactReplayErrorV1::Version);
-        }
-        if hash(CHECKSUM_DOMAIN, body) != checksum {
-            return Err(NativeWorkerCompactReplayErrorV1::Checksum);
-        }
-        let expected_finalization_identity = reader.array()?;
-        let source_evidence_identity = reader.array()?;
-        let binding_identity = reader.array()?;
-        let outer = ContentIdentityV1::from_parts(reader.array()?, reader.u64()?);
-        let generation = reader.u64()?;
-        let session = reader.array()?;
-        let invocation = reader.array()?;
-        let slot = match reader.u8()? {
-            0 => CompilerModuleHandoffSlotV4::Production,
-            _ => return Err(NativeWorkerCompactReplayErrorV1::Coordinates),
-        };
-        let transaction = reader.array()?;
-        let attempt = decode_attempt(generation, session, invocation)?;
-        let coordinates = NativeWorkerReplayCoordinatesV1 {
-            outer,
-            attempt,
-            slot,
-            transaction,
-        };
-        if [
-            expected_finalization_identity,
-            source_evidence_identity,
-            binding_identity,
-            transaction,
-        ]
-        .contains(&[0; 32])
-            || outer.byte_len() == 0
-            || outer.byte_len() > MAX_COMPILER_MODULE_HANDOFF_BYTES_V4 as u64
-        {
-            return Err(NativeWorkerCompactReplayErrorV1::Coordinates);
-        }
-        // Always the derivation-capable tail grammar; legacy V1/V2 tails cannot
-        // silently drop response derivation bodies by selecting another decoder.
-        let tail = decode_compact_replay_tail(&mut reader, true)?;
-        let storage = retained_storage(bytes.len(), &tail)?;
-        let identity = NativeWorkerCompactFinalizerReplayIdentityV1(hash(IDENTITY_DOMAIN, &bytes));
-        Ok((
-            Self {
-                identity,
-                expected_finalization_identity,
-                source_evidence_identity,
-                binding_identity,
-                coordinates,
-                tail,
-                canonical_bytes: bytes,
-                storage,
-            },
-            storage,
-        ))
+        let core = codec::Core::decode(bytes, codec::Schema::Native, budget)?;
+        let storage = core.storage;
+        Ok((Self { core }, storage))
     }
 
     pub const fn authenticates_compiler_origin(&self) -> bool {
@@ -286,6 +220,7 @@ const FRAME: usize = 2 * size_of::<NativeWorkerCompactFinalizerReplayV1>()
     + size_of::<CompactReplayReaderV1<'static>>()
     + size_of::<NativeWorkerCompactReplayErrorV1>()
     + size_of::<OwnedWorkerV3RequestReplayPartsV1>()
+    + size_of::<codec::Inputs<'static>>()
     + size_of::<Sha256>()
     + 1024;
 
@@ -423,81 +358,39 @@ fn prepare_native_worker_compact_finalizer_replay(
     NativeWorkerCompactFinalizerReplayV1,
     NativeWorkerCompactReplayStorageV1,
 )> {
-    budget.with_prepaid_scope(
+    let core = codec::prepare(
         finalized.required_retained_storage(),
-        8,
-        512,
-        FRAME,
-        |budget| {
+        codec::Schema::Native,
+        budget,
+        || {
             let source = finalized.source_evidence();
-            let request = extract_worker_v3_request_replay_parts_v1(
-                source.bootstrap_request_bytes(),
-                source.exact_replay_request_bytes(),
-            )
-            .map_err(artifact_error)?;
-            let bootstrap = source
-                .bootstrap_response()
-                .replay_metadata()
-                .map_err(artifact_error)?;
-            let replay = source
-                .exact_replay_response()
-                .replay_metadata()
-                .map_err(artifact_error)?;
-            validate_construction_parts(
-                request.bootstrap_output_bound,
-                &request.external_providers,
-                source.plan().options(),
-                bootstrap,
-                replay,
-            )?;
-            let n = compact_replay_encoded_length(
-                HEADER_BYTES - 8 - 2 - 64,
-                true,
-                source.worker_measurement(),
-                &request.external_providers,
-                source.plan().options(),
-                bootstrap,
-                replay,
-            )?;
-            let quote = NativeWorkerCompactReplayResourcesV1::for_wire_length(n)?;
-            let floor = budget.storage();
-            budget.with_prepaid_scope(floor, 8, quote.work, quote.scratch, |_| {
-                let receipt = source.binding().receipt();
-                let attempt = receipt.attempt();
-                let mut bytes = Vec::new();
-                bytes
-                    .try_reserve_exact(n)
-                    .map_err(|_| Resource::Allocation)?;
-                bytes.extend_from_slice(MAGIC);
-                bytes.extend_from_slice(&VERSION.to_le_bytes());
-                bytes.extend_from_slice(finalized.identity());
-                bytes.extend_from_slice(source.identity().as_bytes());
-                bytes.extend_from_slice(source.binding().identity().as_bytes());
-                bytes.extend_from_slice(receipt.handoff_identity().sha256());
-                bytes.extend_from_slice(&receipt.handoff_identity().byte_len().to_le_bytes());
-                bytes.extend_from_slice(&attempt.generation().to_le_bytes());
-                bytes.extend_from_slice(attempt.session().as_bytes());
-                bytes.extend_from_slice(attempt.invocation().as_bytes());
-                bytes.push(receipt.slot() as u8);
-                bytes.extend_from_slice(receipt.transaction_identity().as_bytes());
-                encode_compact_replay_tail(
-                    &mut bytes,
-                    true,
-                    source.worker_measurement(),
-                    source.execution_limits(),
-                    request.bootstrap_output_bound,
-                    &request.external_providers,
-                    source.plan().options(),
-                    bootstrap,
-                    replay,
-                )?;
-                let checksum = hash(CHECKSUM_DOMAIN, &bytes);
-                bytes.extend_from_slice(&checksum);
-                debug_assert_eq!(bytes.len(), n);
-                NativeWorkerCompactFinalizerReplayV1::decode_owned(bytes)
-            })
+            let receipt = source.binding().receipt();
+            codec::Inputs {
+                header: codec::Header {
+                    finalization: *finalized.identity(),
+                    source: *source.identity().as_bytes(),
+                    binding: *source.binding().identity().as_bytes(),
+                    outer: ContentIdentityV1::from_parts(
+                        *receipt.handoff_identity().sha256(),
+                        receipt.handoff_identity().byte_len(),
+                    ),
+                    attempt: receipt.attempt(),
+                    slot: receipt.slot() as u8,
+                    transaction: *receipt.transaction_identity().as_bytes(),
+                },
+                requests: [
+                    source.bootstrap_request_bytes(),
+                    source.exact_replay_request_bytes(),
+                ],
+                responses: [source.bootstrap_response(), source.exact_replay_response()],
+                worker: source.worker_measurement(),
+                limits: source.execution_limits(),
+                options: source.plan().options(),
+            }
         },
-    )
+    )?;
+    let storage = core.storage;
+    Ok((NativeWorkerCompactFinalizerReplayV1 { core }, storage))
 }
 
 /// Exact external attachment extraction, using the same frozen V2 wire checks.
