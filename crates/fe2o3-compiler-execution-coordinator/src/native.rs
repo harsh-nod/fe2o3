@@ -3,6 +3,9 @@ use crate::{
     CompilerExecutionSupervisorProgramSourcesV1 as Sources,
     native_trust_adapter::CompilerExecutionSupervisorTrustErrorV2 as TrustError,
 };
+use fe2o3_compiler_execution_lifecycle::{
+    CompilerExecutionServiceLifecycleLeaseV2 as Lease, LifecycleLeaseErrorV2 as LifecycleError,
+};
 use fe2o3_compiler_execution_supervisor::{
     IssuerServiceCredentialProfileErrorV1 as CredentialsError,
     IssuerServiceCredentialProfileV1 as Credentials,
@@ -14,6 +17,9 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
 use fe2o3_protected_service_profile::ProtectedServiceProfileErrorV2 as ProfileError;
+use fe2o3_protected_service_spawn::{
+    ProtectedServiceCleanupErrorV2 as CleanupError, ProtectedServiceCleanupServiceV2 as Cleanup,
+};
 use fe2o3_protected_static_executable::{
     ProtectedStaticExecutableErrorV2 as ImageError,
     ProtectedStaticExecutableMeasurementV1 as Measurement,
@@ -71,6 +77,10 @@ pub enum CompilerExecutionPreparationErrorV2 {
     ServiceInputs(InputsError),
     /// Native managed anchor continuity or context refused.
     Anchor(AnchorError),
+    /// The existing cleanup pool guard could not be borrowed for validation.
+    Cleanup(CleanupError),
+    /// The cleanup guard does not validate against the actual retained lifecycle.
+    Lifecycle(LifecycleError),
     /// Native namespace observation refused.
     Profile(ProfileError),
     /// Dedicated service credentials are invalid.
@@ -99,6 +109,8 @@ from_error!(TrustError, Trust);
 from_error!(ImageError, Executable);
 from_error!(InputsError, ServiceInputs);
 from_error!(AnchorError, Anchor);
+from_error!(CleanupError, Cleanup);
+from_error!(LifecycleError, Lifecycle);
 from_error!(ProfileError, Profile);
 from_error!(CredentialsError, Credentials);
 impl fmt::Display for Failure {
@@ -109,6 +121,8 @@ impl fmt::Display for Failure {
             Self::Executable(e) => e.fmt(f),
             Self::ServiceInputs(e) => e.fmt(f),
             Self::Anchor(e) => e.fmt(f),
+            Self::Cleanup(e) => e.fmt(f),
+            Self::Lifecycle(e) => e.fmt(f),
             Self::Profile(e) => e.fmt(f),
             Self::Credentials(e) => e.fmt(f),
             Self::RootRequired => {
@@ -132,6 +146,8 @@ impl Error for Failure {
             Self::Executable(e) => Some(e),
             Self::ServiceInputs(e) => Some(e),
             Self::Anchor(e) => Some(e),
+            Self::Cleanup(e) => Some(e),
+            Self::Lifecycle(e) => Some(e),
             Self::Profile(e) => Some(e),
             Self::Credentials(e) => Some(e),
             _ => None,
@@ -155,6 +171,50 @@ pub(crate) const fn maximum(values: &[usize]) -> usize {
     }
     maximum
 }
+
+pub(crate) fn cleanup_guard_quota(
+    revalidation: CompilerExecutionPreparationQuotaV2,
+    frame: usize,
+) -> Result<CompilerExecutionPreparationQuotaV2> {
+    Ok(CompilerExecutionPreparationQuotaV2 {
+        work: sum(&[
+            LOCAL_WORK,
+            revalidation.work(),
+            Cleanup::GUARD_CLONE_WORK,
+            Lease::TRANSFER_WORK,
+        ])?,
+        scratch: sum(&[
+            frame,
+            maximum(&[
+                revalidation.scratch(),
+                sum(&[Cleanup::GUARD_CLONE_SCRATCH, Cleanup::GUARD_FILE_STORAGE])?,
+                sum(&[Cleanup::GUARD_FILE_STORAGE, Lease::IO_STORAGE])?,
+            ]),
+        ])?,
+    })
+}
+
+// The family adapter binds both checks to the same actual Prepared. Keeping the
+// accounting schedule separate lets tests exercise custody without fabricating one.
+pub(crate) fn with_cleanup_guard(
+    floor: usize,
+    frame: usize,
+    cleanup: &mut Cleanup,
+    budget: &mut Budget<'_>,
+    revalidate: impl FnOnce(&mut Budget<'_>) -> Result<()>,
+    validate: impl FnOnce(&File, &mut Budget<'_>) -> Result<()>,
+) -> Result<()> {
+    budget.with_prepaid_scope(floor, ENTRY, LOCAL_WORK, frame, |b| {
+        revalidate(b)?;
+        let (alias, charge) = cleanup.try_clone_deployment_guard(b)?;
+        b.reserve_storage(charge.additional_storage())?;
+        validate(&alias, b)?;
+        drop(alias);
+        b.release_storage(charge.additional_storage())?;
+        Ok(())
+    })
+}
+
 pub(crate) fn require_root() -> Result<()> {
     fe2o3_protected_service_spawn::require_exact_root_identity_v1()
         .map_err(|_| Failure::RootRequired)

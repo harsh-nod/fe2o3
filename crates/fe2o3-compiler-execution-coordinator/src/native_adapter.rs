@@ -246,6 +246,30 @@ macro_rules! preparation {
                     |b| self.check(b))
             }
 
+            /// Complete request work and extra peak above FULL retained_storage for
+            /// validate_cleanup_guard. The original cleanup account separately pays
+            /// GUARD_CLONE_WORK and keeps its existing pool/guard reservation.
+            /// This query grants no launch authority or launch/protected validation credit.
+            pub fn cleanup_guard_quota(&self) -> Result<Quota> {
+                native::cleanup_guard_quota(self.revalidation_quota()?, Self::FRAME_STORAGE)
+            }
+
+            /// Revalidates this actual Prepared, then joins the existing cleanup guard
+            /// to this owner's root-bound lifecycle on the original request budget.
+            /// Keep FULL retained_storage prepaid. The anchor installed the guard
+            /// before launch; this owner already holds a live anchor and cannot install
+            /// or replace that guard. An independently valid unrelated lease is refused.
+            /// The temporary alias is fully charged and dropped before retirement;
+            /// all exits restore entry storage without refunding work or denial history.
+            /// Success grants no launch authority or launch/protected validation credit.
+            pub fn validate_cleanup_guard(&self,
+                cleanup: &mut fe2o3_protected_service_spawn::ProtectedServiceCleanupServiceV2,
+                b: &mut Budget<'_>) -> Result<()> {
+                native::with_cleanup_guard(self.retained, Self::FRAME_STORAGE, cleanup, b,
+                    |b| self.revalidate(b),
+                    |alias, b| Ok(self.lifecycle.validate_transfer(alias, b)?))
+            }
+
             fn check(&self, b: &mut Budget<'_>) -> Result<()> {
                 native::require_root()?;
                 if rustix::process::getpid() != self.prepared_by { return Err(Error::CoordinatorChanged); }

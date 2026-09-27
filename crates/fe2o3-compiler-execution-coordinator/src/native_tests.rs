@@ -325,3 +325,260 @@ fn fixed_arithmetic_and_namespace_receipt_match_native_contracts() {
     drop(namespaces);
     b.release_storage(storage.additional_storage()).unwrap();
 }
+
+#[test]
+fn cleanup_guard_apis_and_precise_preparation_errors() {
+    type Quota = CompilerExecutionPreparationQuotaV2;
+    macro_rules! api {
+        ($prepared:ty) => {
+            let _: fn(&$prepared) -> Result<Quota> = <$prepared>::cleanup_guard_quota;
+            let _: fn(&$prepared, &mut Cleanup, &mut Budget<'_>) -> Result<()> =
+                <$prepared>::validate_cleanup_guard;
+        };
+    }
+    api!(crate::PreparedCompilerExecutionSupervisorV2);
+    api!(crate::PreparedCompilerExecutionSupervisorV3);
+    for error in [
+        Failure::from(CleanupError::State),
+        Failure::from(LifecycleError::ParentChanged),
+    ] {
+        assert_eq!(error.to_string(), error.source().unwrap().to_string());
+    }
+    assert!(matches!(
+        Failure::from(CleanupError::State),
+        Failure::Cleanup(CleanupError::State)
+    ));
+    assert!(matches!(
+        Failure::from(LifecycleError::ParentChanged),
+        Failure::Lifecycle(LifecycleError::ParentChanged)
+    ));
+}
+
+#[allow(unsafe_code)]
+fn guard_pool() -> Cleanup {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account;
+    // SAFETY: this isolated pool only holds a test lock; no child is ever submitted.
+    unsafe {
+        fe2o3_protected_service_spawn::cleanup_bridge::isolated_cleanup_for_test(Account::new(
+            Work::new(LIMIT),
+            Cleanup::STORAGE,
+        ))
+    }
+}
+
+#[test]
+fn cleanup_guard_refuses_before_pool_access_on_original_account() {
+    let mut cleanup = guard_pool();
+    let before = cleanup.report().unwrap();
+    for mode in 0..4 {
+        let floor = EXTRA - usize::from(mode == 0);
+        let mut work = Work::new(LOCAL_WORK - usize::from(mode == 1));
+        let mut b = Budget::new(&mut work, floor + 64 - usize::from(mode == 2));
+        b.reserve_storage(floor).unwrap();
+        let ledger = b.work_ledger_identity_v1();
+        let result = with_cleanup_guard(
+            EXTRA,
+            64,
+            &mut cleanup,
+            &mut b,
+            |_| Err(Failure::CoordinatorChanged),
+            |_, _| panic!("guard validation reached after refusal"),
+        );
+        match mode {
+            0 => assert!(matches!(
+                result,
+                Err(Failure::Resource(Resource::Accounting))
+            )),
+            1 => assert!(matches!(result, Err(Failure::Resource(Resource::Work(_))))),
+            2 => assert!(matches!(
+                result,
+                Err(Failure::Resource(Resource::Storage(_)))
+            )),
+            _ => assert!(matches!(result, Err(Failure::CoordinatorChanged))),
+        }
+        assert_eq!(b.storage(), floor);
+        assert_eq!(b.work(), if mode < 2 { ENTRY } else { LOCAL_WORK });
+        assert!(b.work_ledger_identity_v1() == ledger);
+        assert_eq!(cleanup.report().unwrap(), before);
+    }
+    cleanup.shutdown().unwrap();
+}
+
+#[test]
+fn cleanup_guard_requires_an_existing_guard_without_installing_one() {
+    let mut cleanup = guard_pool();
+    let before = cleanup.report().unwrap();
+    let work_limit = LOCAL_WORK + Cleanup::GUARD_CLONE_WORK;
+    let mut work = Work::new(work_limit);
+    let mut b = Budget::new(
+        &mut work,
+        EXTRA + 64 + Cleanup::GUARD_CLONE_SCRATCH + Cleanup::GUARD_FILE_STORAGE,
+    );
+    b.reserve_storage(EXTRA).unwrap();
+    assert!(matches!(
+        with_cleanup_guard(
+            EXTRA,
+            64,
+            &mut cleanup,
+            &mut b,
+            |_| Ok(()),
+            |_, _| panic!("missing guard must not reach validation")
+        ),
+        Err(Failure::Cleanup(CleanupError::State))
+    ));
+    assert_eq!(b.storage(), EXTRA);
+    assert_eq!(b.work(), work_limit);
+    let after = cleanup.report().unwrap();
+    assert_eq!(after.storage, before.storage);
+    assert_eq!(after.work, before.work + Cleanup::GUARD_CLONE_WORK);
+    cleanup.shutdown().unwrap();
+}
+
+fn root_lease(b: &mut Budget<'_>) -> (tempfile::TempDir, File, Lease) {
+    use fe2o3_compiler_execution_protocol::{
+        COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1 as MODE,
+        COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1 as PATH,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let root = dir.path().join("state");
+    fs::create_dir(&root).unwrap();
+    let lock = dir
+        .path()
+        .join(std::path::Path::new(PATH).file_name().unwrap());
+    fs::write(&lock, []).unwrap();
+    fs::set_permissions(&lock, fs::Permissions::from_mode(MODE)).unwrap();
+    let root = File::open(root).unwrap();
+    b.reserve_storage(Lease::STATE_ROOT_STORAGE).unwrap();
+    let (lease, charge) = Lease::open(&root, b).unwrap();
+    b.reserve_storage(charge.additional_storage()).unwrap();
+    (dir, root, lease)
+}
+
+#[test]
+fn cleanup_guard_real_lease_join_exact_short_substituted_and_unwind() {
+    // Exercise the shared schedule with genuine root leases, not a fabricated
+    // Prepared or a protected launch. Public Prepared wiring is checked above.
+    if let Err(error) = require_root() {
+        eprintln!(
+            "SKIP cleanup_guard_real_lease_join_exact_short_substituted_and_unwind: \
+             {error}; real-lease accounting, substitution and unwind cases were not \
+             exercised. Rootless accounting tests remain independent; no launch or \
+             protected-validation credit."
+        );
+        return;
+    }
+    let frame = crate::PreparedCompilerExecutionSupervisorV2::FRAME_STORAGE;
+    let quota = cleanup_guard_quota(
+        CompilerExecutionPreparationQuotaV2 {
+            work: Lease::ROOT_BINDING_WORK,
+            scratch: Lease::ROOT_BINDING_SCRATCH,
+        },
+        frame,
+    )
+    .unwrap();
+    let prefix = 2 * Lease::ADMISSION_WORK + Lease::TRANSFER_WORK + Cleanup::GUARD_WORK;
+    for mode in 0..6 {
+        let mut cleanup = guard_pool();
+        let mut work = Work::new(prefix + quota.work() - usize::from(mode == 1));
+        let mut b = Budget::new(&mut work, LIMIT);
+        let (dir, root, lease) = root_lease(&mut b);
+        let (other_dir, other_root, other) = root_lease(&mut b);
+        let (guard, charge) = lease.try_clone_for_transfer(&mut b).unwrap();
+        b.reserve_storage(charge.additional_storage()).unwrap();
+        cleanup.retain_deployment_guard(guard, &mut b).unwrap();
+        b.release_storage(charge.additional_storage()).unwrap();
+        assert_eq!(b.work(), prefix);
+        let owners = b.storage();
+        // Prepay unrelated caller storage, leaving exactly the queried allowance.
+        let padding = LIMIT - owners - quota.scratch() + usize::from(mode == 2);
+        b.reserve_storage(padding).unwrap();
+        let floor = b.storage();
+        let ledger = b.work_ledger_identity_v1();
+        assert!(b.charge_work(LIMIT).is_err());
+        assert!(b.reserve_storage(LIMIT).is_err());
+        let history = (b.failed_work(), b.failed_storage());
+        let pool = cleanup.report().unwrap();
+        let object = lease_object(&dir);
+        let before = refs(object);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            with_cleanup_guard(
+                floor,
+                frame,
+                &mut cleanup,
+                &mut b,
+                |b| Ok(lease.revalidate_for_root(if mode == 3 { &other_root } else { &root }, b)?),
+                |alias, b| {
+                    if mode == 5 {
+                        panic!("charged cleanup alias unwinds");
+                    }
+                    let actual = if mode == 4 { &other } else { &lease };
+                    Ok(actual.validate_transfer(alias, b)?)
+                },
+            )
+        }));
+        match mode {
+            0 => {
+                result.unwrap().unwrap();
+                assert_eq!(b.work(), prefix + quota.work());
+                assert_eq!(b.peak_storage(), floor + quota.scratch());
+            }
+            1 => assert!(matches!(
+                result.unwrap(),
+                Err(Failure::Lifecycle(LifecycleError::Resource(
+                    Resource::Work(_)
+                )))
+            )),
+            2 => assert!(matches!(
+                result.unwrap(),
+                Err(Failure::Lifecycle(LifecycleError::Resource(
+                    Resource::Storage(_)
+                )))
+            )),
+            3 => assert!(matches!(
+                result.unwrap(),
+                Err(Failure::Lifecycle(LifecycleError::ParentChanged))
+            )),
+            4 => assert!(matches!(
+                result.unwrap(),
+                Err(Failure::Lifecycle(LifecycleError::Lease(
+                    fe2o3_compiler_execution_lifecycle::LifecycleLeaseErrorV1::FileChanged
+                )))
+            )),
+            _ => assert!(result.is_err()),
+        }
+        assert_eq!(b.storage(), floor);
+        assert_eq!((b.failed_work(), b.failed_storage()), history);
+        assert!(b.work_ledger_identity_v1() == ledger);
+        assert_eq!(refs(object), before);
+        let after = cleanup.report().unwrap();
+        assert_eq!(after.storage, pool.storage);
+        assert_eq!(after.admission_open, pool.admission_open);
+        assert_eq!(
+            after.work,
+            pool.work
+                + if matches!(mode, 2 | 3) {
+                    0
+                } else {
+                    Cleanup::GUARD_CLONE_WORK
+                }
+        );
+        drop((lease, other, root, other_root));
+        b.release_storage(owners + padding).unwrap();
+        assert_eq!(b.storage(), 0);
+        assert_eq!(refs(object), 1);
+        cleanup.shutdown().unwrap();
+        assert_eq!(refs(object), 0);
+        drop((dir, other_dir));
+    }
+}
+
+fn lease_object(dir: &tempfile::TempDir) -> (u64, u64) {
+    let name = std::path::Path::new(
+        fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1,
+    )
+    .file_name()
+    .unwrap();
+    let m = fs::metadata(dir.path().join(name)).unwrap();
+    (m.dev(), m.ino())
+}
