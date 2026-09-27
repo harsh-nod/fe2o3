@@ -35,6 +35,8 @@ macro_rules! launch {
         const LAUNCH_FRAME: usize = 4 * size_of::<($Managed, LaunchStorage)>()
             + 4 * size_of::<Stage>() + 8 * size_of::<LaunchError>()
             + 4 * size_of::<rustix::fs::Stat>() + 16384;
+        #[cfg(test)]
+        type ManagedFixture = $Managed;
 
         impl $Prepared {
             /// Full prepared-owner AND borrowed-context floor for launch and continuity.
@@ -46,7 +48,17 @@ macro_rules! launch {
             /// Complete request work/extra peak for installing or validating the guard.
             /// The cleanup account independently pays GUARD_WORK or GUARD_CLONE_WORK.
             pub fn cleanup_guard_quota(&self, install: bool) -> LaunchResult<LaunchQuota> {
-                let q = self.revalidation_quota()?;
+                Self::cleanup_guard_quota_for(self.revalidation_quota()?, install)
+            }
+
+            /// Request-ledger guard envelope at the fixed image ceilings. Full owner
+            /// and borrowed contexts remain prepaid separately; this does not fund the
+            /// independent cleanup account or install/validate an actual guard.
+            pub fn maximum_cleanup_guard_quota(install: bool) -> LaunchResult<LaunchQuota> {
+                Self::cleanup_guard_quota_for(Self::maximum_revalidation_quota()?, install)
+            }
+
+            fn cleanup_guard_quota_for(q: Quota, install: bool) -> LaunchResult<LaunchQuota> {
                 Ok(LaunchQuota {
                     work: launch::sum(&[launch::LOCAL_WORK, q.work(), Lease::TRANSFER_WORK,
                         if install { Cleanup::GUARD_WORK } else { Cleanup::GUARD_CLONE_WORK }])?,
@@ -87,41 +99,64 @@ macro_rules! launch {
             }
 
             fn transfer_source_storage(&self) -> LaunchResult<usize> {
-                launch::sum(&[Image::file_storage(self.helper.measurement()).map_err(Error::from)?,
-                    Image::file_storage(self.daemon.measurement()).map_err(Error::from)?,
+                Self::transfer_source_storage_for_lengths(self.helper.measurement().byte_len(),
+                    self.daemon.measurement().byte_len())
+            }
+
+            fn transfer_source_storage_for_lengths(helper: u64, daemon: u64) -> LaunchResult<usize> {
+                launch::sum(&[Image::file_storage_for_length(helper).map_err(Error::from)?,
+                    Image::file_storage_for_length(daemon).map_err(Error::from)?,
                     Lease::FILE_STORAGE, PolicyCap::FILE_STORAGE, SupervisorCap::FILE_STORAGE,
                     DeploymentCap::FILE_STORAGE, ProvisioningCap::FILE_STORAGE, Key::FILE_STORAGE,
                     Self::ROOT_STORAGE, 4 * launch::FILE_STORAGE, BINDINGS_STORAGE])
             }
 
-            fn transfer_work(&self) -> LaunchResult<usize> {
+            fn transfer_work_for_lengths(helper: u64, daemon: u64) -> LaunchResult<usize> {
                 launch::sum(&[PolicyCap::IO_WORK, SupervisorCap::IO_WORK, DeploymentCap::IO_WORK,
                     ProvisioningCap::IO_WORK, Key::IO_WORK, Lease::TRANSFER_WORK,
-                    Image::quota(self.helper.measurement(), ImageOperation::Transfer).map_err(Error::from)?.work(),
-                    Image::quota(self.daemon.measurement(), ImageOperation::Transfer).map_err(Error::from)?.work()])
+                    Image::quota_for_length(helper, ImageOperation::Transfer).map_err(Error::from)?.work(),
+                    Image::quota_for_length(daemon, ImageOperation::Transfer).map_err(Error::from)?.work()])
             }
 
             fn staging_quota(&self) -> LaunchResult<LaunchQuota> {
-                let source = self.transfer_source_storage()?;
+                Self::staging_quota_for_lengths(self.helper.measurement().byte_len(),
+                    self.daemon.measurement().byte_len())
+            }
+
+            fn staging_quota_for_lengths(helper: u64, daemon: u64) -> LaunchResult<LaunchQuota> {
+                let source = Self::transfer_source_storage_for_lengths(helper, daemon)?;
                 let retained = Stage::storage_for_sources(source)?;
-                let revalidation = self.revalidation_quota()?;
-                let transfer = self.transfer_work()?;
+                let revalidation = Self::revalidation_quota_for_lengths(helper, daemon)?;
+                let transfer = Self::transfer_work_for_lengths(helper, daemon)?;
                 Ok(LaunchQuota {
                     work: launch::sum(&[launch::LOCAL_WORK, revalidation.work(), revalidation.work(),
                         transfer, transfer, Stage::STAGING_WORK])?,
                     scratch: launch::sum(&[LAUNCH_FRAME, source, retained, Stage::STAGING_SCRATCH,
                         retained, revalidation.scratch(), CONTEXT_STORAGE, Lease::IO_STORAGE,
-                        Image::quota(self.helper.measurement(), ImageOperation::Transfer).map_err(Error::from)?.scratch(),
-                        Image::quota(self.daemon.measurement(), ImageOperation::Transfer).map_err(Error::from)?.scratch()])?,
+                        Image::quota_for_length(helper, ImageOperation::Transfer).map_err(Error::from)?.scratch(),
+                        Image::quota_for_length(daemon, ImageOperation::Transfer).map_err(Error::from)?.scratch()])?,
                 })
             }
 
             /// Conservative successful-path envelope, including every bounded readiness attempt.
             /// Queries do not admit inputs or promise successful launch within a deadline.
             pub fn launch_quota(&self) -> LaunchResult<LaunchQuota> {
-                let staging = self.staging_quota()?;
-                let validation = self.revalidation_quota()?;
-                let guard = self.cleanup_guard_quota(false)?;
+                Self::launch_quota_for(self.staging_quota()?, self.revalidation_quota()?,
+                    self.transfer_source_storage()?)
+            }
+
+            /// Complete launch envelope at both protocol image ceilings, requiring
+            /// no prepared owner. Prepared/context floors, prior guard installation,
+            /// and persistent cleanup-pool funding are separate. Does not spawn a child.
+            pub fn maximum_launch_quota() -> LaunchResult<LaunchQuota> {
+                Self::launch_quota_for(Self::staging_quota_for_lengths(MAX_HELPER, MAX_DAEMON)?,
+                    Self::maximum_revalidation_quota()?,
+                    Self::transfer_source_storage_for_lengths(MAX_HELPER, MAX_DAEMON)?)
+            }
+
+            fn launch_quota_for(staging: LaunchQuota, validation: Quota, source: usize)
+                -> LaunchResult<LaunchQuota> {
+                let guard = Self::cleanup_guard_quota_for(validation, false)?;
                 let polling = launch_io::MAX_LIVENESS_CHECKS.checked_mul(Child::OPERATION_WORK)
                     .and_then(|n| n.checked_add(launch_io::MAX_WORK)).ok_or(Resource::Arithmetic)?;
                 Ok(LaunchQuota {
@@ -133,7 +168,7 @@ macro_rules! launch {
                     scratch: launch::sum(&[LAUNCH_FRAME, Channels::STORAGE, NAMESPACE_STORAGE, guard.scratch(),
                         Namespaces::CAPTURE_SCRATCH, Namespaces::REVALIDATE_SELF_SCRATCH,
                         Namespaces::REVALIDATE_PROCESS_SCRATCH, observations::PROCESS_VALIDATE_SCRATCH,
-                        staging.scratch(), Stage::storage_for_sources(self.transfer_source_storage()?)?,
+                        staging.scratch(), Stage::storage_for_sources(source)?,
                         Stage::SPAWN_SCRATCH, Child::STORAGE, Child::OPERATION_SCRATCH,
                         launch_io::ATTEMPT_SCRATCH, validation.scratch(),
                         4 * Admission::PAIR_STORAGE, ADMISSION_STORAGE, Admission::IO_STORAGE,
@@ -295,8 +330,8 @@ macro_rules! launch {
                     // CLOEXEC EOF; the same live child and endpoint passed native admission.
                     // No other wait consumer or inherited bootstrap alias escapes this path.
                     unsafe { child.confirm_exec(b) }?;
-                    let growth = launch::sum(&[Child::STORAGE, admission.retained_storage(), $Managed::ENVELOPE])?;
-                    let retained = launch::sum(&[self.retained, growth])?;
+                    let (retained, growth) = $Managed::retained_storage_for(self.retained,
+                        admission.retained_storage())?;
                     b.reserve_storage($Managed::ENVELOPE)?;
                     Ok(($Managed { admission, child, prepared: self, disposition: ready.disposition(), retained },
                         LaunchStorage(growth)))
@@ -344,9 +379,32 @@ macro_rules! launch {
             pub const fn disposition(&self) -> crate::ExternalAnchorProvisioningReadyDispositionV1 { self.disposition }
             /// Full retained owner charge, excluding borrowed contexts and global cleanup funding.
             pub const fn retained_storage(&self) -> usize { self.retained }
+
+            /// Conservative full managed-owner charge, excluding borrowed supervisor/
+            /// policy and independent cleanup funding. Adds exact child, admission and
+            /// enclosing-owner growth to the conservative prepared-owner bound.
+            pub fn maximum_retained_storage() -> LaunchResult<usize> {
+                Self::retained_storage_for($Prepared::maximum_retained_storage()?, ADMISSION_STORAGE)
+                    .map(|(retained, _)| retained)
+            }
+
+            fn retained_storage_for(prepared: usize, admission: usize) -> LaunchResult<(usize, usize)> {
+                let growth = launch::sum(&[Child::STORAGE, admission, Self::ENVELOPE])?;
+                Ok((launch::sum(&[prepared, growth])?, growth))
+            }
+
             /// Complete continuity work and additional peak above owner and context charges.
             pub fn continuity_quota(&self) -> LaunchResult<LaunchQuota> {
-                let q = self.prepared.revalidation_quota()?;
+                Self::continuity_quota_for(self.prepared.revalidation_quota()?)
+            }
+
+            /// Continuity envelope at both protocol image ceilings. Does not fabricate
+            /// child/admission custody; full managed/context floors remain separate.
+            pub fn maximum_continuity_quota() -> LaunchResult<LaunchQuota> {
+                Self::continuity_quota_for($Prepared::maximum_revalidation_quota()?)
+            }
+
+            fn continuity_quota_for(q: Quota) -> LaunchResult<LaunchQuota> {
                 Ok(LaunchQuota {
                     work: launch::sum(&[launch::LOCAL_WORK, q.work(), Child::OPERATION_WORK,
                         Admission::REVALIDATION_WORK])?,

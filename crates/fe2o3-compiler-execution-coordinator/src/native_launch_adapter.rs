@@ -49,22 +49,32 @@ macro_rules! launch {
 
         impl $Prepared {
             fn transfer_source_storage(&self) -> Result<usize> {
-                sum(&[Image::file_storage(self.programs[0].measurement())?,
-                    Image::file_storage(self.programs[1].measurement())?,
-                    Image::file_storage(self.programs[2].measurement())?, Inputs::PAIR_STORAGE,
+                Self::transfer_source_storage_for(self.programs.each_ref().map(|p| p.measurement().byte_len()))
+            }
+
+            fn transfer_source_storage_for(n: [u64; 3]) -> Result<usize> {
+                sum(&[Image::file_storage_for_length(n[0])?,
+                    Image::file_storage_for_length(n[1])?,
+                    Image::file_storage_for_length(n[2])?, Inputs::PAIR_STORAGE,
                     PolicyCap::FILE_STORAGE, Key::FILE_STORAGE, DeploymentCap::FILE_STORAGE,
                     AnchorTransfer::STORAGE, Lease::FILE_STORAGE, 4 * launch::FILE_STORAGE,
                     BINDINGS_STORAGE])
             }
 
             fn staging_quota(&self) -> Result<Quota> {
-                let validation = self.revalidation_quota()?;
-                let anchor = self.anchor.supervisor_transfer_quota()?;
-                let anchor_check = self.anchor.supervisor_transfer_validation_quota()?;
-                let image = [Image::quota(self.programs[0].measurement(), ImageOperation::Transfer)?,
-                    Image::quota(self.programs[1].measurement(), ImageOperation::Transfer)?,
-                    Image::quota(self.programs[2].measurement(), ImageOperation::Transfer)?];
-                let source = self.transfer_source_storage()?;
+                Self::staging_quota_for(self.programs.each_ref().map(|p| p.measurement().byte_len()),
+                    self.revalidation_quota()?, self.anchor.supervisor_transfer_quota()?,
+                    self.anchor.supervisor_transfer_validation_quota()?)
+            }
+
+            fn staging_quota_for(n: [u64; 3], validation: crate::CompilerExecutionPreparationQuotaV2,
+                anchor: fe2o3_external_anchor_coordinator::ExternalAnchorSupervisorTransferQuotaV2,
+                anchor_check: fe2o3_external_anchor_coordinator::ExternalAnchorSupervisorTransferQuotaV2)
+                -> Result<Quota> {
+                let image = [Image::quota_for_length(n[0], ImageOperation::Transfer)?,
+                    Image::quota_for_length(n[1], ImageOperation::Transfer)?,
+                    Image::quota_for_length(n[2], ImageOperation::Transfer)?];
+                let source = Self::transfer_source_storage_for(n)?;
                 let stage = Stage::storage_for_sources(source)?;
                 let transfer = sum(&[image[0].work(), image[1].work(), image[2].work(),
                     Inputs::WORK, PolicyCap::IO_WORK, Key::IO_WORK, DeploymentCap::IO_WORK,
@@ -82,7 +92,10 @@ macro_rules! launch {
             }
 
             fn process_quota(&self) -> Result<Quota> {
-                let validation = self.revalidation_quota()?;
+                Self::process_quota_for(self.revalidation_quota()?)
+            }
+
+            fn process_quota_for(validation: crate::CompilerExecutionPreparationQuotaV2) -> Result<Quota> {
                 Ok(Quota {
                     work: sum(&[validation.work(), Namespaces::REVALIDATE_PROCESS_WORK,
                         observations::PROCESS_VALIDATE_WORK])?,
@@ -92,7 +105,10 @@ macro_rules! launch {
             }
 
             fn managed_quota(&self) -> Result<Quota> {
-                let process = self.process_quota()?;
+                Self::managed_quota_for(self.process_quota()?)
+            }
+
+            fn managed_quota_for(process: Quota) -> Result<Quota> {
                 Ok(Quota {
                     work: sum(&[LOCAL_WORK, Resources::<Self>::ACCESS_WORK, process.work,
                         READY_WORK, PlainChild::OPERATION_WORK])?,
@@ -106,22 +122,39 @@ macro_rules! launch {
             /// funds Cleanup::retained_launch_work and Resources::payload_storage for
             /// this entire preparation; successful funding is not a deadline promise.
             pub fn launch_quota(&self) -> Result<Quota> {
-                let staging = self.staging_quota()?;
-                let guard = self.cleanup_guard_quota()?;
-                let process = self.process_quota()?;
+                Self::launch_quota_for(self.retained, self.transfer_source_storage()?,
+                    self.staging_quota()?, self.cleanup_guard_quota()?, self.process_quota()?)
+            }
+
+            /// Conservative complete request envelope before native preparation exists.
+            /// Uses the same calculation at fixed image ceilings and retained-owner bounds.
+            /// Persistent cleanup funding is still separate; this query grants no authority.
+            pub fn maximum_launch_quota() -> Result<Quota> {
+                let n = [super::MAX_SUPERVISOR, super::MAX_LAUNCHER, super::MAX_LAUNCHER];
+                Self::launch_quota_for(Self::maximum_retained_storage()?,
+                    Self::transfer_source_storage_for(n)?,
+                    Self::staging_quota_for(n, Self::maximum_revalidation_quota()?,
+                        super::Anchor::maximum_supervisor_transfer_quota()?,
+                        super::Anchor::maximum_supervisor_transfer_validation_quota()?)?,
+                    Self::maximum_cleanup_guard_quota()?,
+                    Self::process_quota_for(Self::maximum_revalidation_quota()?)?)
+            }
+
+            fn launch_quota_for(retained: usize, source: usize, staging: Quota,
+                guard: crate::CompilerExecutionPreparationQuotaV2, process: Quota) -> Result<Quota> {
                 let polling = launch_io::MAX_LIVENESS_CHECKS.checked_mul(PlainChild::OPERATION_WORK)
                     .and_then(|n| n.checked_add(launch_io::MAX_WORK)).ok_or(Resource::Arithmetic)?;
-                let child_growth = Child::storage_for(self.retained)?.checked_sub(self.retained)
+                let child_growth = Child::storage_for(retained)?.checked_sub(retained)
                     .ok_or(Resource::Accounting)?;
                 Ok(Quota {
                     work: sum(&[LOCAL_WORK, guard.work(), staging.work, process.work, process.work,
                         3 * Resources::<Self>::ACCESS_WORK, 2 * READY_WORK,
                         Stage::spawn_work_for(DESTINATIONS.len(), 63)?,
-                        Cleanup::retained_launch_work::<Self>(self.retained)?, polling,
+                        Cleanup::retained_launch_work::<Self>(retained)?, polling,
                         2 * PlainChild::OPERATION_WORK])?,
                     scratch: sum(&[FRAME, Channels::STORAGE, guard.scratch(), staging.scratch,
-                        Stage::storage_for_sources(self.transfer_source_storage()?)?,
-                        Stage::spawn_retaining_scratch::<Self>(self.retained)?, child_growth,
+                        Stage::storage_for_sources(source)?,
+                        Stage::spawn_retaining_scratch::<Self>(retained)?, child_growth,
                         Resources::<Self>::ACCESS_SCRATCH, process.scratch, READY_BYTES,
                         READY_SCRATCH, READY_OWNER_STORAGE, launch_io::ATTEMPT_SCRATCH,
                         PlainChild::OPERATION_SCRATCH, $Managed::ENVELOPE])?,
@@ -315,6 +348,16 @@ macro_rules! launch {
         }
         impl $Managed {
             const ENVELOPE: usize = size_of::<(Self, Storage)>() - size_of::<Child>() - size_of::<Ready>();
+            /// Inert conservative charge for the complete managed owner at image ceilings.
+            pub fn maximum_retained_storage() -> Result<usize> {
+                sum(&[Child::storage_for($Prepared::maximum_retained_storage()?)?,
+                    READY_OWNER_STORAGE, Self::ENVELOPE])
+            }
+            /// Same continuity calculation as launch, without a running child or authority.
+            pub fn maximum_continuity_quota() -> Result<Quota> {
+                $Prepared::managed_quota_for($Prepared::process_quota_for(
+                    $Prepared::maximum_revalidation_quota()?)?)
+            }
             /// Scalar child PID; not standalone signal or launch authority.
             pub fn pid(&self) -> rustix::process::Pid { self.child.pid() }
             /// Exact same-family private-bootstrap record, not independent admission.

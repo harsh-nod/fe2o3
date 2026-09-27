@@ -155,6 +155,23 @@ macro_rules! preparation {
                 Self::preparation_quota_for_lengths(MAX_HELPER, MAX_DAEMON)
             }
 
+            /// Conservative full prepared-owner charge at both protocol image ceilings.
+            /// Lease/capability/key I/O envelopes bound their complete retained owners;
+            /// they deliberately overcount here. Borrowed supervisor/policy contexts and
+            /// independent cleanup-pool funding are excluded. No owner or digest is made.
+            pub fn maximum_retained_storage() -> Result<usize> {
+                let consumed = sum(&[Self::ROOT_STORAGE, Lease::IO_STORAGE,
+                    DeploymentCap::IO_STORAGE, ProvisioningCap::IO_STORAGE, Key::IO_STORAGE,
+                    Image::file_storage_for_length(MAX_HELPER)?,
+                    Image::file_storage_for_length(MAX_DAEMON)?])?;
+                Self::retained_storage_for_input(consumed, 0)
+            }
+
+            fn retained_storage_for_input(floor: usize, borrowed: usize) -> Result<usize> {
+                floor.checked_sub(borrowed).and_then(|v| v.checked_add(Self::GROWTH_STORAGE))
+                    .ok_or(Resource::Arithmetic.into())
+            }
+
             fn preparation_quota_for_lengths(helper: u64, daemon: u64) -> Result<Quota> {
                 let h = Image::quota_for_length(helper, ImageOperation::Admit)?;
                 let d = Image::quota_for_length(daemon, ImageOperation::Admit)?;
@@ -189,9 +206,8 @@ macro_rules! preparation {
                 b.charge_work(ENTRY_WORK)?;
                 let floor = Self::prepare_input_storage(&lifecycle, &deployment, &provisioning,
                     &key_template, supervisor, policy)?;
-                let retained = floor.checked_sub(sum(&[supervisor.retained_storage(),
-                    policy.retained_storage()])?).and_then(|v| v.checked_add(Self::GROWTH_STORAGE))
-                    .ok_or(Resource::Arithmetic)?;
+                let retained = Self::retained_storage_for_input(floor,
+                    sum(&[supervisor.retained_storage(), policy.retained_storage()])?)?;
                 b.with_prepaid_scope(floor, 0, LOCAL_WORK - ENTRY_WORK, Self::FRAME_STORAGE, |b| {
                     native::require_root::<ROOT>()?;
                     check_context(&deployment, &provisioning, &key_template, supervisor, policy, b)?;
@@ -219,8 +235,20 @@ macro_rules! preparation {
 
             /// Complete revalidation work and scratch above this owner AND actual contexts.
             pub fn revalidation_quota(&self) -> Result<Quota> {
-                let h = Image::quota(self.helper.measurement(), ImageOperation::Revalidate)?;
-                let d = Image::quota(self.daemon.measurement(), ImageOperation::Revalidate)?;
+                Self::revalidation_quota_for_lengths(self.helper.measurement().byte_len(),
+                    self.daemon.measurement().byte_len())
+            }
+
+            /// Revalidation envelope at both fixed protocol image ceilings, without
+            /// observing descriptors or constructing admitted inputs. Full prepared and
+            /// borrowed supervisor/policy reservations remain separate from scratch.
+            pub fn maximum_revalidation_quota() -> Result<Quota> {
+                Self::revalidation_quota_for_lengths(MAX_HELPER, MAX_DAEMON)
+            }
+
+            fn revalidation_quota_for_lengths(helper: u64, daemon: u64) -> Result<Quota> {
+                let h = Image::quota_for_length(helper, ImageOperation::Revalidate)?;
+                let d = Image::quota_for_length(daemon, ImageOperation::Revalidate)?;
                 Ok(Quota { work: sum(&[LOCAL_WORK, CONTEXT_WORK, h.work(), d.work()])?,
                     scratch: sum(&[Self::FRAME_STORAGE,
                         maximum(&[CONTEXT_STORAGE, h.scratch(), d.scratch()])])? })

@@ -190,6 +190,13 @@ macro_rules! trust {
             pub const SCRATCH: usize = Self::OUTER_STORAGE + maximum(&[
                 DeploymentCap::IO_STORAGE, PolicyCap::IO_STORAGE, DEPLOYMENT_STORAGE, Key::IO_STORAGE]);
 
+            /// Conservative inert owner charge for startup planning. Each component's
+            /// I/O envelope includes its full retained owner; no capability is created.
+            pub fn maximum_retained_storage() -> Result<usize> {
+                input_storage(DeploymentCap::IO_STORAGE, PolicyCap::IO_STORAGE, Key::IO_STORAGE)?
+                    .checked_add(Self::GROWTH_STORAGE).ok_or(Resource::Arithmetic.into())
+            }
+
             /// Consumes the three genuine same-family owners after a full prepaid floor.
             /// Returns only metadata growth; failed inputs close without automatic retirement.
             pub fn new(deployment: DeploymentCap, policy: PolicyCap, key_template: Key,

@@ -456,6 +456,43 @@ fn transfer_required_actual_context_rejects_every_policy_and_supervisor_axis() {
 }
 
 #[test]
+fn maximum_transfer_queries_share_both_continuity_passes_and_full_output_peak() {
+    let continuity = ManagedFixture::maximum_continuity_quota().unwrap();
+    let validation = ManagedFixture::maximum_supervisor_transfer_validation_quota().unwrap();
+    let clone = ManagedFixture::maximum_supervisor_transfer_quota().unwrap();
+    assert_eq!(
+        validation,
+        supervisor_transfer_quota_for(continuity, false).unwrap()
+    );
+    assert_eq!(
+        clone,
+        supervisor_transfer_quota_for(continuity, true).unwrap()
+    );
+    assert_eq!(
+        validation.work(),
+        TRANSFER_LOCAL_WORK + continuity.work() + Admission::VALIDATE_TRANSFER_WORK
+    );
+    assert_eq!(
+        validation.scratch(),
+        TRANSFER_FRAME + continuity.scratch().max(Admission::IO_STORAGE)
+    );
+    assert_eq!(
+        clone.work(),
+        2 * TRANSFER_LOCAL_WORK
+            + 2 * continuity.work()
+            + Admission::CLONE_TRANSFER_WORK
+            + Admission::VALIDATE_TRANSFER_WORK
+    );
+    assert_eq!(
+        clone.scratch(),
+        2 * TRANSFER_FRAME
+            + TransferFixture::STORAGE
+            + continuity.scratch().max(Admission::IO_STORAGE)
+    );
+    assert!(clone.scratch() >= TransferFixture::STORAGE + validation.scratch());
+}
+
+#[test]
 fn transfer_quota_counts_both_continuity_passes_and_live_output_overlap() {
     let continuity = LaunchQuota {
         work: 123,

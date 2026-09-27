@@ -79,10 +79,24 @@ macro_rules! transfer {
                 supervisor_transfer_quota_for(self.continuity_quota()?, true)
             }
 
+            /// Maximum clone/continuity/final-pair envelope without a managed owner.
+            /// Full managed and actual supervisor/policy floors remain separate;
+            /// includes peak output staging, not an independently retained transfer.
+            pub fn maximum_supervisor_transfer_quota() -> LaunchResult<TransferQuota> {
+                supervisor_transfer_quota_for(Self::maximum_continuity_quota()?, true)
+            }
+
             /// Complete final-pair validation allowance. In addition to this owner
             /// and both contexts, prepay the candidate pair's full PAIR_STORAGE.
             pub fn supervisor_transfer_validation_quota(&self) -> LaunchResult<TransferQuota> {
                 supervisor_transfer_quota_for(self.continuity_quota()?, false)
+            }
+
+            /// Maximum final-pair validation envelope without any observed owner.
+            /// Managed/context and candidate PAIR_STORAGE floors remain separately
+            /// prepaid; no pair is admitted or validated by this inert query.
+            pub fn maximum_supervisor_transfer_validation_quota() -> LaunchResult<TransferQuota> {
+                supervisor_transfer_quota_for(Self::maximum_continuity_quota()?, false)
             }
 
             /// Clones a supervisor transfer from this live, context-bound occurrence.

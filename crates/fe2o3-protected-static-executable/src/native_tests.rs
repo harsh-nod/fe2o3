@@ -237,11 +237,17 @@ fn inert_length_queries_share_image_bounds_without_a_digest_or_owner() {
             let actual = Image::quota_for_length(length, operation).unwrap();
             assert_eq!(actual.work(), expected.work());
             assert_eq!(actual.scratch(), expected.scratch());
+            assert_eq!(
+                Image::file_storage_for_length(length).unwrap(),
+                Image::file_storage(Measurement::new([1; 32], length, length).unwrap()).unwrap()
+            );
             assert!(actual.work() > previous.0);
             assert!(actual.scratch() > previous.1);
             previous = (actual.work(), actual.scratch());
         }
         assert!(Image::quota_for_length(0, operation).is_err());
+        assert!(Image::file_storage_for_length(0).is_err());
+        assert!(Image::file_storage_for_length(u64::MAX).is_err());
         assert!(matches!(
             Image::quota_for_length(u64::MAX, operation),
             Err(Error::Resource(Resource::Arithmetic))

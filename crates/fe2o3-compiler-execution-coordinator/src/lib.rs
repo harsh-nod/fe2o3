@@ -92,7 +92,7 @@ pub use native::{
 };
 pub use native_inherited::{
     CompilerExecutionRootAdmissionQuotaV2, CompilerExecutionRootDeploymentErrorV2,
-    CompilerExecutionRootStorageV2,
+    CompilerExecutionRootStorageV2, CompilerExecutionStartupQuotaV2,
 };
 pub use native_inherited_v2::InheritedCompilerExecutionDeploymentV2;
 pub use native_inherited_v3::InheritedCompilerExecutionDeploymentV3;

@@ -130,7 +130,16 @@ impl ProtectedStaticExecutableV2 {
 
     /// Full incoming/outgoing File plus logical image charge, even for a shared inode.
     pub fn file_storage(measurement: Measurement) -> Result<usize> {
-        usize::try_from(measurement.byte_len())
+        Self::file_storage_for_length(measurement.byte_len())
+    }
+
+    /// Inert full source charge before a digest is available. The caller separately
+    /// enforces its role ceiling; this does not validate or admit any file.
+    pub fn file_storage_for_length(byte_len: u64) -> Result<usize> {
+        if byte_len == 0 {
+            return Err(ImageError::InvalidMeasurement.into());
+        }
+        usize::try_from(byte_len)
             .ok()
             .and_then(|n| n.checked_add(size_of::<(File, ProtectedStaticExecutableStorageV2)>()))
             .ok_or(Resource::Arithmetic.into())

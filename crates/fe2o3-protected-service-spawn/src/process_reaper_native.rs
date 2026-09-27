@@ -181,6 +181,23 @@ impl Service {
     /// it does not fund later deferred turns or parent/child protocol execution.
     pub const RESERVATION_WORK: usize = CAPACITY + 32;
 
+    /// Inert complete cost of one finite pool scan, using the same turn bounds as
+    /// pump. Funding a scan does not guarantee that any child is terminal.
+    pub fn pump_work(visits: usize) -> Result<usize, Failure> {
+        if visits == 0 || visits > CAPACITY {
+            return Err(Failure::InvalidTurn);
+        }
+        visits
+            .checked_mul(Self::CELL_WORK)
+            .and_then(|n| n.checked_add(Self::TURN_WORK))
+            .ok_or(Resource::Arithmetic.into())
+    }
+
+    /// Cost of each shutdown attempt after the one prepaid by admission/recovery.
+    pub const fn shutdown_work() -> usize {
+        SHUTDOWN_WORK
+    }
+
     /// Consumes an owned service account and reserves the entire pool before any launch.
     ///
     /// Current storage must be empty; a previously accepted work prefix is preserved.
@@ -258,16 +275,14 @@ impl Service {
     /// Failed charges do not advance the cursor or touch a child. Smaller later
     /// turns may drain remaining work; any service denial stops new admissions.
     pub fn pump(&mut self, visits: usize) -> Result<ProtectedServiceCleanupReportV2, Failure> {
-        if visits == 0 || visits > CAPACITY {
-            return Err(Failure::InvalidTurn);
-        }
+        let work = Self::pump_work(visits)?;
         let mut mode = self
             .reaper
             .mode
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let native = self.native(&mut mode)?;
-        native.charge(Self::TURN_WORK + visits * Self::CELL_WORK)?;
+        native.charge(work)?;
         drop(mode);
         for _ in 0..visits {
             let mut mode = self

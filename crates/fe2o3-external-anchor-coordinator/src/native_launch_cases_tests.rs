@@ -168,10 +168,248 @@ fn native_launch_quota_covers_staging_and_full_owner_overlap() {
     let (_, p) = prepared_fixture();
     let q = p.launch_quota().unwrap();
     let s = p.staging_quota().unwrap();
+    let maximum = Prepared::maximum_launch_quota().unwrap();
+    assert!(maximum.work() >= q.work());
+    assert!(maximum.scratch() >= q.scratch());
+    for install in [false, true] {
+        let actual = p.cleanup_guard_quota(install).unwrap();
+        let maximum = Prepared::maximum_cleanup_guard_quota(install).unwrap();
+        assert!(maximum.work() >= actual.work());
+        assert!(maximum.scratch() >= actual.scratch());
+    }
+    // Reuse the real prepared fixture's length-dependent quota without creating
+    // a fake live child/admission owner to call the managed query methods.
+    let actual = ManagedFixture::continuity_quota_for(p.revalidation_quota().unwrap()).unwrap();
+    let maximum = ManagedFixture::maximum_continuity_quota().unwrap();
+    assert!(maximum.work() >= actual.work());
+    assert!(maximum.scratch() >= actual.scratch());
+    let retained = ManagedFixture::retained_storage_for(p.retained_storage(), ADMISSION_STORAGE)
+        .unwrap()
+        .0;
+    assert!(ManagedFixture::maximum_retained_storage().unwrap() >= retained);
+    for clone in [false, true] {
+        let q = supervisor_transfer_quota_for(actual, clone).unwrap();
+        let maximum = if clone {
+            ManagedFixture::maximum_supervisor_transfer_quota().unwrap()
+        } else {
+            ManagedFixture::maximum_supervisor_transfer_validation_quota().unwrap()
+        };
+        assert!(maximum.work() >= q.work());
+        assert!(maximum.scratch() >= q.scratch());
+    }
     assert!(q.work() > s.work() + Stage::spawn_work_for(9, 63).unwrap());
     assert!(q.scratch() > s.scratch() + Channels::STORAGE + Child::STORAGE + ADMISSION_STORAGE);
     assert!(Stage::spawn_work_for(0, 63).is_err());
     assert!(Stage::spawn_work_for(9, 64).is_err());
+}
+
+#[test]
+fn maximum_guard_continuity_and_retained_queries_match_closed_forms() {
+    let validation = Prepared::maximum_revalidation_quota().unwrap();
+    for install in [false, true] {
+        let q = Prepared::maximum_cleanup_guard_quota(install).unwrap();
+        assert_eq!(
+            q.work(),
+            launch::LOCAL_WORK
+                + validation.work()
+                + Lease::TRANSFER_WORK
+                + if install {
+                    Cleanup::GUARD_WORK
+                } else {
+                    Cleanup::GUARD_CLONE_WORK
+                }
+        );
+        assert_eq!(
+            q.scratch(),
+            LAUNCH_FRAME
+                + validation.scratch()
+                + Lease::IO_STORAGE
+                + Cleanup::GUARD_CLONE_SCRATCH
+                + 2 * Cleanup::GUARD_FILE_STORAGE
+        );
+    }
+    let continuity = ManagedFixture::maximum_continuity_quota().unwrap();
+    assert_eq!(
+        continuity.work(),
+        launch::LOCAL_WORK
+            + validation.work()
+            + Child::OPERATION_WORK
+            + Admission::REVALIDATION_WORK
+    );
+    assert_eq!(
+        continuity.scratch(),
+        LAUNCH_FRAME
+            + validation
+                .scratch()
+                .max(Child::OPERATION_SCRATCH)
+                .max(Admission::IO_STORAGE)
+    );
+    let prepared = Prepared::maximum_retained_storage().unwrap();
+    let growth = Child::STORAGE + ADMISSION_STORAGE + ManagedFixture::ENVELOPE;
+    assert_eq!(
+        ManagedFixture::maximum_retained_storage().unwrap(),
+        prepared + growth
+    );
+    assert_eq!(
+        ManagedFixture::retained_storage_for(prepared, ADMISSION_STORAGE).unwrap(),
+        (prepared + growth, growth)
+    );
+}
+
+#[test]
+fn inert_staging_keeps_both_image_sources_and_both_staged_reservations() {
+    for (helper, daemon) in [(17, 31), (MAX_HELPER, MAX_DAEMON)] {
+        let source = Prepared::transfer_source_storage_for_lengths(helper, daemon).unwrap();
+        assert_eq!(
+            source,
+            2 * size_of::<(File, ImageStorage)>()
+                + helper as usize
+                + daemon as usize
+                + Lease::FILE_STORAGE
+                + PolicyCap::FILE_STORAGE
+                + SupervisorCap::FILE_STORAGE
+                + DeploymentCap::FILE_STORAGE
+                + ProvisioningCap::FILE_STORAGE
+                + Key::FILE_STORAGE
+                + Prepared::ROOT_STORAGE
+                + 4 * launch::FILE_STORAGE
+                + BINDINGS_STORAGE
+        );
+        let staged = Stage::storage_for_sources(source).unwrap();
+        let validation = Prepared::revalidation_quota_for_lengths(helper, daemon).unwrap();
+        let h = Image::quota_for_length(helper, ImageOperation::Transfer).unwrap();
+        let d = Image::quota_for_length(daemon, ImageOperation::Transfer).unwrap();
+        let transfer = PolicyCap::IO_WORK
+            + SupervisorCap::IO_WORK
+            + DeploymentCap::IO_WORK
+            + ProvisioningCap::IO_WORK
+            + Key::IO_WORK
+            + Lease::TRANSFER_WORK
+            + h.work()
+            + d.work();
+        let q = Prepared::staging_quota_for_lengths(helper, daemon).unwrap();
+        assert_eq!(
+            q.work(),
+            launch::LOCAL_WORK + 2 * validation.work() + 2 * transfer + Stage::STAGING_WORK
+        );
+        assert_eq!(
+            q.scratch(),
+            LAUNCH_FRAME
+                + source
+                + 2 * staged
+                + Stage::STAGING_SCRATCH
+                + validation.scratch()
+                + CONTEXT_STORAGE
+                + Lease::IO_STORAGE
+                + h.scratch()
+                + d.scratch()
+        );
+    }
+}
+
+#[test]
+fn maximum_launch_counts_guard_staging_polling_and_all_live_outputs() {
+    let staging = Prepared::staging_quota_for_lengths(MAX_HELPER, MAX_DAEMON).unwrap();
+    let validation = Prepared::maximum_revalidation_quota().unwrap();
+    let guard = Prepared::maximum_cleanup_guard_quota(false).unwrap();
+    let source = Prepared::transfer_source_storage_for_lengths(MAX_HELPER, MAX_DAEMON).unwrap();
+    let q = Prepared::maximum_launch_quota().unwrap();
+    assert_eq!(
+        q,
+        Prepared::launch_quota_for(staging, validation, source).unwrap()
+    );
+    assert_eq!(
+        q.work(),
+        launch::LOCAL_WORK
+            + staging.work()
+            + validation.work()
+            + guard.work()
+            + Namespaces::CAPTURE_WORK
+            + Namespaces::REVALIDATE_SELF_WORK
+            + Namespaces::REVALIDATE_PROCESS_WORK
+            + observations::PROCESS_VALIDATE_WORK
+            + Stage::spawn_work_for(9, 63).unwrap()
+            + launch_io::MAX_LIVENESS_CHECKS * Child::OPERATION_WORK
+            + launch_io::MAX_WORK
+            + 3 * Child::OPERATION_WORK
+            + Admission::ADMISSION_WORK
+            + Admission::REVALIDATION_WORK
+    );
+    assert_eq!(
+        q.scratch(),
+        LAUNCH_FRAME
+            + Channels::STORAGE
+            + NAMESPACE_STORAGE
+            + guard.scratch()
+            + Namespaces::CAPTURE_SCRATCH
+            + Namespaces::REVALIDATE_SELF_SCRATCH
+            + Namespaces::REVALIDATE_PROCESS_SCRATCH
+            + observations::PROCESS_VALIDATE_SCRATCH
+            + staging.scratch()
+            + Stage::storage_for_sources(source).unwrap()
+            + Stage::SPAWN_SCRATCH
+            + Child::STORAGE
+            + Child::OPERATION_SCRATCH
+            + launch_io::ATTEMPT_SCRATCH
+            + validation.scratch()
+            + 4 * Admission::PAIR_STORAGE
+            + ADMISSION_STORAGE
+            + Admission::IO_STORAGE
+            + ManagedFixture::ENVELOPE
+    );
+}
+
+#[test]
+fn shared_launch_queries_reject_length_and_cost_overflow_without_owners() {
+    for (helper, daemon) in [(0, 1), (1, 0), (u64::MAX, 1), (1, u64::MAX)] {
+        assert!(Prepared::transfer_source_storage_for_lengths(helper, daemon).is_err());
+        assert!(Prepared::transfer_work_for_lengths(helper, daemon).is_err());
+        assert!(Prepared::staging_quota_for_lengths(helper, daemon).is_err());
+    }
+    for q in [
+        Quota {
+            work: usize::MAX,
+            scratch: 0,
+        },
+        Quota {
+            work: 0,
+            scratch: usize::MAX,
+        },
+    ] {
+        assert!(Prepared::cleanup_guard_quota_for(q, true).is_err());
+        assert!(Prepared::cleanup_guard_quota_for(q, false).is_err());
+        assert!(ManagedFixture::continuity_quota_for(q).is_err());
+    }
+    for (prepared, admission) in [(usize::MAX, 0), (0, usize::MAX)] {
+        assert!(ManagedFixture::retained_storage_for(prepared, admission).is_err());
+    }
+    let validation = Quota {
+        work: 1,
+        scratch: 1,
+    };
+    for staging in [
+        LaunchQuota {
+            work: usize::MAX,
+            scratch: 0,
+        },
+        LaunchQuota {
+            work: 0,
+            scratch: usize::MAX,
+        },
+    ] {
+        assert!(Prepared::launch_quota_for(staging, validation, 1).is_err());
+    }
+    assert!(
+        Prepared::launch_quota_for(
+            LaunchQuota {
+                work: 1,
+                scratch: 1
+            },
+            validation,
+            usize::MAX
+        )
+        .is_err()
+    );
 }
 
 #[test]

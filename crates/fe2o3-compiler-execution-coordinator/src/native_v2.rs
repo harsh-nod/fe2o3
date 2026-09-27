@@ -1,4 +1,8 @@
 use crate::native_trust_v2::CompilerExecutionSupervisorTrustV2 as Trust;
+use fe2o3_compiler_execution_protocol::{
+    MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V2 as MAX_SUPERVISOR,
+    MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V2 as MAX_LAUNCHER,
+};
 use fe2o3_external_anchor_coordinator::RootManagedExternalAnchorV2 as Anchor;
 
 crate::native_adapter::preparation!(PreparedCompilerExecutionSupervisorV2, "2", "3");

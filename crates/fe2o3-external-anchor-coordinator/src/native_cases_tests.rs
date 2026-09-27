@@ -249,6 +249,76 @@ fn reserve_fixture(f: &Fixture, b: &mut Budget<'_>) {
 }
 
 #[test]
+fn maximum_prepared_queries_are_inert_closed_form_bounds() {
+    let prepare = Prepared::maximum_preparation_quota().unwrap();
+    let revalidate = Prepared::maximum_revalidation_quota().unwrap();
+    let h = Image::quota_for_length(MAX_HELPER, ImageOperation::Revalidate).unwrap();
+    let d = Image::quota_for_length(MAX_DAEMON, ImageOperation::Revalidate).unwrap();
+    assert_eq!(
+        revalidate.work(),
+        LOCAL_WORK + CONTEXT_WORK + h.work() + d.work()
+    );
+    assert_eq!(
+        revalidate.scratch(),
+        Prepared::FRAME_STORAGE + CONTEXT_STORAGE.max(h.scratch()).max(d.scratch())
+    );
+    assert_eq!(
+        prepare,
+        Prepared::preparation_quota_for_lengths(MAX_HELPER, MAX_DAEMON).unwrap()
+    );
+    assert_eq!(
+        revalidate,
+        Prepared::revalidation_quota_for_lengths(MAX_HELPER, MAX_DAEMON).unwrap()
+    );
+    let full = Prepared::maximum_retained_storage().unwrap();
+    assert_eq!(
+        full,
+        Prepared::ROOT_STORAGE
+            + Lease::IO_STORAGE
+            + DeploymentCap::IO_STORAGE
+            + ProvisioningCap::IO_STORAGE
+            + Key::IO_STORAGE
+            + 2 * size_of::<(File, ImageStorage)>()
+            + MAX_HELPER as usize
+            + MAX_DAEMON as usize
+            + Prepared::GROWTH_STORAGE
+    );
+    // These are inert lengths, not images, digests or admitted capabilities.
+    for (helper, daemon) in [
+        (1, 1),
+        (4096, 8192),
+        (1, MAX_DAEMON),
+        (MAX_HELPER, 1),
+        (MAX_HELPER, MAX_DAEMON),
+    ] {
+        let p = Prepared::preparation_quota_for_lengths(helper, daemon).unwrap();
+        let r = Prepared::revalidation_quota_for_lengths(helper, daemon).unwrap();
+        assert!(prepare.work() >= p.work());
+        assert!(prepare.scratch() >= p.scratch());
+        assert!(revalidate.work() >= r.work());
+        assert!(revalidate.scratch() >= r.scratch());
+    }
+}
+
+#[test]
+fn prepared_length_and_retained_queries_refuse_zero_underflow_and_overflow() {
+    for (helper, daemon) in [(0, 1), (1, 0), (u64::MAX, 1), (1, u64::MAX)] {
+        assert!(Prepared::preparation_quota_for_lengths(helper, daemon).is_err());
+        assert!(Prepared::revalidation_quota_for_lengths(helper, daemon).is_err());
+    }
+    assert_eq!(
+        Prepared::retained_storage_for_input(123, 23).unwrap(),
+        100 + Prepared::GROWTH_STORAGE
+    );
+    for (floor, borrowed) in [(0, 1), (usize::MAX, 0)] {
+        assert!(matches!(
+            Prepared::retained_storage_for_input(floor, borrowed),
+            Err(Error::Resource(Resource::Arithmetic))
+        ));
+    }
+}
+
+#[test]
 fn exact_preparation_and_revalidation_preserve_images_lock_and_full_charge() {
     let mut f = Fixture::new();
     let floor = f.floor();
@@ -284,6 +354,7 @@ fn exact_preparation_and_revalidation_preserve_images_lock_and_full_charge() {
         p.retained_storage() + f.context_storage(),
         floor + c.additional_storage()
     );
+    assert!(Prepared::maximum_retained_storage().unwrap() >= p.retained_storage());
     b.reserve_storage(c.additional_storage()).unwrap();
     for (image, source) in [&p.helper, &p.daemon].into_iter().zip(sources) {
         let id = image.object_identity();
@@ -296,6 +367,9 @@ fn exact_preparation_and_revalidation_preserve_images_lock_and_full_charge() {
         Err(rustix::io::Errno::WOULDBLOCK)
     );
     let rq = p.revalidation_quota().unwrap();
+    let maximum = Prepared::maximum_revalidation_quota().unwrap();
+    assert!(maximum.work() >= rq.work());
+    assert!(maximum.scratch() >= rq.scratch());
     let live = p.retained_storage() + f.context_storage();
     let mut rw = Work::new(rq.work());
     let mut rb = Budget::new(&mut rw, live + rq.scratch());

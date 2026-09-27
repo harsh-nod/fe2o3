@@ -21,6 +21,7 @@ pub(crate) type Result<T> = std::result::Result<T, CompilerExecutionRootDeployme
 pub(crate) const FILE_STORAGE: usize = size_of::<(File, usize)>();
 pub(crate) const DESCRIPTORS: [i32; 14] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 pub(crate) const LOCAL_WORK: usize = 8 + 128 * 1024;
+pub(crate) const TURN_WORK: usize = 8 + 4096;
 pub(crate) const INTAKE_SCRATCH: usize = 4 * size_of::<[File; 14]>() + 8192;
 pub(crate) const LISTENER_GROWTH: usize =
     size_of::<(RuntimeListener, usize)>() + 4 * 108 + FILE_STORAGE;
@@ -68,6 +69,8 @@ pub enum CompilerExecutionRootDeploymentErrorV2 {
     AnchorLaunch(fe2o3_external_anchor_coordinator::ExternalAnchorLaunchErrorV2),
     /// Native compiler launch refused.
     CompilerLaunch(crate::CompilerExecutionLaunchErrorV2),
+    /// Persistent cleanup funding or state refused.
+    Cleanup(fe2o3_protected_service_spawn::ProtectedServiceCleanupErrorV2),
     /// A fixed role's input shape or process state is invalid.
     Invalid {
         /// Fixed descriptor or process role.
@@ -122,7 +125,8 @@ errors!(Resource => Resource, source::RootSourceErrorV2 => Source,
     crate::CompilerExecutionPreparationErrorV2 => Preparation,
     fe2o3_external_anchor_coordinator::ExternalAnchorPreparationErrorV2 => AnchorPreparation,
     fe2o3_external_anchor_coordinator::ExternalAnchorLaunchErrorV2 => AnchorLaunch,
-    crate::CompilerExecutionLaunchErrorV2 => CompilerLaunch);
+    crate::CompilerExecutionLaunchErrorV2 => CompilerLaunch,
+    fe2o3_protected_service_spawn::ProtectedServiceCleanupErrorV2 => Cleanup);
 impl From<RuntimeListenerError> for Failure {
     fn from(error: RuntimeListenerError) -> Self {
         match error {
@@ -159,6 +163,39 @@ impl CompilerExecutionRootAdmissionQuotaV2 {
     pub const fn scratch(self) -> usize {
         self.scratch
     }
+}
+
+/// Inert funding plan for one activation/admission/launch and a finite service
+/// lifetime. The request and cleanup limits belong to two independent original
+/// accounts, never renewed per phase or tick. This grants no execution authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompilerExecutionStartupQuotaV2 {
+    pub(crate) request_work: usize,
+    pub(crate) request_storage: usize,
+    pub(crate) cleanup_work: usize,
+    pub(crate) cleanup_storage: usize,
+}
+impl CompilerExecutionStartupQuotaV2 {
+    /// Complete original-request work including finite monitoring and cleanup control.
+    pub const fn request_work(self) -> usize {
+        self.request_work
+    }
+    /// Peak logical request storage from an empty account, not process RSS.
+    pub const fn request_storage(self) -> usize {
+        self.request_storage
+    }
+    /// Original persistent-account work, including guard, payload, scans and shutdown.
+    pub const fn cleanup_work(self) -> usize {
+        self.cleanup_work
+    }
+    /// Full cleanup pool and retained preparation payload, independent of request storage.
+    pub const fn cleanup_storage(self) -> usize {
+        self.cleanup_storage
+    }
+}
+
+pub(crate) fn repeated(count: usize, work: usize) -> Result<usize> {
+    count.checked_mul(work).ok_or(Resource::Arithmetic.into())
 }
 
 // Sum scratch conservatively rather than relying on the order of nested scopes.

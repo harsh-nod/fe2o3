@@ -101,6 +101,73 @@ macro_rules! inherited {
                 })
             }
 
+            /// Inert conservative bound for this full admitted owner at fixed image ceilings.
+            pub fn maximum_retained_storage() -> Result<usize> {
+                let image = |n| Image::file_storage_for_length(n)
+                    .map_err(crate::CompilerExecutionPreparationErrorV2::from);
+                sum(&[image(MAX_SUPERVISOR)?, image(MAX_LAUNCHER)?, image(MAX_LAUNCHER)?,
+                    Trust::maximum_retained_storage()?, Inputs::PAIR_STORAGE, Inputs::OWNER_GROWTH,
+                    Anchor::maximum_retained_storage()?, 2 * Lease::IO_STORAGE, Self::ENVELOPE])
+            }
+
+            /// Funds one complete startup and at most the specified positive numbers
+            /// of monitoring/cleanup turns. Each monitoring turn may wait once, check
+            /// continuity once and scan the entire cleanup pool once. Each cleanup turn
+            /// may wait once, scan once and attempt shutdown once; the first shutdown
+            /// attempt is separately prepaid at cleanup admission. Cancellation is
+            /// already prepaid by launch. No account may be renewed between phases.
+            ///
+            /// Includes private activation mechanics but does not install a runner,
+            /// authenticate provisioning, guarantee successful I/O or eventual reaping.
+            /// Quarantined/nonterminal custody must remain charged after the turn bound.
+            pub fn startup_quota(monitor_ticks: usize, cleanup_turns: usize)
+                -> Result<root::CompilerExecutionStartupQuotaV2> {
+                use crate::native_activation as activation;
+                use fe2o3_protected_service_spawn::{RetainedResourcesV2 as Resources,
+                    MAX_PROTECTED_SERVICE_PROCESSES_V2 as CAPACITY};
+                if monitor_ticks == 0 || cleanup_turns == 0 {
+                    return Err(root::invalid("startup", "monitoring and cleanup require finite positive turns"));
+                }
+                let admission = Self::admission_quota()?;
+                let guard = Anchor::maximum_cleanup_guard_quota(true)?;
+                let anchor = Anchor::maximum_launch_quota()?;
+                let preparation = Prepared::maximum_preparation_quota()?;
+                let compiler = Prepared::maximum_launch_quota()?;
+                let continuity = Managed::maximum_continuity_quota()?;
+                let prepared_storage = Prepared::maximum_retained_storage()?;
+                let launch_work = sum(&[root::LOCAL_WORK, Trust::REVALIDATION_WORK,
+                    2 * Inputs::LIFECYCLE_WORK, 3 * source::VALIDATE_WORK, guard.work(),
+                    anchor.work(), preparation.work(), compiler.work()])?;
+                let launch_peak = sum(&[Self::maximum_retained_storage()?, Self::FRAME,
+                    Trust::SCRATCH, Inputs::LIFECYCLE_SCRATCH, source::VALIDATE_SCRATCH,
+                    guard.scratch(), anchor.scratch(), ManagedAnchor::maximum_retained_storage()?,
+                    preparation.scratch(), prepared_storage, compiler.scratch(),
+                    Managed::maximum_retained_storage()?])?;
+                let lifetime_peak = sum(&[Managed::maximum_retained_storage()?,
+                    crate::native::maximum(&[continuity.scratch(), activation::WAIT_SCRATCH,
+                        activation::RESTORE_SCRATCH, activation::PUBLISH_SCRATCH])])?;
+                let scans = sum(&[monitor_ticks, cleanup_turns])?;
+                Ok(root::CompilerExecutionStartupQuotaV2 {
+                    request_work: sum(&[2 * root::LOCAL_WORK, activation::CAPTURE_WORK,
+                        activation::INSTALL_WORK, activation::PUBLISH_WORK, activation::RESTORE_WORK,
+                        admission.work(), launch_work,
+                        root::repeated(monitor_ticks, sum(&[root::TURN_WORK,
+                            activation::WAIT_WORK, continuity.work()])?)?,
+                        root::repeated(cleanup_turns, root::TURN_WORK + activation::WAIT_WORK)?])?,
+                    request_storage: sum(&[Self::FRAME, activation::ACTIVATION_STORAGE,
+                        activation::SIGNALS_STORAGE, crate::native::maximum(&[
+                            activation::CAPTURE_SCRATCH, activation::INSTALL_SCRATCH,
+                            activation::PUBLISH_SCRATCH, admission.scratch(), launch_peak, lifetime_peak])])?,
+                    cleanup_work: sum(&[Cleanup::ADMISSION_WORK, Cleanup::GUARD_WORK,
+                        2 * Cleanup::GUARD_CLONE_WORK,
+                        Cleanup::retained_launch_work::<Prepared>(prepared_storage)?,
+                        root::repeated(scans, Cleanup::pump_work(CAPACITY)?)?,
+                        root::repeated(cleanup_turns, Cleanup::shutdown_work())?])?,
+                    cleanup_storage: sum(&[Cleanup::STORAGE,
+                        Resources::<Prepared>::payload_storage(prepared_storage)?])?,
+                })
+            }
+
             /// Admits one complete inherited native deployment, returning its FULL
             /// unreserved owner charge. All source bytes and nested native owners are
             /// funded on the supplied original ledger before access/retention. Entry

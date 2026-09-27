@@ -8,10 +8,6 @@ macro_rules! preparation {
             CompilerExecutionPreparationStorageV2 as Storage,
         }};
         use fe2o3_compiler_execution_lifecycle::CompilerExecutionServiceLifecycleLeaseV2 as Lease;
-        use fe2o3_compiler_execution_protocol::{
-            MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V1 as MAX_SUPERVISOR,
-            MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1 as MAX_LAUNCHER,
-        };
         use fe2o3_compiler_execution_supervisor::{
             IssuerServiceCredentialProfileV1 as Credentials,
             ProvisionedProtectedIssuerServiceInputsV2 as ServiceInputs,
@@ -39,7 +35,11 @@ macro_rules! preparation {
         }
 
         fn context_quota(anchor: &Anchor) -> Result<Quota> {
-            let anchor = anchor.continuity_quota()?;
+            context_quota_for(anchor.continuity_quota()?)
+        }
+
+        fn context_quota_for(anchor: fe2o3_external_anchor_coordinator::ExternalAnchorLaunchQuotaV2)
+            -> Result<Quota> {
             Ok(Quota {
                 work: sum(&[Trust::REVALIDATION_WORK, ServiceInputs::LIFECYCLE_WORK,
                     ServiceInputs::LIFECYCLE_WORK, anchor.work()])?,
@@ -146,11 +146,33 @@ macro_rules! preparation {
             /// This query observes inert measurements, not descriptors or authority.
             pub fn preparation_quota(trust: &Trust, anchor: &Anchor) -> Result<Quota> {
                 let m = measurements(trust)?;
-                let a = [Image::quota(m[0], Operation::Admit)?, Image::quota(m[1], Operation::Admit)?,
-                    Image::quota(m[2], Operation::Admit)?];
-                let r = [Image::quota(m[0], Operation::Revalidate)?, Image::quota(m[1], Operation::Revalidate)?,
-                    Image::quota(m[2], Operation::Revalidate)?];
-                let c = context_quota(anchor)?;
+                Self::preparation_quota_for(m.map(|m| m.byte_len()), context_quota(anchor)?)
+            }
+
+            /// Complete conservative preparation quota before native owners exist.
+            /// Uses the same calculation at the fixed family image ceilings.
+            pub fn maximum_preparation_quota() -> Result<Quota> {
+                Self::preparation_quota_for([MAX_SUPERVISOR, MAX_LAUNCHER, MAX_LAUNCHER],
+                    context_quota_for(Anchor::maximum_continuity_quota()?)?)
+            }
+
+            /// Conservative full owner charge, not a descriptor or authority token.
+            pub fn maximum_retained_storage() -> Result<usize> {
+                sum(&[Trust::maximum_retained_storage()?, ServiceInputs::PAIR_STORAGE,
+                    ServiceInputs::OWNER_GROWTH, 2 * Lease::IO_STORAGE,
+                    Anchor::maximum_retained_storage()?,
+                    Image::file_storage_for_length(MAX_SUPERVISOR)?,
+                    Image::file_storage_for_length(MAX_LAUNCHER)?,
+                    Image::file_storage_for_length(MAX_LAUNCHER)?, Self::GROWTH_STORAGE])
+            }
+
+            fn preparation_quota_for(n: [u64; 3], c: Quota) -> Result<Quota> {
+                let a = [Image::quota_for_length(n[0], Operation::Admit)?,
+                    Image::quota_for_length(n[1], Operation::Admit)?,
+                    Image::quota_for_length(n[2], Operation::Admit)?];
+                let r = [Image::quota_for_length(n[0], Operation::Revalidate)?,
+                    Image::quota_for_length(n[1], Operation::Revalidate)?,
+                    Image::quota_for_length(n[2], Operation::Revalidate)?];
                 Ok(Quota {
                     work: sum(&[LOCAL_WORK, c.work(), a[0].work(), a[1].work(), a[2].work(),
                         Namespaces::CAPTURE_WORK, Namespaces::REVALIDATE_SELF_WORK, c.work(),
@@ -229,10 +251,20 @@ macro_rules! preparation {
 
             /// Complete revalidation work and additional peak above this owner.
             pub fn revalidation_quota(&self) -> Result<Quota> {
-                let c = context_quota(&self.anchor)?;
-                let r = [Image::quota(self.programs[0].measurement(), Operation::Revalidate)?,
-                    Image::quota(self.programs[1].measurement(), Operation::Revalidate)?,
-                    Image::quota(self.programs[2].measurement(), Operation::Revalidate)?];
+                Self::revalidation_quota_for(self.programs.each_ref().map(|p| p.measurement().byte_len()),
+                    context_quota(&self.anchor)?)
+            }
+
+            /// Conservative complete revalidation envelope at the fixed image ceilings.
+            pub fn maximum_revalidation_quota() -> Result<Quota> {
+                Self::revalidation_quota_for([MAX_SUPERVISOR, MAX_LAUNCHER, MAX_LAUNCHER],
+                    context_quota_for(Anchor::maximum_continuity_quota()?)?)
+            }
+
+            fn revalidation_quota_for(n: [u64; 3], c: Quota) -> Result<Quota> {
+                let r = [Image::quota_for_length(n[0], Operation::Revalidate)?,
+                    Image::quota_for_length(n[1], Operation::Revalidate)?,
+                    Image::quota_for_length(n[2], Operation::Revalidate)?];
                 Ok(Quota {
                     work: sum(&[LOCAL_WORK, Namespaces::REVALIDATE_SELF_WORK, c.work(),
                         r[0].work(), r[1].work(), r[2].work()])?,
@@ -253,6 +285,11 @@ macro_rules! preparation {
             /// This query grants no launch authority or launch/protected validation credit.
             pub fn cleanup_guard_quota(&self) -> Result<Quota> {
                 native::cleanup_guard_quota(self.revalidation_quota()?, Self::FRAME_STORAGE)
+            }
+
+            /// Same guard-validation cost at maximum image sizes, without a live owner.
+            pub fn maximum_cleanup_guard_quota() -> Result<Quota> {
+                native::cleanup_guard_quota(Self::maximum_revalidation_quota()?, Self::FRAME_STORAGE)
             }
 
             /// Revalidates this actual Prepared, then joins the existing cleanup guard

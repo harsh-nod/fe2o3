@@ -1041,3 +1041,19 @@ fn concurrent_recovery_grants_one_controller_and_charges_the_original_account_on
     assert!(matches!(*REAPER.mode.lock().unwrap(), ReaperMode::Closed));
     assert_empty(&REAPER);
 }
+#[test]
+fn public_cleanup_cost_queries_match_the_bounded_pump_and_shutdown() {
+    for visits in 1..=CAPACITY {
+        assert_eq!(
+            Service::pump_work(visits).unwrap(),
+            Service::TURN_WORK + visits * Service::CELL_WORK
+        );
+    }
+    for visits in [0, CAPACITY + 1, usize::MAX] {
+        assert!(matches!(
+            Service::pump_work(visits),
+            Err(Failure::InvalidTurn)
+        ));
+    }
+    assert_eq!(Service::shutdown_work(), SHUTDOWN_WORK);
+}

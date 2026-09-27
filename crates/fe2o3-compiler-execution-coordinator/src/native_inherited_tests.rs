@@ -119,6 +119,63 @@ fn record_envelopes_refuse_zero_and_overflow_before_source_access() {
 }
 
 #[test]
+fn startup_limits_compose_both_original_accounts_and_finite_turns() {
+    use crate::{
+        PreparedCompilerExecutionSupervisorV2 as P2, PreparedCompilerExecutionSupervisorV3 as P3,
+        RootManagedCompilerExecutionServiceV2 as M2, RootManagedCompilerExecutionServiceV3 as M3,
+        native_activation as a,
+    };
+    use fe2o3_protected_service_spawn::{
+        MAX_PROTECTED_SERVICE_PROCESSES_V2 as CAPACITY,
+        ProtectedServiceCleanupServiceV2 as Cleanup, RetainedResourcesV2 as Resources,
+    };
+    let pump = Cleanup::pump_work(CAPACITY).unwrap();
+    for (startup, prepared, payload, continuity, managed) in [
+        (
+            V2::startup_quota as fn(usize, usize) -> Result<CompilerExecutionStartupQuotaV2>,
+            P2::maximum_retained_storage().unwrap(),
+            Resources::<P2>::payload_storage(P2::maximum_retained_storage().unwrap()).unwrap(),
+            M2::maximum_continuity_quota().unwrap(),
+            M2::maximum_retained_storage().unwrap(),
+        ),
+        (
+            V3::startup_quota,
+            P3::maximum_retained_storage().unwrap(),
+            Resources::<P3>::payload_storage(P3::maximum_retained_storage().unwrap()).unwrap(),
+            M3::maximum_continuity_quota().unwrap(),
+            M3::maximum_retained_storage().unwrap(),
+        ),
+    ] {
+        let base = startup(1, 1).unwrap();
+        let monitoring = startup(2, 1).unwrap();
+        let draining = startup(1, 2).unwrap();
+        assert_eq!(
+            monitoring.request_work() - base.request_work(),
+            TURN_WORK + a::WAIT_WORK + continuity.work()
+        );
+        assert_eq!(
+            draining.request_work() - base.request_work(),
+            TURN_WORK + a::WAIT_WORK
+        );
+        assert_eq!(monitoring.cleanup_work() - base.cleanup_work(), pump);
+        assert_eq!(
+            draining.cleanup_work() - base.cleanup_work(),
+            pump + Cleanup::shutdown_work()
+        );
+        assert_eq!(base.cleanup_storage(), Cleanup::STORAGE + payload);
+        assert!(payload >= prepared);
+        assert!(base.request_storage() >= managed + continuity.scratch());
+        for q in [monitoring, draining] {
+            assert_eq!(q.request_storage(), base.request_storage());
+            assert_eq!(q.cleanup_storage(), base.cleanup_storage());
+        }
+        for (ticks, turns) in [(0, 1), (1, 0), (usize::MAX, 1), (1, usize::MAX)] {
+            assert!(startup(ticks, turns).is_err());
+        }
+    }
+}
+
+#[test]
 fn preflight_requires_bounded_images_exact_records_and_directory_roots() {
     use rustix::fs::FileType;
     let file = tempfile::tempfile().unwrap();

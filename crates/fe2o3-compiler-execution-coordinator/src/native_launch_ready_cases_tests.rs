@@ -155,3 +155,18 @@ fn native_launch_descriptor_table_and_retained_layout_cover_actual_types() {
     assert!(Child::storage_for(input).unwrap() > input);
     assert!(Stage::spawn_retaining_scratch::<Prepared>(input).is_ok());
 }
+
+#[test]
+fn maximum_compiler_launch_costs_are_inert_checked_and_cover_retention() {
+    let retained = Prepared::maximum_retained_storage().unwrap();
+    let quota = Prepared::maximum_launch_quota().unwrap();
+    assert!(retained >= size_of::<Prepared>());
+    assert!(quota.work() > Cleanup::retained_launch_work::<Prepared>(retained).unwrap());
+    assert!(quota.scratch() >= Stage::spawn_retaining_scratch::<Prepared>(retained).unwrap());
+    assert!(
+        Prepared::maximum_preparation_quota().unwrap().work()
+            >= Prepared::maximum_revalidation_quota().unwrap().work()
+    );
+    assert!(Prepared::transfer_source_storage_for([0, 1, 1]).is_err());
+    assert!(Prepared::transfer_source_storage_for([1, u64::MAX, 1]).is_err());
+}

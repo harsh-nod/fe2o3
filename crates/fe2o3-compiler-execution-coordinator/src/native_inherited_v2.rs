@@ -32,5 +32,7 @@ use fe2o3_compiler_execution_protocol::{
     MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V2 as MAX_SUPERVISOR,
     MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V2 as MAX_LAUNCHER,
 };
-use fe2o3_external_anchor_coordinator::PreparedExternalAnchorOccurrenceV2 as Anchor;
+use fe2o3_external_anchor_coordinator::{
+    PreparedExternalAnchorOccurrenceV2 as Anchor, RootManagedExternalAnchorV2 as ManagedAnchor,
+};
 crate::native_inherited_adapter::inherited!(InheritedCompilerExecutionDeploymentV2, "2", "3");
