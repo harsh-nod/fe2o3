@@ -742,13 +742,23 @@ fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, BuildConfigErr
         )));
     }
 
-    let mut providers = Vec::with_capacity(values.len());
+    // Admit all metadata and the aggregate payload before opening any provider.
+    let mut declared = Vec::with_capacity(values.len());
+    let mut total_bytes = 0_u64;
     let mut previous = None;
     for (index, value) in values.iter().enumerate() {
         let context = format!("providers[{index}]");
         let object = exact_object(value, PROVIDER_KEYS, &context)?;
         let path = absolute_json_path(required_string(object, "path", &context)?, &context)?;
         let identity = declared_identity(object, &context)?;
+        total_bytes = total_bytes
+            .checked_add(identity.byte_len())
+            .filter(|total| *total <= fe2o3_hsaco_finalize::MAX_WORKER_TOTAL_INPUT_BYTES as u64)
+            .ok_or_else(|| {
+                BuildConfigError::Invalid(
+                    "provider payloads exceed the total input limit".to_owned(),
+                )
+            })?;
         if previous.is_some_and(|previous| previous >= identity) {
             return Err(BuildConfigError::Invalid(
                 "providers must be strictly ordered by declared content identity".to_owned(),
@@ -765,17 +775,15 @@ fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, BuildConfigErr
                 )));
             }
         };
-        let bytes = read_bounded(
-            &path,
-            fe2o3_hsaco_finalize::MAX_WORKER_TOTAL_INPUT_BYTES,
-            "provider",
-        )?;
-        providers.push(
-            WorkerInputV1::from_declared(kind, identity, bytes)
-                .map_err(BuildConfigError::Protocol)?,
-        );
+        declared.push((path, kind, identity));
     }
-    Ok(providers)
+    declared
+        .into_iter()
+        .map(|(path, kind, identity)| {
+            let bytes = read_bounded(&path, identity.byte_len() as usize, "provider")?;
+            WorkerInputV1::from_declared(kind, identity, bytes).map_err(BuildConfigError::Protocol)
+        })
+        .collect()
 }
 
 fn parse_link_options(value: &Value) -> Result<Vec<LinkOptionV1>, BuildConfigError> {
@@ -1121,6 +1129,106 @@ mod tests {
     impl Drop for ScratchDirectory {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn provider(path: &Path, byte_len: u64, sha256: [u8; 32]) -> Value {
+        serde_json::json!({
+            "byte_len": byte_len,
+            "kind": "llvm-bitcode",
+            "path": path,
+            "sha256": hex(&sha256),
+        })
+    }
+
+    #[test]
+    fn providers_reject_aggregate_limits_before_any_payload_io() {
+        let scratch = ScratchDirectory::new();
+        let missing = scratch.0.join("missing-provider");
+        let cap = fe2o3_hsaco_finalize::MAX_WORKER_TOTAL_INPUT_BYTES as u64;
+        for lengths in [
+            vec![cap + 1],
+            vec![cap, 1],
+            vec![u64::MAX],
+            vec![1, u64::MAX],
+        ] {
+            let values: Vec<_> = lengths
+                .iter()
+                .enumerate()
+                .map(|(i, len)| provider(&missing, *len, [i as u8; 32]))
+                .collect();
+            assert!(matches!(
+                prepare_providers(&Value::Array(values)),
+                Err(BuildConfigError::Invalid(reason)) if reason.contains("total input limit")
+            ));
+        }
+        for lengths in [vec![cap], vec![cap - 1, 1]] {
+            let values: Vec<_> = lengths
+                .iter()
+                .enumerate()
+                .map(|(i, len)| provider(&missing, *len, [i as u8; 32]))
+                .collect();
+            assert!(matches!(
+                prepare_providers(&Value::Array(values)),
+                Err(BuildConfigError::Io { kind: "provider", error, .. })
+                    if error.kind() == std::io::ErrorKind::NotFound
+            ));
+        }
+    }
+
+    #[test]
+    fn providers_validate_later_metadata_before_opening_earlier_inputs() {
+        let scratch = ScratchDirectory::new();
+        let missing = scratch.0.join("missing-provider");
+        for mutation in 0..4 {
+            let first = provider(&missing, 1, [1; 32]);
+            let mut second = provider(&missing, 1, [2; 32]);
+            match mutation {
+                0 => second["sha256"] = first["sha256"].clone(),
+                1 => second["kind"] = Value::from("unsupported"),
+                2 => second["byte_len"] = Value::from(0),
+                _ => {
+                    second.as_object_mut().unwrap().remove("path");
+                }
+            }
+            assert!(matches!(
+                prepare_providers(&serde_json::json!([first, second])),
+                Err(BuildConfigError::Invalid(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn providers_keep_exact_content_checks_and_bound_reads_by_declared_size() {
+        let scratch = ScratchDirectory::new();
+        let path = scratch.0.join("provider.bc");
+        let bytes = b"provider fixture";
+        fs::write(&path, bytes).unwrap();
+        let exact = provider(&path, bytes.len() as u64, Sha256::digest(bytes).into());
+        let inputs = prepare_providers(&serde_json::json!([exact.clone()])).unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].bytes(), bytes);
+        assert!(
+            prepare_providers(&serde_json::json!([]))
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut oversized_file = exact.clone();
+        oversized_file["byte_len"] = Value::from(bytes.len() - 1);
+        assert!(matches!(
+            prepare_providers(&serde_json::json!([oversized_file])),
+            Err(BuildConfigError::Invalid(reason)) if reason.contains("regular file containing")
+        ));
+        let mut short_file = exact.clone();
+        short_file["byte_len"] = Value::from(bytes.len() + 1);
+        let mut wrong_digest = exact;
+        wrong_digest["sha256"] = Value::from(hex(&[0; 32]));
+        for rejected in [short_file, wrong_digest] {
+            assert!(matches!(
+                prepare_providers(&serde_json::json!([rejected])),
+                Err(BuildConfigError::Protocol(_))
+            ));
         }
     }
 

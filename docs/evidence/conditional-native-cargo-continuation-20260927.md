@@ -81,3 +81,38 @@ and release CI are not established by this checkpoint.
 Native agent creation failed at the service thread limit. The primary agent
 implemented and reviewed this change; no Qwen worker was invoked. No remote jobs
 or files were created. Push and issue-update outcomes are reported separately.
+
+## Production Parser Follow-up
+
+Review of configuration admission found that `prepare_providers` enforced the
+input-byte cap per file but not across providers before payload I/O. It now
+validates the entire provider metadata list and checked aggregate declared size
+before opening any provider, then bounds each read by its admitted declared
+length. Content identity, canonical ordering, file-kind and change-during-read
+checks remain in place. Both existing production configuration versions use
+this same parser. This is not full native-account configuration preparation.
+
+`cargo test -p cargo-fe2o3 --bin cargo-fe2o3 build_config::tests -- --test-threads=1`
+passed all 10 tests, none ignored. The three new tests cover aggregate/exact-cap
+limits without allocating large payloads, arithmetic overflow, late invalid
+metadata before earlier I/O, empty/valid inputs, excessive actual size, short
+files and wrong hashes.
+
+`cargo test -p cargo-fe2o3 --test production_build_config -- --test-threads=1`
+finished with **18 passed, 1 failed**, none ignored. The existing
+`production_runner_rejects_no_envelope_marker` test fails during the supervisor
+startup socket check, before its expected missing-envelope diagnostic. An
+independent socket-pair probe confirms `getsockopt(SOL_SOCKET, SO_TYPE)` returns
+`EPERM` in this environment after successful socket creation. Validation is not
+relaxed, and this test is not counted as passing.
+
+Additional logs in the same evidence directory:
+
+```text
+0b972907848d32e2cab194599b644b569787925c9f9e47a8bf8bf63005b2aee6  cargo-provider-admission-tests-r1-20260927.log
+e227127d5961da3dec92a9dd993ca55acbb6654c8e25a6e72c599697c7832472  cargo-provider-production-regression-r1-20260927.log
+```
+
+All test commands terminated. Both private empty Cargo scratch directories were
+removed; no remote scratch was created. All three SSH aliases failed DNS during
+this follow-up. Rustfmt and whitespace checks passed.
