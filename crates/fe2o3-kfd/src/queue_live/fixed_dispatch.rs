@@ -556,8 +556,7 @@ impl ComputeAqlQueueSessionV1 {
         self.dispatch = Some(replay.dispatch);
         self.set_single_persistent_compute_attachment_v1(PersistentComputeAttachmentV1 {
             allocation: replay.allocation,
-            authenticated_sha256: replay.authenticated_sha256,
-            fully_initialized: replay.fully_initialized,
+            initialization: replay.initialization,
             state,
             binding: PersistentComputeBindingKeyV1 {
                 queue: self.key,
@@ -615,15 +614,14 @@ impl ComputeAqlQueueSessionV1 {
             }
             (PersistentRetainedControlReplayDispositionV1::TerminalAttached, Err(failure)) => {
                 let (_, prepared) = failure.into_parts();
-                let (mut allocation, authenticated_sha256, fully_initialized) = input.into_parts();
+                let (mut allocation, initialization) = input.into_parts();
                 let state = quarantine_persistent_retained_control_replay_prepared_v1(
                     &mut allocation.owner,
                     prepared,
                 );
                 self.set_single_persistent_compute_attachment_v1(PersistentComputeAttachmentV1 {
                     allocation,
-                    authenticated_sha256,
-                    fully_initialized,
+                    initialization,
                     state,
                     binding: PersistentComputeBindingKeyV1 {
                         queue: self.key,
@@ -683,8 +681,7 @@ impl ComputeAqlQueueSessionV1 {
                 let error = ComputeAqlQueueSessionErrorV1::Contract("persistent replay panicked");
                 match phases.into_bind_outcome(Err(error)) {
                     PersistentRetainedControlReplayOutcomeV1::BeforeDetach { request, .. } => {
-                        let (mut allocation, authenticated_sha256, fully_initialized) =
-                            request.input.into_parts();
+                        let (mut allocation, initialization) = request.input.into_parts();
                         let state = quarantine_persistent_retained_control_replay_prepared_v1(
                             &mut allocation.owner,
                             request.prepared,
@@ -693,8 +690,7 @@ impl ComputeAqlQueueSessionV1 {
                         self.set_single_persistent_compute_attachment_v1(
                             PersistentComputeAttachmentV1 {
                                 allocation,
-                                authenticated_sha256,
-                                fully_initialized,
+                                initialization,
                                 state,
                                 binding: PersistentComputeBindingKeyV1 {
                                     queue: self.key,
@@ -797,8 +793,7 @@ impl ComputeAqlQueueSessionV1 {
                 self.detached_next_insertion_index = None;
                 self.set_single_persistent_compute_attachment_v1(PersistentComputeAttachmentV1 {
                     allocation: replay.allocation,
-                    authenticated_sha256: replay.authenticated_sha256,
-                    fully_initialized: replay.fully_initialized,
+                    initialization: replay.initialization,
                     state: PersistentComputeUseStateV1::Prepared(replay.prepared),
                     binding,
                     storage_identity: commit.storage_identity,
@@ -948,11 +943,10 @@ impl ComputeAqlQueueSessionV1 {
         }
 
         let mut entries = inputs.inputs.map(|input| {
-            let (allocation, authenticated_sha256, fully_initialized) = input.into_parts();
+            let (allocation, initialization) = input.into_parts();
             PersistentComputeAttachmentEntryV1 {
                 allocation,
-                authenticated_sha256,
-                fully_initialized,
+                initialization,
                 state: PersistentComputeUseStateV1::Quarantined,
                 storage_identity: None,
                 effect: Gfx942PersistentComputeEffectV1::Read,
@@ -1008,9 +1002,9 @@ impl ComputeAqlQueueSessionV1 {
             entry.storage_identity = Some(identity);
         }
         let initialized = [
-            entries[0].fully_initialized,
-            entries[1].fully_initialized,
-            entries[2].fully_initialized,
+            entries[0].initialization.is_fully_initialized(),
+            entries[1].initialization.is_fully_initialized(),
+            entries[2].initialization.is_fully_initialized(),
         ];
         let storage = identities.map(Gfx942SdmaBufferStorageIdentityV1::Device);
         let control_identity = match three_binding_persistent_fixed_dispatch_control_identity_v1(
@@ -1282,7 +1276,7 @@ impl ComputeAqlQueueSessionV1 {
                 }
             };
             entries[index].state = PersistentComputeUseStateV1::Prepared(prepared);
-            let item = match entries[index].authenticated_sha256 {
+            let item = match entries[index].initialization.authenticated_sha256() {
                 Some(sha256) => {
                     let content = match Gfx942DeviceContentDescriptorV1::new(
                         content_roles[index],
@@ -1291,7 +1285,7 @@ impl ComputeAqlQueueSessionV1 {
                     ) {
                         Ok(content) => content,
                         Err(_) => {
-                            data.push(Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease));
+                            data.push(Gfx942FixedDispatchDataV1::initialized_storage(lease));
                             quarantine_persistent_compute_entries_v1(
                                 entries.each_mut(),
                                 Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
@@ -1328,11 +1322,11 @@ impl ComputeAqlQueueSessionV1 {
                         lease, content,
                     ) {
                         Ok(initialized) => Gfx942FixedDispatchDataV1::initialized(initialized),
-                        Err(lease) => Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease),
+                        Err(lease) => Gfx942FixedDispatchDataV1::initialized_storage(lease),
                     }
                 }
-                None if entries[index].fully_initialized => {
-                    Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease)
+                None if entries[index].initialization.is_fully_initialized() => {
+                    Gfx942FixedDispatchDataV1::initialized_storage(lease)
                 }
                 None => Gfx942FixedDispatchDataV1::uninitialized(lease),
             };
@@ -1532,6 +1526,7 @@ impl ComputeAqlQueueSessionV1 {
             Gfx942PersistentComputeInputV1::Uninitialized(_) => None,
             Gfx942PersistentComputeInputV1::Initialized(ready) => Some(ready.authenticated_sha256),
             Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_) => None,
+            Gfx942PersistentComputeInputV1::InitializedStorage(_) => None,
         };
         let initialized = !matches!(&input, Gfx942PersistentComputeInputV1::Uninitialized(_));
         let allocation = match &mut input {
@@ -1539,6 +1534,7 @@ impl ComputeAqlQueueSessionV1 {
             Gfx942PersistentComputeInputV1::InitializedAfterDispatch(ready) => {
                 &mut ready.allocation
             }
+            Gfx942PersistentComputeInputV1::InitializedStorage(ready) => &mut ready.allocation,
             Gfx942PersistentComputeInputV1::Initialized(ready) => &mut ready.allocation,
         };
         if allocation.attachment.queue != self.compute_lane_session
@@ -1669,13 +1665,11 @@ impl ComputeAqlQueueSessionV1 {
                         ));
                     }
                     PersistentBindCancellationDispositionV1::Terminal(reserved) => {
-                        let (allocation, authenticated_sha256, fully_initialized) =
-                            input.into_parts();
+                        let (allocation, initialization) = input.into_parts();
                         self.set_single_persistent_compute_attachment_v1(
                             PersistentComputeAttachmentV1 {
                                 allocation,
-                                authenticated_sha256,
-                                fully_initialized,
+                                initialization,
                                 state: PersistentComputeUseStateV1::Reserved(reserved),
                                 binding: PersistentComputeBindingKeyV1 {
                                     queue: self.key,
@@ -1740,15 +1734,14 @@ impl ComputeAqlQueueSessionV1 {
         let validation = match validation {
             Ok(result) => result,
             Err(payload) => {
-                let (mut allocation, authenticated_sha256, fully_initialized) = input.into_parts();
+                let (mut allocation, initialization) = input.into_parts();
                 let state = quarantine_persistent_retained_control_replay_prepared_v1(
                     &mut allocation.owner,
                     prepared,
                 );
                 self.set_single_persistent_compute_attachment_v1(PersistentComputeAttachmentV1 {
                     allocation,
-                    authenticated_sha256,
-                    fully_initialized,
+                    initialization,
                     state,
                     binding: PersistentComputeBindingKeyV1 {
                         queue: self.key,
@@ -1766,11 +1759,10 @@ impl ComputeAqlQueueSessionV1 {
             }
         };
         if let Err(error) = validation {
-            let (allocation, authenticated_sha256, fully_initialized) = input.into_parts();
+            let (allocation, initialization) = input.into_parts();
             let mut attachment = PersistentComputeAttachmentV1 {
                 allocation,
-                authenticated_sha256,
-                fully_initialized,
+                initialization,
                 state: PersistentComputeUseStateV1::Prepared(prepared),
                 binding: PersistentComputeBindingKeyV1 {
                     queue: self.key,
@@ -1784,8 +1776,7 @@ impl ComputeAqlQueueSessionV1 {
             if cancel_persistent_compute_prepublication_entries_v1([&mut attachment]) {
                 let input = Gfx942PersistentComputeInputV1::from_parts(
                     attachment.allocation,
-                    attachment.authenticated_sha256,
-                    attachment.fully_initialized,
+                    attachment.initialization,
                 );
                 if persistent_bind_retryable_v1(!self.terminal_poisoned, true) {
                     return Err(recover(error, input));
@@ -1820,12 +1811,11 @@ impl ComputeAqlQueueSessionV1 {
                     ));
                 }
                 PersistentBindCancellationDispositionV1::Terminal(prepared) => {
-                    let (allocation, authenticated_sha256, fully_initialized) = input.into_parts();
+                    let (allocation, initialization) = input.into_parts();
                     self.set_single_persistent_compute_attachment_v1(
                         PersistentComputeAttachmentV1 {
                             allocation,
-                            authenticated_sha256,
-                            fully_initialized,
+                            initialization,
                             state: PersistentComputeUseStateV1::Prepared(prepared),
                             binding: PersistentComputeBindingKeyV1 {
                                 queue: self.key,
@@ -1850,7 +1840,7 @@ impl ComputeAqlQueueSessionV1 {
                 }
             },
         };
-        let (mut allocation, authenticated_sha256, initialized) = input.into_parts();
+        let (mut allocation, initialization) = input.into_parts();
         let data = match initialized_content {
             Some(content) => {
                 match Gfx942InitializedDeviceMemoryV1::from_authenticated_full_transfer(
@@ -1866,8 +1856,7 @@ impl ComputeAqlQueueSessionV1 {
                         self.set_single_persistent_compute_attachment_v1(
                             PersistentComputeAttachmentV1 {
                                 allocation,
-                                authenticated_sha256,
-                                fully_initialized: initialized,
+                                initialization,
                                 state,
                                 binding: PersistentComputeBindingKeyV1 {
                                     queue: self.key,
@@ -1898,7 +1887,7 @@ impl ComputeAqlQueueSessionV1 {
                     }
                 }
             }
-            None if initialized => Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease),
+            None if initialized => Gfx942FixedDispatchDataV1::initialized_storage(lease),
             None => Gfx942FixedDispatchDataV1::uninitialized(lease),
         };
         let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, vec![data]);
@@ -1928,8 +1917,7 @@ impl ComputeAqlQueueSessionV1 {
                 );
                 self.set_single_persistent_compute_attachment_v1(PersistentComputeAttachmentV1 {
                     allocation,
-                    authenticated_sha256,
-                    fully_initialized: initialized,
+                    initialization,
                     state,
                     binding: PersistentComputeBindingKeyV1 {
                         queue: self.key,
@@ -1960,8 +1948,7 @@ impl ComputeAqlQueueSessionV1 {
                 );
                 self.set_single_persistent_compute_attachment_v1(PersistentComputeAttachmentV1 {
                     allocation,
-                    authenticated_sha256,
-                    fully_initialized: initialized,
+                    initialization,
                     state,
                     binding: PersistentComputeBindingKeyV1 {
                         queue: self.key,
@@ -1995,8 +1982,7 @@ impl ComputeAqlQueueSessionV1 {
         self.detached_next_insertion_index = None;
         self.set_single_persistent_compute_attachment_v1(PersistentComputeAttachmentV1 {
             allocation,
-            authenticated_sha256,
-            fully_initialized: initialized,
+            initialization,
             state: PersistentComputeUseStateV1::Prepared(prepared),
             binding,
             storage_identity,
@@ -3721,7 +3707,7 @@ impl ComputeAqlQueueSessionV1 {
                 frontier,
                 effect: entry.effect,
                 authenticated_sha256: (!entry.effect.writes())
-                    .then_some(entry.authenticated_sha256)
+                    .then_some(entry.initialization.authenticated_sha256())
                     .flatten(),
                 fully_initialized: initialized,
             }
@@ -3941,7 +3927,7 @@ impl ComputeAqlQueueSessionV1 {
             frontier,
             effect: attachment.effect,
             authenticated_sha256: (!attachment.effect.writes())
-                .then_some(attachment.authenticated_sha256)
+                .then_some(attachment.initialization.authenticated_sha256())
                 .flatten(),
             fully_initialized,
         })

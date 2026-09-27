@@ -506,6 +506,23 @@ impl Gfx942SdmaDeviceBackingV1 {
             })
     }
 
+    pub(crate) fn has_full_initialization(
+        &self,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+    ) -> bool {
+        self.matches_scope(queue, generation, logical_bytes)
+            && self.initialization.as_ref().is_some_and(|fact| {
+                crate::initialized_prefix::covers(
+                    fact.initialized_prefix,
+                    logical_bytes,
+                    0,
+                    logical_bytes,
+                )
+            })
+    }
+
     pub(crate) fn from_completed_compute_data(
         data: crate::queue::Gfx942FixedDispatchDataV1,
         queue: QueueKeyV1,
@@ -6298,6 +6315,17 @@ pub(crate) fn write_host_buffer(
     offset: u64,
     source: &[u8],
 ) -> Result<(), Gfx942SdmaErrorV1> {
+    write_host_buffer_with_v1(buffer, offset, source, |token, offset, source| {
+        memory.overwrite_mapped_host_visible_subrange(token, offset, source)
+    })
+}
+
+fn write_host_buffer_with_v1(
+    buffer: &mut Gfx942SdmaBufferV1,
+    offset: u64,
+    source: &[u8],
+    write: impl FnOnce(&mut MappedHostBufferV1, u64, &[u8]) -> Result<(), MemorySessionError>,
+) -> Result<(), Gfx942SdmaErrorV1> {
     if source.is_empty()
         || offset
             .checked_add(source.len() as u64)
@@ -6308,7 +6336,7 @@ pub(crate) fn write_host_buffer(
     buffer.clear_host_content_certificate();
     match &mut buffer.storage {
         Gfx942SdmaBufferStorageV1::Host(token) => {
-            memory.overwrite_mapped_host_visible_subrange(token, offset, source)?;
+            write(token, offset, source)?;
             buffer.record_initialized_write(offset, source.len() as u64, true);
             Ok(())
         }
@@ -6316,6 +6344,20 @@ pub(crate) fn write_host_buffer(
             "device-local buffer is not CPU writable",
         )),
     }
+}
+
+#[cfg(test)]
+pub(crate) fn write_host_buffer_for_test_v1(
+    memory: &mut impl SdmaSingleMemoryV1,
+    buffer: &mut Gfx942SdmaBufferV1,
+    offset: u64,
+    source: &[u8],
+) -> Result<(), Gfx942SdmaErrorV1> {
+    write_host_buffer_with_v1(buffer, offset, source, |token, offset, source| {
+        memory.check_queue_operational_currentness()?;
+        memory.overwrite_mapped_host_visible_subrange_in_current_scope(token, offset, source)?;
+        memory.check_queue_operational_currentness()
+    })
 }
 
 pub(crate) fn exact_full_host_write_is_authenticatable(

@@ -164,8 +164,10 @@ impl Case {
                     };
                     entries.push(PersistentComputeAttachmentEntryV1 {
                         allocation,
-                        authenticated_sha256: digest,
-                        fully_initialized: initialized,
+                        initialization: PersistentComputeInitializationV1::from_test_parts(
+                            digest,
+                            initialized,
+                        ),
                         state: PersistentComputeUseStateV1::Prepared(use_lease),
                         storage_identity: Some(identity),
                         effect: if is_read {
@@ -355,13 +357,17 @@ impl PersistentCancelContextV1 for Case {
                     attachment.entries[0].storage_identity = None
                 }
                 Corruption::Initialization if point == CancelPointV1::Returned => {
-                    attachment.entries[0].fully_initialized =
-                        !attachment.entries[0].fully_initialized
+                    let initialization = &mut attachment.entries[0].initialization;
+                    *initialization = if initialization.is_fully_initialized() {
+                        PersistentComputeInitializationV1::Uninitialized
+                    } else {
+                        PersistentComputeInitializationV1::AfterDispatch
+                    };
                 }
                 Corruption::DigestOnCold if point == CancelPointV1::Returned => {
                     let entry = attachment.entries.last_mut().unwrap();
-                    entry.authenticated_sha256 = Some([0xcc; 32]);
-                    entry.fully_initialized = false;
+                    entry.initialization =
+                        PersistentComputeInitializationV1::AuthenticatedH2d([0xcc; 32]);
                     let data = root.native.returned.pop().unwrap();
                     let Gfx942SdmaBufferStorageV1::Device(lease) = data.into_sdma_storage() else {
                         unreachable!()
@@ -492,7 +498,9 @@ fn persistent_cancel_constructed_restores_exact_initialized_cold_and_digest_free
                 for (input, &(identity, initialized, digest)) in
                     inputs.into_iter().zip(&case.expected)
                 {
-                    let (allocation, actual_digest, actual_initialized) = input.into_parts();
+                    let (allocation, initialization) = input.into_parts();
+                    let actual_digest = initialization.authenticated_sha256();
+                    let actual_initialized = initialization.is_fully_initialized();
                     assert_eq!((actual_digest, actual_initialized), (digest, initialized));
                     assert_eq!(
                         allocation
@@ -564,15 +572,6 @@ fn persistent_cancel_constructed_shape_rejection_precedes_native_restore_and_led
             let mut case = Case::new(shape, shape == CancelShapeV1::Three, false, None);
             case.corruption = Some(corruption);
             let result = case.run().unwrap();
-            if shape == CancelShapeV1::Single && matches!(corruption, Corruption::Initialization) {
-                let mut inputs =
-                    result.expect("single cancellation accepts returned initialization");
-                assert!(
-                    !inputs.pop().unwrap().is_fully_initialized(),
-                    "attachment flags cannot promote cold returned storage"
-                );
-                continue;
-            }
             assert!(result.is_err());
             let root = case.assert_terminal();
             assert_eq!((root.native.restored, root.native.cancelled), (0, 0));
@@ -866,13 +865,47 @@ fn persistent_cancel_constructed_three_preflights_reject_before_changing_any_pre
 }
 
 #[test]
-fn persistent_cancel_constructed_single_returned_initialization_is_not_downgraded() {
-    let mut case = Case::new(CancelShapeV1::Single, true, false, None);
-    case.corruption = Some(Corruption::Initialization);
-    let mut inputs = case.run().unwrap().unwrap();
-    assert!(matches!(
-        inputs.pop().unwrap(),
-        Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_)
-    ));
-    assert_eq!((case.entered, case.poisons), (1, 0));
+fn persistent_cancel_constructed_single_returned_initialization_mismatch_is_terminal() {
+    for predecessor in [None, Some(0), Some(7)] {
+        let mut case = Case::new(CancelShapeV1::Single, true, false, predecessor);
+        case.corruption = Some(Corruption::Initialization);
+        assert!(case.run().unwrap().is_err());
+        let root = case.assert_terminal();
+        assert_eq!((root.native.restored, root.native.cancelled), (0, 0));
+        assert!(!root.native.restore_started);
+        assert_eq!(root.native.returned.len(), 1);
+        assert!(root.native.returned[0].is_fully_initialized());
+        assert_eq!((case.entered, case.poisons), (1, 1));
+    }
+}
+
+#[test]
+fn persistent_cancel_constructed_preserves_storage_origin_for_every_binding() {
+    for shape in [CancelShapeV1::Single, CancelShapeV1::Three] {
+        for predecessor in [None, Some(0), Some(7)] {
+            let mut case = Case::new(shape, true, false, predecessor);
+            for entry in &mut case.attachment.as_mut().unwrap().entries {
+                entry.initialization = PersistentComputeInitializationV1::InitializedStorage;
+            }
+            let inputs = case.run().unwrap().unwrap();
+            assert_eq!(inputs.len(), case.expected.len());
+            for (input, expected) in inputs.into_iter().zip(&case.expected) {
+                let Gfx942PersistentComputeInputV1::InitializedStorage(ready) = input else {
+                    panic!("cancellation must preserve storage origin");
+                };
+                let allocation = ready.into_allocation();
+                assert_eq!(
+                    allocation
+                        .owner
+                        .local_native_for_sdma()
+                        .unwrap()
+                        .storage_identity(),
+                    expected.0
+                );
+                assert_eq!(allocation.owner.live_use_count(), 0);
+                assert_eq!(allocation.owner.retained_settled_use_count(), 0);
+            }
+            assert_eq!((case.entered, case.poisons), (1, 0));
+        }
+    }
 }

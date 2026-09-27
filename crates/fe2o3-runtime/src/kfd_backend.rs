@@ -4664,6 +4664,9 @@ impl KfdRuntimeBackendV1 {
                         DirectionalSdmaDeviceOwnerV1::Native(device),
                     ))
                 }
+                KfdRuntimePersistentComputeInputV1::Native(
+                    Gfx942PersistentComputeInputV1::InitializedStorage(_),
+                ) => unreachable!("storage-origin input is rejected by the whole-roster preflight"),
                 #[cfg(test)]
                 KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => {
                     let shell = shell
@@ -4752,6 +4755,14 @@ impl KfdRuntimeBackendV1 {
                     submission,
                     KfdRuntimeSdmaStorageV1::PersistentReplay(Box::new(input)),
                 ),
+            input @ Gfx942PersistentComputeInputV1::InitializedStorage(_) => {
+                self.retain_terminal_sdma_custody_v1(
+                    KfdRuntimeTerminalSdmaCustodyV1::PersistentComputeInput(input),
+                );
+                Err(self.terminal_error(
+                    "storage-origin compute input requires the deferred native conversion adapter",
+                ))
+            }
         }
     }
 

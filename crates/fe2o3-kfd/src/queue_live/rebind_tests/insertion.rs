@@ -952,7 +952,7 @@ fn device_allocation_insertion_production_wiring_preserves_uninitialized_custody
             "Box::new",
             "to_vec()",
             "DeviceInitializedContent",
-            "initialized_after_dispatch",
+            "initialized_storage",
         ] {
             assert!(
                 !selected.contains(forbidden),

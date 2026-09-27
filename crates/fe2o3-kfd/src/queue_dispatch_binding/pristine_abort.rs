@@ -630,7 +630,7 @@ mod tests {
         ));
         assert!(matches!(
             data[1].storage,
-            DispatchDataStorageV1::InitializedAfterDispatch(_)
+            DispatchDataStorageV1::InitializedStorage(_)
         ));
         let DispatchDataStorageV1::InitializedContent(ref initialized) = data[2].storage else {
             panic!("lost content descriptor")
@@ -672,7 +672,7 @@ mod tests {
             .collect();
         assert!(matches!(
             data[1].storage,
-            DispatchDataStorageV1::InitializedAfterDispatch(_)
+            DispatchDataStorageV1::InitializedStorage(_)
         ));
         let calls = memory.native_calls();
         let usage = memory.usage();

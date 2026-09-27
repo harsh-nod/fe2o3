@@ -404,7 +404,7 @@ impl Gfx942FixedDispatchDataLayoutV1 {
 enum DispatchDataStorageV1 {
     Uninitialized(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
     InitializedContent(Gfx942InitializedDeviceMemoryV1),
-    InitializedAfterDispatch(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
+    InitializedStorage(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
     HostVisibleUninitialized(
         SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
     ),
@@ -416,7 +416,7 @@ enum DispatchDataStorageV1 {
 pub(crate) enum Gfx942FixedDispatchStorageIdentityV1 {
     DeviceUninitialized(Gfx942DeviceMemoryIdentityV1),
     DeviceInitializedContent(Gfx942DeviceMemoryIdentityV1),
-    DeviceInitializedAfterDispatch(Gfx942DeviceMemoryIdentityV1),
+    DeviceInitializedStorage(Gfx942DeviceMemoryIdentityV1),
     HostVisibleUninitialized(SharedGttAllocationIdentityV1),
     HostVisibleInitialized(SharedGttAllocationIdentityV1),
 }
@@ -451,19 +451,19 @@ impl Gfx942FixedDispatchDataV1 {
         }
     }
 
-    pub(super) fn initialized_after_dispatch(
+    pub(super) fn initialized_storage(
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
     ) -> Self {
         Self {
-            storage: DispatchDataStorageV1::InitializedAfterDispatch(lease),
+            storage: DispatchDataStorageV1::InitializedStorage(lease),
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn initialized_after_dispatch_for_test(
+    pub(crate) fn initialized_storage_for_test(
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
     ) -> Self {
-        Self::initialized_after_dispatch(lease)
+        Self::initialized_storage(lease)
     }
 
     pub fn host_visible_uninitialized(
@@ -483,7 +483,7 @@ impl Gfx942FixedDispatchDataV1 {
     pub const fn layout(&self) -> Gfx942FixedDispatchDataLayoutV1 {
         match &self.storage {
             DispatchDataStorageV1::Uninitialized(lease)
-            | DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+            | DispatchDataStorageV1::InitializedStorage(lease) => {
                 let layout = lease.layout();
                 Gfx942FixedDispatchDataLayoutV1 {
                     kind: Gfx942FixedDispatchDataKindV1::DeviceLocal,
@@ -526,8 +526,8 @@ impl Gfx942FixedDispatchDataV1 {
                     memory.storage_identity(),
                 )
             }
-            DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
-                Gfx942FixedDispatchStorageIdentityV1::DeviceInitializedAfterDispatch(
+            DispatchDataStorageV1::InitializedStorage(lease) => {
+                Gfx942FixedDispatchStorageIdentityV1::DeviceInitializedStorage(
                     lease.storage_identity(),
                 )
             }
@@ -547,7 +547,7 @@ impl Gfx942FixedDispatchDataV1 {
     pub(crate) const fn sdma_storage_identity(&self) -> Gfx942SdmaBufferStorageIdentityV1 {
         match &self.storage {
             DispatchDataStorageV1::Uninitialized(lease)
-            | DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+            | DispatchDataStorageV1::InitializedStorage(lease) => {
                 Gfx942SdmaBufferStorageIdentityV1::Device(lease.storage_identity())
             }
             DispatchDataStorageV1::InitializedContent(memory) => {
@@ -565,7 +565,7 @@ impl Gfx942FixedDispatchDataV1 {
     pub(crate) fn into_sdma_storage(self) -> Gfx942SdmaBufferStorageV1 {
         match self.storage {
             DispatchDataStorageV1::Uninitialized(lease)
-            | DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+            | DispatchDataStorageV1::InitializedStorage(lease) => {
                 Gfx942SdmaBufferStorageV1::Device(lease)
             }
             DispatchDataStorageV1::InitializedContent(memory) => {
@@ -620,7 +620,7 @@ impl Gfx942FixedDispatchDataV1 {
                     fully_initialized: true,
                 }
             }
-            DispatchDataStorageV1::InitializedAfterDispatch(lease) => DispatchDataInputV1 {
+            DispatchDataStorageV1::InitializedStorage(lease) => DispatchDataInputV1 {
                 layout,
                 storage: DispatchDataInputStorageV1::Device(lease),
                 initialized_content: None,
@@ -644,7 +644,7 @@ impl Gfx942FixedDispatchDataV1 {
     pub(crate) fn storage_ref(&self) -> DispatchDataStorageRefV1<'_> {
         match &self.storage {
             DispatchDataStorageV1::Uninitialized(lease)
-            | DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+            | DispatchDataStorageV1::InitializedStorage(lease) => {
                 DispatchDataStorageRefV1::Device(lease)
             }
             DispatchDataStorageV1::InitializedContent(memory) => {
@@ -2244,7 +2244,7 @@ fn dispatch_data_from_authority_v1(
 ) -> Gfx942FixedDispatchDataV1 {
     match (authority, fully_initialized) {
         (DispatchDataAuthorityV1::Device(authority), true) => {
-            Gfx942FixedDispatchDataV1::initialized_after_dispatch(authority.into_lease())
+            Gfx942FixedDispatchDataV1::initialized_storage(authority.into_lease())
         }
         (DispatchDataAuthorityV1::Device(authority), false) => {
             Gfx942FixedDispatchDataV1::uninitialized(authority.into_lease())
@@ -2397,7 +2397,8 @@ impl DispatchResourceOwnerV1 {
         let input = retain(data)?;
         self.data.push(input.authority);
         premise.initialized_content = input.initialized_content;
-        premise.fully_initialized = input.fully_initialized || retained_initialized;
+        // Detached storage may have been overwritten since the retained dispatch.
+        premise.fully_initialized = input.fully_initialized;
         self.persistent_control = PersistentFixedDispatchControlStateV1::Attached(
             BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity),
         );
@@ -4189,10 +4190,10 @@ fn recover_dispatch_input_v1(input: DispatchDataInputV1) -> Gfx942FixedDispatchD
                     lease, content,
                 ) {
                     Ok(initialized) => Gfx942FixedDispatchDataV1::initialized(initialized),
-                    Err(lease) => Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease),
+                    Err(lease) => Gfx942FixedDispatchDataV1::initialized_storage(lease),
                 }
             } else if input.fully_initialized {
-                Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease)
+                Gfx942FixedDispatchDataV1::initialized_storage(lease)
             } else {
                 Gfx942FixedDispatchDataV1::uninitialized(lease)
             }

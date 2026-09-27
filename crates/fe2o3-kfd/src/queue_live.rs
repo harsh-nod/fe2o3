@@ -106,7 +106,8 @@ use crate::persistent_compute::{
     Gfx942ThreeBindingPersistentComputePollAndRecycleV1,
     Gfx942ThreeBindingPersistentComputeTransitionFailureV1,
     Gfx942ThreeBindingPersistentComputeWaitAndRecycleV1, PersistentComputeAttachmentEntryV1,
-    PersistentComputeAttachmentV1, PersistentComputeBindingKeyV1, PersistentComputeTerminalDataV1,
+    PersistentComputeAttachmentV1, PersistentComputeBindingKeyV1,
+    PersistentComputeInitializationV1, PersistentComputeTerminalDataV1,
     PersistentComputeTerminalNativeCustodyV1, PersistentComputeUseStateV1,
     ThreeBindingPersistentComputeAttachmentV1,
 };
@@ -271,6 +272,8 @@ mod pool_trim;
 #[path = "queue_live/sdma_allocation.rs"]
 mod sdma_allocation;
 pub use sdma_allocation::{Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1};
+#[path = "queue_live/initialized_storage.rs"]
+mod initialized_storage;
 #[path = "queue_live/sdma_demotion.rs"]
 mod sdma_demotion;
 #[path = "queue_live/sdma_promotion.rs"]
@@ -2607,8 +2610,7 @@ struct PersistentRetainedControlReplayDetachedV1 {
     allocation: Gfx942DirectionalQueuePersistentAllocationV1,
     prepared: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
     dispatch: DispatchResourceOwnerV1,
-    authenticated_sha256: Option<[u8; 32]>,
-    fully_initialized: bool,
+    initialization: PersistentComputeInitializationV1,
 }
 
 struct PersistentRetainedControlReplayStorageV1 {
@@ -2875,6 +2877,7 @@ fn persistent_compute_input_allocation_mut_v1(
     match input {
         Gfx942PersistentComputeInputV1::Uninitialized(allocation) => allocation,
         Gfx942PersistentComputeInputV1::InitializedAfterDispatch(ready) => &mut ready.allocation,
+        Gfx942PersistentComputeInputV1::InitializedStorage(ready) => &mut ready.allocation,
         Gfx942PersistentComputeInputV1::Initialized(ready) => &mut ready.allocation,
     }
 }
@@ -3152,11 +3155,7 @@ fn three_binding_entries_into_inputs_v1(
     entries: [PersistentComputeAttachmentEntryV1; 3],
 ) -> Gfx942ThreeBindingPersistentComputeInputsV1 {
     Gfx942ThreeBindingPersistentComputeInputsV1::new(entries.map(|entry| {
-        Gfx942PersistentComputeInputV1::from_parts(
-            entry.allocation,
-            entry.authenticated_sha256,
-            entry.fully_initialized,
-        )
+        Gfx942PersistentComputeInputV1::from_parts(entry.allocation, entry.initialization)
     }))
 }
 
@@ -3743,6 +3742,7 @@ pub struct ComputeAqlQueueSessionV1 {
     sdma_allocation: Option<sdma_allocation::SdmaAllocationCustodyV1>,
     sdma_promotion: Option<crate::persistent_directional_sdma::Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1>,
     sdma_demotion: Option<crate::persistent_directional_sdma::Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1>,
+    initialized_storage_promotion: Option<crate::persistent_compute::Gfx942PersistentComputeStoragePromotionTerminalCustodyV1>,
     sdma_synchronous: Option<sdma_synchronous::SdmaSynchronousCustodyV1>,
     sdma_recycle: Option<sdma_recycle::SdmaRecycleCustodyV1>,
     sdma_pool_reuse_count: u64,
@@ -7627,6 +7627,20 @@ impl ComputeAqlQueueSessionV1 {
         sdma_demotion::demote_in_place(self, allocation)
     }
 
+    /// Authenticates full native initialization after every use frontier is retired.
+    /// Preserves the original owner, pool generation and outstanding-buffer debit.
+    /// This establishes no content digest or preceding compute-dispatch claim.
+    #[allow(clippy::result_large_err)]
+    pub fn promote_initialized_persistent_allocation_for_compute_v1(
+        &mut self,
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    ) -> Result<
+        crate::persistent_compute::Gfx942PersistentComputeInitializedStorageV1,
+        crate::persistent_compute::Gfx942PersistentComputeStoragePromotionFailureV1,
+    > {
+        initialized_storage::promote_in_place(self, allocation)
+    }
+
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     fn admit_directional_persistent_sdma_request_v1(
         &self,
@@ -9913,7 +9927,7 @@ impl ComputeAqlQueueSessionV1 {
         self.sdma_outstanding_buffers -= 1;
         Ok(Gfx942PromotedSdmaDestinationV1 {
             source,
-            data: Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease),
+            data: Gfx942FixedDispatchDataV1::initialized_storage(lease),
             bridge: Gfx942SdmaDispatchDataBridgeV1 {
                 owner,
                 pool_generation,
@@ -12031,6 +12045,11 @@ impl ComputeAqlQueueSessionV1 {
     }
 
     fn require_no_sdma_owner_transition_v1(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.initialized_storage_promotion.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "unfinished initialized storage promotion",
+            ));
+        }
         if self.sdma_promotion.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "unfinished SDMA promotion",
@@ -13242,6 +13261,7 @@ impl Drop for ComputeAqlQueueSessionV1 {
             || self.sdma_allocation.is_some()
             || self.sdma_promotion.is_some()
             || self.sdma_demotion.is_some()
+            || self.initialized_storage_promotion.is_some()
             || self.sdma_synchronous.is_some()
             || self.sdma_recycle.is_some()
         {
@@ -16082,6 +16102,7 @@ mod tests {
             sdma_allocation: None,
             sdma_promotion: None,
             sdma_demotion: None,
+            initialized_storage_promotion: None,
             sdma_synchronous: None,
             sdma_recycle: None,
             auxiliary_release: None,
@@ -16147,8 +16168,7 @@ mod tests {
             .quarantine_for_caller_reported_currentness_loss();
         PersistentComputeAttachmentEntryV1 {
             allocation,
-            authenticated_sha256: Some([id as u8; 32]),
-            fully_initialized: true,
+            initialization: PersistentComputeInitializationV1::AuthenticatedH2d([id as u8; 32]),
             state: PersistentComputeUseStateV1::Quarantined,
             storage_identity: Some(storage_identity),
             effect,
@@ -16181,7 +16201,10 @@ mod tests {
                 .unwrap()
                 .storage_identity();
             (
-                Gfx942PersistentComputeInputV1::from_parts(allocation, None, true),
+                Gfx942PersistentComputeInputV1::from_parts(
+                    allocation,
+                    PersistentComputeInitializationV1::AfterDispatch,
+                ),
                 identity,
             )
         };
@@ -16272,8 +16295,7 @@ mod tests {
         let published = allocation.owner.publish(prepared).unwrap();
         PersistentComputeAttachmentEntryV1 {
             allocation,
-            authenticated_sha256: Some([id as u8; 32]),
-            fully_initialized: true,
+            initialization: PersistentComputeInitializationV1::AuthenticatedH2d([id as u8; 32]),
             state: PersistentComputeUseStateV1::Published(published),
             storage_identity: Some(storage_identity),
             effect,
@@ -16297,8 +16319,7 @@ mod tests {
                 );
                 BoundedPersistentComputeAttachmentV1::from_single(PersistentComputeAttachmentV1 {
                     allocation: entry.allocation,
-                    authenticated_sha256: entry.authenticated_sha256,
-                    fully_initialized: entry.fully_initialized,
+                    initialization: entry.initialization,
                     state: entry.state,
                     binding,
                     storage_identity: entry
@@ -16355,8 +16376,7 @@ mod tests {
                         .map(|entry| {
                             (
                                 entry.storage_identity,
-                                entry.authenticated_sha256,
-                                entry.fully_initialized,
+                                entry.initialization,
                                 entry.effect,
                                 entry.allocation.byte_len(),
                                 entry.allocation.owner.live_use_count(),
@@ -16430,7 +16450,10 @@ mod tests {
                     .storage_identity(),
                 allocation.byte_len(),
             );
-            let input = Gfx942PersistentComputeInputV1::from_parts(allocation, None, true);
+            let input = Gfx942PersistentComputeInputV1::from_parts(
+                allocation,
+                PersistentComputeInitializationV1::AfterDispatch,
+            );
             let packet = Gfx942FixedDispatchPacketV1::new(
                 0,
                 fe2o3_aql::AqlDispatchGeometryV1::new([1, 1, 1], [1, 1, 1]).unwrap(),
@@ -16457,7 +16480,9 @@ mod tests {
             let Gfx942PersistentComputeBindFailureCustodyV1::Retryable(input) = custody else {
                 panic!("occupied-slot rejection must return the exact incoming input")
             };
-            let (allocation, digest, initialized) = input.into_parts();
+            let (allocation, initialization) = input.into_parts();
+            let digest = initialization.authenticated_sha256();
+            let initialized = initialization.is_fully_initialized();
             assert_eq!(digest, None);
             assert!(initialized);
             assert_eq!(allocation.attachment.queue, queue);
@@ -16562,7 +16587,10 @@ mod tests {
                 .local_native_for_sdma()
                 .unwrap()
                 .storage_identity();
-            let input = Gfx942PersistentComputeInputV1::from_parts(allocation, None, true);
+            let input = Gfx942PersistentComputeInputV1::from_parts(
+                allocation,
+                PersistentComputeInitializationV1::AfterDispatch,
+            );
             let packet = Gfx942FixedDispatchPacketV1::new(
                 0,
                 fe2o3_aql::AqlDispatchGeometryV1::new([1, 1, 1], [1, 1, 1]).unwrap(),
@@ -16595,7 +16623,9 @@ mod tests {
                     terminal.input.unwrap()
                 }
             };
-            let (allocation, _, _) = input.into_parts();
+            let (allocation, initialization) = input.into_parts();
+            let _ = initialization.authenticated_sha256();
+            let _ = initialization.is_fully_initialized();
             assert_eq!(allocation.attachment.queue, source);
             assert_eq!(
                 allocation
@@ -16919,7 +16949,7 @@ mod tests {
             .detach_local_native_for_compute(&prepared)
             .unwrap();
         let data = if fully_initialized {
-            Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease)
+            Gfx942FixedDispatchDataV1::initialized_storage(lease)
         } else {
             Gfx942FixedDispatchDataV1::uninitialized(lease)
         };
@@ -16929,8 +16959,10 @@ mod tests {
         };
         let attachment = PersistentComputeAttachmentV1 {
             allocation,
-            authenticated_sha256,
-            fully_initialized,
+            initialization: PersistentComputeInitializationV1::from_test_parts(
+                authenticated_sha256,
+                fully_initialized,
+            ),
             state: PersistentComputeUseStateV1::Prepared(prepared),
             binding,
             storage_identity,
@@ -16995,13 +17027,14 @@ mod tests {
             (
                 PersistentComputeAttachmentEntryV1 {
                     allocation,
-                    authenticated_sha256: Some(digests[index]),
-                    fully_initialized: true,
+                    initialization: PersistentComputeInitializationV1::AuthenticatedH2d(
+                        digests[index],
+                    ),
                     state: PersistentComputeUseStateV1::Prepared(prepared),
                     storage_identity: Some(storage_identity),
                     effect: effects[index],
                 },
-                Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease),
+                Gfx942FixedDispatchDataV1::initialized_storage(lease),
                 storage_identity,
             )
         };
@@ -17054,7 +17087,9 @@ mod tests {
         assert!(!session.terminal_poisoned);
         assert!(!take_dispatch_terminal_process_gate_record_v1());
         for (index, input) in inputs.into_iter().enumerate() {
-            let (allocation, digest, initialized) = input.into_parts();
+            let (allocation, initialization) = input.into_parts();
+            let digest = initialization.authenticated_sha256();
+            let initialized = initialization.is_fully_initialized();
             assert_eq!(digest, Some(digests[index]));
             assert!(initialized);
             assert_eq!(
@@ -17168,7 +17203,10 @@ mod tests {
                 .unwrap()
                 .storage_identity();
             (
-                Gfx942PersistentComputeInputV1::from_parts(allocation, None, true),
+                Gfx942PersistentComputeInputV1::from_parts(
+                    allocation,
+                    PersistentComputeInitializationV1::AfterDispatch,
+                ),
                 identity,
             )
         };
@@ -17209,7 +17247,9 @@ mod tests {
             panic!("validation-only exit must return all three inputs")
         };
         for (input, identity) in inputs.into_inputs().into_iter().zip(identities) {
-            let (allocation, _, initialized) = input.into_parts();
+            let (allocation, initialization) = input.into_parts();
+            let _ = initialization.authenticated_sha256();
+            let initialized = initialization.is_fully_initialized();
             assert!(initialized);
             assert_eq!(
                 allocation
@@ -18087,7 +18127,10 @@ mod tests {
         assert_eq!(session.detached_next_insertion_index, Some(0));
         assert_eq!(session.detached_data_count, 0);
         assert!(session.detached_data_identities.is_empty());
-        let input = Gfx942PersistentComputeInputV1::from_parts(allocation, Some(digest), true);
+        let input = Gfx942PersistentComputeInputV1::from_parts(
+            allocation,
+            PersistentComputeInitializationV1::AuthenticatedH2d(digest),
+        );
         assert!(preserve_persistent_compute_bind_input_for_sdma_quiescence_v1(input, true).is_ok());
     }
 
@@ -18101,7 +18144,13 @@ mod tests {
         let attachment = session
             .single_persistent_compute_attachment_v1()
             .expect("fixture retains one prepared attachment");
-        assert!(!attachment.single_entry().unwrap().fully_initialized);
+        assert!(
+            !attachment
+                .single_entry()
+                .unwrap()
+                .initialization
+                .is_fully_initialized()
+        );
         assert_eq!(
             attachment.single_entry().unwrap().effect,
             Gfx942PersistentComputeEffectV1::Write
@@ -18152,6 +18201,24 @@ mod tests {
         );
         assert_eq!(session.detached_dispatch_generation, Some(7));
         assert_eq!(session.detached_next_insertion_index, Some(0));
+    }
+
+    #[test]
+    fn prepared_cancellation_preserves_initialized_storage_origin() {
+        for predecessor in [None, Some(0), Some(7)] {
+            let queue = test_queue_key(165, 1);
+            let (mut session, prepared, _) =
+                prepared_persistent_compute_cancellation_fixture(queue, 6565, None, predecessor);
+            session.persistent_compute.as_mut().unwrap().entries[0].initialization =
+                PersistentComputeInitializationV1::InitializedStorage;
+            let input = session
+                .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
+                .expect("cancellation preserves digest-free storage authority");
+            assert!(matches!(
+                input,
+                Gfx942PersistentComputeInputV1::InitializedStorage(_)
+            ));
+        }
     }
 
     #[test]
@@ -18301,7 +18368,9 @@ mod tests {
         let input = producer
             .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
             .expect("the producer must accept the unchanged prepared receipt");
-        let (allocation, observed_digest, initialized) = input.into_parts();
+        let (allocation, initialization) = input.into_parts();
+        let observed_digest = initialization.authenticated_sha256();
+        let initialized = initialization.is_fully_initialized();
         assert!(initialized);
         assert_eq!(observed_digest, Some(digest));
         assert_eq!(
@@ -19686,7 +19755,9 @@ mod tests {
         let input = session
             .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
             .expect("fixture cancellation restores attached replay input");
-        let (mut allocation, _, _) = input.into_parts();
+        let (mut allocation, initialization) = input.into_parts();
+        let _ = initialization.authenticated_sha256();
+        let _ = initialization.is_fully_initialized();
         let request = Gfx942PersistentUseRequestV1::new(
             Gfx942PersistentOperationV1::ComputeReadWrite,
             0,
@@ -19716,8 +19787,7 @@ mod tests {
                 );
                 PersistentComputeAttachmentEntryV1 {
                     allocation,
-                    authenticated_sha256: None,
-                    fully_initialized: true,
+                    initialization: PersistentComputeInitializationV1::AfterDispatch,
                     state: PersistentComputeUseStateV1::Prepared(prepared),
                     storage_identity,
                     effect: Gfx942PersistentComputeEffectV1::ReadWrite,
@@ -20076,7 +20146,9 @@ mod tests {
                 }
                 _ => panic!("public replay failure returned the wrong custody class"),
             };
-            let (allocation, _, _) = input.into_parts();
+            let (allocation, initialization) = input.into_parts();
+            let _ = initialization.authenticated_sha256();
+            let _ = initialization.is_fully_initialized();
             assert_eq!(allocation.attachment.storage_identity, expected_identity);
         }
     }

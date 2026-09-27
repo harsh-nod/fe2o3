@@ -71,8 +71,7 @@ pub(super) fn attachment_snapshot(
                         ));
                         (
                             entry.storage_identity,
-                            entry.authenticated_sha256,
-                            entry.fully_initialized,
+                            entry.initialization,
                             entry.effect,
                             entry.allocation.byte_len(),
                             entry.allocation.owner.live_use_count(),

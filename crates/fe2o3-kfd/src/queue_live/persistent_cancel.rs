@@ -85,7 +85,6 @@ impl PersistentComputeCancellationCustodyV1 {
             returned: Vec::new(),
             generation: None,
             mapped: std::array::from_fn(|_| None),
-            initialized: [false; 3],
             count,
             original_attached: false,
             restore_started: false,
@@ -141,9 +140,7 @@ impl PersistentCancelRootV1 {
                     entry.storage_identity.is_some_and(|identity| {
                         data.sdma_storage_identity()
                             == Gfx942SdmaBufferStorageIdentityV1::Device(identity)
-                    }) && (shape == CancelShapeV1::Single
-                        || data.is_fully_initialized() == entry.fully_initialized)
-                        && (entry.authenticated_sha256.is_none() || data.is_fully_initialized())
+                    }) && data.is_fully_initialized() == entry.initialization.is_fully_initialized()
                 });
         if !exact {
             return Err(shape.error(
@@ -157,7 +154,6 @@ impl PersistentCancelRootV1 {
     fn map_returned(&mut self) {
         // Validation bounds every slot and excludes host storage before any move.
         for (index, data) in self.native.returned.drain(..).enumerate() {
-            self.native.initialized[index] = data.is_fully_initialized();
             let Gfx942SdmaBufferStorageV1::Device(lease) = data.into_sdma_storage() else {
                 unreachable!("validated cancellation device storage")
             };
@@ -357,20 +353,12 @@ pub(in crate::queue) fn settle_persistent_cancel_v1(
         #[cfg(test)]
         context.checkpoint(CancelPointV1::Output, &mut root)?;
         let ledger = context.ledger();
-        for (index, entry) in root
-            .attachment
-            .as_mut()
-            .unwrap()
-            .entries
-            .drain(..)
-            .enumerate()
-        {
+        for entry in root.attachment.as_mut().unwrap().entries.drain(..) {
             root.native
                 .output
                 .push(Gfx942PersistentComputeInputV1::from_parts(
                     entry.allocation,
-                    entry.authenticated_sha256,
-                    root.native.initialized[index],
+                    entry.initialization,
                 ));
         }
         // Output is fully validated and rooted; no fallible operation follows these writes.

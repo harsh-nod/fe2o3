@@ -78,7 +78,7 @@ pub(in crate::queue) fn ordinary_recycled_with_capacity_in_memory_v1(
         unreachable!();
     };
     // Synthetic completed typing exercises representation recovery, not GPU initialization.
-    data.push(Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease));
+    data.push(Gfx942FixedDispatchDataV1::initialized_storage(lease));
     let expected = data
         .iter()
         .map(|data| {
@@ -1773,6 +1773,74 @@ fn persistent_three_bind_settlement_retains_real_roster_controls_roles_and_gener
     }
     for validation in [BindFault::Error, BindFault::Panic] {
         check_three_bind_settlement(None, BindFault::None, validation);
+    }
+}
+
+#[test]
+fn persistent_write_replay_replaces_stale_initialization_with_actual_incoming_storage() {
+    use control_release::{ReturningControlCleanupCustodyV1, ReturningControlModeV1};
+    for initialized in [false, true] {
+        let mut memory = Memory::new(true);
+        let data = memory.device(true);
+        let storage = data.sdma_storage_identity();
+        let mut dispatch = persistent_cancel_control_in_memory_v1(
+            &mut memory,
+            super::super::tests::persistent_control_test_queue(45),
+            vec![data],
+            None,
+        );
+        let PersistentFixedDispatchControlStateV1::Attached(identity) = dispatch.persistent_control
+        else {
+            panic!("attached")
+        };
+        let identity = identity.as_single().unwrap();
+        assert_eq!(identity.effect, DeviceDataEffectV1::WriteOnly);
+        let (predecessor, mut detached) = recycle_and_detach_persistent_fixture_v1(&mut dispatch);
+        assert!(dispatch.data_premises[0].fully_initialized);
+        let DispatchDataInputStorageV1::Device(lease) =
+            detached.pop().unwrap().into_parts().storage
+        else {
+            panic!("device")
+        };
+        let mut incoming = Some(if initialized {
+            Gfx942FixedDispatchDataV1::initialized_storage(lease)
+        } else {
+            Gfx942FixedDispatchDataV1::uninitialized(lease)
+        });
+        let code: Vec<_> = dispatch.code.iter().map(Memory::code_identity).collect();
+        let kernarg = Memory::kernarg_identity(&dispatch.kernarg);
+        let occurrence = dispatch.generation.recipe_occurrence;
+        dispatch
+            .retain_persistent_replay_data_with_v1(identity, &mut incoming, predecessor, |data| {
+                memory.retain_replay(data, || {})
+            })
+            .unwrap();
+        assert!(incoming.is_none());
+        assert_eq!(dispatch.data_premises[0].fully_initialized, initialized);
+        assert!(dispatch.data_premises[0].initialized_content.is_none());
+        assert_eq!(
+            dispatch
+                .code
+                .iter()
+                .map(Memory::code_identity)
+                .collect::<Vec<_>>(),
+            code
+        );
+        assert_eq!(Memory::kernarg_identity(&dispatch.kernarg), kernarg);
+        assert_eq!(dispatch.generation.recipe_occurrence, occurrence);
+        let mut cleanup = ReturningControlCleanupCustodyV1::new(
+            dispatch,
+            ReturningControlModeV1::PersistentBeforePublication,
+        );
+        cleanup.release_in_place(&mut memory).unwrap();
+        let (_, mut returned) = cleanup.take_persistent_data().unwrap();
+        let data = returned.pop().unwrap();
+        assert_eq!(data.sdma_storage_identity(), storage);
+        assert_eq!(data.is_fully_initialized(), initialized);
+        assert!(data.initialized_content().is_none());
+        let mut data = crate::shared_memory::DataCleanupCustodyV1::new(data);
+        crate::shared_memory::DispatchDataReleaseV1::release_data(&mut memory, &mut data).unwrap();
+        assert!(data.is_complete());
     }
 }
 

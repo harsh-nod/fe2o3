@@ -430,6 +430,7 @@ impl ComputeAqlQueueSessionV1 {
                     &ready.allocation
                 }
                 Gfx942PersistentComputeInputV1::Initialized(ready) => &ready.allocation,
+                Gfx942PersistentComputeInputV1::InitializedStorage(ready) => &ready.allocation,
             };
             if allocation.owner.live_use_count() != 0
                 || allocation.owner.retained_settled_use_count() != 0

@@ -103,11 +103,7 @@ fn entries_snapshot(
                     .map(|lease| lease.storage_identity()),
                 entry.allocation.owner.live_use_count(),
                 entry.allocation.owner.quarantine_reason(),
-                (
-                    entry.authenticated_sha256,
-                    entry.fully_initialized,
-                    entry.effect,
-                ),
+                (entry.initialization, entry.effect),
                 match &entry.state {
                     PersistentComputeUseStateV1::Prepared(lease) => {
                         Some(lease.cancellation_identity_for_test())
@@ -145,7 +141,6 @@ fn native_snapshot(
             native.original_attached,
         ),
         native.generation,
-        native.initialized,
         native.cleanup.as_ref().map(OwnerSnapshot::root_v1),
         native.output.len(),
     )

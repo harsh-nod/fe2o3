@@ -130,7 +130,7 @@ impl ReleaseFixture {
                 panic!("device-uninitialized fixture slot changed kind");
             };
             // Synthetic completed-dispatch typing, not a GPU completion observation.
-            let data = Gfx942FixedDispatchDataV1::initialized_after_dispatch_for_test(lease);
+            let data = Gfx942FixedDispatchDataV1::initialized_storage_for_test(lease);
             base.context().ledger().identities[index] = data.storage_identity();
             base.data.insert(index, data);
         }
@@ -158,7 +158,7 @@ impl ReleaseFixture {
                 Gfx942FixedDispatchStorageIdentityV1::HostVisibleUninitialized(_)
             ) | (
                 4,
-                Gfx942FixedDispatchStorageIdentityV1::DeviceInitializedAfterDispatch(_)
+                Gfx942FixedDispatchStorageIdentityV1::DeviceInitializedStorage(_)
             )
         ));
         assert_eq!(data.is_fully_initialized(), matches!(kind, 0 | 1 | 4));

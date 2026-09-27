@@ -1311,6 +1311,41 @@ impl Gfx942PersistentDeviceAllocationV1 {
         self.local_native_for_sdma().is_some()
     }
 
+    /// Initialization conversion requires retirement, not merely settled uses.
+    pub(crate) fn preflight_initialized_storage_for_compute(
+        &self,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+        physical_bytes: u64,
+    ) -> Result<(), Gfx942PersistentUseErrorV1> {
+        if self.quarantine.is_some() {
+            return Err(Gfx942PersistentUseErrorV1::Quarantined);
+        }
+        if self.frontier_sequence.is_some() || self.state.ledger.iter().any(Option::is_some) {
+            return Err(Gfx942PersistentUseErrorV1::OutstandingUses);
+        }
+        if self.mapping != Gfx942PersistentMappingFormV1::Local
+            || self.state.detached_compute.is_some()
+            || logical_bytes == 0
+            || logical_bytes != physical_bytes
+            || physical_bytes != self.byte_len
+        {
+            return Err(Gfx942PersistentUseErrorV1::WrongState);
+        }
+        let Some(PersistentBackingV1::Local(backing)) = self.state.native.as_ref() else {
+            return Err(Gfx942PersistentUseErrorV1::WrongState);
+        };
+        if !backing.lease().is_some_and(|lease| {
+            lease.storage_identity() == self.binding
+                && lease.layout().requested_bytes() == physical_bytes
+        }) || !backing.has_full_initialization(queue, generation, logical_bytes)
+        {
+            return Err(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
+        }
+        Ok(())
+    }
+
     pub(crate) fn local_native_for_sdma(
         &self,
     ) -> Option<&Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>> {

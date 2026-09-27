@@ -3,6 +3,8 @@
 #![allow(clippy::result_large_err)]
 
 use super::*;
+#[path = "integration_initialized_storage_tests.rs"]
+mod initialized_storage;
 use crate::persistent_directional_sdma::Gfx942DirectionalPersistentSdmaTerminalStageV1 as Stage;
 use crate::queue::live::sdma_synchronous::{
     self, OutcomeV1, SdmaSynchronousContextV1, SdmaSynchronousCustodyV1, UseV1,

@@ -2797,7 +2797,9 @@ mod tests {
             else {
                 panic!("quiescence rejection returns exact retryable compute input")
             };
-            let (allocation, digest, initialized) = recovered.into_parts();
+            let (allocation, initialization) = recovered.into_parts();
+            let digest = initialization.authenticated_sha256();
+            let initialized = initialization.is_fully_initialized();
             assert_eq!(allocation.attachment.storage_identity, identity);
             assert_eq!(digest, None);
             assert!(!initialized);

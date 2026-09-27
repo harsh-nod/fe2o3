@@ -230,7 +230,7 @@ impl fmt::Debug for Gfx942PersistentComputeReadyFailureV1 {
 /// ```compile_fail,E0624
 /// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInputV1};
 /// fn forge(allocation: Gfx942DirectionalQueuePersistentAllocationV1) -> Gfx942PersistentComputeInputV1 {
-///     Gfx942PersistentComputeInputV1::from_parts(allocation, None, true)
+///     Gfx942PersistentComputeInputV1::from_parts(allocation, unreachable!())
 /// }
 /// ```
 /// The payload has no public constructor or mutable allocation access:
@@ -280,6 +280,142 @@ impl Gfx942PersistentComputeInitializedAfterDispatchV1 {
     }
 }
 
+/// Sealed full-extent initialization from queue-authenticated native storage.
+/// This does not attest content or claim a preceding compute dispatch.
+///
+/// ```compile_fail,E0308
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInputV1};
+/// fn forge(allocation: Gfx942DirectionalQueuePersistentAllocationV1) -> Gfx942PersistentComputeInputV1 {
+///     Gfx942PersistentComputeInputV1::InitializedStorage(allocation)
+/// }
+/// ```
+/// ```compile_fail,E0451
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInitializedStorageV1};
+/// fn forge(allocation: Gfx942DirectionalQueuePersistentAllocationV1) -> Gfx942PersistentComputeInitializedStorageV1 {
+///     Gfx942PersistentComputeInitializedStorageV1 { allocation }
+/// }
+/// ```
+/// ```compile_fail,E0616
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInitializedStorageV1};
+/// fn replace(value: &mut Gfx942PersistentComputeInitializedStorageV1, bare: Gfx942DirectionalQueuePersistentAllocationV1) {
+///     value.allocation = bare;
+/// }
+/// ```
+/// ```compile_fail,E0599
+/// use fe2o3_kfd::Gfx942PersistentComputeInitializedStorageV1;
+/// fn duplicate(value: Gfx942PersistentComputeInitializedStorageV1) { let _copy = value.clone(); }
+/// ```
+/// ```compile_fail,E0382
+/// use fe2o3_kfd::{Gfx942PersistentComputeInitializedStorageV1, Gfx942PersistentComputeInputV1};
+/// fn reuse(value: Gfx942PersistentComputeInitializedStorageV1) {
+///     let _bare = value.into_allocation();
+///     let _input = Gfx942PersistentComputeInputV1::InitializedStorage(value);
+/// }
+/// ```
+#[derive(Debug)]
+#[must_use = "initialized storage must be bound or normalized"]
+pub struct Gfx942PersistentComputeInitializedStorageV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+}
+
+impl Gfx942PersistentComputeInitializedStorageV1 {
+    pub const fn byte_len(&self) -> u64 {
+        self.allocation.byte_len()
+    }
+    pub const fn physical_byte_len(&self) -> u64 {
+        self.allocation.physical_byte_len()
+    }
+    pub fn into_allocation(self) -> Gfx942DirectionalQueuePersistentAllocationV1 {
+        self.allocation
+    }
+}
+
+/// Original allocation custody returned by failed storage initialization admission.
+#[must_use = "retryable custody may be restored; terminal custody requires process teardown"]
+pub enum Gfx942PersistentComputeStoragePromotionCustodyV1 {
+    Retryable(Gfx942DirectionalQueuePersistentAllocationV1),
+    ForeignQueue(Gfx942DirectionalQueuePersistentAllocationV1),
+    ProcessTeardown(Gfx942PersistentComputeStoragePromotionTerminalCustodyV1),
+}
+
+/// Opaque original allocation after ambiguous queue/model currentness.
+#[must_use = "terminal storage custody must remain opaque until process teardown"]
+pub struct Gfx942PersistentComputeStoragePromotionTerminalCustodyV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+}
+
+#[must_use = "inspect the error and retain the original allocation custody"]
+pub struct Gfx942PersistentComputeStoragePromotionFailureV1 {
+    pub(crate) error: ComputeAqlQueueSessionErrorV1,
+    pub(crate) custody: Gfx942PersistentComputeStoragePromotionCustodyV1,
+}
+
+impl Gfx942PersistentComputeStoragePromotionFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Gfx942PersistentComputeStoragePromotionCustodyV1,
+    ) {
+        (self.error, self.custody)
+    }
+}
+
+impl fmt::Debug for Gfx942PersistentComputeStoragePromotionFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942PersistentComputeStoragePromotionFailureV1")
+            .field("error", &self.error)
+            .field(
+                "custody",
+                &match self.custody {
+                    Gfx942PersistentComputeStoragePromotionCustodyV1::Retryable(_) => "retryable",
+                    Gfx942PersistentComputeStoragePromotionCustodyV1::ForeignQueue(_) => {
+                        "foreign-queue"
+                    }
+                    Gfx942PersistentComputeStoragePromotionCustodyV1::ProcessTeardown(_) => {
+                        "process-teardown"
+                    }
+                },
+            )
+            .finish()
+    }
+}
+
+/// Describes initialization only while paired with the exact retained owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PersistentComputeInitializationV1 {
+    Uninitialized,
+    AuthenticatedH2d([u8; 32]),
+    InitializedStorage,
+    AfterDispatch,
+}
+
+impl PersistentComputeInitializationV1 {
+    #[cfg(test)]
+    pub(crate) fn from_test_parts(digest: Option<[u8; 32]>, initialized: bool) -> Self {
+        match (digest, initialized) {
+            (Some(digest), true) => Self::AuthenticatedH2d(digest),
+            (None, true) => Self::AfterDispatch,
+            (None, false) => Self::Uninitialized,
+            (Some(_), false) => panic!("invalid initialization fixture"),
+        }
+    }
+    pub(crate) const fn is_fully_initialized(self) -> bool {
+        !matches!(self, Self::Uninitialized)
+    }
+    pub(crate) const fn authenticated_sha256(self) -> Option<[u8; 32]> {
+        match self {
+            Self::AuthenticatedH2d(digest) => Some(digest),
+            _ => None,
+        }
+    }
+}
+
 /// Quiescent input for one persistent compute attachment.
 #[must_use = "persistent compute input must be bound or normalized"]
 pub enum Gfx942PersistentComputeInputV1 {
@@ -287,6 +423,8 @@ pub enum Gfx942PersistentComputeInputV1 {
     Uninitialized(Gfx942DirectionalQueuePersistentAllocationV1),
     /// Exact full-H2D initialization was authenticated before frontier retirement.
     Initialized(Gfx942PersistentComputeReadyV1),
+    /// Exact quiescent storage has full native initialization coverage, without a digest.
+    InitializedStorage(Gfx942PersistentComputeInitializedStorageV1),
     /// Exact predecessor compute completed, recycled, detached, restored, and
     /// retired its dependency frontier while proving the full extent initialized.
     InitializedAfterDispatch(Gfx942PersistentComputeInitializedAfterDispatchV1),
@@ -332,6 +470,7 @@ impl Gfx942PersistentComputeInputV1 {
             Self::Uninitialized(allocation) => allocation.attachment.queue == queue,
             Self::Initialized(ready) => ready.allocation.attachment.queue == queue,
             Self::InitializedAfterDispatch(ready) => ready.allocation.attachment.queue == queue,
+            Self::InitializedStorage(ready) => ready.allocation.attachment.queue == queue,
         }
     }
 
@@ -340,6 +479,7 @@ impl Gfx942PersistentComputeInputV1 {
             Self::Uninitialized(allocation) => allocation.byte_len(),
             Self::Initialized(ready) => ready.byte_len(),
             Self::InitializedAfterDispatch(allocation) => allocation.byte_len(),
+            Self::InitializedStorage(allocation) => allocation.byte_len(),
         }
     }
 
@@ -348,6 +488,7 @@ impl Gfx942PersistentComputeInputV1 {
             Self::Uninitialized(allocation) => allocation.physical_byte_len(),
             Self::Initialized(ready) => ready.physical_byte_len(),
             Self::InitializedAfterDispatch(allocation) => allocation.physical_byte_len(),
+            Self::InitializedStorage(allocation) => allocation.physical_byte_len(),
         }
     }
 
@@ -355,37 +496,46 @@ impl Gfx942PersistentComputeInputV1 {
         self,
     ) -> (
         Gfx942DirectionalQueuePersistentAllocationV1,
-        Option<[u8; 32]>,
-        bool,
+        PersistentComputeInitializationV1,
     ) {
         match self {
-            Self::Uninitialized(allocation) => (allocation, None, false),
-            Self::Initialized(ready) => (ready.allocation, Some(ready.authenticated_sha256), true),
-            Self::InitializedAfterDispatch(ready) => (ready.allocation, None, true),
+            Self::Uninitialized(allocation) => {
+                (allocation, PersistentComputeInitializationV1::Uninitialized)
+            }
+            Self::Initialized(ready) => (
+                ready.allocation,
+                PersistentComputeInitializationV1::AuthenticatedH2d(ready.authenticated_sha256),
+            ),
+            Self::InitializedAfterDispatch(ready) => (
+                ready.allocation,
+                PersistentComputeInitializationV1::AfterDispatch,
+            ),
+            Self::InitializedStorage(ready) => (
+                ready.allocation,
+                PersistentComputeInitializationV1::InitializedStorage,
+            ),
         }
     }
 
     pub(crate) fn from_parts(
         allocation: Gfx942DirectionalQueuePersistentAllocationV1,
-        authenticated_sha256: Option<[u8; 32]>,
-        fully_initialized: bool,
+        initialization: PersistentComputeInitializationV1,
     ) -> Self {
-        match (authenticated_sha256, fully_initialized) {
-            (Some(authenticated_sha256), true) => {
+        match initialization {
+            PersistentComputeInitializationV1::AuthenticatedH2d(authenticated_sha256) => {
                 Self::Initialized(Gfx942PersistentComputeReadyV1 {
                     allocation,
                     authenticated_sha256,
                 })
             }
-            (None, true) => {
+            PersistentComputeInitializationV1::AfterDispatch => {
                 Self::InitializedAfterDispatch(Gfx942PersistentComputeInitializedAfterDispatchV1 {
                     allocation,
                 })
             }
-            (None, false) => Self::Uninitialized(allocation),
-            (Some(_), false) => {
-                debug_assert!(false, "authenticated persistent input must be initialized");
-                Self::Uninitialized(allocation)
+            PersistentComputeInitializationV1::Uninitialized => Self::Uninitialized(allocation),
+            PersistentComputeInitializationV1::InitializedStorage => {
+                Self::InitializedStorage(Gfx942PersistentComputeInitializedStorageV1 { allocation })
             }
         }
     }
@@ -394,6 +544,7 @@ impl Gfx942PersistentComputeInputV1 {
         match self {
             Self::Uninitialized(allocation) => allocation,
             Self::InitializedAfterDispatch(ready) => ready.allocation,
+            Self::InitializedStorage(ready) => ready.allocation,
             Self::Initialized(ready) => ready.allocation,
         }
     }
@@ -403,13 +554,7 @@ impl fmt::Debug for Gfx942PersistentComputeInputV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Gfx942PersistentComputeInputV1")
-            .field(
-                "initialized",
-                &matches!(
-                    self,
-                    Self::Initialized(_) | Self::InitializedAfterDispatch(_)
-                ),
-            )
+            .field("initialized", &self.is_fully_initialized())
             .field("byte_len", &self.byte_len())
             .field("physical_byte_len", &self.physical_byte_len())
             .finish_non_exhaustive()
@@ -784,7 +929,6 @@ pub(crate) struct PersistentComputeCancellationCustodyV1 {
     pub(crate) returned: Vec<Gfx942FixedDispatchDataV1>,
     pub(crate) generation: Option<u64>,
     pub(crate) mapped: [Option<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>>; 3],
-    pub(crate) initialized: [bool; 3],
     pub(crate) count: usize,
     pub(crate) original_attached: bool,
     pub(crate) restore_started: bool,
@@ -890,8 +1034,7 @@ impl PersistentComputeTerminalNativeCustodyV1 {
 
 pub(crate) struct PersistentComputeAttachmentV1 {
     pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
-    pub(crate) authenticated_sha256: Option<[u8; 32]>,
-    pub(crate) fully_initialized: bool,
+    pub(crate) initialization: PersistentComputeInitializationV1,
     pub(crate) state: PersistentComputeUseStateV1,
     pub(crate) binding: PersistentComputeBindingKeyV1,
     pub(crate) storage_identity: Gfx942DeviceMemoryIdentityV1,
@@ -902,8 +1045,7 @@ pub(crate) struct PersistentComputeAttachmentV1 {
 
 pub(crate) struct PersistentComputeAttachmentEntryV1 {
     pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
-    pub(crate) authenticated_sha256: Option<[u8; 32]>,
-    pub(crate) fully_initialized: bool,
+    pub(crate) initialization: PersistentComputeInitializationV1,
     pub(crate) state: PersistentComputeUseStateV1,
     pub(crate) storage_identity: Option<Gfx942DeviceMemoryIdentityV1>,
     pub(crate) effect: Gfx942PersistentComputeEffectV1,
@@ -928,8 +1070,7 @@ impl BoundedPersistentComputeAttachmentV1 {
         let mut entries = ArrayVec::new();
         entries.push(PersistentComputeAttachmentEntryV1 {
             allocation: attachment.allocation,
-            authenticated_sha256: attachment.authenticated_sha256,
-            fully_initialized: attachment.fully_initialized,
+            initialization: attachment.initialization,
             state: attachment.state,
             storage_identity: Some(attachment.storage_identity),
             effect: attachment.effect,
@@ -978,8 +1119,7 @@ impl BoundedPersistentComputeAttachmentV1 {
         let entry = self.entries.pop().expect("validated single entry");
         Ok(PersistentComputeAttachmentV1 {
             allocation: entry.allocation,
-            authenticated_sha256: entry.authenticated_sha256,
-            fully_initialized: entry.fully_initialized,
+            initialization: entry.initialization,
             state: entry.state,
             binding: self.binding,
             storage_identity: entry

@@ -78,9 +78,9 @@ impl PristineAbortMemoryFixtureV1 {
                     .unwrap(),
             ),
             // Synthetic completed-dispatch typing; not a hardware completion observation.
-            4 => Gfx942FixedDispatchDataV1::initialized_after_dispatch_for_test(
-                self.device().into_lease(),
-            ),
+            4 => {
+                Gfx942FixedDispatchDataV1::initialized_storage_for_test(self.device().into_lease())
+            }
             _ => unreachable!(),
         }
     }
@@ -624,7 +624,7 @@ fn typed_data_cleanup_preserves_all_five_inputs_and_refunds_once() {
                 (1, Identity::Host(id)) => FixedIdentity::HostVisibleUninitialized(id),
                 (2, Identity::Device(id)) => FixedIdentity::DeviceInitializedContent(id),
                 (3, Identity::Host(id)) => FixedIdentity::HostVisibleInitialized(id),
-                (4, Identity::Device(id)) => FixedIdentity::DeviceInitializedAfterDispatch(id),
+                (4, Identity::Device(id)) => FixedIdentity::DeviceInitializedStorage(id),
                 _ => panic!("fixture storage does not match its requested kind"),
             };
             assert_eq!(*identity, expected_identity);

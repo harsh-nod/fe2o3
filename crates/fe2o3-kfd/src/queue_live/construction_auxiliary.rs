@@ -98,6 +98,7 @@ impl ComputeAqlQueueSessionV1 {
             sdma_allocation: None,
             sdma_promotion: None,
             sdma_demotion: None,
+            initialized_storage_promotion: None,
             sdma_synchronous: None,
             sdma_recycle: None,
             auxiliary_release: None,

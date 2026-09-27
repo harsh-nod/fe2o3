@@ -58,14 +58,13 @@ impl PersistentRetainedControlReplayCustodyV1 {
         let Self::Input(request) = core::mem::replace(self, Self::Empty) else {
             unreachable!("borrowed input phase")
         };
-        let (allocation, authenticated_sha256, fully_initialized) = request.input.into_parts();
+        let (allocation, initialization) = request.input.into_parts();
         *self = Self::Storage(PersistentRetainedControlReplayStorageV1 {
             replay: PersistentRetainedControlReplayDetachedV1 {
                 allocation,
                 prepared: request.prepared,
                 dispatch: request.dispatch,
-                authenticated_sha256,
-                fully_initialized,
+                initialization,
             },
             lease,
             initialized_content: request.initialized_content,
@@ -107,6 +106,9 @@ impl PersistentRetainedControlReplayCustodyV1 {
                         ));
                     }
                 }
+            }
+            None if storage.replay.initialization.is_fully_initialized() => {
+                Gfx942FixedDispatchDataV1::initialized_storage(storage.lease)
             }
             None => Gfx942FixedDispatchDataV1::uninitialized(storage.lease),
         };

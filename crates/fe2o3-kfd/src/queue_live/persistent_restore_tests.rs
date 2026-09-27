@@ -78,8 +78,10 @@ impl Case {
             let digest = content.map(|c| c.sha256());
             entries.push(PersistentComputeAttachmentEntryV1 {
                 allocation,
-                authenticated_sha256: digest,
-                fully_initialized: initialized,
+                initialization: PersistentComputeInitializationV1::from_test_parts(
+                    digest,
+                    initialized,
+                ),
                 state: PersistentComputeUseStateV1::Prepared(prepared),
                 storage_identity: Some(identity),
                 effect: if read {
@@ -321,9 +323,7 @@ fn persistent_completed_restore_public_scope_failure_keeps_entire_original_roste
                 assert_eq!(
                     data.storage_identity(),
                     if initialized {
-                        Gfx942FixedDispatchStorageIdentityV1::DeviceInitializedAfterDispatch(
-                            *identity,
-                        )
+                        Gfx942FixedDispatchStorageIdentityV1::DeviceInitializedStorage(*identity)
                     } else {
                         Gfx942FixedDispatchStorageIdentityV1::DeviceUninitialized(*identity)
                     }

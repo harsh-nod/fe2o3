@@ -172,6 +172,7 @@ impl SdmaRecycleContextV1 for ComputeAqlQueueSessionV1 {
             && self.sdma_allocation.is_none()
             && self.sdma_promotion.is_none()
             && self.sdma_demotion.is_none()
+            && self.initialized_storage_promotion.is_none()
             && self.sdma_synchronous.is_none()
             && self.sdma_recycle.is_none()
         {
