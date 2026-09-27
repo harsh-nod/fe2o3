@@ -447,9 +447,11 @@ preflight, contextual records, zeroizing seed reads and shared listener mechanic
 Admission quota queries now cover the complete inherited admission at fixed
 image ceilings, using the same executable cost calculation without constructing
 placeholder authority. Bounded native activation mechanics are compiled and
-component-tested but not installed. Complete launch/cleanup funding, matching
-V3 provisioning, runner integration and protected validation remain outstanding;
-see the [startup checkpoint](evidence/conditional-native-startup-bounds-20260926.md).
+component-tested but not installed. Startup quota queries now compose launch,
+retained payload, finite monitoring and persistent cleanup funding on independent
+original accounts. Matching V3 provisioning, runner consumption and protected
+validation remain outstanding; see the
+[funding checkpoint](evidence/conditional-native-startup-funding-20260926.md).
 Neither `cancel`, field-drop order, a
 persistent guard nor passing component tests establish successful production
 startup. See the [compiler launch checkpoint](evidence/conditional-native-compiler-launch-20260926.md).

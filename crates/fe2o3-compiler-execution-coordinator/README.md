@@ -6,11 +6,11 @@ sealed images, listener/root inputs, root-bound lifecycle leases and a managed
 anchor on the original resource ledger. Consuming native supervisor launch now
 transfers that complete preparation into ordered child custody before clone.
 Native inherited descriptor admission and anchor-first composition now exist.
-The installed entrypoint still uses V1. Admission quota queries and bounded native
-activation mechanics now exist; complete launch/cleanup funding, the installed
-native runner and matching provisioning remain unfinished. These APIs do not
+The installed entrypoint still uses V1. Composed startup/cleanup quota queries and
+bounded native activation mechanics now exist; consuming those limits in the
+installed native runner and matching provisioning remain unfinished. These APIs do not
 establish 47/47 safe GPU launch. See the
-[startup checkpoint](../../docs/evidence/conditional-native-startup-bounds-20260926.md).
+[funding checkpoint](../../docs/evidence/conditional-native-startup-funding-20260926.md).
 
 ## Native Preparation
 
@@ -69,8 +69,17 @@ uses native compiler preparation and retained supervisor launch on the original
 request and cleanup accounts. `SOURCE_STORAGE` covers the raw inputs only;
 `admission_quota()` additionally covers all nested admission work and retained/
 temporary storage at the fixed image ceilings. This inert query needs no
-descriptor, seed or admitted owner. It excludes consuming launch, monitoring and
-the independent cleanup account, whose full composition is still required.
+descriptor, seed or admitted owner.
+
+`startup_quota(monitor_ticks, cleanup_turns)` composes activation, admission,
+anchor/compiler launch, monitoring and bounded cleanup into independent request
+and persistent-cleanup limits. The latter funds the guard, full retained
+preparation, complete pool scans and shutdown attempts. Both positive turn counts
+are checked for overflow. The same component cost calculations serve actual
+owners and inert maximum-size queries; no placeholder admitted owner is created.
+These are root-coordinator logical bounds, not executed-program or RSS limits.
+No phase or tick may renew an account, and finite funding cannot promise reaping.
+The installed runner does not yet consume this plan.
 
 Private native activation mechanics bound command-line and environment reads,
 validate all fourteen roles and the main PID, clear the validated environment,

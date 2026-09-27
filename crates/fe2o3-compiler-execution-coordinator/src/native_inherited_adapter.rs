@@ -119,6 +119,7 @@ macro_rules! inherited {
             ///
             /// Includes private activation mechanics but does not install a runner,
             /// authenticate provisioning, guarantee successful I/O or eventual reaping.
+            /// Bounds cover root-coordinator work, not the executed programs' accounts.
             /// Quarantined/nonterminal custody must remain charged after the turn bound.
             pub fn startup_quota(monitor_ticks: usize, cleanup_turns: usize)
                 -> Result<root::CompilerExecutionStartupQuotaV2> {
