@@ -34,6 +34,10 @@ pub(super) struct PeerComputeGateV1 {
 }
 
 impl PeerComputeGateV1 {
+    pub(super) fn router_owner(self) -> u64 {
+        self.owner
+    }
+
     pub(super) fn owns(self, owner: u64, consumer: u64) -> bool {
         let gate = self;
         peer_compute_gate_owns_body!(gate_rust_expr, gate, owner, consumer)

@@ -428,6 +428,7 @@ fn child_peer_gate_failed_input_waits_for_both_ordering_prefixes_not_other_input
                     SubmissionRecordV1 {
                         stream: owner,
                         status,
+                        dependency_depth: 1,
                         profile_dispatch_published: false,
                     },
                 );
@@ -502,6 +503,7 @@ fn child_peer_gate_pending_native_input_still_retires_its_active_ordered_prefix(
         SubmissionRecordV1 {
             stream: foreign,
             status: BackendPollV1::Pending,
+            dependency_depth: 1,
             profile_dispatch_published: false,
         },
     );

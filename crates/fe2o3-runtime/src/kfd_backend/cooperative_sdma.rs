@@ -54,6 +54,72 @@ enum LeafProgressV1 {
 }
 
 impl CooperativeSdmaLeafV1 {
+    pub(super) fn authenticates_compute_predecessor_v1(
+        &self,
+        copy: &CooperativeCopySubmissionV1,
+        child: &KfdRuntimeBackendV1,
+        read_origin: Option<PeerCopyOriginV1>,
+        write_origin: Option<PeerCopyOriginV1>,
+    ) -> bool {
+        let reading = copy.phase == CooperativeCopyPhaseV1::Read;
+        let (endpoint, region, base) = if reading {
+            (copy.source, copy.source_region, read_origin)
+        } else if copy.phase == CooperativeCopyPhaseV1::Write {
+            (copy.destination, copy.destination_region, write_origin)
+        } else {
+            return false;
+        };
+        if self.endpoint != endpoint
+            || !self.origin.zip(base).is_some_and(|(origin, base)| {
+                origin.matches_leaf(base, endpoint, self.allocation, self.stream)
+            })
+        {
+            return false;
+        }
+        let Some(id) = self.submission else {
+            return true;
+        };
+        let Some(active) = child.active_sdma.get(&id) else {
+            return child.exact_submission_quiescent_v1(id)
+                && child
+                    .submissions
+                    .get(&id)
+                    .is_some_and(|record| Some(record.stream) == self.stream);
+        };
+        let (device, scratch, offset, scratch_offset) = if reading {
+            (
+                active.source,
+                active.destination,
+                active.source_offset,
+                active.destination_offset,
+            )
+        } else {
+            (
+                active.destination,
+                active.source,
+                active.destination_offset,
+                active.source_offset,
+            )
+        };
+        self.step == LeafStepV1::Observe
+            && active.id == id
+            && Some(active.stream) == self.stream
+            && device == endpoint.local
+            && Some(scratch) == self.allocation
+            && scratch_offset == 0
+            && region.byte_offset.checked_add(copy.byte_cursor as u64) == Some(offset)
+            && active.byte_len
+                == copy
+                    .staging
+                    .len()
+                    .saturating_sub(copy.byte_cursor)
+                    .min(COOPERATIVE_COPY_CHUNK_BYTES_V1) as u64
+            && active
+                .peer_access
+                .is_some_and(|access| Some(access.origin()) == self.origin)
+            && child.peer_dma_access_is_intact_v1(active)
+    }
+
     pub(super) fn is_quiescent(&self, child: &KfdRuntimeBackendV1) -> bool {
         matches!(self.step, LeafStepV1::Cleanup(_))
             && self.submission.is_none_or(|submission| {

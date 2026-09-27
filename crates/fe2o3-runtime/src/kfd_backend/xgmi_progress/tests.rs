@@ -297,6 +297,7 @@ impl Driver for Rig {
                     SubmissionRecordV1 {
                         stream: *id + 1000,
                         status: *status,
+                        dependency_depth: 1,
                         profile_dispatch_published: false,
                     },
                 )

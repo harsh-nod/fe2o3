@@ -479,10 +479,22 @@ impl RuntimeDirectedScalarPeerCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 "directed progress does not match retained route and ordered producers",
             ));
         }
+        self.progress_retained_directed_peer_v1(request.submission)
+    }
+}
+
+impl KfdMultiDeviceRuntimeBackendV1 {
+    pub(super) fn progress_retained_directed_peer_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, Failure> {
+        self.require_live()?;
+        self.check_directed_identity_v1(submission)?;
+        let copy = self.directed_copy_v1(submission)?;
         if copy.is_quiescent() {
             return Ok(copy.status());
         }
-        let mut selected = request.submission;
+        let mut selected = submission;
         let mut found = false;
         for _ in 0..MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
             self.check_directed_identity_v1(selected)?;
@@ -513,7 +525,7 @@ impl RuntimeDirectedScalarPeerCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 if !self.directed_copy_v1(selected)?.is_quiescent() {
                     return Err(self.directed_corruption_v1());
                 }
-                if selected == request.submission {
+                if selected == submission {
                     return Err(failure);
                 }
                 // Do not misattribute another owner's result. A failed success
@@ -522,7 +534,7 @@ impl RuntimeDirectedScalarPeerCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             }
             Err(failure) => return Err(failure),
         }
-        self.check_directed_identity_v1(request.submission)?;
-        Ok(self.directed_copy_v1(request.submission)?.status())
+        self.check_directed_identity_v1(submission)?;
+        Ok(self.directed_copy_v1(submission)?.status())
     }
 }

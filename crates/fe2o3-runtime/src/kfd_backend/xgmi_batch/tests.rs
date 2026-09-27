@@ -443,6 +443,7 @@ fn dependency_indexes_retain_and_wake_blocked_successors_exactly() {
             SubmissionRecordV1 {
                 stream: 1,
                 status: BackendPollV1::Succeeded,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         )]);

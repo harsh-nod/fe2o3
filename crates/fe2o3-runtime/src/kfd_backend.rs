@@ -834,6 +834,7 @@ impl KfdRuntimeSdmaStorageV1 {
 struct SubmissionRecordV1 {
     stream: u64,
     status: BackendPollV1,
+    dependency_depth: usize,
     profile_dispatch_published: bool,
 }
 
@@ -2774,6 +2775,11 @@ impl KfdRuntimeBackendV1 {
                     self.active_sdma
                         .get(&dependency)
                         .map(|copy| copy.dependency_depth)
+                })
+                .or_else(|| {
+                    self.submissions
+                        .get(&dependency)
+                        .map(|record| record.dependency_depth)
                 });
             if let Some(dependency_depth) = dependency_depth {
                 depth = depth.max(
@@ -2927,6 +2933,7 @@ impl KfdRuntimeBackendV1 {
             SubmissionRecordV1 {
                 stream: pending.launch.stream,
                 status,
+                dependency_depth: pending.dependency_depth,
                 profile_dispatch_published: false,
             },
         );
@@ -2956,6 +2963,7 @@ impl KfdRuntimeBackendV1 {
             SubmissionRecordV1 {
                 stream: active.stream,
                 status: BackendPollV1::Failed { code: -2 },
+                dependency_depth: active.dependency_depth,
                 profile_dispatch_published: false,
             },
         );
@@ -3877,6 +3885,7 @@ impl KfdRuntimeBackendV1 {
             SubmissionRecordV1 {
                 stream: active.stream,
                 status,
+                dependency_depth: active.dependency_depth,
                 profile_dispatch_published: false,
             },
         );
@@ -3916,6 +3925,7 @@ impl KfdRuntimeBackendV1 {
             SubmissionRecordV1 {
                 stream: active.stream,
                 status,
+                dependency_depth: active.dependency_depth,
                 profile_dispatch_published: false,
             },
         );
@@ -6024,7 +6034,14 @@ impl KfdRuntimeBackendV1 {
                 Self::capacity(detail)
             })?
             .max(minimum_dependency_depth);
-        self.validate_compute_launch_v1(&launch, &explicit_success_dependencies, input_admission)?;
+        self.validate_compute_launch_base_v1(&launch)?;
+        let peer_dma = self.admit_peer_dma_owners_v1(launch.bindings, peer_gate, &peer_access)?;
+        self.validate_compute_launch_with_peer_v1(
+            &launch,
+            &explicit_success_dependencies,
+            input_admission,
+            &peer_dma,
+        )?;
 
         let explicit_kernarg = try_copy_vec_v1(
             launch.explicit_kernarg,
@@ -7929,6 +7946,7 @@ fn settle_xgmi_submission_record_v1(
         SubmissionRecordV1 {
             stream: active.stream,
             status,
+            dependency_depth: 1,
             profile_dispatch_published: false,
         },
     );
@@ -8626,6 +8644,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 }
                 return match copy.status() {
                     BackendPollV1::Succeeded => Ok(None),
+                    BackendPollV1::Pending if copy.directed.is_some() => Ok(None),
                     BackendPollV1::Pending => Err(KfdRuntimeBackendV1::rejected(
                         KfdRuntimeBackendErrorKindV1::Busy,
                         "cooperative launch producer is pending",
@@ -8971,6 +8990,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         };
         match native_route {
             Some(route) => {
+                self.refresh_peer_launch_gate_v1(submission)?;
+                self.service_native_peer_prefix_v1(route, false)?;
                 let result = self.children[route.child].poll_v1(route.local);
                 self.observe_peer_launch_result_v1(submission, result, |status| {
                     *status != BackendPollV1::Pending
@@ -12349,6 +12370,8 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         };
         match native_route {
             Some(route) => {
+                self.refresh_peer_launch_gate_v1(submission)?;
+                self.service_native_peer_prefix_v1(route, false)?;
                 let result = self.children[route.child].poll_v1(route.local);
                 self.observe_peer_launch_result_v1(submission, result, |status| {
                     *status != BackendPollV1::Pending
@@ -12381,6 +12404,8 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         };
         match native_route {
             Some(route) => {
+                self.refresh_peer_launch_gate_v1(submission)?;
+                self.service_native_peer_prefix_v1(route, false)?;
                 let result = self.children[route.child].wait_v1(route.local, deadline);
                 self.observe_peer_launch_result_v1(submission, result, |status| {
                     *status != BackendPollV1::Pending
@@ -12611,12 +12636,6 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 "kernel and stream belong to different KFD devices",
             ));
         }
-        if self.stream_has_pending_cooperative_copy_v1(request.stream) {
-            return Err(KfdRuntimeBackendV1::rejected(
-                KfdRuntimeBackendErrorKindV1::Busy,
-                "mixed cooperative/native stream ordering requires quiescing prior cooperative work",
-            ));
-        }
         if request.bindings.len() > fe2o3_host_api::MAX_DISPATCH_BINDINGS_V1 {
             return Err(KfdRuntimeBackendV1::capacity(
                 "KFD binding roster exceeds the host dispatch admission bound",
@@ -12638,12 +12657,6 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::WrongDevice,
                     "kernel binding belongs to another KFD device",
-                ));
-            }
-            if self.allocation_retained_by_cooperative_copy(allocation) {
-                return Err(KfdRuntimeBackendV1::rejected(
-                    KfdRuntimeBackendErrorKindV1::Busy,
-                    "kernel binding is retained by a pending cooperative copy",
                 ));
             }
             bindings.push(BackendBindingV1 {
@@ -12716,7 +12729,9 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             "multi-device submission route allocation failed",
         )?;
         let id = self.next_id()?;
-        let ancestry = if peer_producers.is_empty() {
+        let ancestry = if peer_producers.is_empty()
+            && !self.cooperative_stream_tails.contains_key(&request.stream)
+        {
             None
         } else {
             Some(self.capture_peer_launch_ancestry_v1(id, request.stream, &peer_producers)?)
@@ -12732,11 +12747,22 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 ancestry,
                 &bindings,
             )?;
+            let (result, ordered) = ancestry.state(self);
             collected.peer_gate = Some(
-                PeerComputeGateV1::waiting(id, child_id, true)
-                    .resolve(id, child_id, PeerComputeResultV1::Succeeded, true)
-                    .expect("exact completed peer producers retain their child consumer identity"),
+                PeerComputeGateV1::waiting(id, child_id, ordered)
+                    .resolve(id, child_id, result, ordered)
+                    .expect("captured peer state names the exact child consumer"),
             );
+        } else if bindings.iter().any(|binding| {
+            self.allocation_retained_by_cooperative_copy(RoutedHandleV1 {
+                child: stream.child,
+                local: binding.region.allocation,
+            })
+        }) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "kernel binding is retained by an unrelated cooperative copy",
+            ));
         }
         let local = self.with_peer_launch_ancestry_v1(id, ancestry, |backend| {
             backend.children[stream.child].submit_collected_compute_v1(child_launch, collected)
@@ -13236,47 +13262,8 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
             .pending_compute
             .get(&submission)
             .expect("successful peer gate retains its real compute stream head");
-        let ordered_predecessor_lane = pending.ordered_predecessor.and_then(|predecessor| {
-            let lane = self.active_compute_lane_v1(predecessor)?;
-            ordered_successor_lane_matches_v1(
-                self.stream_compute_lanes
-                    .get(&pending.launch.stream)
-                    .copied(),
-                lane,
-            )
-            .then_some(lane)
-        });
-        if self.free_compute_lane_v1().is_none() && ordered_predecessor_lane.is_none() {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::Busy,
-                "KFD compute stream head has no mutation-free publication slot",
-            ));
-        }
-        let overlaps_published_compute = (0..self.native_compute_lanes.len()).any(|lane| {
-            if ordered_predecessor_lane == Some(lane) {
-                return false;
-            }
-            if lane == 0 {
-                launch_overlaps_active_compute_v1(
-                    &pending.launch.bindings,
-                    self.active.iter().chain(self.compute_pipeline.iter()),
-                )
-            } else {
-                let state = &self.auxiliary_compute_lanes[lane - 1];
-                launch_overlaps_active_compute_v1(
-                    &pending.launch.bindings,
-                    state.active.iter().chain(state.pipeline.iter()),
-                )
-            }
-        });
-        let overlaps_published_sdma = self
-            .published_sdma_conflict_v1(pending.id, pending.launch.stream, &pending.launch.bindings)
-            .is_some();
-        if overlaps_published_compute || overlaps_published_sdma {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::Busy,
-                "KFD compute stream head conflicts with published native work",
-            ));
+        if let Some(detail) = self.compute_stream_head_publication_blocker_v1(pending) {
+            return Err(Self::rejected(KfdRuntimeBackendErrorKindV1::Busy, detail));
         }
         let pending = self
             .pending_compute
@@ -13533,6 +13520,7 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
                 SubmissionRecordV1 {
                     stream: active.stream,
                     status: BackendPollV1::Failed { code: -2 },
+                    dependency_depth: active.dependency_depth,
                     profile_dispatch_published: false,
                 },
             );
@@ -13682,6 +13670,27 @@ impl RuntimeFlushBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
         let route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
+        self.flush_peer_launch_roots_v1(stream)?;
+        if let Some(local) = self.children[route.child]
+            .pending_compute_streams
+            .get(&route.local)
+            .and_then(|ids| ids.front())
+            .copied()
+        {
+            let result = self.service_native_peer_prefix_v1(
+                RoutedHandleV1 {
+                    child: route.child,
+                    local,
+                },
+                true,
+            );
+            if let Err(error) = result {
+                if !self.terminal {
+                    self.retire_flushed_peer_launches_v1(stream);
+                }
+                return Err(error);
+            }
+        }
         if let Some(submission) =
             self.cooperative_stream_tails
                 .get(&stream)
@@ -13695,9 +13704,14 @@ impl RuntimeFlushBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         {
             loop {
                 let progress_before = self.cooperative_progress_generation;
-                let status = self.progress_cooperative_copy(submission)?;
+                let status = if matches!(self.submissions.get(&submission), Some(RoutedSubmissionV1::CooperativeCopy(copy)) if copy.directed.is_some())
+                {
+                    self.progress_retained_directed_peer_v1(submission)?
+                } else {
+                    self.progress_cooperative_copy(submission)?
+                };
                 match status {
-                    BackendPollV1::Succeeded => return Ok(()),
+                    BackendPollV1::Succeeded => break,
                     BackendPollV1::Failed { .. } => {
                         return Err(KfdRuntimeBackendV1::quiescent_error(
                             KfdRuntimeBackendErrorKindV1::Native,
@@ -13785,16 +13799,45 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             }
         };
         if let Some(route) = native_route {
-            let result = self.children[route.child].drain_v1(route.local, deadline);
-            return self.observe_peer_launch_result_v1(submission, result, |status| {
-                *status != BackendPollV1::Pending
-            });
+            if self.peer_launch_retains.is_empty() {
+                let result = self.children[route.child].drain_v1(route.local, deadline);
+                return self.latch(result);
+            }
+            let mut attempts = 0_u32;
+            let mut sleep = WAIT_INITIAL_SLEEP_V1;
+            loop {
+                self.refresh_peer_launch_gate_v1(submission)?;
+                if Instant::now() < deadline {
+                    match self.service_native_peer_prefix_v1(route, true) {
+                        Ok(()) => {}
+                        Err(RuntimeBackendFailureV1::Quiescent(_))
+                            if self.children[route.child]
+                                .exact_submission_quiescent_v1(route.local) => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+                let result = self.children[route.child].poll_v1(route.local);
+                let status = self.observe_peer_launch_result_v1(submission, result, |status| {
+                    *status != BackendPollV1::Pending
+                })?;
+                if status != BackendPollV1::Pending
+                    || !apply_wait_backoff_v1(attempts, &mut sleep, deadline)
+                {
+                    return Ok(status);
+                }
+                attempts = attempts.saturating_add(1);
+            }
         }
 
         let mut attempts = 0_u32;
         let mut sleep = WAIT_INITIAL_SLEEP_V1;
         loop {
-            let status = self.progress_cooperative_copy(submission)?;
+            let status = if matches!(self.submissions.get(&submission), Some(RoutedSubmissionV1::CooperativeCopy(copy)) if copy.directed.is_some())
+            {
+                self.progress_retained_directed_peer_v1(submission)?
+            } else {
+                self.progress_cooperative_copy(submission)?
+            };
             if status != BackendPollV1::Pending {
                 return Ok(status);
             }
@@ -18212,6 +18255,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Pending,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -20283,6 +20327,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Pending,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -20339,6 +20384,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Pending,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -20450,6 +20496,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Pending,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -20787,6 +20834,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Succeeded,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -20874,6 +20922,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Succeeded,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -21319,6 +21368,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Pending,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -21355,6 +21405,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Pending,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -21546,6 +21597,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Pending,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -23194,6 +23246,7 @@ mod tests {
                             SubmissionRecordV1 {
                                 stream: owner_stream,
                                 status: BackendPollV1::Pending,
+                                dependency_depth: 1,
                                 profile_dispatch_published: false,
                             },
                         );
@@ -23300,6 +23353,7 @@ mod tests {
                 SubmissionRecordV1 {
                     stream,
                     status: BackendPollV1::Failed { code: -9 },
+                    dependency_depth: 1,
                     profile_dispatch_published: false,
                 },
             );
@@ -24531,6 +24585,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream: 3,
                 status: BackendPollV1::Failed { code: -7 },
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -24618,6 +24673,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream: 8,
                 status: BackendPollV1::Succeeded,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -24626,6 +24682,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream: 8,
                 status: BackendPollV1::Pending,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -26091,6 +26148,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream: left,
                 status: BackendPollV1::Succeeded,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -26149,6 +26207,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Succeeded,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -26790,6 +26849,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Pending,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -26950,6 +27010,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream: 1,
                 status: BackendPollV1::Succeeded,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -27669,6 +27730,7 @@ mod tests {
                 SubmissionRecordV1 {
                     stream,
                     status: BackendPollV1::Succeeded,
+                    dependency_depth: 1,
                     profile_dispatch_published: false,
                 },
             );
@@ -27681,6 +27743,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Succeeded,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -27720,6 +27783,7 @@ mod tests {
                 SubmissionRecordV1 {
                     stream,
                     status: BackendPollV1::Succeeded,
+                    dependency_depth: 1,
                     profile_dispatch_published: false,
                 },
             );
@@ -27732,6 +27796,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream,
                 status: BackendPollV1::Succeeded,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );

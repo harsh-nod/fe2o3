@@ -464,6 +464,7 @@ pub(in crate::kfd_backend) mod tests {
                         SubmissionRecordV1 {
                             stream: 1,
                             status: BackendPollV1::Pending,
+                            dependency_depth: 1,
                             profile_dispatch_published: false,
                         },
                     );

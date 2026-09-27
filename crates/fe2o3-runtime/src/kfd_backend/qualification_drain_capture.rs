@@ -647,6 +647,7 @@ mod tests {
             SubmissionRecordV1 {
                 stream: fixture.stream,
                 status: BackendPollV1::Succeeded,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -716,6 +717,7 @@ mod tests {
                         SubmissionRecordV1 {
                             stream: fixture.stream,
                             status: BackendPollV1::Succeeded,
+                            dependency_depth: 1,
                             profile_dispatch_published: false,
                         },
                     );
@@ -804,6 +806,7 @@ mod tests {
                         SubmissionRecordV1 {
                             stream: fixture.stream,
                             status: BackendPollV1::Pending,
+                            dependency_depth: 1,
                             profile_dispatch_published: false,
                         },
                     );

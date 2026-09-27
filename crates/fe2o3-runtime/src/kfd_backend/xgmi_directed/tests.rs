@@ -126,6 +126,7 @@ impl Rig {
             SubmissionRecordV1 {
                 stream: record.stream,
                 status,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -667,6 +668,7 @@ fn unknown_legacy_and_inconsistent_retained_records_are_distinct() {
         SubmissionRecordV1 {
             stream: 11,
             status: BackendPollV1::Succeeded,
+            dependency_depth: 1,
             profile_dispatch_published: false,
         },
     );

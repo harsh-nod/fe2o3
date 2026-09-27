@@ -67,6 +67,7 @@ fn succeeded(id: u64) -> SubmissionRecordV1 {
     SubmissionRecordV1 {
         stream: id,
         status: BackendPollV1::Succeeded,
+        dependency_depth: 1,
         profile_dispatch_published: false,
     }
 }

@@ -36,6 +36,46 @@ pub(super) struct PeerLaunchAncestryV1 {
 }
 
 impl PeerLaunchAncestryV1 {
+    pub(super) fn stream(&self) -> u64 {
+        self.stream
+    }
+
+    pub(super) fn roots(&self) -> impl Iterator<Item = u64> + '_ {
+        self.ordered
+            .into_iter()
+            .chain(self.success_roots.iter().copied())
+    }
+
+    pub(super) fn state(
+        &self,
+        backend: &KfdMultiDeviceRuntimeBackendV1,
+    ) -> (PeerComputeResultV1, bool) {
+        let status = |id| match &backend.submissions[&id] {
+            RoutedSubmissionV1::CooperativeCopy(copy) => copy.status(),
+            _ => unreachable!("authenticated peer ancestry names cooperative copies"),
+        };
+        let result = if self
+            .success_roots
+            .iter()
+            .any(|id| matches!(status(*id), BackendPollV1::Failed { .. }))
+        {
+            PeerComputeResultV1::Failed
+        } else if self
+            .success_roots
+            .iter()
+            .all(|id| status(*id) == BackendPollV1::Succeeded)
+        {
+            PeerComputeResultV1::Succeeded
+        } else {
+            PeerComputeResultV1::Pending
+        };
+        (
+            result,
+            self.ordered
+                .is_none_or(|id| status(id) != BackendPollV1::Pending),
+        )
+    }
+
     pub(super) fn owner(&self) -> u64 {
         self.owner
     }
@@ -269,6 +309,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         &mut self,
         ancestry: &PeerLaunchAncestryV1,
     ) -> Result<(), Failure> {
+        if self.peer_launch_ancestry_is_intact_v1(ancestry) {
+            Ok(())
+        } else {
+            Err(self.directed_corruption_v1())
+        }
+    }
+
+    pub(super) fn peer_launch_ancestry_is_intact_v1(
+        &self,
+        ancestry: &PeerLaunchAncestryV1,
+    ) -> bool {
         if ancestry.owner == 0
             || !self.streams.contains_key(&ancestry.stream)
             || ancestry.nodes.len() > MAX_PEER_LAUNCH_ANCESTORS_V1
@@ -285,7 +336,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 .windows(2)
                 .all(|pair| pair[0].id < pair[1].id)
         {
-            return Err(self.directed_corruption_v1());
+            return false;
         }
         let mut sorted_roots = [0; MAX_RUNTIME_DEPENDENCIES_V1];
         sorted_roots[..ancestry.success_roots.len()].copy_from_slice(&ancestry.success_roots);
@@ -297,18 +348,20 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 Some(RoutedSubmissionV1::CooperativeCopy(copy)) if copy.stream == ancestry.stream)
             })
         {
-            return Err(self.directed_corruption_v1());
+            return false;
         }
         let mut edge_work = 0_usize;
         let mut depth = 1_usize;
         for node in &ancestry.nodes {
-            self.check_directed_if_present_v1(node.id)?;
             let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = self.submissions.get(&node.id)
             else {
-                return Err(self.directed_corruption_v1());
+                return false;
             };
+            if copy.directed.is_some() && !self.directed_identity_is_intact_v1(node.id) {
+                return false;
+            }
             let Some(original) = ancestry.dependencies.get(node.dependencies.clone()) else {
-                return Err(self.directed_corruption_v1());
+                return false;
             };
             let implicit = node.prior.filter(|prior| {
                 !original
@@ -320,7 +373,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 .and_then(|count| count.checked_add(usize::from(implicit.is_some())))
                 .filter(|count| *count <= MAX_PEER_LAUNCH_EDGES_V1)
             else {
-                return Err(self.directed_corruption_v1());
+                return false;
             };
             edge_work = next_edge_work;
             if node.id == 0
@@ -348,7 +401,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                         .chain(implicit)
                         .eq(copy.dependencies.iter().copied())
             {
-                return Err(self.directed_corruption_v1());
+                return false;
             }
             if sorted_roots.binary_search(&node.id).is_ok() {
                 let producer_depth = if node.directed_extents.is_some() {
@@ -356,17 +409,13 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 } else {
                     1
                 };
-                depth = depth.max(
-                    producer_depth
-                        .checked_add(1)
-                        .ok_or_else(|| self.directed_corruption_v1())?,
-                );
+                let Some(next) = producer_depth.checked_add(1) else {
+                    return false;
+                };
+                depth = depth.max(next);
             }
         }
-        if depth != ancestry.depth || depth > MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
-            return Err(self.directed_corruption_v1());
-        }
-        Ok(())
+        depth == ancestry.depth && depth <= MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1
     }
 
     pub(super) fn admit_peer_ancestry_bindings_v1(

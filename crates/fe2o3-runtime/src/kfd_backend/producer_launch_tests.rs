@@ -33,6 +33,7 @@ fn exact_single_device_dependencies_reject_alias_mismatch_and_failure() {
         SubmissionRecordV1 {
             stream,
             status: BackendPollV1::Pending,
+            dependency_depth: 1,
             profile_dispatch_published: false,
         },
     );
@@ -108,6 +109,7 @@ fn producer_aware_single_device_rejection_precedes_launch_custody() {
         SubmissionRecordV1 {
             stream,
             status: BackendPollV1::Succeeded,
+            dependency_depth: 1,
             profile_dispatch_published: false,
         },
     );
@@ -174,6 +176,7 @@ fn accepted_pending_launch_retains_exact_producer_and_launch_custody() {
         SubmissionRecordV1 {
             stream,
             status: BackendPollV1::Pending,
+            dependency_depth: 1,
             profile_dispatch_published: false,
         },
     );
@@ -328,6 +331,7 @@ fn accepted_routed_producer_launch_retains_and_refunds_only_its_child() {
             SubmissionRecordV1 {
                 stream: stream_route.local,
                 status: BackendPollV1::Pending,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
@@ -574,6 +578,7 @@ fn routed_exact_dependency_requires_native_same_child_identity() {
         SubmissionRecordV1 {
             stream: 11,
             status: BackendPollV1::Failed { code: -3 },
+            dependency_depth: 1,
             profile_dispatch_published: false,
         },
     );

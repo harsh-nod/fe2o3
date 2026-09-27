@@ -1,5 +1,55 @@
 use super::*;
 
+impl KfdRuntimeBackendV1 {
+    pub(super) fn compute_stream_head_publication_blocker_v1(
+        &self,
+        pending: &PendingComputeSubmissionV1,
+    ) -> Option<&'static str> {
+        let ordered_lane = pending.ordered_predecessor.and_then(|predecessor| {
+            let lane = self.active_compute_lane_v1(predecessor)?;
+            ordered_successor_lane_matches_v1(
+                self.stream_compute_lanes
+                    .get(&pending.launch.stream)
+                    .copied(),
+                lane,
+            )
+            .then_some(lane)
+        });
+        if self.free_compute_lane_v1().is_none() && ordered_lane.is_none() {
+            return Some("KFD compute stream head has no mutation-free publication slot");
+        }
+        let overlaps_compute = (0..self.native_compute_lanes.len()).any(|lane| {
+            if ordered_lane == Some(lane) {
+                return false;
+            }
+            if lane == 0 {
+                launch_overlaps_active_compute_v1(
+                    &pending.launch.bindings,
+                    self.active.iter().chain(self.compute_pipeline.iter()),
+                )
+            } else {
+                let state = &self.auxiliary_compute_lanes[lane - 1];
+                launch_overlaps_active_compute_v1(
+                    &pending.launch.bindings,
+                    state.active.iter().chain(state.pipeline.iter()),
+                )
+            }
+        });
+        if overlaps_compute
+            || self
+                .published_sdma_conflict_v1(
+                    pending.id,
+                    pending.launch.stream,
+                    &pending.launch.bindings,
+                )
+                .is_some()
+        {
+            return Some("KFD compute stream head conflicts with published native work");
+        }
+        None
+    }
+}
+
 mod materialization;
 use materialization::{
     materialize_in_retained_session_v1, materialize_with_custody_v1, overwrite_with_custody_v1,
@@ -439,11 +489,25 @@ impl KfdRuntimeBackendV1 {
         Ok(submissions.into_boxed_slice())
     }
 
+    #[cfg(test)]
     pub(super) fn validate_compute_launch_v1(
         &self,
         launch: &BackendLaunchV1<'_>,
         dependencies: &[u64],
         input_admission: ComputeInputAdmissionV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.validate_compute_launch_base_v1(launch)?;
+        self.validate_compute_launch_with_peer_v1(
+            launch,
+            dependencies,
+            input_admission,
+            &peer_compute_access::PeerDmaAdmissionsV1::default(),
+        )
+    }
+
+    pub(super) fn validate_compute_launch_base_v1(
+        &self,
+        launch: &BackendLaunchV1<'_>,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if launch.explicit_kernarg.len() > MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1 {
             return Err(Self::capacity(
@@ -495,6 +559,16 @@ impl KfdRuntimeBackendV1 {
                 ));
             }
         }
+        Ok(())
+    }
+
+    pub(super) fn validate_compute_launch_with_peer_v1(
+        &self,
+        launch: &BackendLaunchV1<'_>,
+        dependencies: &[u64],
+        input_admission: ComputeInputAdmissionV1,
+        peer_dma: &peer_compute_access::PeerDmaAdmissionsV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if three_binding_requires_persistent_admission_v1(
             launch.semantic_launch,
             launch.bindings,
@@ -504,7 +578,11 @@ impl KfdRuntimeBackendV1 {
             .is_none()
             && !self.three_binding_storage_candidates_admissible_v1(*launch)
             && (input_admission != ComputeInputAdmissionV1::ExactProducers
-                || !self.three_binding_producer_inputs_are_deferred_v1(*launch, dependencies))
+                || !self.three_binding_producer_inputs_are_deferred_v1(
+                    *launch,
+                    dependencies,
+                    peer_dma,
+                ))
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -513,12 +591,16 @@ impl KfdRuntimeBackendV1 {
         }
 
         if launch.bindings.iter().any(|binding| {
-            self.allocation_has_unordered_custody_v1(
-                binding.region.allocation,
-                launch.stream,
-                dependencies,
-                None,
-            )
+            self.allocation_custody
+                .get(&binding.region.allocation)
+                .is_some_and(|custody| {
+                    custody.owners.iter().any(|owner| {
+                        owner.stream != launch.stream
+                            && !dependencies.contains(&owner.submission)
+                            && !(owner.kind == RuntimeAllocationCustodyKindV1::Sdma
+                                && peer_dma.authorizes(binding.region.allocation, owner.submission))
+                    })
+                })
         }) {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -532,6 +614,7 @@ impl KfdRuntimeBackendV1 {
         &self,
         launch: BackendLaunchV1<'_>,
         dependencies: &[u64],
+        peer_dma: &peer_compute_access::PeerDmaAdmissionsV1,
     ) -> bool {
         let Some(&device) = self.streams.get(&launch.stream) else {
             return false;
@@ -549,6 +632,7 @@ impl KfdRuntimeBackendV1 {
             let allocation = &self.allocations[&binding.region.allocation];
             if three_binding_persistent_ready_source_v1(allocation).is_some()
                 || candidates.contains(&Some(binding.region.allocation))
+                || matches!(allocation.sdma_storage, KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Async(owner)) if peer_dma.authorizes(binding.region.allocation, owner))
             {
                 return true;
             }
@@ -4156,6 +4240,7 @@ impl KfdRuntimeBackendV1 {
             SubmissionRecordV1 {
                 stream: active.stream,
                 status,
+                dependency_depth: active.dependency_depth,
                 profile_dispatch_published: true,
             },
         );
@@ -4316,6 +4401,7 @@ impl KfdRuntimeBackendV1 {
             SubmissionRecordV1 {
                 stream: active.stream,
                 status,
+                dependency_depth: active.dependency_depth,
                 profile_dispatch_published: true,
             },
         );
@@ -4367,6 +4453,7 @@ impl KfdRuntimeBackendV1 {
             SubmissionRecordV1 {
                 stream: active.stream,
                 status,
+                dependency_depth: active.dependency_depth,
                 profile_dispatch_published: true,
             },
         );
@@ -4419,6 +4506,7 @@ impl KfdRuntimeBackendV1 {
             SubmissionRecordV1 {
                 stream: active.stream,
                 status,
+                dependency_depth: active.dependency_depth,
                 profile_dispatch_published: true,
             },
         );

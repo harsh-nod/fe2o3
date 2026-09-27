@@ -126,6 +126,10 @@ pub(super) struct PeerCopyAccessV1 {
 }
 
 impl PeerCopyAccessV1 {
+    pub(super) fn origin(self) -> PeerCopyOriginV1 {
+        self.origin
+    }
+
     pub(super) fn capture(
         origin: PeerCopyOriginV1,
         stream: u64,
@@ -163,6 +167,15 @@ impl PeerComputePermitV1 {
 
 #[derive(Debug, Default)]
 pub(super) struct PeerComputePermitsV1(Box<[PeerComputePermitV1]>);
+
+#[derive(Default)]
+pub(super) struct PeerDmaAdmissionsV1(Vec<(u64, u64)>);
+
+impl PeerDmaAdmissionsV1 {
+    pub(super) fn authorizes(&self, allocation: u64, submission: u64) -> bool {
+        self.0.contains(&(allocation, submission))
+    }
+}
 
 impl PeerComputePermitsV1 {
     pub(super) fn valid_for(
@@ -209,6 +222,86 @@ impl PeerComputePermitsV1 {
 }
 
 impl KfdRuntimeBackendV1 {
+    pub(super) fn admit_peer_dma_owners_v1(
+        &mut self,
+        bindings: &[BackendBindingV1],
+        gate: Option<PeerComputeGateV1>,
+        permits: &PeerComputePermitsV1,
+    ) -> Result<PeerDmaAdmissionsV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let mut admitted = PeerDmaAdmissionsV1::default();
+        let Some(gate) = gate else {
+            return Ok(admitted);
+        };
+        for binding in bindings {
+            let allocation = binding.region.allocation;
+            let Some(custody) = self.allocation_custody.get(&allocation) else {
+                continue;
+            };
+            for owner in &custody.owners {
+                if owner.kind != RuntimeAllocationCustodyKindV1::Sdma {
+                    continue;
+                }
+                let Some(active) = self.active_sdma.get(&owner.submission) else {
+                    return Err(self.terminal_error("peer admission lost a retained DMA owner"));
+                };
+                let Some(access) = active.peer_access else {
+                    continue;
+                };
+                let published = self
+                    .published_sdma_submissions
+                    .iter()
+                    .filter(|id| **id == owner.submission)
+                    .count();
+                let phase_intact = match active.phase {
+                    ActiveSdmaPhaseV1::Ready => published == 0 && [active.source, active.destination].into_iter().all(|id| {
+                        self.allocations.get(&id).is_some_and(|record| !matches!(record.sdma_storage,
+                            KfdRuntimeSdmaStorageV1::InFlight(_) | KfdRuntimeSdmaStorageV1::ComputeInFlight(_)))
+                    }),
+                    ActiveSdmaPhaseV1::DirectionalPublished(_) => published == 1 && [active.source, active.destination].into_iter().all(|id| {
+                        self.allocations.get(&id).is_some_and(|record| matches!(record.sdma_storage,
+                            KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Async(actual)) if actual == active.id))
+                    }),
+                    ActiveSdmaPhaseV1::SameDevicePublished(_) => false,
+                };
+                if active.id != owner.submission
+                    || active.stream != owner.stream
+                    || !active.dependencies.is_empty()
+                    || !phase_intact
+                    || !self.peer_dma_access_is_intact_v1(active)
+                    || ![active.source, active.destination].into_iter().all(|id| {
+                        self.allocation_retains_exact_owner_v1(id, *owner)
+                            && self.allocation_custody[&id].owner_counts
+                                [RuntimeAllocationCustodyKindV1::Sdma.index()]
+                                == 1
+                            && self.allocation_custody[&id]
+                                .owners
+                                .iter()
+                                .filter(|entry| entry.kind == RuntimeAllocationCustodyKindV1::Sdma)
+                                .eq(std::iter::once(owner))
+                    })
+                {
+                    return Err(self
+                        .terminal_error("peer admission DMA identity or custody is inconsistent"));
+                }
+                if access.origin.region.endpoint.local == allocation
+                    && permits.authorizes(
+                        gate,
+                        self.next_handle,
+                        access.origin,
+                        PeerAccessPurposeV1::Copy,
+                    )
+                    && !admitted.authorizes(allocation, owner.submission)
+                {
+                    admitted.0.try_reserve(1).map_err(|_| {
+                        Self::capacity("peer DMA admission roster allocation failed")
+                    })?;
+                    admitted.0.push((allocation, owner.submission));
+                }
+            }
+        }
+        Ok(admitted)
+    }
+
     pub(super) fn peer_dma_endpoints_are_clean_v1(&self, source: u64, destination: u64) -> bool {
         [source, destination].into_iter().all(|allocation| {
             self.allocations
@@ -384,12 +477,24 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         }
         self.admit_peer_ancestry_bindings_v1(ancestry, consumer.child, bindings)?;
         for producer in ancestry.producers() {
+            let read_origin = self.peer_copy_origin_for_leg_v1(producer, PeerCopyLegV1::Read)?;
+            let write_origin = self.peer_copy_origin_for_leg_v1(producer, PeerCopyLegV1::Write)?;
             let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = self.submissions.get(&producer)
             else {
                 return Err(self.directed_corruption_v1());
             };
             if copy.is_quiescent() {
                 continue;
+            }
+            if !copy.sdma_leaf.as_ref().is_none_or(|leaf| {
+                leaf.authenticates_compute_predecessor_v1(
+                    copy,
+                    &self.children[leaf.child()],
+                    read_origin,
+                    write_origin,
+                )
+            }) {
+                return Err(self.directed_corruption_v1());
             }
             if copy.directed.is_none() || producer >= owner {
                 return Err(KfdRuntimeBackendV1::rejected(

@@ -106,11 +106,16 @@ fn flush_retires_only_the_matching_conclusive_native_consumers() {
         backend
             .with_peer_launch_custody_v1(id, vec![40], |_| Ok(id))
             .unwrap();
+        let prepared = backend.peer_launch_retains.prepare_stream(owner).unwrap();
+        backend
+            .peer_launch_retains
+            .acquire_stream(id, owner, prepared);
         backend.children[0].submissions.insert(
             id,
             SubmissionRecordV1 {
                 stream: local,
                 status,
+                dependency_depth: 1,
                 profile_dispatch_published: false,
             },
         );
