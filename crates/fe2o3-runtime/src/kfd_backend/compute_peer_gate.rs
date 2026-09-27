@@ -160,7 +160,7 @@ impl KfdRuntimeBackendV1 {
         match action {
             PeerComputeActionV1::ContinueNativeChecks => Ok(PeerComputeStepV1::Continue(pending)),
             PeerComputeActionV1::FailUnpublished => Ok(PeerComputeStepV1::Observed(
-                self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 }),
+                self.settle_failed_unpublished_compute_v1(pending, -1)?,
             )),
             PeerComputeActionV1::Wait => {
                 self.pending_compute.insert(pending.id, pending);

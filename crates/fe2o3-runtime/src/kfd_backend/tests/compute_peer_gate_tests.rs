@@ -413,7 +413,7 @@ fn child_peer_gate_failed_input_waits_for_both_ordering_prefixes_not_other_input
             for (id, owner, status) in [
                 (40, stream, BackendPollV1::Pending),
                 (
-                    50,
+                    30,
                     foreign,
                     if native_failure {
                         BackendPollV1::Failed { code: -9 }
@@ -421,7 +421,7 @@ fn child_peer_gate_failed_input_waits_for_both_ordering_prefixes_not_other_input
                         BackendPollV1::Pending
                     },
                 ),
-                (51, foreign, BackendPollV1::Pending),
+                (31, foreign, BackendPollV1::Pending),
             ] {
                 backend.submissions.insert(
                     id,
@@ -433,7 +433,7 @@ fn child_peer_gate_failed_input_waits_for_both_ordering_prefixes_not_other_input
                     },
                 );
             }
-            let mut pending = pending_compute_for_test_v1(41, stream, allocation, vec![50, 51]);
+            let mut pending = pending_compute_for_test_v1(41, stream, allocation, vec![30, 31]);
             pending.ordered_predecessor = Some(40);
             let waiting = PeerComputeGateV1::waiting(OWNER, 41, false);
             pending.peer_gate = Some(if native_failure {
@@ -449,7 +449,7 @@ fn child_peer_gate_failed_input_waits_for_both_ordering_prefixes_not_other_input
                 .insert(stream, VecDeque::from([41]));
             index_pending_compute_custody_for_test_v1(&mut backend, 41);
             backend.compute_completion_reservations = 1;
-            for id in [40, 50, 51] {
+            for id in [40, 30, 31] {
                 backend.compute_dependency_retain_counts.insert(id, 1);
             }
             backend.stream_submission_tails.insert(stream, 41);
@@ -477,17 +477,18 @@ fn child_peer_gate_failed_input_waits_for_both_ordering_prefixes_not_other_input
                 progress(&mut backend).unwrap(),
                 BackendPollV1::Failed { code: -1 }
             );
-            assert_eq!(backend.submissions[&51].status, BackendPollV1::Pending);
+            assert_eq!(backend.submissions[&31].status, BackendPollV1::Pending);
             assert!(backend.compute_dependency_retain_counts.is_empty());
             assert!(backend.compute_module_retain_counts.is_empty());
             assert!(backend.allocation_custody.is_empty());
             assert_eq!(backend.compute_completion_reservations, 0);
-            for id in [40, 41, 50, 51] {
+            for id in [40, 41, 30, 31] {
                 backend.release_submission_v1(id).unwrap();
             }
             backend.release_allocation_v1(allocation).unwrap();
             backend.destroy_stream_v1(stream).unwrap();
             backend.destroy_stream_v1(foreign).unwrap();
+            release_pending_compute_test_resources_v1(&mut backend);
             backend.shutdown_native_v1().unwrap();
         }
     }

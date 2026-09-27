@@ -1944,7 +1944,7 @@ impl KfdRuntimeBackendV1 {
                 return Ok(BackendPollV1::Pending);
             }
         }
-        Ok(self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 }))
+        self.settle_failed_unpublished_compute_v1(pending, -1)
     }
 
     pub(super) fn progress_pending_compute_v1(
@@ -2061,10 +2061,7 @@ impl KfdRuntimeBackendV1 {
                         self.pending_compute.insert(pending.id, pending);
                         return Ok(BackendPollV1::Pending);
                     }
-                    return Ok(self.settle_unpublished_compute_v1(
-                        pending,
-                        BackendPollV1::Failed { code: -1 },
-                    ));
+                    return self.settle_failed_unpublished_compute_v1(pending, -1);
                 }
                 Err(failure @ RuntimeBackendFailureV1::Rejected(_))
                 | Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
@@ -2097,9 +2094,7 @@ impl KfdRuntimeBackendV1 {
         ) && three_binding_admission.is_none()
             && !conversion_candidate
         {
-            return Ok(
-                self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 })
-            );
+            return self.settle_failed_unpublished_compute_v1(pending, -1);
         }
         let persistent_selected = conversion_candidate
             || self
@@ -2184,8 +2179,7 @@ impl KfdRuntimeBackendV1 {
                     Ok(BackendPollV1::Pending)
                 }
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => {
-                    Ok(self
-                        .settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 }))
+                    self.settle_failed_unpublished_compute_v1(pending, -1)
                 }
                 Err(failure @ RuntimeBackendFailureV1::Rejected(_))
                 | Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
@@ -2232,8 +2226,7 @@ impl KfdRuntimeBackendV1 {
         if let Err(failure) = staging {
             return match failure {
                 RuntimeBackendFailureV1::Rejected(_) | RuntimeBackendFailureV1::Quiescent(_) => {
-                    Ok(self
-                        .settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 }))
+                    self.settle_failed_unpublished_compute_v1(pending, -1)
                 }
                 failure @ RuntimeBackendFailureV1::Terminal(_) => {
                     self.pending_compute.insert(pending.id, pending);
@@ -2249,9 +2242,7 @@ impl KfdRuntimeBackendV1 {
             &self.allocations,
         ) && three_binding_admission.is_none()
         {
-            return Ok(
-                self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 })
-            );
+            return self.settle_failed_unpublished_compute_v1(pending, -1);
         }
         let persistent_selected = self
             .persistent_full_range_admission_for_launch_v1(pending.launch.borrowed())
@@ -2303,7 +2294,7 @@ impl KfdRuntimeBackendV1 {
             }
             Err(RuntimeBackendFailureV1::Rejected(_) | RuntimeBackendFailureV1::Quiescent(_)) => {
                 self.release_compute_lane_lease_v1(pending.launch.stream, lane);
-                Ok(self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 }))
+                self.settle_failed_unpublished_compute_v1(pending, -1)
             }
             Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
                 self.pending_compute.insert(pending.id, pending);
@@ -2378,10 +2369,7 @@ impl KfdRuntimeBackendV1 {
                         self.pending_compute.insert(pending.id, pending);
                         return Ok(BackendPollV1::Pending);
                     }
-                    return Ok(self.settle_unpublished_compute_v1(
-                        pending,
-                        BackendPollV1::Failed { code: -1 },
-                    ));
+                    return self.settle_failed_unpublished_compute_v1(pending, -1);
                 }
                 Err(RuntimeBackendFailureV1::Rejected(error)) => {
                     self.pending_compute.insert(pending.id, pending);
@@ -4706,6 +4694,7 @@ impl KfdRuntimeBackendV1 {
             || !self.modules.is_empty()
             || !self.allocations.is_empty()
             || !self.pending_compute.is_empty()
+            || self.terminal_pending_compute.is_some()
             || !self.pending_compute_streams.is_empty()
             || !self.allocation_custody.is_empty()
             || !self.compute_module_retain_counts.is_empty()

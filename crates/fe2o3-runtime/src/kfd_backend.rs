@@ -92,6 +92,7 @@ use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_peer_gate;
 mod compute_quiescence_control;
+mod compute_settlement;
 mod peer_ancestry;
 mod peer_compute_access;
 use peer_ancestry::PeerLaunchAncestryV1;
@@ -1325,6 +1326,7 @@ pub struct KfdRuntimeBackendV1 {
     compute_completion_reservations: usize,
     sdma_completion_reservations: usize,
     pending_compute: HashMap<u64, PendingComputeSubmissionV1>,
+    terminal_pending_compute: Option<PendingComputeSubmissionV1>,
     // Monotone: an empty router ledger is only a fast path before the first gate.
     has_admitted_peer_gate: bool,
     pending_compute_streams: HashMap<u64, VecDeque<u64>>,
@@ -1416,6 +1418,7 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
                 &self.sdma_completion_reservations,
             )
             .field("pending_compute", &self.pending_compute.len())
+            .field("terminal_pending_compute", &self.terminal_pending_compute)
             .field("allocation_custody", &self.allocation_custody.len())
             .field(
                 "compute_module_retain_counts",
@@ -1812,6 +1815,7 @@ impl KfdRuntimeBackendV1 {
             compute_completion_reservations: 0,
             sdma_completion_reservations: 0,
             pending_compute: HashMap::new(),
+            terminal_pending_compute: None,
             has_admitted_peer_gate: false,
             pending_compute_streams: HashMap::new(),
             allocation_custody: HashMap::new(),
@@ -2475,6 +2479,10 @@ impl KfdRuntimeBackendV1 {
         for allocation in allocations {
             self.release_allocation_custody_v1(allocation, submission);
         }
+        self.release_compute_module_retain_v1(module);
+    }
+
+    fn release_compute_module_retain_v1(&mut self, module: u64) {
         let count = self
             .compute_module_retain_counts
             .get_mut(&module)
@@ -2926,10 +2934,19 @@ impl KfdRuntimeBackendV1 {
     }
 
     fn release_compute_dependency_retains_v1(&mut self, dependencies: &[u64]) {
+        Self::release_compute_dependency_counts_v1(
+            &mut self.compute_dependency_retain_counts,
+            dependencies,
+        );
+    }
+
+    fn release_compute_dependency_counts_v1(
+        counts: &mut HashMap<u64, usize>,
+        dependencies: &[u64],
+    ) {
         for dependency in dependencies {
             let remove = {
-                let count = self
-                    .compute_dependency_retain_counts
+                let count = counts
                     .get_mut(dependency)
                     .expect("pending compute dependency remains retained");
                 *count = count
@@ -2938,7 +2955,7 @@ impl KfdRuntimeBackendV1 {
                 *count == 0
             };
             if remove {
-                self.compute_dependency_retain_counts.remove(dependency);
+                counts.remove(dependency);
             }
         }
     }
@@ -3025,34 +3042,6 @@ impl KfdRuntimeBackendV1 {
                 self.stream_submission_tails.remove(&stream);
             }
         }
-    }
-
-    fn settle_unpublished_compute_v1(
-        &mut self,
-        pending: PendingComputeSubmissionV1,
-        status: BackendPollV1,
-    ) -> BackendPollV1 {
-        self.remove_pending_compute_from_stream_v1(pending.launch.stream, pending.id);
-        self.release_pending_compute_dependency_retains_v1(&pending);
-        self.release_compute_custody_v1(
-            pending.id,
-            pending.module,
-            pending.retained_allocations.iter().copied(),
-        );
-        self.submissions.insert(
-            pending.id,
-            SubmissionRecordV1 {
-                stream: pending.launch.stream,
-                status,
-                dependency_depth: pending.dependency_depth,
-                profile_dispatch_published: false,
-            },
-        );
-        self.compute_completion_reservations = self
-            .compute_completion_reservations
-            .checked_sub(1)
-            .expect("accepted compute reserves one completion slot");
-        status
     }
 
     fn settle_cancelled_persistent_prepared_v1(
@@ -13180,14 +13169,13 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
         if self.active_sdma.contains_key(&submission) {
             return self.cancel_sdma_copy_v1(submission);
         }
-        if self.submissions.contains_key(&submission)
-            || self.active_compute_lane_v1(submission).is_some()
-        {
-            // A published AQL/SDMA packet has no reviewed withdrawal primitive;
-            // completed records are likewise conclusive.
-            return Ok(crate::BackendCancellationV1::TooLate);
-        }
         if self.pending_compute.contains_key(&submission) {
+            let stream = self.pending_compute[&submission].launch.stream;
+            if !self.pending_compute_stream_membership_intact_v1(stream, submission) {
+                return Err(
+                    self.terminal_error("pending compute cancellation lost its FIFO membership")
+                );
+            }
             let is_stream_tail = self
                 .pending_compute
                 .get(&submission)
@@ -13203,14 +13191,17 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
                 // prefix has completed.
                 return Ok(crate::BackendCancellationV1::TooLate);
             }
-            let pending = self
-                .pending_compute
-                .remove(&submission)
-                .expect("validated pending compute remains indexed");
-            let stream = pending.launch.stream;
-            self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -2 });
+            let stream = self.pending_compute[&submission].launch.stream;
+            self.settle_indexed_unpublished_compute_v1(submission, -2)?;
             self.restore_unfinished_stream_tail_v1(stream, submission);
             return Ok(crate::BackendCancellationV1::Cancelled);
+        }
+        if self.submissions.contains_key(&submission)
+            || self.active_compute_lane_v1(submission).is_some()
+        {
+            // Published packets have no reviewed withdrawal primitive;
+            // completed records are likewise conclusive.
+            return Ok(crate::BackendCancellationV1::TooLate);
         }
         Err(Self::rejected(
             KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -13566,6 +13557,7 @@ impl Drop for KfdRuntimeBackendV1 {
             || self.primary_teardown.is_some()
             || scripted_owner_live
             || !self.pending_compute.is_empty()
+            || self.terminal_pending_compute.is_some()
             || !self.pending_compute_streams.is_empty()
             || !self.allocation_custody.is_empty()
             || !self.compute_module_retain_counts.is_empty()
@@ -13614,6 +13606,7 @@ mod retained_release_tests;
 mod tests {
     mod compute_peer_gate_tests;
     mod compute_quiescence_tests;
+    mod compute_settlement_custody_tests;
     mod cooperative_directed_tests;
     mod cooperative_sdma_tests;
     #[cfg(feature = "hardware-diagnostic")]
@@ -22339,7 +22332,7 @@ mod tests {
             module: 9,
             launch: Arc::new(OwnedComputeLaunchV1 {
                 stream,
-                kernel: 9,
+                kernel: 10,
                 explicit_kernarg: Box::new([]),
                 bindings: vec![BackendBindingV1 {
                     region: BackendMemoryRegionV1 {
@@ -23004,7 +22997,7 @@ mod tests {
                         .unwrap();
                     // The completion receipt for A stays pending while the
                     // foreign dependency of B fails; C must remain behind B.
-                    for (id, owner_stream) in [(40, stream), (50, foreign_stream)] {
+                    for (id, owner_stream) in [(40, stream), (30, foreign_stream)] {
                         backend.submissions.insert(
                             id,
                             SubmissionRecordV1 {
@@ -23015,7 +23008,7 @@ mod tests {
                             },
                         );
                     }
-                    let mut failed = pending_compute_for_test_v1(41, stream, allocation, vec![50]);
+                    let mut failed = pending_compute_for_test_v1(41, stream, allocation, vec![30]);
                     failed.ordered_predecessor = Some(40);
                     let mut successor =
                         pending_compute_for_test_v1(42, stream, successor_allocation, vec![]);
@@ -23029,16 +23022,16 @@ mod tests {
                         index_pending_compute_custody_for_test_v1(&mut backend, id);
                     }
                     backend.compute_completion_reservations = 2;
-                    for dependency in [40, 41, 50] {
+                    for dependency in [40, 41, 30] {
                         backend
                             .compute_dependency_retain_counts
                             .insert(dependency, 1);
                     }
                     backend.stream_submission_tails.insert(stream, 42);
-                    backend.submissions.get_mut(&50).unwrap().status =
+                    backend.submissions.get_mut(&30).unwrap().status =
                         BackendPollV1::Failed { code: -2 };
                     if quiescent_dependency {
-                        backend.quiescent_sdma_submissions.insert(50);
+                        backend.quiescent_sdma_submissions.insert(30);
                     }
                     let progress = |backend: &mut KfdRuntimeBackendV1, id| {
                         let pending = backend.pending_compute.remove(&id).unwrap();
@@ -23057,7 +23050,7 @@ mod tests {
                         assert!(!backend.submissions.contains_key(&42));
                         assert_eq!(backend.compute_completion_reservations, 2);
                         assert_eq!(backend.compute_module_retain_counts[&9], 2);
-                        for dependency in [40, 41, 50] {
+                        for dependency in [40, 41, 30] {
                             assert_eq!(backend.compute_dependency_retain_counts[&dependency], 1);
                         }
                         assert!(matches!(
@@ -23077,7 +23070,7 @@ mod tests {
                     assert_eq!(backend.compute_completion_reservations, 1);
                     assert_eq!(backend.compute_module_retain_counts[&9], 1);
                     assert!(!backend.compute_dependency_retain_counts.contains_key(&40));
-                    assert!(!backend.compute_dependency_retain_counts.contains_key(&50));
+                    assert!(!backend.compute_dependency_retain_counts.contains_key(&30));
                     assert_eq!(backend.compute_dependency_retain_counts[&41], 1);
 
                     // The failed ordered receipt does not fail C: observation
@@ -23091,13 +23084,14 @@ mod tests {
                         backend.cancel_v1(42).unwrap(),
                         crate::BackendCancellationV1::Cancelled
                     );
-                    for id in [40, 41, 42, 50] {
+                    for id in [40, 41, 42, 30] {
                         backend.release_submission_v1(id).unwrap();
                     }
                     backend.release_allocation_v1(allocation).unwrap();
                     backend.release_allocation_v1(successor_allocation).unwrap();
                     backend.destroy_stream_v1(stream).unwrap();
                     backend.destroy_stream_v1(foreign_stream).unwrap();
+                    release_pending_compute_test_resources_v1(&mut backend);
                     backend.shutdown_native_v1().unwrap();
                 }
             }
@@ -23149,6 +23143,7 @@ mod tests {
         ordered.release_submission_v1(41).unwrap();
         ordered.release_allocation_v1(allocation).unwrap();
         ordered.destroy_stream_v1(stream).unwrap();
+        release_pending_compute_test_resources_v1(&mut ordered);
         ordered.shutdown_native_v1().unwrap();
 
         let (mut explicit, stream, allocation) = make_backend();
@@ -23175,6 +23170,7 @@ mod tests {
         explicit.release_submission_v1(41).unwrap();
         explicit.release_allocation_v1(allocation).unwrap();
         explicit.destroy_stream_v1(stream).unwrap();
+        release_pending_compute_test_resources_v1(&mut explicit);
         explicit.shutdown_native_v1().unwrap();
     }
 
@@ -23201,7 +23197,41 @@ mod tests {
         let pending = &backend.pending_compute[&submission];
         let stream = pending.launch.stream;
         let module = pending.module;
+        let kernel = pending.launch.kernel;
         let allocations = pending.retained_allocations.to_vec();
+        // Legacy private scheduling fixtures use fixed handles. Populate their
+        // actual resource records as well as their retain indexes; public-path
+        // fixtures already own these records and are left untouched.
+        let mut resources = KfdRuntimeBackendV1::mock();
+        if !backend.modules.contains_key(&module) || !backend.kernels.contains_key(&kernel) {
+            let source_module = resources
+                .load_module_v1(7, &synthetic_cov6::module())
+                .unwrap();
+            let source_kernel = resources
+                .resolve_kernel_v1(source_module, "vecadd", [7; 32])
+                .unwrap();
+            backend
+                .modules
+                .entry(module)
+                .or_insert_with(|| resources.modules.remove(&source_module).unwrap());
+            backend.kernels.entry(kernel).or_insert_with(|| {
+                let mut record = resources.kernels.remove(&source_kernel).unwrap();
+                record.module = module;
+                record
+            });
+        }
+        for allocation in &allocations {
+            if !backend.allocations.contains_key(allocation) {
+                let source = resources
+                    .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+                    .unwrap();
+                backend
+                    .allocations
+                    .insert(*allocation, resources.allocations.remove(&source).unwrap());
+                backend.staged_context_bytes += 8;
+                resources.staged_context_bytes -= 8;
+            }
+        }
         let new_entries = backend.reserve_allocation_custody_v1(&allocations).unwrap();
         backend.retain_allocation_custody_v1(
             &allocations,
@@ -23216,6 +23246,17 @@ mod tests {
             .compute_module_retain_counts
             .entry(module)
             .or_insert(0) += 1;
+    }
+
+    fn release_pending_compute_test_resources_v1(backend: &mut KfdRuntimeBackendV1) {
+        let allocations: Vec<_> = backend.allocations.keys().copied().collect();
+        for allocation in allocations {
+            backend.release_allocation_v1(allocation).unwrap();
+        }
+        let modules: Vec<_> = backend.modules.keys().copied().collect();
+        for module in modules {
+            backend.unload_module_v1(module).unwrap();
+        }
     }
 
     fn index_sdma_custody_for_test_v1(backend: &mut KfdRuntimeBackendV1, submission: u64) {
@@ -26860,6 +26901,7 @@ mod tests {
         backend.release_submission_v1(40).unwrap();
         backend.release_submission_v1(41).unwrap();
         backend.destroy_stream_v1(stream).unwrap();
+        release_pending_compute_test_resources_v1(&mut backend);
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -26907,6 +26949,7 @@ mod tests {
             backend.release_submission_v1(submission).unwrap();
         }
         backend.destroy_stream_v1(stream).unwrap();
+        release_pending_compute_test_resources_v1(&mut backend);
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -26965,6 +27008,7 @@ mod tests {
         );
         backend.release_submission_v1(40).unwrap();
         backend.destroy_stream_v1(stream).unwrap();
+        release_pending_compute_test_resources_v1(&mut backend);
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -27009,6 +27053,7 @@ mod tests {
         backend.release_submission_v1(41).unwrap();
         backend.destroy_stream_v1(producer_stream).unwrap();
         backend.destroy_stream_v1(consumer_stream).unwrap();
+        release_pending_compute_test_resources_v1(&mut backend);
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -27063,6 +27108,7 @@ mod tests {
             .clear();
         backend.release_allocation_v1(allocation).unwrap();
         backend.destroy_stream_v1(stream).unwrap();
+        release_pending_compute_test_resources_v1(&mut backend);
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -27248,6 +27294,7 @@ mod tests {
 
         backend.release_submission_v1(40).unwrap();
         backend.destroy_stream_v1(stream).unwrap();
+        release_pending_compute_test_resources_v1(&mut backend);
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -27286,6 +27333,7 @@ mod tests {
         backend.release_submission_v1(41).unwrap();
         backend.release_allocation_v1(allocation).unwrap();
         backend.destroy_stream_v1(stream).unwrap();
+        release_pending_compute_test_resources_v1(&mut backend);
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -27342,6 +27390,7 @@ mod tests {
         backend.release_submission_v1(40).unwrap();
         backend.release_allocation_v1(allocation).unwrap();
         backend.destroy_stream_v1(stream).unwrap();
+        release_pending_compute_test_resources_v1(&mut backend);
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -27626,6 +27675,7 @@ mod tests {
         backend.release_allocation_v1(destination).unwrap();
         backend.destroy_stream_v1(compute_stream).unwrap();
         backend.destroy_stream_v1(copy_stream).unwrap();
+        release_pending_compute_test_resources_v1(&mut backend);
         backend.shutdown_native_v1().unwrap();
     }
 

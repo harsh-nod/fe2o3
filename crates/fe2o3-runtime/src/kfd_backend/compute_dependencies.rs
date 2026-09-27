@@ -155,11 +155,11 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
-    fn compute_quiescence_limit_v1(&self) -> usize {
+    pub(super) fn compute_quiescence_limit_v1(&self) -> usize {
         fe2o3_host_api::MAX_DISPATCH_BINDINGS_V1 * self.dispatch_capacity.custody_limit()
     }
 
-    fn native_dependency_stream_v1(&self, id: u64) -> Option<u64> {
+    pub(super) fn native_dependency_stream_v1(&self, id: u64) -> Option<u64> {
         self.pending_compute
             .get(&id)
             .map(|pending| pending.launch.stream)

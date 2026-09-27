@@ -161,6 +161,8 @@ fn producer_aware_single_device_rejection_precedes_launch_custody() {
 #[test]
 fn accepted_pending_launch_retains_exact_producer_and_launch_custody() {
     let mut backend = KfdRuntimeBackendV1::mock();
+    // The manually retained producer 40 predates every newly issued handle.
+    backend.next_handle = 41;
     let stream = backend.create_stream_v1(7).unwrap();
     let module = backend
         .load_module_v1(7, &synthetic_cov6::module())
