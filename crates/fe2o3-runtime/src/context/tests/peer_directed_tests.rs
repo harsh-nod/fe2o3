@@ -758,7 +758,7 @@ fn directed_reservation_survives_success_and_no_effect_writer_slot_reuse() {
                 .as_mut()
                 .unwrap()
                 .read_leases_for_test_v1()
-                .producer_read_status(reservation.first)
+                .producer_read_status(reservation.active_first_for_test().unwrap())
                 .unwrap(),
             if cancel {
                 ContextProducerReadStatusV1::NoEffect

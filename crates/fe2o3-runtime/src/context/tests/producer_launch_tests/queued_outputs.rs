@@ -161,12 +161,23 @@ fn queued_outputs_exclude_host_and_launch_access_after_head_reconciliation() {
             RuntimeValidationErrorV1::ContextReserved,
         );
         validation(
-            f.launch(2, reads, &[be]),
+            f.launch(2, reads, &[ae]),
             RuntimeValidationErrorV1::ContextReserved,
         );
         assert_eq!(f.snapshot(), before);
         assert!(!f.context.is_terminal());
     }
+    let mut reader = f
+        .launch(
+            2,
+            vec![
+                span(f.allocations[2], RuntimeAccessV1::Read, 0, 64),
+                span(f.allocations[3], RuntimeAccessV1::Read, 0, 64),
+            ],
+            &[be],
+        )
+        .unwrap();
+    f.complete(&mut reader);
     f.complete(&mut b);
     assert!(f.context.cleanup().is_complete());
 }

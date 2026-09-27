@@ -8,6 +8,7 @@ mod completion_faults;
 mod peer_producers;
 mod pending_peers;
 mod queued_outputs;
+mod queued_reads;
 
 #[test]
 fn producer_launch_pending_full_output_queues_with_exact_event() {
@@ -565,7 +566,13 @@ fn producer_launch_mixed_inputs_preserve_native_ranges_and_whole_allocation_cust
         .lookup_read(record.journal_read.unwrap().first)
         .unwrap();
     let pending = owner
-        .lookup_producer_read(record.journal_producer_read.unwrap().first)
+        .lookup_producer_read(
+            record
+                .journal_producer_read
+                .unwrap()
+                .active_first_for_test()
+                .unwrap(),
+        )
         .unwrap();
     assert_eq!((stable.byte_offset, stable.byte_len), (0, 64));
     assert_eq!((pending.read.byte_offset, pending.read.byte_len), (0, 64));
@@ -1554,7 +1561,7 @@ fn producer_launch_resolved_reservation_survives_writer_slot_reuse() {
                 .as_mut()
                 .unwrap()
                 .read_leases_for_test_v1()
-                .producer_read_status(marker.first)
+                .producer_read_status(marker.active_first_for_test().unwrap())
                 .unwrap(),
             if cancel {
                 ContextProducerReadStatusV1::NoEffect

@@ -2,6 +2,7 @@ use super::*;
 use alloc::{format, string::String, vec};
 
 mod group_disposal;
+mod reads;
 
 type Journal = ContextQueuedWriterJournalV1;
 type Writer = ContextWriterReferenceV1;

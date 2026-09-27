@@ -108,7 +108,9 @@ impl<B: RuntimeProducerAwareLaunchBackendV1> RuntimeContextV1<B> {
     /// range must be covered by its named producer's writable ranges. Full-allocation
     /// Write outputs can queue behind an exact latest writer from this profile,
     /// named by an explicit event. Every output alias must then be a full Write;
-    /// partial/ReadWrite outputs and reads of queued outputs remain unsupported.
+    /// partial/ReadWrite queued outputs remain unsupported. Pure reads of queued
+    /// outputs bind the exact latest writer through an explicit event, retaining
+    /// custody until the consumer is quiescent without predicting future versions.
     /// Events must remain live until admission;
     /// afterwards Context retains producers independently of those public events.
     /// Device completion may precede logical completion while producers reconcile.

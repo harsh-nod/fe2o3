@@ -31,8 +31,9 @@ every writer or allocation. Dropping a descriptive reference never releases it.
 The native N3 path has one full-allocation Write destination. Context supports
 whole multi-destination writers, multi-parent joins and mixed idle/busy
 destinations without splitting settlement. The overall goal also requires partial
-writes, ReadWrite and downstream queued-output reads. Full-overwrite support must
-not be reported as those broader semantics or as multi-output native support.
+writes and ReadWrite. Downstream pure reads of the exact queued output are now
+implemented at the model/Context boundary described below. Full-overwrite support
+must not be reported as broader write semantics or as multi-output native support.
 
 ## Transitions
 
@@ -72,7 +73,8 @@ no ID; registration and Begin recheck their respective state before commitment.
 
 The wrapper calls shared inner preflights before added queue exclusion checks,
 preserving ordinary-path error precedence. It has no heap allocation after
-construction; roster operations are O(k), independent of total queue depth.
+construction; writer admission and activation are O(k), independent of total queue
+depth. Settlement additionally visits the writer's attached queued reads.
 Model tests exercise arena conservation, fixed storage addresses/capacities,
 three-deep success, cancellation permutations, multi-parent/idle joins, readers,
 stale identities, epoch exhaustion and fail-stop Unknown custody.
@@ -90,8 +92,46 @@ The owner model alone is not proof of the Context composition. In particular:
   Disposal destroys allocations rather than exposing uncertain content.
 - Failed/quiescent backend results alone are not NoEffect authority. Descendant
   failure after cancellation cannot be used to silently release queued custody.
-- Queued-output reads, partial writes and ReadWrite integration remain open.
+- Queued-output reads have a CPU-tested model/Context implementation. Native
+  integration qualification, partial writes and ReadWrite integration remain open.
 - The unchanged inner journal proofs do not establish outer queue invariants.
+
+### Queued Output Reads
+
+`ContextQueuedProducerReadV1` binds a range, allocation identity/device/extent,
+and exact queued writer. It carries no guessed epoch or lineage. New admission
+requires the latest Waiting/Ready writer and an explicit event authenticated by
+the producer-aware Context profile. Original pure-Read aliases must be covered
+by that producer's writable ranges. Generic launches and directed-peer consumers
+do not gain this admission path.
+
+The fixed queued-read arena shares the existing R budget with stable and active
+producer leases. Acquisition validates all three families before committing any;
+it validates each distinct queued producer's full destination roster once using
+preallocated sorted scratch. Its model cost is O(S + A + Q log Q + sum of distinct
+producer roster sizes). This is not a linear-complexity claim for Context's
+complete binding and producer authentication.
+
+Already-admitted ancestors may activate and settle while the deferred reader
+remains. New writers, retirement and Unknown-group disposal cannot ignore it.
+Producer Success records actual settled versions; NoEffect and Unknown resolve
+only that exact producer's reads, never reparenting them to an ancestor. Resolved
+read records survive writer-slot reuse and stay live until consumer quiescence.
+
+Context retains separate active/queued typed reference arrays and independent
+first-reference/count markers. Both complete rosters are validated before release.
+The active release followed by queued release is a committed-prefix operation,
+not an atomic transaction: an error or unwind between them retains the original
+Context root, seals Context and quarantines remaining custody. The old shared
+completion proof does not prove this internal composition.
+
+CPU tests cover byte observations, exact-event rejection/acceptance, all seven
+completion ingresses, public-event release, cancellation, Unknown/terminal
+outcomes, three-family release and its injected partial failure, corruption and
+writer-slot reuse. Model tests also check shared capacity, fixed storage, stale
+identities, attachment-corruption rejection and affine indexed-access scaling.
+No new formal proof, native hardware qualification or matched performance claim
+follows from these tests.
 
 ### Unknown Group Disposal
 

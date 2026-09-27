@@ -25,13 +25,14 @@ impl ContextQueuedWriterJournalV1 {
         self.inner.reserved_writer_count()
     }
     pub fn remaining_read_slots(&self) -> usize {
-        self.inner.remaining_read_slots()
+        self.inner.remaining_read_slots() - self.retained_queued_read_count()
     }
     pub fn retained_read_count(&self) -> usize {
-        self.inner.retained_read_count()
+        self.inner.retained_read_count() + self.retained_queued_read_count()
     }
+    /// Retained active-producer and queued-producer leases combined.
     pub fn retained_producer_read_count(&self) -> usize {
-        self.inner.retained_producer_read_count()
+        self.inner.retained_producer_read_count() + self.retained_queued_read_count()
     }
     pub fn member_capacity(&self) -> usize {
         self.members.len()
@@ -63,7 +64,10 @@ impl ContextQueuedWriterJournalV1 {
         self.inner.lookup_reserved(writer)
     }
     pub fn reader_count(&self, allocation: ContextAllocationReferenceV1) -> Result<usize, Error> {
-        self.inner.reader_count(allocation)
+        self.inner
+            .reader_count(allocation)?
+            .checked_add(self.read_counts[allocation.slot])
+            .ok_or(Error::InvalidState)
     }
 
     pub fn validate_no_queued_writer(
@@ -102,11 +106,13 @@ impl ContextQueuedWriterJournalV1 {
 
     pub fn validate_read_capacity(&self, count: usize) -> Result<(), Error> {
         self.ensure_usable()?;
-        self.inner.validate_read_capacity(count)
+        self.inner.validate_read_capacity(count)?;
+        self.validate_total_read_capacity(count)
     }
     pub fn validate_producer_read_capacity(&self, count: usize) -> Result<(), Error> {
         self.ensure_usable()?;
-        self.inner.validate_producer_read_capacity(count)
+        self.inner.validate_producer_read_capacity(count)?;
+        self.validate_total_read_capacity(count)
     }
     pub fn validate_read(&self, read: &ContextAllocationReadV1) -> Result<(), Error> {
         self.ensure_usable()?;
@@ -128,6 +134,7 @@ impl ContextQueuedWriterJournalV1 {
         self.ensure_usable()?;
         self.inner
             .preflight_acquire_reads_v1(consumer, requests, output)?;
+        self.validate_total_read_capacity(requests.len())?;
         for read in requests {
             self.require_unqueued(read.allocation)?;
         }
@@ -142,6 +149,7 @@ impl ContextQueuedWriterJournalV1 {
         self.ensure_usable()?;
         self.inner
             .preflight_acquire_producer_reads_v1(consumer, requests, output)?;
+        self.validate_total_read_capacity(requests.len())?;
         for read in requests {
             self.require_unqueued(read.read.allocation)?;
         }
@@ -163,6 +171,12 @@ impl ContextQueuedWriterJournalV1 {
             stable_output,
             producer_requests,
             producer_output,
+        )?;
+        self.validate_total_read_capacity(
+            stable_requests
+                .len()
+                .checked_add(producer_requests.len())
+                .ok_or(Error::MemberCapacity)?,
         )?;
         for read in stable_requests {
             self.require_unqueued(read.allocation)?;
@@ -262,6 +276,9 @@ impl ContextQueuedWriterJournalV1 {
         self.inner.validate_allocation_retirement(allocations)?;
         for &allocation in allocations {
             self.require_unqueued(allocation)?;
+            if self.reader_count(allocation)? != 0 {
+                return Err(Error::AllocationBusy);
+            }
         }
         Ok(())
     }
@@ -279,12 +296,18 @@ impl ContextQueuedWriterJournalV1 {
     ) -> Result<(), Error> {
         self.ensure_usable()?;
         self.inner.validate_unknown_disposal(writer, members)?;
+        if self.has_queued_consumer_reads_matching(|consumer| consumer == writer.key) {
+            return Err(Error::AllocationBusy);
+        }
         let root = self.validate_root(writer)?;
         if root.phase != Phase::Active {
             return Err(Error::InvalidState);
         }
         for member in members {
             self.require_unqueued(member.allocation)?;
+            if self.reader_count(member.allocation)? != 0 {
+                return Err(Error::AllocationBusy);
+            }
         }
         Ok(())
     }

@@ -12,6 +12,7 @@ pub(in crate::context) enum CompletionJournalStageV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::context) enum CompletionJournalPointV1 {
     BeforeEffect,
+    BetweenProducerClasses,
     AfterEffect,
 }
 

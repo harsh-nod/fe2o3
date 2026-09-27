@@ -1,10 +1,14 @@
 # Producer-Bound Read Reservations V1
 
-Status: concrete Rust model candidate. Not yet wired into RuntimeContext, Worker
-transport or a native backend. Core reader/custody proofs are registered in the
-Verus campaign; recent execution extensions have dedicated development checkers.
-Production Rust/native refinement remains open.
-Pending journaled producer-to-consumer requests still return `ContextReserved`.
+Status: concrete Rust model used by directed-peer and producer-aware Context
+profiles. Core reader/custody proofs are registered in the Verus campaign; recent
+execution extensions have dedicated development checkers. Production Rust/native
+composition refinement and protected Worker transport integration remain open.
+Generic pending journaled reads still return `ContextReserved`; the explicit
+[producer-aware launch profile](runtime-producer-aware-typed-launch-v1.md) has
+separate admission. Deferred reads of queued writers use the distinct outer
+[queued-read model](runtime-successor-writer-plan-v1.md#queued-output-reads), not
+the active-producer version relation described below.
 
 ## Ownership Model
 

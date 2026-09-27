@@ -8,10 +8,12 @@ use alloc::vec::Vec;
 
 mod forward;
 mod group_disposal;
+mod reads;
 pub use group_disposal::{
     ContextQueuedWriterFlatGroupDisposalEvidenceV1, ContextQueuedWriterGroupDisposalErrorV1,
     ContextQueuedWriterGroupDisposalEvidenceV1, ContextQueuedWriterGroupHeaderV1,
 };
+pub use reads::{ContextQueuedProducerReadReferenceV1, ContextQueuedProducerReadV1};
 #[cfg(test)]
 mod tests;
 
@@ -52,6 +54,8 @@ struct Root {
     head: Option<usize>,
     count: usize,
     phase: Phase,
+    read_head: Option<usize>,
+    read_count: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -67,8 +71,9 @@ struct Member {
 /// Bounded exclusive writer queues. No mutable or immutable inner projection is
 /// exposed: even read-only availability queries must respect queued destinations.
 /// Construction reserves O(A + W + R + M) metadata; M bounds all active/queued
-/// destination records. Admission, activation and settlement are O(k), with no
-/// heap allocation after construction. Cancellation unlinks only its own roster
+/// destination records. Writer admission and activation are O(k); settlement is
+/// O(k + r) for its k destinations and r attached queued reads. There is no heap
+/// allocation after construction. Cancellation unlinks only its own roster
 /// and marks immediate descendants failed without reparenting them.
 ///
 /// Queued writers remain Reserved in the inner journal until activation. Their
@@ -97,6 +102,11 @@ pub struct ContextQueuedWriterJournalV1 {
     tails: Vec<Option<usize>>,
     queued_counts: Vec<usize>,
     scratch: Vec<ContextAllocationWriteV1>,
+    queued_reads: Vec<Option<reads::Reservation>>,
+    free_reads: Vec<usize>,
+    read_counts: Vec<usize>,
+    next_read_incarnation: u64,
+    read_producer_scratch: Vec<ContextWriterReferenceV1>,
     disposal_terminal: bool,
     #[cfg(test)]
     disposal_fault: Option<(usize, bool)>,
@@ -127,6 +137,15 @@ impl ContextQueuedWriterJournalV1 {
         free.try_reserve_exact(members)
             .map_err(|_| Error::StorageAllocationFailed)?;
         free.extend((0..members).rev());
+        let mut free_reads = Vec::new();
+        free_reads
+            .try_reserve_exact(reads)
+            .map_err(|_| Error::StorageAllocationFailed)?;
+        free_reads.extend((0..reads).rev());
+        let mut read_producer_scratch = Vec::new();
+        read_producer_scratch
+            .try_reserve_exact(reads)
+            .map_err(|_| Error::StorageAllocationFailed)?;
         let placeholder = ContextAllocationWriteV1 {
             allocation: ContextAllocationReferenceV1 {
                 slot: 0,
@@ -150,6 +169,11 @@ impl ContextQueuedWriterJournalV1 {
             tails: filled(allocations, None)?,
             queued_counts: filled(allocations, 0)?,
             scratch: filled(allocations, placeholder)?,
+            queued_reads: filled(reads, None)?,
+            free_reads,
+            read_counts: filled(allocations, 0)?,
+            next_read_incarnation: 1,
+            read_producer_scratch,
             disposal_terminal: false,
             #[cfg(test)]
             disposal_fault: None,
@@ -339,7 +363,7 @@ impl ContextQueuedWriterJournalV1 {
             }
             previous = Some(write.allocation.key);
             let state = self.destination(write)?;
-            if self.inner.reader_count(write.allocation)? != 0 {
+            if self.reader_count(write.allocation)? != 0 {
                 return Err(Error::AllocationBusy);
             }
             let slot = write.allocation.slot;
@@ -443,6 +467,8 @@ impl ContextQueuedWriterJournalV1 {
             head,
             count,
             phase,
+            read_head: None,
+            read_count: 0,
         });
     }
 
@@ -654,12 +680,16 @@ impl ContextQueuedWriterJournalV1 {
             return Err(Error::SettlementEvidenceMismatch);
         }
         let root = self.validate_root(writer)?;
+        self.validate_attached_reads(root)?;
         if root.phase != Phase::Active {
             self.activate_queued_writer(writer)?;
         }
         let root = self.validate_root(writer)?;
         self.inner.settle_success(writer, evidence)?;
+        self.disposal_terminal = true;
+        self.resolve_reads(root, ContextProducerReadStatusV1::Success);
         self.unlink(root, true);
+        self.disposal_terminal = false;
         Ok(())
     }
 
@@ -679,17 +709,22 @@ impl ContextQueuedWriterJournalV1 {
         if root.phase == Phase::Unknown {
             return Err(Error::InvalidState);
         }
+        self.validate_attached_reads(root)?;
         if root.phase == Phase::Active {
             self.inner.settle_no_effect(writer, evidence)?;
         } else {
             self.inner.abort_reserved(writer)?;
         }
+        self.disposal_terminal = true;
+        self.resolve_reads(root, ContextProducerReadStatusV1::NoEffect);
         self.unlink(root, false);
+        self.disposal_terminal = false;
         Ok(())
     }
 
     pub fn mark_unknown(&mut self, writer: ContextWriterReferenceV1) -> Result<(), Error> {
         let root = self.validate_root(writer)?;
+        self.validate_attached_reads(root)?;
         if root.phase == Phase::Active {
             self.inner.mark_unknown(writer)?;
         } else {
@@ -698,6 +733,9 @@ impl ContextQueuedWriterJournalV1 {
                 .expect("retained root")
                 .phase = Phase::Unknown;
         }
+        self.disposal_terminal = true;
+        self.resolve_reads(root, ContextProducerReadStatusV1::Unknown);
+        self.disposal_terminal = false;
         Ok(())
     }
 }

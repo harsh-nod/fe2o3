@@ -216,7 +216,7 @@ fn pending_peer_launch_checks_each_alias_not_the_whole_allocation_lease() {
         .as_mut()
         .unwrap()
         .read_leases_for_test_v1()
-        .lookup_producer_read(marker.first)
+        .lookup_producer_read(marker.active_first_for_test().unwrap())
         .unwrap()
         .read;
     assert_eq!((input.byte_offset, input.byte_len), (0, 64));
@@ -401,7 +401,7 @@ fn pending_peer_launch_resolved_input_survives_writer_slot_reuse() {
                 .as_mut()
                 .unwrap()
                 .read_leases_for_test_v1()
-                .producer_read_status(marker.first)
+                .producer_read_status(marker.active_first_for_test().unwrap())
                 .unwrap(),
             if cancel {
                 ContextProducerReadStatusV1::NoEffect

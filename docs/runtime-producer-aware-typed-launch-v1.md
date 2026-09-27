@@ -40,12 +40,19 @@ Adjacent intervals may cover one read; a gap, uncovered alias, Read-only
 producer binding, or unrelated event cannot supply coverage. Canonicalizing
 allocation custody must not discard these original footprints.
 
-One consumer may hold stable reads, multiple pending-producer reads and output
-writers simultaneously. Both reader classes share one capacity budget. All
+One consumer may hold stable reads, active-producer reads, queued-producer reads
+and output writers simultaneously. All three reader classes share one capacity budget. All
 requests, canonical rosters and combined capacity are checked before any lease
 or dependency retain is acquired. All fallible roster allocations precede
-submission identity consumption. Writable aliases with pending predecessors
-remain rejected; this is not ordered-writer or cross-run reuse authority.
+submission identity consumption. Full-allocation Write outputs can queue behind
+an exact latest producer named by an explicit event; partial/ReadWrite queued
+outputs remain rejected. See the [successor integration contract](runtime-successor-writer-plan-v1.md).
+
+Pure reads of queued outputs name the exact latest Waiting/Ready writer without
+predicting future epoch/lineage. Their distinct bounded leases resolve only when
+that producer settles and survive its writer-slot reuse. Context's original
+binding/dependency checks still apply; this does not grant queued-read admission
+to generic launches, directed-peer consumers or protected generated work.
 
 The consumer root is installed before journal mutation and backend entry.
 Both complete reader rosters are validated before either is released. A
@@ -53,12 +60,14 @@ resolved producer reservation is queried by its retained identity, not
 readmitted against a writer slot that may have been reused. Rejected initial
 submission releases inputs/dependencies and settles output writers as NoEffect;
 conclusively quiescent failure releases inputs but retains Unknown output
-state. Terminal failure, panic, malformed handles and ownership contradictions
+state. Active and queued producer release have a committed-prefix boundary;
+failure between them preserves the root and quarantines remaining custody.
+Terminal failure, panic, malformed handles and ownership contradictions
 retain uncertain resources and seal the Context.
 
 ### Atomic Mixed Acquisition
 
-`ContextProducerReadJournalV1::acquire_mixed_reads` performs both complete
+The inner `ContextProducerReadJournalV1::acquire_mixed_reads` performs both complete
 preflights before committing either reader class. It validates the Submission
 consumer, both output shapes and checked combined headroom even when one side
 is empty. An empty side does not consume or validate its unused arena's next
@@ -73,6 +82,12 @@ and empty-input consumers remain supported. A panic after acquisition retains
 the roots and journal leases and seals the Context; it does not roll back the
 transaction. Output-writer Begin, dependency retention and these two input
 classes are not one formally proved all-or-nothing transaction.
+
+The outer `ContextQueuedWriterJournalV1::acquire_mixed_reads_with_queued` adds a
+third typed roster under the same total R bound and preflights it before inner
+commit. Queued references have their own incarnation sequence and marker anchor.
+The historical two-family proof below does not cover this outer transaction,
+queued-read resolution, or the active-then-queued release composition.
 
 The shared-body Verus definition specifies error preservation, the two exact
 commit relations and combined-budget preservation under storage-domain

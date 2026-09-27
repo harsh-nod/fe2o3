@@ -4,14 +4,26 @@ use super::*;
 use crate::context::peer_custody::ScalarPeerDependencyV1;
 use fe2o3_runtime_model::{
     ContextAllocationReadV1, ContextProducerReadReferenceV1, ContextProducerReadStatusV1,
-    ContextProducerReadV1, ContextReadQuiescenceEvidenceV1, ContextWriterKeyV1,
+    ContextProducerReadV1, ContextQueuedProducerReadReferenceV1, ContextQueuedProducerReadV1,
+    ContextQueuedWriterStatusV1, ContextReadQuiescenceEvidenceV1, ContextWriterKeyV1,
     ContextWriterKindV1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::context) struct SubmissionProducerReaderMarkerV1 {
-    pub(in crate::context) first: ContextProducerReadReferenceV1,
+    first: FirstProducerReadV1,
     pub(in crate::context) count: usize,
+    active: Option<(ContextProducerReadReferenceV1, usize)>,
+    queued: Option<(ContextQueuedProducerReadReferenceV1, usize)>,
+}
+
+#[cfg(test)]
+impl SubmissionProducerReaderMarkerV1 {
+    pub(in crate::context) fn active_first_for_test(
+        self,
+    ) -> Option<ContextProducerReadReferenceV1> {
+        self.active.map(|(first, _)| first)
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -20,10 +32,28 @@ enum ProducerReadDomainV1 {
     Launch,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FirstProducerReadV1 {
+    consumer: ContextWriterKeyV1,
+    reference: ProducerReadReferenceV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProducerReadReferenceV1 {
+    Active(ContextProducerReadReferenceV1),
+    Queued(ContextQueuedProducerReadReferenceV1),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProducerReadRequestV1 {
+    Active(ContextProducerReadV1),
+    Queued(ContextQueuedProducerReadV1),
+}
+
 struct ProducerInputV1 {
     source: ContextReadSourceV1,
     dependency: ScalarPeerDependencyV1,
-    request: ContextProducerReadV1,
+    request: ProducerReadRequestV1,
 }
 
 pub(super) struct RetainedProducerReadV1 {
@@ -31,10 +61,47 @@ pub(super) struct RetainedProducerReadV1 {
     inputs: Vec<ProducerInputV1>,
     requests: Vec<ContextProducerReadV1>,
     references: Vec<ContextProducerReadReferenceV1>,
+    queued_requests: Vec<ContextQueuedProducerReadV1>,
+    queued_references: Vec<ContextQueuedProducerReadReferenceV1>,
     pub(super) marker: Option<SubmissionProducerReaderMarkerV1>,
 }
 
 impl RetainedProducerReadV1 {
+    fn first_reference(&self) -> Option<FirstProducerReadV1> {
+        let (consumer, reference) = match self.inputs.first()?.request {
+            ProducerReadRequestV1::Active(_) => {
+                let first = *self.references.first()?;
+                (first.consumer, ProducerReadReferenceV1::Active(first))
+            }
+            ProducerReadRequestV1::Queued(_) => {
+                let first = *self.queued_references.first()?;
+                (first.consumer, ProducerReadReferenceV1::Queued(first))
+            }
+        };
+        Some(FirstProducerReadV1 {
+            consumer,
+            reference,
+        })
+    }
+
+    fn complete_marker(&self) -> SubmissionProducerReaderMarkerV1 {
+        SubmissionProducerReaderMarkerV1 {
+            first: self
+                .first_reference()
+                .expect("complete typed producer references"),
+            count: self.inputs.len(),
+            active: self
+                .references
+                .first()
+                .copied()
+                .map(|first| (first, self.references.len())),
+            queued: self
+                .queued_references
+                .first()
+                .copied()
+                .map(|first| (first, self.queued_references.len())),
+        }
+    }
     pub(super) fn sources(&self) -> impl Iterator<Item = &ContextReadSourceV1> {
         self.inputs.iter().map(|input| &input.source)
     }
@@ -43,6 +110,7 @@ impl RetainedProducerReadV1 {
 pub(super) struct PreparedProducerReadsV1 {
     root: RetainedProducerReadV1,
     output: Vec<Option<ContextProducerReadReferenceV1>>,
+    queued_output: Vec<Option<ContextQueuedProducerReadReferenceV1>>,
 }
 
 #[cfg(test)]
@@ -84,7 +152,7 @@ impl ContextVersionsV1 {
             .map_or((0, 0, false), |root| {
                 (
                     root.inputs.len(),
-                    root.references.len(),
+                    root.references.len() + root.queued_references.len(),
                     root.marker.is_some(),
                 )
             });
@@ -119,6 +187,21 @@ impl ContextVersionsV1 {
     ) {
         self.producer_readers.get_mut(&id).unwrap().references[index].incarnation += 1;
     }
+
+    pub(in crate::context) fn corrupt_queued_read_for_test_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+        corruption: usize,
+    ) {
+        let root = self.producer_readers.get_mut(&id).unwrap();
+        match corruption {
+            0 => root.queued_references[0].incarnation += 1,
+            1 => root.queued_requests[0].producer.key.local += 1,
+            2 => root.marker.as_mut().unwrap().queued.as_mut().unwrap().1 += 1,
+            3 => root.queued_references.clear(),
+            _ => panic!("unknown queued read corruption"),
+        }
+    }
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
@@ -152,18 +235,39 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .map(|state| (allocation, state))
             });
         let (allocation, state) = self.journal_result_v1(result)?;
-        self.validate_journal_unqueued_v1(source.region.allocation, &source.record)?;
-        let Some(writer) = state.pending_writer else {
+        let result = self
+            .versions
+            .as_ref()
+            .expect("configured journal")
+            .journal
+            .latest_writer(allocation);
+        let Some(writer) = self.journal_result_v1(result)? else {
             return Ok(None);
         };
         let result = self
             .versions
             .as_ref()
             .expect("configured journal")
-            .retained_writer(writer);
+            .journal
+            .queued_writer_status(writer);
+        let queued = match self.journal_result_v1(result)? {
+            None => false,
+            Some(ContextQueuedWriterStatusV1::Waiting | ContextQueuedWriterStatusV1::Ready) => true,
+            Some(_) => return Err(RuntimeValidationErrorV1::ContextReserved),
+        };
+        let versions = self.versions.as_ref().expect("configured journal");
+        let result = if queued {
+            versions.journal.lookup_writer(writer)
+        } else {
+            versions.retained_writer(writer)
+        };
+        let retained = self.journal_result_v1(result)?;
         if !matches!(
-            self.journal_result_v1(result)?,
-            fe2o3_runtime_model::ContextWriterStateV1::Pending { .. }
+            (queued, retained),
+            (
+                false,
+                fe2o3_runtime_model::ContextWriterStateV1::Pending { .. }
+            ) | (true, fe2o3_runtime_model::ContextWriterStateV1::Reserved)
         ) {
             return Err(RuntimeValidationErrorV1::ContextReserved);
         }
@@ -176,6 +280,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             })
             .copied()
             .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
+        if queued
+            && (launch.is_none() || !self.producer_launches.contains_key(&dependency.submission))
+        {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
         if let Some(consumer) = launch {
             // Leases cover the allocation; native coverage must cover every original Read alias.
             let mut found = false;
@@ -226,24 +335,38 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if self.submissions[&dependency.submission].journal_writer != Some(writer) {
             return Err(RuntimeValidationErrorV1::ContextReserved);
         }
-        let request = ContextProducerReadV1 {
-            read: ContextAllocationReadV1 {
-                allocation,
-                device: state.device,
-                byte_extent: state.byte_extent,
+        let request = if queued {
+            ProducerReadRequestV1::Queued(ContextQueuedProducerReadV1 {
+                allocation: fe2o3_runtime_model::ContextAllocationWriteV1 {
+                    allocation,
+                    device: state.device,
+                    byte_extent: state.byte_extent,
+                },
                 byte_offset: source.region.byte_offset,
                 byte_len: source.region.byte_len,
-                attempt_epoch: state.attempt_epoch,
-                content_lineage: state.content_lineage,
-            },
-            producer: writer,
+                producer: writer,
+            })
+        } else {
+            ProducerReadRequestV1::Active(ContextProducerReadV1 {
+                read: ContextAllocationReadV1 {
+                    allocation,
+                    device: state.device,
+                    byte_extent: state.byte_extent,
+                    byte_offset: source.region.byte_offset,
+                    byte_len: source.region.byte_len,
+                    attempt_epoch: state.attempt_epoch,
+                    content_lineage: state.content_lineage,
+                },
+                producer: writer,
+            })
         };
-        let result = self
-            .versions
-            .as_ref()
-            .expect("configured journal")
-            .journal
-            .validate_producer_read(&request);
+        let journal = &self.versions.as_ref().expect("configured journal").journal;
+        let result = match request {
+            ProducerReadRequestV1::Active(request) => journal.validate_producer_read(&request),
+            ProducerReadRequestV1::Queued(request) => {
+                journal.validate_queued_producer_read(&request)
+            }
+        };
         match result {
             Err(ContextVersionJournalErrorV1::AllocationBusy) => {
                 return Err(RuntimeValidationErrorV1::ContextReserved);
@@ -265,12 +388,19 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if inputs.is_empty() {
             return Ok(None);
         }
-        let result = self
-            .versions
-            .as_ref()
-            .expect("configured journal")
-            .journal
-            .validate_producer_read_capacity(inputs.len());
+        let journal = &self.versions.as_ref().expect("configured journal").journal;
+        let active_count = inputs
+            .iter()
+            .filter(|input| matches!(input.request, ProducerReadRequestV1::Active(_)))
+            .count();
+        let queued_count = inputs.len() - active_count;
+        let result = if journal.remaining_read_slots() < inputs.len() {
+            Err(ContextVersionJournalErrorV1::MemberCapacity)
+        } else {
+            journal
+                .validate_producer_read_capacity(active_count)
+                .and_then(|()| journal.validate_queued_producer_read_capacity(queued_count))
+        };
         match result {
             Err(
                 ContextVersionJournalErrorV1::MemberCapacity
@@ -281,17 +411,35 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let mut requests = Vec::new();
         let mut references = Vec::new();
         let mut output = Vec::new();
+        let mut queued_requests = Vec::new();
+        let mut queued_references = Vec::new();
+        let mut queued_output = Vec::new();
         requests
-            .try_reserve_exact(inputs.len())
+            .try_reserve_exact(active_count)
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
         references
-            .try_reserve_exact(inputs.len())
+            .try_reserve_exact(active_count)
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
         output
-            .try_reserve_exact(inputs.len())
+            .try_reserve_exact(active_count)
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
-        requests.extend(inputs.iter().map(|input| input.request));
-        output.resize(inputs.len(), None);
+        queued_requests
+            .try_reserve_exact(queued_count)
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        queued_references
+            .try_reserve_exact(queued_count)
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        queued_output
+            .try_reserve_exact(queued_count)
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        for input in &inputs {
+            match input.request {
+                ProducerReadRequestV1::Active(request) => requests.push(request),
+                ProducerReadRequestV1::Queued(request) => queued_requests.push(request),
+            }
+        }
+        output.resize(active_count, None);
+        queued_output.resize(queued_count, None);
         self.versions
             .as_mut()
             .expect("configured journal")
@@ -304,9 +452,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 inputs,
                 requests,
                 references,
+                queued_requests,
+                queued_references,
                 marker: None,
             },
             output,
+            queued_output,
         }))
     }
 
@@ -430,11 +581,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 } else {
                     Vec::new()
                 };
-                let mut producer_output = if let Some(prepared) = producers {
+                let (mut producer_output, mut queued_output) = if let Some(prepared) = producers {
                     versions.producer_readers.insert(id, prepared.root);
-                    prepared.output
+                    (prepared.output, prepared.queued_output)
                 } else {
-                    Vec::new()
+                    (Vec::new(), Vec::new())
                 };
                 let mut read_root = versions.submission_readers.get_mut(&id);
                 let mut producer_root = versions.producer_readers.get_mut(&id);
@@ -442,30 +593,46 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 let fault = versions.mixed_input_fault.take();
                 #[cfg(test)]
                 if matches!(fault.as_ref(), Some(MixedInputFaultV1::RejectPending)) {
-                    producer_root
-                        .as_mut()
-                        .expect("fault fixture producer")
-                        .requests
-                        .last_mut()
+                    let root = producer_root.as_mut().expect("fault fixture producer");
+                    match root
+                        .inputs
+                        .last()
                         .expect("fault fixture pending input")
-                        .read
-                        .byte_len = 0;
+                        .request
+                    {
+                        ProducerReadRequestV1::Active(_) => {
+                            root.requests.last_mut().unwrap().read.byte_len = 0
+                        }
+                        ProducerReadRequestV1::Queued(_) => {
+                            root.queued_requests.last_mut().unwrap().byte_len = 0
+                        }
+                    }
                 }
                 let consumer = ContextWriterKeyV1 {
                     context_generation: id.context_generation,
                     local: id.local,
                     kind: ContextWriterKindV1::Submission,
                 };
-                versions.journal.acquire_mixed_reads(
+                versions.journal.acquire_mixed_reads_with_queued(
                     consumer,
-                    read_root
-                        .as_ref()
-                        .map_or(&[], |root| root.requests.as_slice()),
-                    &mut read_output,
-                    producer_root
-                        .as_ref()
-                        .map_or(&[], |root| root.requests.as_slice()),
-                    &mut producer_output,
+                    (
+                        read_root
+                            .as_ref()
+                            .map_or(&[], |root| root.requests.as_slice()),
+                        &mut read_output,
+                    ),
+                    (
+                        producer_root
+                            .as_ref()
+                            .map_or(&[], |root| root.requests.as_slice()),
+                        &mut producer_output,
+                    ),
+                    (
+                        producer_root
+                            .as_ref()
+                            .map_or(&[], |root| root.queued_requests.as_slice()),
+                        &mut queued_output,
+                    ),
                 )?;
                 #[cfg(test)]
                 if let Some(MixedInputFaultV1::FinalizationPanic(payload)) = fault {
@@ -490,18 +657,20 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         root.references
                             .push(reference.expect("complete producer reservations"));
                     }
+                    assert!(
+                        root.queued_references.capacity() >= queued_output.len(),
+                        "preallocated queued references"
+                    );
+                    for reference in queued_output {
+                        root.queued_references
+                            .push(reference.expect("complete queued reservations"));
+                    }
                 }
                 let read_marker = read_root.as_ref().map(|root| SubmissionReaderMarkerV1 {
                     first: root.references[0],
                     count: root.references.len(),
                 });
-                let producer_marker =
-                    producer_root
-                        .as_ref()
-                        .map(|root| SubmissionProducerReaderMarkerV1 {
-                            first: root.references[0],
-                            count: root.references.len(),
-                        });
+                let producer_marker = producer_root.as_ref().map(|root| root.complete_marker());
                 // Publish neither marker until both complete reference arrays are retained.
                 if let Some(root) = read_root {
                     root.marker = read_marker;
@@ -568,10 +737,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     root.references
                         .push(reference.expect("complete producer reservations"));
                 }
-                let marker = SubmissionProducerReaderMarkerV1 {
-                    first: root.references[0],
-                    count: root.references.len(),
-                };
+                let marker = root.complete_marker();
                 root.marker = Some(marker);
                 Ok(Some(marker))
             })();
@@ -606,9 +772,24 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         if marker.count == 0
             || marker.count != root.inputs.len()
-            || marker.count != root.references.len()
-            || marker.count != root.requests.len()
-            || marker.first != root.references[0]
+            || marker.count != root.references.len() + root.queued_references.len()
+            || root.references.len() != root.requests.len()
+            || root.queued_references.len() != root.queued_requests.len()
+            || Some(marker.first) != root.first_reference()
+            || marker.active
+                != root
+                    .references
+                    .first()
+                    .copied()
+                    .map(|first| (first, root.references.len()))
+            || marker.queued
+                != root
+                    .queued_references
+                    .first()
+                    .copied()
+                    .map(|first| (first, root.queued_references.len()))
+            || marker.first.consumer != consumer
+            || !launch && !root.queued_requests.is_empty()
             || !launch && versions.submission_readers.contains_key(&id)
             || record.is_some_and(|record| {
                 record.producer_launch != launch
@@ -626,15 +807,64 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(E::InvalidReference);
         }
         let mut aggregate = ContextProducerReadStatusV1::Success;
-        for (index, ((input, request), reference)) in root
-            .inputs
-            .iter()
-            .zip(&root.requests)
-            .zip(&root.references)
-            .enumerate()
-        {
+        let mut active_index = 0usize;
+        let mut queued_index = 0usize;
+        for (index, input) in root.inputs.iter().enumerate() {
             let source = input.source;
-            let read = request.read;
+            let (allocation, byte_offset, byte_len, producer, status) = match input.request {
+                ProducerReadRequestV1::Active(request) => {
+                    let reference = *root
+                        .references
+                        .get(active_index)
+                        .ok_or(E::InvalidReference)?;
+                    if root.requests.get(active_index) != Some(&request)
+                        || reference.consumer != consumer
+                        || root.references[0]
+                            .incarnation
+                            .checked_add(active_index as u64)
+                            != Some(reference.incarnation)
+                        || versions.journal.lookup_producer_read(reference)? != request
+                    {
+                        return Err(E::InvalidReference);
+                    }
+                    active_index += 1;
+                    (
+                        fe2o3_runtime_model::ContextAllocationWriteV1 {
+                            allocation: request.read.allocation,
+                            device: request.read.device,
+                            byte_extent: request.read.byte_extent,
+                        },
+                        request.read.byte_offset,
+                        request.read.byte_len,
+                        request.producer,
+                        versions.journal.producer_read_status(reference)?,
+                    )
+                }
+                ProducerReadRequestV1::Queued(request) => {
+                    let reference = *root
+                        .queued_references
+                        .get(queued_index)
+                        .ok_or(E::InvalidReference)?;
+                    if root.queued_requests.get(queued_index) != Some(&request)
+                        || reference.consumer != consumer
+                        || root.queued_references[0]
+                            .incarnation
+                            .checked_add(queued_index as u64)
+                            != Some(reference.incarnation)
+                        || versions.journal.lookup_queued_producer_read(reference)? != request
+                    {
+                        return Err(E::InvalidReference);
+                    }
+                    queued_index += 1;
+                    (
+                        request.allocation,
+                        request.byte_offset,
+                        request.byte_len,
+                        request.producer,
+                        versions.journal.queued_producer_read_status(reference)?,
+                    )
+                }
+            };
             let bound = if launch {
                 self.producer_launches.get(&id).is_some_and(|launch| {
                     launch.dependencies_held
@@ -653,10 +883,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 })
             };
             if !bound
-                || *request != input.request
-                || reference.consumer != consumer
-                || marker.first.incarnation.checked_add(index as u64) != Some(reference.incarnation)
-                || request.producer.key
+                || producer.key
                     != (ContextWriterKeyV1 {
                         context_generation: input.dependency.submission.context_generation,
                         local: input.dependency.submission.local,
@@ -675,23 +902,21 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     source.record.byte_len,
                 )
                 || versions.validate_live(source.region.allocation, &source.record)?
-                    != read.allocation
-                || read.device
+                    != allocation.allocation
+                || allocation.device
                     != enrollment(
                         source.region.allocation,
                         source.record.device,
                         source.record.byte_len,
                     )
                     .device
-                || read.byte_extent != source.record.byte_len
-                || read.byte_offset != source.region.byte_offset
-                || read.byte_len != source.region.byte_len
-                || versions.journal.lookup_producer_read(*reference)? != *request
+                || allocation.byte_extent != source.record.byte_len
+                || byte_offset != source.region.byte_offset
+                || byte_len != source.region.byte_len
             {
                 return Err(E::InvalidReference);
             }
             // Resolved reservations outlive their writer slot; never revalidate admission.
-            let status = versions.journal.producer_read_status(*reference)?;
             aggregate = match (aggregate, status) {
                 (ContextProducerReadStatusV1::Unknown, _)
                 | (_, ContextProducerReadStatusV1::Unknown) => ContextProducerReadStatusV1::Unknown,
@@ -703,6 +928,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 | (_, ContextProducerReadStatusV1::Pending) => ContextProducerReadStatusV1::Pending,
                 _ => ContextProducerReadStatusV1::Success,
             };
+        }
+        if active_index != root.references.len() || queued_index != root.queued_references.len() {
+            return Err(E::InvalidReference);
         }
         Ok(Some(aggregate))
     }
@@ -750,6 +978,53 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 completion_faults::CompletionJournalStageV1::Producer,
                 completion_faults::CompletionJournalPointV1::BeforeEffect,
             )?;
+            let root = versions
+                .producer_readers
+                .get(&id)
+                .expect("validated producer inputs");
+            if !root.queued_references.is_empty() {
+                let consumer = root
+                    .marker
+                    .expect("validated producer marker")
+                    .first
+                    .consumer;
+                let evidence = ContextReadQuiescenceEvidenceV1 { consumer };
+                if !root.references.is_empty() {
+                    versions.journal.release_producer_reads(
+                        consumer,
+                        &root.references,
+                        &evidence,
+                    )?;
+                }
+                // Each family preflights independently. A failure after the active
+                // release retains the Context root and quarantines the remainder.
+                #[cfg(test)]
+                versions.completion_boundary_for_test_v1(
+                    id,
+                    completion_faults::CompletionJournalStageV1::Producer,
+                    completion_faults::CompletionJournalPointV1::BetweenProducerClasses,
+                )?;
+                let root = versions
+                    .producer_readers
+                    .get(&id)
+                    .expect("retained producer inputs");
+                versions.journal.release_queued_producer_reads(
+                    consumer,
+                    &root.queued_references,
+                    &evidence,
+                )?;
+                #[cfg(test)]
+                versions.completion_boundary_for_test_v1(
+                    id,
+                    completion_faults::CompletionJournalStageV1::Producer,
+                    completion_faults::CompletionJournalPointV1::AfterEffect,
+                )?;
+                versions.producer_readers.remove(&id);
+                if let Some(record) = self.submissions.get_mut(&id) {
+                    record.journal_producer_read = None;
+                }
+                return Ok(());
+            }
             completion_selected_reader_release_body!(completion_journal_rust_syntax,
             versions.producer_readers, self.submissions, versions.journal,
             id, journal_producer_read, release_producer_reads, [

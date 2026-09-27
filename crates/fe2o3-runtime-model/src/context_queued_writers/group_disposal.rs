@@ -261,7 +261,9 @@ impl ContextQueuedWriterJournalV1 {
         };
         // A selected submission must release inputs outside the destination union
         // too. Destination reader counts alone cannot establish that condition.
-        if self.inner.has_consumer_reads_matching_v1(selected) {
+        if self.inner.has_consumer_reads_matching_v1(selected)
+            || self.has_queued_consumer_reads_matching(selected)
+        {
             return Err(Error::AllocationBusy);
         }
         let mut previous_allocation = None;
@@ -270,7 +272,7 @@ impl ContextQueuedWriterJournalV1 {
                 return Err(Error::NonCanonicalRoster);
             }
             let state = self.destination(write)?;
-            if self.inner.reader_count(write.allocation)? != 0 {
+            if self.reader_count(write.allocation)? != 0 {
                 return Err(Error::AllocationBusy);
             }
             if state.pending_writer.is_none() {
