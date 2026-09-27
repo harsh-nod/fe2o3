@@ -41,10 +41,10 @@ impl Prepared {
                 invocation,
                 attempt,
             } => {
-                // Activation still requires replacing this legacy live-process
-                // observation with the bounded native observation boundary.
+                // Image streams are metered; complete live argv/environment and
+                // capability capture still require the native migration boundary.
                 invocation
-                    .revalidate_for_publication()
+                    .revalidate_for_publication_with_image_budget(b)
                     .map_err(Error::LiveInvocation)?;
                 // Both immutable descriptors passed the canonical size bound;
                 // this pays byte comparisons and their bounded field headers.

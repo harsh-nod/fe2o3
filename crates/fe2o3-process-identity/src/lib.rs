@@ -26,8 +26,14 @@ use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
+mod compiler_image;
 mod protected_rustc;
 mod sealed_memfd;
+
+pub use compiler_image::{
+    COMPILER_IMAGE_MEASUREMENT_STORAGE_V1, CompilerImageMeasurementErrorV1, CompilerImageRoleV1,
+    measure_compiler_image_file_sha256_v1, measure_compiler_image_sha256_v1,
+};
 
 pub use protected_rustc::{
     CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2, EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1,
@@ -410,21 +416,10 @@ pub fn current_directory_object_identity_v3() -> Result<LinuxObjectIdentityV3, P
 }
 
 pub fn measure_executable_sha256_v3(path: &Path) -> Result<[u8; 32], ProcessIdentityError> {
-    let mut file = File::open(path).map_err(|error| {
-        ProcessIdentityError::new(format!(
-            "cannot open executable {}: {error}",
-            path.display()
-        ))
-    })?;
-    let (sha256, _, object) =
-        measure_open_regular_file(&mut file, MAX_EXECUTABLE_BYTES_V3, "executable")?;
-    if object.mode & 0o111 == 0 {
-        return Err(ProcessIdentityError::new(format!(
-            "executable {} has no execute permission bits",
-            path.display()
-        )));
-    }
-    Ok(sha256)
+    measure_compiler_image_sha256_v1(path, CompilerImageRoleV1::Executable, |_| {
+        Ok::<_, std::convert::Infallible>(())
+    })
+    .map_err(|error| ProcessIdentityError::new(format!("executable {}: {error}", path.display())))
 }
 
 /// Consumes one immutable parent expectation and compares it with a child observation.
@@ -475,58 +470,10 @@ fn measure_open_regular_file(
     maximum: u64,
     label: &str,
 ) -> Result<([u8; 32], u64, LinuxObjectIdentityV3), ProcessIdentityError> {
-    let initial_metadata = file
-        .metadata()
-        .map_err(|error| ProcessIdentityError::new(format!("cannot inspect {label}: {error}")))?;
-    if !initial_metadata.is_file() {
-        return Err(ProcessIdentityError::new(format!(
-            "{label} is not a regular file"
-        )));
-    }
-    let initial = FileSnapshot::from_metadata(&initial_metadata);
-    if initial.size == 0 || initial.size > maximum {
-        return Err(ProcessIdentityError::new(format!(
-            "{label} has an invalid bounded size"
-        )));
-    }
-    file.seek(SeekFrom::Start(0)).map_err(|error| {
-        ProcessIdentityError::new(format!("cannot rewind {label} before hashing: {error}"))
-    })?;
-    let mut remaining = initial.size;
-    let mut digest = Sha256::new();
-    let mut buffer = [0_u8; HASH_CHUNK_BYTES];
-    while remaining != 0 {
-        let wanted = usize::try_from(remaining.min(buffer.len() as u64))
-            .expect("bounded hash chunk fits usize");
-        let read = file
-            .read(&mut buffer[..wanted])
-            .map_err(|error| ProcessIdentityError::new(format!("cannot hash {label}: {error}")))?;
-        if read == 0 {
-            return Err(ProcessIdentityError::new(format!(
-                "{label} was truncated while hashing"
-            )));
-        }
-        digest.update(&buffer[..read]);
-        remaining -= read as u64;
-    }
-    if file
-        .read(&mut buffer[..1])
-        .map_err(|error| ProcessIdentityError::new(format!("cannot bound {label}: {error}")))?
-        != 0
-    {
-        return Err(ProcessIdentityError::new(format!(
-            "{label} grew while hashing"
-        )));
-    }
-    let final_snapshot = FileSnapshot::from_metadata(&file.metadata().map_err(|error| {
-        ProcessIdentityError::new(format!("cannot reinspect {label}: {error}"))
-    })?);
-    if final_snapshot != initial {
-        return Err(ProcessIdentityError::new(format!(
-            "{label} changed while hashing"
-        )));
-    }
-    Ok((digest.finalize().into(), initial.size, initial.object))
+    compiler_image::measure_open(file, maximum, false, &mut |_| {
+        Ok::<_, std::convert::Infallible>(())
+    })
+    .map_err(|error| ProcessIdentityError::new(format!("{label}: {error}")))
 }
 
 fn consume_sealed_digest_v3(descriptor: RawFd) -> Result<[u8; 32], ProcessIdentityError> {

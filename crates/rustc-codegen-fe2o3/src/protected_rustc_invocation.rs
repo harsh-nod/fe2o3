@@ -2,10 +2,9 @@
 
 use std::env;
 use std::fmt;
-use std::fs::{self, File, Metadata};
-use std::io::Read as _;
+use std::fs;
 use std::os::fd::RawFd;
-use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
 
 #[cfg(test)]
@@ -13,12 +12,17 @@ use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_closure_capability::{
     RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1,
 };
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+};
 use fe2o3_process_identity::{
-    CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2, EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1,
-    ProtectedRustcProcessValidationErrorV1, validate_protected_rustc_process_observation_v1,
+    CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2, COMPILER_IMAGE_MEASUREMENT_STORAGE_V1,
+    CompilerImageMeasurementErrorV1 as ImageError, CompilerImageRoleV1 as ImageRole,
+    EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1, ProtectedRustcProcessValidationErrorV1,
+    measure_compiler_image_sha256_v1, validate_protected_rustc_process_observation_v1,
 };
 use fe2o3_rustc_invocation::{CompileEnvironmentV2, RustcInvocationDescriptorV3};
-use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
 const BASELINE_PROTECTED_TARGET_V1: &str = fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1;
@@ -58,10 +62,35 @@ impl AdmittedProtectedRustcInvocationV1 {
     /// Revalidates before native publication without detaching the original
     /// invocation from the complete retained source/target preparation owner.
     pub(crate) fn revalidate_for_publication(&self) -> Result<(), ProtectedRustcInvocationErrorV1> {
+        self.revalidate_with(RustcProcessObservationV1::capture)
+    }
+
+    /// Meters both image streams on the original account. Complete live argv,
+    /// cwd/environment capture and legacy capability admission remain migration
+    /// gates; this method does not claim to bound those other observations.
+    pub(crate) fn revalidate_for_publication_with_image_budget(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), ProtectedRustcInvocationErrorV1> {
+        self.revalidate_with(|descriptor| {
+            RustcProcessObservationV1::capture_with_images(descriptor, |path, role| {
+                measure_image_with_budget(path, role, budget)
+                    .map_err(|e| ProtectedRustcInvocationErrorV1::Observation(e.to_string()))
+            })
+        })
+    }
+
+    fn revalidate_with(
+        &self,
+        capture: impl FnOnce(
+            &RustcInvocationDescriptorV3,
+        )
+            -> Result<RustcProcessObservationV1, ProtectedRustcInvocationErrorV1>,
+    ) -> Result<(), ProtectedRustcInvocationErrorV1> {
         self.capability
             .revalidate()
             .map_err(ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged)?;
-        let observation = RustcProcessObservationV1::capture(self.capability.descriptor())?;
+        let observation = capture(self.capability.descriptor())?;
         validate_retained_capability(&self.capability, observation)
     }
 
@@ -294,6 +323,16 @@ impl RustcProcessObservationV1 {
     fn capture(
         descriptor: &RustcInvocationDescriptorV3,
     ) -> Result<Self, ProtectedRustcInvocationErrorV1> {
+        Self::capture_with_images(descriptor, |path, role| {
+            measure_compiler_image_sha256_v1(path, role, |_| Ok::<_, std::convert::Infallible>(()))
+                .map_err(|e| ProtectedRustcInvocationErrorV1::Observation(e.to_string()))
+        })
+    }
+
+    fn capture_with_images(
+        descriptor: &RustcInvocationDescriptorV3,
+        mut measure: impl FnMut(&Path, ImageRole) -> Result<[u8; 32], ProtectedRustcInvocationErrorV1>,
+    ) -> Result<Self, ProtectedRustcInvocationErrorV1> {
         let argv = env::args_os()
             .enumerate()
             .map(|(index, value)| {
@@ -329,16 +368,11 @@ impl RustcProcessObservationV1 {
                 "cannot capture complete compile environment: {error}"
             ))
         })?;
-        let running_rustc_sha256 =
-            fe2o3_process_identity::measure_executable_sha256_v3(Path::new(RUNNING_RUSTC_PATH))
-                .map_err(|error| {
-                    ProtectedRustcInvocationErrorV1::Observation(format!(
-                        "cannot measure running rustc: {error}"
-                    ))
-                })?;
-        let running_codegen_backend_sha256 =
-            measure_bounded_regular_file(Path::new(descriptor.codegen_backend_path()), "backend")
-                .map_err(ProtectedRustcInvocationErrorV1::Observation)?;
+        let running_rustc_sha256 = measure(Path::new(RUNNING_RUSTC_PATH), ImageRole::Executable)?;
+        let running_codegen_backend_sha256 = measure(
+            Path::new(descriptor.codegen_backend_path()),
+            ImageRole::CodegenBackend,
+        )?;
         Ok(Self {
             argv,
             canonical_working_directory,
@@ -427,83 +461,23 @@ fn map_process_validation_error(
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct FileSnapshotV1 {
-    device: u64,
-    inode: u64,
-    mode: u32,
-    size: u64,
-    modified_seconds: i64,
-    modified_nanoseconds: i64,
-    changed_seconds: i64,
-    changed_nanoseconds: i64,
-}
-
-impl FileSnapshotV1 {
-    fn from_metadata(metadata: &Metadata) -> Self {
-        Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            mode: metadata.mode(),
-            size: metadata.len(),
-            modified_seconds: metadata.mtime(),
-            modified_nanoseconds: metadata.mtime_nsec(),
-            changed_seconds: metadata.ctime(),
-            changed_nanoseconds: metadata.ctime_nsec(),
-        }
-    }
-}
-
-fn measure_bounded_regular_file(path: &Path, label: &str) -> Result<[u8; 32], String> {
-    let mut file = File::open(path)
-        .map_err(|error| format!("cannot open {label} {}: {error}", path.display()))?;
-    let initial = file
-        .metadata()
-        .map_err(|error| format!("cannot inspect {label} {}: {error}", path.display()))?;
-    if !initial.is_file()
-        || initial.len() == 0
-        || initial.len() > fe2o3_process_identity::MAX_EXECUTABLE_BYTES_V3
-    {
-        return Err(format!(
-            "{label} {} has invalid bounded regular-file size {}",
-            path.display(),
-            initial.len()
-        ));
-    }
-    let snapshot = FileSnapshotV1::from_metadata(&initial);
-    let mut digest = Sha256::new();
-    let mut remaining = initial.len();
-    let mut buffer = [0_u8; 64 * 1024];
-    while remaining != 0 {
-        let requested = usize::try_from(remaining.min(buffer.len() as u64))
-            .expect("bounded backend chunk fits usize");
-        let read = file
-            .read(&mut buffer[..requested])
-            .map_err(|error| format!("cannot hash {label} {}: {error}", path.display()))?;
-        if read == 0 {
-            return Err(format!(
-                "{label} {} became shorter while hashing",
-                path.display()
-            ));
-        }
-        digest.update(&buffer[..read]);
-        remaining -= read as u64;
-    }
-    if file
-        .read(&mut buffer[..1])
-        .map_err(|error| format!("cannot finish hashing {label} {}: {error}", path.display()))?
-        != 0
-    {
-        return Err(format!("{label} {} grew while hashing", path.display()));
-    }
-    let final_metadata = file
-        .metadata()
-        .map_err(|error| format!("cannot re-inspect {label} {}: {error}", path.display()))?;
-    if FileSnapshotV1::from_metadata(&final_metadata) != snapshot {
-        return Err(format!("{label} {} changed while hashing", path.display()));
-    }
-    Ok(digest.finalize().into())
+fn measure_image_with_budget(
+    path: &Path,
+    role: ImageRole,
+    budget: &mut Budget<'_>,
+) -> Result<[u8; 32], ImageError<Resource>> {
+    budget.with_prepaid_scope(
+        path.as_os_str().as_bytes().len(),
+        8,
+        8,
+        COMPILER_IMAGE_MEASUREMENT_STORAGE_V1 + std::mem::size_of::<ImageError<Resource>>(),
+        |b| measure_compiler_image_sha256_v1(path, role, |work| b.charge_work(work)),
+    )
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "protected_rustc_invocation/image_budget_tests.rs"]
+mod image_budget_tests;
