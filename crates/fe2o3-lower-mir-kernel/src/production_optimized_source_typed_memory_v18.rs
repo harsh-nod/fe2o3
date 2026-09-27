@@ -200,20 +200,20 @@ pub(super) fn test_optimized_whole_value_roles_v18(
 
 // Borrowed original metadata and the exact mapped output payload. This is an
 // input to C2 currentness, never a replacement source/object/schema owner.
-struct OptimizedSourceObjectV18<'a> {
-    original: SourcePhysicalObjectV18<'a>,
-    input: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
-    output: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
-    actual: ScopedObjectPayloadV29,
+pub(super) struct OptimizedSourceObjectV18<'a> {
+    pub(super) original: SourcePhysicalObjectV18<'a>,
+    pub(super) input: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+    pub(super) output: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+    pub(super) actual: ScopedObjectPayloadV29,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct OptimizedSourceObjectCensusV18 {
+pub(super) struct OptimizedSourceObjectCensusV18 {
     retained: usize,
     unreachable: usize,
 }
 
-fn visit_optimized_source_objects_v18(
+pub(super) fn visit_optimized_source_objects_v18(
     original: &ProductionSourceCorrespondenceV18<'_>,
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
     root: usize,
@@ -352,7 +352,7 @@ fn mark_source_object_operation_v18(
     Ok(())
 }
 
-fn optimized_source_object_payload_v18(
+pub(super) fn optimized_source_object_payload_v18(
     original: &ProductionSourceCorrespondenceV18<'_>,
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
     input: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,

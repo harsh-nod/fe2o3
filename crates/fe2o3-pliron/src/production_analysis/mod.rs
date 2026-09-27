@@ -836,6 +836,7 @@ pub use canonical_ranked_checks_v1::{
     CheckedCanonicalRankedPoliciesV18, with_canonical_ranked_policy_checks_v1,
     with_canonical_ranked_policy_checks_v18,
     CanonicalRankedSourceObligationV18, PendingCanonicalRankedPoliciesV18,
+    PendingCanonicalPrivateMemoryPoliciesV18,
     PendingCanonicalRankedSourceRolesV18, with_pending_canonical_ranked_source_roles_v18,
 };
 

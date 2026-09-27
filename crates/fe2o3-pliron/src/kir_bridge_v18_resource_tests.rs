@@ -55,6 +55,9 @@ fn headers() -> usize {
         + 2 * size_of::<Result<crate::OperationGraphSnapshotV1, OperationHandleError>>()
         + 2 * size_of::<Result<(), ResourceError>>()
         + 2 * size_of::<Result<usize, ResourceError>>()
+        + 2 * size_of::<resources::Envelope>()
+        + 2 * size_of::<Result<resources::Envelope, ResourceError>>()
+        + 2 * size_of::<usize>()
         + 2 * size_of::<Result<storage_v18::ProfileV18<'_>, CanonicalKernelIrReplayAdmissionErrorV18>>(
         )
         + 2 * size_of::<
@@ -94,14 +97,22 @@ const KEY: usize = 1 + 1 + 4 + (4 + 34 + 2 + 8 + 4);
 const VOLUME: usize = WIRE + TREE + 1;
 const OPAQUE_WORK: usize = 4 * VOLUME * VOLUME + 8 * VOLUME;
 const OPAQUE_STORAGE: usize = 64 * VOLUME + 4096;
+const COORDINATE_WORK: usize = 2 * TREE * TREE + 8 * TREE;
 const ENTRY_WORK: usize = 1 + 4;
-const IMPORT_WORK: usize = ENTRY_WORK + KEY + WIRE + OPAQUE_WORK;
+const IMPORT_WORK: usize = ENTRY_WORK + KEY + WIRE + OPAQUE_WORK + COORDINATE_WORK;
 // V966 independent empty Module("m") whole factory: count11 + emit45,
 // entry1 + decode(44+11+57) + layout8 + verify7 + hash94.
 const CANONICAL: usize = 1 + 11 + 45 + (44 + 11 + 57) + 8 + 7 + 94;
 const EXPORT_WORK: usize = ENTRY_WORK + WIRE + TREE + OPAQUE_WORK + CANONICAL + KEY + WIRE;
 fn retained_graph() -> usize {
-    OPAQUE_STORAGE + size_of::<KirPlironGraphV18<'_>>()
+    OPAQUE_STORAGE + coordinate_storage(TREE) + size_of::<KirPlironGraphV18<'_>>()
+}
+fn coordinate_storage(slots: usize) -> usize {
+    2 * slots * (size_of::<(Ptr<Operation>, KirBridgeCoordinateV1)>() + 1) + 16
+        + size_of::<HashMap<Ptr<Operation>, KirBridgeCoordinateV1>>()
+        + size_of::<Result<(), std::collections::TryReserveError>>()
+        + size_of::<Option<KirBridgeCoordinateV1>>()
+        + size_of::<(Ptr<Operation>, KirBridgeCoordinateV1, usize, usize)>()
 }
 fn retained_output() -> usize {
     size_of::<VerifiedCanonicalKernelIrModuleV18>() + 1 + WIRE + size_of::<KirBridgeReportV18>()
@@ -112,7 +123,7 @@ fn storage_v18_empty_whole_import_has_independent_work_and_transfer_reservation(
     assert_eq!(resources::headers().unwrap(), headers());
     assert_eq!(KEY, 58);
     assert_eq!(CANONICAL, 278);
-    assert_eq!(IMPORT_WORK, 8564);
+    assert_eq!(IMPORT_WORK, 8606);
     assert_eq!(EXPORT_WORK, 8886);
     let owner = tests::owner(&Module::new("m"));
     let mut work = Work::new(IMPORT_WORK);
@@ -409,4 +420,49 @@ fn storage_v18_foreign_ledger_does_not_enter_payload_cleanup_or_poison() {
     assert_eq!(foreign.storage(), FLOOR + retained_graph());
     assert_eq!(budget.storage(), FLOOR + retained_graph());
     tests::clear_panic();
+}
+
+#[test]
+fn storage_v18_coordinate_table_has_independent_capacity_work_and_storage_bounds() {
+    for slots in [TREE, 7, 257] {
+        let envelope = resources::coordinate_envelope(slots).unwrap();
+        assert_eq!(envelope.work, 2 * slots * slots + 8 * slots);
+        assert_eq!(envelope.storage, coordinate_storage(slots));
+        let mut map = HashMap::<Ptr<Operation>, KirBridgeCoordinateV1>::new();
+        map.try_reserve(slots).unwrap();
+        assert!(map.capacity() >= slots && map.capacity() <= 2 * slots);
+    }
+    assert!(matches!(resources::coordinate_envelope(usize::MAX), Err(ResourceError::Arithmetic)));
+    let owner = tests::owner(&Module::new("m"));
+    let peak = FLOOR + headers() + retained_graph();
+    for (work_limit, storage_limit, success) in [
+        (IMPORT_WORK, peak, true),
+        (IMPORT_WORK - 1, peak, false),
+        (IMPORT_WORK, peak - 1, false),
+    ] {
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(FLOOR).unwrap();
+        let result = KirPlironGraphV18::import(&owner, &mut budget);
+        assert_eq!(result.is_ok(), success);
+        if !success {
+            assert!(matches!(&result, Err(KirBridgeErrorV18::Resource(_))));
+            if work_limit < IMPORT_WORK {
+                assert_eq!(budget.work(), ENTRY_WORK + KEY + WIRE);
+                assert_eq!(budget.failed_storage(), None);
+            } else {
+                assert_eq!(budget.work(), IMPORT_WORK);
+                assert_eq!(budget.failed_storage(), Some(peak));
+                assert_eq!(budget.peak_storage(), peak - size_of::<KirPlironGraphV18<'_>>());
+            }
+        }
+        if let Ok((graph, receipt)) = result {
+            assert!(graph.coordinates.is_empty());
+            assert!(graph.coordinates.capacity() >= TREE && graph.coordinates.capacity() <= 2 * TREE);
+            assert_eq!(receipt.retained_storage(), retained_graph());
+            assert_eq!(budget.work(), IMPORT_WORK);
+            assert_eq!(budget.peak_storage(), peak);
+        }
+        assert_eq!(budget.storage(), FLOOR);
+    }
 }

@@ -14,6 +14,47 @@ struct SourcePhysicalBackingV18<'a> {
     slot: &'a ScopedSourceSlotV29,
 }
 
+fn source_allocation_shape_headers_v18() -> Result<usize, ArgumentResourceV1> {
+    argument_sum_v1(&[
+        size_of::<()>(),
+        argument_product_v1(2, size_of::<SourceOwnedResultV18<()>>())?,
+        size_of::<&ScopedSourceSlotV29>(),
+        size_of::<&Operation>(),
+        size_of::<&Option<ValueId>>(),
+        size_of::<&Type>(),
+        size_of::<&u32>(),
+        size_of::<(ScopedAllocationIdentityV29, ScopedAllocationSourceV29, ScopedSlotRepresentationV29)>(),
+        size_of::<ScopedScalarArraySlotV29>(),
+        size_of::<Result<ScopedScalarArraySlotV29, ProductionSemanticKirErrorV1>>(),
+        size_of::<SourceOwnedResultV18<ScopedScalarArraySlotV29>>(),
+        size_of::<Option<&(ValueId, PrivateArrayPhysicalLocationV1)>>(),
+        size_of::<&(ValueId, PrivateArrayPhysicalLocationV1)>(),
+        size_of::<&ValueId>(),
+        size_of::<Option<ValueId>>(),
+        size_of::<SourceCorrespondenceWorkV18<'_, '_>>(),
+        size_of::<SourceOwnedResultV18<bool>>(),
+        size_of::<Result<(), ProductionSemanticKirErrorV1>>(),
+    ])
+}
+
+fn source_allocation_slot_headers_v18() -> Result<usize, ArgumentResourceV1> {
+    argument_sum_v1(&[
+        size_of::<SourcePhysicalBackingV18<'_>>(),
+        argument_product_v1(2, size_of::<SourceOwnedResultV18<SourcePhysicalBackingV18<'_>>>())?,
+        size_of::<&ScopedModuleRootV29>(),
+        size_of::<SourceOwnedResultV18<&ScopedModuleRootV29>>(),
+        size_of::<Option<&ScopedSourceSlotV29>>(),
+        size_of::<&ScopedSourceSlotV29>(),
+        size_of::<SourceOwnedResultV18<&ScopedSourceSlotV29>>(),
+        size_of::<fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1>(),
+        size_of::<SourceOwnedResultV18<fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1>>(),
+        size_of::<&fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'_>>(),
+        size_of::<SourceOwnedResultV18<&fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'_>>>(),
+        size_of::<&Operation>(),
+        size_of::<SourceOwnedResultV18<()>>(),
+    ])
+}
+
 struct SourcePhysicalAccessV18<'a> {
     instance: usize,
     row: usize,
@@ -292,7 +333,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 .and_then(|body| body.blocks.get(operation.block.block as usize))
                 .and_then(|block| block.operations.get(operation.operation as usize))
                 .ok_or(ProductionSourceOwnedViewErrorV18::Binding("retained allocation coordinate"))?;
-            let OperationKind::Alloca { address_space: AddressSpace::Private, count, element: element_type, alignment } = &actual.kind else {
+            let OperationKind::Alloca { address_space: AddressSpace::Private, .. } = &actual.kind else {
                 return Ok(None);
             };
             let [result] = actual.results.as_slice() else {
@@ -318,22 +359,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                     if matched.is_some() || slot.instance != owner.instance {
                         return self.source.missing("retained allocation has ambiguous or changed backing");
                     }
-                    budget.charge_work(3)?;
-                    match (slot.origin.identity, slot.origin.source, slot.representation) {
-                        (ScopedAllocationIdentityV29::LegacyLocal(_), ScopedAllocationSourceV29::Legacy | ScopedAllocationSourceV29::OriginalArray { .. }, ScopedSlotRepresentationV29::ScalarArray(scalar)) => {
-                            slot.scalar_array().map_err(|error| source_attachment_error_v18(error.into()))?;
-                            if scalar.count.as_ref().map(|(value, _)| *value) != *count
-                                || scalar.element.alignment != *alignment
-                                || !scalar.element.element.matches_borrowed(element_type, &mut SourceCorrespondenceWorkV18(budget))? {
-                                return self.source.missing("retained scalar allocation changed representation");
-                            }
-                        }
-                        (ScopedAllocationIdentityV29::OriginalObject { .. }, ScopedAllocationSourceV29::OriginalObject { schema: original, .. }, ScopedSlotRepresentationV29::Object { schema, alignment, .. }) if original == schema => {
-                            check_scoped_object_alloca_v29(actual, slot.origin.pointer, schema, alignment, budget)
-                                .map_err(|error| source_attachment_error_v18(error.into()))?;
-                        }
-                        _ => return self.source.missing("retained allocation changed source kind"),
-                    }
+                    self.retained_allocation_shape_v18(slot, actual, budget)?;
                     let rows = self.attachment_range(TileAttachmentKeyV29 {
                         root, family: TileAttachmentFamilyV29::SourceSlot, instance,
                         row: first.checked_add(offset).ok_or(ArgumentResourceV1::Arithmetic)?,
@@ -354,6 +380,127 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 }
             }
             Ok(matched)
+        })())
+    }
+
+    // The existing whole-inventory locator and the slot-directed caller share
+    // the same representation check. No schema/identity is inferred from bits.
+    fn retained_allocation_shape_v18(
+        &self,
+        slot: &ScopedSourceSlotV29,
+        actual: &Operation,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<()> {
+        budget.reserve_storage(source_allocation_shape_headers_v18()?)?;
+        budget.charge_work(3)?;
+        let OperationKind::Alloca {
+            address_space: AddressSpace::Private,
+            count,
+            element: element_type,
+            alignment,
+        } = &actual.kind
+        else {
+            return self
+                .source
+                .missing("retained allocation changed source kind");
+        };
+        match (
+            slot.origin.identity,
+            slot.origin.source,
+            slot.representation,
+        ) {
+            (
+                ScopedAllocationIdentityV29::LegacyLocal(_),
+                ScopedAllocationSourceV29::Legacy | ScopedAllocationSourceV29::OriginalArray { .. },
+                ScopedSlotRepresentationV29::ScalarArray(scalar),
+            ) => {
+                slot.scalar_array()
+                    .map_err(|error| source_attachment_error_v18(error.into()))?;
+                if scalar.count.as_ref().map(|(value, _)| *value) != *count
+                    || scalar.element.alignment != *alignment
+                    || !scalar
+                        .element
+                        .element
+                        .matches_borrowed(element_type, &mut SourceCorrespondenceWorkV18(budget))?
+                {
+                    return self
+                        .source
+                        .missing("retained scalar allocation changed representation");
+                }
+            }
+            (
+                ScopedAllocationIdentityV29::OriginalObject { .. },
+                ScopedAllocationSourceV29::OriginalObject {
+                    schema: original, ..
+                },
+                ScopedSlotRepresentationV29::Object {
+                    schema, alignment, ..
+                },
+            ) if original == schema => {
+                check_scoped_object_alloca_v29(
+                    actual,
+                    slot.origin.pointer,
+                    schema,
+                    alignment,
+                    budget,
+                )
+                .map_err(|error| source_attachment_error_v18(error.into()))?;
+            }
+            _ => {
+                return self
+                    .source
+                    .missing("retained allocation changed source kind");
+            }
+        }
+        Ok(())
+    }
+
+    // Only an authentic retained slot ordinal selects this path. The attachment
+    // helper rejoins its exact active instance interval and original operation.
+    // The sole production slot constructor appends to one root-wide vector and
+    // rejects duplicate pointers before each push. Assembly moves that owner
+    // unchanged; relocation only borrows it. This authenticated invariant, not
+    // a caller-supplied table, preserves the full locator's uniqueness check.
+    // This avoids the allocation-by-all-slots scan in a complete slot traversal.
+    fn retained_allocation_for_slot_v18(
+        &self,
+        root: usize,
+        slot_ordinal: usize,
+        operation: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<SourcePhysicalBackingV18<'_>> {
+        self.retain_query((|| {
+            self.query(budget)?;
+            budget.reserve_storage(source_allocation_slot_headers_v18()?)?;
+            let owner = self.source.root_row(root)?;
+            budget.charge_work(4)?;
+            if owner.source_slots.instances.len() != owner.sidecars.rows.len() {
+                return self
+                    .source
+                    .missing("retained allocation active instance census");
+            }
+            let slot = owner.source_slots.slots.get(slot_ordinal).ok_or(
+                ProductionSourceOwnedViewErrorV18::Binding("retained allocation slot ordinal"),
+            )?;
+            let input = scoped_raw_admission_v29::optimized_source_slot_input_v18(
+                self,
+                root,
+                slot_ordinal,
+                budget,
+            )?;
+            if input != operation {
+                return self
+                    .source
+                    .missing("retained allocation slot changed original operation");
+            }
+            let actual =
+                optimized_source_operation_row_v18(self.inventory, operation, budget)?.operation;
+            self.retained_allocation_shape_v18(slot, actual, budget)?;
+            Ok(SourcePhysicalBackingV18 {
+                instance: slot.instance.index(),
+                row: slot_ordinal,
+                slot,
+            })
         })())
     }
 

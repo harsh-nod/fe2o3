@@ -76,6 +76,30 @@ fn check_issued_original_definition_v18(
     Ok(())
 }
 
+// Both immutable and optimized access replay call this against the authenticated
+// original statement. The retained MemoryAccess bit is never effect authority.
+pub(super) fn check_issued_original_effect_v18(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    root: usize,
+    instance: usize,
+    anchor: usize,
+    operation: &Operation,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<()> {
+    original.query(budget)?;
+    original.retain_query((|| {
+        let semantic = original.source.source_semantic(budget)?;
+        let function_id = original.source.instance(root, instance, budget)?.0;
+        let function = semantic.functions().get(function_id.index() as usize)
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("issued original effect function"))?;
+        let anchors = original.source.sidecar(root, instance, budget)?.scoped_memory_anchors.as_ref()
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("issued original effect anchors"))?;
+        let row = anchors.rows.get(anchor)
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("issued original effect anchor"))?;
+        check_scoped_payload_effect_v29(function, row, operation, budget).map_err(immutable_memory_error_v29)
+    })())
+}
+
 fn check_immutable_issued_roles_v18(
     original: &ProductionSourceCorrespondenceV18<'_>,
     root: usize,
@@ -212,11 +236,12 @@ fn check_immutable_issued_roles_inner_v18(
         original.retained_scalar_payload_v18(root, coordinate, &access, budget)?
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding("issued access scalar payload"))?;
         let operation = optimized_source_operation_row_v18(original.inventory, coordinate, budget)?.operation;
+        check_issued_original_effect_v18(original, root, row.instance.index(), row.anchor, operation, budget)?;
         let value = source_address_value_access_v29(operation).map_err(immutable_memory_error_v29)?
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding("issued access opcode"))?;
         budget.charge_work(8)?;
         if value.object || value.pointer != issuer.pointer || value.access.address_space != AddressSpace::Global
-            || value.access.volatile || (value.writing && issuer.access != AccessMode::ReadWrite)
+            || (value.writing && issuer.access != AccessMode::ReadWrite)
             || value.access != row.access || value.writing != row.writing
             || *actual.value(value.value, budget).map_err(immutable_memory_error_v29)?.ty != Type::Scalar(issuer.element) {
             return Err(immutable_memory_error_v29(source_issued_error_v29()));
@@ -264,6 +289,13 @@ pub(super) fn source_issued_replay_headers_v18() -> Result<usize, ArgumentResour
         source_issued_census_query_headers_v29()?,
         h::<usize>()?, h::<bool>()?, h::<()>()?,
         h::<Option<usize>>()?,
+        h::<&ScopedMemoryAnchorV29>()?, h::<Option<&ScopedMemoryAnchorV29>>()?,
+        h::<&ScopedMemoryAnchorsV29>()?, h::<Option<&ScopedMemoryAnchorsV29>>()?,
+        h::<ScopedMemoryStoreSourceV29>()?, h::<ScopedMemoryReadV29>()?,
+        h::<Option<&SemanticStatementKindV1>>()?,
+        h::<&fe2o3_mir_model::semantic_mir_v1::SemanticMemoryStoreV1>()?,
+        std::mem::size_of::<(&ProductionSourceCorrespondenceV18<'_>, usize, usize, usize, &Operation)>(),
+        std::mem::size_of::<Result<(), ProductionSemanticKirErrorV1>>(),
         h::<&fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1>()?,
         h::<&ProductionSemanticSsaOwnerV1>()?,
         h::<fe2o3_pliron::ProductionSemanticSsaOccurrenceViewV1<'_>>()?,

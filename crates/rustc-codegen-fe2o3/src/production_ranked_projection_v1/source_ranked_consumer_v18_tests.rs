@@ -1,5 +1,7 @@
 use super::*;
 
+include!("source_entry_consumer_v18_tests.rs");
+
 // Called only from the actual pinned-rustc Prepared-source test driver. The
 // small recipe is an inert private-symbol namespace census, not a second
 // executable program or a claim of ranked/effect/allocation correspondence.

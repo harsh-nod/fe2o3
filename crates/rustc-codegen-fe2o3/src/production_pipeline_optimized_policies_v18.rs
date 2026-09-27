@@ -9,7 +9,11 @@ use fe2o3_kernel_analysis::{
 };
 use fe2o3_lower_mir_kernel::ProductionSourceNativeLifecycleDiagnosticV18 as NativeDiagnostic;
 use fe2o3_lower_mir_kernel::ProductionSourceNativeLifecycleErrorV18 as NativeError;
+use crate::production_ranked_projection_v1::{
+    ProductionRankedProjectionErrorV1 as ProjectionError, SourceNativePolicyViewV18,
+};
 type DiagnosticCell = std::cell::Cell<Option<NativeDiagnostic>>;
+type NativeConsumerResult = Result<Result<(), ProjectionError>, NativeError>;
 
 #[cfg(test)]
 #[path = "production_pipeline_native_lifecycle_probe_v18_tests.rs"]
@@ -90,6 +94,14 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
 }
 
 fn native_lifecycle_envelopes() -> Result<usize, ProductionPipelineError> {
+    type CompletedArgs<'a> = (
+        &'a Original<'a>, &'a Optimized<'a>, &'a SourceNativePolicyViewV18<'a, 'a, 'a>,
+        &'a mut Budget<'a>, &'a DiagnosticCell,
+        &'a [crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
+        &'a crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+        &'a std::cell::Cell<(usize, usize)>,
+    );
+    type SelectArgs<'a> = (&'a Original<'a>, &'a fe2o3_kernel_analysis::CanonicalKirInventoryV18<'a>, &'a mut Budget<'a>);
     let mut total = 0usize;
     for bytes in [
         std::mem::size_of::<NativeError>(),
@@ -99,6 +111,23 @@ fn native_lifecycle_envelopes() -> Result<usize, ProductionPipelineError> {
         std::mem::size_of::<OptimizedSourcePolicyObservationV18>(),
         std::mem::size_of::<std::cell::Cell<(usize, usize)>>(),
         2 * std::mem::size_of::<DiagnosticCell>(),
+        std::mem::size_of::<Result<NativeDiagnostic, NativeError>>(),
+        std::mem::size_of::<CompletedArgs<'_>>() + 2 * std::mem::align_of::<CompletedArgs<'_>>(),
+        std::mem::size_of::<SelectArgs<'_>>() + 2 * std::mem::align_of::<SelectArgs<'_>>(),
+        std::mem::size_of::<Result<(), NativeError>>(),
+        crate::production_ranked_projection_v1::private_root_bridge_entrance_headers_v18()
+            .ok_or_else(|| source_resource_v18(Resource::Arithmetic))?,
+        std::mem::size_of::<NativeConsumerResult>(),
+        std::mem::size_of::<Result<NativeConsumerResult, ViewError>>(),
+        std::mem::size_of::<Result<(), ProjectionError>>(),
+        std::mem::size_of::<fe2o3_kernel_analysis::CanonicalKirPrivateMemoryLimitsV1>(),
+        std::mem::size_of::<bool>(),
+        std::mem::size_of::<Result<bool, ProductionPipelineError>>(),
+        std::mem::size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'_>>>(),
+        std::mem::size_of::<Option<&fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'_>>>(),
+        std::mem::size_of::<&fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'_>>(),
+        std::mem::size_of::<&fe2o3_kernel_ir::OperationKind>(),
+        std::mem::size_of::<SourceNativePolicyViewV18<'_, '_, '_>>(),
         std::mem::size_of::<Result<NativeDiagnostic, NativeError>>(),
     ] {
         total = total
@@ -291,6 +320,12 @@ fn consume_actual_native_policy(
         .limits(budget)?
         .storage_layout_limits();
     let output = optimized.output_inventory(budget)?;
+    let private_memory = select_private_memory_native_path(original, output, budget)?;
+    let private_limits = fe2o3_kernel_analysis::CanonicalKirPrivateMemoryLimitsV1 {
+        // Source composition independently requires one whole scalar per
+        // allocation. This bound is derived from the exact output, not a case.
+        max_cells: output.definitions().len(),
+    };
     #[cfg(test)]
     lifecycle_probe::record(original, optimized, output, budget)?;
     // Empty metadata carries no source authority. The genuine original recipe
@@ -317,79 +352,29 @@ fn consume_actual_native_policy(
         &candidate,
         budget,
         |checked, budget| {
-            Ok::<_, ViewError>(optimized.with_lifecycle_native_policies_v18(
-                checked,
-                layouts,
-                budget,
-                |policies, budget| {
-                    crate::production_ranked_projection_v1::with_source_native_ranked_roots_v18(
-                        original,
-                        optimized,
-                        policies,
-                        ranked_roots,
-                        reference_bindings,
-                        budget,
-                        |roots, budget| {
-                            for root in 0..roots.root_count(budget)? {
-                                let _ = roots.root(root, budget)?;
-                            }
-                            diagnostic.set(Some(policies.diagnostic(budget)?));
-                            #[cfg(test)]
-                            if let Some(storage_short) = lifecycle_probe::native_entry() {
-                                // Query the exact actual report before cutting this same
-                                // invocation; no separate unmodified graph is emitted.
-                                let count = policies.function_count(budget)?;
-                                assert!(count > 0);
-                                assert!((0..count).any(|ordinal| {
-                                    policies.report(ordinal, budget).unwrap().is_some()
-                                }));
-                                if storage_short {
-                                    let limit =
-                                        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT;
-                                    let error = budget
-                                        .reserve_storage(limit - budget.storage() + 1)
-                                        .unwrap_err();
-                                    return Err(NativeError::Source(
-                                        original.retain_query_resource_error_v18(error),
-                                    ));
-                                }
-                                let limit = usize::try_from(
-                                    crate::production_canonical_phase_policy_v1::WORK_LIMIT,
-                                )
-                                .unwrap();
-                                budget.charge_work(limit - budget.work()).unwrap();
-                            }
-                            let mut defined_functions = 0usize;
-                            let mut declarations = 0usize;
-                            for ordinal in 0..policies.function_count(budget)? {
-                                if policies.report(ordinal, budget)?.is_some() {
-                                    defined_functions =
-                                        defined_functions.checked_add(1).ok_or_else(|| {
-                                            NativeError::Source(
-                                                original.retain_query_resource_error_v18(
-                                                    Resource::Arithmetic,
-                                                ),
-                                            )
-                                        })?;
-                                } else {
-                                    declarations =
-                                        declarations.checked_add(1).ok_or_else(|| {
-                                            NativeError::Source(
-                                                original.retain_query_resource_error_v18(
-                                                    Resource::Arithmetic,
-                                                ),
-                                            )
-                                        })?;
-                                }
-                            }
-                            counts.set((defined_functions, declarations));
-                            #[cfg(test)]
-                            lifecycle_probe::consumed();
-                            Ok(())
-                        },
-                    )
-                },
-            ))
+            let consumed = if private_memory {
+                optimized.with_private_memory_native_policies_v18(
+                    checked, layouts, private_limits, budget,
+                    |request, budget| {
+                        crate::production_ranked_projection_v1::check_source_private_memory_root_prepaid_v18(
+                            original, optimized, request, budget,
+                        )
+                    },
+                    |policies, budget| consume_completed_native_policy(
+                        original, optimized, &SourceNativePolicyViewV18::Private(policies),
+                        budget, diagnostic, ranked_roots, reference_bindings, &counts,
+                    ),
+                )
+            } else {
+                optimized.with_lifecycle_native_policies_v18(
+                    checked, layouts, budget,
+                    |policies, budget| consume_completed_native_policy(
+                        original, optimized, &SourceNativePolicyViewV18::Lifecycle(policies),
+                        budget, diagnostic, ranked_roots, reference_bindings, &counts,
+                    ),
+                ).map(|()| Ok::<(), ProjectionError>(() ))
+            };
+            Ok::<_, ViewError>(consumed)
         },
     )
     .map_err(|error| view_error(original, error))?;
@@ -408,7 +393,8 @@ fn consume_actual_native_policy(
                 .ok_or_else(|| retain_resource(original, Resource::Arithmetic))?,
         )
         .map_err(|error| retain_resource(original, error))?;
-    result.map_err(|error| ProductionPipelineError::SourceNativeLifecycle(Box::new(error)))?;
+    result.map_err(|error| ProductionPipelineError::SourceNativeLifecycle(Box::new(error)))?
+        .map_err(ProductionPipelineError::RankedProjection)?;
     let (defined_functions, declarations) = counts.get();
     Ok(OptimizedSourcePolicyObservationV18 {
         invocations,
@@ -416,4 +402,88 @@ fn consume_actual_native_policy(
         defined_functions,
         declarations,
     })
+}
+
+fn select_private_memory_native_path(
+    original: &Original<'_>,
+    output: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<bool, ProductionPipelineError> {
+    original.check_query_v18(budget)?;
+    budget.charge_work(output.operations().len())
+        .map_err(|error| retain_resource(original, error))?;
+    // A structural choice only. Both selected consumers must still reject
+    // every unresolved role. Never retry the lifecycle path after a refusal.
+    Ok(output.operations().iter().any(|row| private_memory_carrier(&row.operation.kind)))
+}
+
+fn private_memory_carrier(kind: &fe2o3_kernel_ir::OperationKind) -> bool {
+    matches!(kind,
+        fe2o3_kernel_ir::OperationKind::Alloca { .. }
+            | fe2o3_kernel_ir::OperationKind::Storage(_)
+    )
+}
+
+#[cfg(test)]
+#[path = "production_pipeline_private_native_selection_v18_tests.rs"]
+mod private_native_selection_tests;
+
+fn consume_completed_native_policy(
+    original: &Original<'_>,
+    optimized: &Optimized<'_>,
+    policies: &SourceNativePolicyViewV18<'_, '_, '_>,
+    budget: &mut Budget<'_>,
+    diagnostic: &DiagnosticCell,
+    ranked_roots: &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    counts: &std::cell::Cell<(usize, usize)>,
+) -> Result<(), NativeError> {
+    #[cfg(test)]
+    lifecycle_probe::completed_policy(policies.is_private_memory());
+    crate::production_ranked_projection_v1::with_source_completed_native_ranked_roots_v18(
+        original, optimized, policies, ranked_roots, reference_bindings, budget,
+        |roots, budget| {
+            for root in 0..roots.root_count(budget)? {
+                let _ = roots.root(root, budget)?;
+            }
+            diagnostic.set(Some(policies.diagnostic(budget)?));
+            #[cfg(test)]
+            if let Some(storage_short) = lifecycle_probe::native_entry(policies.is_private_memory()) {
+                // Query the exact actual report before cutting this same
+                // invocation; no separate unmodified graph is emitted.
+                let count = policies.function_count(budget)?;
+                assert!(count > 0);
+                assert!((0..count).any(|ordinal| {
+                    policies.report(ordinal, budget).unwrap().is_some()
+                }));
+                if storage_short {
+                    let limit = crate::production_canonical_phase_policy_v1::STORAGE_LIMIT;
+                    let error = budget.reserve_storage(limit - budget.storage() + 1).unwrap_err();
+                    return Err(NativeError::Source(
+                        original.retain_query_resource_error_v18(error),
+                    ));
+                }
+                let limit = usize::try_from(
+                    crate::production_canonical_phase_policy_v1::WORK_LIMIT,
+                ).unwrap();
+                budget.charge_work(limit - budget.work()).unwrap();
+            }
+            let mut defined_functions = 0usize;
+            let mut declarations = 0usize;
+            for ordinal in 0..policies.function_count(budget)? {
+                let count = if policies.report(ordinal, budget)?.is_some() {
+                    &mut defined_functions
+                } else {
+                    &mut declarations
+                };
+                *count = count.checked_add(1).ok_or_else(|| NativeError::Source(
+                    original.retain_query_resource_error_v18(Resource::Arithmetic),
+                ))?;
+            }
+            counts.set((defined_functions, declarations));
+            #[cfg(test)]
+            lifecycle_probe::consumed();
+            Ok(())
+        },
+    )
 }

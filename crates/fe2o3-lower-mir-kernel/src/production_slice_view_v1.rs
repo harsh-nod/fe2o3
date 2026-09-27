@@ -410,6 +410,7 @@ fn source_slice_query_error_v18(
         // internal adapter carries no construction or replacement-source path.
         ProductionSourceOwnedViewErrorV18::Binding(_)
         | ProductionSourceOwnedViewErrorV18::Analysis(_)
+        | ProductionSourceOwnedViewErrorV18::PrivateMemory(_)
         | ProductionSourceOwnedViewErrorV18::Source(_) => {
             ProductionSemanticKirErrorV1::CorrespondenceMismatch
         }

@@ -139,6 +139,9 @@ mod optimization;
 pub(crate) use optimization::{ExecutedV18Parts, optimize_v18_graph};
 #[path = "kir_bridge_canonical_ranked_v18.rs"]
 mod ranked_policy;
+#[path = "kir_bridge_private_memory_v18.rs"]
+mod private_policy;
+pub(crate) use private_policy::NativeCanonicalPrivateAdmissionV18;
 
 impl<'input> KirPlironGraphV18<'input> {
     /// The returned reservation must be held on the same work ledger while the
@@ -362,10 +365,13 @@ fn import_inner<'input>(
     budget.charge_work(input.canonical_bytes().len())?;
     let tree = source_tree_work_v12(input.module())?;
     let envelope = resources::envelope(input.canonical_bytes().len(), tree)?;
-    budget.charge_work(envelope.work)?;
-    budget.reserve_storage(envelope.storage)?;
+    let coordinate_envelope = resources::coordinate_envelope(tree)?;
+    let import_work = resources::add(envelope.work, coordinate_envelope.work)?;
+    let import_storage = resources::add(envelope.storage, coordinate_envelope.storage)?;
+    budget.charge_work(import_work)?;
+    budget.reserve_storage(import_storage)?;
     let retained = resources::add(
-        envelope.storage,
+        import_storage,
         std::mem::size_of::<KirPlironGraphV18<'_>>(),
     )?;
     budget.reserve_storage(std::mem::size_of::<KirPlironGraphV18<'_>>())?;
@@ -386,6 +392,10 @@ fn import_inner<'input>(
         let transaction = session.begin_checked_operation_graph_mutation_v1(&root)?;
         let pointer = session.operations[&root.identity];
         let mut coordinates = HashMap::new();
+        coordinates.try_reserve(tree).map_err(|_| KirBridgeErrorV18::Allocation)?;
+        if coordinates.capacity() > resources::mul(tree, 2)? {
+            return Err(KirBridgeErrorV18::Allocation);
+        }
         let origins = build_module_graph_with_coordinates(
             &mut session.context,
             pointer,
@@ -393,6 +403,9 @@ fn import_inner<'input>(
             KirBridgeTypeProfileV12::V18(profile),
             Some(&mut coordinates),
         )?;
+        if coordinates.len() > tree {
+            return Err(KirBridgeErrorV1::GraphIdentityMismatch.into());
+        }
         session.finish_internal_root_construction(&root, transaction)?;
         let epoch = *session
             .operation_graph_epochs

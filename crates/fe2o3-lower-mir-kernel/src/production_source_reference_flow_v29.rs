@@ -3,6 +3,7 @@
 include!("production_source_reference_array_assignment_v29.rs");
 include!("production_source_direct_volatile_v29.rs");
 include!("production_source_raw_volatile_v29.rs");
+include!("production_source_ordered_issued_v29.rs");
 
 impl SourceReferenceBuilderV29<'_, '_, '_> {
     fn function(
@@ -211,6 +212,9 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                     && !self.plan.ordered_descriptor_effect(
                         site, store.destination(), ExecutionOperandV29::StoreDestination, budget,
                     )?
+                    && !self.plan.ordered_issued_effect(
+                        site, store.destination(), ExecutionOperandV29::StoreDestination, budget,
+                    )?
                 {
                     return Err(source_reference_error_v29(
                         "source reference ordered store requires checked addressable effects",
@@ -305,6 +309,9 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             SemanticRvalueKindV1::Load(load) => {
                 if (load.volatility() != SemanticVolatilityV1::NonVolatile || load.atomic().is_some())
                     && !self.plan.ordered_descriptor_effect(
+                        site, load.source(), ExecutionOperandV29::RvaluePlace, budget,
+                    )?
+                    && !self.plan.ordered_issued_effect(
                         site, load.source(), ExecutionOperandV29::RvaluePlace, budget,
                     )?
                 {

@@ -13,6 +13,7 @@ enum PipelineFamilyV1<'a> {
     Ordinary,
     LifecycleV18(&'a crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'a>),
     Conditional(&'a ConditionalPipelineSubjectV1<'a>),
+    CanonicalPrivateV18(&'a crate::kir_bridge_v1::NativeCanonicalPrivateAdmissionV18<'a>),
     CanonicalPrivate(&'a crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1<'a>),
 }
 
@@ -24,6 +25,7 @@ enum ValidationFamilyV1<'a> {
     Ordinary(ProductionAnalysisReportValidationSessionV1<'a>),
     Conditional(conditional_validation::SessionV1<'a>),
     CanonicalPrivate(canonical_private_v1::SessionV1<'a>),
+    CanonicalPrivateV18(canonical_private_v1::SessionV1<'a, crate::kir_bridge_v1::NativeCanonicalPrivateAdmissionV18<'a>>),
 }
 
 // Constructed only by the closed dispatcher from its own preservation session
@@ -306,7 +308,7 @@ impl PipelineFamilyV1<'_> {
         PipelineErrorV1,
     > {
         match self {
-            Self::Ordinary | Self::LifecycleV18(_) | Self::CanonicalPrivate(_) => Ok((None, None)),
+            Self::Ordinary | Self::LifecycleV18(_) | Self::CanonicalPrivate(_) | Self::CanonicalPrivateV18(_) => Ok((None, None)),
             Self::Conditional(input) => conditional_ownership::prepare_rows_with_observation_v1(
                 input.context(),
                 input.function(),
@@ -375,7 +377,7 @@ impl PipelineFamilyV1<'_> {
         observer: PipelineObservationV1<'_, '_, '_>,
     ) -> Result<ProductionAnalysisResourceUpperBoundV1, PipelineErrorV1> {
         Ok(match self {
-            Self::Ordinary | Self::LifecycleV18(_) | Self::CanonicalPrivate(_) => bound,
+            Self::Ordinary | Self::LifecycleV18(_) | Self::CanonicalPrivate(_) | Self::CanonicalPrivateV18(_) => bound,
             Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::checked_phase(
                 phase,
                 bound.work_upper_bound(),
@@ -405,7 +407,7 @@ impl PipelineFamilyV1<'_> {
         )
         .map_err(resource_error)?;
         let effect = match self {
-            Self::Ordinary | Self::LifecycleV18(_) | Self::CanonicalPrivate(_) => {
+            Self::Ordinary | Self::LifecycleV18(_) | Self::CanonicalPrivate(_) | Self::CanonicalPrivateV18(_) => {
                 compose_effect_refinement_resource_upper_bound_v1(census, effect_local, ownership)
             }
             Self::Conditional(_) => effect_local
@@ -684,6 +686,20 @@ impl<'a> ValidationFamilyV1<'a> {
                 let transfer = observer.map(|_| session.setup());
                 Ok((Self::CanonicalPrivate(session), transfer))
             }
+            PipelineFamilyV1::CanonicalPrivateV18(input) => {
+                let session = canonical_private_v1::SessionV1::begin(
+                    input,
+                    endpoint,
+                    atomic_target,
+                    preservation,
+                    census,
+                    limits,
+                    analyses,
+                    observer,
+                )?;
+                let transfer = observer.map(|_| session.setup());
+                Ok((Self::CanonicalPrivateV18(session), transfer))
+            }
             PipelineFamilyV1::Ordinary | PipelineFamilyV1::LifecycleV18(_) => {
                 let session = begin_observed_report_validation_v1(
                     context,
@@ -720,6 +736,7 @@ impl<'a> ValidationFamilyV1<'a> {
             Self::Ordinary(session) => session.setup_resource_upper_bound_v1(),
             Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::default(),
             Self::CanonicalPrivate(session) => session.setup(),
+            Self::CanonicalPrivateV18(session) => session.setup(),
         }
     }
 
@@ -776,6 +793,14 @@ impl<'a> ValidationFamilyV1<'a> {
                 Ok(observer.map(|_| bound))
             }
             Self::CanonicalPrivate(session) => session.record(
+                (context, function),
+                checkpoint,
+                report,
+                stage,
+                analyses,
+                observer,
+            ),
+            Self::CanonicalPrivateV18(session) => session.record(
                 (context, function),
                 checkpoint,
                 report,

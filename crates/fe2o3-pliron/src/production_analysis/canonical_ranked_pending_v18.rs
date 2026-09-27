@@ -355,3 +355,7 @@ pub fn with_pending_canonical_ranked_source_roles_v18<'w, T>(
 #[cfg(test)]
 #[path = "canonical_ranked_pending_v18_tests.rs"]
 mod tests;
+
+#[path = "canonical_ranked_private_pending_v18.rs"]
+mod private_memory;
+pub use private_memory::PendingCanonicalPrivateMemoryPoliciesV18;

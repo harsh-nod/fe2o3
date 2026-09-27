@@ -333,13 +333,13 @@ impl ProductionOptimizedSourceAnalysisV18<'_> {
     /// Lends freshly derived memory-version analyses of both checked endpoints.
     /// These reports describe physical memory dependencies; consumers must
     /// still check source currentness, initialization, and exact access roles.
-    pub fn with_memory_versions<T, E>(
+    pub fn with_memory_versions<'work, T, E>(
         &mut self,
-        budget: &mut ArgumentBudgetV1<'_>,
+        budget: &mut ArgumentBudgetV1<'work>,
         consume: impl FnOnce(
             &CanonicalKirMemorySsaV18<'_, '_>,
             &CanonicalKirMemorySsaV18<'_, '_>,
-            &mut ArgumentBudgetV1<'_>,
+            &mut ArgumentBudgetV1<'work>,
         ) -> Result<T, E>,
     ) -> Result<T, E>
     where

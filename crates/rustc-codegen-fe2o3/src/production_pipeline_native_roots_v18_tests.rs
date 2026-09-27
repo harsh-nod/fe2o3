@@ -13,6 +13,9 @@ use fe2o3_lower_mir_kernel::{
 
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::native_roots_v18_tests::native_root_child";
 
+#[path = "production_pipeline_private_bridge_scratch_v18_tests.rs"]
+mod private_bridge_scratch;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct Observation {
     roots: usize,
@@ -66,7 +69,11 @@ impl Callbacks for RootCallbacks {
                 );
                 assert_eq!(roots.roots, 2);
                 let native = native.ok_or("actual output/native observation is absent")?;
-                assert!(native.first_unresolved.is_none() && native.lifecycle >= 2);
+                assert!(native.lifecycle >= 2);
+                if native.private_memory {
+                    assert!(matches!(native.first_unresolved, Some((_,
+                        fe2o3_pliron::CanonicalRankedSourceRequirementV18::Memory))));
+                } else { assert!(native.first_unresolved.is_none()); }
                 if mode == 0 {
                     let actual =
                         result.map_err(|error| format!("multi-root native positive: {error:?}"))?;
@@ -106,12 +113,9 @@ impl Callbacks for RootCallbacks {
                             SourceError::Binding("selected root attachment callback error"),
                         ) => (),
                         (6, SourceError::Resource(Resource::Accounting)) => (),
-                        (
-                            7,
-                            SourceError::Binding(
-                                "native root attachment substituted its original source",
-                            ),
-                        ) => (),
+                        (7, SourceError::Binding(detail)) if *detail == if native.private_memory {
+                            "private native source subject changed"
+                        } else { "native root attachment substituted its original source" } => (),
                         (3, SourceError::Resource(Resource::Work(limit))) => {
                             assert_eq!(limit.limit(), work);
                             assert!(limit.actual() > work);

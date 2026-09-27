@@ -1,4 +1,4 @@
-//! Lexical root custody for the actual lifecycle-checked V18 output.
+//! Lexical root custody for actual source-completed native V18 output.
 //! This is not the legacy ranked owner or a final ranked-equivalence receipt.
 
 use super::*;
@@ -34,7 +34,7 @@ struct RootRow {
 pub(crate) struct SourceNativeRankedRootRosterV18<'a, 'g, 'scope, 'owner> {
     original: &'a Original<'g>,
     optimized: &'a Optimized<'g>,
-    native: &'a Native<'scope, 'owner>,
+    native: &'a SourceNativePolicyViewV18<'a, 'scope, 'owner>,
     inputs: &'a [ProductionRankedRootInputV1],
     references: &'a crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     rows: &'a [RootRow],
@@ -45,7 +45,7 @@ fn refusal(detail: &'static str) -> Error {
     Error::Source(SourceError::Binding(detail))
 }
 
-fn retain<T>(native: &Native<'_, '_>, result: Result<T, Error>) -> Result<T, Error> {
+fn retain<T>(native: &SourceNativePolicyViewV18<'_, '_, '_>, result: Result<T, Error>) -> Result<T, Error> {
     result.map_err(|error| match error {
         Error::Source(SourceError::Binding(detail)) => {
             native.retain_source_binding_error_v18(detail)
@@ -70,7 +70,7 @@ fn projection(original: &Original<'_>, error: ProductionRankedProjectionErrorV1)
 fn checked_subject(
     original: &Original<'_>,
     optimized: &Optimized<'_>,
-    native: &Native<'_, '_>,
+    native: &SourceNativePolicyViewV18<'_, '_, '_>,
     budget: &mut Budget<'_>,
 ) -> Result<(), Error> {
     native.check_source_subject_v18(original, optimized, budget)?;
@@ -180,7 +180,7 @@ fn prepay_kernel_declaration_comparison(
 fn build_rows(
     original: &Original<'_>,
     optimized: &Optimized<'_>,
-    native: &Native<'_, '_>,
+    native: &SourceNativePolicyViewV18<'_, '_, '_>,
     inputs: &[ProductionRankedRootInputV1],
     references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     budget: &mut Budget<'_>,
@@ -442,6 +442,27 @@ pub(crate) fn with_source_native_ranked_roots_v18<'g, 'scope, 'owner>(
         &mut Budget<'_>,
     ) -> Result<(), Error>,
 ) -> Result<(), Error> {
+    with_source_completed_native_ranked_roots_v18(
+        original, optimized, &SourceNativePolicyViewV18::Lifecycle(native),
+        inputs, references, budget, consume,
+    )
+}
+
+/// Both variants require authentic completed lower source/native proofs. This
+/// dispatcher shares custody checks but never converts one lower token into
+/// the other or accepts physical-only pending native observations.
+pub(crate) fn with_source_completed_native_ranked_roots_v18<'g, 'scope, 'owner>(
+    original: &Original<'g>,
+    optimized: &Optimized<'g>,
+    native: &SourceNativePolicyViewV18<'_, 'scope, 'owner>,
+    inputs: &[ProductionRankedRootInputV1],
+    references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut Budget<'_>,
+    consume: impl FnOnce(
+        &SourceNativeRankedRootRosterV18<'_, 'g, 'scope, 'owner>,
+        &mut Budget<'_>,
+    ) -> Result<(), Error>,
+) -> Result<(), Error> {
     retain(
         native,
         with_roots_inner(
@@ -453,7 +474,7 @@ pub(crate) fn with_source_native_ranked_roots_v18<'g, 'scope, 'owner>(
 fn with_roots_inner<'g, 'scope, 'owner>(
     original: &Original<'g>,
     optimized: &Optimized<'g>,
-    native: &Native<'scope, 'owner>,
+    native: &SourceNativePolicyViewV18<'_, 'scope, 'owner>,
     inputs: &[ProductionRankedRootInputV1],
     references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     budget: &mut Budget<'_>,
@@ -522,6 +543,7 @@ fn root_headers(callback: usize, alignment: usize) -> Option<usize> {
         alignment.checked_mul(2)?,
         size_of::<[usize; 2]>(),
         size_of::<SourceNativeRankedRootRosterV18<'_, '_, '_, '_>>(),
+        size_of::<SourceNativePolicyViewV18<'_, '_, '_>>(),
         size_of::<Result<Vec<RootRow>, Error>>(),
         size_of::<Result<Vec<RootRow>, ProductionRankedProjectionErrorV1>>(),
         size_of::<Result<Vec<Vec<usize>>, Error>>(),
@@ -556,8 +578,10 @@ fn root_headers(callback: usize, alignment: usize) -> Option<usize> {
             >,
         >(),
         size_of::<Result<usize, Error>>(),
+        size_of::<Result<usize, Error>>(),
         size_of::<Result<Option<&fe2o3_pliron::ProductionPlironPreloweringReportV2>, Error>>(),
-        6 * size_of::<Result<(), Error>>(),
+        size_of::<Result<Option<&fe2o3_pliron::ProductionPlironPreloweringReportV2>, Error>>(),
+        8 * size_of::<Result<(), Error>>(),
         size_of::<std::thread::Result<Result<(), Error>>>(),
     ]
     .into_iter()

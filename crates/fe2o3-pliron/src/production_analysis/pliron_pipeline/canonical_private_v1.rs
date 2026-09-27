@@ -1,5 +1,6 @@
 //! Exact paired private proof and actual producer report at each shared checkpoint.
 use super::*;
+use crate::kir_bridge_v1::NativePrivateInputV1;
 use crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1;
 use crate::production_analysis::canonical_ranked_checks_v1::private::PrivateOperationKindV1;
 use pliron::{builtin::op_interfaces::OneRegionInterface, linked_list::ContainsLinkedList};
@@ -50,8 +51,8 @@ pub(crate) struct CanonicalPrivatePipelineOutcomeV1 {
     pub(crate) resource_upper_bound: ProductionAnalysisResourceUpperBoundV1,
 }
 
-pub(super) struct SessionV1<'a> {
-    input: &'a NativeCanonicalPrivateAdmissionV1<'a>,
+pub(super) struct SessionV1<'a, A: NativePrivateInputV1 = NativeCanonicalPrivateAdmissionV1<'a>> {
+    input: &'a A,
     ordinary: ProductionAnalysisReportValidationSessionV1<'a>,
     manager: usize,
     identity: crate::PlironStructuralIdentityLabelV1,
@@ -61,9 +62,9 @@ pub(super) struct SessionV1<'a> {
     setup: ProductionAnalysisResourceUpperBoundV1,
 }
 
-impl<'a> SessionV1<'a> {
+impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
     pub(super) fn begin(
-        input: &'a NativeCanonicalPrivateAdmissionV1<'a>,
+        input: &'a A,
         endpoint: (&'a Context, &'a FuncOp),
         atomic_target: Option<&PlironAtomicTargetContextV1>,
         preservation: crate::PlironPassValidationHandleV1,
@@ -189,7 +190,9 @@ impl<'a> SessionV1<'a> {
                     // at each real stage. Calls occupy the existing call slot;
                     // ends, like other terminators, are covered by total rows.
                     PrivateOperationKindV1::TrapCall => Some(4),
-                    PrivateOperationKindV1::TrapEnd => None,
+                    PrivateOperationKindV1::TrapEnd
+                    | PrivateOperationKindV1::LifecycleV18
+                    | PrivateOperationKindV1::UnreachableV18 => None,
                 };
                 if let Some(slot) = slot {
                     counts[slot] += 1;
@@ -349,6 +352,27 @@ pub(crate) fn run(
         _ => Err(PipelineErrorV1::CanonicalPrivateInput),
     }
 }
+
+pub(crate) fn run_v18(
+    input: &crate::kir_bridge_v1::NativeCanonicalPrivateAdmissionV18<'_>,
+    limits: ProductionAnalysisResourceLimitsV1,
+    receipt: Option<&mut invocation_receipt_v1::InvocationReceiptV1>,
+) -> Result<CanonicalPrivatePipelineOutcomeV1, PipelineErrorV1> {
+    match run_shared_production_checks_v1(
+        input.context(),
+        input.function(),
+        None,
+        None,
+        limits,
+        (PipelineFamilyV1::CanonicalPrivateV18(input), receipt),
+        #[cfg(test)]
+        None,
+    )? {
+        PipelineOutcomeV1::CanonicalPrivate(outcome) => Ok(outcome),
+        _ => Err(PipelineErrorV1::CanonicalPrivateInput),
+    }
+}
+
 
 #[cfg(test)]
 #[path = "../canonical_private_pipeline_v1_tests.rs"]

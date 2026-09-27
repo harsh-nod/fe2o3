@@ -11,6 +11,7 @@ use fe2o3_lower_mir_kernel::{
     ProductionSourceScalarInputV18 as Input,
     ProductionSourceScalarStoreV18 as StoreInput,
     ProductionOptimizedSourceScalarStoreV18 as OptimizedStoreInput,
+    ProductionSourceEntryWriteV18 as EntryWriteInput,
 };
 use std::{cell::{Cell, RefCell}, mem::size_of};
 
@@ -326,6 +327,7 @@ pub(super) fn check_optimized_source_scalar_store_v18(
 enum SourceScalarStoreEndpointV18<'a> {
     Original(&'a StoreInput<'a>),
     Optimized(&'a OptimizedStoreInput<'a>),
+    TypedEntry(&'a EntryWriteInput<'a>),
 }
 
 impl SourceScalarStoreEndpointV18<'_> {
@@ -333,12 +335,14 @@ impl SourceScalarStoreEndpointV18<'_> {
         match self {
             Self::Original(request) => request.original(budget),
             Self::Optimized(request) => request.original(budget),
+            Self::TypedEntry(request) => request.original(budget),
         }
     }
     fn scalar(&self, budget: &mut Budget<'_>) -> Result<ProductionSemanticScalarTypeV2, SourceError> {
         match self {
             Self::Original(request) => request.scalar(budget),
             Self::Optimized(request) => request.scalar(budget),
+            Self::TypedEntry(request) => request.scalar(budget),
         }
     }
     fn input_for<'f>(&self, function: &'f SemanticFunctionDeclV1, budget: &mut Budget<'_>)
@@ -347,6 +351,7 @@ impl SourceScalarStoreEndpointV18<'_> {
         match self {
             Self::Original(request) => request.input_for(function, budget),
             Self::Optimized(request) => request.input_for(function, budget),
+            Self::TypedEntry(request) => request.input_for(function, budget),
         }
     }
     fn check_expression(&self, expression: &ProductionSemanticExpressionV2, budget: &mut Budget<'_>)
@@ -355,8 +360,17 @@ impl SourceScalarStoreEndpointV18<'_> {
         match self {
             Self::Original(request) => request.check_expression(expression, budget),
             Self::Optimized(request) => request.check_expression(expression, budget),
+            Self::TypedEntry(request) => request.check_expression(expression, budget),
         }
     }
+}
+
+pub(super) fn check_source_entry_write_v18(
+    semantic: &AdmittedInertSemanticMirV1, leaves: &Leaves<'_>,
+    request: &EntryWriteInput<'_>, budget: &mut Budget<'_>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    check_source_scalar_store_endpoint_v18(semantic, leaves,
+        SourceScalarStoreEndpointV18::TypedEntry(request), budget)
 }
 
 fn check_source_scalar_store_endpoint_v18(

@@ -1,9 +1,9 @@
 //! Private orchestration uses the existing cumulative analysis contract/receipt.
 use super::*;
-use crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1;
+use crate::kir_bridge_v1::NativePrivateInputV1;
 use crate::production_analysis::pliron_pipeline::{
     PipelineErrorV1,
-    canonical_private_v1::{self, CanonicalPrivatePipelineOutcomeV1},
+    canonical_private_v1::CanonicalPrivatePipelineOutcomeV1,
 };
 
 fn snapshot(
@@ -21,15 +21,15 @@ fn snapshot(
     }
 }
 
-pub(super) struct PrivateAnalysisV1 {
+pub(in crate::production_analysis::canonical_ranked_checks_v1) struct PrivateAnalysisV1 {
     contract: Contract,
     limits: Limits,
     denial: Option<(Phase, &'static str)>,
     panicked: bool,
-    pub(super) last: Option<CanonicalRankedPolicyHistoryV1>,
+    pub(in crate::production_analysis::canonical_ranked_checks_v1) last: Option<CanonicalRankedPolicyHistoryV1>,
 }
 impl PrivateAnalysisV1 {
-    pub(super) fn new(limits: Limits) -> Self {
+    pub(in crate::production_analysis::canonical_ranked_checks_v1) fn new(limits: Limits) -> Self {
         Self {
             contract: Contract::new(limits),
             limits,
@@ -44,7 +44,7 @@ impl PrivateAnalysisV1 {
         error.into()
     }
 
-    pub(super) fn observation(&self) -> CanonicalRankedPolicyResourceObservationV1 {
+    pub(in crate::production_analysis::canonical_ranked_checks_v1) fn observation(&self) -> CanonicalRankedPolicyResourceObservationV1 {
         let mut observed = snapshot(
             self.contract.cumulative(),
             InvocationObservationV1::default(),
@@ -54,9 +54,9 @@ impl PrivateAnalysisV1 {
         observed
     }
 
-    pub(super) fn invoke(
+    pub(in crate::production_analysis::canonical_ranked_checks_v1) fn invoke(
         &mut self,
-        input: &NativeCanonicalPrivateAdmissionV1<'_>,
+        input: &impl NativePrivateInputV1,
     ) -> Result<CanonicalPrivatePipelineOutcomeV1, Failure> {
         let floor = self.contract.cumulative();
         let limits = self
@@ -66,7 +66,7 @@ impl PrivateAnalysisV1 {
         let mut receipt =
             InvocationReceiptV1::new(floor, self.limits).map_err(|error| self.denied(error))?;
         let result = catch_unwind(AssertUnwindSafe(|| {
-            canonical_private_v1::run(input, limits, Some(&mut receipt))
+            input.run_fixed(limits, Some(&mut receipt))
         }));
         let observed = receipt.snapshot();
         self.last = Some(CanonicalRankedPolicyHistoryV1 {
@@ -104,7 +104,7 @@ impl PrivateAnalysisV1 {
         Ok(outcome)
     }
 
-    pub(super) fn release_reports(&mut self) -> Result<(), Failure> {
+    pub(in crate::production_analysis::canonical_ranked_checks_v1) fn release_reports(&mut self) -> Result<(), Failure> {
         let retained = self.contract.cumulative().retained_storage_upper_bound();
         self.contract
             .admit_replacement(Phase::PipelineVerification, retained, Bound::default())

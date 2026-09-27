@@ -330,6 +330,9 @@ pub fn kernel_abi_probe({signature}) {{ let _ = input; {body} }}
 #[path = "production_source_descriptor_propagation_v18_tests.rs"]
 mod descriptor_propagation_v18_tests;
 
+#[path = "production_source_entry_rhs_actual_v18_tests.rs"]
+mod entry_rhs_actual_v18_tests;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct ScalarOwnedObservation {
     source: [u8; 32],

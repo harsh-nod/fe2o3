@@ -14,7 +14,7 @@ use fe2o3_kernel_ir::{
 };
 
 #[path = "canonical_private_admission_resources_v1.rs"]
-mod private_resources;
+pub(super) mod private_resources;
 
 /// This enumeration is diagnostic only, never permission to extend a reader.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -817,6 +817,8 @@ pub(crate) enum PrivateOperationKindV1 {
     Call,
     TrapCall,
     TrapEnd,
+    LifecycleV18,
+    UnreachableV18,
 }
 
 #[path = "canonical_private_memory_admission_v1.rs"]

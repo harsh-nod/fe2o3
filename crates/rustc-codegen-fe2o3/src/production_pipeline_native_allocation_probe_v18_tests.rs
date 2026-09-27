@@ -400,6 +400,7 @@ fn native_allocation_diagnostic_scope_has_exact_header_work_cuts_and_cleanup() {
             operation_count: 3,
             consumers: 0,
             native_entries: 0,
+            private_memory: false,
         })
     }
     let action: fn(&mut super::Budget<'_>) -> Result<Observation, ProbeError> = empty;

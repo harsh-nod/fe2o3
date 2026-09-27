@@ -494,3 +494,7 @@ fn original_allocation_locator_has_exact_and_one_short_owned_resource_boundaries
         else { assert!(matches!(error, ArgumentResourceV1::Storage(_))); }
     }
 }
+
+include!("production_source_allocation_slot_v18_tests.rs");
+include!("production_source_private_memory_v18_tests.rs");
+include!("production_source_native_private_v18_tests.rs");

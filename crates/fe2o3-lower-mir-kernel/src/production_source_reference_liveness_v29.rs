@@ -642,11 +642,10 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             for &local in liveness.completed(&self.plan, site, budget)? {
                 self.plan.charge(4, budget)?;
                 let mut value = self.local(site.instance, local)?;
-                // Mixed-SSA storage holders retain their original memory
-                // liveness contract even if a scalar SSA value is dead.
-                if value.storage.is_some() {
-                    continue;
-                }
+                // The authenticated schedule contains only owner-promoted
+                // locals, excluding retained-memory holders. A logical storage
+                // snapshot exists even for promoted values; leave that snapshot
+                // and its generation intact while ending only the dead alias.
                 if let Some(node) = value.node {
                     let candidate = self
                         .plan

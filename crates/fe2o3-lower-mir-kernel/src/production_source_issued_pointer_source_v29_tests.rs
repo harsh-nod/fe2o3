@@ -257,7 +257,7 @@ fn owner_with_shape_and_read(issuer_count: usize, access_count: usize, read: boo
     owner_with_shape_and_effects(issuer_count, access_count, read, None)
 }
 
-fn owner_with_shape_and_effects(issuer_count: usize, access_count: usize, read: bool,
+pub(super) fn owner_with_shape_and_effects(issuer_count: usize, access_count: usize, read: bool,
     ordered: Option<SemanticVolatilityV1>) -> ProductionSemanticSsaOwnerV1 {
     owner_with_shape_effects_and_guard(issuer_count, access_count, read, ordered, true)
 }
@@ -269,17 +269,24 @@ fn owner_with_shape_effects_and_guard(issuer_count: usize, access_count: usize, 
 
 fn owner_with_shape_effects_guard_and_atomic(issuer_count: usize, access_count: usize, read: bool,
     ordered: Option<SemanticVolatilityV1>, valid_guard: bool, atomic: bool) -> ProductionSemanticSsaOwnerV1 {
-    owner_with_issuer_locals(issuer_count, access_count, read, ordered, valid_guard, atomic, true)
+    owner_with_issuer_locals(issuer_count, access_count, read, ordered, valid_guard, atomic, true, true)
 }
 
 pub(super) fn owner_with_reused_option_issuers(issuer_count: usize, access_count: usize)
     -> ProductionSemanticSsaOwnerV1
 {
-    owner_with_issuer_locals(issuer_count, access_count, false, None, true, false, false)
+    owner_with_issuer_locals(issuer_count, access_count, false, None, true, false, false, true)
+}
+
+pub(super) fn owner_with_reused_discriminator_issuers(issuer_count: usize, access_count: usize)
+    -> ProductionSemanticSsaOwnerV1
+{
+    owner_with_issuer_locals(issuer_count, access_count, false, None, true, false, true, false)
 }
 
 fn owner_with_issuer_locals(issuer_count: usize, access_count: usize, read: bool,
-    ordered: Option<SemanticVolatilityV1>, valid_guard: bool, atomic: bool, distinct: bool)
+    ordered: Option<SemanticVolatilityV1>, valid_guard: bool, atomic: bool,
+    distinct_options: bool, distinct_discriminators: bool)
     -> ProductionSemanticSsaOwnerV1
 {
     // Fixture block identities are single-byte ordered tags, not a production
@@ -444,13 +451,22 @@ fn owner_with_issuer_locals(issuer_count: usize, access_count: usize, read: bool
     }
     let mut blocks = Vec::new();
     for issuer in 0..issuer_count {
-        let option = if distinct && issuer != 0 {
+        let option = if distinct_options && issuer != 0 {
             let local = u32::try_from(locals.len()).unwrap();
             locals.push(SemanticLocalDeclV1::new(
                 SemanticLocalIdentityV1::from_sha256([40 + u8::try_from(local).unwrap(); 32]),
                 OPTIONAL, SemanticLocalRoleV1::Temporary, provenance()));
             local
         } else { 5 };
+        // Producer and discriminator uniqueness are independent source contracts.
+        // Keep the reused-Option negative's discriminators otherwise admissible.
+        let discriminator = if distinct_discriminators && issuer != 0 {
+            let local = u32::try_from(locals.len()).unwrap();
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([40 + u8::try_from(local).unwrap(); 32]),
+                U32, SemanticLocalRoleV1::Temporary, provenance()));
+            local
+        } else { 6 };
         let mut access = issued_access.clone();
         access[0] = assign(7, REFERENCE,
             SemanticRvalueKindV1::Use(SemanticOperandV1::Move(some(option))));
@@ -465,9 +481,9 @@ fn owner_with_issuer_locals(issuer_count: usize, access_count: usize, read: bool
             SemanticOperandV1::Move(place(4, WITNESS)),
         ], option, OPTIONAL, base + 2)));
         blocks.push(block((base + 2) as u8, vec![assign(
-            6, U32, SemanticRvalueKindV1::Discriminant(place(option, OPTIONAL)),
+            discriminator, U32, SemanticRvalueKindV1::Discriminant(place(option, OPTIONAL)),
         )], SemanticTerminatorKindV1::SwitchInt {
-            discriminant: SemanticOperandV1::Copy(place(6, U32)),
+            discriminant: SemanticOperandV1::Copy(place(discriminator, U32)),
             targets: SemanticSwitchTargetsV1::new(vec![SemanticSwitchTargetV1::new(
                 1, edge(SemanticEdgeRoleV1::SwitchValue, base + if valid_guard { 3 } else { 4 }),
             )], edge(SemanticEdgeRoleV1::SwitchOtherwise, base + if valid_guard { 4 } else { 3 })).unwrap(),
@@ -610,6 +626,11 @@ fn observe_original(
                     *slice = other;
                     changed += 1;
                 }
+                (OperationKind::Store { access, .. }, 7)
+                | (OperationKind::Load { access, .. }, 8) => {
+                    access.volatile = !access.volatile;
+                    changed += 1;
+                }
                 _ => {}
             }
         }
@@ -700,6 +721,13 @@ fn run_original_owner(fault: u8, used: bool, read: bool, owner: ProductionSemant
         .expect("explicit original occurrence capture")
         .retained_storage();
     let semantic = owner.source_semantic();
+    let ordered_read = semantic.functions()[0].blocks().iter().flat_map(|block| block.statements())
+        .any(|statement| matches!(statement.kind(), SemanticStatementKindV1::Assign(assignment)
+            if matches!(assignment.value().kind(), SemanticRvalueKindV1::Load(load)
+                if load.volatility() == SemanticVolatilityV1::Volatile)));
+    let ordered_write = semantic.functions()[0].blocks().iter().flat_map(|block| block.statements())
+        .any(|statement| matches!(statement.kind(), SemanticStatementKindV1::Store(store)
+            if store.volatility() == SemanticVolatilityV1::Volatile));
     let hash = *owner.source_semantic_sha256();
     let binding = *semantic.functions()[0]
         .kernel_entry()
@@ -776,7 +804,10 @@ fn run_original_owner(fault: u8, used: bool, read: bool, owner: ProductionSemant
             Err(error) => error,
             Ok(_) => panic!("changed actual issuer must refuse"),
         };
-        assert!(
+        assert!(if fault >= 7 {
+            matches!(error, ProductionPendingScopedSourceErrorV29::Source(
+                ProductionSemanticKirErrorV1::Unsupported { detail: "scoped memory anchors differ from their source instance", .. }))
+        } else {
             matches!(
                 error,
                 ProductionPendingScopedSourceErrorV29::Source(
@@ -785,7 +816,8 @@ fn run_original_owner(fault: u8, used: bool, read: bool, owner: ProductionSemant
                         ..
                     }
                 )
-            ),
+            )
+        },
             "fault {fault}: {error:?}"
         );
         assert_eq!(budget.storage(), 37 + occurrence_storage);
@@ -807,11 +839,12 @@ fn run_original_owner(fault: u8, used: bool, read: bool, owner: ProductionSemant
                 match operation.kind {
                     OperationKind::Store { access, .. } => {
                         assert_eq!(access.address_space, AddressSpace::Global);
+                        assert_eq!(access.volatile, ordered_write);
                         stores += 1;
                     }
                     OperationKind::Load { access, .. } => {
                         assert_eq!(access.address_space, AddressSpace::Global);
-                        assert!(!access.volatile);
+                        assert_eq!(access.volatile, ordered_read);
                         loads += 1;
                     }
                     OperationKind::GetElementPointer { .. } => gep += 1,

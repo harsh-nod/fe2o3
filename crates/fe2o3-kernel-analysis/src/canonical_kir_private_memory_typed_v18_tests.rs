@@ -595,10 +595,43 @@ fn typed_private_pointer_parameters_and_access_restriction_are_not_new_provenanc
             function.body.as_mut().unwrap().parameters.push(ValueId(50));
         }
         with_inventory(&module, |inventory, floor| {
-            assert!(matches!(
-                exercise(inventory, floor, WORK, STORAGE, 1, &[]).0,
-                Err(Error::Unsupported { .. })
-            ))
+            if !cast {
+                assert!(matches!(
+                    exercise(inventory, floor, WORK, STORAGE, 1, &[]).0,
+                    Err(Error::Unsupported { .. })
+                ));
+                return;
+            }
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+            let mut budget = Budget::new(&mut work, STORAGE);
+            budget.reserve_storage(floor).unwrap();
+            let (proof, receipt) = check_canonical_kir_private_memory_v18(
+                inventory,
+                CanonicalKirPrivateMemoryLimitsV1 { max_cells: 1 },
+                &mut budget,
+            )
+            .unwrap();
+            assert_eq!(budget.storage(), floor);
+            budget.reserve_storage(receipt.retained_storage()).unwrap();
+            let allocation = inventory.operations()[0].results.start;
+            let alias = inventory.operations()[3].results.start;
+            assert_eq!(proof.address(alias), proof.address(allocation));
+            let address = proof.address(alias).unwrap();
+            assert_eq!(
+                (address.allocation(), address.length(), address.offset()),
+                (0, 1, 0)
+            );
+            assert_eq!(
+                (0..4).map(|op| proof.operation(op)).collect::<Vec<_>>(),
+                [true, true, true, false]
+            );
+            assert_eq!(proof.latest_stores(), [None, None, Some(1), None]);
+            assert!(proof.is_for(inventory));
+            assert!(std::ptr::eq(proof.inventory().owner(), inventory.owner()));
+            assert!(!proof.grants_authority());
+            drop(proof);
+            budget.release_storage(receipt.retained_storage()).unwrap();
+            assert_eq!(budget.storage(), floor);
         });
     }
 }
@@ -669,26 +702,27 @@ fn typed_private_fixed_helper_headers_are_paid_before_traversal() {
         + slot::<(
             CheckedCanonicalKirPrivateMemoryV18<'_, '_>,
             CanonicalKirPrivateMemoryStorageV1,
-        )>();
+        )>()
+        + restriction_tests::header_oracle();
     assert_eq!(headers().unwrap(), independent);
     for (work_limit, storage_limit, expected_work) in [
-        (50, 23 + independent, 50),
-        (49, 23 + independent, 0),
-        (50, 22 + independent, 50),
+        (86, 23 + independent, 86),
+        (85, 23 + independent, 0),
+        (86, 22 + independent, 86),
     ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
         let mut budget = Budget::new(&mut work, storage_limit);
         budget.reserve_storage(23).unwrap();
         let result = reserve_headers(&mut budget);
         match (work_limit, storage_limit, result) {
-            (50, limit, Ok(())) if limit == 23 + independent => {
+            (86, limit, Ok(())) if limit == 23 + independent => {
                 assert_eq!(budget.storage(), 23 + independent);
                 budget.release_storage(independent).unwrap();
             }
-            (49, _, Err(Error::Resource(Resource::Work(error)))) => {
-                assert_eq!((error.actual(), error.limit()), (50, 49));
+            (85, _, Err(Error::Resource(Resource::Work(error)))) => {
+                assert_eq!((error.actual(), error.limit()), (86, 85));
             }
-            (50, limit, Err(Error::Resource(Resource::Storage(error)))) => {
+            (86, limit, Err(Error::Resource(Resource::Storage(error)))) => {
                 assert_eq!((error.actual(), error.limit()), (23 + independent, limit));
             }
             other => panic!("unexpected header boundary: {other:?}"),
@@ -696,4 +730,117 @@ fn typed_private_fixed_helper_headers_are_paid_before_traversal() {
         assert_eq!(budget.storage(), 23);
         assert_eq!(budget.work(), expected_work);
     }
+}
+
+#[path = "canonical_kir_private_memory_restriction_v18_tests.rs"]
+mod restriction_tests;
+
+fn mixed_global_private(volatile: bool) -> Module {
+    let mut module = local(ScalarType::U32, 4, 4);
+    let function = &mut module.functions[0];
+    function.signature.parameters.push(Type::pointer(
+        Type::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    ));
+    let body = function.body.as_mut().unwrap();
+    body.parameters.push(ValueId(901));
+    assert_eq!(body.blocks.len(), 1);
+    let operations = &mut body.blocks[0].operations;
+    assert_eq!(operations.len(), 3);
+    let mut access = MemoryAccess::new(AddressSpace::Global, 4);
+    access.volatile = volatile;
+    operations.insert(
+        2,
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(901),
+                value: ValueId(20),
+                access,
+            },
+        ),
+    );
+    operations.insert(
+        3,
+        Operation::effect_free(
+            ValueDef::new(ValueId(41), Type::Scalar(ScalarType::U32)),
+            OperationKind::Load {
+                pointer: ValueId(901),
+                access,
+            },
+        ),
+    );
+    module
+}
+
+#[test]
+fn typed_private_mixed_global_rows_stay_unclaimed_and_do_not_replace_store_identity() {
+    for volatile in [false, true] {
+        let module = mixed_global_private(volatile);
+        with_inventory(&module, |inventory, floor| {
+            assert_eq!(inventory.operations().len(), 5);
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+            let mut budget = Budget::new(&mut work, STORAGE);
+            budget.reserve_storage(floor).unwrap();
+            let (proof, receipt) = check_canonical_kir_private_memory_v18(
+                inventory,
+                CanonicalKirPrivateMemoryLimitsV1 { max_cells: 1 },
+                &mut budget,
+            )
+            .unwrap();
+            assert_eq!(budget.storage(), floor);
+            budget.reserve_storage(receipt.retained_storage()).unwrap();
+            assert!(proof.is_for(inventory));
+            assert!(!proof.grants_authority());
+            assert_eq!(
+                (0..5)
+                    .map(|index| proof.operation(index))
+                    .collect::<Vec<_>>(),
+                vec![true, true, false, false, true],
+            );
+            assert_eq!(proof.latest_stores(), &[None, None, None, None, Some(1)]);
+            drop(proof);
+            budget.release_storage(receipt.retained_storage()).unwrap();
+            assert_eq!(budget.storage(), floor);
+
+            // This is a private-only result even when the unclaimed global
+            // access is volatile. It cannot complete any global/native role.
+            let expected = [None, None, None, None, Some(1)];
+            let measured = exercise(inventory, floor, WORK, STORAGE, 1, &expected);
+            assert!(measured.0.is_ok());
+            assert!(
+                exercise(inventory, floor, measured.1, measured.2, 1, &expected)
+                    .0
+                    .is_ok()
+            );
+            assert!(matches!(
+                exercise(inventory, floor, measured.1 - 1, measured.2, 1, &expected).0,
+                Err(Error::Resource(Resource::Work(error)))
+                    if error.limit() == measured.1 - 1 && error.actual() > error.limit(),
+            ));
+            assert!(matches!(
+                exercise(inventory, floor, measured.1, measured.2 - 1, 1, &expected).0,
+                Err(Error::Resource(Resource::Storage(error)))
+                    if error.limit() == measured.2 - 1 && error.actual() > error.limit(),
+            ));
+        });
+    }
+}
+
+#[test]
+fn typed_private_global_store_cannot_initialize_a_same_scalar_private_allocation() {
+    let mut module = mixed_global_private(false);
+    let operations = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations;
+    operations.remove(1);
+    with_inventory(&module, |inventory, floor| {
+        assert_eq!(inventory.operations().len(), 4);
+        assert!(matches!(
+            exercise(inventory, floor, WORK, STORAGE, 1, &[]).0,
+            Err(Error::Unsupported {
+                detail: "Load requires one exact reaching Store",
+                ..
+            }),
+        ));
+    });
 }

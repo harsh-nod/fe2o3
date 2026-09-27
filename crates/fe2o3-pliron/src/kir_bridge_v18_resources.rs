@@ -118,6 +118,11 @@ pub(super) fn headers() -> Result<usize, ResourceError> {
         ),
         (2, size_of::<Result<(), ResourceError>>()),
         (2, size_of::<Result<usize, ResourceError>>()),
+        // Coordinate envelope/result and import totals are constructed before
+        // that envelope's payload reservation, so this earlier scope owns them.
+        (2, size_of::<Envelope>()),
+        (2, size_of::<Result<Envelope, ResourceError>>()),
+        (2, size_of::<usize>()),
         (
             2,
             size_of::<
@@ -171,6 +176,31 @@ pub(super) fn envelope(bytes: usize, slots: usize) -> Result<Envelope, ResourceE
     Ok(Envelope {
         work: add(mul(mul(volume, volume)?, 4)?, mul(volume, 8)?)?,
         storage: add(mul(volume, 64)?, 4096)?,
+    })
+}
+
+// V18 alone retains exact ordinary-operation and terminator coordinates. The
+// already-counted tree contains at least two slots for each such operation.
+// Reserve once to avoid growth during construction. Capacity/control bytes are
+// a logical upper envelope, not a promise about the allocator's physical RSS.
+pub(super) fn coordinate_envelope(slots: usize) -> Result<Envelope, ResourceError> {
+    let capacity = mul(slots, 2)?;
+    let payload = add(mul(capacity, add(size_of::<(Ptr<Operation>, KirBridgeCoordinateV1)>(), 1)?)?, 16)?;
+    let headers = add(
+        size_of::<HashMap<Ptr<Operation>, KirBridgeCoordinateV1>>(),
+        add(
+            size_of::<Result<(), std::collections::TryReserveError>>(),
+            add(
+                size_of::<Option<KirBridgeCoordinateV1>>(),
+                size_of::<(Ptr<Operation>, KirBridgeCoordinateV1, usize, usize)>(),
+            )?,
+        )?,
+    )?;
+    Ok(Envelope {
+        // Worst-case hash insertion/comparison debit, not an assertion that
+        // HashMap has deterministic constant-time or logarithmic lookup.
+        work: add(mul(mul(slots, slots)?, 2)?, mul(slots, 8)?)?,
+        storage: add(payload, headers)?,
     })
 }
 

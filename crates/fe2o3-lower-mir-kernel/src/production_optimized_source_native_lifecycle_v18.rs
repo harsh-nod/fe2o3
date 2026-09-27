@@ -709,3 +709,5 @@ impl ProductionOptimizedExecutionRecipesV18<'_> {
 #[cfg(test)]
 #[path = "production_optimized_source_native_lifecycle_controls_v18_tests.rs"]
 mod controls;
+
+include!("production_optimized_source_native_private_v18.rs");

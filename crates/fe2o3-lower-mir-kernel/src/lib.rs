@@ -17,7 +17,8 @@ mod production_source_launch_v1;
 pub use production_semantic_kir_v1::ProductionMemoryDischargeFailureV1;
 pub use production_semantic_kir_v1::{
     ProductionOptimizedSourceCorrespondenceV18,
-    ProductionLifecycleCheckedNativePoliciesV18, ProductionOptimizedExecutionKindV18,
+    ProductionLifecycleCheckedNativePoliciesV18, ProductionPrivateMemoryCheckedNativePoliciesV18,
+    ProductionSourcePrivateMemoryRootRequestV18, ProductionOptimizedExecutionKindV18,
     ProductionOptimizedExecutionRecipesV18, ProductionSourceNativeLifecycleErrorV18,
     ProductionSourceNativeLifecycleDiagnosticV18,
     ProductionOptimizedSourceOperationV18, ProductionOptimizedSourceGapV18,
@@ -42,6 +43,7 @@ pub use production_semantic_kir_v1::{
     ProductionOptimizedSliceAccessViewV18,
     ProductionSourceScalarArgumentV18, ProductionSourceScalarLeavesV18,
     ProductionSourceScalarInputV18, ProductionSourceScalarStoreV18,
+    ProductionSourceEntryWriteV18, ProductionCheckedSourceEntryWritesV18,
 };
 pub use production_source_launch_v1::*;
 

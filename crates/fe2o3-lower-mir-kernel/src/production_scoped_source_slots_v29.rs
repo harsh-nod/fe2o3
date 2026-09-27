@@ -579,10 +579,7 @@ fn append_scoped_source_slots_v29(
             }
         }
         budget.charge_work(slots.len())?;
-        if slots
-            .iter()
-            .any(|previous| previous.origin.pointer == origin.pointer)
-        {
+        if !scoped_slot_pointer_is_unique_v29(slots, origin.pointer) {
             return Err(scoped_slot_error_v29());
         }
         emission_push_v1(
@@ -915,4 +912,13 @@ fn derive_scoped_source_slots_with_identities_v1(
                 .ok_or(ArgumentResourceV1::Accounting)?,
         })
     })
+}
+
+// Caller prepays the complete existing slot census before this query. A new
+// slot is never appended until its actual Alloca result and this roster agree.
+fn scoped_slot_pointer_is_unique_v29(
+    slots: &[ScopedSourceSlotV29],
+    pointer: ValueId,
+) -> bool {
+    !slots.iter().any(|previous| previous.origin.pointer == pointer)
 }

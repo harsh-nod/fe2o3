@@ -444,7 +444,7 @@ impl FactSet {
 }
 
 fn canonical_private_operation_kind_v1(
-    input: &crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1<'_>,
+    input: &impl crate::kir_bridge_v1::NativePrivateInputV1,
     context: &Context,
     operation: pliron::context::Ptr<Operation>,
 ) -> Option<RankedOperationKind> {
@@ -456,7 +456,8 @@ fn canonical_private_operation_kind_v1(
         Kind::Write => RankedOperationKind::PrivateWrite,
         Kind::Call => RankedOperationKind::PrivateCall,
         Kind::TrapCall => RankedOperationKind::TerminalCall,
-        Kind::TrapEnd => RankedOperationKind::TerminalEnd,
+        Kind::TrapEnd | Kind::UnreachableV18 => RankedOperationKind::TerminalEnd,
+        Kind::LifecycleV18 => RankedOperationKind::NativeData,
         Kind::Scalar => {
             return ranked_operation_kind(Operation::get_op_dyn(operation, context).as_ref());
         }

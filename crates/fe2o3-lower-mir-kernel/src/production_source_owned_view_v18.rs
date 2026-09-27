@@ -9,6 +9,8 @@ pub enum ProductionSourceOwnedViewErrorV18 {
     Binding(&'static str),
     /// The same-owner analysis framework refused construction or settlement.
     Analysis(fe2o3_pliron::CanonicalAnalysisScopeErrorV1),
+    /// The exact physical private-memory checker refused a supported-family obligation.
+    PrivateMemory(fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1),
 }
 
 impl std::fmt::Display for ProductionSourceOwnedViewErrorV18 {
@@ -18,6 +20,7 @@ impl std::fmt::Display for ProductionSourceOwnedViewErrorV18 {
             Self::Resource(error) => error.fmt(formatter),
             Self::Binding(detail) => write!(formatter, "source-owned V18 query: {detail}"),
             Self::Analysis(error) => error.fmt(formatter),
+            Self::PrivateMemory(error) => error.fmt(formatter),
         }
     }
 }
@@ -29,6 +32,7 @@ impl std::error::Error for ProductionSourceOwnedViewErrorV18 {
             Self::Resource(error) => Some(error),
             Self::Binding(_) => None,
             Self::Analysis(error) => Some(error),
+            Self::PrivateMemory(error) => Some(error),
         }
     }
 }
@@ -43,9 +47,13 @@ impl From<fe2o3_pliron::CanonicalAnalysisScopeErrorV1> for ProductionSourceOwned
         use fe2o3_pliron::CanonicalAnalysisScopeErrorV1 as Analysis;
         match error {
             Analysis::Resource(error)
-            | Analysis::Inventory(fe2o3_kernel_analysis::CanonicalKirInventoryErrorV1::Resource(error))
+            | Analysis::Inventory(fe2o3_kernel_analysis::CanonicalKirInventoryErrorV1::Resource(
+                error,
+            ))
             | Analysis::Sparse(fe2o3_kernel_analysis::CanonicalKirSparseErrorV1::Resource(error))
-            | Analysis::MemorySsa(fe2o3_kernel_analysis::CanonicalKirMemorySsaErrorV1::Resource(error)) => Self::Resource(error),
+            | Analysis::MemorySsa(fe2o3_kernel_analysis::CanonicalKirMemorySsaErrorV1::Resource(
+                error,
+            )) => Self::Resource(error),
             other => Self::Analysis(other),
         }
     }
@@ -53,6 +61,20 @@ impl From<fe2o3_pliron::CanonicalAnalysisScopeErrorV1> for ProductionSourceOwned
 impl From<ProductionPendingScopedSourceErrorV29> for ProductionSourceOwnedViewErrorV18 {
     fn from(error: ProductionPendingScopedSourceErrorV29) -> Self {
         Self::Source(error)
+    }
+}
+impl From<fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1>
+    for ProductionSourceOwnedViewErrorV18
+{
+    fn from(error: fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1) -> Self {
+        use fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1 as Physical;
+        match error {
+            Physical::Resource(error) => error.into(),
+            Physical::Inventory(error) => {
+                fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error).into()
+            }
+            other => Self::PrivateMemory(other),
+        }
     }
 }
 impl From<ScopedModuleErrorV29> for ProductionSourceOwnedViewErrorV18 {
@@ -154,7 +176,14 @@ impl ProductionPendingScopedSourceOwnerV29 {
         limits: ProductionSemanticKirLimitsV1,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<ProductionPreparedSourceV18> {
-        Self::prepare_source_and_kernel_abi_v18(owner, launch, input, Some(kernel_abi), limits, budget)
+        Self::prepare_source_and_kernel_abi_v18(
+            owner,
+            launch,
+            input,
+            Some(kernel_abi),
+            limits,
+            budget,
+        )
     }
 
     fn prepare_source_and_kernel_abi_v18(
@@ -205,7 +234,9 @@ impl ProductionPendingScopedSourceOwnerV29 {
                 };
                 let mut source = capture_pending_source_inputs_v18(owner, launch, input, budget)?;
                 if let Some(kernel_abi) = kernel_abi {
-                    source.input.capture_kernel_argument_abi_v18(&source.owner, kernel_abi, budget)
+                    source
+                        .input
+                        .capture_kernel_argument_abi_v18(&source.owner, kernel_abi, budget)
                         .map_err(ProductionPendingScopedSourceErrorV29::Source)?;
                 }
                 let retained = budget
@@ -305,26 +336,38 @@ impl ProductionPendingScopedSourceOwnerV29 {
             self.inner.replay_with_cleanup(cleanup, budget)?;
             Ok::<_, ProductionSourceOwnedViewErrorV18>(headers)
         })?;
-            let guard = SourceOwnedQueryGuardV18::new(self, budget);
-            let view = ProductionSourceOwnedViewV18 {
-                owner: self,
-                guard: &guard,
-                cleanup,
-            };
-            let caught = match view.query(budget) {
-                Ok(()) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget))),
-                Err(error) => { drop(consume); Ok(Err(error.into())) }
-            };
-            let prior_query_failure = guard.first.get();
-            let postflight = if matches!(&caught, Ok(Ok(_))) {
-                guard.check(self, cleanup, budget)
-            } else {
-                guard.observe_custody(cleanup, budget)
-            };
-            drop(view);
-            drop(guard);
-            source_owned_finish_callback_v18(caught, prior_query_failure, postflight, cleanup, budget, headers)
-                .map_err(SourceConsumerErrorV18)
+        let guard = SourceOwnedQueryGuardV18::new(self, budget);
+        let view = ProductionSourceOwnedViewV18 {
+            owner: self,
+            guard: &guard,
+            cleanup,
+        };
+        let caught = match view.query(budget) {
+            Ok(()) => {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget)))
+            }
+            Err(error) => {
+                drop(consume);
+                Ok(Err(error.into()))
+            }
+        };
+        let prior_query_failure = guard.first.get();
+        let postflight = if matches!(&caught, Ok(Ok(_))) {
+            guard.check(self, cleanup, budget)
+        } else {
+            guard.observe_custody(cleanup, budget)
+        };
+        drop(view);
+        drop(guard);
+        source_owned_finish_callback_v18(
+            caught,
+            prior_query_failure,
+            postflight,
+            cleanup,
+            budget,
+            headers,
+        )
+        .map_err(SourceConsumerErrorV18)
     }
 }
 
@@ -407,22 +450,23 @@ impl ProductionPreparedSourceV18 {
                 .storage()
                 .checked_sub(self.retained)
                 .ok_or(ArgumentResourceV1::Accounting)?;
-            let (pending, retained) = scoped_source_attempt_v29(cleanup, budget, floor, move |budget| {
-                let Self {
-                    source,
-                    limits,
-                    capture_storage,
-                    ..
-                } = self;
-                let mut donor = Some(source);
-                let inner = SourceOwnedScopedModuleV29::try_new_with_cleanup(
-                    &mut donor, limits, cleanup, budget,
-                )?;
-                let pending = ProductionPendingScopedSourceOwnerV29 { inner };
-                budget.release_storage(size_of::<Self>())?;
-                let retained = argument_sum_v1(&[pending.adopted_storage(), capture_storage])?;
-                Ok::<_, ProductionSourceOwnedViewErrorV18>((pending, retained))
-            })?;
+            let (pending, retained) =
+                scoped_source_attempt_v29(cleanup, budget, floor, move |budget| {
+                    let Self {
+                        source,
+                        limits,
+                        capture_storage,
+                        ..
+                    } = self;
+                    let mut donor = Some(source);
+                    let inner = SourceOwnedScopedModuleV29::try_new_with_cleanup(
+                        &mut donor, limits, cleanup, budget,
+                    )?;
+                    let pending = ProductionPendingScopedSourceOwnerV29 { inner };
+                    budget.release_storage(size_of::<Self>())?;
+                    let retained = argument_sum_v1(&[pending.adopted_storage(), capture_storage])?;
+                    Ok::<_, ProductionSourceOwnedViewErrorV18>((pending, retained))
+                })?;
             let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 pending.with_source_consumer_with_cleanup_v18(cleanup, budget, consume)
             }));
@@ -437,6 +481,11 @@ enum SourceOwnedQueryFailureV18 {
     Resource(ArgumentResourceV1),
     Binding(&'static str),
     Analysis(fe2o3_pliron::CanonicalAnalysisScopeErrorV1),
+    PrivateMemoryUnsupported {
+        phase: &'static str,
+        detail: &'static str,
+    },
+    PrivateMemoryPanicked,
 }
 
 // All scope-owned values have dropped before this exact-credit settlement.
@@ -456,7 +505,9 @@ where
     let released = if cleanup.is_denied() {
         Err(ArgumentResourceV1::Accounting)
     } else {
-        budget.release_storage(storage).inspect_err(|_| cleanup.deny_refund())
+        budget
+            .release_storage(storage)
+            .inspect_err(|_| cleanup.deny_refund())
     };
     match caught {
         Err(payload) => std::panic::resume_unwind(payload),
@@ -466,16 +517,50 @@ where
         },
         Ok(Ok(value)) => match postflight.and(released.map_err(Into::into)) {
             Ok(()) => Ok(value),
-            Err(error) => { drop(value); Err(error.into()) }
+            Err(error) => {
+                drop(value);
+                Err(error.into())
+            }
         },
     }
 }
 impl SourceOwnedQueryFailureV18 {
+    // Resource and inventory causes reuse the existing latch variants. Keeping
+    // only the physical refusal payload avoids a second enum discriminant.
+    fn private_memory(error: fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1) -> Self {
+        use fe2o3_kernel_analysis::{
+            CanonicalKirInventoryErrorV1 as Inventory, CanonicalKirPrivateMemoryErrorV1 as Physical,
+        };
+        match error {
+            Physical::Resource(error) | Physical::Inventory(Inventory::Resource(error)) => {
+                Self::Resource(error)
+            }
+            Physical::Inventory(error) => Self::Analysis(
+                fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error),
+            ),
+            Physical::Unsupported { phase, detail } => {
+                Self::PrivateMemoryUnsupported { phase, detail }
+            }
+            Physical::Panicked => Self::PrivateMemoryPanicked,
+        }
+    }
+
     fn error(self) -> ProductionSourceOwnedViewErrorV18 {
         match self {
             Self::Resource(error) => error.into(),
             Self::Binding(detail) => ProductionSourceOwnedViewErrorV18::Binding(detail),
             Self::Analysis(error) => ProductionSourceOwnedViewErrorV18::Analysis(error),
+            Self::PrivateMemoryUnsupported { phase, detail } => {
+                ProductionSourceOwnedViewErrorV18::PrivateMemory(
+                    fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1::Unsupported {
+                        phase,
+                        detail,
+                    },
+                )
+            }
+            Self::PrivateMemoryPanicked => ProductionSourceOwnedViewErrorV18::PrivateMemory(
+                fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1::Panicked,
+            ),
         }
     }
 }
@@ -632,57 +717,64 @@ impl ProductionSourceOwnedViewV18<'_> {
         let floor = budget.storage();
         let headers = scoped_source_attempt_v29(self.cleanup, budget, floor, |budget| {
             self.retain_construction(|| {
-            let headers = argument_sum_v1(&[
-                size_of::<fe2o3_pliron::CanonicalAnalysisCleanupV1<'_>>(),
-                size_of::<std::cell::Cell<bool>>(),
-                size_of::<std::thread::Result<Result<T, SourceAnalysisBoundaryV18<E>>>>(),
-            ])?;
-            budget.reserve_storage(headers)?;
-            Ok(headers)
+                let headers = argument_sum_v1(&[
+                    size_of::<fe2o3_pliron::CanonicalAnalysisCleanupV1<'_>>(),
+                    size_of::<std::cell::Cell<bool>>(),
+                    size_of::<std::thread::Result<Result<T, SourceAnalysisBoundaryV18<E>>>>(),
+                ])?;
+                budget.reserve_storage(headers)?;
+                Ok(headers)
             })
         })?;
-            let cleanup = fe2o3_pliron::CanonicalAnalysisCleanupV1::linked(&self.cleanup.denied);
-            let entered = std::cell::Cell::new(false);
-            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                fe2o3_pliron::with_canonical_analysis_scope_v18(
-                    &self.owner.inner.pending.graph,
-                    budget,
-                    &cleanup,
-                    |scope| {
-                        entered.set(true);
-                        consume(scope).map_err(SourceAnalysisBoundaryV18::Consumer)
-                    },
-                )
-            }));
-            if cleanup.refund_denied() {
-                self.cleanup.deny_refund();
+        let cleanup = fe2o3_pliron::CanonicalAnalysisCleanupV1::linked(&self.cleanup.denied);
+        let entered = std::cell::Cell::new(false);
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            fe2o3_pliron::with_canonical_analysis_scope_v18(
+                &self.owner.inner.pending.graph,
+                budget,
+                &cleanup,
+                |scope| {
+                    entered.set(true);
+                    consume(scope).map_err(SourceAnalysisBoundaryV18::Consumer)
+                },
+            )
+        }));
+        if cleanup.refund_denied() {
+            self.cleanup.deny_refund();
+        }
+        let caught = match caught {
+            Ok(Err(SourceAnalysisBoundaryV18::Framework(error))) => {
+                let retained = self.retain_query::<()>(Err(error.into())).unwrap_err();
+                Ok(Err(retained.into()))
             }
-            let caught = match caught {
-                Ok(Err(SourceAnalysisBoundaryV18::Framework(error))) => {
-                    let retained = self.retain_query::<()>(Err(error.into())).unwrap_err();
-                    Ok(Err(retained.into()))
+            Ok(Err(SourceAnalysisBoundaryV18::Consumer(error))) => Ok(Err(error)),
+            Ok(Ok(value)) => Ok(Ok(value)),
+            Err(payload) => {
+                if !entered.get() {
+                    let _ = self.guard.reject::<()>(SourceOwnedQueryFailureV18::Binding(
+                        "source analysis construction panicked",
+                    ));
                 }
-                Ok(Err(SourceAnalysisBoundaryV18::Consumer(error))) => Ok(Err(error)),
-                Ok(Ok(value)) => Ok(Ok(value)),
-                Err(payload) => {
-                    if !entered.get() {
-                        let _ = self.guard.reject::<()>(SourceOwnedQueryFailureV18::Binding(
-                            "source analysis construction panicked",
-                        ));
-                    }
-                    Err(payload)
-                }
-            };
-            let prior_query_failure = self.guard.first.get();
-            // An enclosing source scope must not mistake a later postflight
-            // error for a query failure preceding this selected consumer error.
-            let postflight = if matches!(&caught, Ok(Ok(_))) {
-                self.guard.check(self.owner, self.cleanup, budget)
-            } else {
-                self.guard.observe_custody(self.cleanup, budget)
-            };
-            drop(cleanup);
-            source_owned_finish_callback_v18(caught, prior_query_failure, postflight, self.cleanup, budget, headers)
+                Err(payload)
+            }
+        };
+        let prior_query_failure = self.guard.first.get();
+        // An enclosing source scope must not mistake a later postflight
+        // error for a query failure preceding this selected consumer error.
+        let postflight = if matches!(&caught, Ok(Ok(_))) {
+            self.guard.check(self.owner, self.cleanup, budget)
+        } else {
+            self.guard.observe_custody(self.cleanup, budget)
+        };
+        drop(cleanup);
+        source_owned_finish_callback_v18(
+            caught,
+            prior_query_failure,
+            postflight,
+            self.cleanup,
+            budget,
+            headers,
+        )
     }
 
     fn query(&self, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
@@ -697,12 +789,18 @@ impl ProductionSourceOwnedViewV18<'_> {
 
     fn retain_query<T>(&self, result: SourceOwnedResultV18<T>) -> SourceOwnedResultV18<T> {
         match result {
-            Err(ProductionSourceOwnedViewErrorV18::Resource(error)) =>
-                self.guard.reject(SourceOwnedQueryFailureV18::Resource(error)),
-            Err(ProductionSourceOwnedViewErrorV18::Binding(detail)) =>
-                self.guard.reject(SourceOwnedQueryFailureV18::Binding(detail)),
-            Err(ProductionSourceOwnedViewErrorV18::Analysis(error)) =>
-                self.guard.reject(SourceOwnedQueryFailureV18::Analysis(error)),
+            Err(ProductionSourceOwnedViewErrorV18::Resource(error)) => self
+                .guard
+                .reject(SourceOwnedQueryFailureV18::Resource(error)),
+            Err(ProductionSourceOwnedViewErrorV18::Binding(detail)) => self
+                .guard
+                .reject(SourceOwnedQueryFailureV18::Binding(detail)),
+            Err(ProductionSourceOwnedViewErrorV18::Analysis(error)) => self
+                .guard
+                .reject(SourceOwnedQueryFailureV18::Analysis(error)),
+            Err(ProductionSourceOwnedViewErrorV18::PrivateMemory(error)) => self
+                .guard
+                .reject(SourceOwnedQueryFailureV18::private_memory(error)),
             other => other,
         }
     }
@@ -765,13 +863,22 @@ impl ProductionSourceOwnedViewV18<'_> {
         self.retain_query((|| {
             self.instance(root, instance, budget)?;
             let root = self.root_row(root)?;
-            let ordinal = root.active_instances.sidecar_ordinal(
-                instance, root.coordinates.sources.rows.len(), &root.sidecars.rows, budget,
-            ).map_err(|error| match error {
-                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error) =>
-                    ProductionSourceOwnedViewErrorV18::Resource(error),
-                _ => ProductionSourceOwnedViewErrorV18::Binding("active instance index changed its original roster"),
-            })?;
+            let ordinal = root
+                .active_instances
+                .sidecar_ordinal(
+                    instance,
+                    root.coordinates.sources.rows.len(),
+                    &root.sidecars.rows,
+                    budget,
+                )
+                .map_err(|error| match error {
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error) => {
+                        ProductionSourceOwnedViewErrorV18::Resource(error)
+                    }
+                    _ => ProductionSourceOwnedViewErrorV18::Binding(
+                        "active instance index changed its original roster",
+                    ),
+                })?;
             Ok(ordinal)
         })())
     }
@@ -823,7 +930,10 @@ impl ProductionSourceOwnedViewV18<'_> {
     ) -> SourceOwnedResultV18<()> {
         self.query(budget)?;
         self.retain_query(
-            self.owner.inner.source.input
+            self.owner
+                .inner
+                .source
+                .input
                 .check_candidate_v18(&self.owner.inner.source.owner, input, budget)
                 .map_err(|error| match error {
                     crate::ProductionContextRootErrorV29::Resource(error) => error.into(),
@@ -851,9 +961,17 @@ impl ProductionSourceOwnedViewV18<'_> {
         self.retain_query((|| {
             self.query(budget)?;
             self.root_row(root)?;
-            self.owner.inner.source.input.kernel_argument_abi.as_ref()
-                .map(|profile| profile.descriptor_root(&self.owner.inner.source.owner, root, budget))
-                .transpose().map_err(kernel_argument_abi_v18::query_error)
+            self.owner
+                .inner
+                .source
+                .input
+                .kernel_argument_abi
+                .as_ref()
+                .map(|profile| {
+                    profile.descriptor_root(&self.owner.inner.source.owner, root, budget)
+                })
+                .transpose()
+                .map_err(kernel_argument_abi_v18::query_error)
         })())
     }
 
@@ -869,8 +987,12 @@ impl ProductionSourceOwnedViewV18<'_> {
             self.query(budget)?;
             self.root_row(root)?;
             budget.charge_work(4)?;
-            let Some(profile) = &self.owner.inner.source.input.kernel_argument_abi else { return Ok(None); };
-            profile.argument_count(root).map(Some)
+            let Some(profile) = &self.owner.inner.source.input.kernel_argument_abi else {
+                return Ok(None);
+            };
+            profile
+                .argument_count(root)
+                .map(Some)
                 .map_err(kernel_argument_abi_v18::query_error)
         })())
     }
@@ -889,9 +1011,18 @@ impl ProductionSourceOwnedViewV18<'_> {
             self.query(budget)?;
             self.root_row(root)?;
             budget.charge_work(4)?;
-            let profile = self.owner.inner.source.input.kernel_argument_abi.as_ref()
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("original source has no kernel argument ABI profile"))?;
-            profile.argument_kind(root, argument)
+            let profile = self
+                .owner
+                .inner
+                .source
+                .input
+                .kernel_argument_abi
+                .as_ref()
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "original source has no kernel argument ABI profile",
+                ))?;
+            profile
+                .argument_kind(root, argument)
                 .map_err(kernel_argument_abi_v18::query_error)
         })())
     }
@@ -908,9 +1039,18 @@ impl ProductionSourceOwnedViewV18<'_> {
         self.retain_query((|| {
             self.query(budget)?;
             self.root_row(root)?;
-            let profile = self.owner.inner.source.input.kernel_argument_abi.as_ref()
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("original source has no kernel argument ABI profile"))?;
-            profile.by_value_argument_v29(&self.owner.inner.source.owner, root, argument, budget)
+            let profile = self
+                .owner
+                .inner
+                .source
+                .input
+                .kernel_argument_abi
+                .as_ref()
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "original source has no kernel argument ABI profile",
+                ))?;
+            profile
+                .by_value_argument_v29(&self.owner.inner.source.owner, root, argument, budget)
                 .map_err(kernel_argument_abi_v18::query_error)
         })())
     }
@@ -926,9 +1066,18 @@ impl ProductionSourceOwnedViewV18<'_> {
     ) -> SourceOwnedResultV18<()> {
         self.retain_query((|| {
             self.query(budget)?;
-            let profile = self.owner.inner.source.input.kernel_argument_abi.as_ref()
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("original source has no kernel argument ABI profile"))?;
-            profile.matches_original_input(&self.owner.inner.source.owner, input, budget)
+            let profile = self
+                .owner
+                .inner
+                .source
+                .input
+                .kernel_argument_abi
+                .as_ref()
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "original source has no kernel argument ABI profile",
+                ))?;
+            profile
+                .matches_original_input(&self.owner.inner.source.owner, input, budget)
                 .map_err(kernel_argument_abi_v18::query_error)
         })())
     }
@@ -1019,8 +1168,10 @@ impl ProductionSourceOwnedViewV18<'_> {
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<Option<ProductionInvocationEntrySpanV1>> {
         self.query(budget)?;
-        Ok(self.optional_sidecar(root, instance, budget)?
-            .and_then(|row| row.invocation_entry.as_ref()).map(|row| row.span))
+        Ok(self
+            .optional_sidecar(root, instance, budget)?
+            .and_then(|row| row.invocation_entry.as_ref())
+            .map(|row| row.span))
     }
 
     /// Returns the exact count of source-to-final mapped spans for one root.
@@ -1061,7 +1212,9 @@ impl ProductionSourceOwnedViewV18<'_> {
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<usize> {
         self.query(budget)?;
-        let Some(sidecar) = self.optional_sidecar(root, instance, budget)? else { return Ok(0); };
+        let Some(sidecar) = self.optional_sidecar(root, instance, budget)? else {
+            return Ok(0);
+        };
         match sidecar.scoped_memory_anchors.as_ref() {
             Some(rows) => Ok(rows.rows.len()),
             None => self.missing("memory anchor census missing"),
@@ -1078,7 +1231,11 @@ impl ProductionSourceOwnedViewV18<'_> {
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<Option<(BlockId, usize, ValueId)>> {
         self.query(budget)?;
-        let Some(anchors) = self.sidecar(root, instance, budget)?.scoped_memory_anchors.as_ref() else {
+        let Some(anchors) = self
+            .sidecar(root, instance, budget)?
+            .scoped_memory_anchors
+            .as_ref()
+        else {
             return self.missing("memory anchor census missing");
         };
         let Some(row) = anchors.rows.get(ordinal) else {
@@ -1088,9 +1245,10 @@ impl ProductionSourceOwnedViewV18<'_> {
             ScopedMemoryAnchorKindV29::Object(_) => {
                 return self.missing("typed object is not a scalar single-pointer memory access");
             }
-            ScopedMemoryAnchorKindV29::Access { pointer, payload: _ } => {
-                Some((row.block, row.position, pointer))
-            }
+            ScopedMemoryAnchorKindV29::Access {
+                pointer,
+                payload: _,
+            } => Some((row.block, row.position, pointer)),
             ScopedMemoryAnchorKindV29::Kill { .. }
             | ScopedMemoryAnchorKindV29::FailureRead { .. } => None,
         })
@@ -1104,17 +1262,36 @@ impl ProductionSourceOwnedViewV18<'_> {
         instance: usize,
         ordinal: usize,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<Option<(BlockId, usize, fe2o3_kernel_ir::StorageOperationV1, Option<ValueId>)>> {
+    ) -> SourceOwnedResultV18<
+        Option<(
+            BlockId,
+            usize,
+            fe2o3_kernel_ir::StorageOperationV1,
+            Option<ValueId>,
+        )>,
+    > {
         self.query(budget)?;
-        let Some(anchors) = self.sidecar(root, instance, budget)?.scoped_memory_anchors.as_ref() else {
+        let Some(anchors) = self
+            .sidecar(root, instance, budget)?
+            .scoped_memory_anchors
+            .as_ref()
+        else {
             return self.missing("memory anchor census missing");
         };
-        let Some(row) = anchors.rows.get(ordinal) else { return self.missing("memory anchor ordinal"); };
+        let Some(row) = anchors.rows.get(ordinal) else {
+            return self.missing("memory anchor ordinal");
+        };
         match row.kind {
             ScopedMemoryAnchorKindV29::Object(_) => {
-                let payload = anchors.object_payload(row, budget)
+                let payload = anchors
+                    .object_payload(row, budget)
                     .map_err(|error| source_attachment_error_v18(error.into()))?;
-                Ok(Some((row.block, row.position, payload.operation, payload.result)))
+                Ok(Some((
+                    row.block,
+                    row.position,
+                    payload.operation,
+                    payload.result,
+                )))
             }
             ScopedMemoryAnchorKindV29::Access { .. }
             | ScopedMemoryAnchorKindV29::Kill { .. }

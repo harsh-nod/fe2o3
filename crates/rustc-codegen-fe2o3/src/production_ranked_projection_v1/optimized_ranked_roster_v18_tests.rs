@@ -218,18 +218,20 @@ pub(super) fn check(
         let source = view.original.source(budget)?;
         let inventory = view.original.inventory(budget)?;
         let completed = Cell::new(false);
+        let expected = if view.native.is_private_memory() { "private native source subject changed" }
+            else { "native root attachment substituted its original source" };
         let result: Result<(), Error> =
             source.with_ranked_correspondence_v18(inventory, budget, |foreign, budget| {
                 assert!(!std::ptr::eq(view.original, foreign));
                 binding(
                     view.native
                         .check_source_subject_v18(foreign, view.optimized, budget),
-                    "native root attachment substituted its original source",
+                    expected,
                 );
                 let before = (budget.work(), budget.storage());
                 binding(
                     view.root_count(budget).map(|_| ()),
-                    "native root attachment substituted its original source",
+                    expected,
                 );
                 assert_eq!((budget.work(), budget.storage()), before);
                 completed.set(true);
@@ -238,7 +240,7 @@ pub(super) fn check(
         assert!(completed.get());
         binding(
             result,
-            "native root attachment substituted its original source",
+            expected,
         );
     } else if mode == 8 {
         OBSERVATION.with(|slot| {
@@ -275,7 +277,7 @@ pub(super) fn check(
             .reserve_storage(padding)
             .map_err(|error| resource(view.original, error))?;
         // The zero-capture callback has no dynamic header. It must never run.
-        let result = with_source_native_ranked_roots_v18(
+        let result = with_source_completed_native_ranked_roots_v18(
             view.original,
             view.optimized,
             view.native,
@@ -321,6 +323,7 @@ fn native_root_fixed_header_preflight_is_exact_and_rejects_one_short() {
         + 2 * alignment
         + size_of::<[usize; 2]>()
         + size_of::<[usize; 9]>()
+        + size_of::<SourceNativePolicyViewV18<'_, '_, '_>>()
         + size_of::<Result<Vec<()>, Error>>()
         + size_of::<Result<Vec<()>, ProductionRankedProjectionErrorV1>>()
         + size_of::<Result<Vec<Vec<()>>, Error>>()
@@ -355,8 +358,10 @@ fn native_root_fixed_header_preflight_is_exact_and_rejects_one_short() {
             >,
         >()
         + size_of::<Result<usize, Error>>()
+        + size_of::<Result<usize, Error>>()
         + size_of::<Result<Option<&fe2o3_pliron::ProductionPlironPreloweringReportV2>, Error>>()
-        + 6 * size_of::<Result<(), Error>>()
+        + size_of::<Result<Option<&fe2o3_pliron::ProductionPlironPreloweringReportV2>, Error>>()
+        + 8 * size_of::<Result<(), Error>>()
         + size_of::<std::thread::Result<Result<(), Error>>>();
     assert_eq!(headers, expected);
     assert_eq!(root_headers(usize::MAX, alignment), None);

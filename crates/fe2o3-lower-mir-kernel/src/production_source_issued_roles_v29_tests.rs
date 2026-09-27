@@ -2,6 +2,8 @@ use super::*;
 use fe2o3_mir_model::semantic_mir_v1::*;
 use crate::{ProductionSourceLaunchInputV1, ProductionSourceLaunchRootInputV1, ProductionSourceLaunchRosterV1};
 
+include!("production_source_issued_root_binding_v29_tests.rs");
+
 const ISSUED_ROLE_FLOOR: usize = 37;
 const ISSUED_ROLE_LIMIT: usize = 1_000_000_000;
 
@@ -220,8 +222,8 @@ fn issued_pointer_reused_original_option_local_remains_an_explicit_admission_gap
     let old = owner_with_reused_option_issuers(2, 1);
     assert_ne!(owner.source_semantic_sha256(), old.source_semantic_sha256(),
         "independent local producers are a fixture correction, not a same-source recovery");
-    assert_eq!(old.source_semantic().functions()[0].locals().len(), 8);
-    assert_eq!(owner.source_semantic().functions()[0].locals().len(), 9);
+    assert_eq!(old.source_semantic().functions()[0].locals().len(), 9);
+    assert_eq!(owner.source_semantic().functions()[0].locals().len(), 10);
     let complete = std::cell::Cell::new(false);
     let positive = run_issued_role_owner_v18(owner, ISSUED_ROLE_LIMIT, ISSUED_ROLE_LIMIT,
         &std::cell::Cell::new(None), |original, budget| {
@@ -241,6 +243,37 @@ fn issued_pointer_reused_original_option_local_remains_an_explicit_admission_gap
         ProductionPendingScopedSourceErrorV29::Source(ProductionSemanticKirErrorV1::Unsupported {
             function: 0, block: None, statement: None,
             detail: "an Option capability local does not have one exact producer",
+        })))), "{refused:?}");
+}
+
+#[test]
+fn issued_pointer_reused_original_discriminator_remains_an_explicit_admission_gap() {
+    use source_issued_pointer_source_tests_v29::{owner_with_shape, owner_with_reused_discriminator_issuers};
+    assert_eq!(owner_with_shape(1, 1).source_semantic_sha256(),
+        owner_with_reused_discriminator_issuers(1, 1).source_semantic_sha256());
+    let owner = owner_with_shape(2, 1);
+    let reused = owner_with_reused_discriminator_issuers(2, 1);
+    assert_ne!(owner.source_semantic_sha256(), reused.source_semantic_sha256(),
+        "distinct discriminators change the original source, not production admission");
+    assert_eq!(reused.source_semantic().functions()[0].locals().len(), 9);
+    let completed = std::cell::Cell::new(false);
+    run_issued_role_owner_v18(owner, ISSUED_ROLE_LIMIT, ISSUED_ROLE_LIMIT,
+        &std::cell::Cell::new(None), |original, budget| {
+            let rows = issued_rows_v18(original);
+            assert_eq!((rows.sources.len(), rows.issuers.len(), rows.accesses.len()), (2, 2, 2));
+            check_immutable_issued_roles_v18(original, 0, rows, budget)?;
+            completed.set(true);
+            Ok(())
+        }).0.unwrap();
+    assert!(completed.get());
+    let entered = std::cell::Cell::new(false);
+    let refused = run_issued_role_owner_v18(reused, ISSUED_ROLE_LIMIT, ISSUED_ROLE_LIMIT,
+        &std::cell::Cell::new(None), |_, _| { entered.set(true); Ok(()) }).0;
+    assert!(!entered.get());
+    assert!(matches!(refused, Err(ProductionSourceOwnedViewErrorV18::Source(
+        ProductionPendingScopedSourceErrorV29::Source(ProductionSemanticKirErrorV1::Unsupported {
+            function: 0, block: None, statement: None,
+            detail: "an Option capability discriminator does not have one exact definition",
         })))), "{refused:?}");
 }
 
@@ -266,7 +299,7 @@ fn issued_pointer_retained_replay_rejects_copied_source_identity_and_guard_mutat
     // Copied receipts must match the authentic owner's complete roster before
     // replay. These earlier receipt refusals are not downstream guard proof
     // coverage; actual input/tail/edge mutants remain in the source observer.
-    for fault in 0..=13 {
+    for fault in 0..=14 {
         let used = !matches!(fault, 0 | 9 | 12);
         let completed = std::cell::Cell::new(false);
         let (result, _, _) = run_issued_role_source_v18(used, ISSUED_ROLE_LIMIT, ISSUED_ROLE_LIMIT, |original, budget| {
@@ -298,6 +331,7 @@ fn issued_pointer_retained_replay_rejects_copied_source_identity_and_guard_mutat
                 11 => copy.accesses[0].writing = !copy.accesses[0].writing,
                 12 => copy.issuers.clear(),
                 13 => copy.accesses.clear(),
+                14 => copy.accesses[0].access.volatile = !copy.accesses[0].access.volatile,
                 _ => unreachable!(),
             }
             let error = check_immutable_issued_roles_v18(original, 0, &copy, budget).unwrap_err();
@@ -430,5 +464,77 @@ fn issued_role_resource_v18(error: ProductionSourceOwnedViewErrorV18) -> Argumen
         | View::Source(Pending::Canonical(C::Decode(D::WorkLimit(limit))))
         | View::Source(Pending::Canonical(C::Decode(D::Encode(E::WorkLimit(limit))))) => ArgumentResourceV1::Work(limit),
         other => panic!("exact issued source resource refusal required: {other:?}"),
+    }
+}
+
+fn run_issued_ordered_roster_v18(volatile: bool, work: usize, storage: usize)
+    -> (SourceOwnedResultV18<()>, usize, usize)
+{
+    let owner = source_issued_pointer_source_tests_v29::owner_with_shape_and_effects(1, 1, false,
+        Some(if volatile { SemanticVolatilityV1::Volatile } else { SemanticVolatilityV1::NonVolatile }));
+    let completed = std::cell::Cell::new(false);
+    let result = run_issued_role_owner_v18(owner, work, storage, &std::cell::Cell::new(None), |original, budget| {
+        check_issued_role_positive_v18(original, true, budget)?;
+        let rows = issued_rows_v18(original);
+        assert_eq!(rows.accesses.len(), 1, "ordered accesses cannot disappear from the source census");
+        assert_eq!(rows.accesses[0].access.volatile, volatile);
+        assert!(rows.accesses[0].writing);
+        completed.set(true);
+        Ok(())
+    });
+    if result.0.is_ok() { assert!(completed.get()); }
+    result
+}
+
+#[test]
+fn issued_pointer_ordered_store_retains_exact_issuer_access_and_resource_census() {
+    for volatile in [false, true] {
+        let (result, work, storage) = run_issued_ordered_roster_v18(volatile, ISSUED_ROLE_LIMIT, ISSUED_ROLE_LIMIT);
+        result.unwrap();
+        let exact = run_issued_ordered_roster_v18(volatile, work, storage);
+        exact.0.unwrap();
+        assert_eq!((exact.1, exact.2), (work, storage));
+        assert!(matches!(issued_role_resource_v18(run_issued_ordered_roster_v18(volatile, work - 1, storage).0.unwrap_err()),
+            ArgumentResourceV1::Work(error) if error.limit() == work - 1 && error.actual() > work - 1));
+        assert!(matches!(issued_role_resource_v18(run_issued_ordered_roster_v18(volatile, work, storage - 1).0.unwrap_err()),
+            ArgumentResourceV1::Storage(error) if error.limit() == storage - 1 && error.actual() > storage - 1));
+    }
+}
+
+#[test]
+fn issued_pointer_original_effect_replay_rejects_added_dropped_store_bit_independently() {
+    // This is a copied-operation helper control. Actual candidate mutations are
+    // independently exercised by the final-source observer tests.
+    for volatile in [false, true] {
+        let owner = source_issued_pointer_source_tests_v29::owner_with_shape_and_effects(1, 1, false,
+            Some(if volatile { SemanticVolatilityV1::Volatile } else { SemanticVolatilityV1::NonVolatile }));
+        let completed = std::cell::Cell::new(false);
+        let result = run_issued_role_owner_v18(owner, ISSUED_ROLE_LIMIT, ISSUED_ROLE_LIMIT,
+            &std::cell::Cell::new(None), |original, budget| {
+                check_issued_role_positive_v18(original, true, budget)?;
+                let row = issued_rows_v18(original).accesses[0];
+                let [position] = original.attachment_range(TileAttachmentKeyV29 {
+                    root: 0, family: TileAttachmentFamilyV29::MemoryAnchor,
+                    instance: row.instance.index(), row: row.anchor,
+                    field: TileAttachmentFieldV29::MemoryPosition, component: 0, part: 0,
+                }, budget)? else { panic!("one exact original position"); };
+                let ProductionSourceOperationV18::Operation(coordinate) = original.mapped_source_operation(position.location, budget)?
+                    else { panic!("actual original Store"); };
+                let operation = optimized_source_operation_row_v18(original.inventory, coordinate, budget)?.operation;
+                check_issued_original_effect_v18(original, 0, row.instance.index(), row.anchor, operation, budget)?;
+                let mut changed = operation.clone();
+                let OperationKind::Store { access, .. } = &mut changed.kind else { panic!("issued Store"); };
+                assert_eq!(access.volatile, volatile);
+                access.volatile = !volatile;
+                let error = check_issued_original_effect_v18(original, 0, row.instance.index(), row.anchor, &changed, budget).unwrap_err();
+                assert!(matches!(error, ProductionSourceOwnedViewErrorV18::Source(ProductionPendingScopedSourceErrorV29::Source(
+                    ProductionSemanticKirErrorV1::Unsupported { detail: "scoped memory anchors differ from their source instance", .. }))));
+                // The detailed Source error is propagated by this closed
+                // caller. Only Resource/Binding/Analysis are sticky query
+                // failures; this copied-operation control invents no new rule.
+                completed.set(true);
+                Err(error)
+            }).0;
+        assert!(completed.get() && result.is_err(), "{result:?}");
     }
 }

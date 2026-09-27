@@ -997,7 +997,8 @@ fn actual_source_scalar_leaf_queries_reject_coherent_typed_result_and_capture_su
                 source.with_ranked_correspondence_v18(inventory, budget, |relation, budget| {
                     let function = inventory.functions()[source.root(0, budget)?.1].function;
                     let recipe = scalar_leaf_collision_recipe_v18(function);
-                    let mut leaves = SourceScalarLeavesV18::build(relation, 0, &recipe, budget)?;
+                    let mut leaves = SourceScalarLeavesV18::build(
+                        relation, 0, &SourceScalarNamespaceV18::Ranked(&recipe), budget)?;
                     let first = leaves.rows[0];
                     let other = *leaves.rows.iter().find(|row| row.instance != first.instance
                         && row.place == first.place && row.scalar == first.scalar).unwrap();

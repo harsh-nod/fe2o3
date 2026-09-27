@@ -1205,6 +1205,85 @@ fn check_scoped_array_initializer_recipe_v29(
     Ok(())
 }
 
+fn check_scoped_store_volatility_v29(
+    function: &SemanticFunctionDeclV1,
+    row: &ScopedMemoryAnchorV29,
+    source: ScopedMemoryStoreSourceV29,
+    actual: bool,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    budget.charge_work(8)?;
+    let expected = match source {
+        ScopedMemoryStoreSourceV29::Operand { site, role: ExecutionOperandV29::StoreValue, ty, .. } => {
+            let Some(SemanticStatementKindV1::Store(store)) = scoped_source_statement_v29(function, site)
+                else { return Err(scoped_memory_error_v29()); };
+            if row.source != Some(ScopedMemoryFrameV29::operand(site, Some(ExecutionOperandV29::StoreDestination)))
+                || store.atomic().is_some() || store.destination().ty() != ty
+                || semantic_operand_type(store.value()) != ty {
+                return Err(scoped_memory_error_v29());
+            }
+            store.volatility() == SemanticVolatilityV1::Volatile
+        }
+        // Assignment, argument and result materialization are ordinary stores;
+        // a copied access bit cannot turn them into an original ordered effect.
+        _ => false,
+    };
+    if actual != expected { return Err(scoped_memory_error_v29()); }
+    Ok(())
+}
+
+fn check_scoped_payload_effect_v29(
+    function: &SemanticFunctionDeclV1,
+    row: &ScopedMemoryAnchorV29,
+    operation: &Operation,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let header = argument_sum_v1(&[
+        std::mem::size_of::<ScopedMemoryAnchorKindV29>(),
+        std::mem::size_of::<ScopedMemoryStoreSourceV29>(),
+        std::mem::size_of::<ScopedMemoryReadV29>(),
+        std::mem::size_of::<Option<&SemanticStatementKindV1>>(),
+        std::mem::size_of::<&fe2o3_mir_model::semantic_mir_v1::SemanticMemoryStoreV1>(),
+        std::mem::size_of::<(&SemanticFunctionDeclV1, &ScopedMemoryAnchorV29, &Operation, &mut dyn SemanticEmissionBudgetV1)>(),
+        2 * std::mem::size_of::<Result<(), ProductionSemanticKirErrorV1>>(),
+        std::mem::size_of::<std::thread::Result<Result<(), ProductionSemanticKirErrorV1>>>(),
+        std::mem::size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>(),
+        std::mem::size_of::<Option<usize>>(),
+        3 * std::mem::size_of::<usize>(),
+        2 * std::mem::size_of::<bool>(),
+    ])?;
+    let ledger = budget.work_ledger_identity_v1();
+    let slot = budget.emission_service_slot_v1();
+    let required = argument_sum_v1(&[budget.storage(), header])?;
+    budget.reserve_storage(header)?;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        budget.charge_work(3)?;
+        match (row.kind, &operation.kind) {
+            (ScopedMemoryAnchorKindV29::Access { payload: Some(ScopedMemoryPayloadV29::Store { source, .. }), .. },
+                OperationKind::Store { access, .. } | OperationKind::GuardedStore { access, .. }) => {
+                check_scoped_store_volatility_v29(function, row, source, access.volatile, budget)
+            }
+            (ScopedMemoryAnchorKindV29::Access { payload: Some(ScopedMemoryPayloadV29::Load { read, .. }), .. },
+                OperationKind::Load { access, .. } | OperationKind::GuardedLoad { access, .. }) => {
+                check_scoped_read_volatility_v29(function, read, access.volatile, budget)
+            }
+            _ => Err(scoped_memory_error_v29()),
+        }
+    }));
+    // This closed query retains no data and invokes no consumer. Refund only
+    // its own paid header after same-slot/ledger and local-floor checks.
+    let refunded = budget.work_ledger_identity_v1() == ledger
+        && budget.emission_service_slot_v1() == slot
+        && budget.storage() >= required
+        && budget.release_storage(header).is_ok();
+    match result {
+        Ok(Ok(())) if refunded => Ok(()),
+        Ok(Ok(())) => Err(ArgumentResourceV1::Accounting.into()),
+        Ok(Err(error)) => Err(error),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
 fn check_scoped_payload_v29(
     function: &SemanticFunctionDeclV1,
     occurrences: &ProductionSemanticSsaFunctionOccurrencesV1<'_>,
@@ -1279,6 +1358,7 @@ fn check_scoped_payload_v29(
             {
                 return Err(scoped_memory_error_v29());
             }
+            check_scoped_payload_effect_v29(function, row, operation, budget)?;
             match source {
                 ScopedMemoryStoreSourceV29::Operand {
                     site,

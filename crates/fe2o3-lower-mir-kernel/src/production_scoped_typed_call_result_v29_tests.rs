@@ -612,17 +612,29 @@ pub(in super::super) fn complete_original_source_again(
                                                 assert_eq!(actual.operation_pointer(budget)?, (coordinate, address));
                                                 raw_results += 1;
                                             }
-                                            ScopedObjectIdentityV29::Local { instance, local, .. } => {
+                                            ScopedObjectIdentityV29::Local { instance, local, generation } => {
                                                 assert_eq!(instance.index(), payload.instance);
                                                 assert_eq!(local.index(), 3);
+                                                assert_eq!(generation, 0);
                                                 assert_eq!(site, execution_site_v29(SemanticBlockIdV1::from_index(2), None));
                                                 assert_eq!(destination.source, ScopedObjectSourceV29::Place {
                                                     site, role: ExecutionOperandV29::CallDestinationAddress, local, prefix: 0,
                                                 });
                                                 assert_eq!(access, MemoryAccess::new(AddressSpace::Private, 4));
-                                                // The exact immutable typed effect is checked above;
-                                                // an ordinary local has no borrowed/raw-alias receipt.
-                                                assert!(actual.is_none());
+                                                // Gen0 direct Object backing now has its exact
+                                                // Invocation alternative, independently of raw loans.
+                                                let actual = actual.expect("direct call destination keeps its checked invocation activation");
+                                                assert_eq!(actual.operation_pointer(budget)?, (coordinate, address));
+                                                let mut alternatives = 0;
+                                                actual.visit_alternatives(budget, |owner, original_local, slot, activation, _| {
+                                                    assert_eq!((owner, original_local, activation), (payload.instance, local, None));
+                                                    let backing = &source.root_row(0)?.source_slots.slots[slot];
+                                                    assert_eq!(backing.instance, instance);
+                                                    assert_eq!(backing.origin.identity.original_local(), Some(local.index()));
+                                                    alternatives += 1;
+                                                    Ok(())
+                                                })?;
+                                                assert_eq!(alternatives, 1);
                                                 local_results += 1;
                                             }
                                             _ => panic!("call results must retain their exact original Reference or Local role"),

@@ -24,6 +24,7 @@ mod storage_v18;
 #[path = "kir_bridge_v18.rs"]
 mod bridge_v18;
 include!("kir_bridge_lifecycle_identity_v18.rs");
+include!("kir_bridge_native_private_input_v1.rs");
 pub(crate) use bridge_v18::{BOUNDED_PAYLOAD_CLEANUP_ATTEMPTS_V1, discard_bounded_payload_v1};
 pub(crate) use bridge_v18::{ExecutedV18Parts, optimize_v18_graph};
 pub use bridge_v18::{
@@ -933,3 +934,5 @@ include!("kir_bridge_commutative_owner_v1.rs");
 
 #[path = "kir_bridge_canonical_trace_v1.rs"]
 pub(crate) mod canonical_trace_v1;
+
+pub(crate) use bridge_v18::NativeCanonicalPrivateAdmissionV18;

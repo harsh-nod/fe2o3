@@ -57,8 +57,16 @@ pub(crate) fn capability_work_refusal_for_test_v18(error: &ProductionRankedProje
     }
 }
 mod optimized_source_consumer_v18;
+mod optimized_source_private_consumer_v18;
+pub(crate) use optimized_source_private_consumer_v18::{
+    SourceNativePolicyViewV18, check_source_private_memory_root_prepaid_v18,
+    private_root_bridge_entrance_headers_v18,
+};
+#[cfg(test)]
+pub(crate) use optimized_source_private_consumer_v18::inspect_actual_private_bridge_scratch_v18;
 mod optimized_ranked_roster_v18;
 pub(crate) use optimized_ranked_roster_v18::with_source_native_ranked_roots_v18;
+pub(crate) use optimized_ranked_roster_v18::with_source_completed_native_ranked_roots_v18;
 #[cfg(test)]
 pub(crate) use optimized_ranked_roster_v18::with_actual_root_controls_v18;
 use source_ranked_consumer_v18::{ResolverActiveDefinitionsV18, ResolverBorrowedLocalsV18, SourceScalarResolverLeavesV18};
@@ -69,6 +77,8 @@ mod source_ranked_consumer_resources_v18;
 mod source_ranked_consumer_v18_tests;
 #[cfg(test)]
 pub(crate) use source_ranked_consumer_v18_tests::inspect_actual_source_scalar_consumer_v18;
+#[cfg(test)]
+pub(crate) use source_ranked_consumer_v18_tests::inspect_actual_source_entry_consumer_v18;
 #[cfg(test)]
 pub(crate) mod conditional_bound_observation_v1_tests;
 #[cfg(test)]

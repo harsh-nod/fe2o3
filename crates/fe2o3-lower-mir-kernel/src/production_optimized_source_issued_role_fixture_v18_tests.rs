@@ -347,3 +347,64 @@ fn original_issued_descriptor_installer_header_cut_precedes_all_role_publication
     assert!(completed.get(), "{result:?}");
     assert!(matches!(result, Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(_)))));
 }
+
+fn run_ordered_issued_roles_v18(mode: DescriptorRoleSourceV18, work: usize, storage: usize)
+    -> (SourceOwnedResultV18<()>, usize, usize)
+{
+    run_descriptor_roles_v18(DescriptorRoleEntranceV18::IssuedDisjointSlice, mode, work, storage,
+        |original, optimized, budget| {
+            let root = original.source.root(0, budget)?.1;
+            let recipe = scalar_leaf_collision_recipe_v18(original.inventory.functions()[root].function);
+            original.with_descriptor_source_roles_v18(optimized, 0, &recipe, budget, |roles, budget| {
+                let output = optimized.output_inventory(budget)?;
+                let function = optimized_source_root_function_v18(original, optimized, 0, budget)?;
+                let (mut ordered, mut ordinary, mut dependencies) = (0, 0, 0);
+                for operation in &output.operations()[function.operations.clone()] {
+                    let role = roles.role(operation.coordinate, budget)?;
+                    match operation.operation.kind {
+                        OperationKind::Store { access, .. } => {
+                            assert!(access.volatile);
+                            assert_eq!(role, None, "an exact ordered access is still pending");
+                            ordered += 1;
+                        }
+                        OperationKind::Load { access, .. } => {
+                            assert!(!access.volatile);
+                            assert_eq!(role, Some(DescriptorSourceRoleV18::Read));
+                            ordinary += 1;
+                        }
+                        OperationKind::SliceLength { .. } | OperationKind::SliceData { .. }
+                        | OperationKind::GetElementPointer { .. } => {
+                            if role.is_some() { dependencies += 1; }
+                        }
+                        _ => assert!(role.is_none()),
+                    }
+                }
+                assert_eq!(ordered, 1);
+                if matches!(mode, DescriptorRoleSourceV18::VolatileOnly) {
+                    assert_eq!((ordinary, dependencies), (0, 0));
+                } else {
+                    assert_eq!((ordinary, dependencies), (1, 3));
+                }
+                Ok(())
+            })
+        })
+}
+
+#[test]
+fn original_issued_ordered_only_and_mixed_users_have_exact_transaction_boundaries() {
+    for mode in [DescriptorRoleSourceV18::VolatileOnly, DescriptorRoleSourceV18::Volatile] {
+        let (positive, work, storage) = run_ordered_issued_roles_v18(mode, OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT);
+        positive.unwrap();
+        let exact = run_ordered_issued_roles_v18(mode, work, storage);
+        exact.0.unwrap();
+        assert_eq!((exact.1, exact.2), (work, storage));
+        let work_error = source_slot_tests::original_repeated_source_resource_v29(
+            run_ordered_issued_roles_v18(mode, work - 1, storage).0.unwrap_err());
+        assert!(matches!(work_error, ArgumentResourceV1::Work(error)
+            if error.limit() == work - 1 && error.actual() > work - 1));
+        let storage_error = source_slot_tests::original_repeated_source_resource_v29(
+            run_ordered_issued_roles_v18(mode, work, storage - 1).0.unwrap_err());
+        assert!(matches!(storage_error, ArgumentResourceV1::Storage(error)
+            if error.limit() == storage - 1 && error.actual() > storage - 1));
+    }
+}

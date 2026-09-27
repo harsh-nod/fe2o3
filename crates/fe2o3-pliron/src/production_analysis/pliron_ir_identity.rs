@@ -386,11 +386,12 @@ pub(crate) struct BuiltIdentityV1 {
 }
 
 use crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1;
-use crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18;
+use crate::kir_bridge_v1::{NativeLifecycleIdentityAdmissionV18, NativeCanonicalPrivateAdmissionV18, NativePrivateInputV1};
 
 #[derive(Clone, Copy)]
 enum IdentityAdmissionV1<'a> {
     Private(&'a NativeCanonicalPrivateAdmissionV1<'a>),
+    PrivateV18(&'a NativeCanonicalPrivateAdmissionV18<'a>),
     Lifecycle(&'a NativeLifecycleIdentityAdmissionV18<'a>),
 }
 
@@ -398,24 +399,28 @@ impl IdentityAdmissionV1<'_> {
     fn authenticate(self, context: &Context, function: &FuncOp) -> bool {
         match self {
             Self::Private(input) => input.authenticate(context, function),
+            Self::PrivateV18(input) => input.authenticate(context, function),
             Self::Lifecycle(input) => input.authenticate(context, function),
         }
     }
     fn operation(self, context: &Context, pointer: Ptr<Operation>) -> Option<()> {
         match self {
             Self::Private(input) => input.operation(context, pointer).map(|_| ()),
+            Self::PrivateV18(input) => input.operation(context, pointer).map(|_| ()),
             Self::Lifecycle(input) => input.operation(context, pointer),
         }
     }
     fn attribute(self, context: &Context, pointer: Ptr<Operation>, key: &str, dialect: &str, name: &str) -> bool {
         match self {
             Self::Private(input) => input.attribute(context, pointer, key, dialect, name),
+            Self::PrivateV18(input) => input.attribute(context, pointer, key, dialect, name),
             Self::Lifecycle(input) => input.attribute(context, pointer, key, dialect, name),
         }
     }
     fn identity_lookup_work(self) -> Option<usize> {
         match self {
             Self::Private(input) => input.identity_lookup_work(),
+            Self::PrivateV18(input) => input.identity_lookup_work(),
             Self::Lifecycle(input) => input.identity_lookup_work(),
         }
     }
@@ -444,6 +449,14 @@ impl<'a> LivePlironStructuralIdentityProviderV1<'a> {
             context: input.context(),
             function: input.function(),
             private: Some(IdentityAdmissionV1::Private(input)),
+        }
+    }
+
+    pub(crate) fn canonical_private_v18(input: &'a NativeCanonicalPrivateAdmissionV18<'a>) -> Self {
+        Self {
+            context: input.context(),
+            function: input.function(),
+            private: Some(IdentityAdmissionV1::PrivateV18(input)),
         }
     }
 

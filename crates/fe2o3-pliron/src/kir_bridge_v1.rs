@@ -1044,7 +1044,7 @@ fn build_module_graph_with_coordinates(
                 }
             }
         }
-        for block in &body.blocks {
+        for (block_index, block) in body.blocks.iter().enumerate() {
             let live_block = block_for(&blocks, function_index, block.id)?;
             let terminator = build_terminator(
                 context,
@@ -1054,6 +1054,19 @@ fn build_module_graph_with_coordinates(
                 &blocks,
             )?;
             terminator.insert_at_back(live_block, context);
+            if let Some(coordinates) = coordinates.as_deref_mut()
+                && coordinates
+                    .insert(
+                        terminator,
+                        KirBridgeCoordinateV1::Terminator {
+                            function: to_u32(function_index)?,
+                            block: to_u32(block_index)?,
+                        },
+                    )
+                    .is_some()
+            {
+                return Err(KirBridgeErrorV1::GraphIdentityMismatch);
+            }
             if Operation::is_op::<PreservedTerminatorOp>(terminator, context)
                 && origins
                     .preserved_terminators

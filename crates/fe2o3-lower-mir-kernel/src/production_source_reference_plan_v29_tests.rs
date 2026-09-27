@@ -401,9 +401,8 @@ fn source_reference_same_field_unique_borrows_are_not_misclassified_as_disjoint(
     ));
 }
 
-#[test]
-fn source_reference_different_union_fields_still_overlap_the_same_storage() {
-    let owner = owner_with(Case::UniqueRead, |types, functions| {
+fn union_field_loans_owner_v29(first_has_future_use: bool) -> ProductionSemanticSsaOwnerV1 {
+    owner_with(Case::UniqueRead, |types, functions| {
         let union = SemanticTypeIdV1::from_index(u32::try_from(types.len()).unwrap());
         types.push(SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256([42; 32]),
@@ -457,6 +456,7 @@ fn source_reference_different_union_fields_still_overlap_the_same_storage() {
                 local(21, union, SemanticLocalRoleV1::Argument(0)),
                 local(22, REFERENCE, SemanticLocalRoleV1::Temporary),
                 local(23, REFERENCE, SemanticLocalRoleV1::Temporary),
+                local(24, WORD, SemanticLocalRoleV1::Temporary),
             ],
             vec![block(
                 20,
@@ -475,6 +475,12 @@ fn source_reference_different_union_fields_still_overlap_the_same_storage() {
                             place: projected(1, &[(SemanticProjectionKindV1::Field(1), WORD)]),
                         },
                     ),
+                    if first_has_future_use {
+                        assign(place(4, WORD), SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                            projected(2, &[(SemanticProjectionKindV1::Dereference, WORD)]))))
+                    } else {
+                        statement(SemanticStatementKindV1::Nop)
+                    },
                     dead(2),
                     dead(3),
                     unit(),
@@ -482,8 +488,13 @@ fn source_reference_different_union_fields_still_overlap_the_same_storage() {
                 SemanticTerminatorKindV1::Return,
             )],
         );
-    });
-    let result = run_owner(owner, |_, _| panic!("union fields share physical storage"));
+    })
+}
+
+#[test]
+fn source_reference_different_union_fields_still_overlap_the_same_storage() {
+    let result = run_owner(union_field_loans_owner_v29(true), |_, _|
+        panic!("simultaneously live union field loans share physical storage"));
     assert!(matches!(
         result,
         Err(ProductionSemanticKirErrorV1::Unsupported {
@@ -491,6 +502,16 @@ fn source_reference_different_union_fields_still_overlap_the_same_storage() {
             ..
         })
     ));
+}
+
+#[test]
+fn source_reference_dead_union_field_loan_does_not_conflict_with_the_next_borrow() {
+    run_owner(union_field_loans_owner_v29(false), |plan, _| {
+        assert_eq!(plan.loans.len(), 2);
+        assert_eq!(plan.loans[0].kind, SemanticBorrowKindV1::Mutable);
+        assert_eq!(plan.loans[1].kind, SemanticBorrowKindV1::Mutable);
+        Ok(())
+    }).unwrap();
 }
 use fe2o3_pliron::{
     ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSemanticSsaLimitsV1,
@@ -1086,13 +1107,34 @@ fn source_reference_reborrow_suspends_then_resumes_parent_without_new_origin() {
 #[test]
 fn source_reference_dead_child_no_longer_suspends_parent() {
     run(Case::DeadChild, |plan, _| {
+        assert_eq!(plan.storage, SourceReferenceStorageV29::PromotedOnly);
+        assert!(plan.accesses.is_empty());
         let children: Vec<_> = plan.loans.iter().filter(|loan| loan.parent.is_some()).collect();
         assert_eq!(children.len(), 2);
+        assert_ne!(children[0].site.instance, children[1].site.instance);
         for child in children {
-            assert!(plan.accesses.iter().any(|access|
-                access.key.site.instance == child.site.instance
-                    && access.key.site.statement == Some(2)
-                    && access.key.access == SourceReferenceAccessV29::Read));
+            let parent = &plan.loans[child.parent.unwrap()];
+            let child_origin = &plan.origins[child.origin];
+            let origin = &plan.origins[parent.origin];
+            assert_eq!(
+                (child_origin.instance, child_origin.local, child_origin.generation),
+                (origin.instance, origin.local, origin.generation),
+            );
+            assert_eq!(child.effects.referent_reads, 0);
+            assert_eq!(parent.effects.referent_reads, 1);
+            let instance = plan.instances.instance(child.site.instance).unwrap();
+            assert_eq!(instance.function().index(), 2);
+            let statement = &instance.declaration().blocks()[0].statements()[2];
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                panic!("original parent read assignment");
+            };
+            assert_eq!(assignment.value().kind(), &SemanticRvalueKindV1::Use(
+                SemanticOperandV1::Copy(projected(2, &[
+                    (SemanticProjectionKindV1::Dereference, WORD),
+                ])),
+            ));
+            assert_eq!(origin.generation, 0);
+            assert_eq!(origin.ty, WORD);
         }
         Ok(())
     }).unwrap();

@@ -7,7 +7,8 @@ mod census;
 #[path = "production_optimized_source_native_lifecycle_v18.rs"]
 mod native;
 pub use native::{
-    ProductionLifecycleCheckedNativePoliciesV18, ProductionSourceNativeLifecycleErrorV18,
+    ProductionLifecycleCheckedNativePoliciesV18, ProductionPrivateMemoryCheckedNativePoliciesV18,
+    ProductionSourcePrivateMemoryRootRequestV18, ProductionSourceNativeLifecycleErrorV18,
     ProductionSourceNativeLifecycleDiagnosticV18,
 };
 #[cfg(test)]

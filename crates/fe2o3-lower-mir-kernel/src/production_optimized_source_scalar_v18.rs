@@ -169,8 +169,42 @@ impl ProductionSourceCorrespondenceV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        self.with_optimized_scalar_leaf_namespace_v18(
+            optimized, root, &SourceScalarNamespaceV18::Ranked(recipe), budget, consume)
+    }
+
+    /// Opens the same checked source/output scalar scope without reserving
+    /// names from a ranked recipe. All root, Load and use bindings remain
+    /// mandatory; typed-memory and ranked equivalence are not granted here.
+    pub fn with_optimized_source_scalar_leaves_v18<'work, T, E>(
+        &self,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        root: usize,
+        budget: &mut ArgumentBudgetV1<'work>,
+        consume: impl for<'scope> FnOnce(
+            &ProductionOptimizedSourceScalarLeavesV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<T, E>,
+    ) -> Result<T, E>
+    where E: From<ProductionSourceOwnedViewErrorV18> {
+        self.with_optimized_scalar_leaf_namespace_v18(
+            optimized, root, &SourceScalarNamespaceV18::SourceOnly, budget, consume)
+    }
+
+    fn with_optimized_scalar_leaf_namespace_v18<'work, T, E>(
+        &self,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        root: usize,
+        namespace: &SourceScalarNamespaceV18<'_>,
+        budget: &mut ArgumentBudgetV1<'work>,
+        consume: impl for<'scope> FnOnce(
+            &ProductionOptimizedSourceScalarLeavesV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<T, E>,
+    ) -> Result<T, E>
+    where E: From<ProductionSourceOwnedViewErrorV18> {
         optimized_source_endpoints_v18(self, optimized, budget)?;
-        self.with_scalar_leaves_v18(root, recipe, budget, |original, budget| {
+        self.with_scalar_leaf_namespace_v18(root, namespace, budget, |original, budget| {
             let floor = budget.storage();
             let (reads, function, retained) = scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
                 self.retain_query((|| {
@@ -630,24 +664,28 @@ fn optimized_source_scalar_expression_endpoint_v18(
                 rows: [None; MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1], length: 0,
             };
             let no_ranked_reads = BTreeMap::new();
-            let expected = charge.begin_normalized_tree().and_then(|()| {
+            let mut expected = charge.begin_normalized_tree().and_then(|()| {
                 normalize_semantic_expression_v18(expression, &expected_leaves, 0, &mut charge)
             });
             let expected_nodes = charge.remaining_nodes.and_then(|remaining| {
                 fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2.checked_sub(remaining)
             });
-            let actual = if expected.is_some() && charge.begin_normalized_tree().is_some() {
+            let mut actual = if expected.is_some() && charge.begin_normalized_tree().is_some() {
                 native_helper_value_expansion_v1::with_source_value_expansion_v18(&ledger, |helpers| {
                     normalize_kir_expression_with_visiting_v18(function.function, &graph, &no_ranked_reads,
                         value, 0, &mut visiting, &mut charge, helpers)
                         .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)
                 }).ok()
             } else { None };
+            let constants = expected.as_mut().zip(actual.as_mut()).and_then(|(expected, actual)| {
+                source_scalar_constant_fold_v18(expected, 0, &mut charge)?;
+                source_scalar_constant_fold_v18(actual, 0, &mut charge)
+            }).is_some();
             let equality_work = expected_nodes.zip(charge.remaining_nodes).and_then(|(expected, remaining)| {
                 fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2
                     .checked_sub(remaining)?.checked_add(expected)
             });
-            let equality_paid = expected.is_some() && actual.is_some()
+            let equality_paid = constants
                 && equality_work.and_then(|work| charge.charge_many(work)).is_some();
             let equal = equality_paid && expected == actual && visiting.length == 0;
             // The pair can share input DAG nodes, but never heap ownership.
@@ -671,6 +709,7 @@ fn optimized_source_scalar_expression_endpoint_v18(
             size_of::<SourceExpressionLeavesV18<'_, '_, '_, '_, '_, '_>>(),
             size_of::<InventoryCorrelationV18<'_, '_, '_, '_, '_, '_>>(),
             size_of::<BTreeMap<(FunctionOperationLocation, u32), SemanticAccessSiteV1>>(),
+            source_scalar_constant_fold_headers_v18()?,
         ])?;
         source_scalar_normalization_scratch_v18(relation.source.cleanup, budget, storage, run)
     })())

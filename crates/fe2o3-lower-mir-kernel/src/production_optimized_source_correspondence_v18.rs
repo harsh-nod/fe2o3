@@ -31,7 +31,8 @@ pub use attachments::{
 pub use control::ProductionOptimizedSourceEffectsV18;
 pub use cfg::{ProductionOptimizedSourceCfgEventV18, ProductionOptimizedSourceCfgRootV18};
 pub use execution::{
-    ProductionLifecycleCheckedNativePoliciesV18, ProductionOptimizedExecutionKindV18,
+    ProductionLifecycleCheckedNativePoliciesV18, ProductionPrivateMemoryCheckedNativePoliciesV18,
+    ProductionSourcePrivateMemoryRootRequestV18, ProductionOptimizedExecutionKindV18,
     ProductionOptimizedExecutionRecipesV18, ProductionSourceNativeLifecycleErrorV18,
     ProductionSourceNativeLifecycleDiagnosticV18,
 };

@@ -13,7 +13,7 @@ pub(super) fn setup() -> Result<Bound, Limit> {
 }
 
 pub(super) fn stage(
-    input: &NativeCanonicalPrivateAdmissionV1<'_>,
+    input: &impl NativePrivateInputV1,
     phase: Phase,
 ) -> Result<Bound, Limit> {
     let work = input

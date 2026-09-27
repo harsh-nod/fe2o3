@@ -187,10 +187,11 @@ where
         preservation,
         receipt.as_deref_mut(),
         (phase, |analyses, observer| {
-            let ValidationFamilyV1::CanonicalPrivate(session) = validation else {
-                return prepare(analyses, observer);
+            let coverage = match validation {
+                ValidationFamilyV1::CanonicalPrivate(session) => session.prepare(phase, analyses, observer)?,
+                ValidationFamilyV1::CanonicalPrivateV18(session) => session.prepare(phase, analyses, observer)?,
+                _ => return prepare(analyses, observer),
             };
-            let coverage = session.prepare(phase, analyses, observer)?;
             let mut prepared = with_pipeline_projection_v1(
                 observer,
                 &|local| coverage.checked_then_retain(local, phase),

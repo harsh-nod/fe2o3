@@ -12615,7 +12615,8 @@ include!("production_source_correspondence_v18.rs");
 #[path = "production_optimized_source_correspondence_v18.rs"]
 mod optimized_source_v18;
 pub use optimized_source_v18::{ProductionOptimizedSourceCorrespondenceV18,
-    ProductionLifecycleCheckedNativePoliciesV18, ProductionOptimizedExecutionKindV18,
+    ProductionLifecycleCheckedNativePoliciesV18, ProductionPrivateMemoryCheckedNativePoliciesV18,
+    ProductionSourcePrivateMemoryRootRequestV18, ProductionOptimizedExecutionKindV18,
     ProductionOptimizedExecutionRecipesV18, ProductionSourceNativeLifecycleErrorV18,
     ProductionSourceNativeLifecycleDiagnosticV18,
     ProductionOptimizedSourceOperationV18, ProductionOptimizedSourceGapV18,

@@ -2,8 +2,8 @@
 use super::*;
 use crate::{CanonicalKirDefinitionRefV1, CanonicalKirInventoryV18, CanonicalKirOperationRefV1};
 use fe2o3_kernel_ir::{
-    MemoryAccess, Module, PointerType, ScalarType, StorageLayoutIdV1, StorageLayoutKindV1,
-    StorageLayoutV1, StorageOperationV1, VerifiedCanonicalKernelIrModuleV12,
+    AccessMode, CastKind, MemoryAccess, Module, PointerType, ScalarType, StorageLayoutIdV1,
+    StorageLayoutKindV1, StorageLayoutV1, StorageOperationV1, VerifiedCanonicalKernelIrModuleV12,
     VerifiedCanonicalKernelIrModuleV18,
 };
 
@@ -157,15 +157,149 @@ fn headers() -> R<usize> {
             CheckedCanonicalKirPrivateMemoryV18<'_, '_>,
             CanonicalKirPrivateMemoryStorageV1,
         )>()?,
+        restriction_headers()?,
     ];
     terms.into_iter().try_fold(0usize, |sum, term| {
         sum.checked_add(term).ok_or_else(arithmetic)
     })
 }
 fn reserve_headers(budget: &mut Budget<'_>) -> R<()> {
-    charge(budget, 50)?;
+    charge(budget, 86)?;
     budget.reserve_storage(headers()?)?;
     Ok(())
+}
+
+fn restriction_headers() -> R<usize> {
+    let terms = [
+        h::<&CanonicalKirInventoryV18<'_>>()?,
+        h::<&CanonicalKirOperationRefV1<'_>>()?,
+        h::<&[Option<Address>]>()?,
+        h::<&mut Budget<'_>>()?,
+        h::<&OperationKind>()?,
+        h::<&ValueId>()?,
+        h::<&Type>()?,
+        h::<&Type>()?,
+        h::<&Type>()?,
+        h::<&PointerType>()?,
+        h::<&PointerType>()?,
+        h::<&PointerType>()?,
+        h::<&StorageLayoutIdV1>()?,
+        h::<&StorageLayoutIdV1>()?,
+        h::<&StorageLayoutIdV1>()?,
+        h::<&[CanonicalKirDefinitionRefV1<'_>]>()?,
+        h::<Option<&CanonicalKirDefinitionRefV1<'_>>>()?,
+        h::<&CanonicalKirDefinitionRefV1<'_>>()?,
+        h::<&CanonicalKirDefinitionRefV1<'_>>()?,
+        h::<&[CanonicalKirOperationRefV1<'_>]>()?,
+        h::<Option<&CanonicalKirOperationRefV1<'_>>>()?,
+        h::<&CanonicalKirOperationRefV1<'_>>()?,
+        h::<Option<&Option<Address>>>()?,
+        h::<&Option<Address>>()?,
+        h::<Option<Address>>()?,
+        h::<Option<Option<Address>>>()?,
+        h::<Address>()?,
+        h::<fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1>()?,
+        h::<usize>()?,
+        h::<usize>()?,
+        h::<(ValueId, bool)>()?,
+        h::<AccessMode>()?,
+        h::<bool>()?,
+        h::<bool>()?,
+        h::<()>()?,
+        h::<Result<Option<usize>, CanonicalKirInventoryErrorV1>>()?,
+    ];
+    terms.into_iter().try_fold(0usize, |sum, term| {
+        sum.checked_add(term).ok_or_else(arithmetic)
+    })
+}
+
+pub(super) fn restrict_address<O: PrivateMemoryOwner>(
+    inventory: &CanonicalKirInventoryV1<'_, O>,
+    row: &CanonicalKirOperationRefV1<'_>,
+    addresses: &[Option<Address>],
+    budget: &mut Budget<'_>,
+) -> R<Address> {
+    charge(budget, 36)?;
+    let OperationKind::Cast {
+        kind: CastKind::RestrictPointerAccess,
+        value,
+        to,
+    } = &row.operation.kind
+    else {
+        return Err(refused("private", "exact typed pointer restriction"));
+    };
+    if !O::TYPED || row.results.len() != 1 || row.operands.len() != 1 || !row.effects.is_empty() {
+        return Err(refused("private", "exact typed pointer restriction"));
+    }
+    let definition = index(inventory, row.coordinate.block.function, *value, budget)?;
+    let address = addresses
+        .get(definition)
+        .copied()
+        .flatten()
+        .ok_or_else(|| refused("private", "restriction has exact allocation lineage"))?;
+    let allocation = inventory
+        .operations()
+        .get(address.allocation)
+        .ok_or_else(|| refused("private", "restriction has exact allocation lineage"))?;
+    let OperationKind::Alloca {
+        element: Type::StorageObject(layout),
+        ..
+    } = allocation.operation.kind
+    else {
+        return Err(refused(
+            "private",
+            "restriction belongs to typed scalar allocation",
+        ));
+    };
+    if allocation.coordinate.block.function != row.coordinate.block.function
+        || allocation.results.len() != 1
+        || allocation.results.start != definition
+        || address.offset != 0
+    {
+        return Err(refused(
+            "private",
+            "restriction has direct typed allocation lineage",
+        ));
+    }
+    let source = inventory
+        .definitions()
+        .get(definition)
+        .ok_or_else(|| refused("private", "restriction source definition"))?;
+    let result = inventory
+        .definitions()
+        .get(row.results.start)
+        .ok_or_else(|| refused("private", "restriction result definition"))?;
+    if source.value != Some(*value)
+        || !matches!(source.ty, Type::Pointer(pointer)
+            if pointer.address_space == AddressSpace::Private
+            && pointer.access == AccessMode::ReadWrite
+            && matches!(pointer.pointee.as_ref(), Type::StorageObject(found) if *found == layout))
+        || !matches!(to, Type::Pointer(pointer)
+            if pointer.address_space == AddressSpace::Private
+            && pointer.access == AccessMode::ReadOnly
+            && matches!(pointer.pointee.as_ref(), Type::StorageObject(found) if *found == layout))
+        || !matches!(result.ty, Type::Pointer(pointer)
+            if pointer.address_space == AddressSpace::Private
+            && pointer.access == AccessMode::ReadOnly
+            && matches!(pointer.pointee.as_ref(), Type::StorageObject(found) if *found == layout))
+        || result.coordinate
+            != (fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::Result {
+                operation: row.coordinate,
+                result: 0,
+            })
+        || scalar_stride(
+            inventory.owner().layouts(),
+            layout,
+            address.alignment,
+            budget,
+        )? != address.stride
+    {
+        return Err(refused(
+            "private",
+            "restriction preserves exact private scalar layout",
+        ));
+    }
+    Ok(address)
 }
 
 pub(super) fn count_literal(value: &Constant) -> Option<u64> {
@@ -251,11 +385,9 @@ pub(super) fn check_access<O: PrivateMemoryOwner>(
             "typed access belongs to typed allocation",
         ));
     };
-    // Typed projections/transport are not inferred from equal pointer bits.
-    if definition != allocation.results.start
-        || allocation.results.len() != 1
-        || address.offset != 0
-    {
+    // The private definition table is populated only by exact Alloca or the
+    // checked restriction above. No projected/equal-bit address is inserted.
+    if allocation.results.len() != 1 || address.offset != 0 {
         return Err(refused("private", "whole typed allocation address only"));
     }
     let (scalar, stride) = scalar_layout(inventory.owner().layouts(), layout, budget)?;
@@ -263,9 +395,9 @@ pub(super) fn check_access<O: PrivateMemoryOwner>(
         .definitions()
         .get(definition)
         .ok_or_else(|| refused("private", "exact typed address definition"))?;
-    let operand = match row.operation.kind {
-        OperationKind::Storage(StorageOperationV1::ReadValue { address, .. })
-        | OperationKind::Storage(StorageOperationV1::WriteValue { address, .. }) => address,
+    let (operand, writing) = match row.operation.kind {
+        OperationKind::Storage(StorageOperationV1::ReadValue { address, .. }) => (address, false),
+        OperationKind::Storage(StorageOperationV1::WriteValue { address, .. }) => (address, true),
         _ => return Err(refused("private", "whole scalar storage read or write")),
     };
     if allocation.coordinate.block.function != row.coordinate.block.function
@@ -275,9 +407,14 @@ pub(super) fn check_access<O: PrivateMemoryOwner>(
     }
     if !matches!(pointer.ty, Type::Pointer(pointer)
         if pointer.address_space == AddressSpace::Private
-        && pointer.access == fe2o3_kernel_ir::AccessMode::ReadWrite
+        && pointer.access == if definition == allocation.results.start {
+            AccessMode::ReadWrite
+        } else {
+            AccessMode::ReadOnly
+        }
         && pointer.pointee.as_ref() == &Type::StorageObject(layout))
         || stride != address.stride
+        || (writing && definition != allocation.results.start)
     {
         return Err(refused(
             "private",

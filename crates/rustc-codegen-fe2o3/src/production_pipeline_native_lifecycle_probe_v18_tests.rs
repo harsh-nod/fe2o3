@@ -16,6 +16,7 @@ pub(crate) struct Observation {
     pub(crate) operation_count: usize,
     pub(crate) consumers: usize,
     pub(crate) native_entries: usize,
+    pub(crate) private_memory: bool,
 }
 
 std::thread_local! {
@@ -27,12 +28,20 @@ pub(super) fn reset(cut: Option<bool>) {
     OBSERVED.with(|slot| slot.set(None));
     RESOURCE_CUT.with(|slot| slot.set(cut));
 }
-pub(super) fn native_entry() -> Option<bool> {
+pub(super) fn completed_policy(private_memory: bool) {
+    OBSERVED.with(|slot| {
+        let mut row = slot.get().expect("actual output precedes completed source/native policy");
+        row.private_memory = private_memory;
+        slot.set(Some(row));
+    });
+}
+pub(super) fn native_entry(private_memory: bool) -> Option<bool> {
     OBSERVED.with(|slot| {
         let mut row = slot
             .get()
             .expect("exact output precedes actual native entry");
         row.native_entries += 1;
+        assert_eq!(row.private_memory, private_memory);
         slot.set(Some(row));
     });
     RESOURCE_CUT.with(std::cell::Cell::take)
@@ -101,6 +110,7 @@ fn record_inventory(
         operation_count: inventory.operations().len(),
         consumers: 0,
         native_entries: 0,
+        private_memory: false,
     };
     for row in inventory.operations() {
         let role = match &row.operation.kind {

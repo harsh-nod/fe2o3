@@ -182,92 +182,160 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
             let Some(original) = self.original.retained_allocation(root, input, budget)? else {
                 return Ok(None);
             };
-            let output = self.ordered_output(input, budget)?;
-            let Some(actual) = output else {
-                return Ok(Some(ProductionOptimizedSourceAllocationV18 {
-                    original,
-                    input,
-                    output,
-                    pointer: None,
-                    count: None,
-                }));
-            };
-            let ordinal = resources::operation_index(self.checked.output(), actual, budget)?;
-            let op = self.checked.output().operations()[ordinal].operation;
-            let OperationKind::Alloca {
-                element,
-                count,
-                address_space: AddressSpace::Private,
-                alignment,
-            } = &op.kind
-            else {
-                return resources::binding("source allocation changed output operation");
-            };
-            budget.charge_work(3)?;
-            let [result] = op.results.as_slice() else {
-                return resources::binding("source allocation output result census");
-            };
-            match original.slot.representation {
-                ScopedSlotRepresentationV29::ScalarArray(scalar) => {
-                    if scalar.element.alignment != *alignment
-                        || !scalar.element.element.matches_borrowed(element, &mut SourceCorrespondenceWorkV18(budget))? {
-                        return resources::binding("source allocation changed element or alignment");
-                    }
-                }
-                ScopedSlotRepresentationV29::Object { schema, alignment, .. } => {
-                    check_scoped_object_alloca_v29(op, result.id, schema, alignment, budget)
-                        .map_err(|error| source_attachment_error_v18(error.into()))?;
-                }
-            }
-            let pointer = Definition::Result {
-                operation: actual,
-                result: 0,
-            };
-            self.exact_output_result(
-                Definition::Result {
-                    operation: input,
-                    result: 0,
-                },
-                pointer,
-                budget,
-            )?;
-            let definition = resources::definition_index(self.checked.output(), pointer, budget)?;
-            if self.checked.output().definitions()[definition].value != Some(result.id) {
-                return resources::binding("source allocation actual pointer differs");
-            }
-            let count = match (original.slot.representation.count(), count) {
-                (None, None) => None,
-                (Some(_), Some(value)) => {
-                    let actual_count = self.exact_output_operand(
-                        UseCoordinate::OperationOperand {
-                            operation: input,
-                            operand: 0,
-                        },
-                        actual,
-                        budget,
-                    )?;
-                    let definition = resources::definition_index(
-                        self.checked.output(),
-                        actual_count.definition,
-                        budget,
-                    )?;
-                    if self.checked.output().definitions()[definition].value != Some(*value) {
-                        return resources::binding("source allocation actual count differs");
-                    }
-                    Some(actual_count)
-                }
-                (None, Some(_)) | (Some(_), None) => {
-                    return resources::binding("source allocation count shape changed");
-                }
-            };
-            Ok(Some(ProductionOptimizedSourceAllocationV18 {
+            let allocation = self.allocation_from_backing_v18(original, input, budget)?;
+            Ok(Some(allocation))
+        })())
+    }
+
+    pub(in super::super) fn allocation_for_slot_v18(
+        &self,
+        root: usize,
+        slot: usize,
+        input: OpCoordinate,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<ProductionOptimizedSourceAllocationV18<'_>> {
+        self.retain((|| {
+            self.query(budget)?;
+            let original = self
+                .original
+                .retained_allocation_for_slot_v18(root, slot, input, budget)?;
+            self.allocation_from_backing_v18(original, input, budget)
+        })())
+    }
+
+    // Both locators enter through authentic original backing. Keep one output
+    // transport implementation, including exact operand/result descendants.
+    pub(in super::super) fn allocation_transport_headers_v18() -> Result<usize, ArgumentResourceV1> {
+        argument_sum_v1(&[
+            size_of::<SourcePhysicalBackingV18<'_>>(),
+            size_of::<ProductionOptimizedSourceAllocationV18<'_>>(),
+            argument_product_v1(2, size_of::<SourceOwnedResultV18<ProductionOptimizedSourceAllocationV18<'_>>>())?,
+            argument_product_v1(2, size_of::<OpCoordinate>())?,
+            size_of::<Option<OpCoordinate>>(),
+            size_of::<SourceOwnedResultV18<Option<OpCoordinate>>>(),
+            size_of::<usize>(),
+            size_of::<SourceOwnedResultV18<usize>>(),
+            size_of::<&Operation>(),
+            size_of::<&[ValueDef]>(),
+            size_of::<&ValueDef>(),
+            size_of::<&Type>(),
+            size_of::<&Option<ValueId>>(),
+            size_of::<&ValueId>(),
+            size_of::<&u32>(),
+            size_of::<ScopedSlotRepresentationV29>(),
+            size_of::<ScopedScalarArraySlotV29>(),
+            size_of::<SourceCorrespondenceWorkV18<'_, '_>>(),
+            size_of::<SourceOwnedResultV18<bool>>(),
+            size_of::<Result<(), ProductionSemanticKirErrorV1>>(),
+            size_of::<SourceOwnedResultV18<()>>(),
+            argument_product_v1(2, size_of::<Definition>())?,
+            size_of::<Option<Definition>>(),
+            size_of::<(Option<(ValueId, PrivateArrayPhysicalLocationV1)>, &Option<ValueId>)>(),
+            size_of::<CanonicalKirOutputUseV1>(),
+            size_of::<SourceOwnedResultV18<CanonicalKirOutputUseV1>>(),
+            size_of::<Option<CanonicalKirOutputUseV1>>(),
+            size_of::<UseCoordinate>(),
+        ])
+    }
+
+    fn allocation_from_backing_v18<'a>(
+        &self,
+        original: SourcePhysicalBackingV18<'a>,
+        input: OpCoordinate,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<ProductionOptimizedSourceAllocationV18<'a>> {
+        budget.reserve_storage(Self::allocation_transport_headers_v18()?)?;
+        let output = self.ordered_output(input, budget)?;
+        let Some(actual) = output else {
+            return Ok(ProductionOptimizedSourceAllocationV18 {
                 original,
                 input,
                 output,
-                pointer: Some(pointer),
-                count,
-            }))
-        })())
+                pointer: None,
+                count: None,
+            });
+        };
+        let ordinal = resources::operation_index(self.checked.output(), actual, budget)?;
+        let op = self.checked.output().operations()[ordinal].operation;
+        let OperationKind::Alloca {
+            element,
+            count,
+            address_space: AddressSpace::Private,
+            alignment,
+        } = &op.kind
+        else {
+            return resources::binding("source allocation changed output operation");
+        };
+        budget.charge_work(3)?;
+        let [result] = op.results.as_slice() else {
+            return resources::binding("source allocation output result census");
+        };
+        match original.slot.representation {
+            ScopedSlotRepresentationV29::ScalarArray(scalar) => {
+                if scalar.element.alignment != *alignment
+                    || !scalar
+                        .element
+                        .element
+                        .matches_borrowed(element, &mut SourceCorrespondenceWorkV18(budget))?
+                {
+                    return resources::binding("source allocation changed element or alignment");
+                }
+            }
+            ScopedSlotRepresentationV29::Object {
+                schema, alignment, ..
+            } => {
+                check_scoped_object_alloca_v29(op, result.id, schema, alignment, budget)
+                    .map_err(|error| source_attachment_error_v18(error.into()))?;
+            }
+        }
+        let pointer = Definition::Result {
+            operation: actual,
+            result: 0,
+        };
+        self.exact_output_result(
+            Definition::Result {
+                operation: input,
+                result: 0,
+            },
+            pointer,
+            budget,
+        )?;
+        let definition = resources::definition_index(self.checked.output(), pointer, budget)?;
+        if self.checked.output().definitions()[definition].value != Some(result.id) {
+            return resources::binding("source allocation actual pointer differs");
+        }
+        let count = match (original.slot.representation.count(), count) {
+            (None, None) => None,
+            (Some(_), Some(value)) => {
+                let actual_count = self.exact_output_operand(
+                    UseCoordinate::OperationOperand {
+                        operation: input,
+                        operand: 0,
+                    },
+                    actual,
+                    budget,
+                )?;
+                let definition = resources::definition_index(
+                    self.checked.output(),
+                    actual_count.definition,
+                    budget,
+                )?;
+                if self.checked.output().definitions()[definition].value != Some(*value) {
+                    return resources::binding("source allocation actual count differs");
+                }
+                Some(actual_count)
+            }
+            (None, Some(_)) | (Some(_), None) => {
+                return resources::binding("source allocation count shape changed");
+            }
+        };
+        Ok(ProductionOptimizedSourceAllocationV18 {
+            original,
+            input,
+            output,
+            pointer: Some(pointer),
+            count,
+        })
     }
 
     /// Transports only ordinary scalar Load/Store and their guarded forms.

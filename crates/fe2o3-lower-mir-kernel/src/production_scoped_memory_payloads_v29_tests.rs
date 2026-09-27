@@ -1038,7 +1038,7 @@ fn inspect_reference_cell_payloads(
         }
         assert_eq!((entries, reads), (1, 1));
         let SemanticStatementKindV1::Assign(assignment) =
-            source.blocks()[0].statements()[1].kind()
+            source.blocks()[1].statements()[0].kind()
         else {
             panic!("original promoted dereference assignment missing");
         };
@@ -1054,7 +1054,7 @@ fn inspect_reference_cell_payloads(
             SemanticProjectionKindV1::Dereference
         );
         let span = lowered.statement_operation_spans.iter().find(|span|
-            span.semantic_block.index() == 0 && span.statement_ordinal == 1).unwrap();
+            span.semantic_block.index() == 1 && span.statement_ordinal == 0).unwrap();
         let block = lowered.function.body.as_ref().unwrap().blocks.iter()
             .find(|block| block.id == span.kernel_ir_block).unwrap();
         assert!(block.operations[span.first_operation_ordinal as usize..
@@ -1074,13 +1074,59 @@ fn inspect_reference_cell_payloads(
 fn actual_reference_cell_reads_keep_full_source_prefix_and_distinct_entry_initialization() {
     PAYLOAD_COMPLETED.set(0);
     let (result, _, _, completed) = run_original_repeated_source_v29(
-        super::super::super::fixtures::repeated_reference_owner,
+        super::super::retained_scalar_entry_tests::retained_reference_owner,
         inspect_reference_cell_payloads,
         LIMIT,
         LIMIT,
     );
     assert!(result.is_ok(), "{result:?}");
     assert!(completed, "the inspected reference-cell candidate must complete physical admission");
+    assert_eq!(PAYLOAD_COMPLETED.get(), 3);
+    assert_eq!(OBSERVED.get(), 3);
+}
+
+fn inspect_promoted_reference_payloads(
+    lifecycle: &ExecutionLifecycleSourceV29<'_>,
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &mut [Option<LoweredFunctionResultV1>],
+    slots: &OwnedScopedSourceSlotsV29,
+    _: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    assert_eq!(lifecycle.owner.identity(), instances.owner().identity());
+    let mut helpers = 0;
+    for item in slots.instances.iter().filter(|row| row.function.index() == 3) {
+        helpers += 1;
+        let source = instances.instance(item.instance).unwrap().declaration();
+        assert_eq!(source.blocks().len(), 1);
+        let SemanticStatementKindV1::Assign(borrow) = source.blocks()[0].statements()[0].kind()
+            else { panic!("original same-block Shared borrow") };
+        assert!(matches!(borrow.value().kind(), SemanticRvalueKindV1::Borrow {
+            kind: SemanticBorrowKindV1::Shared, ..
+        }));
+        let lowered = emitted[item.instance.index()].as_ref().unwrap();
+        assert!(lowered.scoped_memory_anchors.as_ref().unwrap().rows.iter().all(|row|
+            !matches!(row.kind, ScopedMemoryAnchorKindV29::Access { .. })));
+        assert!(lowered.function.body.as_ref().unwrap().blocks.iter()
+            .flat_map(|block| &block.operations).all(|operation|
+                !matches!(operation.kind, OperationKind::Alloca { .. }
+                    | OperationKind::Load { .. } | OperationKind::Store { .. }
+                    | OperationKind::GuardedLoad { .. })));
+    }
+    assert_eq!(helpers, 2);
+    PAYLOAD_COMPLETED.set(PAYLOAD_COMPLETED.get() + 1);
+    OBSERVED.set(OBSERVED.get() + 1);
+    Ok(())
+}
+
+#[test]
+fn actual_promoted_reference_reads_need_no_memory_payloads() {
+    PAYLOAD_COMPLETED.set(0);
+    let (result, _, _, completed) = run_original_repeated_source_v29(
+        super::super::super::fixtures::repeated_reference_owner,
+        inspect_promoted_reference_payloads, LIMIT, LIMIT,
+    );
+    assert!(result.is_ok(), "{result:?}");
+    assert!(completed);
     assert_eq!(PAYLOAD_COMPLETED.get(), 3);
     assert_eq!(OBSERVED.get(), 3);
 }

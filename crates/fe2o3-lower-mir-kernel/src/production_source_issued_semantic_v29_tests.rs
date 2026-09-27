@@ -248,20 +248,26 @@ fn issued_pointer_semantic_original_none_edge_cannot_issue_a_some_payload() {
         |instances, budget| check_issued_semantic_effects_v29(instances, budget, true)).0.unwrap();
     let owner = owner_with_shape_effects_and_guard(1, 1, true, Some(SemanticVolatilityV1::Volatile), false);
     let completed = std::cell::Cell::new(false);
-    run_issued_semantic_owner_v29(owner, 1_000_000_000, 1_000_000_000, |instances, budget| {
+    let refused = run_issued_semantic_owner_v29(owner, 1_000_000_000, 1_000_000_000, |instances, budget| {
         let instance = instances.root();
-        let function = instances.instance(instance).unwrap().declaration();
-        let mut resolver = SourceIssuedSemanticV29::new(instances, instance, SourceIssuedReplayModeV29::SourceOnly, budget)?;
-        let (site, role, place) = issued_semantic_sites_v29(function)[0];
-        let error = resolver.effect(site, role, place, budget).unwrap_err();
-        assert!(matches!(error, ProductionSemanticKirErrorV1::Unsupported {
-            detail: "source issued pointer differs from its original issuer or actual guard", ..
-        }), "original None edge: {error:?}");
+        let floor = budget.storage();
+        let refused: Result<(), ProductionSemanticKirErrorV1> = with_canonical_call_scratch_v1(budget, |budget| {
+            // Whole-function Option dominance rejects the original None edge
+            // before any per-access effect query can obtain a resolver.
+            match SourceIssuedSemanticV29::new(instances, instance, SourceIssuedReplayModeV29::SourceOnly, budget) {
+                Err(error) => Err(error),
+                Ok(resolver) => { drop(resolver); panic!("original None edge admitted a resolver"); }
+            }
+        });
+        assert_eq!(budget.storage(), floor, "refused resolver releases its partial scratch");
         completed.set(true);
-        drop(resolver);
-        Ok(())
-    }).0.unwrap();
+        refused
+    }).0;
     assert!(completed.get(), "must reach original option-dominance refusal");
+    assert!(matches!(refused, Err(ProductionSemanticKirErrorV1::Unsupported {
+        function: 0, block: None, statement: None,
+        detail: "source issued pointer differs from its original issuer or actual guard",
+    })), "original None edge: {refused:?}");
 }
 
 #[test]
@@ -356,4 +362,89 @@ fn issued_pointer_semantic_memo_never_replaces_complete_emitted_archive_replay()
     run_original_owner(0, true, true,
         owner_with_shape_and_effects(1, 1, true, Some(SemanticVolatilityV1::NonVolatile)));
     assert!(ISSUED_SEMANTIC_REPLAY_COMPLETE.get() > 0, "same original candidate must finish source and emitted queries");
+}
+
+fn issued_ordered_selection_v29(instances: &ExecutionInstancesV29<'_>, budget: &mut ArgumentBudgetV1<'_>, expected: bool)
+    -> Result<(), ProductionSemanticKirErrorV1>
+{
+    let instance = instances.root();
+    let function = instances.instance(instance).unwrap().declaration();
+    let floor = budget.storage();
+    for (execution, role, place) in issued_semantic_sites_v29(function) {
+        let ExecutionSiteV29::Statement { block, statement } = execution else { unreachable!(); };
+        let site = SourceReferenceSiteV29 { instance, block: SemanticBlockIdV1::from_index(block.get()),
+            statement: Some(statement as usize) };
+        for _ in 0..3 {
+            assert_eq!(source_ordered_issued_effect_v29(instances, site, place, role, budget)?, expected);
+            assert_eq!(budget.storage(), floor, "no resolver or memo escapes the lexical selector");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn issued_pointer_ordered_selector_uses_exact_source_and_releases_every_query() {
+    for volatility in [SemanticVolatilityV1::NonVolatile, SemanticVolatilityV1::Volatile] {
+        run_issued_semantic_v29(volatility, 1_000_000_000, 1_000_000_000, |instances, budget|
+            issued_ordered_selection_v29(instances, budget, volatility == SemanticVolatilityV1::Volatile)).0.unwrap();
+    }
+}
+
+#[test]
+fn issued_pointer_ordered_selector_has_exact_work_storage_boundaries() {
+    let run = |work, storage| run_issued_semantic_v29(SemanticVolatilityV1::Volatile, work, storage,
+        |instances, budget| issued_ordered_selection_v29(instances, budget, true));
+    let (positive, work, storage) = run(1_000_000_000, 1_000_000_000);
+    positive.unwrap();
+    let exact = run(work, storage);
+    exact.0.unwrap();
+    assert_eq!((exact.1, exact.2), (work, storage));
+    assert!(matches!(run(work - 1, storage).0,
+        Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Work(error)))
+            if error.limit() == work - 1 && error.actual() > work - 1));
+    assert!(matches!(run(work, storage - 1).0,
+        Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Storage(error)))
+            if error.limit() == storage - 1 && error.actual() > storage - 1));
+}
+
+#[test]
+fn issued_pointer_ordered_selector_refuses_cloned_roles_atomic_and_original_none_edge() {
+    run_issued_semantic_v29(SemanticVolatilityV1::Volatile, 1_000_000_000, 1_000_000_000, |instances, budget| {
+        issued_ordered_selection_v29(instances, budget, true)?;
+        let instance = instances.root();
+        let function = instances.instance(instance).unwrap().declaration();
+        for (execution, role, place) in issued_semantic_sites_v29(function) {
+            let ExecutionSiteV29::Statement { block, statement } = execution else { unreachable!(); };
+            let site = SourceReferenceSiteV29 { instance, block: SemanticBlockIdV1::from_index(block.get()),
+                statement: Some(statement as usize) };
+            let floor = budget.storage();
+            assert!(!source_ordered_issued_effect_v29(instances, site, &place.clone(), role, budget)?);
+            let wrong = if role == ExecutionOperandV29::RvaluePlace { ExecutionOperandV29::StoreDestination }
+                else { ExecutionOperandV29::RvaluePlace };
+            assert!(!source_ordered_issued_effect_v29(instances, site, place, wrong, budget)?);
+            assert!(!source_ordered_issued_effect_v29(instances, SourceReferenceSiteV29 { statement: None, ..site },
+                place, role, budget)?);
+            assert_eq!(budget.storage(), floor);
+        }
+        Ok(())
+    }).0.unwrap();
+    let atomic = owner_with_shape_effects_guard_and_atomic(1, 1, true,
+        Some(SemanticVolatilityV1::NonVolatile), true, true);
+    run_issued_semantic_owner_v29(atomic, 1_000_000_000, 1_000_000_000,
+        |instances, budget| issued_ordered_selection_v29(instances, budget, false)).0.unwrap();
+    let unavailable = owner_with_shape_effects_and_guard(1, 1, true, Some(SemanticVolatilityV1::Volatile), false);
+    let result = run_issued_semantic_owner_v29(unavailable, 1_000_000_000, 1_000_000_000,
+        |instances, budget| issued_ordered_selection_v29(instances, budget, true)).0;
+    assert!(matches!(result, Err(ProductionSemanticKirErrorV1::Unsupported {
+        detail: "source issued pointer differs from its original issuer or actual guard", .. })), "{result:?}");
+}
+
+#[test]
+fn issued_pointer_ordered_original_source_and_actual_added_dropped_effects() {
+    for volatility in [SemanticVolatilityV1::NonVolatile, SemanticVolatilityV1::Volatile] {
+        for fault in [0, 7, 8] {
+            run_original_owner(0, true, true, owner_with_shape_and_effects(1, 1, true, Some(volatility)));
+            run_original_owner(fault, true, true, owner_with_shape_and_effects(1, 1, true, Some(volatility)));
+        }
+    }
 }

@@ -197,6 +197,7 @@ impl<'a> NativeCanonicalPrivateProjectionV1<'a> {
                             }
                             Kind::TrapEnd => false,
                             Kind::Scalar => keys(context, pointer).is_none(),
+                            Kind::LifecycleV18 | Kind::UnreachableV18 => false,
                         };
                         if !matches {
                             return Err(refuse(Need::NativeJoin, None));
@@ -382,5 +383,32 @@ mod private_call_whole_entry_layout_premises {
         check::<NativeCanonicalPrivateProjectionV1<'_>, PrivateProjectionFields<'_>>(
             "private projection",
         );
+    }
+}
+
+impl super::super::native_private_seal::Sealed for NativeCanonicalPrivateAdmissionV1<'_> {}
+impl super::super::NativePrivateInputV1 for NativeCanonicalPrivateAdmissionV1<'_> {
+    fn context(&self) -> &Context { self.context() }
+    fn function(&self) -> &FuncOp { self.function() }
+    fn ordinal(&self) -> usize { self.ordinal() }
+    fn epoch(&self) -> u64 { self.epoch() }
+    fn operation_count(&self) -> usize { self.operation_count() }
+    fn authenticate(&self, context: &Context, function: &FuncOp) -> bool {
+        self.authenticate(context, function)
+    }
+    fn operation(&self, context: &Context, pointer: Ptr<Operation>) -> Option<Kind> {
+        self.operation(context, pointer)
+    }
+    fn attribute(&self, context: &Context, pointer: Ptr<Operation>, key: &str, dialect: &str, name: &str) -> bool {
+        self.attribute(context, pointer, key, dialect, name)
+    }
+    fn identity_lookup_work(&self) -> Option<usize> { self.identity_lookup_work() }
+    fn stage_lookup_work(&self) -> Option<usize> { self.stage_lookup_work() }
+    fn run_fixed(&self, limits: crate::ProductionAnalysisResourceLimitsV1,
+        receipt: Option<&mut crate::invocation_receipt_v1::InvocationReceiptV1>)
+        -> Result<crate::canonical_private_v1::CanonicalPrivatePipelineOutcomeV1,
+            crate::PipelineErrorV1>
+    {
+        crate::canonical_private_v1::run(self, limits, receipt)
     }
 }

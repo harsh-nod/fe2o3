@@ -11,8 +11,10 @@ struct SourceIssuedRootArgumentV29 {
     argument: u32,
     local: usize,
     ty: SemanticTypeIdV1,
+    entry: bool,
     value: Option<SsaValueV1>,
     physical: Option<usize>,
+    input: Option<ValueId>,
 }
 
 #[derive(Clone, Copy)]
@@ -25,6 +27,29 @@ struct SourceIssuedRootTransportV29 {
 struct SourceIssuedActualV29<'a> {
     values: Vec<SourceIssuedActualValueV29<'a>>,
     root_arguments: Vec<SourceIssuedRootArgumentV29>,
+}
+
+fn source_issued_root_binding_headers_v29() -> Result<usize, ArgumentResourceV1> {
+    fn h<T>() -> Result<usize, ArgumentResourceV1> {
+        argument_sum_v1(&[std::mem::size_of::<T>(),
+            argument_product_v1(2, std::mem::size_of::<Result<T, ProductionSemanticKirErrorV1>>())?])
+    }
+    argument_sum_v1(&[
+        h::<&SourceAddressSourceIndexV29<'_>>()?,
+        h::<&PendingInstanceSidecarsV29>()?, h::<&SemanticKirParameterBindingV1>()?,
+        h::<Option<&SemanticKirParameterBindingV1>>()?,
+        h::<std::slice::Iter<'_, SemanticKirParameterBindingV1>>()?,
+        h::<&fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1>()?,
+        h::<Option<&fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1>>()?,
+        h::<&mut SourceIssuedRootArgumentV29>()?, h::<Option<&mut SourceIssuedRootArgumentV29>>()?,
+        h::<&SourceIssuedRootArgumentV29>()?, h::<Option<&SourceIssuedRootArgumentV29>>()?,
+        h::<std::slice::Iter<'_, SourceIssuedRootArgumentV29>>()?,
+        h::<SourceIssuedRootArgumentV29>()?, h::<SourceIssuedActualValueV29<'_>>()?,
+        h::<SourceIssuedRootTransportV29>()?, h::<Option<SsaValueV1>>()?,
+        h::<ValueId>()?, h::<Option<ValueId>>()?, h::<&ValueId>()?, h::<Option<&ValueId>>()?,
+        h::<usize>()?, h::<Option<usize>>()?,
+        h::<bool>()?, h::<()>()?,
+    ])
 }
 
 impl<'a> SourceIssuedActualV29<'a> {
@@ -75,7 +100,8 @@ impl<'a> SourceIssuedActualV29<'a> {
     }
 
     fn bind_root_arguments(&mut self, references: &SourceReferencePlanV29<'_, '_>,
-        actual: &Function, budget: &mut ArgumentBudgetV1<'_>)
+        source_index: &SourceAddressSourceIndexV29<'_>, actual: &Function,
+        budget: &mut ArgumentBudgetV1<'_>)
         -> Result<(), ProductionSemanticKirErrorV1>
     {
         let instances = references.instances;
@@ -84,6 +110,7 @@ impl<'a> SourceIssuedActualV29<'a> {
         budget.reserve_storage(argument_sum_v1(&[
             std::mem::size_of::<Vec<SourceIssuedRootArgumentV29>>(),
             std::mem::size_of::<Result<Vec<SourceIssuedRootArgumentV29>, ProductionSemanticKirErrorV1>>(),
+            source_issued_root_binding_headers_v29()?,
         ])?)?;
         let root = instances.instance(instances.root()).ok_or_else(source_issued_error_v29)?;
         let function = root.declaration();
@@ -102,7 +129,7 @@ impl<'a> SourceIssuedActualV29<'a> {
                     return Err(source_issued_error_v29());
                 }
                 root_arguments.push(SourceIssuedRootArgumentV29 { argument, local, ty: declaration.ty(),
-                    value: None, physical: None });
+                    entry: false, value: None, physical: None, input: None });
             }
         }
         call_splice_sort_work_v1(root_arguments.len(), budget).map_err(source_address_call_error_v29)?;
@@ -118,7 +145,8 @@ impl<'a> SourceIssuedActualV29<'a> {
             let declaration = function.locals().get(local).ok_or_else(source_issued_error_v29)?;
             if let SemanticLocalRoleV1::Argument(argument) = declaration.role() {
                 let row = root_arguments.get_mut(argument as usize).ok_or_else(source_issued_error_v29)?;
-                if row.local != local || row.value.is_some() { return Err(source_issued_error_v29()); }
+                if row.local != local || row.entry { return Err(source_issued_error_v29()); }
+                row.entry = true;
                 row.value = definition.value();
             }
         }
@@ -151,6 +179,32 @@ impl<'a> SourceIssuedActualV29<'a> {
             budget.release_storage(budget.storage().checked_sub(floor).ok_or(ArgumentResourceV1::Accounting)?)?;
         }
         if ordinal != body.parameters.len() { return Err(source_issued_error_v29()); }
+        // Direct root ABI bindings exist even when the original local is not
+        // promoted. They identify real parameters; absence of an SSA value is
+        // never repaired by inventing an archive entry or using a typed peer.
+        let sidecar = source_index.sidecar(instances.root(), budget)?;
+        if sidecar.source_call_instance != Some(instances.root()) { return Err(source_issued_error_v29()); }
+        for binding in &sidecar.parameter_bindings {
+            budget.charge_work(8)?;
+            if binding.correspondence_owner != root.function()
+                || binding.semantic_function != root.function() { return Err(source_issued_error_v29()); }
+            let local = binding.semantic_local.index() as usize;
+            let declaration = function.locals().get(local).ok_or_else(source_issued_error_v29)?;
+            let SemanticLocalRoleV1::Argument(argument) = declaration.role()
+                else { return Err(source_issued_error_v29()); };
+            let row = root_arguments.get_mut(argument as usize).ok_or_else(source_issued_error_v29)?;
+            let ordinal = row.physical.ok_or_else(source_issued_error_v29)?;
+            if row.local != local || row.ty != declaration.ty() || !row.entry || row.input.is_some()
+                || body.parameters.get(ordinal) != Some(&binding.kernel_ir_value)
+                || self.value(binding.kernel_ir_value, budget)?.input != Some(ordinal) {
+                return Err(source_issued_error_v29());
+            }
+            row.input = Some(binding.kernel_ir_value);
+        }
+        for row in &root_arguments {
+            budget.charge_work(2)?;
+            if row.physical.is_some() != row.input.is_some() { return Err(source_issued_error_v29()); }
+        }
         self.root_arguments = root_arguments;
         Ok(())
     }
@@ -354,10 +408,16 @@ impl SourceIssuedOriginalV29<'_, '_, '_> {
             .map_err(|_| source_issued_error_v29())?;
         let row = actual.root_arguments[index];
         if row.ty != anchor.ty || row.physical.is_none() { return Err(source_issued_error_v29()); }
-        let value = row.value.ok_or_else(source_issued_error_v29)?;
-        let archived = archive.lookup_original_v29(self.instances, root, value, budget)?;
-        source_issued_root_transport_v29(actual, row.physical.ok_or_else(source_issued_error_v29)?,
-            slice, archived, budget)
+        let input = row.input.ok_or_else(source_issued_error_v29)?;
+        let ordinal = row.physical.ok_or_else(source_issued_error_v29)?;
+        if let Some(value) = row.value {
+            let archived = archive.lookup_original_v29(self.instances, root, value, budget)?;
+            let transport = source_issued_root_transport_v29(actual, ordinal, slice, archived, budget)?;
+            if transport.input != input { return Err(source_issued_error_v29()); }
+            Ok(transport)
+        } else {
+            source_issued_root_input_transport_v29(actual, ordinal, input, slice, budget)
+        }
     }
 }
 
@@ -366,18 +426,29 @@ fn source_issued_root_transport_v29(actual: &SourceIssuedActualV29<'_>, ordinal:
     -> Result<SourceIssuedRootTransportV29, ProductionSemanticKirErrorV1>
 {
     budget.charge_work(4)?;
-    let SemanticValueBindingV1::Value { id: input, ty: Type::Slice(expected) } = archived
+    let SemanticValueBindingV1::Value { id: input, ty: Type::Slice(_) } = archived
         else { return Err(source_issued_error_v29()); };
     // The original entry archive must still be the exact physical ABI input.
     // A transported receiver is checked separately against actual CFG edges.
     check_source_issued_root_input_v29(actual, ordinal, *input, archived, budget)?;
+    source_issued_root_input_transport_v29(actual, ordinal, *input, receiver, budget)
+}
+
+fn source_issued_root_input_transport_v29(actual: &SourceIssuedActualV29<'_>, ordinal: usize,
+    input: ValueId, receiver: ValueId, budget: &mut ArgumentBudgetV1<'_>)
+    -> Result<SourceIssuedRootTransportV29, ProductionSemanticKirErrorV1>
+{
+    budget.charge_work(5)?;
+    let parameter = actual.value(input, budget)?;
+    let Type::Slice(expected) = parameter.ty else { return Err(source_issued_error_v29()); };
+    if parameter.input != Some(ordinal) { return Err(source_issued_error_v29()); }
     let Type::Slice(found) = actual.value(receiver, budget)?.ty else { return Err(source_issued_error_v29()); };
     let Type::Scalar(element) = expected.element.as_ref() else { return Err(source_issued_error_v29()); };
     if found.address_space != expected.address_space || found.access != expected.access
         || *found.element != Type::Scalar(*element) {
         return Err(source_issued_error_v29());
     }
-    Ok(SourceIssuedRootTransportV29 { receiver, input: *input, checked: false })
+    Ok(SourceIssuedRootTransportV29 { receiver, input, checked: false })
 }
 
 fn check_source_issued_root_input_v29(actual: &SourceIssuedActualV29<'_>, ordinal: usize,

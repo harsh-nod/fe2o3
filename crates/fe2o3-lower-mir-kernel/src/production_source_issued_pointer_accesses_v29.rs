@@ -25,7 +25,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
         budget.reserve_storage(argument_sum_v1(&[std::mem::size_of::<Self>(),
             std::mem::size_of::<Result<Self, ProductionSemanticKirErrorV1>>()])?)?;
         let mut actual = SourceIssuedActualV29::from_function(&source_index.pending.function, budget)?;
-        actual.bind_root_arguments(references, &source_index.pending.function, budget)?;
+        actual.bind_root_arguments(references, source_index, &source_index.pending.function, budget)?;
         let owned = budget.storage().checked_sub(floor).ok_or(ArgumentResourceV1::Accounting)?;
         Ok(Self { instances, source_index, actual, originals: BTreeMap::new(), issuers: BTreeSet::new(),
             queries: Vec::new(), transports: Vec::new(), retained: PendingSourceIssuedRolesV29::empty(),
@@ -99,7 +99,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             check_scoped_payload_v29(function, &occurrences, row, operation, budget)?;
             let access = source_address_value_access_v29(operation)?.ok_or_else(source_issued_error_v29)?;
             if access.object || access.pointer != recipe.pointer || access.access.address_space != AddressSpace::Global
-                || access.access.volatile || access.access.alignment == 0
+                || access.access.alignment == 0
                 || u64::from(access.access.alignment) > self.instances.owner().source_semantic().types()[place.ty().index() as usize]
                     .layout().alignment_bytes()
                 || (access.writing && recipe.access != AccessMode::ReadWrite)

@@ -1,4 +1,18 @@
 // Genuine source owners and their captured occurrences, not detached live sets.
+fn completed_statement_helper_instances_v29(
+    instances: &ExecutionInstancesV29<'_>,
+) -> [ProductionCallInstanceIdV1; 2] {
+    let mut helpers = instances
+        .instances()
+        .iter()
+        .enumerate()
+        .filter(|(_, instance)| instance.function().index() == 2)
+        .map(|(ordinal, _)| instances.id_at(ordinal).unwrap());
+    let result = [helpers.next().unwrap(), helpers.next().unwrap()];
+    assert!(helpers.next().is_none());
+    result
+}
+
 fn completed_statement_owner_v29(mode: usize) -> ProductionSemanticSsaOwnerV1 {
     owner_with(Case::Writeback, |_, functions| {
         let referent = || {
@@ -133,10 +147,10 @@ fn completed_statement_liveness_preserves_future_use_suspended_parent_and_escape
         matches!(
             error,
             ProductionSemanticKirErrorV1::Unsupported {
-                function: 2,
-                block: Some(0),
-                statement: Some(2),
-                detail: "source reference access bypasses a live loan",
+                function: 0,
+                block: None,
+                statement: None,
+                detail: "source reference parent is suspended by a live reborrow",
             }
         ),
         "{error:?}"
@@ -183,7 +197,7 @@ fn completed_statement_liveness_joins_original_events_and_keeps_same_statement_d
             &mut budget,
             |instances, budget| {
                 let mut builder = SourceReferenceBuilderV29::new(instances, budget).unwrap();
-                let instance = instances.id_at(2).unwrap();
+                let instance = completed_statement_helper_instances_v29(instances)[0];
                 let floor = budget.storage();
                 with_source_reference_liveness_v29(
                     &mut builder,
@@ -248,7 +262,7 @@ fn completed_statement_liveness_joins_original_events_and_keeps_same_statement_d
                                 )
                                 .is_err()
                         );
-                        let repeated = instances.id_at(4).unwrap();
+                        let repeated = completed_statement_helper_instances_v29(instances)[1];
                         assert_eq!(
                             instances.instance(repeated).unwrap().function(),
                             instances.instance(instance).unwrap().function()
@@ -365,7 +379,7 @@ fn completed_statement_liveness_scope_preserves_consumer_storage_and_original_ge
                 emission_push_v1(&mut builder.plan.states, state, budget).unwrap();
                 builder.frames[ordinal] = Some(index);
             }
-            let instance = instances.id_at(2).unwrap();
+            let instance = completed_statement_helper_instances_v29(instances)[0];
             let before = budget.storage();
             let mut allocated = None;
             with_source_reference_liveness_v29(
@@ -408,7 +422,7 @@ fn completed_statement_liveness_query_work_is_exact_and_sticky_after_a_swallowed
                 let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
                 let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
                 let mut builder = SourceReferenceBuilderV29::new(instances, &mut budget).unwrap();
-                let instance = instances.id_at(2).unwrap();
+                let instance = completed_statement_helper_instances_v29(instances)[0];
                 let floor = budget.storage();
                 let result = with_source_reference_liveness_v29(
                     &mut builder,
@@ -489,7 +503,7 @@ fn completed_statement_liveness_foreign_budget_refuses_without_debit_then_replay
         &mut budget,
         |instances, budget| {
             let mut builder = SourceReferenceBuilderV29::new(instances, budget).unwrap();
-            let instance = instances.id_at(2).unwrap();
+            let instance = completed_statement_helper_instances_v29(instances)[0];
             let floor = budget.storage();
             let result = with_source_reference_liveness_v29(
                 &mut builder,
@@ -552,7 +566,7 @@ fn completed_statement_liveness_partial_constructor_storage_returns_the_exact_ca
             let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
             let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
             let mut builder = SourceReferenceBuilderV29::new(instances, &mut budget).unwrap();
-            let instance = instances.id_at(2).unwrap();
+            let instance = completed_statement_helper_instances_v29(instances)[0];
             assert_eq!(instances.instance(instance).unwrap().declaration().blocks().len(), 1);
             // Captureless unit consumer. Partial construction reserves the
             // first Vec header and one block range, then denies header two.
@@ -591,7 +605,7 @@ fn completed_statement_liveness_scope_cleans_semantic_error_and_unwind_but_not_l
                 let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
                 let mut builder = SourceReferenceBuilderV29::new(instances, &mut budget).unwrap();
                 let floor = budget.storage();
-                let instance = instances.id_at(2).unwrap();
+                let instance = completed_statement_helper_instances_v29(instances)[0];
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     with_source_reference_liveness_v29(
                         &mut builder,
@@ -677,7 +691,7 @@ fn completed_statement_liveness_unrelated_scalar_prefix_has_independent_linear_w
             &mut budget,
             |instances, budget| {
                 let mut builder = SourceReferenceBuilderV29::new(instances, budget).unwrap();
-                let instance = instances.id_at(2).unwrap();
+                let instance = completed_statement_helper_instances_v29(instances)[0];
                 let before = (budget.work(), budget.storage());
                 with_source_reference_liveness_v29(
                     &mut builder,
@@ -808,6 +822,68 @@ fn completed_statement_liveness_failure_move_keeps_normal_successor_and_edge_res
     }
 }
 
+fn completed_statement_with_storage_builder_v29(
+    owner: ProductionSemanticSsaOwnerV1,
+    inspect: impl FnOnce(
+        &mut SourceReferenceBuilderV29<'_, '_, '_>,
+        &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1>,
+) {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+    let demands =
+        source_storage_demands_v29::SourceStorageDemandsV29::collect(&owner, &mut budget).unwrap();
+    let mut layouts = source_storage_v29::SourceStorageLayoutsV29::new_with_limits(
+        &owner,
+        demands.types(&owner, &mut budget).unwrap(),
+        ProductionSemanticKirLimitsV1::default().storage_layout_limits(),
+        &mut budget,
+    )
+    .unwrap();
+    production_call_instances_v1::with_production_call_instances_v1(
+        &owner,
+        ROOT,
+        &mut budget,
+        |instances, budget| {
+            let floor = budget.storage();
+            source_storage_v29::with_source_storage_root_v29(
+                &mut layouts,
+                instances,
+                budget,
+                |plan, root, budget| {
+                    let retained = root.snapshot_statistics(budget)?;
+                    let floor = budget.storage();
+                    let mut builder = SourceReferenceBuilderV29::new_with_root(
+                        plan.instances,
+                        SourceReferenceStorageV29::ScalarCells,
+                        Some(root),
+                        budget,
+                    )?;
+                    builder.function(plan.root, None, budget)?;
+                    assert_eq!(builder.plan.storage_snapshots, plan.storage_snapshots);
+                    inspect(&mut builder, budget)?;
+                    assert_eq!(
+                        builder.storage_root.as_ref().unwrap().snapshot_statistics(budget)?,
+                        retained
+                    );
+                    drop(builder);
+                    budget.release_storage(budget.storage() - floor)?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+            let extra = budget.storage() - floor;
+            assert!(layouts.permits_root_emission_refund(&owner, extra, budget));
+            budget.release_storage(extra).unwrap();
+            Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(())
+        },
+    )
+    .unwrap();
+    layouts.release(&mut budget).unwrap();
+    demands.discard(&mut budget).unwrap();
+    assert_eq!(budget.storage(), 0);
+}
+
 #[test]
 fn completed_statement_liveness_changes_only_node_not_generation_storage_or_observations() {
     let owner = owner_with(Case::Shared, |_, functions| {
@@ -821,6 +897,179 @@ fn completed_statement_liveness_changes_only_node_not_generation_storage_or_obse
             false,
             CAPTURE,
             helper.locals().to_vec(),
+            vec![
+                block(30, statements[..3].to_vec(), go(1)),
+                block(
+                    31,
+                    statements[3..].to_vec(),
+                    helper.blocks()[0].terminator().kind().clone(),
+                ),
+            ],
+        );
+    });
+    completed_statement_with_storage_builder_v29(owner, |builder, budget| {
+        let instances = builder.plan.instances;
+        let instance = completed_statement_helper_instances_v29(instances)[0];
+        let local = SemanticLocalIdV1::from_index(2);
+        let frame = builder
+            .plan
+            .blocks
+            .iter()
+            .find(|row| row.instance == instance && row.block.index() == 1)
+            .unwrap()
+            .entry;
+        builder.frames[instance.index()] = Some(frame);
+        let original = builder.local(instance, local).unwrap();
+        assert_eq!(original.generation, 1);
+        assert!(original.node.is_none());
+        let snapshot = builder.plan.storage_snapshots[original.storage.unwrap()];
+        assert!(
+            builder
+                .storage_root
+                .as_ref()
+                .unwrap()
+                .snapshot_initialized(snapshot, &[], budget)
+                .unwrap()
+        );
+        let entry = builder.plan.entries[instance.index()].unwrap();
+        let capture = builder.plan.states[entry][1].node.unwrap();
+        let node = builder.field(capture, 0, budget)?;
+        assert!(matches!(
+            builder.plan.nodes[node].kind,
+            SourceReferenceNodeKindV29::Loan(_)
+        ));
+        let loan_count = builder.plan.loans.len();
+        let origin_count = builder.plan.origins.len();
+        let activation_count = builder.plan.storage_activations.len();
+        let access_count = builder.plan.accesses.len();
+        with_source_reference_liveness_v29(
+            builder,
+            instance,
+            budget,
+            |builder, context, budget| {
+                let site = SourceReferenceSiteV29 {
+                    instance,
+                    block: SemanticBlockIdV1::from_index(0),
+                    statement: Some(2),
+                };
+                assert!(
+                    context
+                        .completed(&builder.plan, site, budget)?
+                        .contains(&local)
+                );
+                builder.set_local(
+                    instance,
+                    local,
+                    SourceReferenceLocalV29 {
+                        node: Some(node),
+                        ..original
+                    },
+                )?;
+                builder.expire_completed_statement_v29(context, site, budget)?;
+                assert_eq!(
+                    builder.local(instance, local)?,
+                    SourceReferenceLocalV29 {
+                        node: None,
+                        ..original
+                    }
+                );
+                assert_eq!(
+                    builder.plan.storage_snapshots[original.storage.unwrap()],
+                    snapshot
+                );
+                assert!(
+                    builder
+                        .storage_root
+                        .as_ref()
+                        .unwrap()
+                        .snapshot_initialized(snapshot, &[], budget)
+                        .unwrap()
+                );
+                for kind in [
+                    SourceReferenceNodeKindV29::Address(usize::MAX),
+                    SourceReferenceNodeKindV29::EnumView(usize::MAX),
+                ] {
+                    let copied = SourceReferenceNodeV29 {
+                        kind,
+                        ..builder.plan.nodes[node]
+                    };
+                    let index = builder.plan.nodes.len();
+                    emission_push_v1(&mut builder.plan.nodes, copied, budget)?;
+                    let opaque = SourceReferenceLocalV29 {
+                        node: Some(index),
+                        ..original
+                    };
+                    builder.set_local(instance, local, opaque)?;
+                    builder.expire_completed_statement_v29(context, site, budget)?;
+                    assert_eq!(builder.local(instance, local)?, opaque);
+                }
+                assert_eq!(
+                    (
+                        builder.plan.loans.len(),
+                        builder.plan.origins.len(),
+                        builder.plan.storage_activations.len(),
+                        builder.plan.accesses.len()
+                    ),
+                    (loan_count, origin_count, activation_count, access_count)
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+        Ok(())
+    });
+}
+
+#[test]
+fn completed_statement_liveness_excludes_genuine_address_observed_holder_before_node_query() {
+    let owner = owner_with(Case::Shared, |types, functions| {
+        let raw = SemanticTypeIdV1::from_index(u32::try_from(types.len()).unwrap());
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([252; 32]),
+            SemanticLayoutIdentityV1::from_sha256([252; 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(8),
+                8,
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                    SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    REFERENCE,
+                    SemanticPointerKindV1::Raw,
+                    SemanticMutabilityV1::Immutable,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        ));
+        let helper = &functions[2];
+        assert_eq!(helper.blocks().len(), 1);
+        let mut locals = helper.locals().to_vec();
+        let raw_local = u32::try_from(locals.len()).unwrap();
+        locals.push(local(252, raw, SemanticLocalRoleV1::Temporary));
+        let mut statements = helper.blocks()[0].statements().to_vec();
+        statements.insert(
+            2,
+            assign(
+                place(raw_local, raw),
+                SemanticRvalueKindV1::AddressOf {
+                    mutability: SemanticMutabilityV1::Immutable,
+                    place: place(2, REFERENCE),
+                },
+            ),
+        );
+        functions[2] = function(
+            30,
+            false,
+            CAPTURE,
+            locals,
             vec![block(
                 30,
                 statements,
@@ -836,103 +1085,58 @@ fn completed_statement_liveness_changes_only_node_not_generation_storage_or_obse
         &mut budget,
         |instances, budget| {
             let mut builder = SourceReferenceBuilderV29::new(instances, budget).unwrap();
-            builder.function(instances.root(), None, budget).unwrap();
-            let instance = instances.id_at(2).unwrap();
-            let local = SemanticLocalIdV1::from_index(2);
-            let frame = builder
-                .plan
-                .states
-                .iter()
-                .position(|state| state.get(2).is_some_and(|local| local.generation == 1))
-                .unwrap();
-            builder.frames[instance.index()] = Some(frame);
-            let original = builder.local(instance, local).unwrap();
-            assert_eq!(original.generation, 1);
-            assert!(original.storage.is_none());
-            let node = builder
-                .plan
-                .nodes
-                .iter()
-                .position(|node| {
-                    matches!(node.kind, SourceReferenceNodeKindV29::Loan(_)) && node.ty == REFERENCE
-                })
-                .unwrap();
-            let loan_count = builder.plan.loans.len();
-            let origin_count = builder.plan.origins.len();
-            let activation_count = builder.plan.storage_activations.len();
-            let access_count = builder.plan.accesses.len();
-            with_source_reference_liveness_v29(
-                &mut builder,
-                instance,
-                budget,
-                |builder, context, budget| {
-                    let site = SourceReferenceSiteV29 {
-                        instance,
-                        block: SemanticBlockIdV1::from_index(0),
-                        statement: Some(2),
-                    };
-                    assert!(
-                        context
-                            .completed(&builder.plan, site, budget)?
-                            .contains(&local)
-                    );
-                    builder.set_local(
-                        instance,
-                        local,
-                        SourceReferenceLocalV29 {
-                            node: Some(node),
-                            ..original
-                        },
-                    )?;
-                    builder.expire_completed_statement_v29(context, site, budget)?;
-                    assert_eq!(
-                        builder.local(instance, local)?,
-                        SourceReferenceLocalV29 {
-                            node: None,
-                            ..original
+            for instance in completed_statement_helper_instances_v29(instances) {
+                let row = instances.instance(instance).unwrap();
+                assert!(
+                    !row.ssa()
+                        .plan()
+                        .promoted_variables()
+                        .iter()
+                        .any(|variable| variable.get() == 2)
+                );
+                let mut state =
+                    source_reference_scratch_v29(row.declaration().locals().len(), budget).unwrap();
+                state.resize(
+                    row.declaration().locals().len(),
+                    SourceReferenceLocalV29::default(),
+                );
+                // An opaque sentinel makes any accidental node query fail. The
+                // genuine source/SSA exclusion must precede node interpretation;
+                // this is not a claim to execute or authorize the raw address.
+                let retained = SourceReferenceLocalV29 {
+                    node: Some(usize::MAX),
+                    ..SourceReferenceLocalV29::default()
+                };
+                state[2] = retained;
+                builder.frames[instance.index()] = Some(builder.plan.states.len());
+                emission_push_v1(&mut builder.plan.states, state, budget).unwrap();
+                with_source_reference_liveness_v29(
+                    &mut builder,
+                    instance,
+                    budget,
+                    |builder, context, budget| {
+                        for statement in 0..row.declaration().blocks()[0].statements().len() {
+                            let site = SourceReferenceSiteV29 {
+                                instance,
+                                block: SemanticBlockIdV1::from_index(0),
+                                statement: Some(statement),
+                            };
+                            assert!(
+                                !context
+                                    .completed(&builder.plan, site, budget)?
+                                    .contains(&SemanticLocalIdV1::from_index(2))
+                            );
+                            builder.expire_completed_statement_v29(context, site, budget)?;
+                            assert_eq!(
+                                builder.local(instance, SemanticLocalIdV1::from_index(2))?,
+                                retained
+                            );
                         }
-                    );
-                    // A retained-memory marker is an explicit negative: it grants no
-                    // storage authority and must not be consulted or erased here.
-                    let retained = SourceReferenceLocalV29 {
-                        node: Some(node),
-                        storage: Some(usize::MAX),
-                        ..original
-                    };
-                    builder.set_local(instance, local, retained)?;
-                    builder.expire_completed_statement_v29(context, site, budget)?;
-                    assert_eq!(builder.local(instance, local)?, retained);
-                    for kind in [
-                        SourceReferenceNodeKindV29::Address(usize::MAX),
-                        SourceReferenceNodeKindV29::EnumView(usize::MAX),
-                    ] {
-                        let copied = SourceReferenceNodeV29 {
-                            kind,
-                            ..builder.plan.nodes[node]
-                        };
-                        let index = builder.plan.nodes.len();
-                        emission_push_v1(&mut builder.plan.nodes, copied, budget)?;
-                        let opaque = SourceReferenceLocalV29 {
-                            node: Some(index),
-                            ..original
-                        };
-                        builder.set_local(instance, local, opaque)?;
-                        builder.expire_completed_statement_v29(context, site, budget)?;
-                        assert_eq!(builder.local(instance, local)?, opaque);
-                    }
-                    assert_eq!(
-                        (
-                            builder.plan.loans.len(),
-                            builder.plan.origins.len(),
-                            builder.plan.storage_activations.len(),
-                            builder.plan.accesses.len()
-                        ),
-                        (loan_count, origin_count, activation_count, access_count)
-                    );
-                    Ok(())
-                },
-            )
-            .unwrap();
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            }
             Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(())
         },
     )

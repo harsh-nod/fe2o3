@@ -114,9 +114,7 @@ fn optimized_source_slots_v18(
     for (ordinal, slot) in owner.source_slots.slots.iter().enumerate() {
         budget.charge_work(2)?;
         let input = optimized_source_slot_input_v18(relation, original.root, ordinal, budget)?;
-        let allocation = optimized.allocation(original.root, input, budget)?.ok_or(
-            ProductionSourceOwnedViewErrorV18::Binding("optimized allocation lost original slot"),
-        )?;
+        let allocation = optimized.allocation_for_slot_v18(original.root, ordinal, input, budget)?;
         if allocation.instance() != slot.instance.index() {
             return relation
                 .source

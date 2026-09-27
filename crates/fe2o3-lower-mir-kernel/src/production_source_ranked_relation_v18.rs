@@ -248,6 +248,8 @@ impl ScalarValueVisitingV18 for SourceScalarVisitingV18 {
     }
 }
 
+include!("production_source_scalar_constant_fold_v18.rs");
+
 // Equality is relative to unresolved original read occurrences. This returns
 // no ranked, memory or executable owner; the containing consumer must still
 // discharge source effects/control/calls and physical read-from/epoch checks.
@@ -292,6 +294,7 @@ fn source_scalar_expression_endpoint_v18(
             size_of::<SourceExpressionLeavesV18<'_, '_, '_, '_, '_, '_>>(),
             size_of::<InventoryCorrelationV18<'_, '_, '_, '_, '_, '_>>(),
             size_of::<BTreeMap<(FunctionOperationLocation, u32), SemanticAccessSiteV1>>(),
+            source_scalar_constant_fold_headers_v18()?,
             argument_product_v1(fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2,
                 argument_product_v1(2, size_of::<NormalizedScalarExpressionV1>())?)?,
         ])?;
@@ -312,17 +315,21 @@ fn source_scalar_expression_endpoint_v18(
             rows: [None; MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1], length: 0,
         };
         let no_ranked_reads = BTreeMap::new();
-        let expected = normalize_semantic_expression_v18(expression, &expected_leaves, 0, &mut charge);
-        let actual = if expected.is_some() {
+        let mut expected = normalize_semantic_expression_v18(expression, &expected_leaves, 0, &mut charge);
+        let mut actual = if expected.is_some() {
             native_helper_value_expansion_v1::with_source_value_expansion_v18(&ledger, |helpers| {
                 normalize_kir_expression_with_visiting_v18(function.function, &graph, &no_ranked_reads,
                     value, 0, &mut visiting, &mut charge, helpers)
                     .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)
             }).ok()
         } else { None };
+        let constants = expected.as_mut().zip(actual.as_mut()).and_then(|(expected, actual)| {
+            source_scalar_constant_fold_v18(expected, 0, &mut charge)?;
+            source_scalar_constant_fold_v18(actual, 0, &mut charge)
+        }).is_some();
         let resource = ledger.failure.get();
         let refused = ledger.inconsistent_inventory.get() || charge.finite_denied;
-        let equal = expected.is_some() && expected == actual && visiting.length == 0;
+        let equal = constants && expected == actual && visiting.length == 0;
         drop((actual, expected, no_ranked_reads, visiting, charge, expected_leaves, graph));
         drop(ledger);
         if let Some(error) = resource { return Err(error.into()); }
@@ -458,6 +465,8 @@ pub enum ProductionSourceScalarInputV18<'scope> {
         argument: u32,
     },
 }
+
+include!("production_source_entry_rhs_v18.rs");
 
 /// One scoped original Store input. The actual Store is retained privately;
 /// callers cannot substitute its graph value or source occurrence.
@@ -901,6 +910,11 @@ impl ProductionSourceScalarLeavesV18<'_> {
     }
 }
 
+enum SourceScalarNamespaceV18<'a> {
+    Ranked(&'a fe2o3_pliron::ProductionRankedKernelV1),
+    SourceOnly,
+}
+
 impl ProductionSourceCorrespondenceV18<'_> {
     /// Gives the shared source resolver private read names over this exact
     /// source and canonical graph. The recipe is used solely to exclude its
@@ -912,16 +926,40 @@ impl ProductionSourceCorrespondenceV18<'_> {
             &mut ArgumentBudgetV1<'work>) -> Result<T, E>,
     ) -> Result<T, E>
     where E: From<ProductionSourceOwnedViewErrorV18> {
+        self.with_scalar_leaf_namespace_v18(root, &SourceScalarNamespaceV18::Ranked(recipe), budget, consume)
+    }
+
+    /// Lends private scalar names without a ranked recipe. The root, argument
+    /// symbols and complete original Load census still come from this exact
+    /// source/canonical relation. This grants no ranked or memory equivalence.
+    pub fn with_source_scalar_leaves_v18<'work, T, E>(
+        &self, root: usize, budget: &mut ArgumentBudgetV1<'work>,
+        consume: impl for<'scope> FnOnce(&ProductionSourceScalarLeavesV18<'scope>,
+            &mut ArgumentBudgetV1<'work>) -> Result<T, E>,
+    ) -> Result<T, E>
+    where E: From<ProductionSourceOwnedViewErrorV18> {
+        self.with_scalar_leaf_namespace_v18(root, &SourceScalarNamespaceV18::SourceOnly, budget, consume)
+    }
+
+    fn with_scalar_leaf_namespace_v18<'work, T, E>(
+        &self, root: usize, namespace: &SourceScalarNamespaceV18<'_>,
+        budget: &mut ArgumentBudgetV1<'work>,
+        consume: impl for<'scope> FnOnce(&ProductionSourceScalarLeavesV18<'scope>,
+            &mut ArgumentBudgetV1<'work>) -> Result<T, E>,
+    ) -> Result<T, E>
+    where E: From<ProductionSourceOwnedViewErrorV18> {
         self.query(budget)?;
         let floor = budget.storage();
         let (leaves, retained) = scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
             self.retain_query((|| {
             let headers = argument_sum_v1(&[
                 size_of::<ProductionSourceScalarLeavesV18<'_>>(),
+                size_of::<SourceScalarNamespaceV18<'_>>(),
+                size_of::<&SourceScalarNamespaceV18<'_>>(),
                 size_of::<std::thread::Result<Result<T, E>>>(),
             ])?;
             budget.reserve_storage(headers)?;
-            let leaves = SourceScalarLeavesV18::build(self, root, recipe, budget)?;
+            let leaves = SourceScalarLeavesV18::build(self, root, namespace, budget)?;
             let retained = budget.storage().checked_sub(floor).ok_or(ArgumentResourceV1::Accounting)?;
             Ok((leaves, retained))
             })())
@@ -1001,7 +1039,7 @@ fn visit_source_expression_symbols_v18(
 
 fn visit_source_reserved_symbols_v18(
     declaration: &SemanticFunctionDeclV1,
-    recipe: &fe2o3_pliron::ProductionRankedKernelV1,
+    namespace: &SourceScalarNamespaceV18<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
     visit: &mut impl FnMut(u32, &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()>,
 ) -> SourceOwnedResultV18<()> {
@@ -1014,6 +1052,7 @@ fn visit_source_reserved_symbols_v18(
             visit(symbol, budget)?;
         }
     }
+    let SourceScalarNamespaceV18::Ranked(recipe) = namespace else { return Ok(()); };
     for block in recipe.blocks() {
         budget.charge_work(1)?;
         for operation in block.operations() {
@@ -1080,7 +1119,7 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
     fn build(
         relation: &'relation ProductionSourceCorrespondenceV18<'source>,
         root: usize,
-        recipe: &fe2o3_pliron::ProductionRankedKernelV1,
+        namespace: &SourceScalarNamespaceV18<'_>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<Self> {
         relation.retain_query((|| {
@@ -1092,8 +1131,10 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
             let function = relation.inventory.functions().get(physical)
                 .ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar leaf physical root"))?;
             budget.charge_work(1)?;
-            if recipe.function_name() != function.function.id.as_str() {
-                return relation.source.missing("scalar leaf ranked root differs");
+            if let SourceScalarNamespaceV18::Ranked(recipe) = namespace {
+                if recipe.function_name() != function.function.id.as_str() {
+                    return relation.source.missing("scalar leaf ranked root differs");
+                }
             }
             // This only reserves names against collision. Ranked/source
             // equivalence is checked by the containing consumer, not here.
@@ -1103,13 +1144,13 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                     MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 * 2 + 1]>(),
             ])?)?;
             let mut count = 0usize;
-            visit_source_reserved_symbols_v18(declaration, recipe, budget, &mut |_, budget| {
+            visit_source_reserved_symbols_v18(declaration, namespace, budget, &mut |_, budget| {
                 budget.charge_work(1)?;
                 count = count.checked_add(1).ok_or(ArgumentResourceV1::Arithmetic)?;
                 Ok(())
             })?;
             let mut reserved = emission_vec_v1(count, budget).map_err(source_emission_error_v18)?;
-            visit_source_reserved_symbols_v18(declaration, recipe, budget, &mut |symbol, budget| {
+            visit_source_reserved_symbols_v18(declaration, namespace, budget, &mut |symbol, budget| {
                 budget.charge_work(1)?;
                 if reserved.len() >= count || reserved.len() == reserved.capacity() {
                     return relation.source.missing("scalar symbol census changed between passes");

@@ -30,7 +30,7 @@ pub struct CanonicalKirPrivateMemoryLimitsV1 {
 }
 
 /// No partial physical proof is returned on refusal.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CanonicalKirPrivateMemoryErrorV1 {
     /// The caller's existing work/storage ledger refused.
     Resource(Resource),
@@ -467,9 +467,8 @@ fn build<'a, 'g, O: typed::PrivateMemoryOwner>(
         operations[ordinal] = true;
         cells = end;
     }
-    // Only direct constant element addresses are admitted. In particular phi,
-    // pointer casts, integer-derived pointers and nested/dynamic GEPs do not
-    // acquire provenance by sharing a numeric address or a private type.
+    // Only direct constant element addresses and the V18 typed restriction
+    // below acquire lineage. Equal pointer bits/types are never provenance.
     for (ordinal, row) in inventory.operations().iter().enumerate() {
         charge(
             budget,
@@ -483,6 +482,20 @@ fn build<'a, 'g, O: typed::PrivateMemoryOwner>(
             continue;
         }
         if matches!(row.operation.kind, OperationKind::Alloca { .. }) {
+            continue;
+        }
+        if O::TYPED
+            && matches!(
+                row.operation.kind,
+                OperationKind::Cast {
+                    kind: fe2o3_kernel_ir::CastKind::RestrictPointerAccess,
+                    ..
+                }
+            )
+        {
+            let address = typed::restrict_address(inventory, row, &addresses, budget)?;
+            addresses[row.results.start] = Some(address);
+            // Restriction is pure address transport, not a physical Memory row.
             continue;
         }
         let OperationKind::GetElementPointer { base, offset } = row.operation.kind else {
@@ -617,6 +630,18 @@ fn build<'a, 'g, O: typed::PrivateMemoryOwner>(
                         ..
                     }) if O::TYPED => {
                         address == operand.value && value != operand.value && operations[ordinal]
+                    }
+                    OperationKind::Cast {
+                        kind: fe2o3_kernel_ir::CastKind::RestrictPointerAccess,
+                        value,
+                        ..
+                    } if O::TYPED => {
+                        charge(budget, 3)?;
+                        // The producer pass authenticated this exact result and
+                        // copied only the direct typed allocation's address.
+                        value == operand.value
+                            && row.results.len() == 1
+                            && addresses[row.results.start] == addresses[operand.definition]
                     }
                     _ => false,
                 };

@@ -5,6 +5,7 @@ use super::*;
 include!("production_optimized_source_allocation_v18.rs");
 include!("production_optimized_source_typed_memory_v18.rs");
 include!("production_optimized_source_currentness_v18.rs");
+include!("production_optimized_source_private_memory_v18.rs");
 include!("production_source_issued_role_replay_v18.rs");
 #[cfg(test)]
 #[path = "production_source_issued_roles_v29_tests.rs"]
@@ -1840,6 +1841,8 @@ fn check_expanded_source_memory_inner_v29(
     Ok(retained)
 }
 
+include!("production_source_direct_object_activation_v29.rs");
+
 fn retain_pending_memory_v29(
     instances: &ExecutionInstancesV29<'_>,
     plan: &SourceReferencePlanV29<'_, '_>,
@@ -1937,7 +1940,7 @@ fn retain_pending_memory_v29(
         retained_storage: 0,
     };
     for source in sources {
-        budget.charge_work(3)?;
+        budget.charge_work(4)?;
         let first = output.alternatives.len();
         if let Some(access) = source.raw {
             let set = plan
@@ -2029,6 +2032,13 @@ fn retain_pending_memory_v29(
                     )?;
                 }
             }
+        } else if source.direct_object.is_some()
+            && let Some(alternative) = source_direct_object_invocation_v29(
+            instances, plan, slots, source, budget)?
+        {
+            #[cfg(test)]
+            test_direct_object_invocation_v29(instances, plan, slots, source, budget)?;
+            emission_push_v1(&mut output.alternatives, alternative, budget)?;
         } else if ordinary_indices
             && matches!(
                 slots.slots.get(source.physical.slot)

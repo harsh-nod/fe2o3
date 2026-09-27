@@ -840,6 +840,10 @@ fn original_boundary_census_preserves_each_actual_call_and_return_instance() {
 }
 
 fn boundary_after_move_owner_v29() -> ProductionSemanticSsaOwnerV1 {
+    boundary_after_move_owner_with_use_v29(true)
+}
+
+fn boundary_after_move_owner_with_use_v29(later_use: bool) -> ProductionSemanticSsaOwnerV1 {
     owner_with(Case::Shared, |_, functions| {
         let first = functions[1].blocks()[0].clone();
         let locals = functions[1].locals().to_vec();
@@ -853,7 +857,12 @@ fn boundary_after_move_owner_v29() -> ProductionSemanticSsaOwnerV1 {
                         vec![SemanticOperandV1::Move(place(4, REFERENCE))]).unwrap())),
                 dead(4),
             ], go(2)),
-            block(22, vec![unit()], SemanticTerminatorKindV1::Return),
+            block(22, if later_use {
+                vec![statement(SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4))),
+                    assign(place(4, REFERENCE), SemanticRvalueKindV1::Use(
+                    SemanticOperandV1::Copy(projected(3, &[(SemanticProjectionKindV1::Field(0), REFERENCE)])))),
+                    dead(4), unit()]
+            } else { vec![unit()] }, SemanticTerminatorKindV1::Return),
         ]);
     })
 }
@@ -894,6 +903,26 @@ fn original_argument_rows_survive_move_and_later_holder_reassignment() {
         Ok(())
     }).unwrap();
     assert!(reached.get());
+}
+
+#[test]
+fn original_argument_rows_survive_expiry_of_an_unused_replacement_holder() {
+    run_enum_with_original_demands(boundary_after_move_owner_with_use_v29(false), |plan, budget| {
+        assert_original_boundary_census_v29(plan, budget)?;
+        let mut checked = 0;
+        for row in &plan.boundary_values {
+            if !matches!(row.role, SourceReferenceBoundaryRoleV29::Argument(0))
+                || plan.nodes[row.node].ty != CAPTURE { continue; }
+            let later = plan.blocks.iter().find(|entry|
+                entry.instance == row.site.instance && entry.block.index() == 2).unwrap();
+            assert!(plan.states[later.entry][3].node.is_none());
+            assert!(matches!(plan.nodes[row.node].kind, SourceReferenceNodeKindV29::Aggregate { count: 1, .. }));
+            assert_eq!(plan.boundary_at(row.site, row.role, budget)?.unwrap().1, *row);
+            checked += 1;
+        }
+        assert_eq!(checked, 2);
+        Ok(())
+    }).unwrap();
 }
 
 fn intrinsic_boundary_owner_v29() -> ProductionSemanticSsaOwnerV1 {

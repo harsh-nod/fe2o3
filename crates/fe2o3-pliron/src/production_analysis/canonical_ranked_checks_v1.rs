@@ -425,6 +425,7 @@ pub use storage::{
     with_canonical_ranked_policy_checks_v18,
     CanonicalRankedSourceObligationV18, PendingCanonicalRankedPoliciesV18,
     PendingCanonicalRankedSourceRolesV18, with_pending_canonical_ranked_source_roles_v18,
+    PendingCanonicalPrivateMemoryPoliciesV18,
 };
 
 #[path = "canonical_private_admission_v1.rs"]

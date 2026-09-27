@@ -320,6 +320,7 @@ enum LoopCase {
     ChangingInitializer,
     SurvivingLoan,
     ChangingHolder,
+    DeadChangingHolder,
     Uninitialized,
     MultipleLatch,
     Irreducible,
@@ -675,20 +676,26 @@ fn check_branch_writeback_plan(
                 .find(|row| row.instance == helper && row.block.index() == block)
                 .unwrap();
             let state = &plan.states[row.entry];
-            let node = plan.nodes[state[1].node.unwrap()];
-            assert_eq!(node.ty, CAPTURE);
-            let SourceReferenceNodeKindV29::Aggregate { first, count } = node.kind else {
-                panic!("helper must retain its original captured reference");
-            };
-            assert_eq!(count, 1);
-            let captured = plan.nodes[plan.children[first]];
-            assert_eq!(captured.ty, REFERENCE);
-            assert_eq!(captured.kind, SourceReferenceNodeKindV29::Loan(index));
-            if block != 0 {
+            if block == 0 {
+                let node = plan.nodes[state[1].node.unwrap()];
+                assert_eq!(node.ty, CAPTURE);
+                let SourceReferenceNodeKindV29::Aggregate { first, count } = node.kind else {
+                    panic!("helper must enter with its original captured reference");
+                };
+                assert_eq!(count, 1);
+                let captured = plan.nodes[plan.children[first]];
+                assert_eq!(captured.ty, REFERENCE);
+                assert_eq!(captured.kind, SourceReferenceNodeKindV29::Loan(index));
+            } else {
+                assert!(state[1].node.is_none(), "capture expires after its final extraction");
+            }
+            if block == 1 || block == 2 {
                 assert_eq!(
                     plan.nodes[state[2].node.unwrap()].kind,
                     SourceReferenceNodeKindV29::Loan(index)
                 );
+            } else if block == 3 {
+                assert!(state[2].node.is_none(), "reference expires after the final branch write");
             }
         }
     }
@@ -814,7 +821,7 @@ fn try_loop_owner(
         ) {
             entry.push(borrow_reference(1));
         }
-        if matches!(case, LoopCase::ChangingHolder) {
+        if matches!(case, LoopCase::ChangingHolder | LoopCase::DeadChangingHolder) {
             entry.push(assign(place(5, WORD), fixture_word(29)));
         }
         let mut body = match case {
@@ -822,7 +829,7 @@ fn try_loop_owner(
             LoopCase::Invariant | LoopCase::MultipleLatch | LoopCase::Irreducible => {
                 vec![read_reference()]
             }
-            LoopCase::ChangingHolder => vec![borrow_reference(5), read_reference()],
+            LoopCase::ChangingHolder | LoopCase::DeadChangingHolder => vec![borrow_reference(5), read_reference()],
             // The explicit exit Load below retains ordinary memory so this
             // case reaches reference CFG initializedness, not scalar SSA.
             LoopCase::Uninitialized => vec![
@@ -858,6 +865,10 @@ fn try_loop_owner(
             body.truncate(4);
         }
         let mut exit = vec![];
+        if matches!(case, LoopCase::ChangingHolder) {
+            // A genuine post-loop use keeps the differing predecessor loans live.
+            exit.push(read_reference());
+        }
         if matches!(case, LoopCase::Uninitialized) {
             exit.push(assign(
                 place(6, WORD),
@@ -1152,6 +1163,18 @@ fn source_reference_cfg_changing_holder_is_not_an_arbitrary_predecessor_snapshot
 }
 
 #[test]
+fn source_reference_cfg_dead_changing_holder_needs_no_predecessor_snapshot() {
+    run_owner(loop_owner(LoopCase::DeadChangingHolder), |plan, _| {
+        assert!(!plan.loans.is_empty());
+        let worker = plan.instances.id_at(1).unwrap();
+        let exit = plan.blocks.iter().find(|row|
+            row.instance == worker && row.block.index() == 3).unwrap();
+        assert!(plan.states[exit.entry][2].node.is_none());
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
 fn source_reference_cfg_worklist_and_index_exhaustion_never_publish_partial_owner() {
     let owner = loop_owner(LoopCase::Invariant);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
@@ -1348,10 +1371,13 @@ fn source_reference_cfg_refusal_probes_reach_real_index_and_worklist_boundaries(
                     let prelude = 4 + index + 3 * 3 + 3 * b + capture + clone;
                     let first_statement = 5 + clone + frames + 1 + 3;
                     let allowance = prelude + first_statement;
-                    budget
-                        .charge_work(LIMIT - budget.work() - allowance)
-                        .unwrap();
-                    let result = builder.run_cfg(worker, 0, &mut budget);
+                    // Pay the independent source-liveness constructor before
+                    // placing the cut in the CFG worklist itself.
+                    let result = with_source_reference_liveness_v29(
+                        &mut builder, worker, &mut budget, |builder, liveness, budget| {
+                            budget.charge_work(LIMIT - budget.work() - allowance)?;
+                            builder.run_cfg_with_liveness_v29(worker, 0, liveness, budget)
+                        });
                     let Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
                         ArgumentResourceV1::Work(error),
                     )) = result
@@ -1371,8 +1397,11 @@ fn source_reference_cfg_refusal_probes_reach_real_index_and_worklist_boundaries(
                     assert_eq!(builder.epochs[worker.index()].len(), b);
                     assert_eq!(budget.work(), LIMIT);
                 } else {
-                    budget.reserve_storage(LIMIT - budget.storage()).unwrap();
-                    let result = builder.run_cfg(worker, 0, &mut budget);
+                    let result = with_source_reference_liveness_v29(
+                        &mut builder, worker, &mut budget, |builder, liveness, budget| {
+                            budget.reserve_storage(LIMIT - budget.storage())?;
+                            builder.run_cfg_with_liveness_v29(worker, 0, liveness, budget)
+                        });
                     let Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
                         ArgumentResourceV1::Storage(error),
                     )) = result

@@ -8,6 +8,7 @@ use fe2o3_kernel_ir::{StorageLayoutLimitsV1, VerifiedCanonicalKernelIrModuleV18}
 mod pending;
 pub use pending::{
     PendingCanonicalRankedPoliciesV18, PendingCanonicalRankedSourceRolesV18,
+    PendingCanonicalPrivateMemoryPoliciesV18,
     with_pending_canonical_ranked_source_roles_v18,
 };
 

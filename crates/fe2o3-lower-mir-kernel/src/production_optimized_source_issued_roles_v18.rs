@@ -182,12 +182,18 @@ fn install_optimized_issued_roles_inner_v18(
     call_splice_sort_work_v1(order.len(), budget).map_err(source_address_call_error_v29).map_err(source_emission_error_v18)?;
     order.sort_unstable_by_key(|&index| (rows.issuers[index].instance.index(), rows.issuers[index].definition));
     let mut accesses = emission_vec_v1(rows.accesses.len(), budget).map_err(source_emission_error_v18)?;
+    let mut users = emission_vec_v1(rows.issuers.len(), budget).map_err(source_emission_error_v18)?;
+    budget.charge_work(rows.issuers.len())?;
+    users.resize(rows.issuers.len(), (false, false));
     for row in &rows.accesses {
         charge_execution_cfg_lookup_v29(order.len(), budget).map_err(source_emission_error_v18)?;
         let index = order.binary_search_by_key(&(row.instance.index(), row.issuer), |&index|
             (rows.issuers[index].instance.index(), rows.issuers[index].definition))
             .map_err(|_| ProductionSourceOwnedViewErrorV18::Binding("issued output original issuer index"))?;
-        let Some(issuer) = &facts[order[index]] else { continue; };
+        let index = order[index];
+        budget.charge_work(1)?;
+        users[index].0 = true;
+        let Some(issuer) = &facts[index] else { continue; };
         let [position] = original.attachment_range(TileAttachmentKeyV29 {
             root, family: TileAttachmentFamilyV29::MemoryAnchor, instance: row.instance.index(), row: row.anchor,
             field: TileAttachmentFieldV29::MemoryPosition, component: 0, part: 0,
@@ -215,11 +221,13 @@ fn install_optimized_issued_roles_inner_v18(
             }
         }
         let operation = optimized_source_operation_row_v18(output, coordinate, budget)?.operation;
+        scoped_raw_admission_v29::check_issued_original_effect_v18(
+            original, root, row.instance.index(), row.anchor, operation, budget)?;
         let access = source_address_value_access_v29(operation).map_err(source_emission_error_v18)?
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding("issued output memory opcode"))?;
         budget.charge_work(6)?;
         if access.object || access.pointer != issuer.physical.pointer || access.writing != row.writing
-            || access.access != row.access || access.access.volatile
+            || access.access != row.access
             || *actual.value(access.value, budget).map_err(source_emission_error_v18)?.ty != Type::Scalar(issuer.physical.element) {
             return original.source.missing("issued output memory attributes or pointer differ");
         }
@@ -253,8 +261,12 @@ fn install_optimized_issued_roles_inner_v18(
         }
         let target = optimized_source_block_row_v18(output, coordinate.block, budget)?.block.id;
         accesses.push((guard.id, row.guard_edge, target));
+        // An exactly replayed ordered access remains pending for an ordered
+        // source-effect proof. It is not an ordinary read/write role.
+        if access.access.volatile { continue; }
         install_descriptor_role_v18(original, optimized, roles, input, coordinate, row.instance.index(), None,
             if row.writing { DescriptorSourceRoleV18::Write } else { DescriptorSourceRoleV18::Read }, budget)?;
+        users[index].1 = true;
     }
     let mut valid = true;
     budget.charge_work(argument_sum_v1(&[facts.len(), accesses.len()])?)?;
@@ -275,6 +287,11 @@ fn install_optimized_issued_roles_inner_v18(
     if !valid { return original.source.missing("issued output root transport or success dominance differs"); }
     for (index, fact) in facts.iter().enumerate() {
         let Some(fact) = fact else { continue; };
+        budget.charge_work(2)?;
+        // Distinguish a genuinely unused issuer from one whose only users are
+        // still pending. Mixed users expose dependencies only for a checked
+        // ordinary role, never for the pending ordered access itself.
+        if users[index].0 && !users[index].1 { continue; }
         for (ordinal, role) in [(0, DescriptorSourceRoleV18::Length), (2, DescriptorSourceRoleV18::Data),
             (3, DescriptorSourceRoleV18::Address)] {
             install_descriptor_role_v18(original, optimized, roles, fact.input[ordinal], fact.output[ordinal],
@@ -297,6 +314,8 @@ fn issued_output_headers_v18() -> Result<usize, ArgumentResourceV1> {
         h::<&IssuedRoleOutputV18>()?, h::<Option<&IssuedRoleOutputV18>>()?,
         h::<&Option<IssuedRoleOutputV18>>()?, h::<Option<&Option<IssuedRoleOutputV18>>>()?,
         h::<Vec<Option<IssuedRoleOutputV18>>>()?,
+        h::<Vec<(bool, bool)>>()?, h::<(bool, bool)>()?,
+        size_of::<Result<Vec<(bool, bool)>, ProductionSemanticKirErrorV1>>(),
         size_of::<Result<Vec<Option<IssuedRoleOutputV18>>, ProductionSemanticKirErrorV1>>(),
         h::<ProductionOptimizedSourceOperationV18>()?,
         h::<ProductionOptimizedSourceMemoryAccessV18<'_>>()?,

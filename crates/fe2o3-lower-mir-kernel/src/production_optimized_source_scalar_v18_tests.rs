@@ -1,3 +1,7 @@
+include!("production_source_entry_rhs_v18_tests.rs");
+include!("production_source_scalar_constant_fold_v18_tests.rs");
+include!("production_source_only_scalar_v18_tests.rs");
+
 #[test]
 fn actual_folded_store_uses_selected_output_value_not_first_descendant() {
     for (factory, retained_divide) in [

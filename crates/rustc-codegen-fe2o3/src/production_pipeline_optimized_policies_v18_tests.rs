@@ -94,6 +94,9 @@ struct Observation {
     required: String,
     #[serde(deserialize_with = "deserialize_unresolved_operation")]
     first_unresolved_operation: Option<UnresolvedOperation>,
+    #[serde(deserialize_with = "deserialize_unresolved_operation")]
+    private_memory_operation: Option<UnresolvedOperation>,
+    private_memory_complete: bool,
     preparation_refused: bool,
     execution_recipes: usize,
     lifecycle_operations: usize,
@@ -169,7 +172,7 @@ impl Callbacks for PolicyCallbacks {
                 transaction.inspect_optimized_source_policies_observed_v18(&mut account);
             let probe = probe.ok_or("actual native candidate was never observed")?;
             assert!(probe.operation_count >= probe.lifecycle && probe.lifecycle > 0);
-            let first_unresolved_operation = unresolved_operation(
+            let mut first_unresolved_operation = unresolved_operation(
                 probe.first_unresolved.map(|(coordinate, _)| coordinate),
                 probe.first_unresolved_kind,
                 serde_json::from_value(
@@ -178,6 +181,7 @@ impl Callbacks for PolicyCallbacks {
                 )
                 .map_err(|error| error.to_string())?,
             )?;
+            let mut private_memory_operation = None;
             use fe2o3_lower_mir_kernel::ProductionSourceNativeLifecycleErrorV18 as NativeError;
             let (required, defined_functions) = match (result, probe.first_unresolved) {
                 (
@@ -193,10 +197,19 @@ impl Callbacks for PolicyCallbacks {
                     assert_eq!((probe.native_entries, probe.consumers), (0, 0));
                     (format!("{requirement:?}"), 0)
                 }
-                (Ok(output), None) => {
+                (Ok(output), initial) if initial.is_none() || probe.private_memory => {
                     assert!(!output.0.grants_authority());
                     assert!(output.1.defined_functions > 0);
                     assert_eq!((probe.native_entries, probe.consumers), (1, 1));
+                    if probe.private_memory {
+                        assert!(matches!(initial, Some((_,
+                            fe2o3_pliron::CanonicalRankedSourceRequirementV18::Memory))));
+                        // Preserve the original syntactic memory observation.
+                        // Only the authentic completed private token and full
+                        // root consumer can turn it into a discharged role.
+                        private_memory_operation = first_unresolved_operation.take();
+                        assert!(private_memory_operation.is_some());
+                    }
                     ("lifecycle-complete".to_owned(), output.1.defined_functions)
                 }
                 (other, expected) => {
@@ -234,7 +247,8 @@ impl Callbacks for PolicyCallbacks {
                     probe.first_unresolved_allocation
                 );
                 match (result, cut_probe.first_unresolved) {
-                    (Err(ProductionPipelineError::SourceNativeLifecycle(error)), None) => {
+                    (Err(ProductionPipelineError::SourceNativeLifecycle(error)), _)
+                        if cut_probe.native_entries == 1 => {
                         let NativeError::SourceAfterNative { source, diagnostic } = error.as_ref()
                         else {
                             panic!("native history erased by outer source cleanup: {error:?}");
@@ -254,6 +268,7 @@ impl Callbacks for PolicyCallbacks {
                         assert!(diagnostic.last_invocation().is_some());
                         assert!(diagnostic.observation().work_upper_bound() > 0);
                         assert_eq!((cut_probe.native_entries, cut_probe.consumers), (1, 0));
+                        assert_eq!(cut_probe.private_memory, probe.private_memory);
                         native_resource_cuts += 1;
                     }
                     (
@@ -284,6 +299,8 @@ impl Callbacks for PolicyCallbacks {
             Ok(Observation {
                 required,
                 first_unresolved_operation,
+                private_memory_operation,
+                private_memory_complete: probe.private_memory && probe.consumers == 1,
                 preparation_refused: true,
                 execution_recipes,
                 lifecycle_operations: probe.lifecycle,
@@ -368,13 +385,15 @@ pub fn lifecycle_probe(mut ctx: KernelContext<'_>, seed: u32) {{ {body} }}
 "#
             )
         },
-        |_, _, _, observation, _| {
+        |_, _, label, observation, _| {
             assert_eq!(observation.required, "lifecycle-complete");
             assert!(observation.first_unresolved_operation.is_none());
             assert!(observation.native_completed && observation.defined_functions > 0);
             assert_eq!(observation.native_resource_cuts, 2);
             assert!(observation.preparation_refused && observation.execution_recipes > 0);
             assert!(observation.lifecycle_operations > 0);
+            assert_eq!(observation.private_memory_complete, label == "workgroup_only");
+            assert_eq!(observation.private_memory_operation.is_some(), observation.private_memory_complete);
         },
     );
 }
@@ -427,6 +446,8 @@ fn native_unresolved_operation_observation_json_is_strict_and_lossless() {
             kind: "Storage.WriteValue".to_owned(),
             allocation: None,
         }),
+        private_memory_operation: None,
+        private_memory_complete: false,
         preparation_refused: true,
         execution_recipes: 3,
         lifecycle_operations: 3,
@@ -447,12 +468,15 @@ fn native_unresolved_operation_observation_json_is_strict_and_lossless() {
         serde_json::from_value::<Observation>(encoded.clone()).unwrap(),
         observation
     );
-    let mut missing = encoded.clone();
-    missing
-        .as_object_mut()
-        .unwrap()
-        .remove("first_unresolved_operation");
-    assert!(serde_json::from_value::<Observation>(missing).is_err());
+    for field in ["first_unresolved_operation", "private_memory_operation", "private_memory_complete"] {
+        let mut missing = encoded.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<Observation>(missing).is_err());
+    }
+    let mut malformed_private = encoded.clone();
+    malformed_private["private_memory_operation"] = encoded["first_unresolved_operation"].clone();
+    malformed_private["private_memory_operation"]["operation"] = serde_json::json!(-1);
+    assert!(serde_json::from_value::<Observation>(malformed_private).is_err());
     let mut extra = encoded.clone();
     extra["first_unresolved_operation"]["unexpected"] = serde_json::json!(true);
     assert!(serde_json::from_value::<Observation>(extra).is_err());
@@ -476,6 +500,14 @@ fn native_unresolved_operation_observation_json_is_strict_and_lossless() {
         serde_json::from_value::<Observation>(complete).unwrap(),
         observation
     );
+    observation.private_memory_operation = Some(UnresolvedOperation {
+        function: 2, block: 3, operation: 5, kind: "Storage.WriteValue".to_owned(), allocation: None,
+    });
+    observation.private_memory_complete = true;
+    let private = serde_json::to_value(&observation).unwrap();
+    assert!(private["first_unresolved_operation"].is_null());
+    assert_eq!(private["private_memory_operation"]["operation"], serde_json::json!(5));
+    assert_eq!(serde_json::from_value::<Observation>(private).unwrap(), observation);
 }
 
 #[test]

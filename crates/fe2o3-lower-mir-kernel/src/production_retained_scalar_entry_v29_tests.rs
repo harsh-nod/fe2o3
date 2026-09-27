@@ -5,7 +5,7 @@ thread_local! {
     static ENTRY_OBSERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn retained_reference_owner() -> ProductionSemanticSsaOwnerV1 {
+pub(super) fn retained_reference_owner() -> ProductionSemanticSsaOwnerV1 {
     let original = super::super::fixtures::repeated_reference_owner();
     let semantic = original.source_semantic();
     let mut functions = semantic.functions().to_vec();

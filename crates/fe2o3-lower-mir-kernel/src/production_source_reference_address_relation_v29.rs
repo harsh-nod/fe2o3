@@ -1140,12 +1140,21 @@ fn source_address_original_slot_v29(
     argument_sum_v1(&[owner.slots.start, offset]).map_err(Into::into)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceDirectObjectOriginV29 {
+    instance: ProductionCallInstanceIdV1,
+    local: SemanticLocalIdV1,
+    generation: u32,
+    ty: SemanticTypeIdV1,
+}
+
 #[derive(Clone, Copy)]
 struct SourceAddressAccessSourceV29 {
     instance: ProductionCallInstanceIdV1,
     anchor: usize,
     physical: SourceAddressAccessV29,
     raw: Option<SourceReferenceRawAccessV29>,
+    direct_object: Option<SourceDirectObjectOriginV29>,
 }
 
 // A completed descriptor producer may be classified outside the private access
@@ -1206,6 +1215,10 @@ fn source_address_accesses_v29(
 ) -> Result<(Vec<SourceAddressAccessSourceV29>, PendingSourceIssuedRolesV29), ProductionSemanticKirErrorV1> {
     references.plan.check_owner(instances, budget)?;
     budget.reserve_storage(source_issued_census_query_headers_v29()?)?;
+    source_reference_emission_prepay_v29::<SourceDirectObjectOriginV29>(budget)?;
+    source_reference_emission_prepay_v29::<Option<SourceDirectObjectOriginV29>>(budget)?;
+    source_reference_emission_prepay_v29::<(ScopedObjectEndpointV29, ScopedObjectIdentityV29,
+        ProductionCallInstanceIdV1, SemanticLocalIdV1, u32, SemanticTypeIdV1)>(budget)?;
     let issued_header = std::mem::size_of::<Option<SourceIssuedAccessesV29<'_, '_, '_>>>();
     budget.reserve_storage(issued_header)?;
     let mut issued = None;
@@ -1564,6 +1577,20 @@ fn source_address_accesses_v29(
                 )
                 .map_err(source_address_point_error_v29)?
                 .ok_or_else(source_raw_physical_error_v29)?;
+            // Retain the authenticated logical endpoint, never infer its
+            // generation from a physical slot shared by several source epochs.
+            budget.charge_work(2)?;
+            let direct_object = match object {
+                Some((endpoint, _)) if raw.is_none() => match endpoint.object {
+                    ScopedObjectIdentityV29::Local { instance: source, local, generation }
+                        if source == instance => Some(SourceDirectObjectOriginV29 {
+                            instance: source, local, generation, ty: endpoint.root_type,
+                        }),
+                    ScopedObjectIdentityV29::Local { .. } => return Err(source_raw_physical_error_v29()),
+                    _ => None,
+                },
+                _ => None,
+            };
             rows.push(SourceAddressAccessSourceV29 {
                 instance,
                 anchor,
@@ -1573,6 +1600,7 @@ fn source_address_accesses_v29(
                     slot: target,
                 },
                 raw,
+                direct_object,
             });
         }
     }
