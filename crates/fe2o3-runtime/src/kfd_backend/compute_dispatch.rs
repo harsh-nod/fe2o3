@@ -582,7 +582,7 @@ impl KfdRuntimeBackendV1 {
             .is_none()
             && !self.three_binding_storage_candidates_admissible_v1(*launch)
             && (input_admission != ComputeInputAdmissionV1::ExactProducers
-                || !self.three_binding_producer_inputs_are_deferred_v1(
+                || !self.three_binding_producer_bindings_are_deferred_v1(
                     *launch,
                     dependencies,
                     ordered,
@@ -627,7 +627,7 @@ impl KfdRuntimeBackendV1 {
         Ok(())
     }
 
-    fn three_binding_producer_inputs_are_deferred_v1(
+    fn three_binding_producer_bindings_are_deferred_v1(
         &self,
         launch: BackendLaunchV1<'_>,
         dependencies: &[u64],
@@ -647,7 +647,7 @@ impl KfdRuntimeBackendV1 {
             return false;
         }
         let candidates = self.initialized_storage_candidates_v1(launch);
-        launch.bindings.iter().enumerate().all(|(index, binding)| {
+        launch.bindings.iter().all(|binding| {
             let allocation = &self.allocations[&binding.region.allocation];
             if three_binding_persistent_ready_source_v1(allocation).is_some()
                 || candidates.contains(&Some(binding.region.allocation))
@@ -679,7 +679,9 @@ impl KfdRuntimeBackendV1 {
             let KfdRuntimeSdmaStorageV1::ComputeInFlight(owner) = &allocation.sdma_storage else {
                 return false;
             };
-            if index == 2 || !(dependencies.contains(owner) || ordered == Some(*owner)
+            // The exact R/R/W shape includes a full-allocation overwrite. An output
+            // may wait for its owner too; this grants neither success nor ready backing.
+            if !(dependencies.contains(owner) || ordered == Some(*owner)
                 || quiescence.binary_search(owner).is_ok()) {
                 return false;
             }

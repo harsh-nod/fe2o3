@@ -9,6 +9,56 @@ mod peer_producers;
 mod pending_peers;
 
 #[test]
+fn producer_launch_pending_full_output_remains_reserved_before_backend_entry() {
+    for cross_stream in [false, true] {
+        let mut f = Fixture::new(4);
+        let mut producer = f
+            .launch(
+                0,
+                vec![
+                    span(f.allocations[0], RuntimeAccessV1::Read, 0, 64),
+                    span(f.allocations[1], RuntimeAccessV1::Read, 0, 64),
+                    span(f.allocations[2], RuntimeAccessV1::Write, 0, 64),
+                ],
+                &[],
+            )
+            .unwrap();
+        let event = f.context.record_event(&producer).unwrap();
+        let regions = vec![
+            span(f.allocations[3], RuntimeAccessV1::Read, 0, 64),
+            span(f.allocations[4], RuntimeAccessV1::Read, 0, 64),
+            span(f.allocations[2], RuntimeAccessV1::Write, 0, 64),
+        ];
+        let before = f.snapshot();
+        let calls = f.context.backend.producer_launch.calls.clone();
+        let events = f.context.backend.producer_launch.events.clone();
+        let output_writer = state(&f.context, f.allocations[2]).pending_writer;
+        validation(
+            f.launch(usize::from(cross_stream), regions.clone(), &[event]),
+            RuntimeValidationErrorV1::ContextReserved,
+        );
+        assert_eq!(f.snapshot(), before);
+        assert_eq!(f.context.backend.producer_launch.calls, calls);
+        assert_eq!(f.context.backend.producer_launch.events, events);
+        assert_eq!(
+            state(&f.context, f.allocations[2]).pending_writer,
+            output_writer
+        );
+        assert_eq!(f.context.producer_launches.len(), 1);
+        assert!(!f.context.is_terminal());
+        // The same exact output is usable after reconciliation, not while a
+        // predecessor owns it. Native WAW eligibility cannot bypass this journal.
+        f.complete(&mut producer);
+        let mut consumer = f
+            .launch(usize::from(cross_stream), regions, &[event])
+            .unwrap();
+        f.context.release_event(event).unwrap();
+        f.complete(&mut consumer);
+        assert!(f.context.cleanup().is_complete());
+    }
+}
+
+#[test]
 fn retained_charge_producer_aware_stable_input_rejects_region_sized_credit() {
     let mut f = Fixture::new(4);
     let (mut producers, events) = f.producers();

@@ -4,6 +4,7 @@ use super::*;
 use std::mem::ManuallyDrop;
 
 mod sdma;
+mod waw;
 
 fn dependency(
     f: &mut ScriptedActiveProducerFixtureV1,

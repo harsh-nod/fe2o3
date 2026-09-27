@@ -16892,7 +16892,7 @@ mod tests {
                 .sdma_storage = KfdRuntimeSdmaStorageV1::ComputeInFlight(fixture.producer);
             assert_eq!(fixture.backend.next_handle, next);
         }
-        fixture.launch.bindings[2].region.allocation = fixture.allocations[0];
+        fixture.launch.bindings[2].region.allocation = fixture.allocations[2];
         assert!(matches!(fixture.submit(),
             Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch));
         fixture.launch.bindings[2].region.allocation = fixture.allocations[3];
