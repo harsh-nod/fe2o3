@@ -207,6 +207,27 @@ impl<'a> AssertionResourcesV1<'a> {
     // Raw vectors/payload values retain the enclosing analyzer's ownership.
     // This helper does not transfer a reservation or lend Budget; its caller
     // must drop all such values before that enclosing owner refunds credits.
+    /// Exact preparation Vec policy through this existing retained handle.
+    /// This entry's owner/sticky-denial admission is intentionally stricter
+    /// than the original preparation wrapper's fitting-capacity early return.
+    pub(super) fn preparation_reserve_v1<T>(
+        &mut self,
+        values: &mut Vec<T>,
+        additional: usize,
+    ) -> Result<()> {
+        let result =
+            super::bf16_nominal_preparation_resources_v1::preparation_reserve_with_meter_v1(
+                self, values, additional,
+            );
+        result.map_err(|error| self.failure(error))
+    }
+    pub(super) fn preparation_push_v1<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<()> {
+        let result = super::bf16_nominal_preparation_resources_v1::preparation_push_with_meter_v1(
+            self, values, value,
+        );
+        result.map_err(|error| self.failure(error))
+    }
+
     pub(super) fn reserve_vec<T>(
         &mut self,
         values: &mut Vec<T>,
@@ -717,3 +738,24 @@ impl<'a> AssertionQueueV1<'a> {
 #[cfg(test)]
 #[path = "assertion_resources_v1_tests.rs"]
 mod tests;
+
+impl super::bf16_nominal_preparation_resources_v1::PreparationPolicyMeterV1
+    for AssertionResourcesV1<'_>
+{
+    fn preparation_admit_v1(&self) -> Result<()> {
+        self.available()
+    }
+    fn preparation_is_metered_v1(&self) -> bool {
+        self.is_strict()
+    }
+    fn preparation_work_v1(&mut self, amount: usize) -> Result<()> {
+        self.extra_work(amount)
+    }
+    fn preparation_storage_v1(&mut self, amount: usize) -> Result<()> {
+        self.reserve_storage(amount)
+    }
+}
+
+#[cfg(test)]
+#[path = "preparation_reserve_policy_v1_tests.rs"]
+mod preparation_policy_tests;

@@ -67,6 +67,8 @@ mod root_bounds_extent_preparation_v1;
 #[allow(dead_code)]
 mod root_bounds_source_scan_v1;
 #[allow(dead_code)]
+mod root_direct_comparison_preparation_v1;
+#[allow(dead_code)]
 mod root_local_contracts_v1;
 #[allow(dead_code)]
 mod root_uniform_operand_preparation_v1;
@@ -24390,6 +24392,7 @@ mod tests {
     include!("production_ranked_projection_v1/root_bounds_source_scan_v1_tests.rs");
     include!("production_ranked_projection_v1/root_bounds_extent_preparation_v1_tests.rs");
     include!("production_ranked_projection_v1/root_uniform_operand_preparation_v1_tests.rs");
+    include!("production_ranked_projection_v1/root_direct_comparison_preparation_v1_tests.rs");
     include!("production_ranked_projection_v1/aggregate_value_projection_v2_tests.rs");
     mod gfx942_inline_value_projection_v30_tests {
         use super::*;

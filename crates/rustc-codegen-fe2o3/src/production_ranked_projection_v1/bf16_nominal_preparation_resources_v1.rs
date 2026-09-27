@@ -21,6 +21,68 @@ pub(super) struct PreparationResourcesV1<'b, 'w> {
 pub(super) fn resource(error: Resource) -> Error {
     Error::CanonicalAssertions(CanonicalAssertionErrorV1::Resource(error))
 }
+// Source-level policy sharing preserves the original preparation call graph.
+// These private item macros introduce no closure, thunk, callback or runtime
+// helper on the existing PreparationResources arm. Fixed invocations below
+// are source-audited against the complete original methods.
+macro_rules! preparation_reserve_policy_item_v1 {
+    (
+        ($($declaration:tt)*)
+        ($meter:ident, $values:ident, $additional:ident, $element:ident)
+        ($is_metered:ident, $work:ident, $storage:ident)
+        ($($admission:tt)*)
+    ) => {
+        $($declaration)* {
+            $($admission)*
+        let requested = $values
+            .len()
+            .checked_add($additional)
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
+        if requested <= $values.capacity() {
+            return Ok(());
+        }
+        if $meter.$is_metered() {
+            // Full next capacity is admitted while all prior growth remains
+            // owned. Relocation and initialization never use refunded scratch.
+            $meter.$work($values.len())?;
+            $meter.$storage(
+                requested
+                    .checked_mul(size_of::<$element>())
+                    .ok_or_else(|| resource(Resource::Arithmetic))?,
+            )?;
+            $values
+                .try_reserve_exact($additional)
+                .map_err(|_| resource(Resource::Allocation))?;
+            if size_of::<$element>() != 0 && $values.capacity() != requested {
+                return Err(resource(Resource::Allocation));
+            }
+        } else {
+            // Legacy loops retain amortized growth, not cumulative exact growth.
+            $values
+                .try_reserve($additional)
+                .map_err(|_| resource(Resource::Allocation))?;
+        }
+        Ok(())
+        }
+    };
+}
+macro_rules! preparation_push_policy_item_v1 {
+    (
+        ($($declaration:tt)*)
+        ($meter:ident, $values:ident, $value:ident, $work:ident)
+        ($($reserve:tt)*)
+        ($($admission:tt)*)
+    ) => {
+        $($declaration)* {
+            $($admission)*
+        $meter.$work(1)?;
+        $($reserve)*?;
+        $values.push($value);
+        Ok(())
+        }
+    };
+}
+
 impl<'b, 'w> PreparationResourcesV1<'b, 'w> {
     pub(super) fn unmetered() -> Self {
         Self {
@@ -80,46 +142,21 @@ impl<'b, 'w> PreparationResourcesV1<'b, 'w> {
         }
         Ok(())
     }
-    pub(super) fn reserve<T>(
+    preparation_reserve_policy_item_v1! {
+        (pub(super) fn reserve<T>(
         &mut self,
         values: &mut Vec<T>,
         additional: usize,
-    ) -> Result<(), Error> {
-        let requested = values
-            .len()
-            .checked_add(additional)
-            .ok_or_else(|| resource(Resource::Arithmetic))?;
-        if requested <= values.capacity() {
-            return Ok(());
-        }
-        if self.is_metered() {
-            // Full next capacity is admitted while all prior growth remains
-            // owned. Relocation and initialization never use refunded scratch.
-            self.work(values.len())?;
-            self.reserve_storage(
-                requested
-                    .checked_mul(size_of::<T>())
-                    .ok_or_else(|| resource(Resource::Arithmetic))?,
-            )?;
-            values
-                .try_reserve_exact(additional)
-                .map_err(|_| resource(Resource::Allocation))?;
-            if size_of::<T>() != 0 && values.capacity() != requested {
-                return Err(resource(Resource::Allocation));
-            }
-        } else {
-            // Legacy loops retain amortized growth, not cumulative exact growth.
-            values
-                .try_reserve(additional)
-                .map_err(|_| resource(Resource::Allocation))?;
-        }
-        Ok(())
+    ) -> Result<(), Error>)
+        (self, values, additional, T)
+        (is_metered, work, reserve_storage)
+        ()
     }
-    pub(super) fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), Error> {
-        self.work(1)?;
-        self.reserve(values, 1)?;
-        values.push(value);
-        Ok(())
+    preparation_push_policy_item_v1! {
+        (pub(super) fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), Error>)
+        (self, values, value, work)
+        (self.reserve(values, 1))
+        ()
     }
     pub(super) fn filled<T: Clone>(&mut self, count: usize, value: T) -> Result<Vec<T>, Error> {
         self.work(count)?;
@@ -163,4 +200,51 @@ impl<'b, 'w> PreparationResourcesV1<'b, 'w> {
         values.dedup();
         Ok(())
     }
+}
+
+// Only these two in-crate resource representations can implement the policy.
+// This seal grants no source, owner-counter or Budget access.
+mod preparation_policy_sealed {
+    pub trait Sealed {}
+    impl Sealed for super::PreparationResourcesV1<'_, '_> {}
+    impl Sealed for super::super::assertion_resources_v1::AssertionResourcesV1<'_> {}
+}
+pub(super) trait PreparationPolicyMeterV1: preparation_policy_sealed::Sealed {
+    fn preparation_admit_v1(&self) -> Result<(), Error>;
+    fn preparation_is_metered_v1(&self) -> bool;
+    fn preparation_work_v1(&mut self, amount: usize) -> Result<(), Error>;
+    fn preparation_storage_v1(&mut self, amount: usize) -> Result<(), Error>;
+}
+impl PreparationPolicyMeterV1 for PreparationResourcesV1<'_, '_> {
+    fn preparation_admit_v1(&self) -> Result<(), Error> {
+        Ok(())
+    }
+    fn preparation_is_metered_v1(&self) -> bool {
+        self.is_metered()
+    }
+    fn preparation_work_v1(&mut self, amount: usize) -> Result<(), Error> {
+        self.work(amount)
+    }
+    fn preparation_storage_v1(&mut self, amount: usize) -> Result<(), Error> {
+        self.reserve_storage(amount)
+    }
+}
+
+// Exact extracted preparation policy; admission belongs to each existing entry.
+preparation_reserve_policy_item_v1! {
+    (pub(super) fn preparation_reserve_with_meter_v1<T, M: PreparationPolicyMeterV1>(
+    meter: &mut M, values: &mut Vec<T>, additional: usize,
+) -> Result<(), Error>)
+    (meter, values, additional, T)
+    (preparation_is_metered_v1, preparation_work_v1, preparation_storage_v1)
+    (meter.preparation_admit_v1()?;)
+}
+
+preparation_push_policy_item_v1! {
+    (pub(super) fn preparation_push_with_meter_v1<T, M: PreparationPolicyMeterV1>(
+    meter: &mut M, values: &mut Vec<T>, value: T,
+) -> Result<(), Error>)
+    (meter, values, value, preparation_work_v1)
+    (preparation_reserve_with_meter_v1(meter, values, 1))
+    (meter.preparation_admit_v1()?;)
 }

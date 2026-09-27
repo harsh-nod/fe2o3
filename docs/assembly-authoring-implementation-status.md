@@ -5,6 +5,19 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Preparation policy and direct comparisons — 2026-09-26
+
+The [policy/comparison checkpoint](bf16-policy-direct-comparison-qualification-20260926.md)
+shares allocation policy without adding ordinary runtime wrapper calls, and
+retains unique, duplicate and conflicting direct predicates in source order.
+All 38 new controls passed (13 policy + 25 comparison); full regression passed
+331 model and 2,916 backend tests (189 ignored), build and 83 JavaScript controls.
+Both ordinary ladders passed, with all 38 lossless bodies and 52 artifacts
+unchanged. These private components do not establish authentic all-producer
+custody or complete the source factory. Lazy joint ownership, remaining writers,
+mandatory verification and production routing remain open.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Uniform operand preparation — 2026-09-26
 
 The [operand checkpoint](bf16-uniform-operand-qualification-20260926.md)
