@@ -9,6 +9,8 @@ use writer_tests::assert_diagnostic;
 type Context = RuntimeContextV1<AllocationOnlyBackend>;
 type Failure = MockMemoryFailure;
 
+mod groups;
+
 struct Fixture {
     context: Context,
     ids: [RuntimeAllocationIdV1; 3],

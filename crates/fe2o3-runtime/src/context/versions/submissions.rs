@@ -22,6 +22,7 @@ pub(super) struct RetainedSubmissionWriterV1 {
     pub(super) members: Vec<ContextAllocationWriteV1>,
     // Ordinary quiescence survives release of public submission metadata.
     pub(super) disposal_quiescent: bool,
+    pub(super) disposal_group: Option<ContextWriterReferenceV1>,
     pub(super) disposal_started: bool,
     pub(super) disposed_count: usize,
     pub(super) journal_disposed: bool,
@@ -77,7 +78,9 @@ impl ContextVersionsV1 {
             allocation.id,
             allocation.record,
             root.members[index],
-            allocation.disposed,
+            root.disposal_group.map_or(allocation.disposed, |key| {
+                self.group_member_disposed_v1(key, allocation.id)
+            }),
         )
     }
 
@@ -87,7 +90,18 @@ impl ContextVersionsV1 {
     ) -> Option<(usize, bool)> {
         self.submission_writers
             .get(&id)
-            .map(|root| (root.disposed_count, root.journal_disposed))
+            .map(|root| match root.disposal_group {
+                None => (root.disposed_count, root.journal_disposed),
+                Some(key) => (
+                    root.allocations
+                        .iter()
+                        .filter(|entry| self.group_member_disposed_v1(key, entry.id))
+                        .count(),
+                    self.disposal_groups
+                        [&RuntimeSubmissionIdV1::new(key.key.context_generation, key.key.local)]
+                        .journal_disposed,
+                ),
+            })
     }
 
     pub(in crate::context) fn clear_disposal_phase_for_test_v1(
@@ -417,6 +431,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     allocations: prepared.allocations,
                     members: prepared.members,
                     disposal_quiescent: false,
+                    disposal_group: None,
                     disposal_started: false,
                     disposed_count: 0,
                     journal_disposed: false,

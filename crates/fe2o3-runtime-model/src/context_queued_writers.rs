@@ -9,7 +9,8 @@ use alloc::vec::Vec;
 mod forward;
 mod group_disposal;
 pub use group_disposal::{
-    ContextQueuedWriterGroupDisposalErrorV1, ContextQueuedWriterGroupDisposalEvidenceV1,
+    ContextQueuedWriterFlatGroupDisposalEvidenceV1, ContextQueuedWriterGroupDisposalErrorV1,
+    ContextQueuedWriterGroupDisposalEvidenceV1, ContextQueuedWriterGroupHeaderV1,
 };
 #[cfg(test)]
 mod tests;

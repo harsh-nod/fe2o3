@@ -13,6 +13,7 @@ include!("versions/settlement_bodies.rs");
 
 #[cfg(test)]
 pub(in crate::context) mod completion_faults;
+mod disposal_groups;
 mod generated;
 mod producer_readers;
 mod readers;
@@ -77,6 +78,8 @@ pub(super) struct ContextVersionsV1 {
     submission_writers: HashMap<RuntimeSubmissionIdV1, submissions::RetainedSubmissionWriterV1>,
     submission_readers: HashMap<RuntimeSubmissionIdV1, readers::RetainedSubmissionReadersV1>,
     producer_readers: HashMap<RuntimeSubmissionIdV1, producer_readers::RetainedProducerReadV1>,
+    disposal_groups: HashMap<RuntimeSubmissionIdV1, disposal_groups::RetainedDisposalGroupV1>,
+    disposal_allocations: HashMap<RuntimeAllocationIdV1, disposal_groups::GroupAllocationIndexV1>,
     #[cfg(test)]
     mixed_input_fault: Option<producer_readers::MixedInputFaultV1>,
     #[cfg(test)]
@@ -97,8 +100,8 @@ pub(super) struct AllocationDisposalV1 {
 enum AllocationDisposalKindV1 {
     Unwritten,
     Synchronous(fe2o3_runtime_model::ContextWriterReferenceV1),
-    Submission {
-        id: RuntimeSubmissionIdV1,
+    Group {
+        key: fe2o3_runtime_model::ContextWriterReferenceV1,
         index: usize,
     },
 }
@@ -165,6 +168,8 @@ impl ContextVersionsV1 {
             submission_writers,
             submission_readers,
             producer_readers,
+            disposal_groups: HashMap::new(),
+            disposal_allocations: HashMap::new(),
             #[cfg(test)]
             mixed_input_fault: None,
             #[cfg(test)]
@@ -422,8 +427,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 panic!("allocation disposal plan identity invariant");
             }
             let plan = match plan {
-                Some(plan) if matches!(plan.kind, AllocationDisposalKindV1::Submission { .. }) => {
-                    let result = context.finish_submission_allocation_disposal_v1(plan);
+                Some(plan) if matches!(plan.kind, AllocationDisposalKindV1::Group { .. }) => {
+                    let result = context.finish_group_allocation_disposal_v1(plan);
                     context
                         .journal_result_v1(result)
                         .expect("submission allocation disposal invariant");

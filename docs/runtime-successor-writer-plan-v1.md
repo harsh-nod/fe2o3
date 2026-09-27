@@ -80,8 +80,9 @@ In particular:
 - Context must authenticate each exact latest writer and explicit success event,
   retain the queued roster, and audit all availability probes before enabling it.
 - Queued Unknown is fail-stop and cannot be refunded by a later NoEffect value.
-  Closed-group model disposal is implemented. Context uses it for existing
-  Ordinary single-writer rosters; shared-group native receipts remain open.
+  Closed-group model disposal and Context shared receipt bookkeeping are
+  implemented. Context tests cover disjoint multi-root groups; overlapping
+  queued Context groups still require admission/integration qualification.
   Disposal destroys allocations rather than exposing uncertain content.
 - Failed/quiescent backend results alone are not NoEffect authority. Descendant
   failure after cancellation cannot be used to silently release queued custody.
@@ -103,8 +104,8 @@ After complete backend release, retire queued-only allocations, dispose inner
 Active-Unknown rosters and abort queued Reserved identities as destruction
 bookkeeping, not as NoEffect or success. Clear the outer group without predecessor
 success propagation. Partial model commitment must quarantine, never masquerade
-as rollback. Context's current per-writer disposal receipts assume disjoint
-destinations and cannot safely implement this contract unchanged.
+as rollback. Context now stores unique receipts in a group rather than mirroring
+each native disposal into every co-owner's mutable counters.
 
 Tests must cover branching/multi-allocation closure, unrelated writers, pending
 co-owner refusal before backend effects, exact identity/reader rejection, partial
@@ -126,33 +127,40 @@ ordinary hot-path admission/settlement still avoid global scans.
 Context now retains an Ordinary writer's conclusive quiescence marker separately
 from removable submission metadata. Successful Unknown settlement can set it;
 quarantine cannot. Both initial and final Ordinary disposal checks require it,
-including absent-submission paths. Ordinary disposal now preflights and commits a
-singleton writer group through the new model engine. Original complete-roster
-native receipts and credits remain until that group commits; preflight failure,
-terminal model error or unwind after native release quarantines Context. Tests
-cover partial release order, metadata removal, credit failure, outside input
-custody and repeated full member-capacity reuse.
+including absent-submission paths. Ordinary disposal discovers the closed writer
+component, authenticates its complete roots and preflights the model before
+freezing any receipt index. Pending co-owners refuse recoverably; invalid custody
+quarantines. Original native receipts and all unique credits remain until the
+whole group commits. Terminal model error or unwind after native release
+quarantines Context. Tests cover partial release order, metadata removal, credit
+failure, outside input custody and repeated full member-capacity reuse.
 
 Generated receipt-based validation/commit and synchronous disposal remain on the
-single-writer path, now through the wrapper. Context still lacks multi-root
-discovery, shared unique-allocation receipts and group credit accounting. Those
-must land before queued admission. Full shared-body proofs remain open.
+single-writer path, now through the wrapper. Full shared-body proofs remain open.
 
-The next adapter step needs an exact-writer-keyed group table and an
-allocation-to-group/ordinal index. Freeze canonical original writer rosters and a
-deduplicated allocation union, including per-allocation receipts, before the first
-backend release. Resume from that frozen state rather than rediscovering from
-removed public handles. Retain submission roots and all unique credits until
-complete native disposal and model commitment; record committed phase and refund
-progress before removing group roots/indexes. Preserve newer allocations that
-reuse a disposed numeric backend handle.
+Context now retains an exact-writer-bound group table and an allocation-to-group
+ordinal index. It freezes canonical writer rosters and a deduplicated allocation
+union before the first backend release. Retries use that frozen state, not removed
+public handles. Frozen retained roots and quiescence markers are immutable;
+public submission metadata may be released independently. Each retry checks its
+exact receipt/index and leader binding; finalization revalidates the complete
+group without rescanning it for every allocation release. Native success records
+one unique receipt and removes only that original public/backend handle. Complete
+model commitment and credit-refund progress are retained before roots/indexes are
+removed. New allocations reusing old numeric backend handles remain intact.
 
-Final model evidence must borrow the retained storage without allocating after
-native effects. Use an indexed or flat-roster model view, not a self-referential
-vector of borrowed per-writer slices. Before public queued admission, genuine
-disjoint Unknown submissions can exercise multi-root receipt/retry/finalization
-through a private multi-seed preparation helper: the model permits disconnected
-closed unions. Such tests do not qualify overlapping Context writer queues.
+Flat model evidence now borrows packed writer headers/members and the unique
+union without allocating after native effects. Nested and flat APIs share the
+same validator/committer; tests compare rejection, success and every injected
+error/panic prefix. Context tests use genuine disjoint Unknown submissions and a
+private multi-seed preparation helper. They cover all 24 four-allocation release
+orders with and without public metadata, retries, pending refusal, index
+corruption, reused backend handles, and every unique credit-refund prefix. A
+missing-model-root fault checks that retained Context custody remains visible.
+These tests do not qualify overlapping Context writer queues. The next steps
+are queue-member capacity policy, availability guards, exact event authentication
+and retained queued-writer admission/reconciliation, then shared-body proofs and
+native qualification.
 
 ## Entry-Point Audit
 

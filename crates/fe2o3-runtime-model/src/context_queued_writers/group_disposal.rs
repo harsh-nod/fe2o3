@@ -12,6 +12,106 @@ pub struct ContextQueuedWriterGroupDisposalEvidenceV1<'a> {
     pub allocations: &'a [ContextAllocationWriteV1],
 }
 
+/// One exact writer segment in a packed flat group roster. Segments cover the
+/// member slice in order, without gaps or overlap. Empty segments are legal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContextQueuedWriterGroupHeaderV1 {
+    pub writer: ContextWriterReferenceV1,
+    pub member_start: usize,
+    pub member_count: usize,
+}
+
+/// Flat equivalent of the nested inert disposal premise. Members concatenate
+/// complete writer rosters and may repeat destinations across writers; only
+/// allocations is the unique union. Adapters can retain the backing vectors
+/// before native effects and borrow this view without allocating at commit.
+#[derive(Debug)]
+pub struct ContextQueuedWriterFlatGroupDisposalEvidenceV1<'a> {
+    pub writers: &'a [ContextQueuedWriterGroupHeaderV1],
+    pub members: &'a [ContextAllocationWriteV1],
+    pub allocations: &'a [ContextAllocationWriteV1],
+}
+
+#[derive(Clone, Copy)]
+enum GroupView<'a> {
+    Nested(&'a [ContextWriterDisposalEvidenceV1<'a>]),
+    Flat(
+        &'a [ContextQueuedWriterGroupHeaderV1],
+        &'a [ContextAllocationWriteV1],
+    ),
+}
+
+impl<'a> GroupView<'a> {
+    fn len(self) -> usize {
+        match self {
+            Self::Nested(writers) => writers.len(),
+            Self::Flat(writers, _) => writers.len(),
+        }
+    }
+
+    fn writer(self, index: usize) -> ContextWriterReferenceV1 {
+        match self {
+            Self::Nested(writers) => writers[index].writer,
+            Self::Flat(writers, _) => writers[index].writer,
+        }
+    }
+
+    fn entry(self, index: usize) -> Result<ContextWriterDisposalEvidenceV1<'a>, Error> {
+        let allocations = match self {
+            Self::Nested(writers) => writers[index].allocations,
+            Self::Flat(writers, members) => {
+                let header = writers[index];
+                let end = header
+                    .member_start
+                    .checked_add(header.member_count)
+                    .ok_or(Error::SettlementEvidenceMismatch)?;
+                members
+                    .get(header.member_start..end)
+                    .ok_or(Error::SettlementEvidenceMismatch)?
+            }
+        };
+        Ok(ContextWriterDisposalEvidenceV1 {
+            writer: self.writer(index),
+            allocations,
+        })
+    }
+
+    fn validate_layout(self, capacity: usize) -> Result<(), Error> {
+        if let Self::Flat(writers, members) = self {
+            if members.len() > capacity {
+                return Err(Error::RosterCapacity);
+            }
+            let mut end = 0;
+            for header in writers {
+                if header.member_start != end {
+                    return Err(Error::SettlementEvidenceMismatch);
+                }
+                end = end
+                    .checked_add(header.member_count)
+                    .ok_or(Error::SettlementEvidenceMismatch)?;
+                if end > members.len() {
+                    return Err(Error::SettlementEvidenceMismatch);
+                }
+            }
+            if end != members.len() {
+                return Err(Error::SettlementEvidenceMismatch);
+            }
+        }
+        Ok(())
+    }
+
+    fn find(self, local: u64) -> Option<usize> {
+        match self {
+            Self::Nested(writers) => writers
+                .binary_search_by_key(&local, |entry| entry.writer.key.local)
+                .ok(),
+            Self::Flat(writers, _) => writers
+                .binary_search_by_key(&local, |entry| entry.writer.key.local)
+                .ok(),
+        }
+    }
+}
+
 /// Rejected means no semantic mutation. Terminal means the owner must never be
 /// reused: a prefix may have committed. Unwind also leaves that terminal flag set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,16 +183,36 @@ impl ContextQueuedWriterJournalV1 {
         writers: &[ContextWriterDisposalEvidenceV1<'_>],
         allocations: &[ContextAllocationWriteV1],
     ) -> Result<(), Error> {
+        self.validate_group(GroupView::Nested(writers), allocations)
+    }
+
+    pub fn validate_flat_unknown_group_disposal(
+        &self,
+        evidence: &ContextQueuedWriterFlatGroupDisposalEvidenceV1<'_>,
+    ) -> Result<(), Error> {
+        self.validate_group(
+            GroupView::Flat(evidence.writers, evidence.members),
+            evidence.allocations,
+        )
+    }
+
+    fn validate_group(
+        &self,
+        writers: GroupView<'_>,
+        allocations: &[ContextAllocationWriteV1],
+    ) -> Result<(), Error> {
         self.ensure_usable()?;
-        if writers.is_empty()
+        if writers.len() == 0
             || writers.len() > self.writer_capacity()
             || allocations.len() > self.allocation_capacity()
         {
             return Err(Error::RosterCapacity);
         }
+        writers.validate_layout(self.member_capacity())?;
         let mut previous_writer = None;
         let mut total = 0usize;
-        for entry in writers {
+        for index in 0..writers.len() {
+            let entry = writers.entry(index)?;
             if previous_writer.is_some_and(|local| local >= entry.writer.key.local) {
                 return Err(Error::NonCanonicalRoster);
             }
@@ -136,8 +256,8 @@ impl ContextQueuedWriterJournalV1 {
         }
         let selected = |key: ContextWriterKeyV1| {
             writers
-                .binary_search_by_key(&key.local, |entry| entry.writer.key.local)
-                .is_ok_and(|index| writers[index].writer.key == key)
+                .find(key.local)
+                .is_some_and(|index| writers.writer(index).key == key)
         };
         // A selected submission must release inputs outside the destination union
         // too. Destination reader counts alone cannot establish that condition.
@@ -159,7 +279,8 @@ impl ContextQueuedWriterJournalV1 {
             }
             previous_allocation = Some(write.allocation.key);
         }
-        for entry in writers {
+        for index in 0..writers.len() {
+            let entry = writers.entry(index)?;
             let root = self.root(entry.writer)?;
             let mut next = root.head;
             for write in entry.allocations {
@@ -196,9 +317,9 @@ impl ContextQueuedWriterJournalV1 {
                     return Err(Error::InvalidState);
                 }
                 let selected = writers
-                    .binary_search_by_key(&member.writer.key.local, |entry| entry.writer.key.local)
-                    .map_err(|_| Error::SettlementEvidenceMismatch)?;
-                if writers[selected].writer != member.writer {
+                    .find(member.writer.key.local)
+                    .ok_or(Error::SettlementEvidenceMismatch)?;
+                if writers.writer(selected) != member.writer {
                     return Err(Error::InvalidReference);
                 }
                 match self.root(member.writer)?.phase {
@@ -236,14 +357,34 @@ impl ContextQueuedWriterJournalV1 {
         &mut self,
         evidence: &ContextQueuedWriterGroupDisposalEvidenceV1<'_>,
     ) -> Result<(), ContextQueuedWriterGroupDisposalErrorV1> {
+        self.dispose_group(GroupView::Nested(evidence.writers), evidence.allocations)
+    }
+
+    /// Allocation-free flat entry point with the same preflight and terminal
+    /// committed-prefix semantics as `dispose_unknown_group`.
+    pub fn dispose_flat_unknown_group(
+        &mut self,
+        evidence: &ContextQueuedWriterFlatGroupDisposalEvidenceV1<'_>,
+    ) -> Result<(), ContextQueuedWriterGroupDisposalErrorV1> {
+        self.dispose_group(
+            GroupView::Flat(evidence.writers, evidence.members),
+            evidence.allocations,
+        )
+    }
+
+    fn dispose_group(
+        &mut self,
+        writers: GroupView<'_>,
+        allocations: &[ContextAllocationWriteV1],
+    ) -> Result<(), ContextQueuedWriterGroupDisposalErrorV1> {
         use ContextQueuedWriterGroupDisposalErrorV1 as Failure;
         if self.disposal_terminal {
             return Err(Failure::Terminal(Error::InvalidState));
         }
-        self.validate_unknown_group_disposal(evidence.writers, evidence.allocations)
+        self.validate_group(writers, allocations)
             .map_err(Failure::Rejected)?;
         self.disposal_terminal = true;
-        self.commit_unknown_group(evidence)
+        self.commit_unknown_group(writers, allocations)
             .map_err(Failure::Terminal)?;
         self.disposal_terminal = false;
         Ok(())
@@ -251,11 +392,12 @@ impl ContextQueuedWriterJournalV1 {
 
     fn commit_unknown_group(
         &mut self,
-        evidence: &ContextQueuedWriterGroupDisposalEvidenceV1<'_>,
+        writers: GroupView<'_>,
+        allocations: &[ContextAllocationWriteV1],
     ) -> Result<(), Error> {
         // Retire queued-only destinations before active-root disposal changes any
         // allocation lookup. Outer custody is deliberately retained until the end.
-        for write in evidence.allocations {
+        for write in allocations {
             if self
                 .inner
                 .lookup_allocation(write.allocation)?
@@ -267,12 +409,13 @@ impl ContextQueuedWriterJournalV1 {
                 self.inner.retire_allocations(&[write.allocation])?;
             }
         }
-        for entry in evidence.writers {
+        for index in 0..writers.len() {
+            let entry = writers.entry(index)?;
             let root = self.roots[entry.writer.slot].ok_or(Error::InvalidState)?;
             #[cfg(test)]
             self.inject_disposal_fault()?;
             match root.phase {
-                Phase::Active => self.inner.dispose_unknown(entry.writer, entry)?,
+                Phase::Active => self.inner.dispose_unknown(entry.writer, &entry)?,
                 // This burns a Reserved identity as destruction bookkeeping, not
                 // as proof that an accepted operation had no effects.
                 Phase::Unknown => self.inner.abort_reserved(entry.writer)?,
@@ -281,7 +424,8 @@ impl ContextQueuedWriterJournalV1 {
         }
         #[cfg(test)]
         self.inject_disposal_fault()?;
-        for entry in evidence.writers {
+        for index in 0..writers.len() {
+            let entry = writers.entry(index)?;
             let root = self.roots[entry.writer.slot].ok_or(Error::InvalidState)?;
             let mut next = root.head;
             for _ in 0..root.count {
@@ -292,7 +436,7 @@ impl ContextQueuedWriterJournalV1 {
             }
             self.roots[entry.writer.slot] = None;
         }
-        for write in evidence.allocations {
+        for write in allocations {
             let slot = write.allocation.slot;
             self.heads[slot] = None;
             self.tails[slot] = None;

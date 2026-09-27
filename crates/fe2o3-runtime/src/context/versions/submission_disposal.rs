@@ -1,11 +1,7 @@
-//! Per-allocation disposal receipts compose only at the complete Unknown roster.
+//! Shared submission identity checks and Generated batch disposal.
 
 use super::*;
-use fe2o3_runtime_model::{
-    ContextAllocationWriteV1, ContextQueuedWriterGroupDisposalErrorV1,
-    ContextQueuedWriterGroupDisposalEvidenceV1, ContextWriterDisposalEvidenceV1,
-    ContextWriterReferenceV1, ContextWriterStateV1,
-};
+use fe2o3_runtime_model::{ContextWriterDisposalEvidenceV1, ContextWriterReferenceV1};
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     pub(super) fn validate_disposal_submission_v1(
@@ -35,142 +31,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(ContextVersionJournalErrorV1::InvalidReference);
         }
         Ok(())
-    }
-
-    pub(super) fn prepare_submission_allocation_disposal_v1(
-        &mut self,
-        allocation: RuntimeAllocationIdV1,
-        record: AllocationRecordV1,
-        member: ContextAllocationWriteV1,
-        writer: ContextWriterReferenceV1,
-    ) -> Result<AllocationDisposalV1, ContextVersionJournalErrorV1> {
-        use ContextVersionJournalErrorV1 as E;
-        let id = RuntimeSubmissionIdV1::new(writer.key.context_generation, writer.key.local);
-        self.validate_disposal_submission_v1(id, writer)?;
-        let versions = self.versions.as_mut().ok_or(E::InvalidState)?;
-        let root = versions
-            .submission_writers
-            .get(&id)
-            .ok_or(E::InvalidReference)?;
-        if root.writer != writer
-            || root.domain != SubmissionWriterDomainV1::Ordinary
-            || versions.submission_readers.contains_key(&id)
-            || versions.producer_readers.contains_key(&id)
-            || root.journal_disposed
-            || root.allocations.len() != root.members.len()
-            || root.disposed_count >= root.allocations.len()
-            || versions.retained_writer(writer)?
-                != (ContextWriterStateV1::Unknown {
-                    member_count: root.allocations.len(),
-                })
-        {
-            return Err(E::InvalidState);
-        }
-        let index = root
-            .allocations
-            .binary_search_by_key(&allocation, |entry| entry.id)
-            .map_err(|_| E::InvalidAllocationReference)?;
-        let entry = &root.allocations[index];
-        if entry.disposed || entry.record != record || root.members[index] != member {
-            return Err(E::InvalidAllocationReference);
-        }
-        if !self
-            .backend_allocations
-            .contains(&record.backend_allocation)
-            || !self.allocation_admission.has_expected_credit(
-                allocation,
-                record.device,
-                record.byte_len,
-            )
-        {
-            return Err(E::InvalidAllocationReference);
-        }
-        if !root.disposal_started {
-            // Freeze the complete original roster before the first owner
-            // release. Later per-ID releases cannot mutate its identities.
-            if root.disposed_count != 0 {
-                return Err(E::InvalidState);
-            }
-            versions.journal.validate_unknown_group_disposal(
-                &[ContextWriterDisposalEvidenceV1 {
-                    writer,
-                    allocations: &root.members,
-                }],
-                &root.members,
-            )?;
-            for (entry, member) in root.allocations.iter().zip(&root.members) {
-                if entry.disposed
-                    || self.allocations.get(&entry.id) != Some(&entry.record)
-                    || !self
-                        .backend_allocations
-                        .contains(&entry.record.backend_allocation)
-                    || versions.whole_allocation(entry.id, &entry.record)? != *member
-                    || !self.allocation_admission.has_expected_credit(
-                        entry.id,
-                        entry.record.device,
-                        entry.record.byte_len,
-                    )
-                {
-                    return Err(E::InvalidAllocationReference);
-                }
-            }
-            versions
-                .submission_writers
-                .get_mut(&id)
-                .expect("validated root")
-                .disposal_started = true;
-        }
-        Ok(AllocationDisposalV1 {
-            id: allocation,
-            record,
-            member,
-            kind: AllocationDisposalKindV1::Submission { id, index },
-        })
-    }
-
-    pub(super) fn finish_submission_allocation_disposal_v1(
-        &mut self,
-        plan: AllocationDisposalV1,
-    ) -> Result<(), ContextVersionJournalErrorV1> {
-        use ContextVersionJournalErrorV1 as E;
-        let AllocationDisposalKindV1::Submission { id, index } = plan.kind else {
-            return Err(E::InvalidState);
-        };
-        let versions = self.versions.as_mut().ok_or(E::InvalidState)?;
-        let root = versions
-            .submission_writers
-            .get_mut(&id)
-            .ok_or(E::InvalidReference)?;
-        let entry = root.allocations.get_mut(index).ok_or(E::InvalidState)?;
-        if !root.disposal_started
-            || root.journal_disposed
-            || entry.disposed
-            || entry.id != plan.id
-            || entry.record != plan.record
-            || root.members.get(index) != Some(&plan.member)
-            || root.disposed_count >= root.members.len()
-            || versions.phases.get(plan.member.allocation.slot)
-                != Some(&Some(AllocationPhaseV1::Live))
-        {
-            return Err(E::InvalidState);
-        }
-
-        // Record native success before any fallible whole-writer settlement.
-        // Removing this exact handle here prevents both use and double release.
-        entry.disposed = true;
-        root.disposed_count += 1;
-        versions.phases[plan.member.allocation.slot] = Some(AllocationPhaseV1::Disposed);
-        let removed = self.allocations.remove(&plan.id);
-        let indexed = self
-            .backend_allocations
-            .remove(&plan.record.backend_allocation);
-        if removed != Some(plan.record) || !indexed {
-            return Err(E::InvalidAllocationReference);
-        }
-        if root.disposed_count != root.members.len() {
-            return Ok(());
-        }
-        self.commit_submission_writer_disposal_v1(id)
     }
 
     pub(super) fn commit_submission_writer_disposal_v1(
@@ -216,28 +76,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             writer,
             allocations: &root.members,
         };
-        match root.domain {
-            SubmissionWriterDomainV1::Ordinary => {
-                // Current admission permits only disjoint active writer roots.
-                // Keep original receipts and credits until this group commits.
-                versions
-                    .journal
-                    .dispose_unknown_group(&ContextQueuedWriterGroupDisposalEvidenceV1 {
-                        writers: &[evidence],
-                        allocations: &root.members,
-                    })
-                    .map_err(|failure| match failure {
-                        // Both are fatal here: every native allocation was disposed.
-                        // The Context caller quarantines; the model also latches a
-                        // terminal committed prefix when applicable.
-                        ContextQueuedWriterGroupDisposalErrorV1::Rejected(error)
-                        | ContextQueuedWriterGroupDisposalErrorV1::Terminal(error) => error,
-                    })?;
-            }
-            SubmissionWriterDomainV1::Generated { .. } => {
-                versions.journal.dispose_unknown(writer, &evidence)?;
-            }
+        if !matches!(root.domain, SubmissionWriterDomainV1::Generated { .. })
+            || root.disposal_group.is_some()
+        {
+            return Err(E::InvalidState);
         }
+        versions.journal.dispose_unknown(writer, &evidence)?;
         root.journal_disposed = true;
         for member in &root.members {
             versions.phases[member.allocation.slot] = None;

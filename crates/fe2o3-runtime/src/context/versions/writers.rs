@@ -40,7 +40,7 @@ impl ContextVersionsV1 {
             + self
                 .submission_writers
                 .values()
-                .filter(|root| root.journal_disposed)
+                .filter(|root| self.journal.lookup_writer(root.writer).is_err())
                 .count()
     }
 
@@ -82,7 +82,7 @@ impl ContextVersionsV1 {
                 self.phases[plan.member.allocation.slot] = None;
             }
             AllocationDisposalKindV1::Unwritten => self.retire(&[plan.member.allocation])?,
-            AllocationDisposalKindV1::Submission { .. } => {
+            AllocationDisposalKindV1::Group { .. } => {
                 return Err(ContextVersionJournalErrorV1::InvalidState);
             }
         }
@@ -302,6 +302,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     context.journal_result_v1(Err(ContextVersionJournalErrorV1::InvalidState))
                 };
             };
+            if versions.disposal_allocations.contains_key(&id) {
+                let result = context.prepare_group_allocation_disposal_v1(id, *record);
+                return context.journal_result_v1(result).map(Some);
+            }
             let result = versions.whole_allocation(id, record).and_then(|member| {
                 let state = versions.journal.lookup_allocation(member.allocation)?;
                 let writer = state
@@ -346,8 +350,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 Some((writer, ContextWriterStateV1::Unknown { .. }))
                     if writer.key.kind == ContextWriterKindV1::Submission =>
                 {
-                    let result = context
-                        .prepare_submission_allocation_disposal_v1(id, *record, member, writer);
+                    let _ = context.freeze_disposal_group_v1(&[writer])?;
+                    let result = context.prepare_group_allocation_disposal_v1(id, *record);
                     return context.journal_result_v1(result).map(Some);
                 }
                 Some((_, ContextWriterStateV1::Unknown { .. })) => {

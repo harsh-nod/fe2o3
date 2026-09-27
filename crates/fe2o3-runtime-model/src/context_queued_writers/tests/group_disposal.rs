@@ -71,6 +71,172 @@ fn rejected(
     );
     assert_eq!(snapshot(j), before);
     assert!(!j.disposal_is_terminal());
+    let (headers, members) = flat_roster(writers);
+    let flat = ContextQueuedWriterFlatGroupDisposalEvidenceV1 {
+        writers: &headers,
+        members: &members,
+        allocations,
+    };
+    assert_eq!(j.validate_flat_unknown_group_disposal(&flat), Err(error));
+    assert_eq!(
+        j.dispose_flat_unknown_group(&flat),
+        Err(Failure::Rejected(error))
+    );
+    assert_eq!(snapshot(j), before);
+}
+
+fn flat_roster(
+    writers: &[ContextWriterDisposalEvidenceV1<'_>],
+) -> (Vec<ContextQueuedWriterGroupHeaderV1>, Vec<Write>) {
+    let mut members = Vec::new();
+    let headers = writers
+        .iter()
+        .map(|entry| {
+            let header = ContextQueuedWriterGroupHeaderV1 {
+                writer: entry.writer,
+                member_start: members.len(),
+                member_count: entry.allocations.len(),
+            };
+            members.extend_from_slice(entry.allocations);
+            header
+        })
+        .collect();
+    (headers, members)
+}
+
+#[test]
+fn flat_group_matches_nested_success_and_every_commit_fault_prefix() {
+    for fault in [None]
+        .into_iter()
+        .chain((0..6).flat_map(|prefix| [Some((prefix, false)), Some((prefix, true))]))
+    {
+        let mut nested = GroupFixture::new();
+        let mut flat = GroupFixture::new();
+        nested.f.journal.disposal_fault = fault;
+        flat.f.journal.disposal_fault = fault;
+        let entries = roots(&nested.writers, &nested.rosters);
+        let (headers, members) = flat_roster(&entries);
+        let storage_before = storage(&flat.f.journal);
+        let a = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            nested.f.journal.dispose_unknown_group(&Evidence {
+                writers: &entries,
+                allocations: &nested.union,
+            })
+        }));
+        let b = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            flat.f.journal.dispose_flat_unknown_group(
+                &ContextQueuedWriterFlatGroupDisposalEvidenceV1 {
+                    writers: &headers,
+                    members: &members,
+                    allocations: &flat.union,
+                },
+            )
+        }));
+        match (a, b) {
+            (Ok(a), Ok(b)) => assert_eq!(a, b),
+            (Err(_), Err(_)) => {}
+            _ => panic!("flat outcome differs"),
+        }
+        assert_eq!(snapshot(&nested.f.journal), snapshot(&flat.f.journal));
+        assert_eq!(storage(&flat.f.journal), storage_before);
+    }
+}
+
+#[test]
+fn malformed_flat_segments_reject_without_effect_or_terminal_latch() {
+    for fault in 0..9 {
+        let mut g = GroupFixture::new();
+        let entries = roots(&g.writers, &g.rosters);
+        let (mut headers, mut members) = flat_roster(&entries);
+        match fault {
+            0 => headers[0].member_start = 1,
+            1 => headers[1].member_start += 1,
+            2 => headers[1].member_start -= 1,
+            3 => headers[1].member_count = usize::MAX,
+            4 => headers[0].member_start = usize::MAX,
+            5 => headers.last_mut().unwrap().member_count += 1,
+            6 => members.push(g.union[0]),
+            7 => headers.swap(0, 1),
+            _ => members.swap(0, 2),
+        }
+        let before = snapshot(&g.f.journal);
+        let evidence = ContextQueuedWriterFlatGroupDisposalEvidenceV1 {
+            writers: &headers,
+            members: &members,
+            allocations: &g.union,
+        };
+        assert!(matches!(
+            g.f.journal.dispose_flat_unknown_group(&evidence),
+            Err(Failure::Rejected(_))
+        ));
+        assert_eq!(snapshot(&g.f.journal), before);
+        assert!(!g.f.journal.disposal_is_terminal());
+    }
+}
+
+#[test]
+fn flat_empty_segments_and_terminal_precedence_match_nested_contract() {
+    let mut f = Fixture::new(1, 4);
+    let a = f.active(&[]);
+    let b = f.active(&[0]);
+    let c = f.active(&[]);
+    for writer in [a, b, c] {
+        f.journal.mark_unknown(writer).unwrap();
+    }
+    let headers = [
+        ContextQueuedWriterGroupHeaderV1 {
+            writer: a,
+            member_start: 0,
+            member_count: 0,
+        },
+        ContextQueuedWriterGroupHeaderV1 {
+            writer: b,
+            member_start: 0,
+            member_count: 1,
+        },
+        ContextQueuedWriterGroupHeaderV1 {
+            writer: c,
+            member_start: 1,
+            member_count: 0,
+        },
+    ];
+    f.journal
+        .dispose_flat_unknown_group(&ContextQueuedWriterFlatGroupDisposalEvidenceV1 {
+            writers: &headers,
+            members: &f.writes,
+            allocations: &f.writes,
+        })
+        .unwrap();
+    audit(&f.journal);
+    let empty = ContextQueuedWriterFlatGroupDisposalEvidenceV1 {
+        writers: &[],
+        members: &[],
+        allocations: &[],
+    };
+    assert_eq!(
+        f.journal.validate_flat_unknown_group_disposal(&empty),
+        Err(Error::RosterCapacity)
+    );
+    let too_many = vec![f.writes[0]; f.journal.member_capacity() + 1];
+    let over_capacity = ContextQueuedWriterFlatGroupDisposalEvidenceV1 {
+        writers: &headers,
+        members: &too_many,
+        allocations: &f.writes,
+    };
+    assert_eq!(
+        f.journal.dispose_flat_unknown_group(&over_capacity),
+        Err(Failure::Rejected(Error::RosterCapacity))
+    );
+    assert!(!f.journal.disposal_is_terminal());
+    f.journal.disposal_terminal = true;
+    assert_eq!(
+        f.journal.dispose_flat_unknown_group(&empty),
+        Err(Failure::Terminal(Error::InvalidState))
+    );
+    assert_eq!(
+        f.journal.validate_flat_unknown_group_disposal(&empty),
+        Err(Error::InvalidState)
+    );
 }
 
 #[test]
