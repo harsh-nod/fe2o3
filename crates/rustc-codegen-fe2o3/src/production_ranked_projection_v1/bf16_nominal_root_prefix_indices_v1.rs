@@ -23,6 +23,9 @@ use crate::reference_effect_v1::{
 };
 use fe2o3_lower_mir_kernel::{CheckedBf16NominalCallV1, ProductionPreRankedKirOwnerV1};
 
+#[path = "bf16_nominal_root_argument_initialization_v1.rs"]
+mod argument_initialization;
+
 /// Must exist physically outside rich/facts/context/graph callbacks. It owns
 /// actual entry operations/SSA counter; future access/CFG preparation extends
 /// this SAME assembly. No conversion from unjoined component data is provided.
@@ -32,6 +35,7 @@ pub(in crate::production_ranked_projection_v1) struct PendingActualRootPrefixInd
     indices: RootInvocationIndexStorageV1,
     guarded: RootGuardedAccessStorageV1,
     origins: ActualRootReferenceOriginsStorageV1,
+    arguments: argument_initialization::PendingArgumentProducersV1,
     ledger: Option<(usize, CanonicalKernelIrWorkLedgerIdentityV1)>,
     started: bool,
     completed: bool,
@@ -45,6 +49,7 @@ impl PendingActualRootPrefixIndicesV1 {
             indices: RootInvocationIndexStorageV1::empty(),
             guarded: RootGuardedAccessStorageV1::empty(),
             origins: ActualRootReferenceOriginsStorageV1::empty(),
+            arguments: argument_initialization::PendingArgumentProducersV1::new(),
             ledger: None,
             started: false,
             completed: false,
@@ -414,6 +419,7 @@ fn assembly_frame<R, F>() -> Result<usize> {
     let mut bytes = 8192usize;
     for amount in [
         size_of::<PendingActualRootPrefixIndicesV1>(),
+        argument_initialization::construction_frame_v1()?,
         size_of::<ActualRootPrefixIndicesV1<'static>>(),
         size_of::<ActualSelectedInputsV1<'static>>(),
         size_of::<ActualRootAssemblyPartsV1<'static>>(),
@@ -780,7 +786,14 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
             if pending.ledger.is_some_and(|saved| saved != ledger) {
                 return Err(resource(Resource::Accounting));
             }
-            if pending.started || pending.ledger.is_some() || pending.completed {
+            if pending.started
+                || pending.ledger.is_some()
+                || pending.completed
+                || !matches!(
+                    pending.arguments.phase,
+                    argument_initialization::Phase::Dormant
+                )
+            {
                 return Err(Error::Incomplete(
                     "actual root assembly cannot be replaced or retried",
                 ));
@@ -888,5 +901,7 @@ pub(crate) use genuine::observe_actual_root_prefix_indices_for_test_v1;
 #[cfg(test)]
 #[path = "bf16_nominal_root_guarded_access_genuine_v1_tests.rs"]
 mod guarded_genuine_v1;
+#[cfg(test)]
+pub(crate) use argument_initialization::observe_actual_root_argument_initialization_for_test_v1;
 #[cfg(test)]
 pub(crate) use guarded_genuine_v1::observe_actual_root_guarded_accesses_for_test_v1;

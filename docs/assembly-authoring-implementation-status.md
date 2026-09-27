@@ -5,6 +5,28 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Authentic argument initialization and native commit diagnosis — 2026-09-27
+
+The [argument-initialization checkpoint](bf16-root-argument-initialization-qualification-20260927.md)
+passed 15 new controls, 331 model and 2,957 backend tests (189 ignored),
+backend build and 83 JavaScript controls. Its genuine-source CPU ladder passed
+five actual rustc sessions and 36 positive numerical runs, with actual
+initialization markers in identity, swapped-input, error and panic sessions.
+Both ordinary ladders passed; 38 lossless observation bodies and 52 artifacts
+match the preceding checkpoint exactly.
+
+The [native debugger attempt](debugger-commit-boundary-diagnosis-20260927.md)
+refused at commit-site 7 after the runtime loaded; no physical capture was
+accepted. Selected-family cleanup and a separate manual postflight passed.
+The missing loaded-host maintenance transition is being implemented without
+rearming the retired unloaded-entry epoch or bypassing the commit guard.
+
+Argument initialization is an internal one-shot boundary, not complete
+producer chronology or a production route. Physical retention through factory
+postflight, the ordinary Option-first prelude, remaining writers, the joint
+bounds driver and native capture remain open. Accepted broad exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Lazy fixed-proof ownership and read-only debugger replay — 2026-09-26
 
 The [lazy-proof checkpoint](bf16-lazy-fixed-proof-qualification-20260926.md)
