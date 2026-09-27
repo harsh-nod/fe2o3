@@ -45,7 +45,7 @@ impl ContextVersionsV1 {
     }
 
     #[cfg(test)]
-    pub(in crate::context) fn journal_for_test(&self) -> &ContextVersionJournalV1 {
+    pub(in crate::context) fn journal_for_test(&self) -> &ContextQueuedWriterJournalV1 {
         &self.journal
     }
 

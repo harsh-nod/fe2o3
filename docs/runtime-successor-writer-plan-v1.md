@@ -9,9 +9,11 @@ a writable destination with a pending predecessor, including an exact event.
 The executable model now has `ContextQueuedWriterJournalV1`, a bounded queued-writer
 owner around `ContextProducerReadJournalV1`. It deliberately exposes neither mutable
 nor immutable dereferencing: inherited availability queries could bypass queue
-custody. The Context adapter still uses the previous owner. Do not replace or bypass the inner
-single-pending-writer invariant. Existing core proofs continue to describe the
-inner journal; the new composition needs its own proof and concrete integration
+custody. Context now uses this owner with queued admission still closed and one
+member slot per allocation, sufficient for its disjoint active rosters. Shared
+queues require an explicit larger member-capacity policy before admission. Do not
+replace or bypass the inner single-pending-writer invariant. Existing core proofs
+continue to describe the inner journal; the new composition needs its own proof and concrete integration
 qualification. An immutable projection must not expose an availability API that
 silently ignores outer reservations. No mutable inner extraction is permitted.
 
@@ -72,13 +74,15 @@ Model tests exercise arena conservation, fixed storage addresses/capacities,
 three-deep success, cancellation permutations, multi-parent/idle joins, readers,
 stale identities, epoch exhaustion and fail-stop Unknown custody.
 
-This is not Context support or a proof of the new owner. In particular:
+This is not public Context successor support or a proof of the new owner.
+In particular:
 
 - Context must authenticate each exact latest writer and explicit success event,
   retain the queued roster, and audit all availability probes before enabling it.
 - Queued Unknown is fail-stop and cannot be refunded by a later NoEffect value.
-  Closed-group model disposal is implemented; its Context/native integration
-  remains open. It destroys allocations rather than exposing uncertain content.
+  Closed-group model disposal is implemented. Context uses it for existing
+  Ordinary single-writer rosters; shared-group native receipts remain open.
+  Disposal destroys allocations rather than exposing uncertain content.
 - Failed/quiescent backend results alone are not NoEffect authority. Descendant
   failure after cancellation cannot be used to silently release queued custody.
 - Queued-output reads, partial writes and ReadWrite integration remain open.
@@ -115,15 +119,40 @@ indexes without success propagation. Outer roots remain through all inner
 subtransitions. A preflight failure is Rejected without mutation; any error or
 unwind after starting commitment permanently makes the owner terminal. Adapters
 must retain their own full native custody through that failure. Group validation
-uses bounded member passes and binary searches plus an O(R) read-arena scan;
+uses bounded member passes and binary searches plus an O(R) read-arena scan
+when input leases remain. Empty read arenas are skipped from their retained counts;
 ordinary hot-path admission/settlement still avoid global scans.
 
 Context now retains an Ordinary writer's conclusive quiescence marker separately
 from removable submission metadata. Successful Unknown settlement can set it;
 quarantine cannot. Both initial and final Ordinary disposal checks require it,
-including absent-submission paths. Generated receipt-based validation remains
-separate. Context still lacks shared-group receipts/credits and does not call the
-new model group disposer. Its integration and full shared-body proofs remain open.
+including absent-submission paths. Ordinary disposal now preflights and commits a
+singleton writer group through the new model engine. Original complete-roster
+native receipts and credits remain until that group commits; preflight failure,
+terminal model error or unwind after native release quarantines Context. Tests
+cover partial release order, metadata removal, credit failure, outside input
+custody and repeated full member-capacity reuse.
+
+Generated receipt-based validation/commit and synchronous disposal remain on the
+single-writer path, now through the wrapper. Context still lacks multi-root
+discovery, shared unique-allocation receipts and group credit accounting. Those
+must land before queued admission. Full shared-body proofs remain open.
+
+The next adapter step needs an exact-writer-keyed group table and an
+allocation-to-group/ordinal index. Freeze canonical original writer rosters and a
+deduplicated allocation union, including per-allocation receipts, before the first
+backend release. Resume from that frozen state rather than rediscovering from
+removed public handles. Retain submission roots and all unique credits until
+complete native disposal and model commitment; record committed phase and refund
+progress before removing group roots/indexes. Preserve newer allocations that
+reuse a disposed numeric backend handle.
+
+Final model evidence must borrow the retained storage without allocating after
+native effects. Use an indexed or flat-roster model view, not a self-referential
+vector of borrowed per-writer slices. Before public queued admission, genuine
+disjoint Unknown submissions can exercise multi-root receipt/retry/finalization
+through a private multi-seed preparation helper: the model permits disconnected
+closed unions. Such tests do not qualify overlapping Context writer queues.
 
 ## Entry-Point Audit
 

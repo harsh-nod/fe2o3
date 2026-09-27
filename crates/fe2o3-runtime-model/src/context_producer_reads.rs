@@ -137,11 +137,12 @@ impl ContextProducerReadJournalV1 {
         selected: impl Fn(ContextWriterKeyV1) -> bool,
     ) -> bool {
         self.stable.has_consumer_reads_matching_v1(&selected)
-            || self
-                .reservations
-                .iter()
-                .flatten()
-                .any(|read| selected(read.reference.consumer))
+            || (self.retained_producer_read_count() != 0
+                && self
+                    .reservations
+                    .iter()
+                    .flatten()
+                    .any(|read| selected(read.reference.consumer)))
     }
 
     pub fn new(

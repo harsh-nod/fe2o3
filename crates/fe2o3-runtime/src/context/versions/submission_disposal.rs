@@ -2,8 +2,9 @@
 
 use super::*;
 use fe2o3_runtime_model::{
-    ContextAllocationWriteV1, ContextWriterDisposalEvidenceV1, ContextWriterReferenceV1,
-    ContextWriterStateV1,
+    ContextAllocationWriteV1, ContextQueuedWriterGroupDisposalErrorV1,
+    ContextQueuedWriterGroupDisposalEvidenceV1, ContextWriterDisposalEvidenceV1,
+    ContextWriterReferenceV1, ContextWriterStateV1,
 };
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
@@ -90,9 +91,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             if root.disposed_count != 0 {
                 return Err(E::InvalidState);
             }
-            versions
-                .journal
-                .validate_unknown_disposal(writer, &root.members)?;
+            versions.journal.validate_unknown_group_disposal(
+                &[ContextWriterDisposalEvidenceV1 {
+                    writer,
+                    allocations: &root.members,
+                }],
+                &root.members,
+            )?;
             for (entry, member) in root.allocations.iter().zip(&root.members) {
                 if entry.disposed
                     || self.allocations.get(&entry.id) != Some(&entry.record)
@@ -207,13 +212,32 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return Err(E::InvalidState);
             }
         }
-        versions.journal.dispose_unknown(
+        let evidence = ContextWriterDisposalEvidenceV1 {
             writer,
-            &ContextWriterDisposalEvidenceV1 {
-                writer,
-                allocations: &root.members,
-            },
-        )?;
+            allocations: &root.members,
+        };
+        match root.domain {
+            SubmissionWriterDomainV1::Ordinary => {
+                // Current admission permits only disjoint active writer roots.
+                // Keep original receipts and credits until this group commits.
+                versions
+                    .journal
+                    .dispose_unknown_group(&ContextQueuedWriterGroupDisposalEvidenceV1 {
+                        writers: &[evidence],
+                        allocations: &root.members,
+                    })
+                    .map_err(|failure| match failure {
+                        // Both are fatal here: every native allocation was disposed.
+                        // The Context caller quarantines; the model also latches a
+                        // terminal committed prefix when applicable.
+                        ContextQueuedWriterGroupDisposalErrorV1::Rejected(error)
+                        | ContextQueuedWriterGroupDisposalErrorV1::Terminal(error) => error,
+                    })?;
+            }
+            SubmissionWriterDomainV1::Generated { .. } => {
+                versions.journal.dispose_unknown(writer, &evidence)?;
+            }
+        }
         root.journal_disposed = true;
         for member in &root.members {
             versions.phases[member.allocation.slot] = None;

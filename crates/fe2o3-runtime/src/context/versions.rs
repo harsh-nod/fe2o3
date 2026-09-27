@@ -1,11 +1,9 @@
 //! Opt-in allocation and host-write metadata. No lineage or reuse authority yet.
 
 use super::*;
-#[cfg(test)]
-use fe2o3_runtime_model::ContextVersionJournalV1;
 use fe2o3_runtime_model::{
     ContextAllocationEnrollmentV1, ContextAllocationKeyV1, ContextAllocationReferenceV1,
-    ContextJournalDeviceKeyV1, ContextProducerReadJournalV1, ContextVersionJournalErrorV1,
+    ContextJournalDeviceKeyV1, ContextQueuedWriterJournalV1, ContextVersionJournalErrorV1,
 };
 
 macro_rules! completion_journal_rust_syntax {
@@ -74,7 +72,7 @@ enum AllocationPhaseV1 {
 }
 
 pub(super) struct ContextVersionsV1 {
-    journal: ContextProducerReadJournalV1,
+    journal: ContextQueuedWriterJournalV1,
     phases: Vec<Option<AllocationPhaseV1>>,
     submission_writers: HashMap<RuntimeSubmissionIdV1, submissions::RetainedSubmissionWriterV1>,
     submission_readers: HashMap<RuntimeSubmissionIdV1, readers::RetainedSubmissionReadersV1>,
@@ -135,7 +133,15 @@ impl ContextVersionsV1 {
         allocations: usize,
         writers: usize,
     ) -> Result<Self, ContextVersionJournalErrorV1> {
-        let journal = ContextProducerReadJournalV1::new(generation, allocations, writers, writers)?;
+        // Queued admission remains closed. Disjoint active rosters need at most
+        // one member per allocation; shared queues need a separate capacity plan.
+        let journal = ContextQueuedWriterJournalV1::new(
+            generation,
+            allocations,
+            writers,
+            writers,
+            allocations,
+        )?;
         let mut phases = Vec::new();
         phases
             .try_reserve_exact(allocations)

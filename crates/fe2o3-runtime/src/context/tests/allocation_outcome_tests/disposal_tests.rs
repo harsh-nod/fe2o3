@@ -1,7 +1,8 @@
 use super::super::async_journal_tests::{MixedArguments, region};
 use super::*;
 use fe2o3_runtime_model::{
-    ContextAllocationStateV1, ContextWriterReferenceV1, ContextWriterStateV1,
+    ContextAllocationReadV1, ContextAllocationStateV1, ContextWriterReferenceV1,
+    ContextWriterStateV1,
 };
 use writer_tests::assert_diagnostic;
 
@@ -146,6 +147,12 @@ impl Fixture {
 
     fn assert_unknown(&self, disposed: usize) {
         let versions = self.context.versions.as_ref().unwrap();
+        let journal = versions.journal_for_test();
+        assert_eq!(
+            journal.remaining_member_slots(),
+            journal.member_capacity() - 3
+        );
+        assert!(!journal.disposal_is_terminal());
         assert_eq!(
             versions.submission_disposal_quiescent_for_test_v1(self.submission_id),
             Some(true)
@@ -296,6 +303,13 @@ fn unknown_roster_disposal_joins_all_orders_outcomes_and_metadata_lifetimes() {
                         order.map(|index| fixture.records[index].backend_allocation)
                     );
                     assert_eq!(fixture.context.version_journal_writer_records_v1(), Some(0));
+                    let journal = fixture
+                        .context
+                        .versions
+                        .as_ref()
+                        .unwrap()
+                        .journal_for_test();
+                    assert_eq!(journal.remaining_member_slots(), journal.member_capacity());
                     assert_eq!(
                         fixture
                             .context
@@ -597,6 +611,122 @@ fn absent_submission_still_requires_retained_disposal_quiescence() {
         assert_eq!(fixture.context.backend.release_calls, 0);
         assert_eq!(fixture.context.backend.inner.memory, memory);
     }
+}
+
+#[test]
+fn ordinary_group_rejects_orphaned_input_custody_before_native_release() {
+    let mut fixture = Fixture::new(true, 1, true);
+    let reference = fixture.context.allocations[&fixture.neighbor]
+        .journal
+        .unwrap();
+    let journal = fixture
+        .context
+        .versions
+        .as_mut()
+        .unwrap()
+        .read_leases_for_test_v1();
+    let state = journal.lookup_allocation(reference).unwrap();
+    let mut output = [None];
+    // Simulate a missing Context reader root without deleting the model lease.
+    // This input is outside the disposed writer's destination roster.
+    journal
+        .acquire_reads(
+            fixture.writer.key,
+            &[ContextAllocationReadV1 {
+                allocation: reference,
+                device: state.device,
+                byte_extent: state.byte_extent,
+                byte_offset: 0,
+                byte_len: 8,
+                attempt_epoch: state.attempt_epoch,
+                content_lineage: state.content_lineage,
+            }],
+            &mut output,
+        )
+        .unwrap();
+    assert!(matches!(
+        fixture.context.release_allocation(fixture.ids[0]),
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::InvalidBackendDescription
+        ))
+    ));
+    assert!(fixture.context.is_terminal());
+    assert_eq!(fixture.context.backend.release_calls, 0);
+    fixture.assert_unknown(0);
+    assert_eq!(fixture.context.version_journal_read_records_v1(), Some(1));
+    assert!(!fixture.context.cleanup().is_complete());
+    assert_eq!(fixture.context.backend.release_calls, 0);
+}
+
+#[test]
+fn ordinary_groups_recycle_full_member_capacity_without_stale_roots() {
+    let mut context =
+        Context::open_with_version_journal_v1(AllocationOnlyBackend::default(), 2, 2).unwrap();
+    let device = context.devices()[0].id();
+    context
+        .configure_allocation_admission_v1(device, 128, 2)
+        .unwrap();
+    let stream = context.create_stream(device).unwrap();
+    let module = context.load_module(device, b"mixed").unwrap();
+    let kernel = context
+        .resolve_kernel::<MixedArguments>(module, "mixed")
+        .unwrap();
+    context.backend.inner.wait_observation = Some(BackendPollV1::Failed { code: -7 });
+    for _ in 0..8 {
+        let ids: [_; 2] = std::array::from_fn(|_| {
+            context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
+                .unwrap()
+        });
+        let mut submissions = ids.map(|id| {
+            context
+                .launch(
+                    stream,
+                    &kernel,
+                    &MixedArguments(vec![region(id, RuntimeAccessV1::Write, 0)]),
+                    geometry(),
+                    &[],
+                )
+                .unwrap()
+        });
+        assert_eq!(
+            context
+                .versions
+                .as_ref()
+                .unwrap()
+                .journal_for_test()
+                .remaining_member_slots(),
+            0
+        );
+        for submission in &mut submissions {
+            assert_eq!(
+                context.wait(submission, Duration::ZERO).unwrap(),
+                RuntimePollV1::Failed { code: -7 }
+            );
+        }
+        for submission in submissions {
+            context.release_submission(submission).unwrap();
+        }
+        for (returned, id) in ids.into_iter().rev().enumerate() {
+            let reference = context.allocations[&id].journal.unwrap();
+            context.release_allocation(id).unwrap();
+            let journal = context.versions.as_ref().unwrap().journal_for_test();
+            assert_eq!(journal.remaining_member_slots(), returned + 1);
+            assert_eq!(journal.remaining_writer_slots(), returned + 1);
+            assert!(journal.lookup_allocation(reference).is_err());
+            assert!(!journal.disposal_is_terminal());
+        }
+        assert_eq!(
+            context
+                .allocation_admission_usage_v1(device)
+                .unwrap()
+                .unwrap()
+                .used,
+            RuntimeResourceVectorV1::ZERO
+        );
+    }
+    assert!(context.cleanup().is_complete());
+    assert_eq!(context.backend.release_calls, 16);
 }
 
 #[test]

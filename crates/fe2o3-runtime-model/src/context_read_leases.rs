@@ -134,10 +134,12 @@ impl ContextReadLeasedJournalV1 {
         &self,
         selected: impl Fn(ContextWriterKeyV1) -> bool,
     ) -> bool {
-        self.leases
-            .iter()
-            .flatten()
-            .any(|lease| selected(lease.reference.consumer))
+        self.retained_read_count() != 0
+            && self
+                .leases
+                .iter()
+                .flatten()
+                .any(|lease| selected(lease.reference.consumer))
     }
 
     pub fn new(
