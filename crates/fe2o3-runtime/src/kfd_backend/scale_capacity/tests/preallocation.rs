@@ -11,6 +11,59 @@ fn install_scaled(backend: &mut KfdRuntimeBackendV1, account: ResourceCreditAcco
 }
 
 #[test]
+fn scaled_pending_compute_fifo_admits_beyond_default_custody_limit() {
+    let (mut backend, launch) = host_visible_three_binding_launch_v1();
+    let account = account(u64::MAX, 16);
+    install_scaled(&mut backend, account.clone());
+    // Synthetic dirty shadows prevent eager publication; no GPU owner is fabricated.
+    for binding in &launch.bindings {
+        backend
+            .allocations
+            .get_mut(&binding.region.allocation)
+            .unwrap()
+            .sdma_shadow_dirty = true;
+    }
+    backend.native_available = true;
+    let mut backend = std::mem::ManuallyDrop::new(backend);
+    let mut submissions = Vec::new();
+    for _ in 0..MAX_RUNTIME_ALLOCATION_CUSTODY_OWNERS_V1 + 2 {
+        let id = backend.submit_v1(launch.borrowed()).unwrap();
+        assert!(
+            backend.pending_compute[&id]
+                .quiescence_dependencies
+                .is_empty()
+        );
+        submissions.push(id);
+    }
+    for binding in &launch.bindings {
+        assert_eq!(
+            backend.allocation_custody[&binding.region.allocation]
+                .owners
+                .len(),
+            submissions.len()
+        );
+    }
+    assert!(!backend.terminal);
+    assert!(
+        backend.active.is_none() && backend.queue.is_none() && backend.admitted_device.is_none()
+    );
+    for id in submissions.into_iter().rev() {
+        assert_eq!(
+            backend.cancel_v1(id).unwrap(),
+            crate::BackendCancellationV1::Cancelled
+        );
+        backend.release_submission_v1(id).unwrap();
+    }
+    assert!(backend.pending_compute.is_empty());
+    assert!(backend.compute_dependency_retain_counts.is_empty());
+    assert!(backend.allocation_custody.is_empty());
+    assert_eq!(backend.compute_completion_reservations, 0);
+    backend.native_available = false;
+    drop(std::mem::ManuallyDrop::into_inner(backend));
+    assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
+}
+
+#[test]
 fn scaled_publication_exhaustion_precedes_recycled_detach_and_resident_consumption() {
     for record_exhaustion in [false, true] {
         let (mut backend, launch) = host_visible_three_binding_launch_v1();

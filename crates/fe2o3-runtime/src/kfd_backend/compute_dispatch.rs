@@ -500,6 +500,8 @@ impl KfdRuntimeBackendV1 {
         self.validate_compute_launch_with_peer_v1(
             launch,
             dependencies,
+            None,
+            &[],
             input_admission,
             &peer_compute_access::PeerDmaAdmissionsV1::default(),
         )
@@ -566,6 +568,8 @@ impl KfdRuntimeBackendV1 {
         &self,
         launch: &BackendLaunchV1<'_>,
         dependencies: &[u64],
+        ordered: Option<u64>,
+        quiescence: &[u64],
         input_admission: ComputeInputAdmissionV1,
         peer_dma: &peer_compute_access::PeerDmaAdmissionsV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
@@ -581,6 +585,8 @@ impl KfdRuntimeBackendV1 {
                 || !self.three_binding_producer_inputs_are_deferred_v1(
                     *launch,
                     dependencies,
+                    ordered,
+                    quiescence,
                     peer_dma,
                 ))
         {
@@ -597,8 +603,13 @@ impl KfdRuntimeBackendV1 {
                     custody.owners.iter().any(|owner| {
                         owner.stream != launch.stream
                             && !dependencies.contains(&owner.submission)
-                            && !(owner.kind == RuntimeAllocationCustodyKindV1::Sdma
-                                && peer_dma.authorizes(binding.region.allocation, owner.submission))
+                            && match owner.kind {
+                                RuntimeAllocationCustodyKindV1::Compute => {
+                                    quiescence.binary_search(&owner.submission).is_err()
+                                }
+                                RuntimeAllocationCustodyKindV1::Sdma => !peer_dma
+                                    .authorizes(binding.region.allocation, owner.submission),
+                            }
                     })
                 })
         }) {
@@ -614,6 +625,8 @@ impl KfdRuntimeBackendV1 {
         &self,
         launch: BackendLaunchV1<'_>,
         dependencies: &[u64],
+        ordered: Option<u64>,
+        quiescence: &[u64],
         peer_dma: &peer_compute_access::PeerDmaAdmissionsV1,
     ) -> bool {
         let Some(&device) = self.streams.get(&launch.stream) else {
@@ -639,13 +652,15 @@ impl KfdRuntimeBackendV1 {
             let KfdRuntimeSdmaStorageV1::ComputeInFlight(owner) = &allocation.sdma_storage else {
                 return false;
             };
-            if index == 2 || !dependencies.contains(owner) {
+            if index == 2 || !(dependencies.contains(owner) || ordered == Some(*owner)
+                || quiescence.binary_search(owner).is_ok()) {
                 return false;
             }
             let Some(active) = self.active_compute_submission_v1(*owner) else {
                 return false;
             };
-            if active.id != *owner || self.streams.get(&active.stream) != Some(&device) {
+            if active.id != *owner || self.streams.get(&active.stream) != Some(&device)
+                || ordered == Some(*owner) && active.stream != launch.stream {
                 return false;
             }
             let admissions = match active.execution.as_ref() {
@@ -1012,6 +1027,19 @@ impl KfdRuntimeBackendV1 {
         lane: usize,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.with_compute_lane_state_v1(lane, |backend| {
+            #[cfg(test)]
+            if backend.scripted_persistent_poll_pending_observations != 0
+                && backend.active.as_ref().is_some_and(|active| {
+                    matches!(
+                        active.execution.as_ref(),
+                        Some(ActiveComputeExecutionV1::ScriptedPersistent { .. })
+                            | Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { .. })
+                    )
+                })
+            {
+                backend.scripted_persistent_poll_pending_observations -= 1;
+                return Ok(BackendPollV1::Pending);
+            }
             let ordinary_native_lane = if backend
                 .active
                 .as_ref()
@@ -1983,6 +2011,10 @@ impl KfdRuntimeBackendV1 {
             // ordered predecessor therefore does not fail this launch unless
             // the same identity also appeared in the explicit dependency set.
         }
+        let Some(ready) = self.observe_compute_quiescence_v1(pending)? else {
+            return Ok(BackendPollV1::Pending);
+        };
+        pending = ready;
         let conversion_candidate = self
             .initialized_storage_candidates_v1(pending.launch.borrowed())
             .iter()
@@ -2158,9 +2190,11 @@ impl KfdRuntimeBackendV1 {
         self.lease_compute_lane_v1(pending.launch.stream, lane);
         let publication = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.with_compute_lane_state_v1(lane, |backend| {
-                if !pending.peer_gate_allows_native_checks_v1() {
+                if !pending.peer_gate_allows_native_checks_v1()
+                    || pending.quiescence_cursor != pending.quiescence_dependencies.len()
+                {
                     return Err(
-                        backend.terminal_error("KFD compute publication lost its peer gate")
+                        backend.terminal_error("KFD compute publication lost a completion gate")
                     );
                 }
                 let prepared = backend.prepare_launch(
@@ -2288,7 +2322,9 @@ impl KfdRuntimeBackendV1 {
                 }
             }
         }
-        self.pending_compute.insert(pending.id, pending);
+        if let Some(pending) = self.observe_compute_quiescence_v1(pending)? {
+            self.pending_compute.insert(pending.id, pending);
+        }
         Ok(BackendPollV1::Pending)
     }
 
@@ -2298,6 +2334,7 @@ impl KfdRuntimeBackendV1 {
         predecessor: u64,
     ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if !pending.peer_gate_allows_native_checks_v1()
+            || !pending.quiescence_dependencies.is_empty()
             || self
                 .initialized_storage_candidates_v1(pending.launch.borrowed())
                 .iter()
@@ -2537,6 +2574,7 @@ impl KfdRuntimeBackendV1 {
         };
         if !pending.peer_gate_allows_native_checks_v1()
             || pending.explicit_dependency_cursor != pending.explicit_success_dependencies.len()
+            || pending.quiescence_cursor != pending.quiescence_dependencies.len()
             || self.native_dirty_extents != 0
             || !pending.launch.bindings.iter().all(|binding| {
                 self.allocations

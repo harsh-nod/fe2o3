@@ -199,114 +199,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         child_index: usize,
         roots: impl Iterator<Item = u64>,
     ) -> Result<Vec<(u64, u64)>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let mut visited = HashSet::new();
-        let mut frontier = Vec::new();
-        let mut order = Vec::new();
-        let queue = |id, visited: &mut HashSet<u64>, frontier: &mut Vec<u64>| {
-            if visited.contains(&id) {
-                return Ok(());
-            }
-            if visited.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
-                return Err(KfdRuntimeBackendV1::capacity(
-                    "native peer prefix capacity exceeded",
-                ));
-            }
-            visited.try_reserve(1).map_err(|_| {
-                KfdRuntimeBackendV1::capacity("native peer prefix index allocation failed")
-            })?;
-            frontier.try_reserve(1).map_err(|_| {
-                KfdRuntimeBackendV1::capacity("native peer prefix frontier allocation failed")
-            })?;
-            visited.insert(id);
-            frontier.push(id);
-            Ok(())
-        };
-        for id in roots {
-            queue(id, &mut visited, &mut frontier)?;
-        }
-        while let Some(id) = frontier.pop() {
-            let child = &self.children[child_index];
-            let native_stream = |submission| {
-                child
-                    .pending_compute
-                    .get(&submission)
-                    .map(|pending| pending.launch.stream)
-                    .or_else(|| {
-                        child
-                            .active_sdma
-                            .get(&submission)
-                            .map(|active| active.stream)
-                    })
-                    .or_else(|| {
-                        child
-                            .active_compute_submission_v1(submission)
-                            .map(|active| active.stream)
-                    })
-                    .or_else(|| {
-                        child
-                            .submissions
-                            .get(&submission)
-                            .map(|record| record.stream)
-                    })
-            };
-            let (stream, dependencies, prior) =
-                if let Some(pending) = child.pending_compute.get(&id) {
-                    if pending.id != id {
-                        return Err(self.directed_corruption_v1());
-                    }
-                    (
-                        pending.launch.stream,
-                        pending.explicit_success_dependencies.as_ref(),
-                        pending.ordered_predecessor,
-                    )
-                } else if let Some(active) = child.active_sdma.get(&id) {
-                    if active.id != id {
-                        return Err(self.directed_corruption_v1());
-                    }
-                    (
-                        active.stream,
-                        active.dependencies.as_slice(),
-                        active.prior_stream_submission,
-                    )
-                } else if let Some(active) = child.active_compute_submission_v1(id) {
-                    (active.stream, &[][..], None)
-                } else if let Some(record) = child.submissions.get(&id) {
-                    (record.stream, &[][..], None)
-                } else {
-                    return Err(self.directed_corruption_v1());
-                };
-            if id == 0
-                || !child.streams.contains_key(&stream)
-                || dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1
-                || dependencies
-                    .iter()
-                    .enumerate()
-                    .any(|(index, id)| dependencies[..index].contains(id))
-                || prior.is_some_and(|prior| native_stream(prior) != Some(stream))
-            {
-                return Err(self.directed_corruption_v1());
-            }
-            order.try_reserve(1).map_err(|_| {
-                KfdRuntimeBackendV1::capacity("native peer prefix schedule allocation failed")
-            })?;
-            order.push((id, stream));
-            for predecessor in dependencies.iter().copied().chain(prior) {
-                let retains = if child.pending_compute.contains_key(&id) {
-                    &child.compute_dependency_retain_counts
-                } else {
-                    &child.sdma_dependency_retain_counts
-                };
-                if predecessor == 0
-                    || predecessor >= id
-                    || retains.get(&predecessor).is_none_or(|count| *count == 0)
-                {
-                    return Err(self.directed_corruption_v1());
-                }
-                queue(predecessor, &mut visited, &mut frontier)?;
-            }
-        }
-        order.sort_unstable_by_key(|(id, _)| *id);
-        Ok(order)
+        let result = self.children[child_index].native_dependency_prefix_v1(roots);
+        self.latch(result)
     }
 
     pub(super) fn inherited_peer_launch_roots_v1(
@@ -314,6 +208,25 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         stream: RoutedHandleV1,
         collected: &CollectedComputeDependenciesV1,
     ) -> Result<Vec<u64>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if self.peer_launch_retains.is_empty()
+            && !self.children[stream.child].has_admitted_peer_gate
+        {
+            if collected
+                .explicit_success_dependencies
+                .iter()
+                .copied()
+                .chain(collected.ordered_predecessor)
+                .any(|id| {
+                    self.children[stream.child]
+                        .pending_compute
+                        .get(&id)
+                        .is_some_and(|pending| pending.peer_gate.is_some())
+                })
+            {
+                return Err(self.directed_corruption_v1());
+            }
+            return Ok(Vec::new());
+        }
         let prefix = self.native_peer_prefix_v1(
             stream.child,
             collected
@@ -416,7 +329,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         route: RoutedHandleV1,
         execute: bool,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if self.peer_launch_retains.is_empty() {
+        let no_peer_custody = self.peer_launch_retains.is_empty();
+        if no_peer_custody && !self.children[route.child].has_admitted_peer_gate {
             if self.children[route.child]
                 .pending_compute
                 .get(&route.local)
@@ -427,6 +341,18 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             return Ok(());
         }
         let order = self.native_peer_prefix_v1(route.child, core::iter::once(route.local))?;
+        if no_peer_custody {
+            // A retired peer history must not change native-only progress policy.
+            if order.iter().any(|(id, _)| {
+                self.children[route.child]
+                    .pending_compute
+                    .get(id)
+                    .is_some_and(|pending| pending.peer_gate.is_some())
+            }) {
+                return Err(self.directed_corruption_v1());
+            }
+            return Ok(());
+        }
         for (id, stream) in order {
             let gate = self.children[route.child]
                 .pending_compute

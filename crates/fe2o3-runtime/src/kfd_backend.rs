@@ -141,6 +141,7 @@ mod generated_adoption;
 mod generated_preparation;
 mod generated_shells;
 pub(crate) use generated_shells::{GeneratedShellBindingV1, GeneratedShellPlanV1};
+mod compute_dependencies;
 mod native_budget;
 mod producer_peers;
 use producer_peers::PeerLaunchRetainsV1;
@@ -1282,6 +1283,8 @@ pub struct KfdRuntimeBackendV1 {
     compute_completion_reservations: usize,
     sdma_completion_reservations: usize,
     pending_compute: HashMap<u64, PendingComputeSubmissionV1>,
+    // Monotone: an empty router ledger is only a fast path before the first gate.
+    has_admitted_peer_gate: bool,
     pending_compute_streams: HashMap<u64, VecDeque<u64>>,
     allocation_custody: HashMap<u64, RuntimeAllocationCustodyV1>,
     compute_module_retain_counts: HashMap<u64, usize>,
@@ -1332,6 +1335,8 @@ pub struct KfdRuntimeBackendV1 {
     scripted_persistent_publication_retries: usize,
     #[cfg(test)]
     scripted_persistent_transition_failure: Option<ScriptedPersistentTransitionFailureV1>,
+    #[cfg(test)]
+    scripted_persistent_poll_pending_observations: u64,
     #[cfg(test)]
     scripted_persistent_wait_pending_observations: u64,
     #[cfg(test)]
@@ -1735,6 +1740,7 @@ impl KfdRuntimeBackendV1 {
             compute_completion_reservations: 0,
             sdma_completion_reservations: 0,
             pending_compute: HashMap::new(),
+            has_admitted_peer_gate: false,
             pending_compute_streams: HashMap::new(),
             allocation_custody: HashMap::new(),
             compute_module_retain_counts: HashMap::new(),
@@ -1785,6 +1791,8 @@ impl KfdRuntimeBackendV1 {
             scripted_persistent_publication_retries: 0,
             #[cfg(test)]
             scripted_persistent_transition_failure: None,
+            #[cfg(test)]
+            scripted_persistent_poll_pending_observations: 0,
             #[cfg(test)]
             scripted_persistent_wait_pending_observations: 0,
             #[cfg(test)]
@@ -2868,6 +2876,7 @@ impl KfdRuntimeBackendV1 {
         pending: &PendingComputeSubmissionV1,
     ) {
         self.release_compute_dependency_retains_v1(&pending.explicit_success_dependencies);
+        self.release_compute_dependency_retains_v1(&pending.quiescence_dependencies);
         if let Some(predecessor) = pending.ordered_predecessor
             && !pending.explicit_success_dependencies.contains(&predecessor)
         {
@@ -6036,9 +6045,16 @@ impl KfdRuntimeBackendV1 {
             .max(minimum_dependency_depth);
         self.validate_compute_launch_base_v1(&launch)?;
         let peer_dma = self.admit_peer_dma_owners_v1(launch.bindings, peer_gate, &peer_access)?;
+        let quiescence_dependencies = self.capture_compute_quiescence_v1(
+            &launch,
+            &explicit_success_dependencies,
+            ordered_predecessor,
+        )?;
         self.validate_compute_launch_with_peer_v1(
             &launch,
             &explicit_success_dependencies,
+            ordered_predecessor,
+            &quiescence_dependencies,
             input_admission,
             &peer_dma,
         )?;
@@ -6108,10 +6124,14 @@ impl KfdRuntimeBackendV1 {
                 .try_reserve(1)
                 .map_err(|_| Self::capacity("KFD compute-lane lease index growth failed"))?;
         }
-        let retained_dependencies = explicit_success_dependencies.iter().copied().chain(
-            ordered_predecessor
-                .filter(|predecessor| !explicit_success_dependencies.contains(predecessor)),
-        );
+        let retained_dependencies = explicit_success_dependencies
+            .iter()
+            .copied()
+            .chain(
+                ordered_predecessor
+                    .filter(|predecessor| !explicit_success_dependencies.contains(predecessor)),
+            )
+            .chain(quiescence_dependencies.iter().copied());
         let new_dependency_entries = retained_dependencies
             .clone()
             .filter(|submission| {
@@ -6176,6 +6196,7 @@ impl KfdRuntimeBackendV1 {
                 .expect("reserved compute stream FIFO remains indexed")
                 .push_back(id);
         }
+        self.has_admitted_peer_gate |= peer_gate.is_some();
         self.pending_compute.insert(
             id,
             PendingComputeSubmissionV1 {
@@ -6193,6 +6214,8 @@ impl KfdRuntimeBackendV1 {
                 ordered_predecessor,
                 explicit_success_dependencies,
                 explicit_dependency_cursor: 0,
+                quiescence_dependencies,
+                quiescence_cursor: 0,
                 dependency_depth,
                 peer_gate,
                 peer_access,
@@ -13282,7 +13305,9 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
             .pending_compute
             .get(&submission)
             .expect("successful peer gate retains its real compute stream head");
-        if let Some(detail) = self.compute_stream_head_publication_blocker_v1(pending) {
+        if pending.quiescence_cursor == pending.quiescence_dependencies.len()
+            && let Some(detail) = self.compute_stream_head_publication_blocker_v1(pending)
+        {
             return Err(Self::rejected(KfdRuntimeBackendErrorKindV1::Busy, detail));
         }
         let pending = self
@@ -13303,6 +13328,7 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
                 pending.peer_gate_allows_native_checks_v1()
                     && pending.explicit_dependency_cursor
                         == pending.explicit_success_dependencies.len()
+                    && pending.quiescence_cursor == pending.quiescence_dependencies.len()
                     && pending.ordered_predecessor.is_none_or(|predecessor| {
                         self.submissions
                             .get(&predecessor)
@@ -13820,6 +13846,7 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         };
         if let Some(route) = native_route {
             if self.peer_launch_retains.is_empty() {
+                self.service_native_peer_prefix_v1(route, false)?;
                 let result = self.children[route.child].drain_v1(route.local, deadline);
                 return self.latch(result);
             }
@@ -13951,6 +13978,7 @@ mod retained_release_tests;
 #[cfg(test)]
 mod tests {
     mod compute_peer_gate_tests;
+    mod compute_quiescence_tests;
     mod cooperative_directed_tests;
     mod cooperative_sdma_tests;
     #[cfg(feature = "hardware-diagnostic")]
@@ -16513,8 +16541,18 @@ mod tests {
                     ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
                 ]
             });
-            let (mut backend, producer_stream, allocations) =
+            let (backend, producer_stream, allocations) =
                 scripted_persistent_backend_with_steps_v1::<4>(byte_len, steps);
+            Self::with_backend(backend, producer_stream, allocations, cross_stream)
+        }
+
+        fn with_backend(
+            mut backend: KfdRuntimeBackendV1,
+            producer_stream: u64,
+            allocations: [u64; 4],
+            cross_stream: bool,
+        ) -> Self {
+            let byte_len = 64_usize;
             let stream = if cross_stream {
                 backend.create_stream_v1(7).unwrap()
             } else {
@@ -22620,6 +22658,8 @@ mod tests {
             ordered_predecessor: None,
             explicit_success_dependencies: dependencies.into_boxed_slice(),
             explicit_dependency_cursor: 0,
+            quiescence_dependencies: Box::new([]),
+            quiescence_cursor: 0,
             dependency_depth,
             peer_gate: None,
             peer_access: PeerComputePermitsV1::default(),

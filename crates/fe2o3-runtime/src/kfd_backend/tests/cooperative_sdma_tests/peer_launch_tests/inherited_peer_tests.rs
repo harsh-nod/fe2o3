@@ -438,3 +438,172 @@ fn inherited_peer_public_admission_rejects_unrelated_and_corrupt_native_prefixes
         ManuallyDrop::into_inner(f).clean(&[p]);
     }
 }
+
+#[test]
+fn inherited_peer_absent_fast_path_does_not_allocate_for_real_native_ancestors() {
+    let mut f = ManuallyDrop::new(fixture(4096, vec![], vec![]));
+    let (module, kernel) = load(&mut f);
+    let stream = f.stream;
+    let a = launch(&mut f, stream, kernel, &[]);
+    let a_dep = dependency(&mut f, stream, a);
+    let b = launch(&mut f, stream, kernel, &[a_dep]);
+    let b_dep = dependency(&mut f, stream, b);
+    let stream_route = f.backend.streams[&stream];
+    let route = routed(&f, b);
+    let launch = Arc::clone(&f.backend.children[route.child].pending_compute[&route.local].launch);
+    let local = f
+        .backend
+        .exact_launch_dependency_for_child(b_dep, route.child)
+        .unwrap()
+        .unwrap();
+    let collected = f.backend.children[route.child]
+        .preflight_compute_v1(
+            launch.borrowed(),
+            ComputeDependencyRosterV1::Exact(&[local]),
+        )
+        .unwrap();
+    assert!(!f.backend.children[route.child].has_admitted_peer_gate);
+    assert!(f.backend.peer_launch_retains.is_empty());
+    let (result, allocations) = counted_allocations_for_test_v1(|| {
+        f.backend
+            .inherited_peer_launch_roots_v1(stream_route, &collected)
+    });
+    assert!(result.unwrap().is_empty());
+    assert_eq!(allocations, 0);
+    f.backend.children[route.child].has_admitted_peer_gate = true;
+    let (result, allocations) = counted_allocations_for_test_v1(|| {
+        f.backend
+            .inherited_peer_launch_roots_v1(stream_route, &collected)
+    });
+    assert!(result.unwrap().is_empty());
+    assert!(
+        allocations > 0,
+        "control must traverse the real retained prefix"
+    );
+    for event in [a_dep.event, b_dep.event] {
+        f.backend.release_event_v1(event).unwrap();
+    }
+    for id in [b, a] {
+        assert_eq!(
+            f.backend.cancel_v1(id).unwrap(),
+            crate::BackendCancellationV1::Cancelled
+        );
+        f.backend.release_submission_v1(id).unwrap();
+    }
+    f.backend.unload_module_v1(module).unwrap();
+    ManuallyDrop::into_inner(f).clean(&[]);
+}
+
+#[test]
+fn inherited_peer_missing_ledger_is_detected_behind_an_ungated_native_intermediate() {
+    let mut f = fixture_with_reporter(0, true);
+    let p = directed(&mut f);
+    let peer_stream = f.stream;
+    let p_dep = dependency(&mut f, peer_stream, p);
+    let stream = f.backend.create_stream_v1(8).unwrap();
+    let (module, kernel) = load(&mut f);
+    let b = launch(&mut f, stream, kernel, &[p_dep]);
+    let b_dep = dependency(&mut f, stream, b);
+    let (middle_stream, allocation) = synthetic_fanout_destination(&mut f, 4096);
+    let local = f.backend.allocations[&allocation].local;
+    let host = f.backend.children[1]
+        .scripted_sdma
+        .as_ref()
+        .unwrap()
+        .test_host_owner(4096);
+    let record = f.backend.children[1].allocations.get_mut(&local).unwrap();
+    record.sdma_storage = KfdRuntimeSdmaStorageV1::Host(host);
+    record.sdma_backed = true;
+    record.sdma_initialized = true;
+    let mut kernarg = [0; 16];
+    kernarg[8..].copy_from_slice(&1024_u64.to_le_bytes());
+    let middle = f
+        .backend
+        .submit_v1(BackendLaunchV1 {
+            stream: middle_stream,
+            kernel,
+            explicit_kernarg: &kernarg,
+            bindings: &[BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    allocation,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 4096,
+                },
+                kernarg_byte_offset: 0,
+            }],
+            dependencies: &[b_dep.event],
+            geometry: crate::RuntimeLaunchGeometryV1 {
+                grid: [64, 1, 1],
+                workgroup: [64, 1, 1],
+                dynamic_shared_bytes: 0,
+            },
+            semantic_launch: BackendSemanticLaunchV1::Ordinary,
+        })
+        .unwrap();
+    let route = routed(&f, middle);
+    let child = &f.backend.children[route.child];
+    assert!(child.pending_compute[&route.local].peer_gate.is_none());
+    assert!(child.has_admitted_peer_gate);
+    let before = f.steps();
+    let pending_count = child.pending_compute.len();
+    let retains = child.compute_dependency_retain_counts.clone();
+    let ledger = std::mem::take(&mut f.backend.peer_launch_retains);
+    for ingress in 0..5 {
+        let result = match ingress {
+            0 => try_launch(&mut f, middle_stream, kernel, &[]).map(|_| ()),
+            1 => f.backend.poll_v1(middle).map(|_| ()),
+            2 => f
+                .backend
+                .wait_v1(middle, Instant::now() + Duration::from_secs(1))
+                .map(|_| ()),
+            3 => f.backend.flush_stream_v1(middle_stream),
+            _ => f
+                .backend
+                .drain_v1(middle, Instant::now() + Duration::from_secs(1))
+                .map(|_| ()),
+        };
+        assert!(
+            matches!(result, Err(RuntimeBackendFailureV1::Terminal(_))),
+            "ingress {ingress}"
+        );
+        assert_eq!(f.steps(), before);
+        assert_eq!(
+            f.backend.children[route.child].pending_compute.len(),
+            pending_count
+        );
+        assert_eq!(
+            f.backend.children[route.child].compute_dependency_retain_counts,
+            retains
+        );
+        f.backend.terminal = false;
+    }
+    // Restore only deliberately corrupted CPU metadata for fixture teardown.
+    f.backend.peer_launch_retains = ledger;
+    f.backend.terminal = false;
+    for event in [b_dep.event, p_dep.event] {
+        f.backend.release_event_v1(event).unwrap();
+    }
+    for id in [middle, b] {
+        assert_eq!(
+            f.backend.cancel_v1(id).unwrap(),
+            crate::BackendCancellationV1::Cancelled
+        );
+        f.backend.release_submission_v1(id).unwrap();
+    }
+    for _ in 0..96 {
+        if f.backend.progress_retained_directed_peer_v1(p).unwrap() == BackendPollV1::Succeeded {
+            break;
+        }
+    }
+    f.backend.unload_module_v1(module).unwrap();
+    f.backend.children[1]
+        .allocations
+        .get_mut(&local)
+        .unwrap()
+        .sdma_backed = false;
+    f.backend.release_allocation_v1(allocation).unwrap();
+    f.backend.destroy_stream_v1(middle_stream).unwrap();
+    f.backend.destroy_stream_v1(stream).unwrap();
+    ManuallyDrop::into_inner(f).clean(&[p]);
+}
