@@ -122,6 +122,17 @@ impl fmt::Debug for PendingCompilerExecutionChildChannelV1 {
 }
 
 impl PendingCompilerExecutionChildChannelV1 {
+    /// Checks both fixed child slots before installing an issuer policy or a
+    /// service-channel hook. This observes but does not reserve either slot;
+    /// each installer must still reserve its exact slot without replacement.
+    pub fn preflight_with_issuer_policy() -> Result<(), CompilerExecutionChildChannelErrorV1> {
+        require_reserved_descriptor_unused()?;
+        require_descriptor_unused(
+            fe2o3_compiler_closure_capability::COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
+            CompilerExecutionChildChannelErrorV1::ReservedPolicyDescriptorInUse,
+        )
+    }
+
     /// Registers exact child-side channel creation on one rustc command.
     pub fn prepare(command: &mut Command) -> Result<Self, CompilerExecutionChildChannelErrorV1> {
         require_reserved_descriptor_unused()?;
@@ -236,10 +247,20 @@ fn require_child_channel_deadline(
 }
 
 fn require_reserved_descriptor_unused() -> Result<(), CompilerExecutionChildChannelErrorV1> {
+    require_descriptor_unused(
+        COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+        CompilerExecutionChildChannelErrorV1::ReservedDescriptorInUse,
+    )
+}
+
+fn require_descriptor_unused(
+    fd: RawFd,
+    occupied: CompilerExecutionChildChannelErrorV1,
+) -> Result<(), CompilerExecutionChildChannelErrorV1> {
     // SAFETY: F_GETFD uses only the scalar descriptor and reports absence through EBADF.
-    let result = unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) };
+    let result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     if result >= 0 {
-        return Err(CompilerExecutionChildChannelErrorV1::ReservedDescriptorInUse);
+        return Err(occupied);
     }
     let error = io::Error::last_os_error();
     if error.raw_os_error() != Some(libc::EBADF) {
@@ -598,6 +619,7 @@ fn duration_to_poll_millis(duration: Duration) -> i32 {
 /// Stable failure for exact child-channel construction and transfer.
 #[derive(Debug)]
 pub enum CompilerExecutionChildChannelErrorV1 {
+    ReservedPolicyDescriptorInUse,
     InvalidChildPid,
     InvalidTimeout,
     DeadlineOverflow,
@@ -625,6 +647,11 @@ pub enum CompilerExecutionChildChannelErrorV1 {
 impl fmt::Display for CompilerExecutionChildChannelErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ReservedPolicyDescriptorInUse => write!(
+                formatter,
+                "reserved rustc issuer-policy descriptor {} is already in use",
+                fe2o3_compiler_closure_capability::COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
+            ),
             Self::InvalidChildPid => formatter.write_str("rustc child PID must be nonzero"),
             Self::InvalidTimeout => formatter.write_str("rustc channel timeout must be nonzero"),
             Self::DeadlineOverflow => formatter.write_str("rustc channel deadline overflowed"),

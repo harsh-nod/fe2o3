@@ -84,7 +84,11 @@ impl PreparedNativeProductionBuildConfig {
         self.config.identity()
     }
 
-    fn check_account(&self, b: &mut Budget<'_>) -> Result<(), Resource> {
+    pub(crate) const fn retained_storage(&self) -> usize {
+        self.retained_storage
+    }
+
+    pub(crate) fn check_account(&self, b: &mut Budget<'_>) -> Result<(), Resource> {
         b.charge_work(8)?;
         if b as *const Budget<'_> as usize != self.account_address
             || b.work_ledger_identity_v1() != self.ledger

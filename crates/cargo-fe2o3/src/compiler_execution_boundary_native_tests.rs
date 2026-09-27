@@ -21,6 +21,160 @@ const WORK: usize = 30_000_000;
 const LIMIT: usize = 2_000_000;
 const CHILD: u32 = 101;
 
+use super::super::tests::run_in_isolated_boundary_test_process as isolated;
+use super::preparation::PreparedCompilerExecutionBoundaryV3 as Prepared;
+use crate::build_config::tests::native_recipe_for_test as recipe;
+use fe2o3_compiler_closure_capability::COMPILER_EXECUTION_POLICY_CHILD_FD_V1 as POLICY_FD;
+use fe2o3_compiler_execution_client::{
+    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 as SERVICE_FD,
+    CompilerExecutionChildChannelErrorV1 as ChildError,
+    PendingCompilerExecutionChildChannelV1 as Pending,
+};
+use std::{fs::File, os::fd::AsRawFd, process::Command};
+
+#[test]
+fn native_preparation_retains_exact_policy_and_terminal_storage() {
+    if isolated(
+        "compiler_execution_boundary::native::tests::native_preparation_retains_exact_policy_and_terminal_storage",
+    ) {
+        return;
+    }
+    let mut work = Work::new(WORK);
+    let mut b = Budget::new(&mut work, LIMIT);
+    let profile = profile(7, &mut b);
+    let expected = *profile.profile().policy().canonical_bytes();
+    let recipe = recipe(&mut b);
+    let floor = b.storage();
+    let ledger = b.work_ledger_identity_v1();
+    let mut command = Command::new("/bin/true");
+    let prepared = Prepared::prepare(profile, recipe, &mut command, &mut b).unwrap();
+    assert_eq!(
+        std::fs::read(format!("/proc/self/fd/{POLICY_FD}")).unwrap(),
+        expected
+    );
+    // SAFETY: F_GETFD observes the slots owned by Command and the pending channel.
+    for fd in [POLICY_FD, SERVICE_FD] {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(flags >= 0);
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
+    drop(prepared);
+    assert!(b.storage() > floor);
+    assert!(b.work_ledger_identity_v1() == ledger);
+    assert!(matches!(
+        Pending::preflight_with_issuer_policy(),
+        Err(ChildError::ReservedPolicyDescriptorInUse)
+    ));
+    let retained = b.storage();
+    drop(command);
+    Pending::preflight_with_issuer_policy().unwrap();
+    assert_eq!(b.storage(), retained);
+}
+
+#[test]
+fn native_preparation_exact_short_and_occupied_slot_checks() {
+    if isolated(
+        "compiler_execution_boundary::native::tests::native_preparation_exact_short_and_occupied_slot_checks",
+    ) {
+        return;
+    }
+    let mut measured = (WORK, LIMIT);
+    for case in 0..6 {
+        let mut work = Work::new(measured.0 - usize::from(case == 2));
+        let mut b = Budget::new(&mut work, measured.1 - usize::from(case == 3));
+        let profile = profile(7, &mut b);
+        let recipe = recipe(&mut b);
+        let floor = b.storage();
+        let ledger = b.work_ledger_identity_v1();
+        let occupied = if case >= 4 {
+            let source = File::open("/dev/null").unwrap();
+            let target = if case == 4 { SERVICE_FD } else { POLICY_FD };
+            let owned = rustix::io::fcntl_dupfd_cloexec(&source, target).unwrap();
+            assert_eq!(owned.as_raw_fd(), target);
+            Some(owned)
+        } else {
+            None
+        };
+        let mut command = Command::new("/bin/true");
+        let result = Prepared::prepare(profile, recipe, &mut command, &mut b);
+        match case {
+            0 | 1 => drop(result.unwrap()),
+            2 | 3 => {
+                let error = result.err().expect("short quota must reject");
+                let resource = match error {
+                    Failure::Resource(resource)
+                    | Failure::Capability(CapabilityError::Resource(resource))
+                    | Failure::Policy(fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV3::Resource(resource)) => resource,
+                    other => panic!("case {case}: unexpected refusal {other:?}"),
+                };
+                assert!(
+                    match resource {
+                        Resource::Work(_) => case == 2,
+                        Resource::Storage(_) => case == 3,
+                        _ => false,
+                    },
+                    "case {case}: {resource:?}"
+                );
+            }
+            4 => assert!(matches!(
+                result,
+                Err(Failure::Child(ChildError::ReservedDescriptorInUse))
+            )),
+            _ => assert!(matches!(
+                result,
+                Err(Failure::Child(ChildError::ReservedPolicyDescriptorInUse))
+            )),
+        }
+        if case == 0 {
+            measured = (b.work(), b.peak_storage());
+        }
+        if let Some(fd) = occupied.as_ref() {
+            assert!(rustix::fs::fstat(fd).is_ok());
+            assert!(
+                command.status().unwrap().success(),
+                "refused preparation changed Command"
+            );
+        }
+        drop(command);
+        drop(occupied);
+        Pending::preflight_with_issuer_policy().unwrap();
+        assert!(b.storage() >= floor);
+        assert!(b.work_ledger_identity_v1() == ledger);
+    }
+}
+
+#[test]
+fn native_preparation_refuses_invalid_finish_without_detaching_the_account() {
+    if isolated(
+        "compiler_execution_boundary::native::tests::native_preparation_refuses_invalid_finish_without_detaching_the_account",
+    ) {
+        return;
+    }
+    for child in [0, std::process::id()] {
+        let mut work = Work::new(WORK);
+        let mut b = Budget::new(&mut work, LIMIT);
+        let profile = profile(7, &mut b);
+        let recipe = recipe(&mut b);
+        let floor = b.storage();
+        let ledger = b.work_ledger_identity_v1();
+        let mut command = Command::new("/bin/true");
+        let prepared = Prepared::prepare(profile, recipe, &mut command, &mut b).unwrap();
+        let result = prepared.finish(child, Instant::now());
+        if child == 0 {
+            assert!(matches!(
+                result,
+                Err(Failure::Child(ChildError::InvalidChildPid))
+            ));
+        } else {
+            assert!(matches!(result, Err(Failure::Child(ChildError::Timeout))));
+        }
+        drop(command);
+        Pending::preflight_with_issuer_policy().unwrap();
+        assert!(b.storage() > floor);
+        assert!(b.work_ledger_identity_v1() == ledger);
+    }
+}
+
 fn policy(generation: u64, b: &mut Budget<'_>) -> PolicyRecord {
     let mut bytes = fixture::policy_wire(3);
     bytes[24..32].copy_from_slice(&generation.to_le_bytes());

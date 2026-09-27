@@ -42,6 +42,9 @@ const SUBJECT_STORAGE: usize = size_of::<(Subject, SubjectStorage)>();
 #[path = "compiler_execution_boundary_native_pipeline.rs"]
 pub(crate) mod pipeline;
 
+#[path = "compiler_execution_boundary_native_prepare.rs"]
+pub(crate) mod preparation;
+
 /// The exact selected child, sealed configuration and original account remain
 /// owned together through receipt admission. Neither readiness nor a signed
 /// carriage grants compiler, publication, load or launch authority.
@@ -308,6 +311,8 @@ fn validate_receipt(
 
 #[derive(Debug)]
 pub(crate) enum Failure {
+    Child(fe2o3_compiler_execution_client::CompilerExecutionChildChannelErrorV1),
+    Policy(fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV3),
     Resource(Resource),
     Capability(CapabilityError),
     Supervisor(SupervisorError),
@@ -331,6 +336,8 @@ macro_rules! causes {
     };
 }
 causes!(Resource=>Resource, CapabilityError=>Capability, SupervisorError=>Supervisor,
+    fe2o3_compiler_execution_client::CompilerExecutionChildChannelErrorV1=>Child,
+    fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV3=>Policy,
     ManifestError=>Manifest, ReadyError=>Ready, HandoffError=>Handoff, SubjectError=>Subject,
     TransportError=>Transport, ReceiptError=>Receipt);
 

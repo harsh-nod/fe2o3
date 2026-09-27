@@ -1125,7 +1125,7 @@ fn valid_selector_text(value: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1333,6 +1333,20 @@ mod tests {
         }
         .unwrap();
         (path, parsed.identity())
+    }
+
+    pub(crate) fn native_recipe_for_test(
+        b: &mut Budget<'_>,
+    ) -> native::PreparedNativeProductionBuildConfig {
+        let scratch = ScratchDirectory::new();
+        let (path, expected) = native_fixture(&scratch, 1);
+        native::PreparedNativeProductionBuildConfig::from_manifest(
+            &path,
+            ProductionBuildConfigVersion::V1,
+            expected.as_bytes(),
+            b,
+        )
+        .unwrap()
     }
 
     #[test]

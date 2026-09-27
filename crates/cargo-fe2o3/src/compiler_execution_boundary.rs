@@ -56,6 +56,10 @@ impl PreparedCompilerExecutionBoundaryV1 {
         command: &mut Command,
         policy_exposure: ChildPolicyExposureV1,
     ) -> Result<Self, CompilerExecutionBoundaryErrorV1> {
+        if policy_exposure == ChildPolicyExposureV1::Inherit {
+            PendingCompilerExecutionChildChannelV1::preflight_with_issuer_policy()
+                .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
+        }
         source_profile
             .revalidate()
             .map_err(CompilerExecutionBoundaryErrorV1::Profile)?;
@@ -396,7 +400,7 @@ mod tests {
 
     const ISOLATED_BOUNDARY_TEST_ENV: &str = "FE2O3_COMPILER_EXECUTION_BOUNDARY_ISOLATED_TEST_V1";
 
-    fn run_in_isolated_boundary_test_process(test_name: &str) -> bool {
+    pub(super) fn run_in_isolated_boundary_test_process(test_name: &str) -> bool {
         match std::env::var_os(ISOLATED_BOUNDARY_TEST_ENV) {
             None => {}
             Some(value) if value == std::ffi::OsStr::new(test_name) => return false,
@@ -497,6 +501,86 @@ mod tests {
         custody.revalidate().unwrap();
         assert!(!custody.grants_compiler_authority());
         assert_ne!(custody.profile_identity().as_bytes(), &[0; 32]);
+    }
+
+    #[test]
+    fn preparation_preflights_both_slots_before_mutating_command() {
+        use std::{fs::File, os::fd::AsRawFd};
+        if run_in_isolated_boundary_test_process(
+            "compiler_execution_boundary::tests::preparation_preflights_both_slots_before_mutating_command",
+        ) {
+            return;
+        }
+        let profile = client_profile(7, 1_234);
+        for target in [
+            COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+            COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
+        ] {
+            PendingCompilerExecutionChildChannelV1::preflight_with_issuer_policy().unwrap();
+            let source = File::open("/dev/null").unwrap();
+            let occupied = rustix::io::fcntl_dupfd_cloexec(&source, target).unwrap();
+            assert_eq!(occupied.as_raw_fd(), target);
+            let before = rustix::fs::fstat(&occupied).unwrap();
+            let flags = rustix::io::fcntl_getfd(&occupied).unwrap();
+            let mut command = Command::new("/bin/true");
+            let error = PreparedCompilerExecutionBoundaryV1::prepare(&profile, &mut command)
+                .err()
+                .expect("occupied slot must reject preparation");
+            assert!(match error {
+                CompilerExecutionBoundaryErrorV1::ChildChannel(
+                    CompilerExecutionChildChannelErrorV1::ReservedDescriptorInUse,
+                ) => target == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+                CompilerExecutionBoundaryErrorV1::ChildChannel(
+                    CompilerExecutionChildChannelErrorV1::ReservedPolicyDescriptorInUse,
+                ) => target == COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
+                _ => false,
+            });
+            let after = rustix::fs::fstat(&occupied).unwrap();
+            assert_eq!(
+                (before.st_dev, before.st_ino, before.st_mode),
+                (after.st_dev, after.st_ino, after.st_mode)
+            );
+            assert_eq!(rustix::io::fcntl_getfd(&occupied).unwrap(), flags);
+            assert!(command.status().unwrap().success());
+            drop(command);
+            drop(occupied);
+            PendingCompilerExecutionChildChannelV1::preflight_with_issuer_policy().unwrap();
+        }
+    }
+
+    #[test]
+    fn application_preparation_does_not_reserve_the_policy_slot() {
+        use std::{fs::File, os::fd::AsRawFd};
+        if run_in_isolated_boundary_test_process(
+            "compiler_execution_boundary::tests::application_preparation_does_not_reserve_the_policy_slot",
+        ) {
+            return;
+        }
+        let profile = client_profile(7, 1_234);
+        PendingCompilerExecutionChildChannelV1::preflight_with_issuer_policy().unwrap();
+        let source = File::open("/dev/null").unwrap();
+        let occupied =
+            rustix::io::fcntl_dupfd_cloexec(&source, COMPILER_EXECUTION_POLICY_CHILD_FD_V1)
+                .unwrap();
+        assert_eq!(occupied.as_raw_fd(), COMPILER_EXECUTION_POLICY_CHILD_FD_V1);
+        let before = rustix::fs::fstat(&occupied).unwrap();
+        let flags = rustix::io::fcntl_getfd(&occupied).unwrap();
+        let mut command = Command::new("/bin/true");
+        let prepared = PreparedCompilerExecutionBoundaryV1::prepare_application_verifier(
+            &profile,
+            &mut command,
+        )
+        .unwrap();
+        drop(prepared);
+        drop(command);
+        let after = rustix::fs::fstat(&occupied).unwrap();
+        assert_eq!(
+            (before.st_dev, before.st_ino, before.st_mode),
+            (after.st_dev, after.st_ino, after.st_mode)
+        );
+        assert_eq!(rustix::io::fcntl_getfd(&occupied).unwrap(), flags);
+        drop(occupied);
+        PendingCompilerExecutionChildChannelV1::preflight_with_issuer_policy().unwrap();
     }
 
     #[test]
