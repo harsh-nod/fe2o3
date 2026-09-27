@@ -2,7 +2,7 @@
 
 ## Milestone Snapshot
 
-As of 2026-09-26, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
+As of 2026-09-27 UTC, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
 remains open. These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -24,6 +24,19 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Authenticated completed-compute import development (2026-09-27 UTC): persistent
+owners now restore initialization from the original typed data after exact
+completed-use and storage-scope authentication. Three-buffer restoration
+preflights the complete roster before mutation; single and three-buffer failures
+retain original typed custody. The [packet](evidence/dev-compute-data-import-2026-09-27/README.md)
+records 1659 full KFD passes with one existing socket-admission failure, 1621
+all-feature runtime passes with three existing socket-permission failures, 89
+doctests and passing strict static/layout checks. It distinguishes actual
+public-path CPU fixtures from injected completion and native execution.
+Sealed InitializedStorage conversion with origin-preserving replay,
+native predecessor/gate integration, formal native refinement and matched hardware
+qualification remain open. Accepted milestones and parity are unchanged.
+
 Persistent SDMA backing development (2026-09-27 UTC): initialization evidence
 now follows whole-buffer transfers across persistent owners, with exact compute
 cancellation and paired restoration. A caught inline-size regression was fixed
@@ -31,9 +44,9 @@ within the existing ledger allocation. The [packet](evidence/dev-persistent-sdma
 records 228 frozen-source focused passes, 89 doctests, strict static checks and a
 19-phase scalar proof campaign. All-feature runtime results remain 1621 passes,
 three existing socket-permission failures and 28 ignores. The native bridge is
-Checked/CPU-tested, not formally refined. Authenticated post-compute import,
-sealed typed-compute conversion, native gate integration and hardware/performance
-qualification remain open; accepted milestones and parity are unchanged.
+Checked/CPU-tested, not formally refined. That checkpoint left authenticated
+post-compute import, sealed typed-compute conversion, native gate integration and
+hardware/performance qualification open; accepted milestones and parity were unchanged.
 
 Latest pending-peer Context development (2026-09-26): typed producer-aware
 launches accept pending directed peers and mixed native/peer inputs, validating

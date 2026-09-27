@@ -143,9 +143,20 @@ completed raw compute restoration discard it. The backing shares the existing
 ledger allocation, keeping the unchanged inline size limits. See the
 [backing qualification](evidence/dev-persistent-sdma-backing-2026-09-27/README.md).
 
-Authenticated completed-compute import and a sealed quiescent conversion into
-typed compute input remain open. No new public pending-peer launch or
-initialized-compute constructor is enabled here.
+Authenticated completed-compute restoration now consumes the original typed
+data after checking its exact completed use, detaching slot/generation, native
+identity, physical extent and original buffer scope. Fully initialized data
+restores full logical coverage; cold data clears the old prefix. The three-buffer
+path preflights every original object before any restoration. Rejection retains
+the original typed roster rather than reconstructing wrappers from raw leases.
+This import does not manufacture a content digest or add a native refinement proof.
+The [import qualification](evidence/dev-compute-data-import-2026-09-27/README.md)
+records full CPU suites, genuine public-path fixtures and existing environment failures.
+
+A sealed quiescent conversion from initialized storage into typed compute input
+remains open, including preservation of its non-dispatch origin through bind,
+replay and cancellation. No new public pending-peer launch or initialized-compute
+constructor is enabled here.
 See [coverage qualification](evidence/dev-sdma-initialized-prefix-2026-09-27/README.md)
 for the exact proof, tests, rejected campaign and remaining adapter boundary.
 
