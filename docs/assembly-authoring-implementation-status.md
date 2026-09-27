@@ -5,6 +5,19 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Disabled loaded-maintenance debugger source — 2026-09-27
+
+The [loaded-maintenance debugger checkpoint](debugger-loaded-maintenance-source-qualification-20260927.md)
+adds a separate physical-v4 source overlay with all public gates disabled.
+Fresh relocation passed 41 source controls, strict C++ builds, 264 real-helper
+mock groups (1,033 checks), and six first-failure controls. Existing physical-v3
+remains byte-exact.
+
+A separate private full debugger build passed all four phases and postflight.
+It has not yet passed actual layout, loaded-runtime/startup, controller/family
+or native capture acceptance. The previous native failure is not reclassified.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Authentic proof-retirement connection — 2026-09-27
 
 The [authentic retirement checkpoint](bf16-authentic-proof-retirement-qualification-20260927.md)
