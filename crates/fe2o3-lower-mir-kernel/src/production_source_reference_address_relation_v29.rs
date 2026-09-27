@@ -1148,6 +1148,15 @@ struct SourceDirectObjectOriginV29 {
     ty: SemanticTypeIdV1,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceSafeObjectOriginV29 {
+    frame: ScopedMemoryFrameV29,
+    key: SourceReferenceAccessKeyV29,
+    loan: usize,
+    referent: SourceDirectObjectOriginV29,
+    formation: SourceReferenceSiteV29,
+}
+
 #[derive(Clone, Copy)]
 struct SourceAddressAccessSourceV29 {
     instance: ProductionCallInstanceIdV1,
@@ -1155,6 +1164,7 @@ struct SourceAddressAccessSourceV29 {
     physical: SourceAddressAccessV29,
     raw: Option<SourceReferenceRawAccessV29>,
     direct_object: Option<SourceDirectObjectOriginV29>,
+    safe_object: Option<SourceSafeObjectOriginV29>,
 }
 
 // A completed descriptor producer may be classified outside the private access
@@ -1217,6 +1227,10 @@ fn source_address_accesses_v29(
     budget.reserve_storage(source_issued_census_query_headers_v29()?)?;
     source_reference_emission_prepay_v29::<SourceDirectObjectOriginV29>(budget)?;
     source_reference_emission_prepay_v29::<Option<SourceDirectObjectOriginV29>>(budget)?;
+    source_reference_emission_prepay_v29::<SourceSafeObjectOriginV29>(budget)?;
+    source_reference_emission_prepay_v29::<Option<SourceSafeObjectOriginV29>>(budget)?;
+    source_reference_emission_prepay_v29::<Option<&SourceReferenceLoanV29>>(budget)?;
+    source_reference_emission_prepay_v29::<&SourceReferenceLoanV29>(budget)?;
     source_reference_emission_prepay_v29::<(ScopedObjectEndpointV29, ScopedObjectIdentityV29,
         ProductionCallInstanceIdV1, SemanticLocalIdV1, u32, SemanticTypeIdV1)>(budget)?;
     let issued_header = std::mem::size_of::<Option<SourceIssuedAccessesV29<'_, '_, '_>>>();
@@ -1264,6 +1278,7 @@ fn source_address_accesses_v29(
                 (_, None) => continue,
                 _ => return Err(source_raw_physical_error_v29()),
             };
+            let mut safe_object = None;
             let (target, raw) = match payload {
                 Some(ScopedMemoryPayloadV29::IndexLoad { read, .. }) => {
                     let frame = row.source.ok_or_else(source_raw_physical_error_v29)?;
@@ -1404,6 +1419,21 @@ fn source_address_accesses_v29(
                             } if actual == instance && original == frame.site && dereference_prefix as usize == prefix
                                 && frame.role == Some(ScopedMemoryRoleV29::Operand(role)))
                         { return Err(scoped_object_error_v29()); }
+                        budget.charge_work(8)?;
+                        let record = references.plan.loans.get(loan.loan)
+                            .ok_or_else(source_raw_physical_error_v29)?;
+                        safe_object = Some(SourceSafeObjectOriginV29 {
+                            frame,
+                            key: SourceReferenceAccessKeyV29 {
+                                site, source: place as *const SemanticPlaceV1 as usize, access,
+                            },
+                            loan: loan.loan,
+                            referent: SourceDirectObjectOriginV29 {
+                                instance: loan.original.instance, local: loan.original.local,
+                                generation: loan.original.generation, ty: loan.original.ty,
+                            },
+                            formation: record.site,
+                        });
                         (source_address_object_slot_v29(instances, references.plan, slots,
                             loan.original.instance, loan.original.local, loan.original.generation,
                             loan.original.ty, budget)?, None)
@@ -1601,6 +1631,7 @@ fn source_address_accesses_v29(
                 },
                 raw,
                 direct_object,
+                safe_object,
             });
         }
     }

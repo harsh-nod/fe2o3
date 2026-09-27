@@ -132,6 +132,10 @@ fn typed_private_restriction_all_scalar_layouts_keep_allocation_and_memory_censu
                 let alias = inventory.operations()[2].results.start;
                 assert_eq!(proof.address(alias), proof.address(allocation));
                 let address = proof.address(alias).unwrap();
+                assert_eq!(proof.access_restriction(2), Some(address));
+                for other in [0, 1, 3, 4, usize::MAX] {
+                    assert!(proof.access_restriction(other).is_none());
+                }
                 assert_eq!(
                     (
                         address.allocation(),

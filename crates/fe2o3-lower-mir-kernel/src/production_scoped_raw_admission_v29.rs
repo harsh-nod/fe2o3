@@ -257,6 +257,7 @@ struct PendingSourceMemoryAccessV29 {
     anchor: usize,
     physical: SourceAddressAccessV29,
     object_location: Option<SourceStaticObjectLocationV29>,
+    safe_object: Option<SourceSafeObjectOriginV29>,
     alternatives: std::ops::Range<usize>,
 }
 
@@ -1842,6 +1843,7 @@ fn check_expanded_source_memory_inner_v29(
 }
 
 include!("production_source_direct_object_activation_v29.rs");
+include!("production_source_safe_object_activation_v29.rs");
 
 fn retain_pending_memory_v29(
     instances: &ExecutionInstancesV29<'_>,
@@ -2039,6 +2041,13 @@ fn retain_pending_memory_v29(
             #[cfg(test)]
             test_direct_object_invocation_v29(instances, plan, slots, source, budget)?;
             emission_push_v1(&mut output.alternatives, alternative, budget)?;
+        } else if source.safe_object.is_some()
+            && let Some(alternative) = source_safe_object_invocation_v29(
+                instances, plan, slots, source, budget)?
+        {
+            #[cfg(test)]
+            test_safe_object_invocation_v29(instances, plan, slots, source, budget)?;
+            emission_push_v1(&mut output.alternatives, alternative, budget)?;
         } else if ordinary_indices
             && matches!(
                 slots.slots.get(source.physical.slot)
@@ -2075,6 +2084,7 @@ fn retain_pending_memory_v29(
             anchor: source.anchor,
             physical: source.physical,
             object_location,
+            safe_object: source.safe_object,
             alternatives: first..output.alternatives.len(),
         });
     }

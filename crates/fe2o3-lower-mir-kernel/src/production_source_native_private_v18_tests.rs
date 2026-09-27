@@ -306,6 +306,67 @@ fn private_native_complete_source_root_and_repeated_helper_reach_real_nine_stage
 }
 
 #[test]
+fn private_native_safe_readonly_aliases_reach_real_nine_stages() {
+    for factory in [
+        safe_private_root_owner_v18 as fn() -> _,
+        safe_private_helper_owner_v18,
+        safe_private_nested_owner_v18,
+    ] {
+        assert_private_native_positive_v18(&private_native_full_v18(factory));
+    }
+}
+
+#[test]
+fn private_native_safe_aliases_cannot_replace_missing_source_coverage() {
+    assert_private_native_positive_v18(&private_native_full_v18(safe_private_root_owner_v18));
+    for case in [
+        PrivateNativeCaseV18::MissingRoot,
+        PrivateNativeCaseV18::MissingOperation,
+        PrivateNativeCaseV18::OldLifecycle,
+    ] {
+        let run = private_native_run_v18(
+            safe_private_root_owner_v18,
+            case,
+            OPTIMIZED_SOURCE_WORK_LIMIT_V18,
+            MODULE_LIMIT,
+        );
+        assert!(!run.entered, "incomplete source entered native policies");
+        match case {
+            PrivateNativeCaseV18::MissingRoot | PrivateNativeCaseV18::MissingOperation => {
+                let Some(Err(NativeLifecycleErrorV18::Source(
+                    ProductionSourceOwnedViewErrorV18::Binding(detail),
+                ))) = &run.observed
+                else {
+                    panic!("{case:?}: {:?}", run.observed);
+                };
+                assert_eq!(
+                    *detail,
+                    if matches!(case, PrivateNativeCaseV18::MissingRoot) {
+                        "private native root request was not completed"
+                    } else {
+                        "private native global physical/source census incomplete"
+                    }
+                );
+                assert!(run.outer.is_err() && run.roots > 0);
+            }
+            PrivateNativeCaseV18::OldLifecycle => {
+                let Some(Err(NativeLifecycleErrorV18::Unresolved(obligation))) = &run.observed
+                else {
+                    panic!("old lifecycle Memory refusal: {:?}", run.observed);
+                };
+                assert_eq!(
+                    obligation.requirement(),
+                    fe2o3_pliron::CanonicalRankedSourceRequirementV18::Memory
+                );
+                assert!(run.outer.is_ok() && run.roots == 0);
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(run.storage, MODULE_FLOOR);
+    }
+}
+
+#[test]
 fn private_native_does_not_widen_the_old_lifecycle_completed_api() {
     assert_private_native_positive_v18(&private_native_full_v18(typed_root_entry_rhs_owner_v18));
     let run = private_native_run_v18(
@@ -348,7 +409,12 @@ fn private_native_keeps_complete_original_lifecycle_subroster_across_two_roots()
         let output = optimized.output_inventory(budget)?;
         let expected_functions = output.functions().len();
         assert_eq!(expected_functions, 3);
-        assert!(output.functions().iter().all(|row| row.function.body.is_some()));
+        assert!(
+            output
+                .functions()
+                .iter()
+                .all(|row| row.function.body.is_some())
+        );
         private_native_ranked_fixture_v18(
             original,
             optimized,
@@ -365,11 +431,18 @@ fn private_native_keeps_complete_original_lifecycle_subroster_across_two_roots()
                         budget,
                         |request, budget| {
                             assert_eq!(request.root(budget)?, roots.get());
-                            let (semantic, input_function) = original.source.root(roots.get(), budget)?;
+                            let (semantic, input_function) =
+                                original.source.root(roots.get(), budget)?;
                             let mapped = optimized_source_root_function_v18(
-                                original, optimized, roots.get(), budget,
+                                original,
+                                optimized,
+                                roots.get(),
+                                budget,
                             )?;
-                            assert_eq!(mapped.function.id, original.inventory.functions()[input_function].function.id);
+                            assert_eq!(
+                                mapped.function.id,
+                                original.inventory.functions()[input_function].function.id
+                            );
                             let function = mapped.coordinate.0 as usize;
                             assert!(matches!(semantic.index(), 0 | 1 | 4));
                             assert!(function < expected_functions);
@@ -394,10 +467,14 @@ fn private_native_keeps_complete_original_lifecycle_subroster_across_two_roots()
                             assert_eq!(output_roots.get(), (1 << expected_functions) - 1);
                             assert_eq!(native.function_count(budget)?, expected_functions);
                             for function in 0..expected_functions {
-                                let report = native.report(function, budget)?.expect("every authentic definition has a native report");
+                                let report = native
+                                    .report(function, budget)?
+                                    .expect("every authentic definition has a native report");
                                 assert!(report.is_clean());
                                 assert_eq!(report.pass_order().len(), 9);
-                                let history = native.history(function, budget)?.expect("every authentic definition has invocation history");
+                                let history = native
+                                    .history(function, budget)?
+                                    .expect("every authentic definition has invocation history");
                                 assert_eq!(history.function(), function);
                             }
                             assert!(native.diagnostic(budget)?.last_invocation().is_some());
@@ -675,7 +752,15 @@ fn private_native_nonentry_writes_stay_unresolved_after_authentic_source_prepara
 
 #[test]
 fn private_native_complete_transaction_has_exact_and_both_one_short_limits() {
-    let factory = typed_entry_rhs_owner_v18;
+    private_native_exact_limits_v18(typed_entry_rhs_owner_v18);
+}
+
+#[test]
+fn private_native_safe_alias_transaction_has_exact_and_both_one_short_limits() {
+    private_native_exact_limits_v18(safe_private_nested_owner_v18);
+}
+
+fn private_native_exact_limits_v18(factory: fn() -> ProductionSemanticSsaOwnerV1) {
     let ample = private_native_full_v18(factory);
     assert_private_native_positive_v18(&ample);
     let exact = private_native_run_v18(

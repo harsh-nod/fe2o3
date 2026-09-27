@@ -505,8 +505,8 @@ fn source_private_allocations_v18<'a>(
     Ok(rows)
 }
 
-fn source_private_current_slot_v18(
-    currentness: &CheckedOptimizedSourceMemoryV18<'_>,
+fn source_private_current_slot_v18<'a>(
+    currentness: &'a CheckedOptimizedSourceMemoryV18<'_>,
     original: &ProductionSourceCorrespondenceV18<'_>,
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
     root: usize,
@@ -514,7 +514,7 @@ fn source_private_current_slot_v18(
     before: ValueId,
     after: ValueId,
     budget: &mut ArgumentBudgetV1<'_>,
-) -> SourceOwnedResultV18<usize> {
+) -> SourceOwnedResultV18<&'a PendingSourceMemoryAccessV29> {
     if !currentness.retained_value_footprint_v18(
         original,
         optimized,
@@ -553,16 +553,92 @@ fn source_private_current_slot_v18(
         .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
             "source private currentness exact occurrence",
         ))?;
-    Ok(currentness
+    currentness
         .original
         .pending
         .accesses
         .get(row.original)
         .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
             "source private currentness original row",
-        ))?
-        .physical
-        .slot)
+        ))
+}
+
+fn source_private_safe_allocation_v18(
+    currentness: &CheckedOptimizedSourceMemoryV18<'_>,
+    allocation: &SourcePrivateAllocationV18<'_>,
+    object: &OptimizedSourceObjectV18<'_>,
+    access: &PendingSourceMemoryAccessV29,
+    safe: SourceSafeObjectOriginV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<()> {
+    budget.charge_work(26)?;
+    let endpoint = match object.original.source.role {
+        ScopedObjectRoleV29::ReadValue { source, .. }
+            if safe.key.access == SourceReferenceAccessV29::Read =>
+        {
+            source
+        }
+        ScopedObjectRoleV29::WriteValue { destination, .. }
+            if safe.key.access == SourceReferenceAccessV29::Write =>
+        {
+            destination
+        }
+        _ => {
+            return Err(ProductionSourceOwnedViewErrorV18::Binding(
+                "source private safe access changed original role",
+            ));
+        }
+    };
+    let ScopedSlotRepresentationV29::Object { schema, .. } = allocation.original.representation
+    else {
+        return Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "source private safe allocation schema",
+        ));
+    };
+    let alternatives = currentness
+        .original
+        .pending
+        .alternatives
+        .get(access.alternatives.clone())
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "source private safe activation range",
+        ))?;
+    let [alternative] = alternatives else {
+        return Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "source private safe activation is not exact",
+        ));
+    };
+    if access.instance.index() != object.original.instance
+        || access.anchor != object.original.row
+        || safe.key.site.instance != access.instance
+        || object.original.anchor.source != Some(safe.frame)
+        || safe.referent.generation != 0
+        || allocation.original.instance != safe.referent.instance
+        || allocation.original.origin.identity
+            != (ScopedAllocationIdentityV29::OriginalObject {
+                local: safe.referent.local.index(),
+                generation: 0,
+            })
+        || allocation.original.origin.semantic_type != safe.referent.ty
+        || endpoint.root_type != safe.referent.ty
+        || endpoint.projected_type != safe.referent.ty
+        || endpoint.root_schema != schema
+        || endpoint.projected_schema != schema
+        || endpoint.path.count != 0
+        || !matches!(endpoint.object, ScopedObjectIdentityV29::Reference { instance, site, role, dereference_prefix }
+            if instance == access.instance && site == safe.frame.site
+                && safe.frame.role == Some(ScopedMemoryRoleV29::Operand(role)) && dereference_prefix != 0)
+        || alternative.instance != safe.referent.instance
+        || alternative.local != safe.referent.local
+        || alternative.slot != allocation.slot
+        || alternative.activation != SourceMemoryActivationV29::Invocation
+        || alternative.formation != Some(safe.formation)
+    {
+        return Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "source private safe access differs from original referent and activation",
+        ));
+    }
+    Ok(())
 }
 
 fn source_private_entry_destination_v18(
@@ -693,7 +769,7 @@ fn source_private_access_row_v18(
         .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
             "source private access allocation lacks original backing",
         ))?;
-    let slot = source_private_current_slot_v18(
+    let access = source_private_current_slot_v18(
         currentness,
         original,
         core.optimized,
@@ -706,15 +782,25 @@ fn source_private_access_row_v18(
     budget.charge_work(7)?;
     if !core.physical.operation(ordinal)
         || allocation.root != root
-        || allocation.slot != slot
-        || allocation.original.instance.index() != object.original.instance
-        || allocation.pointer != after
+        || allocation.slot != access.physical.slot
         || address.length() != 1
         || address.offset() != 0
     {
         return original
             .source
             .missing("source private access source slot and physical allocation differ");
+    }
+    if let Some(safe) = access.safe_object {
+        // `after` was independently resolved through the physical definition
+        // table above. Only this authenticated safe origin permits a distinct
+        // pointer/access instance; equal allocation numbers alone do not.
+        source_private_safe_allocation_v18(currentness, allocation, object, access, safe, budget)?;
+    } else if allocation.original.instance.index() != object.original.instance
+        || allocation.pointer != after
+    {
+        return original
+            .source
+            .missing("source private direct access pointer or source instance differs");
     }
     let kind = match (object.original.actual.operation, object.actual.operation) {
         (
@@ -993,6 +1079,33 @@ fn source_private_root_headers_v18() -> Result<usize, ArgumentResourceV1> {
         source_private_header_v18::<&OptimizedSourceMemoryOccurrenceV18>()?,
         source_private_header_v18::<Option<&PendingSourceMemoryAccessV29>>()?,
         source_private_header_v18::<&PendingSourceMemoryAccessV29>()?,
+        source_private_header_v18::<&PendingSourceMemoryAccessV29>()?,
+        source_private_header_v18::<SourceSafeObjectOriginV29>()?,
+        source_private_header_v18::<Option<SourceSafeObjectOriginV29>>()?,
+        source_private_header_v18::<SourceReferenceAccessV29>()?,
+        source_private_header_v18::<SourceMemoryActivationV29>()?,
+        source_private_header_v18::<Option<SourceReferenceSiteV29>>()?,
+        source_private_header_v18::<Option<ScopedMemoryFrameV29>>()?,
+        source_private_header_v18::<Option<ScopedMemoryRoleV29>>()?,
+        source_private_header_v18::<Option<&[PendingSourceMemoryAlternativeV29]>>()?,
+        source_private_header_v18::<&[PendingSourceMemoryAlternativeV29]>()?,
+        source_private_header_v18::<&PendingSourceMemoryAlternativeV29>()?,
+        source_private_header_v18::<std::ops::Range<usize>>()?,
+        source_private_header_v18::<ScopedObjectEndpointV29>()?,
+        source_private_header_v18::<ScopedSlotRepresentationV29>()?,
+        source_private_header_v18::<(
+            &CheckedOptimizedSourceMemoryV18<'_>,
+            &SourcePrivateAllocationV18<'_>,
+            &OptimizedSourceObjectV18<'_>,
+            &PendingSourceMemoryAccessV29,
+            SourceSafeObjectOriginV29,
+            &mut ArgumentBudgetV1<'_>,
+        )>()?,
+        source_private_header_v18::<ProductionCallInstanceIdV1>()?,
+        source_private_header_v18::<ExecutionSiteV29>()?,
+        source_private_header_v18::<ExecutionOperandV29>()?,
+        source_private_header_v18::<u32>()?,
+        source_private_header_v18::<fe2o3_kernel_ir::StorageLayoutIdV1>()?,
         source_private_header_v18::<Option<&mut Option<SourcePrivateOperationV18>>>()?,
         source_private_header_v18::<&mut Option<SourcePrivateOperationV18>>()?,
         source_private_header_v18::<
@@ -1128,6 +1241,154 @@ impl CheckedSourcePrivatePhysicalV18<'_> {
             )?;
         }
         result
+    }
+}
+
+#[cfg(test)]
+impl CheckedSourcePrivateMemoryV18<'_> {
+    pub(super) fn test_safe_pointer_substitution_v18(
+        &self,
+        other_allocation: bool,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<()> {
+        self.check(budget)?;
+        // These are actual-view query substitutions, not fabricated canonical
+        // owners. The full unchanged composition must precede each refusal.
+        budget.reserve_storage(argument_sum_v1(&[
+            source_private_root_headers_v18()?,
+            source_private_header_v18::<std::slice::Iter<'_, OptimizedSourceMemoryOccurrenceV18>>(
+            )?,
+            source_private_header_v18::<Option<&OptimizedSourceMemoryOccurrenceV18>>()?,
+            source_private_header_v18::<
+                std::slice::Iter<'_, Option<SourcePrivateAllocationV18<'_>>>,
+            >()?,
+            source_private_header_v18::<Option<&Option<SourcePrivateAllocationV18<'_>>>>()?,
+            source_private_header_v18::<(bool, &Self, &mut ArgumentBudgetV1<'_>)>()?,
+        ])?)?;
+        for row in self.currentness.accesses {
+            budget.charge_work(5)?;
+            let original = &self.currentness.original.pending.accesses[row.original];
+            let Some(safe) = original.safe_object else {
+                continue;
+            };
+            if safe.key.access != SourceReferenceAccessV29::Read {
+                continue;
+            }
+            let Some((output, access, pointer)) = row.output else {
+                panic!("retained safe read");
+            };
+            let (input, input_pointer) =
+                immutable_memory_access_v29(self.physical.original, self.root, original, budget)?;
+            assert!(self.currentness.retained_value_footprint_v18(
+                self.physical.original,
+                self.physical.optimized,
+                self.root,
+                original.instance.index(),
+                input,
+                row.input_access,
+                input_pointer,
+                Some((output, access, pointer)),
+                budget
+            )?);
+            let mut replacement = None;
+            for candidate in self.physical.allocations {
+                budget.charge_work(2)?;
+                if let Some(candidate) = candidate
+                    && candidate.root == self.root
+                    && (candidate.slot != original.physical.slot) == other_allocation
+                    && candidate.pointer != pointer
+                {
+                    replacement = Some(candidate.pointer);
+                    break;
+                }
+            }
+            let replacement = replacement.expect("genuine direct or other same-schema allocation");
+            return self
+                .currentness
+                .retained_value_footprint_v18(
+                    self.physical.original,
+                    self.physical.optimized,
+                    self.root,
+                    original.instance.index(),
+                    input,
+                    row.input_access,
+                    input_pointer,
+                    Some((output, access, replacement)),
+                    budget,
+                )
+                .map(|_| ());
+        }
+        panic!("safe reference read required before hostile query")
+    }
+
+    pub(super) fn test_safe_counts_v18(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<[usize; 3]> {
+        self.check(budget)?;
+        let floor = budget.storage();
+        let mut counts = [0; 3];
+        scoped_source_attempt_v29(
+            self.physical.original.source.cleanup,
+            budget,
+            floor,
+            |budget| {
+                budget.reserve_storage(argument_sum_v1(&[source_private_root_headers_v18()?,
+                source_private_header_v18::<[usize; 3]>()?,
+                source_private_header_v18::<(&Self, &mut [usize; 3], &mut ArgumentBudgetV1<'_>)>()?,
+            ])?)?;
+                let output = self.physical.optimized.output_inventory(budget)?;
+                for (relative, row) in self.rows.iter().enumerate() {
+                    budget.charge_work(6)?;
+                    let Some(row) = row else {
+                        continue;
+                    };
+                    if !matches!(row.kind, SourcePrivateOperationKindV18::Read { .. }) {
+                        continue;
+                    }
+                    let key = [
+                        row.input.block.function.0 as usize,
+                        row.input.block.block as usize,
+                        row.input.operation as usize,
+                        0,
+                    ];
+                    let at = private_array_partition_v1(
+                        self.currentness.accesses,
+                        optimized_currentness_occurrence_key_v18,
+                        key,
+                        false,
+                        &mut SourceCorrespondenceWorkV18(budget),
+                    )?;
+                    let checked = &self.currentness.accesses[at];
+                    assert_eq!(optimized_currentness_occurrence_key_v18(checked), key);
+                    let original = &self.currentness.original.pending.accesses[checked.original];
+                    let Some(safe) = original.safe_object else {
+                        continue;
+                    };
+                    let allocation = self.physical.allocations[row.allocation].as_ref().unwrap();
+                    let OperationKind::Storage(ScopedObjectOperationV29::ReadValue {
+                        address, ..
+                    }) = output.operations()[self.first + relative].operation.kind
+                    else {
+                        panic!("genuine safe typed read");
+                    };
+                    assert_eq!(original.instance.index(), row.instance);
+                    assert_eq!(safe.referent.instance, allocation.original.instance);
+                    assert_eq!(original.physical.slot, allocation.slot);
+                    counts[0] += 1;
+                    counts[1] += usize::from(original.instance != safe.referent.instance);
+                    counts[2] += usize::from(address != allocation.pointer);
+                }
+                Ok::<_, ProductionSourceOwnedViewErrorV18>(())
+            },
+        )?;
+        budget.release_storage(
+            budget
+                .storage()
+                .checked_sub(floor)
+                .ok_or(ArgumentResourceV1::Accounting)?,
+        )?;
+        Ok(counts)
     }
 }
 

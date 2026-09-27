@@ -39,6 +39,32 @@ impl PrivateMemoryOwner for VerifiedCanonicalKernelIrModuleV18 {
 pub type CheckedCanonicalKirPrivateMemoryV18<'a, 'g> =
     CheckedCanonicalKirPrivateMemoryV1<'a, 'g, VerifiedCanonicalKernelIrModuleV18>;
 
+impl CheckedCanonicalKirPrivateMemoryV18<'_, '_> {
+    /// The authenticated direct typed allocation of an exact RW-to-RO cast.
+    /// This allocation-free query grants neither source nor native authority;
+    /// the cast remains absent from the memory-operation census. Consumers
+    /// account for their query frames and work, as for `address`/`operation`.
+    pub fn access_restriction(
+        &self,
+        operation: usize,
+    ) -> Option<&CanonicalKirPrivateMemoryAddressV1> {
+        let row = self.inventory().operations().get(operation)?;
+        if self.operation(operation)
+            || row.results.len() != 1
+            || !matches!(
+                row.operation.kind,
+                OperationKind::Cast {
+                    kind: CastKind::RestrictPointerAccess,
+                    ..
+                }
+            )
+        {
+            return None;
+        }
+        self.address(row.results.start)
+    }
+}
+
 /// Checks whole scalar `StorageObject` reads/writes in addition to the unchanged
 /// ordinary private-scalar family. The layout table comes only from the exact
 /// immutable inventory owner. Reserve the returned receipt immediately, as for

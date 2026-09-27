@@ -168,6 +168,7 @@ struct PrivateSourceCompletionV18<'a> {
     coverage: &'a [bool],
     roots: usize,
     memory: usize,
+    aliases: usize,
     required: usize,
 }
 impl PrivateSourceCompletionV18<'_> {
@@ -209,8 +210,10 @@ impl PrivateSourceCompletionV18<'_> {
             .owner(budget)
             .map_err(|error| recipes.pending_error(error))?;
         recipes.check_owner(owner, budget)?;
+        let proof = self.physical.native_physical_v18(budget)?;
         let mut previous = None;
         let mut memory = 0usize;
+        let mut aliases = 0usize;
         let mut execution_count = 0usize;
         for obligation in pending
             .obligations(budget)
@@ -232,13 +235,23 @@ impl PrivateSourceCompletionV18<'_> {
                         obligation.coordinate(),
                         budget,
                     ))?;
-                    if self.coverage.get(index) != Some(&true) {
+                    self.optimized
+                        .retain(budget.charge_work(12).map_err(Into::into))?;
+                    if self.coverage.get(index) == Some(&true) {
+                        memory = memory
+                            .checked_add(1)
+                            .ok_or(ArgumentResourceV1::Arithmetic)
+                            .map_err(ProductionSourceOwnedViewErrorV18::from)?;
+                    } else if proof.access_restriction(index).is_some_and(|address| {
+                        self.coverage.get(address.allocation()) == Some(&true)
+                    }) {
+                        aliases = aliases
+                            .checked_add(1)
+                            .ok_or(ArgumentResourceV1::Arithmetic)
+                            .map_err(ProductionSourceOwnedViewErrorV18::from)?;
+                    } else {
                         return Err(NativeError::Unresolved(*obligation));
                     }
-                    memory = memory
-                        .checked_add(1)
-                        .ok_or(ArgumentResourceV1::Arithmetic)
-                        .map_err(ProductionSourceOwnedViewErrorV18::from)?;
                 }
                 CanonicalRankedSourceRequirementV18::Execution => {
                     if execution.get(execution_count) != Some(obligation) {
@@ -251,11 +264,11 @@ impl PrivateSourceCompletionV18<'_> {
                 _ => return Err(NativeError::Unresolved(*obligation)),
             }
         }
-        if memory != self.memory || execution_count != execution.len() {
+        if memory != self.memory || aliases != self.aliases || execution_count != execution.len() {
             return Err(recipes.source_failure("private native complete obligation census differs"));
         }
         // Only the complete, ordered Execution sub-roster reaches the unchanged
-        // lifecycle join. Memory was independently discharged above.
+        // lifecycle join. Memory and pure aliases have separate exact censuses.
         recipes.join_pending(owner, execution, rows, budget)
     }
 }
@@ -526,6 +539,25 @@ fn private_native_source_headers_v18<E>(
         h::<DiagnosticCell>()?,
         h::<&[CanonicalRankedSourceObligationV18]>()?,
         h::<&fe2o3_kernel_analysis::CheckedCanonicalKirPrivateMemoryV18<'_, '_>>()?,
+        h::<&fe2o3_kernel_analysis::CheckedCanonicalKirPrivateMemoryV18<'_, '_>>()?,
+        h::<Option<&fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'_>>>()?,
+        h::<&fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'_>>()?,
+        h::<Option<&fe2o3_kernel_analysis::CanonicalKirPrivateMemoryAddressV1>>()?,
+        h::<&fe2o3_kernel_analysis::CanonicalKirPrivateMemoryAddressV1>()?,
+        h::<(
+            &fe2o3_kernel_analysis::CheckedCanonicalKirPrivateMemoryV18<'_, '_>,
+            usize,
+        )>()?,
+        h::<(
+            &PrivateSourceCompletionV18<'_>,
+            &fe2o3_kernel_analysis::CanonicalKirPrivateMemoryAddressV1,
+        )>()?,
+        h::<(
+            &[bool],
+            &fe2o3_kernel_analysis::CanonicalKirPrivateMemoryAddressV1,
+        )>()?,
+        h::<usize>()?,
+        h::<usize>()?,
         h::<&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18>()?,
         h::<&CheckedSourcePrivatePhysicalV18<'_>>()?,
         h::<&CheckedOptimizedSourceMemoryV18<'_>>()?,
@@ -778,8 +810,9 @@ where
         let coverage = rows.coverage.borrow();
         let proof = physical.native_physical_v18(budget)?;
         let mut memory = 0usize;
+        let mut aliases = 0usize;
         for (index, completed) in coverage.iter().enumerate() {
-            budget.charge_work(2)?;
+            budget.charge_work(14)?;
             if *completed != proof.operation(index) {
                 return Err(PrivateNativeFlowV18::Native(recipes.source_failure(
                     "private native global physical/source census incomplete",
@@ -787,6 +820,19 @@ where
             }
             if *completed {
                 memory = memory
+                    .checked_add(1)
+                    .ok_or(ArgumentResourceV1::Arithmetic)?;
+            }
+            // A pure access restriction uses the same physical allocation, but
+            // cannot discharge its source obligation without completed source
+            // coverage of that allocation. It never becomes a memory effect.
+            if let Some(address) = proof.access_restriction(index) {
+                if coverage.get(address.allocation()) != Some(&true) {
+                    return Err(PrivateNativeFlowV18::Native(recipes.source_failure(
+                        "private native alias allocation lacks source coverage",
+                    )));
+                }
+                aliases = aliases
                     .checked_add(1)
                     .ok_or(ArgumentResourceV1::Arithmetic)?;
             }
@@ -803,6 +849,7 @@ where
             coverage: &coverage,
             roots: completed_roots,
             memory,
+            aliases,
             required,
         };
         completion.join_pending(recipes, pending, &rows.execution, &rows.recipes, budget)?;

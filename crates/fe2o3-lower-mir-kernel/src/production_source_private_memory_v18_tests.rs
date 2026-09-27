@@ -1,3 +1,5 @@
+include!("production_source_safe_private_memory_v18_tests.rs");
+
 #[test]
 fn private_memory_source_error_preserves_typed_cause_and_existing_fixed_layout() {
     use fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1 as Physical;

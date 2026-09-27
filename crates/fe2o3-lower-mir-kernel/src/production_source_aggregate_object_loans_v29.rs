@@ -305,6 +305,9 @@ fn source_aggregate_object_access_v29(
             std::iter::Enumerate<std::slice::Iter<'_, SemanticProjectionV1>>,
         >(plan, budget)?;
         source_reference_owned_prepay_v29::<Option<(usize, &SemanticProjectionV1)>>(plan, budget)?;
+        source_reference_owned_prepay_v29::<bool>(plan, budget)?;
+        source_reference_owned_prepay_v29::<Option<&SemanticTypeDeclV1>>(plan, budget)?;
+        source_reference_owned_prepay_v29::<Option<&SemanticTypeShapeV1>>(plan, budget)?;
         budget.source_reference_charge_v29(plan, 10)?;
         if plan.storage == SourceReferenceStorageV29::PromotedOnly
             || place.projections().len() > 256
@@ -354,7 +357,26 @@ fn source_aggregate_object_access_v29(
             };
             if pointer.kind() != SemanticPointerKindV1::Reference
                 || pointer.metadata() != SemanticPointerMetadataV1::None
-                || !source_flat_aggregate_object_v29(types, pointer.pointee(), budget)?
+            {
+                return Ok(None);
+            }
+            // Reborrowing a whole primitive Object uses this same exact
+            // parent-pointer path, not an invented Read access. Aggregate
+            // Read/Write suffixes remain restricted to the existing family.
+            budget.source_reference_charge_v29(plan, 2)?;
+            let primitive_borrow = matches!(
+                access,
+                SourceReferenceAccessV29::Borrow(
+                    SemanticBorrowKindV1::Shared | SemanticBorrowKindV1::Mutable
+                )
+            ) && matches!(
+                types
+                    .get(pointer.pointee().index() as usize)
+                    .map(SemanticTypeDeclV1::shape),
+                Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+            );
+            if !primitive_borrow
+                && !source_flat_aggregate_object_v29(types, pointer.pointee(), budget)?
             {
                 return Ok(None);
             }
