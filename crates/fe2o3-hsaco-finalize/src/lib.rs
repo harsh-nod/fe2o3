@@ -21,6 +21,7 @@ use fe2o3_kernel_descriptor::{
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod conditional_worker_finalization;
+mod conditional_worker_replay;
 mod engineering_hsaco;
 mod first_build_worker_binding;
 mod first_build_worker_conditional;
@@ -93,6 +94,7 @@ pub use conditional_worker_finalization::{
     ConditionalWorkerFinalizationStorageV5, PreparedFinalizedConditionalWorkerHsacoV5,
     finalize_conditional_worker_hsaco_v5,
 };
+pub use conditional_worker_replay::revalidate_conditional_worker_finalizer_v5;
 pub use engineering_hsaco::{
     EngineeringHsacoErrorV1, EngineeringHsacoObservationV1, EngineeringProviderObservationV1,
     observe_engineering_hsaco_v1,

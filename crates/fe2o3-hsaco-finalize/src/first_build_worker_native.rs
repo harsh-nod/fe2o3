@@ -24,7 +24,6 @@ use crate::{
         native_handoff_storage_floor,
     },
     first_build_worker_native_resources::NativeWorkerResourceQuote,
-    first_build_worker_v3::{calculate_worker_evidence_identity_parts, validate_replay_parts},
     native_worker_engine::{execute_native_engine, prepare_native_engine},
     worker_executor::InertWorkerExecutionV2,
 };
@@ -473,6 +472,7 @@ pub(crate) fn recover_prepaid_native_worker_evidence_v1(
         worker,
         limits,
     } = input;
+    let identity = exchanges.validate_identity((&binding).into(), decoded, &worker, limits)?;
     let crate::worker_finalizer_replay_engine::ReconstructedWorkerExchanges {
         plan,
         bootstrap_request_bytes,
@@ -480,28 +480,6 @@ pub(crate) fn recover_prepaid_native_worker_evidence_v1(
         replay_request_bytes,
         replay_response,
     } = exchanges;
-    validate_replay_parts(
-        (&binding).into(),
-        &worker,
-        decoded,
-        &plan,
-        &bootstrap_request_bytes,
-        &bootstrap_response,
-        &replay_request_bytes,
-        &replay_response,
-    )
-    .map_err(|e| failure("recovered transcript replay", e))?;
-    let identity = calculate_worker_evidence_identity_parts(
-        (&binding).into(),
-        &worker,
-        limits,
-        &plan,
-        &bootstrap_request_bytes,
-        bootstrap_response.canonical_bytes(),
-        &replay_request_bytes,
-        replay_response.canonical_bytes(),
-    )
-    .map_err(|e| failure("recovered evidence identity", e))?;
     let storage = NativeFirstBuildWorkerStorageV1(
         quote
             .returned_retained_storage()

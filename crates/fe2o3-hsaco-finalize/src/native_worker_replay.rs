@@ -49,7 +49,7 @@ const FRAME: usize = 2 * size_of::<NativeWorkerReplaySource>()
 /// Additional unreserved Worker/finalizer charge. Source and transcript funding
 /// remain separately paid; no recovered value represents fresh process custody.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NativeWorkerReplayStorageV1(usize);
+pub struct NativeWorkerReplayStorageV1(pub(crate) usize);
 impl NativeWorkerReplayStorageV1 {
     pub const fn retained_storage(self) -> usize {
         self.0
@@ -81,7 +81,7 @@ impl fmt::Display for NativeWorkerReplayErrorV1 {
 }
 impl std::error::Error for NativeWorkerReplayErrorV1 {}
 type Result<T> = std::result::Result<T, NativeWorkerReplayErrorV1>;
-fn failure(phase: &'static str, value: impl fmt::Display) -> NativeWorkerReplayErrorV1 {
+pub(crate) fn failure(phase: &'static str, value: impl fmt::Display) -> NativeWorkerReplayErrorV1 {
     NativeWorkerReplayErrorV1::Stage {
         phase,
         diagnostic: NativeWorkerDiagnosticV1::from_display(value),
@@ -358,7 +358,7 @@ pub(crate) fn reconstruct_raw(
     }
 }
 
-fn prepare_providers(
+pub(crate) fn prepare_providers(
     replay: &crate::worker_v3_compact_finalizer_replay::ProtectedWorkerV3CompactFinalizerReplayViewV2<'_>,
     payloads: Vec<Vec<u8>>,
     budget: &mut Budget<'_>,

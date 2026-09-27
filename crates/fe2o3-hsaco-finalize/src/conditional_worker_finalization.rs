@@ -24,7 +24,7 @@ use std::mem::size_of;
 const DOMAIN: &[u8] = b"FE2O3/CONDITIONAL-WORKER-CANONICAL-FINALIZATION/V5\0";
 const FRAME: usize = 2 * size_of::<PreparedFinalizedConditionalWorkerHsacoV5>() + 4096;
 
-/// Actual consumed V5 source/worker owner plus exact V5 artifact bytes. This is
+/// Actual consumed or recovered V5 source/worker owner plus exact V5 artifact bytes. This is
 /// structural evidence, not protected origin, machine refinement or authority.
 /// ```compile_fail
 /// use fe2o3_hsaco_finalize::{PreparedFinalizedConditionalWorkerHsacoV5 as C,
@@ -75,7 +75,7 @@ impl ConditionalWorkerFinalizationStorageV5 {
     }
 }
 
-/// Finalizes only the exact descriptor carried by the consumed conditional
+/// Finalizes only the exact descriptor carried by the retained conditional
 /// source. The caller prepays source custody and reserves the returned header
 /// charge before retaining the result. Worker-wire decoding and artifact
 /// inspection retain their existing separately bounded work/storage domain;
@@ -170,6 +170,12 @@ fn finalize_artifact(
     b.with_prepaid_scope(b.storage(), 0, 0, SCRATCH, |b| {
         finalize_unfinalized_nominal_hsaco_v5(raw, abi, SCRATCH, &mut |w| b.charge_work(w))
             .map_err(|e| descriptor_error("V5 finalization", e))
+    })
+}
+pub(crate) fn reconstruct_artifact(finalized: &[u8], b: &mut Budget<'_>) -> Result<Vec<u8>, Error> {
+    b.with_prepaid_scope(b.storage(), 0, 0, SCRATCH, |b| {
+        crate::derive_unfinalized_nominal_hsaco_v5(finalized, SCRATCH, &mut |w| b.charge_work(w))
+            .map_err(|e| descriptor_error("V5 raw reconstruction", e))
     })
 }
 fn descriptor_error(phase: &'static str, e: NominalFinalizationErrorV5<Resource>) -> Error {

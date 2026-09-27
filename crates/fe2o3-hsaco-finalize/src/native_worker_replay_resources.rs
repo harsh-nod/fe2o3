@@ -1,7 +1,7 @@
 //! Checked Rust resource schedule for native durable Worker replay.
 //!
 //! Covers one nested V2 decode, `reconstruct_worker_exchanges`, and
-//! `recover_prepaid_native_worker_evidence_v1` on the ORIGINAL caller ledger.
+//! native/conditional evidence reconstruction on the ORIGINAL caller ledger.
 //! Source/carrier recovery, receipt reconstruction and raw-HSACO derivation,
 //! hashing/inspection in the artifact domain remain separately bounded/charged.
 //! The shared reconstruction helper's *additional* raw-output hash is paid here.
@@ -28,7 +28,8 @@
 //! reserving reconstruction_storage in Budget::with_prepaid_scope. That scope
 //! restores scratch on every outcome. The returned evidence then needs a NEW
 //! reservation of first_build.returned_retained_storage() plus
-//! sizeof(InertNativeFirstBuildWorkerEvidenceV1); source storage remains separate.
+//! its actual evidence owner size; source storage remains separate. The V5
+//! adapter extends the baseline schedule with `for_evidence` before admission.
 //! The closed Consumed/Replayed owner is sized using its current Rust type.
 //! Caller frame headers are additional. Spare caller capacity, allocator metadata,
 //! RSS and CPU instruction counts are excluded, as in the original quote.
@@ -80,6 +81,20 @@ pub(crate) struct NativeWorkerReplayResourceQuote {
 }
 
 impl NativeWorkerReplayResourceQuote {
+    /// Extend, never discount, the audited schedule for a larger typed owner.
+    /// The common request/response work is unchanged across native families.
+    pub(crate) fn for_evidence<E>(mut self) -> Result<Self> {
+        let shell = size_of::<E>();
+        sum(
+            [self.first_build.returned_retained_storage(), shell],
+            "replay evidence owner",
+        )?;
+        let extra = shell.saturating_sub(size_of::<InertNativeFirstBuildWorkerEvidenceV1>());
+        self.reconstruction_work = sum([self.reconstruction_work, extra], "replay owner work")?;
+        self.reconstruction_storage =
+            sum([self.reconstruction_storage, extra], "replay owner storage")?;
+        Ok(self)
+    }
     pub(crate) fn new(
         module: &CompilerModuleHandoffV2,
         providers: &[WorkerInputV1],

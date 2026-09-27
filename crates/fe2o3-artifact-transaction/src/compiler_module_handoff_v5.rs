@@ -28,6 +28,9 @@ type Error = CompilerModuleHandoffErrorV5;
 type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
+#[path = "compiler_module_handoff_v5_replay_tests.rs"]
+mod replay_tests;
+#[cfg(test)]
 #[path = "compiler_module_handoff_v5_tests.rs"]
 pub(crate) mod tests;
 
@@ -43,6 +46,7 @@ const FRAME_STORAGE: usize = 4 * schema::RECORD_BYTES
     + size_of::<PublishedHandoff<Schema>>()
     + size_of::<Error>()
     + 256;
+const REPLAY_SCRATCH_STORAGE: usize = currentness::replay_scratch_storage::<Schema, Error>();
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum CompilerModuleHandoffSlotV5 {
@@ -396,6 +400,41 @@ pub fn recover_compiler_module_handoff_receipt_v5(
             CompilerModuleHandoffSlotV5::Production,
             resources,
         )?)
+    })
+}
+
+/// Rederive inert occurrence coordinates from the complete strictly decoded V5
+/// handoff. This observes no filesystem and creates no currentness/consumption
+/// token. Historical bytes need not have been published or remain current.
+///
+/// Keep the handoff's backing capacity and decode metadata prepaid on the same
+/// account. Producer text and the complete transport are charged before hashing;
+/// scratch is released on return. The returned fixed receipt is unreserved.
+/// ```compile_fail
+/// use fe2o3_artifact_transaction::{CompilerModuleHandoffReceiptV5 as R,
+///     ConsumedCompilerModuleHandoffV5 as C};
+/// fn promote(receipt: R) -> C { receipt.into() }
+/// ```
+pub fn rederive_compiler_module_handoff_receipt_for_replay_v5(
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    slot: CompilerModuleHandoffSlotV5,
+    expected_transaction: CompilerModuleHandoffTransactionIdentityV5,
+    handoff: &Handoff,
+    budget: &mut Budget<'_>,
+) -> Result<CompilerModuleHandoffReceiptV5> {
+    entry(budget, payload_storage(handoff)?, |resources| {
+        resources.reserve(REPLAY_SCRATCH_STORAGE)?;
+        currentness::rederive_receipt::<Schema>(
+            producer,
+            attempt,
+            slot,
+            expected_transaction.as_bytes(),
+            handoff,
+            handoff.canonical_bytes(),
+            resources,
+        )
+        .map_err(Error::from)
     })
 }
 

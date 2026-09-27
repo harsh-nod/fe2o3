@@ -5,6 +5,7 @@ use crate::{
     WorkerResponseV2,
     first_build_worker_conditional_binding::{
         ProtectedCompilerConditionalHandoffBindingV2 as Binding, require_storage_limit,
+        storage_floor,
     },
     first_build_worker_engine::ReproducibleFirstBuildEnginePreflight as Engine,
     first_build_worker_native::failure,
@@ -61,9 +62,29 @@ impl Prepared {
     }
 }
 
-/// Retains the actual consumed conditional source, final graph and catalog with
-/// both measured worker exchanges. No source replay or ordinary projection is
-/// substituted. Reproducibility grants no protected origin, machine refinement,
+enum ConditionalSource {
+    Consumed(Consumed<Source>),
+    Replayed { source: Source, receipt: Receipt },
+}
+impl ConditionalSource {
+    const fn content(&self) -> &Source {
+        match self {
+            Self::Consumed(value) => value.content(),
+            Self::Replayed { source, .. } => source,
+        }
+    }
+    const fn receipt(&self) -> Receipt {
+        match self {
+            Self::Consumed(value) => value.receipt(),
+            Self::Replayed { receipt, .. } => *receipt,
+        }
+    }
+}
+
+/// Retains the actual consumed or independently recovered conditional source,
+/// final graph and catalog with
+/// both Worker exchanges. No ordinary projection or digest replaces the source.
+/// Reproducibility grants no protected origin, machine refinement,
 /// publication, load or launch authority.
 /// ```compile_fail
 /// use fe2o3_hsaco_finalize::InertConditionalFirstBuildWorkerEvidenceV2 as E;
@@ -79,7 +100,7 @@ impl Prepared {
 /// fn downgrade(c: C) -> N { c.into() }
 /// ```
 pub struct InertConditionalFirstBuildWorkerEvidenceV2 {
-    source: Consumed<Source>,
+    source: ConditionalSource,
     binding: Binding,
     identity: [u8; 32],
     worker: WorkerMeasurementV1,
@@ -94,6 +115,13 @@ pub struct InertConditionalFirstBuildWorkerEvidenceV2 {
 }
 type Evidence = InertConditionalFirstBuildWorkerEvidenceV2;
 impl Evidence {
+    pub const fn custody(&self) -> crate::NativeWorkerEvidenceCustodyV1 {
+        use crate::NativeWorkerEvidenceCustodyV1 as Custody;
+        match &self.source {
+            ConditionalSource::Consumed(_) => Custody::ConsumedPublication,
+            ConditionalSource::Replayed { .. } => Custody::RecoveredTranscript,
+        }
+    }
     pub(crate) fn revalidate_for_artifact(&self, b: &mut Budget<'_>) -> Result<(), Error> {
         b.with_prepaid_scope(self.retained_storage, 8, ENTRY_WORK, FRAME, |b| {
             if self.source.receipt() != self.binding.receipt()
@@ -323,7 +351,7 @@ pub fn execute_preflighted_conditional_reproducible_first_build_worker_v2(
                 execute_native_engine((&binding).into(), engine, &measurement, limits, worker)?;
             Ok((
                 Evidence {
-                    source: consumed,
+                    source: ConditionalSource::Consumed(consumed),
                     binding,
                     identity,
                     worker: measurement,
@@ -347,4 +375,64 @@ fn currentness_error(error: HandoffError) -> Error {
         HandoffError::Resource(e) => e.into(),
         other => failure("V5 currentness", other),
     }
+}
+
+pub(crate) struct ConditionalWorkerReplaySource {
+    pub(crate) source: Source,
+    pub(crate) binding: Binding,
+    pub(crate) worker: WorkerMeasurementV1,
+    pub(crate) limits: WorkerExecutionLimitsV1,
+}
+
+/// Only the original-account prepaid replay adapter calls this constructor.
+/// Recovered exchanges retain their actual source without creating consumption.
+pub(crate) fn recover_prepaid_conditional_worker_evidence_v2(
+    input: ConditionalWorkerReplaySource,
+    decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
+    exchanges: crate::worker_finalizer_replay_engine::ReconstructedWorkerExchanges,
+    quote: &Quote,
+) -> Result<(Evidence, Storage), Error> {
+    let ConditionalWorkerReplaySource {
+        source,
+        binding,
+        worker,
+        limits,
+    } = input;
+    let identity = exchanges.validate_identity((&binding).into(), decoded, &worker, limits)?;
+    let storage = Storage(
+        quote
+            .returned_retained_storage()
+            .checked_add(size_of::<Evidence>())
+            .ok_or(Resource::Arithmetic)?,
+    );
+    let retained_storage = storage_floor(&source)?
+        .checked_add(storage.0)
+        .ok_or(Resource::Arithmetic)?;
+    let executable = worker.executable();
+    Ok((
+        Evidence {
+            source: ConditionalSource::Replayed {
+                source,
+                receipt: binding.receipt(),
+            },
+            binding,
+            identity,
+            worker,
+            limits,
+            plan: exchanges.plan,
+            bootstrap_request: exchanges.bootstrap_request_bytes,
+            bootstrap: InertWorkerExecutionV2::from_recovered_response(
+                executable,
+                exchanges.bootstrap_response,
+            ),
+            replay_request: exchanges.replay_request_bytes,
+            replay: InertWorkerExecutionV2::from_recovered_response(
+                executable,
+                exchanges.replay_response,
+            ),
+            storage,
+            retained_storage,
+        },
+        storage,
+    ))
 }

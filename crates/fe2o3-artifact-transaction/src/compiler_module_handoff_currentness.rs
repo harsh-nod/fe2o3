@@ -38,6 +38,73 @@ pub(super) trait Schema: HandoffSchema<Binding = Binding> {
     }
 }
 
+// Three hash preimages, final-block padding, comparisons and receipt extraction.
+pub(super) const fn replay_fixed_work<S: Schema>() -> usize {
+    let producer = S::PRODUCER_DOMAIN.len() + 16;
+    let slot = S::NAMED_SLOT_DOMAIN.len() + 32 + 8 + 16 + 32 + 1;
+    producer + slot + S::TRANSACTION_DOMAIN.len() + 168 + 3 * 128 + 256
+}
+
+pub(super) const fn replay_scratch_storage<S: Schema, E>() -> usize {
+    use std::mem::size_of;
+    3 * size_of::<S::Receipt>()
+        + 2 * size_of::<PublishedHandoff<S>>()
+        + 2 * size_of::<Sha256>()
+        + 8 * 32
+        + 64 * size_of::<usize>()
+        + resources::fixed_scope_overhead::<std::result::Result<S::Receipt, E>>()
+}
+
+pub(super) fn replay_hash_work<S: Schema>(
+    source: usize,
+    crate_name: usize,
+    transport: usize,
+) -> std::result::Result<usize, fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1> {
+    source
+        .checked_add(crate_name)
+        .and_then(|n| n.checked_add(transport))
+        .and_then(|n| n.checked_add(replay_fixed_work::<S>()))
+        .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)
+}
+
+/// Caller admits the complete typed payload and fixed replay scratch first.
+/// This observes no filesystem and returns coordinates, never current custody.
+pub(super) fn rederive_receipt<S: Schema>(
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    slot: S::Slot,
+    expected: &[u8; 32],
+    payload: &S::Payload,
+    bytes: &[u8],
+    resources: &mut Resources<'_, '_>,
+) -> Result<S::Receipt> {
+    let binding = S::payload_binding(payload);
+    if !S::binding_matches_length(binding, bytes.len()) {
+        return Err(HandoffEngineError::PayloadBindingMismatch);
+    }
+    resources.work(replay_hash_work::<S>(
+        producer.stable_source.len(),
+        producer.crate_name.len(),
+        bytes.len(),
+    )?)?;
+    let producer = producer_identity_for::<S>(producer);
+    let slot_identity = slot_identity_for::<S>(producer, attempt, slot);
+    let identity = S::derive_identity(producer, slot_identity, attempt, binding, bytes);
+    if &identity != expected {
+        return Err(CompilerModuleHandoffErrorV1::DigestMismatch.into());
+    }
+    Ok(S::receipt(
+        PublishedHandoff {
+            attempt,
+            slot,
+            binding,
+            identity,
+            length: bytes.len(),
+        },
+        payload,
+    ))
+}
+
 pub(super) struct Current<S: Schema> {
     pub(super) output: PinnedOutput,
     pub(super) producer: ProducerIdentity,

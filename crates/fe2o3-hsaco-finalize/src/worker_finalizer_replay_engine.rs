@@ -22,6 +22,45 @@ pub(crate) struct ReconstructedWorkerExchanges {
     pub(crate) replay_response: WorkerResponseV2,
 }
 
+impl ReconstructedWorkerExchanges {
+    /// Caller prepays the native replay schedule, including these full checks
+    /// and hashes. Sharing this join prevents source-family adapters drifting.
+    pub(crate) fn validate_identity(
+        &self,
+        binding: WorkerCompilerBinding<'_>,
+        decoded: &DecodedCompilerModuleHandoffV2,
+        worker: &crate::WorkerMeasurementV1,
+        limits: crate::WorkerExecutionLimitsV1,
+    ) -> Result<[u8; 32], crate::NativeFirstBuildWorkerErrorV1> {
+        use crate::first_build_worker_native::failure;
+        use crate::first_build_worker_v3::{
+            calculate_worker_evidence_identity_parts, validate_replay_parts,
+        };
+        validate_replay_parts(
+            binding,
+            worker,
+            decoded,
+            &self.plan,
+            &self.bootstrap_request_bytes,
+            &self.bootstrap_response,
+            &self.replay_request_bytes,
+            &self.replay_response,
+        )
+        .map_err(|e| failure("recovered transcript replay", e))?;
+        calculate_worker_evidence_identity_parts(
+            binding,
+            worker,
+            limits,
+            &self.plan,
+            &self.bootstrap_request_bytes,
+            self.bootstrap_response.canonical_bytes(),
+            &self.replay_request_bytes,
+            self.replay_response.canonical_bytes(),
+        )
+        .map_err(|e| failure("recovered evidence identity", e))
+    }
+}
+
 pub(crate) fn reconstruct_worker_exchanges(
     binding: WorkerCompilerBinding<'_>,
     decoded: &DecodedCompilerModuleHandoffV2,
