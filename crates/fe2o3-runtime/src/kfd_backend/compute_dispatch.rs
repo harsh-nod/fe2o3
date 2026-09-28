@@ -1539,6 +1539,16 @@ impl KfdRuntimeBackendV1 {
                             Some(ActiveComputeExecutionV1::MaterializedRetired(_))
                         )
                     );
+                    #[cfg(test)]
+                    let physical_owner_matches = physical_owner_matches
+                        || (self.scripted_materialized_completion.is_some()
+                            && matches!(
+                                (phase, active.execution.as_ref()),
+                                (
+                                    Some(RuntimeComputePipelinePhaseV1::PhysicallyRetired),
+                                    Some(ActiveComputeExecutionV1::ScriptedMaterializedRetired)
+                                )
+                            ));
                     physical_owner_matches
                         && active.stream == pending.launch.stream
                         && active.ordinary_recipe.as_deref().is_some_and(|recipe| {

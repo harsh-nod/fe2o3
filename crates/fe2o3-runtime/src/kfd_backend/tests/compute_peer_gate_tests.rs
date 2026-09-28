@@ -617,12 +617,15 @@ fn child_peer_gate_success_keeps_existing_native_blocker_progress() {
 
 #[test]
 fn child_peer_gate_ordered_successor_guard_has_a_downstream_attempt_control() {
-    for result in [
-        PeerComputeResultV1::Pending,
-        PeerComputeResultV1::Failed,
-        PeerComputeResultV1::Succeeded,
+    for (result, scripted, retired_marker) in [
+        (PeerComputeResultV1::Pending, true, true),
+        (PeerComputeResultV1::Failed, true, true),
+        (PeerComputeResultV1::Succeeded, true, true),
+        (PeerComputeResultV1::Succeeded, true, false),
+        (PeerComputeResultV1::Succeeded, false, true),
     ] {
         let mut backend = KfdRuntimeBackendV1::mock();
+        backend.scripted_materialized_completion = scripted.then(Default::default);
         let stream = backend.create_stream_v1(7).unwrap();
         let allocation = backend
             .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 64, 8)
@@ -651,9 +654,11 @@ fn child_peer_gate_ordered_successor_guard_has_a_downstream_attempt_control() {
         let PreparedLaunchStorageV1::Materialized(data) = prepared.storage else {
             panic!("ordinary host-visible guard fixture must be materialized");
         };
-        // A physically retired recipe needs no native token. This is a
-        // downstream-attempt control, not evidence of native publication.
+        // Explicit scripted retirement preserves the downstream-attempt control
+        // without fabricating a native recycle observation or accepting None.
         let mut predecessor = pipelined_active_for_test_v1(899);
+        predecessor.execution =
+            retired_marker.then_some(ActiveComputeExecutionV1::ScriptedMaterializedRetired);
         predecessor.stream = stream;
         predecessor.kernel = kernel;
         predecessor.ordinary_recipe = Some(Arc::clone(&pending.launch));
@@ -678,7 +683,7 @@ fn child_peer_gate_ordered_successor_guard_has_a_downstream_attempt_control() {
             &pending.launch.bindings
         ));
         let observed = backend.try_publish_ordered_successor_v1(&pending, 899);
-        if result == PeerComputeResultV1::Succeeded {
+        if result == PeerComputeResultV1::Succeeded && scripted && retired_marker {
             assert!(
                 matches!(observed, Err(RuntimeBackendFailureV1::Terminal(error))
                 if error.detail().contains("lost its exact physical compute lane"))
@@ -694,6 +699,12 @@ fn child_peer_gate_ordered_successor_guard_has_a_downstream_attempt_control() {
         }
         assert_eq!(backend.compute_pipeline.len(), 1);
         assert!(!backend.compute_pipeline.contains(pending.id));
+        assert!(
+            backend
+                .scripted_materialized_completion
+                .as_ref()
+                .is_none_or(VecDeque::is_empty)
+        );
         backend.compute_pipeline.take_commit_frontier().unwrap();
         backend.terminal = false;
         backend.unload_module_v1(module).unwrap();
