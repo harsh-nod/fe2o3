@@ -325,7 +325,7 @@ fn ordinary_initial_publication_unrepaired_drop_aborts() {
         let case: usize = case.parse().unwrap();
         inspect_fault(
             case / FAULTS.len(),
-            case % 2 != 0,
+            !case.is_multiple_of(2),
             FAULTS[case % FAULTS.len()],
             true,
         );
