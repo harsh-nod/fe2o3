@@ -1,0 +1,21 @@
+{
+  "archive": "raw.tar.gz",
+  "artifacts_sha256": "1a90de86281bac7027885fb5179f99c67187fbaa234be478f24a2d0e4ae5f0cb",
+  "bytes": 46553510,
+  "files": 220,
+  "helper_source": "6dd11486f26bfef77ba3033a3bd35c5e6676af9d",
+  "isolation_fix_source": "e5e18c44d76287816d35e266c988310ae693ef83",
+  "restored_replay": {
+    "attempted_cells": 1,
+    "failed_cells": 1,
+    "failure": "ActiveDeviceExists after process-lifetime VM admission",
+    "owned_cleanup": true,
+    "qualified": false,
+    "remote_commands": 6,
+    "short_output_sha256": "9e82dba5c0bef645eed9ecc5e818a93e0c7d13c71650e22d8f8d19739ff2dddf",
+    "strict_endpoints": 3,
+    "unrun_cells": 5
+  },
+  "runtime_source": "89c16e1e484d1af8e6d7233c33d0660aeaa2f219",
+  "sha256": "de8fc2a7e81aba3223c3a1eb6294e702e3e801529a6f4e57a7063c044b08596c"
+}

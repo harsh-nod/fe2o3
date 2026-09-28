@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The fresh [native async campaign](evidence/dev-native-async-2026-09-28/README.md)
+stopped at its first cell: Short produced the complete expected output and
+refunded backing, but Long's new backend hit `ActiveDeviceExists` in the same
+process. Linux VM acquisition deliberately retains process-lifetime admission;
+the fixture incorrectly assumed queue shutdown permitted re-admission. No cell
+qualified, and the five subsequent cells were unrun. Three strict endpoint
+observations passed; complete collection preceded owned cleanup and independent
+absence. The correction splits Short/Long into separate exact ignored tests,
+with no weakened generation guard. Next run a newly built seven-cell matrix.
+The correction passes four focused CPU regressions, 1816 full-runtime tests
+with zero failures and 29 hardware ignores, formatting and diff checks. The
+stopped-run replay and five resealed negative controls pass; this is failure
+evidence and a CPU-tested fixture correction, not corrected-source GPU success.
+Same-process native-session reinitialization remains a separate parity gap;
+A1/A2 and accepted checkpoints are unchanged.
+
 The complete [ordered settlement body](evidence/dev-ordered-settlement-proof-2026-09-28/README.md)
 now compiles in Rust and Verus, composing exact metadata effects with non-Copy
 receipt/profile movement, refusal timing and full malformed-neighbor frames.
@@ -33,9 +49,8 @@ closure. Fifteen focused groups, 1816 runtime tests (zero failures, 28 existing
 ignores), 52 doctests and all static checks pass. Native result authentication,
 storage representation, outer unwind and Pending/retain/Context composition
 remain outside this theorem. A1/A2 and accepted checkpoints are unchanged.
-Next prioritize the existing native mixed-duration, observer and retained-depth
-cells with fresh source/ELF/device binding and owned cleanup; no new GPU or
-HIP/HSA performance result is claimed by this proof packet.
+The native mixed-duration, observer and retained-depth follow-up is recorded
+above. This proof packet itself adds no GPU or HIP/HSA performance result.
 
 The [ordered outer-close join](evidence/dev-ordered-outer-join-2026-09-28/README.md)
 now binds settlement to an exclusive loan of the exact staged pipeline, returned
