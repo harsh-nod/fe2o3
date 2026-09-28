@@ -21,6 +21,7 @@ pub(super) fn membership(rows: &[ReceiptRow]) -> [u8; 32] {
             Some(RuntimeComputePipelinePhaseV1::Completed) => 2,
             Some(RuntimeComputePipelinePhaseV1::PhysicallyRetired) => 3,
             Some(RuntimeComputePipelinePhaseV1::Quarantined) => 4,
+            Some(RuntimeComputePipelinePhaseV1::Publishing) => 5,
         }]);
         hash.update(row.native);
         hash.update(row.shape);

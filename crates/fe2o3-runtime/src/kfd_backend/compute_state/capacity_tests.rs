@@ -9,6 +9,140 @@ fn payload() -> u64 {
 }
 
 #[test]
+fn ordered_publication_stage_retry_preserves_epochs_and_burns_generations() {
+    for older in [false, true] {
+        let mut pipeline = RuntimeComputePipelineV1::vacant();
+        if older {
+            pipeline.insert_published(active(2)).unwrap();
+        }
+        let epoch = pipeline.next_logical_epoch;
+        let frontier = pipeline.commit_frontier;
+        let mut previous = None;
+        for _ in 0..128 {
+            let identity = pipeline.stage_publication_v1(active(3)).unwrap();
+            assert_eq!(Some(identity.logical_epoch), epoch);
+            assert_eq!(pipeline.len(), usize::from(older) + 1);
+            assert!(pipeline.contains(3));
+            assert_eq!(pipeline.iter().count(), pipeline.len());
+            assert!(pipeline.take_commit_frontier().is_none());
+            assert!(pipeline.checked_frontier_v1().is_err());
+            assert!(pipeline.stage_publication_v1(active(4)).is_err());
+            if let Some(stale) = previous {
+                assert!(pipeline.entry_v1(stale).is_none());
+                assert!(pipeline.confirm_publication_v1(stale).is_err());
+                assert!(pipeline.withdraw_publication_v1(stale).is_none());
+                assert!(identity.slot_generation > stale.slot_generation);
+            }
+            assert_eq!(pipeline.withdraw_publication_v1(identity).unwrap().id, 3);
+            assert!(pipeline.entry_v1(identity).is_none());
+            assert_eq!(pipeline.next_logical_epoch, epoch);
+            assert_eq!(pipeline.commit_frontier, frontier);
+            assert_eq!(pipeline.len(), usize::from(older));
+            previous = Some(identity);
+        }
+        let confirmed = pipeline.stage_publication_v1(active(3)).unwrap();
+        pipeline.confirm_publication_v1(confirmed).unwrap();
+        assert!(pipeline.confirm_publication_v1(confirmed).is_err());
+        assert!(pipeline.withdraw_publication_v1(confirmed).is_none());
+        let next = pipeline.insert_published(active(4)).unwrap();
+        assert_eq!(next.logical_epoch, confirmed.logical_epoch + 1);
+        if older {
+            assert_eq!(pipeline.take_commit_frontier().unwrap().1.id, 2);
+        }
+        assert_eq!(pipeline.take_commit_frontier().unwrap().1.id, 3);
+        assert_eq!(pipeline.take_commit_frontier().unwrap().1.id, 4);
+        assert!(pipeline.is_empty());
+    }
+}
+
+#[test]
+fn ordered_publication_stage_refuses_corrupt_or_quarantined_identity() {
+    for case in 0..10 {
+        let mut pipeline = RuntimeComputePipelineV1::vacant();
+        pipeline.insert_published(active(2)).unwrap();
+        let identity = pipeline.stage_publication_v1(active(3)).unwrap();
+        match case {
+            0 => pipeline.staged = None,
+            1 => pipeline.next_logical_epoch = None,
+            2 => pipeline.live = 0,
+            3 => pipeline.live += 1,
+            4 => pipeline.slots[identity.slot as usize].generation += 1,
+            5 => pipeline.entry_mut_v1(identity).unwrap().active.id = 4,
+            6 => {
+                pipeline.entry_mut_v1(identity).unwrap().phase =
+                    RuntimeComputePipelinePhaseV1::Published
+            }
+            7 => pipeline.quarantine_all(),
+            8 => pipeline.commit_frontier = None,
+            9 => pipeline.next_logical_epoch = Some(identity.logical_epoch + 1),
+            _ => unreachable!(),
+        }
+        let before = (
+            pipeline.live,
+            pipeline.next_logical_epoch,
+            pipeline.commit_frontier,
+            pipeline.staged,
+        );
+        assert!(pipeline.confirm_publication_v1(identity).is_err());
+        assert!(pipeline.withdraw_publication_v1(identity).is_none());
+        assert_eq!(
+            (
+                pipeline.live,
+                pipeline.next_logical_epoch,
+                pipeline.commit_frontier,
+                pipeline.staged
+            ),
+            before
+        );
+        assert!(pipeline.slots[0].entry.is_some());
+        assert!(pipeline.slots[identity.slot as usize].entry.is_some());
+    }
+}
+
+#[test]
+fn ordered_publication_stage_exhaustion_never_wraps_or_consumes_an_epoch_on_retry() {
+    let mut pipeline = RuntimeComputePipelineV1::vacant();
+    assert!(pipeline.stage_publication_v1(active(0)).is_err());
+    pipeline.next_logical_epoch = Some(0);
+    assert!(pipeline.stage_publication_v1(active(2)).is_err());
+    pipeline.next_logical_epoch = Some(u64::MAX);
+    let first = pipeline.stage_publication_v1(active(2)).unwrap();
+    pipeline.withdraw_publication_v1(first).unwrap();
+    assert_eq!(pipeline.next_logical_epoch, Some(u64::MAX));
+    let last = pipeline.stage_publication_v1(active(2)).unwrap();
+    assert_eq!(last.logical_epoch, u64::MAX);
+    pipeline.confirm_publication_v1(last).unwrap();
+    assert_eq!(pipeline.next_logical_epoch, None);
+    assert!(pipeline.stage_publication_v1(active(3)).is_err());
+    assert_eq!(pipeline.take_commit_frontier().unwrap().1.id, 2);
+    assert!(!pipeline.has_successor_capacity());
+    let mut slots = RuntimeComputePipelineV1::vacant();
+    slots.exhaust_vacant_identities_for_test_v1();
+    assert!(slots.stage_publication_v1(active(2)).is_err());
+    assert_eq!(slots.next_logical_epoch, Some(1));
+    assert!(slots.is_empty());
+}
+
+#[test]
+fn ordered_publication_stage_metadata_does_not_allocate() {
+    for publish in [false, true] {
+        let mut pipeline = RuntimeComputePipelineV1::vacant();
+        pipeline.insert_published(active(2)).unwrap();
+        let owner = active(3);
+        let ((), allocations) = super::super::drain_capture::tests::counted(|| {
+            let identity = pipeline.stage_publication_v1(owner).unwrap();
+            if publish {
+                pipeline.confirm_publication_v1(identity).unwrap();
+            } else {
+                assert_eq!(pipeline.withdraw_publication_v1(identity).unwrap().id, 3);
+            }
+        });
+        assert_eq!(allocations, 0);
+        assert_eq!(pipeline.len(), 1 + usize::from(publish));
+    }
+}
+
+#[test]
 fn materialized_completion_pipeline_promotion_checks_occupancy_and_identity() {
     for case in 0..8 {
         let mut pipeline = RuntimeComputePipelineV1::vacant();

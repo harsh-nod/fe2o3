@@ -95,6 +95,7 @@ mod compute_settlement;
 mod materialized_cancellation;
 mod materialized_completion;
 mod materialized_publication;
+mod ordered_publication;
 mod peer_ancestry;
 mod peer_compute_access;
 mod persistent_completion;
@@ -1414,6 +1415,9 @@ pub struct KfdRuntimeBackendV1 {
         std::collections::VecDeque<(u64, materialized_completion::ScriptedCompletionStepV1)>,
     >,
     #[cfg(test)]
+    scripted_ordered_publication:
+        Option<VecDeque<(u64, ordered_publication::ScriptedOrderedPublicationV1)>>,
+    #[cfg(test)]
     scripted_prepared_publication_fault:
         Option<prepared_publication::ScriptedPreparedPublicationFaultV1>,
     #[cfg(test)]
@@ -1918,6 +1922,8 @@ impl KfdRuntimeBackendV1 {
             scripted_materialized_cancel_fault: None,
             #[cfg(test)]
             scripted_materialized_completion: None,
+            #[cfg(test)]
+            scripted_ordered_publication: None,
             #[cfg(test)]
             scripted_prepared_publication_fault: None,
             #[cfg(test)]
@@ -2825,6 +2831,7 @@ impl KfdRuntimeBackendV1 {
                 | ActiveComputeExecutionV1::PersistentCompleting(_)
                 | ActiveComputeExecutionV1::ThreeBindingPersistentCompleting(_) => true,
                 ActiveComputeExecutionV1::MaterializedBinding(_)
+                | ActiveComputeExecutionV1::MaterializedSuccessorPublication(_)
                 | ActiveComputeExecutionV1::MaterializedPrepared(_)
                 | ActiveComputeExecutionV1::MaterializedCancelling(_)
                 | ActiveComputeExecutionV1::Materialized(_)
@@ -22795,11 +22802,17 @@ mod tests {
         assert!(body.contains("persistent_full_range_admission_for_launch_v1"));
         assert!(body.contains("three_binding_persistent_admission_for_launch_v1"));
         assert!(body.contains("early_pipeline_launch_is_admitted_v1"));
-        assert!(body.contains("submit_fixed_dispatch_classified_v1::<1>()"));
+        assert!(body.contains("publish_indexed_ordered_successor_v1"));
         assert!(body.contains("performance.user_data_materializations = 0"));
         assert!(!body.contains("materialize_initial_data_v1"));
         assert!(!body.contains("publish_persistent_full_range_v1"));
         assert!(!body.contains("publish_three_binding_persistent_v1"));
+        let adapter = include_str!("kfd_backend/ordered_publication.rs");
+        assert!(adapter.contains("submit_fixed_dispatch_classified_v1::<1>()"));
+        assert!(!adapter.contains("materialize_initial_data_v1"));
+        assert!(!adapter.contains("bind_fixed_dispatch"));
+        assert!(!adapter.contains("publish_persistent_full_range_v1"));
+        assert!(!adapter.contains("publish_three_binding_persistent_v1"));
     }
 
     #[test]

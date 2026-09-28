@@ -134,7 +134,7 @@ fn depth_checker_rejects_frontier_only_missing_duplicate_and_cross_lane_rows() {
 #[test]
 fn depth_checker_rejects_bad_coordinates_phases_and_native_digest_aliases() {
     let (expected, cut) = fixture();
-    for case in 0..12 {
+    for case in 0..13 {
         let mut changed = cut.clone();
         let row = &mut changed.rows[256];
         match case {
@@ -149,6 +149,7 @@ fn depth_checker_rejects_bad_coordinates_phases_and_native_digest_aliases() {
             8 => row.phase = Some(RuntimeComputePipelinePhaseV1::Completed),
             9 => row.phase = Some(RuntimeComputePipelinePhaseV1::PhysicallyRetired),
             10 => row.phase = Some(RuntimeComputePipelinePhaseV1::Quarantined),
+            11 => row.phase = Some(RuntimeComputePipelinePhaseV1::Publishing),
             _ => row.shape = [0; 32],
         }
         changed.membership = checker::membership(&changed.rows);

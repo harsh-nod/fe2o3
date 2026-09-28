@@ -787,7 +787,8 @@ impl KfdRuntimeBackendV1 {
                 );
             };
             match execution {
-                execution @ ActiveComputeExecutionV1::MaterializedPrepared(_) => {
+                execution @ (ActiveComputeExecutionV1::MaterializedPrepared(_)
+                | ActiveComputeExecutionV1::MaterializedSuccessorPublication(_)) => {
                     active.execution = Some(execution);
                     backend.active = Some(active);
                     Err(backend.terminal_error("materialized retry bypassed its indexed path"))
@@ -1089,10 +1090,9 @@ impl KfdRuntimeBackendV1 {
                             } else {
                                 self.pending_compute.insert(pending.id, pending);
                             }
-                            let _ = self.terminal_error(
-                                "KFD ordered-successor publication unwound while native custody was live",
-                            );
-                            std::panic::resume_unwind(payload);
+                            super::sdma_host_write::resume_sdma_owner_panic_v1(payload, || {
+                                self.poison_terminal_v1()
+                            });
                         }
                     };
                     match publication {
@@ -1107,6 +1107,21 @@ impl KfdRuntimeBackendV1 {
                             return Ok(BackendPollV1::Pending);
                         }
                         Ok(false) => {}
+                        Err(failure) if self.active_compute_lane_v1(pending.id).is_some() => {
+                            self.remove_pending_compute_from_stream_v1(
+                                pending.launch.stream,
+                                pending.id,
+                            );
+                            self.release_compute_dependency_retains_v1(
+                                &pending.explicit_success_dependencies,
+                            );
+                            return Err(match failure {
+                                failure @ RuntimeBackendFailureV1::Terminal(_) => failure,
+                                _ => self.terminal_error(
+                                    "indexed ordered publication returned nonterminal failure",
+                                ),
+                            });
+                        }
                         Err(failure) => {
                             self.pending_compute.insert(pending.id, pending);
                             return Err(failure);
@@ -1468,6 +1483,7 @@ impl KfdRuntimeBackendV1 {
         pending: &PendingComputeSubmissionV1,
         predecessor: u64,
     ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_live()?;
         if !pending.peer_gate_allows_native_checks_v1()
             || !pending.quiescence_dependencies.is_empty()
             || self
@@ -1513,43 +1529,14 @@ impl KfdRuntimeBackendV1 {
                         ordinary_compute_recipes_match_v1(recipe, pending.launch.as_ref())
                     })
                     && active.dispatch_shape_sha256 == expected_shape
-                    && matches!(
-                        active.execution,
-                        Some(
-                            ActiveComputeExecutionV1::Materialized(_)
-                                | ActiveComputeExecutionV1::MaterializedCompleted(_)
-                        )
-                    )
+                    && self.ordered_predecessor_execution_matches_v1(active, None)
             });
         let pipelined_predecessor_matches =
             self.compute_pipeline
                 .get(predecessor)
                 .is_some_and(|active| {
                     let phase = self.compute_pipeline.phase(predecessor);
-                    let physical_owner_matches = matches!(
-                        (phase, active.execution.as_ref()),
-                        (
-                            Some(RuntimeComputePipelinePhaseV1::Published),
-                            Some(ActiveComputeExecutionV1::Materialized(_)),
-                        ) | (
-                            Some(RuntimeComputePipelinePhaseV1::Completed),
-                            Some(ActiveComputeExecutionV1::MaterializedCompleted(_)),
-                        ) | (
-                            Some(RuntimeComputePipelinePhaseV1::PhysicallyRetired),
-                            Some(ActiveComputeExecutionV1::MaterializedRetired(_))
-                        )
-                    );
-                    #[cfg(test)]
-                    let physical_owner_matches = physical_owner_matches
-                        || (self.scripted_materialized_completion.is_some()
-                            && matches!(
-                                (phase, active.execution.as_ref()),
-                                (
-                                    Some(RuntimeComputePipelinePhaseV1::PhysicallyRetired),
-                                    Some(ActiveComputeExecutionV1::ScriptedMaterializedRetired)
-                                )
-                            ));
-                    physical_owner_matches
+                    self.ordered_predecessor_execution_matches_v1(active, phase)
                         && active.stream == pending.launch.stream
                         && active.ordinary_recipe.as_deref().is_some_and(|recipe| {
                             ordinary_compute_recipes_match_v1(recipe, pending.launch.as_ref())
@@ -1627,37 +1614,6 @@ impl KfdRuntimeBackendV1 {
                 .map_err(|_| Self::capacity("KFD native-dirty extent reservation failed"))?;
         }
 
-        let publication_started = Instant::now();
-        let native_lane = self.selected_native_compute_lane_v1().map_err(|_| {
-            self.terminal_error(
-                "ordered predecessor lost its exact physical compute lane before successor publication",
-            )
-        })?;
-        let publication = self
-            .queue
-            .as_mut()
-            .expect("ordered predecessor retains its physical queue")
-            .with_compute_lane_v1(native_lane, |queue| {
-                queue.submit_fixed_dispatch_classified_v1::<1>()
-            })
-            .map_err(|error| self.terminal_error(format!("KFD compute-lane selection: {error}")))?;
-        let batch = match publication {
-            Ok(batch) => batch,
-            Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)) => {
-                return Ok(false);
-            }
-            Err(Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error)) => {
-                return Err(self.terminal_error(format!(
-                    "KFD retained ordered-successor recipe was rejected before publication: {error}"
-                )));
-            }
-            Err(Gfx942FixedDispatchSubmissionFailureV1::Terminal(error)) => {
-                return Err(self.terminal_error(format!(
-                    "KFD ordered-successor publication became indeterminate: {error}"
-                )));
-            }
-        };
-        performance.publication = publication_started.elapsed();
         performance.native_binding = Duration::ZERO;
         performance.data_path = KfdRuntimeLaunchDataPathV1::ResidentReused;
         performance.user_data_materializations = 0;
@@ -1675,45 +1631,17 @@ impl KfdRuntimeBackendV1 {
             dispatch_shape_sha256,
             published_at: Instant::now(),
             performance,
-            execution: Some(ActiveComputeExecutionV1::Materialized(batch)),
-        };
-        if let Err(_active) = self.compute_pipeline.insert_published(active) {
-            // Capacity and generation were checked with no intervening roster
-            // mutation. Native publication already happened, so a violated
-            // internal invariant must not unwind and drop its linear token.
-            std::process::abort();
-        }
-
-        let profile_dispatch =
-            self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, pending.id);
-        let profile_queue = self.profile_resource_v1(
-            KfdProfileResourceKindV1::NativeQueue,
-            KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + self.selected_compute_lane as u64,
-        );
-        let profile_stream = self.profile_resource_v1(KfdProfileResourceKindV1::Stream, stream);
-        let profile_kernel = self.profile_resource_v1(KfdProfileResourceKindV1::Kernel, kernel);
-        let profile_shape = self.profile_content_v1(&dispatch_shape_sha256);
-        let profile_event = match profile_bindings {
-            Some(Ok(bindings)) => profile_dispatch
-                .zip(profile_queue)
-                .zip(profile_stream)
-                .zip(profile_kernel)
-                .zip(profile_shape)
-                .map(|((((dispatch, queue), stream), kernel), dispatch_shape)| {
-                    KfdRuntimeProfileEventKindV1::DispatchPublished {
-                        dispatch,
-                        queue,
-                        stream,
-                        kernel,
-                        dispatch_shape,
+            execution: Some(ActiveComputeExecutionV1::MaterializedSuccessorPublication(
+                super::ordered_publication::OrderedPublicationV1::new(
+                    PersistentPublicationProfileV1 {
                         launch: profile_launch,
-                        bindings,
-                    }
-                }),
-            Some(Err(())) | None => None,
+                        semantic_contract: profile_semantic_contract,
+                        bindings: profile_bindings,
+                    },
+                ),
+            )),
         };
-        self.observe_profile_dispatch_v1(profile_event, profile_semantic_contract);
-        Ok(true)
+        self.publish_indexed_ordered_successor_v1(pending, active)
     }
 
     pub(super) fn pending_compute_can_publish_under_deadline_v1(&self, submission: u64) -> bool {

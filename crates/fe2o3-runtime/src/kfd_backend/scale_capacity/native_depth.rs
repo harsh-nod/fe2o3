@@ -537,6 +537,7 @@ fn native_scaled_two_lane_2048_retained_receipts_and_cleanup() {
                 "submission": row.id, "lane": row.lane, "stream": row.stream, "kernel": row.kernel,
                 "allocations": row.allocations, "ordered_predecessor": row.predecessor,
                 "pipeline_phase": row.phase.map(|phase| match phase {
+                    RuntimeComputePipelinePhaseV1::Publishing => "publishing",
                     RuntimeComputePipelinePhaseV1::Published => "published",
                     RuntimeComputePipelinePhaseV1::Completed => "completed",
                     RuntimeComputePipelinePhaseV1::PhysicallyRetired => "physically-retired",

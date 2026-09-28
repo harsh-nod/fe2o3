@@ -5,6 +5,9 @@ use super::super::super::materialized_completion::{
 };
 use super::*;
 
+#[path = "ordered_publication_tests.rs"]
+mod ordered;
+
 const FAULTS: [Step; 12] = [
     Step::PollError,
     Step::PollUnwind,

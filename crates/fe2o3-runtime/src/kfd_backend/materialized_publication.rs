@@ -25,6 +25,18 @@ pub(super) enum MaterializedSubmissionAttemptV1 {
     ScriptedPublished,
 }
 
+impl MaterializedSubmissionAttemptV1 {
+    pub(super) fn submit<E>(
+        &mut self,
+        operation: impl FnOnce() -> Result<Self, E>,
+    ) -> Result<(), E> {
+        *self = Self::NativeOwned;
+        // Root the returned outcome before the outer native lane loan closes.
+        *self = operation()?;
+        Ok(())
+    }
+}
+
 pub(super) struct MaterializedBindingV1 {
     pub(super) profile: PersistentPublicationProfileV1,
     pub(super) origin: MaterializedPreparationOriginV1,
@@ -60,10 +72,7 @@ impl MaterializedBindingV1 {
         &mut self,
         operation: impl FnOnce() -> Result<MaterializedSubmissionAttemptV1, E>,
     ) -> Result<(), E> {
-        self.submission = MaterializedSubmissionAttemptV1::NativeOwned;
-        // This runs inside the native lane callback, before its outer loan closes.
-        self.submission = operation()?;
-        Ok(())
+        self.submission.submit(operation)
     }
 }
 
