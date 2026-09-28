@@ -13,7 +13,7 @@ pub(super) enum OrdinaryLaneIoV1<'a, 'b> {
     #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
     Cpu(
         &'a mut fe2o3_kfd::CpuFixedDispatchLaneV1<'b>,
-        &'a mut Option<Result<fe2o3_kfd::CpuDispatchIdentityV1, ComputeAqlQueueSessionErrorV1>>,
+        &'a mut CpuLaneControlV1,
     ),
 }
 
@@ -51,12 +51,18 @@ impl<'a> OrdinaryQueueIoV1<'a> {
             #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
             Self::Cpu(queue) => {
                 let next_fault = &mut queue.next_outer_fault;
-                let identity = &mut queue.last_submitted_identity;
+                let control = &mut queue.lane_control;
                 let deposited = &mut queue.before_outer_fault;
                 let mut fault = None;
                 let result = queue.fixture.with_lane(lane, |selected| {
-                    fault = next_fault.take();
-                    let result = operation(&mut OrdinaryLaneIoV1::Cpu(selected, identity));
+                    control.returned_operation = None;
+                    let result = operation(&mut OrdinaryLaneIoV1::Cpu(selected, control));
+                    if next_fault
+                        .as_ref()
+                        .is_some_and(|(target, _)| Some(*target) == control.returned_operation)
+                    {
+                        fault = next_fault.take().map(|(_, fault)| fault);
+                    }
                     if fault.is_some() {
                         *deposited = Some(selected.snapshot());
                     }
@@ -83,11 +89,18 @@ impl OrdinaryLaneIoV1<'_, '_> {
         match self {
             Self::Native(lane) => lane.submit_fixed_dispatch_classified_v1::<1>(),
             #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
-            Self::Cpu(lane, identity) => {
-                let result = lane.submit();
+            Self::Cpu(lane, control) => {
+                let result = if core::mem::take(&mut control.pin_next_submission) {
+                    // Pin setup has no classified retry witness; callers fail closed on error.
+                    lane.submit_pinned()
+                        .map_err(Gfx942FixedDispatchSubmissionFailureV1::Terminal)
+                } else {
+                    lane.submit()
+                };
+                control.returned_operation = Some(CpuIoOperationV1::Submit);
                 if let Ok(batch) = &result {
                     // Observe without introducing an error/panic boundary before deposit.
-                    **identity = Some(lane.identity(batch));
+                    control.last_submitted_identity = Some(lane.identity(batch));
                 }
                 result
             }
@@ -101,7 +114,11 @@ impl OrdinaryLaneIoV1<'_, '_> {
         match self {
             Self::Native(lane) => lane.poll_fixed_dispatch(batch),
             #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
-            Self::Cpu(lane, _) => lane.poll(batch),
+            Self::Cpu(lane, control) => {
+                let result = lane.poll(batch);
+                control.returned_operation = Some(CpuIoOperationV1::Poll);
+                result
+            }
         }
     }
 
@@ -113,7 +130,25 @@ impl OrdinaryLaneIoV1<'_, '_> {
         match self {
             Self::Native(lane) => lane.recycle_fixed_dispatch(completed),
             #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
-            Self::Cpu(lane, _) => lane.recycle(completed),
+            Self::Cpu(lane, control) => {
+                let result = lane.recycle(completed);
+                control.returned_operation = Some(CpuIoOperationV1::Recycle);
+                if result.as_ref().is_err_and(|failure| {
+                    matches!(
+                        failure.error(),
+                        ComputeAqlQueueSessionErrorV1::Completion(
+                            fe2o3_kfd::Gfx942CompletionErrorV1::SignalPinned {
+                                event_pins: 1,
+                                native_reader_pins: 0,
+                                ..
+                            }
+                        )
+                    )
+                }) {
+                    control.pinned_recycles = control.pinned_recycles.saturating_add(1);
+                }
+                result
+            }
         }
     }
 }
@@ -131,10 +166,27 @@ impl KfdRuntimeBackendV1 {
 #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
 pub(super) struct CpuOrdinaryQueueV1 {
     pub(super) fixture: fe2o3_kfd::CpuFixedDispatchFixtureV1,
-    pub(super) next_outer_fault: Option<CpuOuterFaultV1>,
+    pub(super) next_outer_fault: Option<(CpuIoOperationV1, CpuOuterFaultV1)>,
+    pub(super) lane_control: CpuLaneControlV1,
+    pub(super) before_outer_fault: Option<fe2o3_kfd::CpuLaneSnapshotV1>,
+}
+
+#[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+#[derive(Default)]
+pub(super) struct CpuLaneControlV1 {
+    pub(super) pin_next_submission: bool,
+    pub(super) pinned_recycles: usize,
+    returned_operation: Option<CpuIoOperationV1>,
     pub(super) last_submitted_identity:
         Option<Result<fe2o3_kfd::CpuDispatchIdentityV1, ComputeAqlQueueSessionErrorV1>>,
-    pub(super) before_outer_fault: Option<fe2o3_kfd::CpuLaneSnapshotV1>,
+}
+
+#[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CpuIoOperationV1 {
+    Submit,
+    Poll,
+    Recycle,
 }
 
 #[cfg(all(test, feature = "cpu-runtime-fixtures"))]

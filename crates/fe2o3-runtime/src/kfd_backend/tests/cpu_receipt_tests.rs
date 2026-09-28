@@ -4,6 +4,9 @@ use super::super::ordinary_queue_io::CpuOrdinaryQueueV1;
 use super::*;
 use fe2o3_kfd::{CpuDispatchIdentityV1, CpuFixedDispatchFixtureV1};
 
+#[path = "cpu_completion_receipt_tests.rs"]
+mod completion;
+
 struct Fixture {
     backend: KfdRuntimeBackendV1,
     streams: [u64; 2],
@@ -145,7 +148,7 @@ impl Fixture {
         backend.cpu_queue = Some(Box::new(CpuOrdinaryQueueV1 {
             fixture,
             next_outer_fault: None,
-            last_submitted_identity: None,
+            lane_control: Default::default(),
             before_outer_fault: None,
         }));
         backend.native_available = true;
@@ -554,7 +557,10 @@ fn cpu_receipts_outer_fault_retains_exact_indexed_publication() {
         let retained = f.backend.compute_module_retain_counts[&f.module];
         let allocations = format!("{:?}", f.backend.allocation_custody);
         let before = f.backend.cpu_queue.as_ref().unwrap().fixture.snapshots();
-        f.backend.cpu_queue.as_mut().unwrap().next_outer_fault = Some(fault);
+        f.backend.cpu_queue.as_mut().unwrap().next_outer_fault = Some((
+            super::super::ordinary_queue_io::CpuIoOperationV1::Submit,
+            fault,
+        ));
         let stream = f.streams[lane];
         let outcome = catch_unwind(AssertUnwindSafe(|| f.backend.flush_stream_v1(stream)));
         match fault {
@@ -603,7 +609,8 @@ fn cpu_receipts_outer_fault_retains_exact_indexed_publication() {
         let cpu = f.backend.cpu_queue.as_ref().unwrap();
         assert!(cpu.fixture.is_terminal());
         assert!(
-            cpu.last_submitted_identity
+            cpu.lane_control
+                .last_submitted_identity
                 .as_ref()
                 .unwrap()
                 .as_ref()
