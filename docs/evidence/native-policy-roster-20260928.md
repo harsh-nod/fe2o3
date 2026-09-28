@@ -2,6 +2,8 @@
 
 Date: 2026-09-28. Parent: `2fde965fd13fc80edc11fae32f0acae71f3437ab`.
 This continues the [native integration checkpoint](native-integration-resume-20260928.md).
+The later [compiler approval and protected replay checkpoint](compiler-approval-runtime-20260928.md)
+records subsequent approval-owner implementation and actual source-proof execution.
 It does not complete an issue #272 M0-M7 milestone, enable the conditional
 production wrapper, or establish a protected Worker/publication or GPU run.
 
