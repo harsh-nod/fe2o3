@@ -70,7 +70,6 @@ fn detached_rebind_retry_cancels_through_cancelled_abort() {
         result.result
     );
     assert!(retained.borrow().is_none());
-    drop(fixture);
     assert!(facade.detached_dispatch_generation.is_none());
     let mut owner = facade.dispatch.take().unwrap();
     assert_eq!(owner.primary_fixture_next_generation_v1(), predecessor + 1);
