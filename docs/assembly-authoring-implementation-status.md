@@ -1633,3 +1633,16 @@ See [qualification and limits](option-enum-scalar-preparation-qualification-2026
 This stops before provenance and does not change the ordinary production route.
 Later provenance/allocation/capability integration, argument writers and
 production admission remain open. Broad accepted exits remain 6/18.
+
+## Authenticated Option → enum → scalar → provenance checkpoint — 2026-09-28
+
+A separate genuine source-owned entry now reaches BeforeAllocation using the
+actual retained scalar inputs and original budget. All 15 new controls and
+full 356-model / 3,284-backend regressions passed (197 ignored), plus builds and
+five actual Rust-source sessions. The two positive sources completed 36
+numerical helper runs. All provenance DATA matches independent original APIs.
+See [qualification and limits](option-enum-scalar-provenance-preparation-qualification-20260928.md).
+
+This stops before allocation contracts. Capability preparation, later writers,
+joint bounds and ordinary production admission remain open.
+Broad accepted exits remain 6/18.
