@@ -1,7 +1,8 @@
 # Accounted Dispatch Capacity Development
 
-This is partial SCALE-CAP implementation, not hardware qualification, A1/A2
-acceptance, or HIP/HSA parity. The default remains 64 epochs per native lane.
+This is partial SCALE-CAP implementation with a bounded native retained-depth
+witness, not complete SCALE-CAP, A1/A2 acceptance or HIP/HSA parity. The default
+remains 64 epochs per native lane.
 
 ## Implemented
 
@@ -115,20 +116,26 @@ now inspects every original native receipt at 1,024 epochs per lane, joins exact
 runtime ownership and complete profiler metadata, and checks cleanup through
 backend destruction. It separately probes runtime custody saturation and actual
 native epoch-table saturation on both lanes. CPU mutation tests validate the
-typed consistency checker; the native cell has not executed. Reuse/rebind,
-async-owner high-depth integration and signed independent replay remain open.
+typed consistency checker. The corrected
+[native campaign](evidence/dev-native-depth-budget-2026-09-28/README.md) now passes
+this cell and signed-source/ELF-bound replay: 2048 distinct retained receipts,
+6179 profile events, complete output checks, separate runtime/native saturation
+refusals and backing/table cleanup. The requested host-table payload peaks at
+4,489,216 bytes/10 records and ends at zero. Private custody comparisons remain
+in-process assertions; unfinished-kernel count and physical overlap are unmeasured.
+Repeated reuse/rebind, async-owner high-depth integration and formal native
+refinement remain open.
 
 ## Remaining Work
 
 1. Finish aggregate backing/control/slot admission and scaled formal refinement;
    preserve the default capacity-65 negative and existing 64-only proofs.
-2. Execute the new opt-in retained-depth canary; qualify scaled joins/rebinds,
-   repeated reuse, async-owner integration and exact cleanup with signed native
-   evidence. Keep the default qualification profile intact.
-3. Measure at least 2048 simultaneously native-published/retained epochs across
-   two lanes with exact identities, negative saturation, complete cleanup and
-   matched HIP/HSA baselines. Retained, incomplete and physically concurrent
-   counts must remain separate.
+2. Extend the passing opt-in retained-depth witness to scaled joins/rebinds,
+   repeated reuse and async-owner integration with signed native evidence.
+   Keep the default qualification profile intact.
+3. Add matched HIP/HSA baselines and separately measured incomplete/concurrent
+   counts to the 2048-retained-epoch witness. Retained, incomplete and physically
+   concurrent counts must remain separate.
 
 The public same-buffer 1025th-launch rejection occurs at runtime custody
 admission, before native epoch reservation. It is not a native epoch-table

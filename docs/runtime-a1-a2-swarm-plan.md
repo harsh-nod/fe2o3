@@ -954,7 +954,11 @@ The scale-only ignored retained-depth canary now inspects all original native
 receipts, exact runtime/profile joins, separate runtime/native saturation
 rejections and the ten-to-two-to-zero metadata ledger lifecycle. Its
 [development packet](evidence/dev-scale-depth-2026-09-25/README.md) is CPU evidence
-only; native execution, repeated reuse/rebind and signed replay remain open.
+only. The corrected [native campaign](evidence/dev-native-depth-budget-2026-09-28/README.md)
+now passes the 2048-retained-receipt cell, exact output/profile joins, separate
+runtime/native saturation checks and covered cleanup with signed-source/ELF-bound
+replay. Repeated reuse/rebind, high-depth async-owner integration, aggregate
+accounting and formal native refinement remain open.
 
 Acceptance: checked generation arithmetic, exact reservations/rollback,
 wraparound and stale-slot rejection, signal-reader retention and no reuse before
@@ -974,8 +978,8 @@ completion before earlier-long completion, exact operation/native identities,
 dropped and timed-out observers, backpressure and successful cleanup.
 
 The two-operation mixed-duration canary and distinct observer-timeout,
-dropped-observer and bounded command-saturation cells are implemented and
-CPU-compiled, but not native-qualified. Timeout and Drop must occur inside one
+dropped-observer and bounded command-saturation cells now pass the exact native
+campaign linked above. Timeout and Drop must occur inside one
 owner callback, bracketed by the same exact native Pending receipt, so a
 completed-observer race cannot qualify. The command cell checks both reply and
 snapshot refunds, exact non-submission of the rejected request, and successful
@@ -993,7 +997,9 @@ published native operations. CPU tests with 2,048 operations qualify neither.
 
 SCALE-CAP supplies the separately reviewed native capacity expansion; increasing
 engine queue capacity alone cannot satisfy that cell. Keep the native-depth gate
-open until the claimed occupancy is actually measured. Active-drain content
+open until the claimed occupancy is actually measured; the named opt-in
+2048-retained-epoch witness now supplies that bounded measurement, not the other
+scale/owner/reuse gates. Active-drain content
 checks can now consume implemented DRN-1A capture; DRN-2 still owns signed
 outstanding-work content qualification. Successful content and custody-only
 drain evidence remain distinct.

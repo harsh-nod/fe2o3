@@ -1,0 +1,20 @@
+{
+  "archive": "raw.tar.gz",
+  "artifacts_sha256": "ab606ffd17863597daac6e81e25571b7af324c8db7b8da10093d7598f2ecf7bb",
+  "bytes": 47323366,
+  "files": 286,
+  "helper_source": "9df14c700e3fd4dafa20d824a56b183d0a87e507",
+  "restored_replay": {
+    "cpu_passes": 1764,
+    "elf_sha256": "de591f2035bb56b63388121b4ddd6d66e0322cd4aac40a061a16aaf291632f9c",
+    "exclusive_reservation": false,
+    "formal_refinement": false,
+    "harness_passes": 7,
+    "owned_cleanup": true,
+    "performance_acceptance": false,
+    "remote_commands": 30,
+    "strict_endpoints": 21
+  },
+  "runtime_source": "4bc0804b7f6d818e4c117b470d79b7a51d0084fb",
+  "sha256": "d292807b561cf00dcb9815288c56cf568fd6f3af2f1daa0c4d848ee8c904b45c"
+}

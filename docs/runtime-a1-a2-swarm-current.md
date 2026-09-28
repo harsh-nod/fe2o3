@@ -9,7 +9,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | Milestone | Status | Remaining exit gates |
 | --- | --- | --- |
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
-| A1: single-device async | Active, incomplete | Protected generated execution, native high-depth/out-of-order qualification, aggregate accounting and production refinement |
+| A1: single-device async | Active, incomplete | Protected generated execution, repeated async-owner scale qualification, aggregate accounting and production refinement |
 | A2: dependencies and overlap | Active, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
 | A3: local multi-GPU | Partial foundations | XGMI copy witnesses exist; unified compute, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
@@ -24,6 +24,21 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The corrected [native depth-budget campaign](evidence/dev-native-depth-budget-2026-09-28/README.md)
+passes all seven exact MI300X cells and complete replay: isolated Short/Long,
+out-of-order owner progress, timeout recovery, dropped-observer progress,
+command backpressure and 2048 retained native receipts (1024 per lane). The depth
+cell validates six full 4 MiB buffers, 6179 profile events, distinct runtime/native
+saturation refusals and covered backing/table cleanup. Its payload ledger peaks
+at 4,489,216 bytes/10 records and ends at zero. All 21 strict endpoints and 30
+remote command groups pass; complete collection precedes owned cleanup and
+independent absence. The actual musl ELF passes 1764 CPU tests, with zero failures
+and 29 hardware ignores. Six profile/eight protocol groups and fresh 286-file
+archive restore/replay pass. This qualifies the named opt-in retained-depth and
+small async witnesses, not unfinished-kernel count, physical overlap, scaled
+reuse/rebinding, high-depth async-owner integration, aggregate memory or matched
+HIP/HSA performance. Default64, A1/A2 and accepted lane checkpoints are unchanged.
+
 The [isolated native async campaign](evidence/dev-native-isolated-2026-09-28/README.md)
 passes six exact MI300X cells: separate Short/Long profiles, later-Short progress
 while earlier Long remains Pending, timeout recovery, dropped-observer progress
@@ -35,8 +50,8 @@ complete matrix is not qualified. A compile-time-checked 128 MiB/256-record
 fixture budget and CPU regression preserve the production limit; ten focused
 tests and 1817 full-runtime tests pass, with zero failures and 29 hardware ignores.
 Formatting, diff checks, stopped replay, seven resealed negative controls and a
-fresh 302-file archive restore pass. Next rebuild the correction and bind a new
-campaign, including the corrected 256-record shutdown expectation. Retained
+fresh 302-file archive restore pass. The corrected source and 256-record shutdown
+expectation are qualified in the subsequent campaign above. Retained
 receipts are not measured unfinished kernels; native depth, physical overlap,
 formal composition and HIP/HSA performance remain open. A1/A2 and accepted lane
 checkpoints are unchanged.
