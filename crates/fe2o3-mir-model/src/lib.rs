@@ -124,3 +124,7 @@ pub use ssa::{
     SsaPlannerErrorV1, SsaPlannerLimitsV1, SsaPlannerResourceReportV1, SsaPlannerResourceV1,
     SsaResolvedEventV1, SsaValueV1, SsaVariableIdV1, plan_ssa_v1, plan_ssa_with_limits_v1,
 };
+
+pub use semantic_u32_induction::{
+    RetainedSemanticU32InductionV1, SemanticU32InductionRetainedFailureV1,
+};

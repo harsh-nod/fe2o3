@@ -2844,3 +2844,10 @@ mod tests {
         ));
     }
 }
+
+// Additive retained V1 DATA owner; original analyzer above remains unchanged.
+#[path = "semantic_u32_induction_retained_v1.rs"]
+mod retained_preparation;
+pub use retained_preparation::{
+    RetainedSemanticU32InductionV1, SemanticU32InductionRetainedFailureV1,
+};
