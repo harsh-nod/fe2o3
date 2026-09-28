@@ -541,7 +541,7 @@ fn moved_original_budget_slot_is_rejected_even_with_identical_ledger() {
         |scope, budget| {
             let original_ledger = budget.work_ledger_identity_v1();
             std::mem::swap(budget, &mut spare);
-            assert_eq!(spare.work_ledger_identity_v1(), original_ledger);
+            assert!(spare.work_ledger_identity_v1() == original_ledger);
             assert_eq!(
                 query(scope, &box_set(1), &mut spare),
                 Err(Error::Resource(Resource::Accounting))
