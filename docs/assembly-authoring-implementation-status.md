@@ -1695,3 +1695,14 @@ See [qualification and limits](debugger-startup-input-closure-qualification-2026
 This is not debugger startup, a loaded-file closure or physical GPU capture.
 V4 and the remaining native producer/adapter work remain open.
 Broad accepted exits remain 6/18.
+
+## Retained original constant analysis — 2026-09-28
+
+The private constants component now retains definitions, visited states,
+resolved values and reusable alias paths on partial failure. All 12 controls,
+356 model tests, 3,349 backend tests (197 ignored), authority/policy checks and
+builds passed. See [qualification](retained-constant-analysis-qualification-20260928.md).
+
+The genuine actual-source capability join remains separate work, as do earlier
+whole-root analyses, argument writers, joint bounds and production admission.
+Broad accepted exits remain 6/18.

@@ -642,3 +642,8 @@ mod retained_allocation_contracts;
 pub(super) use retained_allocation_contracts::{
     RetainedAllocationContractsV1, retained_allocation_frame_v1,
 };
+
+#[path = "bf16_nominal_retained_constant_locals_v1.rs"]
+mod retained_constants;
+#[allow(unused_imports)]
+pub(super) use retained_constants::{RetainedConstantLocalsV1, retained_constant_frame_v1};
