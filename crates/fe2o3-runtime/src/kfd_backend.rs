@@ -95,6 +95,7 @@ mod compute_quiescence_control;
 mod compute_settlement;
 mod peer_ancestry;
 mod peer_compute_access;
+mod persistent_completion;
 mod prepared_cancellation;
 mod prepared_publication;
 use peer_ancestry::PeerLaunchAncestryV1;
@@ -193,6 +194,7 @@ use kfd_backend_sdma_seam::{
     SameDeviceSdmaPairOwnerV1, SameDeviceSdmaPollV1, SameDeviceSdmaSubmissionOwnerV1,
     SameDeviceSdmaWaitV1, SdmaBufferOwnerV1, SdmaRecycleFailureV1, SdmaTransitionFailureV1,
 };
+use persistent_completion::*;
 
 const KFD_RUNTIME_RING_BYTES_V1: u32 = 64 * 1024;
 /// Reviewed V1 bound for independently in-flight native compute queues.
@@ -2791,7 +2793,8 @@ impl KfdRuntimeBackendV1 {
                 | ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. }
                 | ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared { .. }
                 | ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { .. } => true,
-                ActiveComputeExecutionV1::PersistentCancelling(_) => true,
+                ActiveComputeExecutionV1::PersistentCancelling(_)
+                | ActiveComputeExecutionV1::PersistentCompleting(_) => true,
                 ActiveComputeExecutionV1::MaterializedPrepared { .. }
                 | ActiveComputeExecutionV1::Materialized(_)
                 | ActiveComputeExecutionV1::MaterializedCompleted(_) => false,
@@ -4498,7 +4501,7 @@ impl KfdRuntimeBackendV1 {
                     Self::capacity("KFD three-binding ready restore-shell allocation failed")
                 })?),
                 #[cfg(test)]
-                device: (admission.access == RuntimeAccessV1::Write)
+                device: (admission.access != RuntimeAccessV1::Read)
                     .then(try_uninit_box_v1)
                     .transpose()
                     .map_err(|_| {
@@ -4508,7 +4511,7 @@ impl KfdRuntimeBackendV1 {
                     })?,
                 #[cfg(not(test))]
                 device: None,
-                replay: (admission.access == RuntimeAccessV1::Write)
+                replay: (admission.access != RuntimeAccessV1::Read)
                     .then(try_uninit_box_v1)
                     .transpose()
                     .map_err(|_| {
@@ -4624,114 +4627,6 @@ impl KfdRuntimeBackendV1 {
         Ok(())
     }
 
-    fn restore_h2d_ready_after_compute_rejection_v1(
-        &mut self,
-        allocation: u64,
-        submission: u64,
-        ready: PersistentComputeReadyStorageV1,
-    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let slot_matches = self.allocations.get(&allocation).is_some_and(|record| {
-            matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::ComputeInFlight(actual) if actual == submission)
-        });
-        if !slot_matches {
-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Ready(
-                ready.owner,
-            ));
-            return Err(self.terminal_error(
-                "persistent-compute rejection restoration slot changed unexpectedly",
-            ));
-        }
-        let record = self
-            .allocations
-            .get_mut(&allocation)
-            .expect("persistent-compute allocation remains indexed");
-        record.sdma_storage = KfdRuntimeSdmaStorageV1::H2dReady(Box::new(ready));
-        #[cfg(test)]
-        {
-            record.scripted_three_binding_replay = false;
-        }
-        Ok(())
-    }
-
-    fn restore_persistent_compute_input_v1(
-        &mut self,
-        allocation: u64,
-        submission: u64,
-        input: Gfx942PersistentComputeInputV1,
-        promotion: Option<KfdRuntimeReadyPromotionPerformanceV1>,
-    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if matches!(input, Gfx942PersistentComputeInputV1::InitializedStorage(_))
-            || self
-                .allocations
-                .get(&allocation)
-                .is_some_and(|record| record.persistent_storage_restore.is_some())
-        {
-            return self.restore_initialized_storage_input_v1(
-                allocation,
-                submission,
-                KfdRuntimePersistentComputeInputV1::Native(input),
-            );
-        }
-        match input {
-            Gfx942PersistentComputeInputV1::Initialized(ready) => self
-                .restore_h2d_ready_after_compute_rejection_v1(
-                    allocation,
-                    submission,
-                    PersistentComputeReadyStorageV1 {
-                        owner: PersistentComputeReadyOwnerV1::from_native(ready),
-                        promotion,
-                    },
-                ),
-            Gfx942PersistentComputeInputV1::Uninitialized(device) => self
-                .restore_persistent_compute_device_input_v1(
-                    allocation,
-                    submission,
-                    KfdRuntimeSdmaStorageV1::Device(Box::new(
-                        DirectionalSdmaDeviceOwnerV1::Native(device),
-                    )),
-                ),
-            input @ Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_) => self
-                .restore_persistent_compute_device_input_v1(
-                    allocation,
-                    submission,
-                    KfdRuntimeSdmaStorageV1::PersistentReplay(Box::new(input)),
-                ),
-            Gfx942PersistentComputeInputV1::InitializedStorage(_) => {
-                unreachable!("storage-origin restoration handled above")
-            }
-        }
-    }
-
-    fn restore_persistent_compute_device_input_v1(
-        &mut self,
-        allocation: u64,
-        submission: u64,
-        storage: KfdRuntimeSdmaStorageV1,
-    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let slot_matches = self.allocations.get(&allocation).is_some_and(|record| {
-            matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::ComputeInFlight(actual) if actual == submission)
-        });
-        if !slot_matches {
-            match storage {
-                KfdRuntimeSdmaStorageV1::Device(device) => self.retain_terminal_sdma_custody_v1(
-                    KfdRuntimeTerminalSdmaCustodyV1::Device(*device),
-                ),
-                KfdRuntimeSdmaStorageV1::PersistentReplay(input) => self
-                    .retain_terminal_sdma_custody_v1(
-                        KfdRuntimeTerminalSdmaCustodyV1::PersistentComputeInput(*input),
-                    ),
-                _ => unreachable!("persistent compute restores one device input"),
-            }
-            return Err(self
-                .terminal_error("persistent-compute input restoration slot changed unexpectedly"));
-        }
-        self.allocations
-            .get_mut(&allocation)
-            .expect("persistent-compute allocation remains indexed")
-            .sdma_storage = storage;
-        Ok(())
-    }
-
     #[cfg(test)]
     fn restore_persistent_compute_completion_v1(
         &mut self,
@@ -4772,23 +4667,6 @@ impl KfdRuntimeBackendV1 {
             .get_mut(&allocation)
             .expect("persistent-compute allocation remains indexed");
         record.sdma_storage = KfdRuntimeSdmaStorageV1::Device(Box::new(device));
-        apply_persistent_compute_effect_v1(record, effect);
-        debug_assert!(record.native_dirty.is_empty());
-        Ok(())
-    }
-
-    fn restore_persistent_compute_completion_input_v1(
-        &mut self,
-        allocation: u64,
-        submission: u64,
-        input: Gfx942PersistentComputeInputV1,
-        effect: Gfx942PersistentComputeEffectV1,
-    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        self.restore_persistent_compute_input_v1(allocation, submission, input, None)?;
-        let record = self
-            .allocations
-            .get_mut(&allocation)
-            .expect("restored persistent-compute allocation remains indexed");
         apply_persistent_compute_effect_v1(record, effect);
         debug_assert!(record.native_dirty.is_empty());
         Ok(())
@@ -13556,7 +13434,7 @@ mod tests {
 
     #[test]
     fn r26_measured_copies_route_through_fused_async_single_submit() {
-        let production = include_str!("kfd_backend/compute_dispatch.rs");
+        let production = include_str!("kfd_backend/persistent_completion.rs");
         let benchmark = include_str!("../examples/gfx942-runtime-r26-inplace-benchmark.rs");
         let measured_copy = benchmark
             .split("fn run_copy_v1(")
@@ -13644,20 +13522,20 @@ mod tests {
             0
         );
         let persistent_completion = production
-            .split("fn finish_persistent_compute_poll_and_recycle_v1")
+            .split("fn finish_indexed_persistent_poll_v1")
             .nth(1)
             .unwrap()
-            .split("#[cfg(test)]\n    pub(super) fn finish_scripted_persistent_compute_v1")
+            .split("fn restore_indexed_scalar_completion_v1")
             .next()
             .unwrap();
         let midpoint = persistent_completion
             .find(".saturating_duration_since(active.published_at)")
             .unwrap();
         let recycle = persistent_completion
-            .find("completion_signal_recycle = completion_observed_at.elapsed()")
+            .find("signal_recycle = observed_at.elapsed()")
             .unwrap();
         let detach = persistent_completion
-            .find("finish_persistent_full_range_recycled_v1")
+            .find("detach_recycled_directional_persistent_fixed_dispatch_v1")
             .unwrap();
         assert!(midpoint < recycle);
         assert!(recycle < detach);
@@ -18062,6 +17940,7 @@ mod tests {
     #[test]
     fn persistent_compute_poll_and_wait_share_one_completion_handler_without_poll_waiting() {
         let compute_dispatch = include_str!("kfd_backend/compute_dispatch.rs");
+        let completion = include_str!("kfd_backend/persistent_completion.rs");
         let poll = compute_dispatch
             .split("fn poll_compute_lane_v1")
             .nth(1)
@@ -18077,12 +17956,14 @@ mod tests {
             .next()
             .unwrap();
         assert_eq!(
-            poll.matches(".poll_and_recycle_directional_persistent_fixed_dispatch_v1(dispatch)")
+            completion
+                .matches(".poll_and_recycle_directional_persistent_fixed_dispatch_v1(dispatch)")
                 .count(),
             1
         );
         assert_eq!(
-            wait.matches(".wait_and_recycle_directional_persistent_fixed_dispatch_until_v1(")
+            completion
+                .matches(".wait_and_recycle_directional_persistent_fixed_dispatch_until_v1(")
                 .count(),
             1
         );
@@ -18094,12 +17975,11 @@ mod tests {
             1
         );
         assert_eq!(
-            poll.matches("finish_persistent_compute_poll_and_recycle_v1")
-                .count(),
+            poll.matches("advance_scalar_completion_v1(None)").count(),
             1
         );
         assert_eq!(
-            wait.matches("finish_persistent_compute_poll_and_recycle_v1")
+            wait.matches("advance_scalar_completion_v1(Some(deadline))")
                 .count(),
             1
         );
@@ -18199,7 +18079,10 @@ mod tests {
                 if error.kind() == KfdRuntimeBackendErrorKindV1::Terminal
         ));
         assert!(backend.terminal);
-        assert!(backend.active.is_none());
+        assert_eq!(
+            backend.active.as_ref().map(|active| active.id),
+            Some(compute)
+        );
         assert!(backend.last_launch_performance_v1().is_none());
         assert!(!backend.submissions.contains_key(&compute));
         assert!(matches!(

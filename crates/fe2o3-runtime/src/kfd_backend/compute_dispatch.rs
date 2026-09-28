@@ -726,93 +726,6 @@ impl KfdRuntimeBackendV1 {
         })
     }
 
-    pub(super) fn finish_persistent_compute_poll_and_recycle_v1(
-        &mut self,
-        mut active: ActiveSubmissionV1,
-        allocation: u64,
-        access: RuntimeAccessV1,
-        poll: Result<
-            Gfx942PersistentComputePollAndRecycleV1,
-            Gfx942PersistentComputePollAndRecycleFailureV1,
-        >,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let poll = match poll {
-            Ok(poll) => poll,
-            Err(Gfx942PersistentComputePollAndRecycleFailureV1::Poll(failure)) => {
-                let detail = failure.error().to_string();
-                let (_, custody) = failure.into_parts();
-                return match custody {
-                    Gfx942PersistentComputeTransitionFailureCustodyV1::Retryable(dispatch) => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::PersistentComputePublished(dispatch),
-                        );
-                        Err(self.terminal_error(format!(
-                            "KFD persistent-compute completion observation returned foreign retryable custody: {detail}"
-                        )))
-                    }
-                    Gfx942PersistentComputeTransitionFailureCustodyV1::ProcessTeardown(custody) => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::PersistentCompute(custody),
-                        );
-                        Err(self.terminal_error(format!(
-                            "KFD persistent-compute completion observation: {detail}"
-                        )))
-                    }
-                };
-            }
-            Err(Gfx942PersistentComputePollAndRecycleFailureV1::Recycle(failure)) => {
-                let detail = failure.error().to_string();
-                let (_, custody) = failure.into_parts();
-                return match custody {
-                    Gfx942PersistentComputeTransitionFailureCustodyV1::Retryable(completed) => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::PersistentComputeCompleted(completed),
-                        );
-                        Err(self.terminal_error(format!(
-                            "KFD persistent-compute completion recycle returned foreign retryable custody: {detail}"
-                        )))
-                    }
-                    Gfx942PersistentComputeTransitionFailureCustodyV1::ProcessTeardown(custody) => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::PersistentCompute(custody),
-                        );
-                        Err(self.terminal_error(format!(
-                            "KFD persistent-compute completion recycle: {detail}"
-                        )))
-                    }
-                };
-            }
-        };
-        match poll {
-            Gfx942PersistentComputePollAndRecycleV1::Pending(dispatch) => {
-                active.execution = Some(ActiveComputeExecutionV1::Persistent {
-                    allocation,
-                    access,
-                    dispatch,
-                });
-                self.active = Some(active);
-                Ok(BackendPollV1::Pending)
-            }
-            Gfx942PersistentComputePollAndRecycleV1::Recycled {
-                recycled,
-                completion_observed_at,
-            } => {
-                active.performance.publish_to_completion =
-                    completion_observed_at.saturating_duration_since(active.published_at);
-                let completion_signal_recycle = completion_observed_at.elapsed();
-                active.performance.completion_signal_recycle += completion_signal_recycle;
-                self.finish_persistent_full_range_recycled_v1(
-                    active,
-                    allocation,
-                    access,
-                    recycled,
-                    completion_observed_at,
-                    completion_signal_recycle,
-                )
-            }
-        }
-    }
-
     pub(super) fn finish_three_binding_persistent_poll_and_recycle_v1(
         &mut self,
         mut active: ActiveSubmissionV1,
@@ -1006,51 +919,6 @@ impl KfdRuntimeBackendV1 {
         self.finish_restored_three_binding_persistent_compute_v1(active, Duration::ZERO)
     }
 
-    #[cfg(test)]
-    pub(super) fn finish_scripted_persistent_compute_v1(
-        &mut self,
-        mut active: ActiveSubmissionV1,
-        allocation: u64,
-        access: RuntimeAccessV1,
-        device: Box<DirectionalSdmaDeviceOwnerV1>,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if self.scripted_persistent_transition_failure
-            == Some(ScriptedPersistentTransitionFailureV1::Poll)
-        {
-            self.scripted_persistent_transition_failure = None;
-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Device(*device));
-            return Err(self.terminal_error(
-                "scripted persistent-compute completion observation returned foreign retryable custody",
-            ));
-        }
-        active.performance.publish_to_completion = active.published_at.elapsed();
-        if self.scripted_persistent_transition_failure
-            == Some(ScriptedPersistentTransitionFailureV1::Recycle)
-        {
-            self.scripted_persistent_transition_failure = None;
-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Device(*device));
-            return Err(self.terminal_error(
-                "scripted persistent-compute completion recycle returned foreign retryable custody",
-            ));
-        }
-        if self.scripted_persistent_transition_failure
-            == Some(ScriptedPersistentTransitionFailureV1::Detach)
-        {
-            self.scripted_persistent_transition_failure = None;
-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Device(*device));
-            return Err(self.terminal_error(
-                "scripted persistent-compute completion detach returned foreign retryable custody",
-            ));
-        }
-        self.restore_persistent_compute_completion_v1(
-            allocation,
-            active.id,
-            *device,
-            persistent_compute_effect_v1(access),
-        )?;
-        self.finish_restored_persistent_compute_v1(active, allocation, Duration::ZERO)
-    }
-
     pub(super) fn poll_compute_lane_v1(
         &mut self,
         lane: usize,
@@ -1071,6 +939,9 @@ impl KfdRuntimeBackendV1 {
             {
                 backend.scripted_persistent_poll_pending_observations -= 1;
                 return Ok(BackendPollV1::Pending);
+            }
+            if backend.scalar_completion_selected_v1() {
+                return backend.advance_scalar_completion_v1(None);
             }
             let ordinary_native_lane = if backend
                 .active
@@ -1276,19 +1147,11 @@ impl KfdRuntimeBackendV1 {
                     backend.active = Some(active);
                     Err(backend.terminal_error("prepared publication bypassed its indexed path"))
                 }
-                ActiveComputeExecutionV1::Persistent {
-                    allocation,
-                    access,
-                    dispatch,
-                } => {
-                    let poll = backend
-                        .queue
-                        .as_mut()
-                        .expect("persistent submission retains its queue")
-                        .poll_and_recycle_directional_persistent_fixed_dispatch_v1(dispatch);
-                    backend.finish_persistent_compute_poll_and_recycle_v1(
-                        active, allocation, access, poll,
-                    )
+                execution @ (ActiveComputeExecutionV1::Persistent { .. }
+                    | ActiveComputeExecutionV1::PersistentCompleting(_)) => {
+                    active.execution = Some(execution);
+                    backend.active = Some(active);
+                    Err(backend.terminal_error("scalar completion bypassed its indexed path"))
                 }
                 execution @ ActiveComputeExecutionV1::ThreeBindingPersistentPrepared { .. } => {
                     active.execution = Some(execution);
@@ -1315,12 +1178,11 @@ impl KfdRuntimeBackendV1 {
                     )
                 }
                 #[cfg(test)]
-                ActiveComputeExecutionV1::ScriptedPersistent {
-                    allocation,
-                    access,
-                    device,
-                } => backend
-                    .finish_scripted_persistent_compute_v1(active, allocation, access, device),
+                execution @ ActiveComputeExecutionV1::ScriptedPersistent { .. } => {
+                    active.execution = Some(execution);
+                    backend.active = Some(active);
+                    Err(backend.terminal_error("scripted scalar completion bypassed its indexed path"))
+                }
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
                     admissions,
@@ -1628,6 +1490,9 @@ impl KfdRuntimeBackendV1 {
         deadline: Instant,
     ) -> Result<Option<BackendPollV1>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.with_compute_lane_state_v1(lane, |backend| {
+            if backend.scalar_completion_selected_v1() {
+                return backend.advance_scalar_completion_v1(Some(deadline)).map(Some);
+            }
             let waitable = backend
                 .active
                 .as_ref()
@@ -1651,41 +1516,6 @@ impl KfdRuntimeBackendV1 {
                 return Ok(None);
             };
             match execution {
-                ActiveComputeExecutionV1::Persistent {
-                    allocation,
-                    access,
-                    dispatch,
-                } => {
-                    let Some(queue) = backend.queue.as_mut() else {
-                        backend.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::PersistentComputePublished(dispatch),
-                        );
-                        return Err(backend
-                            .terminal_error("published persistent submission lost its KFD queue"));
-                    };
-                    let wait = queue
-                        .wait_and_recycle_directional_persistent_fixed_dispatch_until_v1(
-                            dispatch, deadline,
-                        )
-                        .map(|wait| match wait {
-                            Gfx942PersistentComputeWaitAndRecycleV1::Timeout {
-                                dispatch, ..
-                            } => Gfx942PersistentComputePollAndRecycleV1::Pending(dispatch),
-                            Gfx942PersistentComputeWaitAndRecycleV1::Recycled {
-                                recycled,
-                                completion_observed_at,
-                                ..
-                            } => Gfx942PersistentComputePollAndRecycleV1::Recycled {
-                                recycled,
-                                completion_observed_at,
-                            },
-                        });
-                    backend
-                        .finish_persistent_compute_poll_and_recycle_v1(
-                            active, allocation, access, wait,
-                        )
-                        .map(Some)
-                }
                 ActiveComputeExecutionV1::ThreeBindingPersistent {
                     admissions,
                     restore_shells,
@@ -1728,36 +1558,6 @@ impl KfdRuntimeBackendV1 {
                             wait,
                         )
                         .map(Some)
-                }
-                #[cfg(test)]
-                ActiveComputeExecutionV1::ScriptedPersistent {
-                    allocation,
-                    access,
-                    device,
-                } => {
-                    let mut attempts = 0_u32;
-                    let mut sleep = WAIT_INITIAL_SLEEP_V1;
-                    loop {
-                        backend.scripted_persistent_wait_observations += 1;
-                        if backend.scripted_persistent_wait_pending_observations == 0 {
-                            return backend
-                                .finish_scripted_persistent_compute_v1(
-                                    active, allocation, access, device,
-                                )
-                                .map(Some);
-                        }
-                        backend.scripted_persistent_wait_pending_observations -= 1;
-                        if !apply_wait_backoff_v1(attempts, &mut sleep, deadline) {
-                            active.execution = Some(ActiveComputeExecutionV1::ScriptedPersistent {
-                                allocation,
-                                access,
-                                device,
-                            });
-                            backend.active = Some(active);
-                            return Ok(Some(BackendPollV1::Pending));
-                        }
-                        attempts = attempts.saturating_add(1);
-                    }
                 }
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
@@ -3832,14 +3632,14 @@ impl KfdRuntimeBackendV1 {
         } else {
             None
         };
-        let (persistent_input, restoration) = self.take_persistent_compute_input_v1(
-            PersistentFullRangeComputeAdmissionV1 {
-                allocation: persistent.allocation,
-                access: persistent.access,
-                source: persistent.source,
-            },
-            id,
-        )?;
+        let admission = PersistentFullRangeComputeAdmissionV1 {
+            allocation: persistent.allocation,
+            access: persistent.access,
+            source: persistent.source,
+        };
+        let completion = self.reserve_persistent_completion_v1(admission)?;
+        let (persistent_input, restoration) =
+            self.take_persistent_compute_input_v1(admission, id)?;
         let promotion = restoration.promotion;
         performance.ready_promotion = promotion;
         let publication_profile = PersistentPublicationProfileV1 {
@@ -3881,10 +3681,11 @@ impl KfdRuntimeBackendV1 {
                         input_shell.expect("reserved scripted input shell"),
                         persistent_input,
                     )),
+                    completion,
                     profile: publication_profile,
                 }),
             });
-            drop(restoration);
+            self.install_scalar_completion_shell_v1(restoration);
             return self.publish_initial_persistent_prepared_v1();
         }
         #[cfg(not(test))]
@@ -3968,10 +3769,11 @@ impl KfdRuntimeBackendV1 {
                 access: persistent.access,
                 source: persistent.source,
                 prepared: PreparedReceiptV1::Armed(binding),
+                completion,
                 profile: publication_profile,
             }),
         });
-        drop(restoration);
+        self.install_scalar_completion_shell_v1(restoration);
         self.publish_initial_persistent_prepared_v1()
     }
 
@@ -4170,82 +3972,6 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
-    pub(super) fn finish_persistent_full_range_recycled_v1(
-        &mut self,
-        mut active: ActiveSubmissionV1,
-        allocation: u64,
-        access: RuntimeAccessV1,
-        recycled: Gfx942RecycledPersistentComputeDispatchV1,
-        recycle_started: Instant,
-        completion_signal_recycle: Duration,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let detach = self
-            .queue
-            .as_mut()
-            .expect("recycled persistent completion retains its queue")
-            .detach_recycled_directional_persistent_fixed_dispatch_v1(recycled);
-        let completed = match detach {
-            Ok(completed) => completed,
-            Err(failure) => {
-                let detail = failure.error().to_string();
-                let (_, custody) = failure.into_parts();
-                active.performance.completion_detach_restore +=
-                    completion_detach_restore_duration_v1(
-                        recycle_started.elapsed(),
-                        completion_signal_recycle,
-                    );
-                return match custody {
-                    Gfx942PersistentComputeTransitionFailureCustodyV1::Retryable(recycled) => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::PersistentComputeRecycled(recycled),
-                        );
-                        Err(self.terminal_error(format!(
-                            "KFD persistent-compute completion detach returned foreign retryable custody: {detail}"
-                        )))
-                    }
-                    Gfx942PersistentComputeTransitionFailureCustodyV1::ProcessTeardown(custody) => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::PersistentCompute(custody),
-                        );
-                        Err(self.terminal_error(format!(
-                            "KFD persistent-compute completion detach: {detail}"
-                        )))
-                    }
-                };
-            }
-        };
-        let expected_effect = persistent_compute_effect_v1(access);
-        let (input, actual_effect) = match completed.retire_settled_frontier_for_replay_v1() {
-            Ok(completed) => completed,
-            Err(failure) => {
-                self.retain_terminal_sdma_custody_v1(
-                    KfdRuntimeTerminalSdmaCustodyV1::ComputeRetirement(failure),
-                );
-                return Err(self.terminal_error(
-                    "KFD persistent-compute completion frontier retirement failed",
-                ));
-            }
-        };
-        if actual_effect != expected_effect {
-            self.retain_terminal_sdma_custody_v1(
-                KfdRuntimeTerminalSdmaCustodyV1::PersistentComputeInput(input),
-            );
-            return Err(self
-                .terminal_error("KFD persistent-compute effect changed after metadata admission"));
-        }
-        self.restore_persistent_compute_completion_input_v1(
-            allocation,
-            active.id,
-            input,
-            actual_effect,
-        )?;
-        let completion_detach_restore = completion_detach_restore_duration_v1(
-            recycle_started.elapsed(),
-            completion_signal_recycle,
-        );
-        self.finish_restored_persistent_compute_v1(active, allocation, completion_detach_restore)
-    }
-
     #[cfg(test)]
     pub(super) fn finish_scripted_materialized_compute_v1(
         &mut self,
@@ -4259,58 +3985,6 @@ impl KfdRuntimeBackendV1 {
         active.performance.completed_readback = Duration::ZERO;
         active.performance.completion_signal_recycle = Duration::ZERO;
         active.performance.completion_detach_restore = Duration::ZERO;
-        let compute_lane = self.selected_compute_lane;
-        let module = self
-            .kernels
-            .get(&active.kernel)
-            .expect("active compute retains its kernel")
-            .module;
-        self.release_compute_custody_v1(active.id, module, active.allocations.iter().copied());
-        let status = BackendPollV1::Succeeded;
-        self.submissions.insert(
-            active.id,
-            SubmissionRecordV1 {
-                stream: active.stream,
-                status,
-                dependency_depth: active.dependency_depth,
-                profile_dispatch_published: true,
-            },
-        );
-        self.compute_completion_reservations = self
-            .compute_completion_reservations
-            .checked_sub(1)
-            .expect("published compute reserves one completion slot");
-        self.release_compute_lane_lease_v1(active.stream, compute_lane);
-        self.last_launch_performance = Some(active.performance);
-        let profile_dispatch =
-            self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, active.id);
-        self.observe_profile_v1(profile_dispatch.map(|dispatch| {
-            KfdRuntimeProfileEventKindV1::DispatchCompleted {
-                dispatch,
-                host_timing: profile_host_timing_v1(active.performance),
-            }
-        }));
-        active.execution = None;
-        Ok(status)
-    }
-
-    pub(super) fn finish_restored_persistent_compute_v1(
-        &mut self,
-        mut active: ActiveSubmissionV1,
-        allocation: u64,
-        completion_detach_restore: Duration,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        active.performance.completed_readback = Duration::ZERO;
-        active.performance.completion_detach_restore += completion_detach_restore;
-        debug_assert_eq!(active.performance.user_data_materializations, 0);
-        debug_assert_eq!(
-            active.performance.data_path,
-            KfdRuntimeLaunchDataPathV1::PersistentDeviceReused
-        );
-        self.retained_persistent_dispatch = Some(RetainedPersistentDispatchV1 {
-            allocation,
-            dispatch_shape_sha256: active.dispatch_shape_sha256,
-        });
         let compute_lane = self.selected_compute_lane;
         let module = self
             .kernels

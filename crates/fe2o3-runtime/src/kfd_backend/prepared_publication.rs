@@ -157,7 +157,7 @@ impl KfdRuntimeBackendV1 {
         let submission = self.active.as_ref().map_or(0, |active| active.id);
         if self.selected_compute_lane != 0
             || !self.persistent_prepared_is_armed_v1()
-            || !self.prepared_persistent_custody_intact_v1(submission, false)
+            || !self.persistent_compute_custody_intact_v1(submission, false)
             || !self.prepared_persistent_storage_intact_v1()
             || self.terminal_sdma_custody.is_some()
         {
@@ -238,6 +238,7 @@ impl KfdRuntimeBackendV1 {
                 let Some(ActiveComputeExecutionV1::PersistentPrepared {
                     allocation,
                     access,
+                    completion,
                     profile,
                     ..
                 }) = active.execution.take()
@@ -248,6 +249,7 @@ impl KfdRuntimeBackendV1 {
                     allocation,
                     access,
                     dispatch,
+                    completion,
                 });
                 profile
             }
@@ -311,6 +313,7 @@ impl KfdRuntimeBackendV1 {
                 let Some(ActiveComputeExecutionV1::ScriptedPersistentPrepared {
                     allocation,
                     access,
+                    completion,
                     profile,
                     ..
                 }) = active.execution.take()
@@ -321,6 +324,7 @@ impl KfdRuntimeBackendV1 {
                     allocation,
                     access,
                     device,
+                    completion,
                 });
                 profile
             }

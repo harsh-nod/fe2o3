@@ -119,12 +119,14 @@ pub(super) enum ActiveComputeExecutionV1 {
         access: RuntimeAccessV1,
         source: PersistentFullRangeComputeSourceV1,
         prepared: PreparedReceiptV1<Gfx942PreparedPersistentComputeDispatchV1>,
+        completion: Box<PersistentComputeCompletionV1>,
         profile: PersistentPublicationProfileV1,
     },
     Persistent {
         allocation: u64,
         access: RuntimeAccessV1,
         dispatch: Gfx942PersistentComputeDispatchV1,
+        completion: Box<PersistentComputeCompletionV1>,
     },
     ThreeBindingPersistentPrepared {
         admissions: [PersistentFullRangeComputeAdmissionV1; 3],
@@ -143,6 +145,7 @@ pub(super) enum ActiveComputeExecutionV1 {
         allocation: u64,
         access: RuntimeAccessV1,
         device: Box<DirectionalSdmaDeviceOwnerV1>,
+        completion: Box<PersistentComputeCompletionV1>,
     },
     #[cfg(test)]
     ScriptedPersistentPrepared {
@@ -150,9 +153,11 @@ pub(super) enum ActiveComputeExecutionV1 {
         access: RuntimeAccessV1,
         source: PersistentFullRangeComputeSourceV1,
         input: PreparedReceiptV1<Box<KfdRuntimePersistentComputeInputV1>>,
+        completion: Box<PersistentComputeCompletionV1>,
         profile: PersistentPublicationProfileV1,
     },
     PersistentCancelling(Box<super::prepared_cancellation::PreparedComputeCancellationV1>),
+    PersistentCompleting(Box<PersistentComputeCompletionV1>),
     #[cfg(test)]
     ScriptedThreeBindingPersistentPrepared {
         admissions: [PersistentFullRangeComputeAdmissionV1; 3],
@@ -178,6 +183,12 @@ pub(super) enum ScriptedPersistentTransitionFailureV1 {
     Recycle,
     Detach,
     UnwindBeforeTake,
+    ReserveCompletion,
+    UnwindAfterRetire,
+    CompletionSlotMismatch,
+    CompletionShellMismatch,
+    CompletionEffectMismatch,
+    CompletionCommitRosterMismatch,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

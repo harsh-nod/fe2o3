@@ -335,6 +335,7 @@ fn backend_snapshot(
                     allocation,
                     access,
                     device,
+                    ..
                 } => (
                     1,
                     Some((*allocation, *access, &**device as *const _ as usize)),

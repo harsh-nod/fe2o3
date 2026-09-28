@@ -5,6 +5,9 @@ use super::*;
 use std::mem::ManuallyDrop;
 use std::os::unix::process::ExitStatusExt;
 
+#[path = "persistent_completion_tests.rs"]
+mod completion;
+
 struct Fixture {
     backend: ManuallyDrop<KfdRuntimeBackendV1>,
     stream: u64,

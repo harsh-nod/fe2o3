@@ -36,7 +36,10 @@ pub(super) enum ScriptedPreparedCancelFaultV1 {
 }
 
 impl ThreeBindingPersistentRestoreShellV1 {
-    fn supports_origin_v1(&self, admission: PersistentFullRangeComputeAdmissionV1) -> bool {
+    pub(super) fn supports_origin_v1(
+        &self,
+        admission: PersistentFullRangeComputeAdmissionV1,
+    ) -> bool {
         match admission.source {
             PersistentFullRangeComputeSourceV1::InitializedStorage => {
                 self.initialized.is_some() && self.replay.is_some()
@@ -85,7 +88,7 @@ impl ThreeBindingPersistentRestoreShellV1 {
                 KfdRuntimePersistentComputeInputV1::Native(
                     Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_),
                 ),
-            ) if admission.access == RuntimeAccessV1::Write => self.replay.is_some(),
+            ) if admission.access != RuntimeAccessV1::Read => self.replay.is_some(),
             #[cfg(test)]
             (
                 Source::InitializedStorage,
@@ -102,7 +105,7 @@ impl ThreeBindingPersistentRestoreShellV1 {
             ) => self.device.is_some(),
             #[cfg(test)]
             (Source::AuthenticatedH2d, KfdRuntimePersistentComputeInputV1::ScriptedReplay(_))
-                if admission.access == RuntimeAccessV1::Write =>
+                if admission.access != RuntimeAccessV1::Read =>
             {
                 self.device.is_some()
             }
@@ -193,12 +196,22 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
-    fn prepared_cancel_admissions_v1(&self) -> [Option<PersistentFullRangeComputeAdmissionV1>; 3] {
+    fn persistent_compute_admissions_v1(
+        &self,
+    ) -> [Option<PersistentFullRangeComputeAdmissionV1>; 3] {
         let execution = self
             .active
             .as_ref()
             .and_then(|active| active.execution.as_ref());
         match execution {
+            Some(
+                ActiveComputeExecutionV1::Persistent { completion, .. }
+                | ActiveComputeExecutionV1::PersistentCompleting(completion),
+            ) => [Some(completion.admission), None, None],
+            #[cfg(test)]
+            Some(ActiveComputeExecutionV1::ScriptedPersistent { completion, .. }) => {
+                [Some(completion.admission), None, None]
+            }
             Some(ActiveComputeExecutionV1::PersistentPrepared {
                 allocation,
                 access,
@@ -243,7 +256,7 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
-    pub(super) fn prepared_persistent_custody_intact_v1(
+    pub(super) fn persistent_compute_custody_intact_v1(
         &self,
         submission: u64,
         restored: bool,
@@ -254,7 +267,7 @@ impl KfdRuntimeBackendV1 {
         let Some(kernel) = self.kernels.get(&active.kernel) else {
             return false;
         };
-        let admissions = self.prepared_cancel_admissions_v1();
+        let admissions = self.persistent_compute_admissions_v1();
         let count = admissions.iter().flatten().count();
         if active.id != submission
             || submission == 0
@@ -363,21 +376,24 @@ impl KfdRuntimeBackendV1 {
         else {
             return false;
         };
-        let single = |allocation, source| {
-            self.allocations
-                .get(&allocation)
-                .is_some_and(|record| match source {
-                    PersistentFullRangeComputeSourceV1::InitializedStorage => record
-                        .persistent_storage_restore
-                        .as_ref()
-                        .is_some_and(|shell| shell.initialized.is_some() && shell.replay.is_some()),
-                    _ => record.persistent_storage_restore.is_none(),
-                })
+        let single = |allocation, access, source, completion| {
+            self.scalar_completion_reservation_intact_v1(
+                completion,
+                PersistentFullRangeComputeAdmissionV1 {
+                    allocation,
+                    access,
+                    source,
+                },
+            )
         };
         match execution {
             ActiveComputeExecutionV1::PersistentPrepared {
-                allocation, source, ..
-            } => single(*allocation, *source),
+                allocation,
+                access,
+                source,
+                completion,
+                ..
+            } => single(*allocation, *access, *source, completion),
             ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
                 admissions,
                 restore_shells,
@@ -389,11 +405,13 @@ impl KfdRuntimeBackendV1 {
             #[cfg(test)]
             ActiveComputeExecutionV1::ScriptedPersistentPrepared {
                 allocation,
+                access,
                 source,
+                completion,
                 input,
                 ..
             } => {
-                single(*allocation, *source)
+                single(*allocation, *access, *source, completion)
                     && input.armed().is_some_and(|input| {
                         matches!(
                             (source, input.as_ref()),
@@ -468,7 +486,7 @@ impl KfdRuntimeBackendV1 {
     ) -> Result<crate::BackendCancellationV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
     {
         if !self.persistent_prepared_is_armed_v1()
-            || !self.prepared_persistent_custody_intact_v1(submission, false)
+            || !self.persistent_compute_custody_intact_v1(submission, false)
             || !self.prepared_persistent_storage_intact_v1()
             || self.terminal_sdma_custody.is_some()
         {
@@ -476,7 +494,7 @@ impl KfdRuntimeBackendV1 {
                 self.terminal_error("prepared cancellation custody changed before native effects")
             );
         }
-        let admissions = self.prepared_cancel_admissions_v1();
+        let admissions = self.persistent_compute_admissions_v1();
         let single = admissions[1].is_none();
         let first = admissions[0].unwrap();
         let native = matches!(
@@ -793,7 +811,7 @@ impl KfdRuntimeBackendV1 {
             self.scripted_prepared_cancel_fault = None;
             std::panic::panic_any("scripted cancellation commit unwind");
         }
-        if !self.prepared_persistent_custody_intact_v1(submission, true)
+        if !self.persistent_compute_custody_intact_v1(submission, true)
             || self
                 .submissions
                 .capacity()
@@ -816,7 +834,7 @@ impl KfdRuntimeBackendV1 {
             self.kernels[&active.kernel].module,
             active.dependency_depth,
         );
-        let allocations = self.prepared_cancel_admissions_v1();
+        let allocations = self.persistent_compute_admissions_v1();
         self.retained_persistent_dispatch = None;
         for admission in allocations.into_iter().flatten() {
             self.release_allocation_custody_v1(admission.allocation, submission);
