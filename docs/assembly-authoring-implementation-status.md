@@ -1671,3 +1671,27 @@ See [qualification and limits](retained-capability-fifo-qualification-20260928.m
 This is not the genuine two-pass capability driver or production admission.
 Actual nominal-query integration, earlier constants and the outer shared-owner
 continuation remain open. Broad accepted exits remain 6/18.
+
+## Retained nominal capability driver — 2026-09-28
+
+The private two-pass driver now compiles and preserves both FIFO owners,
+actual no-pipeline scans, the real nominal-query call path, source-index replay
+and partial effect/read-binding storage. All 11 helper/source controls and the
+356-model / 3,337-backend regression passed (197 ignored), plus builds.
+See [qualification and limits](retained-capability-driver-qualification-20260928.md).
+
+These helper tests do not establish genuine full-driver execution.
+The actual-source shared-owner join, earlier whole-root analyses, argument
+writers, joint bounds and production admission remain open.
+Broad accepted exits remain 6/18.
+
+## Debugger startup input-closure checkpoint — 2026-09-28
+
+Fresh source/helper generation, CPU tests, five benign supervision cases and
+the complete 1,024-file selection passed. The selected symlink refusal is
+resolved with three exact alias rules; all 879 duties are retained.
+See [qualification and limits](debugger-startup-input-closure-qualification-20260928.md).
+
+This is not debugger startup, a loaded-file closure or physical GPU capture.
+V4 and the remaining native producer/adapter work remain open.
+Broad accepted exits remain 6/18.
