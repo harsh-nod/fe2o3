@@ -24,6 +24,18 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Prepared retry-publication custody development (2026-09-28 UTC): the active
+descriptor now stays indexed while the lower queue consumes its Prepared
+receipt. Exact retry receipts re-arm the owner; terminal/unwind paths retain
+NativeOwned custody, and successful publication installs Published before
+profiling. [The evidence packet](evidence/dev-prepared-compute-publication-2026-09-28/README.md)
+separates runtime scripted fault coverage, real-recorder controls and lower KFD
+constructed-attachment tests from GPU execution and formal correspondence.
+It also fixes spurious profile loss when releasing a copy or an unpublished
+cancellation that has no dispatch lifecycle event.
+Initial bind/first-submit indexing and its pending-owner handoff remain open.
+Accepted lane checkpoints, A1/A2 and HIP/HSA parity are unchanged.
+
 Authenticated completed-compute import development (2026-09-27 UTC): persistent
 owners now restore initialization from the original typed data after exact
 completed-use and storage-scope authentication. Three-buffer restoration

@@ -212,6 +212,13 @@ Direct native outcome-mapping qualification, allocator-failure injection and
 executable formal correspondence remain open; the scripted ownership tests do
 not close those gates or the complete Context composition.
 
+[Prepared retry publication](evidence/dev-prepared-compute-publication-2026-09-28/README.md)
+now retains the indexed descriptor across consuming publication, exact retry,
+terminal return and unwind, installing Published before profiling. Native and
+scripted paths share the receipt transition. Initial bind/first-submit indexing,
+the caller's one-time pending-owner handoff, coupled GPU qualification and
+executable refinement remain open; this does not close the Context composition.
+
 ### Unknown Group Disposal
 
 Rejecting disposal while a co-owner exists is safe but cannot finish cleanup:
