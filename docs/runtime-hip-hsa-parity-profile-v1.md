@@ -146,6 +146,15 @@ qualify that isolated bridge, not full runtime owner/receipt association,
 GPU submission/completion, native cleanup, formal correspondence or performance.
 No compatibility runtime or public receipt constructor is introduced.
 
+The [shared completion-cell evidence](evidence/dev-native-completion-cell-2026-09-28/README.md)
+extends this source sharing to Pending/Ready, completed-custody retry and physical
+retirement. Genuine lower CPU pin/refusal/release and three-inflight slot-reuse
+controls exercise the cell and private failure classifier; six compiled mutations
+test sensitivity to lost receipts and false retries. Actual runtime selection,
+Pending handoff, timestamp wiring and logical commit are not newly established
+by those lower fixtures. Native completion, staged metadata refinement, protected
+Worker and matched performance remain separate gates.
+
 Poll and `wait` never perform deferred compute preparation, but can retry
 publication of an already bound Prepared recipe. Submit may publish immediately
 ready work. The additive in-process `flush_stream`

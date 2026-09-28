@@ -24,6 +24,23 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Shared completion-receipt development (2026-09-28 UTC): ordinary native Active
+now holds a concrete Published/Completed/Retired/Consuming cell whose production
+body is compiled by KFD tests with genuine lower receipts. Nine groups cover
+Pending/Ready, actual event-pin refusal and release, exact slot reuse, invalid
+phases, terminal faults and lane unwind. Six isolated compiled mutations are
+detected by behavioral assertions. The
+[completion-cell packet](evidence/dev-native-completion-cell-2026-09-28/README.md)
+records 1712 KFD passes with one unwaived telemetry failure, 1794 runtime passes
+with three unwaived socket-inspection failures and 28 ignores, plus passing
+focused/static checks. It preserves the initial stale source-oracle failure and
+its test-only correction; the aggregate remains unsuccessful. Full runtime
+owner/receipt integration,
+native signal access, GPU execution, native cleanup and formal correspondence
+remain open; the lower tests do not establish nested runtime selector/timestamp
+wiring. Staged metadata needs shared complete scans and mutations, not trusted
+validity flags. No milestone or accepted lane checkpoint is promoted.
+
 Shared publication-receipt development (2026-09-28 UTC): initial binding,
 Prepared retry and ordered publication now use one private concrete receipt cell
 and classified-result mapping. KFD tests compile that exact source against real
@@ -36,8 +53,9 @@ records 1703 KFD passes with one unwaived telemetry failure, 1794 runtime passes
 with three unwaived socket-inspection failures and 28 ignores, and passing final
 static and mutation checks. Its selections overlap. The packet
 separates this coupling from full runtime indexing, native GPU execution and
-formal refinement. Completion receipt coupling and staged metadata refinement
-are next; protected Worker, Context composition, native cleanup and matched
+formal refinement. That checkpoint left completion receipt coupling and staged
+metadata refinement open; the newer entry above addresses isolated completion
+storage/classification. Protected Worker, Context composition, native cleanup and matched
 performance remain open. A1/A2 and accepted lane checkpoints are unchanged.
 
 Ordinary ordered-publication development (2026-09-28 UTC): same-recipe successors

@@ -269,8 +269,19 @@ KFD CPU receipts. Its success, retry, error and unwind controls use the producti
 facade conversion; three compiled source mutants test oracle sensitivity.
 This is not full runtime handoff or hardware evidence.
 
-Next, couple completion receipt storage and refine staged occupancy separately
-from confirmed logical epochs.
+The [shared completion receipt cell](evidence/dev-native-completion-cell-2026-09-28/README.md)
+now tests exact production receipt storage and lower failure classification with
+genuine Pending/Ready, event pin/release, fault/unwind and slot-reuse controls.
+Six compiled mutations qualify oracle sensitivity. Full runtime owner/receipt
+integration and native signal access remain outside those CPU fixtures.
+
+Next, carry genuine receipts through actual runtime selection, Pending publication
+and settlement, and refine staged occupancy separately from confirmed logical
+epochs. Share complete slot scans and stage/confirm/withdraw mutations with the
+proof over borrowed slots/scalar heads, preserving opaque Active payloads.
+Separate exact rejection predicates from healthy-roster invariant preservation;
+existing guards are not comprehensive corruption validators. Cover both 64- and
+1024-slot profiles and generation exhaustion.
 Refine logical commit separately from optional/fallible observer emission;
 R60's existing model joins these effects and is not correspondence evidence for
 the indexed adapters. Production-body mutations must detect receipt redirection,

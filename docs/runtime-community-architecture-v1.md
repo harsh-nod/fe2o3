@@ -183,8 +183,18 @@ The [receipt-cell packet](evidence/dev-native-publication-cell-2026-09-28/README
 adds success/recycle, signal-capacity, rejection, terminal and unwind controls,
 plus three compiled production-body mutations. Injected submission/completion
 and CPU-only fixtures do not qualify GPU execution, native teardown or the full
-runtime Active/Pending handoff. Completion receipt-state sharing and indexed
-metadata refinement remain separate work.
+runtime Active/Pending handoff.
+
+Completion receipt storage now follows the same private source-sharing pattern:
+Active contains a Published/Completed/Retired/Consuming cell, with input-phase
+checks before consumption and returned-custody-based retry. The
+[completion-cell packet](evidence/dev-native-completion-cell-2026-09-28/README.md)
+uses actual lower CPU observation/recycle and event pin operations, checking exact
+slot prefixes, unwind state and three-inflight middle-slot reuse. Six compiled
+mutations detect lost receipts and false retries. Runtime timing and logical
+settlement remain in the existing adapter; lower-cell controls do not establish
+full runtime/native owner association or GPU behavior. Indexed metadata scans and
+transitions still need source-shared refinement.
 
 The direct adapter's same-device copies are native SDMA submissions. Direct
 dependency chains are capped at 256 before ledger mutation, cancellation can
