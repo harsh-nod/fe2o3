@@ -75,12 +75,40 @@ fn scalar_cfg_prepared_v18(
     changed: bool,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> (ProductionPreparedSourceV18, OriginalKernelAbiFixtureV18) {
+    scalar_cfg_prepared_geometry_v18(changed, true, budget)
+}
+
+fn scalar_cfg_prepared_geometry_v18(
+    changed: bool,
+    exact_single_workgroup: bool,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> (ProductionPreparedSourceV18, OriginalKernelAbiFixtureV18) {
     with_pending_api_owner_v18(
         ModuleFixture::Ordinary,
         false,
         budget,
         || scalar_cfg_original_v18(changed),
         |owner, launch, input, _, budget| {
+            let launch = if exact_single_workgroup {
+                let semantic = owner.source_semantic();
+                let inputs: Vec<_> = semantic
+                    .roots()
+                    .iter()
+                    .map(|root| {
+                        let entry = semantic.functions()[root.index() as usize]
+                            .kernel_entry()
+                            .unwrap();
+                        ProductionSourceLaunchRootInputV1::new(
+                            std::str::from_utf8(entry.export_symbol().as_bytes()).unwrap(),
+                            *entry.kernel_binding_identity().as_bytes(),
+                            ProductionSourceLaunchInputV1::new(1, Some([64, 1, 1]), [1, 1, 1]),
+                        )
+                    })
+                    .collect();
+                ProductionSourceLaunchRosterV1::try_new(semantic, &inputs).unwrap()
+            } else {
+                launch
+            };
             let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
             let roots = fixture.roots();
             let prepared =
@@ -110,6 +138,19 @@ fn scalar_cfg_handoff_checks_changed_and_noop_actual_multiblock_outputs() {
             .with_source_consumer_v18(&mut budget, |source, budget| {
                 let floor = budget.storage();
                 let source_bytes = source.canonical(budget)?.canonical_bytes();
+                assert!(
+                    source
+                        .canonical(budget)?
+                        .module()
+                        .kernels
+                        .iter()
+                        .all(|kernel| {
+                            kernel.domain
+                                == fe2o3_kernel_ir::LaunchDomain::D1 {
+                                    x: fe2o3_kernel_ir::LaunchExtent::Static(64),
+                                }
+                        })
+                );
                 assert!(
                     source
                         .canonical(budget)?
@@ -151,6 +192,52 @@ fn scalar_cfg_handoff_checks_changed_and_noop_actual_multiblock_outputs() {
             .unwrap();
         assert_eq!(budget.storage(), MODULE_FLOOR);
     }
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(500_000_000);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let (prepared, fixture) = scalar_cfg_prepared_geometry_v18(false, false, &mut budget);
+    let roots = fixture.roots();
+    let error = prepared
+        .with_source_consumer_v18(&mut budget, |source, budget| {
+            assert!(
+                source
+                    .canonical(budget)?
+                    .module()
+                    .kernels
+                    .iter()
+                    .any(|kernel| {
+                        kernel
+                            .domain
+                            .extents()
+                            .any(|extent| matches!(extent, fe2o3_kernel_ir::LaunchExtent::Dynamic))
+                    })
+            );
+            let error = source
+                .checked_scalar_cfg_output_v18(
+                    ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                    budget,
+                )
+                .err()
+                .expect("unknown geometry must not produce a scalar-CFG handoff");
+            Err::<(), _>(error)
+        })
+        .unwrap_err();
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+    let mut exact_unknown = 0;
+    while let Some(error) = cause {
+        if let Some(ProductionScalarCfgCheckErrorV18::FormalIncomplete(reasons)) =
+            error.downcast_ref::<ProductionScalarCfgCheckErrorV18>()
+        {
+            assert_eq!(
+                reasons.as_slice(),
+                &[fe2o3_kernel_ir::FormalMemoryIncompleteReason::LaunchExtentUnknown]
+            );
+            exact_unknown += 1;
+        }
+        cause = error.source();
+    }
+    assert_eq!(exact_unknown, 1, "{error:?}");
+    assert_eq!(budget.storage(), MODULE_FLOOR);
 }
 
 #[test]
@@ -224,6 +311,7 @@ fn scalar_cfg_handoff_equal_bytes_foreign_original_owner_is_not_authority() {
     let (prepared, fixture) = scalar_cfg_prepared_v18(false, &mut budget);
     let foreign = scalar_cfg_original_v18(false);
     let roots = fixture.roots();
+    let completed = std::cell::Cell::new(false);
     let result = prepared.with_source_consumer_v18(&mut budget, |source, budget| {
         assert_eq!(
             source
@@ -239,21 +327,30 @@ fn scalar_cfg_handoff_equal_bytes_foreign_original_owner_is_not_authority() {
         let failure = handoff.check_original_source(&foreign, budget).unwrap_err();
         assert!(matches!(
             failure,
-            ProductionSourceOwnedViewErrorV18::Binding(_)
+            ProductionSourceOwnedViewErrorV18::Binding("foreign original SSA owner")
         ));
         let retained = handoff.retained_storage(budget).unwrap_err();
         assert!(matches!(
             retained,
-            ProductionSourceOwnedViewErrorV18::Binding(_)
+            ProductionSourceOwnedViewErrorV18::Binding("foreign original SSA owner")
         ));
         let cleanup = handoff.discard(budget).unwrap_err();
         assert!(matches!(
             cleanup,
-            ProductionSourceOwnedViewErrorV18::Binding(_)
+            ProductionSourceOwnedViewErrorV18::Binding("foreign original SSA owner")
         ));
+        completed.set(true);
         Err::<(), _>(ProductionScalarCfgHandoffErrorV18::from(failure))
     });
-    assert!(result.is_err());
+    assert!(matches!(
+        result,
+        Err(ProductionScalarCfgHandoffErrorV18::Check(
+            ProductionScalarCfgCheckErrorV18::Source(ProductionSourceOwnedViewErrorV18::Binding(
+                "foreign original SSA owner"
+            ))
+        ))
+    ));
+    assert!(completed.get());
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
 
@@ -264,6 +361,7 @@ fn scalar_cfg_handoff_foreign_ledger_preserves_cleanup_denial() {
     budget.reserve_storage(MODULE_FLOOR).unwrap();
     let (prepared, fixture) = scalar_cfg_prepared_v18(false, &mut budget);
     let roots = fixture.roots();
+    let completed = std::cell::Cell::new(false);
     let result = prepared.with_source_consumer_v18(&mut budget, |source, budget| {
         let handoff = source.checked_scalar_cfg_output_v18(
             ProductionKernelArgumentAbiInputV18 { roots: &roots },
@@ -284,9 +382,18 @@ fn scalar_cfg_handoff_foreign_ledger_preserves_cleanup_denial() {
             paid,
             "lost custody cannot authorize a containing refund"
         );
+        completed.set(true);
         Err::<(), _>(ProductionScalarCfgHandoffErrorV18::from(failure))
     });
-    assert!(result.is_err());
+    assert!(matches!(
+        result,
+        Err(ProductionScalarCfgHandoffErrorV18::Check(
+            ProductionScalarCfgCheckErrorV18::Source(ProductionSourceOwnedViewErrorV18::Resource(
+                ArgumentResourceV1::Accounting
+            ))
+        ))
+    ));
+    assert!(completed.get());
     assert!(budget.storage() > MODULE_FLOOR);
 }
 

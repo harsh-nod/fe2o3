@@ -522,7 +522,6 @@ pub(super) fn test_shared_entry_region_v18(
                                         _ => unreachable!(),
                                     }
                                     expected.set(budget.storage());
-                                    observed.set([1, expected.get(), 0, 0, 0, 0]);
                                     match disposition {
                                         0 => Ok(()),
                                         1 => Err(ProductionSourceOwnedViewErrorV18::Binding("shared custody sentinel")),
@@ -540,6 +539,7 @@ pub(super) fn test_shared_entry_region_v18(
                                     ProductionSourceOwnedViewErrorV18::Binding("shared custody sentinel"))))),
                                 _ => assert_eq!(*caught.unwrap_err().downcast::<u64>().unwrap(), 0x1698),
                             }
+                            observed.set([1, expected.get(), 0, 0, 0, 0]);
                         }
                     }
                     Ok(())

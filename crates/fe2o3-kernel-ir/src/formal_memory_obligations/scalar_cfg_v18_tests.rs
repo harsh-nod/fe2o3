@@ -283,17 +283,49 @@ fn scalar_cfg_formal_census_bounds_fail_before_effects_and_do_not_wrap() {
     let mut exact = MAX_NODES_V18 - 1;
     add_v18(&mut exact, 1).unwrap();
     assert!(add_v18(&mut exact, 1).is_err());
-    let mut too_many = module(false);
-    too_many.functions[0].id = FunctionId::from("x".repeat(MAX_NODES_V18 + 1));
-    too_many.kernels[0].entry = too_many.functions[0].id.clone();
-    with_owner(&too_many, |owner| {
-        assert!(matches!(
-            CanonicalScalarCfgFormalScopeV18::new(owner),
-            Err(CanonicalScalarCfgFormalErrorV18::Unsupported(
+    // Eight legal identifiers reach the aggregate census without violating the
+    // canonical per-identifier 4096-byte admission limit first.
+    assert_eq!(crate::wire::MAX_TEXT_BYTES_V1, 4096);
+    let name_len = crate::wire::MAX_TEXT_BYTES_V1 - 1;
+    for over in [false, true] {
+        let template = module(false);
+        let mut boundary = Module::new("name_census_boundary");
+        for ordinal in 0..8 {
+            let mut function = template.functions[0].clone();
+            function.id = FunctionId::from(format!("{ordinal}{}", "x".repeat(name_len - 1)));
+            let mut kernel = template.kernels[0].clone();
+            kernel.id = KernelId::from(if over && ordinal == 0 {
+                "k00".to_owned()
+            } else {
+                format!("k{ordinal}")
+            });
+            kernel.entry = function.id.clone();
+            boundary.functions.push(function);
+            boundary.kernels.push(kernel);
+        }
+        let names = boundary
+            .functions
+            .iter()
+            .map(|f| f.id.as_str().len())
+            .sum::<usize>()
+            + boundary
+                .kernels
+                .iter()
+                .map(|k| k.id.as_str().len() + k.entry.as_str().len())
+                .sum::<usize>();
+        assert_eq!(names, MAX_NODES_V18 + usize::from(over));
+        with_owner(&boundary, |owner| {
+            let expected = if names == MAX_NODES_V18 {
+                "formal module work bound"
+            } else {
                 "formal module node bound"
-            ))
-        ))
-    });
+            };
+            assert!(matches!(
+                CanonicalScalarCfgFormalScopeV18::new(owner),
+                Err(CanonicalScalarCfgFormalErrorV18::Unsupported(actual)) if actual == expected
+            ));
+        });
+    }
 }
 
 #[test]

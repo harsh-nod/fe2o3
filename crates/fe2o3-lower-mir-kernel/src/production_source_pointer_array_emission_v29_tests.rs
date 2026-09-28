@@ -422,8 +422,9 @@ fn original_pointer_array_leaf_types_authenticate_full_layout_and_sticky_refusal
         SOURCE_ARRAY_CASE_V29.replace((64, 3, false)),
         SOURCE_ARRAY_MODE_V29.replace(SourceArrayModeV29::ThinPointer),
     );
-    for mutation in 0..9 {
-        let mut entered = false;
+    for mutation in 0..11 {
+        let mut completed = false;
+        let mut selected = None;
         let result = with_original_array_plan_from_v29(
             original_argument_pointer_array_owner_v29,
             |plan, budget| {
@@ -464,9 +465,43 @@ fn original_pointer_array_leaf_types_authenticate_full_layout_and_sticky_refusal
                         AccessMode::ReadOnly
                     )
                 );
-                entered = true;
                 if mutation == 0 {
+                    completed = true;
                     return Ok(());
+                }
+                if mutation >= 9 {
+                    let storage_filler = if mutation == 10 {
+                        let filler = MODULE_LIMIT - budget.storage();
+                        budget.reserve_storage(filler)?;
+                        filler
+                    } else {
+                        budget.charge_work(MODULE_LIMIT - budget.work())?;
+                        0
+                    };
+                    let first = source_object_original_leaf_type_v29(plan, *ty, schema, budget)
+                        .unwrap_err();
+                    assert!(
+                        matches!(
+                            &first,
+                            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                                ArgumentResourceV1::Work(_)
+                            ) if mutation == 9
+                        ) || matches!(
+                            &first,
+                            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                                ArgumentResourceV1::Storage(_)
+                            ) if mutation == 10
+                        )
+                    );
+                    budget.release_storage(storage_filler)?;
+                    let before = (budget.work(), budget.storage());
+                    let retry = source_object_original_leaf_type_v29(plan, *ty, schema, budget)
+                        .unwrap_err();
+                    assert_eq!(format!("{first:?}"), format!("{retry:?}"));
+                    assert_eq!((budget.work(), budget.storage()), before);
+                    selected = Some(format!("{first:?}"));
+                    completed = true;
+                    return Err(first);
                 }
                 if mutation < 8 {
                     layouts.mutate_row_for_test_v29(schema, |row| {
@@ -489,19 +524,47 @@ fn original_pointer_array_leaf_types_authenticate_full_layout_and_sticky_refusal
                 let bad_schema = if mutation == 8 { array_schema } else { schema };
                 let first = source_object_original_leaf_type_v29(plan, *ty, bad_schema, budget)
                     .unwrap_err();
+                let expected = if matches!(mutation, 5 | 8) {
+                    "selected storage child differs from its original source component"
+                } else {
+                    "typed allocation identity or representation requires its exact source contract"
+                };
+                assert!(matches!(&first,
+                    ProductionSemanticKirErrorV1::Unsupported {
+                        function: 0, block: None, statement: None, detail
+                    } if *detail == expected));
                 let before = (budget.work(), budget.storage());
-                let retry =
-                    source_object_original_leaf_type_v29(plan, *ty, schema, budget).unwrap_err();
-                assert_eq!(format!("{first:?}"), format!("{retry:?}"));
-                assert_eq!((budget.work(), budget.storage()), before);
-                Ok(())
+                let retry = source_object_original_leaf_type_v29(plan, *ty, schema, budget);
+                if mutation == 8 {
+                    assert_eq!(
+                        retry.unwrap(),
+                        Type::pointer(
+                            Type::Scalar(ScalarType::U64),
+                            AddressSpace::Generic,
+                            AccessMode::ReadOnly
+                        )
+                    );
+                } else {
+                    assert_eq!(format!("{first:?}"), format!("{:?}", retry.unwrap_err()));
+                }
+                // Semantic refusal is not a shared resource denial. The next
+                // query must revalidate and pay for its actual work and scratch.
+                assert!(budget.work() > before.0);
+                assert!(budget.storage() > before.1);
+                assert_eq!(budget.failed_work(), None);
+                assert_eq!(budget.failed_storage(), None);
+                selected = Some(format!("{first:?}"));
+                completed = true;
+                Err(first)
             },
         );
-        assert!(entered);
+        assert!(
+            completed,
+            "mutation {mutation}: callback assertions did not complete"
+        );
         assert_eq!(
-            result.is_ok(),
-            mutation == 0,
-            "mutation {mutation}: {result:?}"
+            result.as_ref().err().map(|error| format!("{error:?}")),
+            selected
         );
     }
 }
@@ -519,7 +582,8 @@ fn original_pointer_leaf_query_does_not_admit_selected_private_address_represent
         SOURCE_ARRAY_CASE_V29.replace((64, 3, false)),
         SOURCE_ARRAY_MODE_V29.replace(SourceArrayModeV29::PointerAddresses),
     );
-    let mut entered = false;
+    let mut completed = false;
+    let mut selected = None;
     let result = with_original_scalar_array_plan_v29(|plan, budget| {
         let cell = plan
             .cells
@@ -556,14 +620,35 @@ fn original_pointer_leaf_query_does_not_admit_selected_private_address_represent
             (AddressSpace::Generic, AddressSpace::Private)
         );
         drop(rows);
-        entered = true;
-        assert!(source_object_original_leaf_type_v29(plan, *ty, element, budget).is_err());
+        let first = source_object_original_leaf_type_v29(plan, *ty, element, budget).unwrap_err();
+        assert!(matches!(
+            &first,
+            ProductionSemanticKirErrorV1::Unsupported {
+                function: 0,
+                block: None,
+                statement: None,
+                detail: "typed allocation identity or representation requires its exact source contract"
+            }
+        ));
         let before = (budget.work(), budget.storage());
-        assert!(source_object_original_leaf_type_v29(plan, *ty, element, budget).is_err());
-        assert_eq!((budget.work(), budget.storage()), before);
-        Ok(())
+        let retry = source_object_original_leaf_type_v29(plan, *ty, element, budget).unwrap_err();
+        assert_eq!(format!("{first:?}"), format!("{retry:?}"));
+        assert!(budget.work() > before.0);
+        assert!(budget.storage() > before.1);
+        assert_eq!(budget.failed_work(), None);
+        assert_eq!(budget.failed_storage(), None);
+        selected = Some(format!("{first:?}"));
+        completed = true;
+        Err(first)
     });
-    assert!(entered && result.is_err());
+    assert!(
+        completed,
+        "selected-address callback assertions did not complete"
+    );
+    assert_eq!(
+        result.as_ref().err().map(|error| format!("{error:?}")),
+        selected
+    );
 }
 
 #[test]

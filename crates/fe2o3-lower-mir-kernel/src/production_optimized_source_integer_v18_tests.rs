@@ -36,6 +36,37 @@ fn integer_identity_source_v18(
         helper.locals().to_vec(),
         vec![block(214, statements, SemanticTerminatorKindV1::Return)],
     );
+    // This fixture supplies a complete scalar descriptor at the owning handoff.
+    // Author its root ownership before admission; unspecified ownership must
+    // continue to fail the production ABI contract.
+    for &root in semantic.roots() {
+        let declaration = &functions[root.index() as usize];
+        assert_eq!(declaration.role(), SemanticFunctionRoleV1::KernelRoot);
+        assert_eq!(declaration.abi().source_input_types(), &[U32]);
+        assert_eq!(
+            declaration.abi().source_argument_ownership(),
+            &[SemanticSourceArgumentOwnershipV1::Unspecified]
+        );
+        functions[root.index() as usize] = SemanticFunctionDeclV1::new(
+            declaration.identity(),
+            declaration.role(),
+            declaration.item_definition_identity(),
+            declaration.monomorphization_identity(),
+            declaration.generic_type_arguments_identity(),
+            declaration.const_generic_arguments_identity(),
+            declaration.source(),
+            declaration
+                .abi()
+                .clone()
+                .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ByValue])
+                .unwrap(),
+            declaration.locals().to_vec(),
+            declaration.entry(),
+            declaration.blocks().to_vec(),
+        )
+        .unwrap()
+        .with_kernel_entry(declaration.kernel_entry().unwrap().clone());
+    }
     let admitted = InertSemanticMirRequestV1::new_with_callables(
         semantic.target(),
         semantic.types().to_vec(),
