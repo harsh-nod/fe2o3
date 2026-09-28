@@ -24,6 +24,19 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The complete [ordered settlement body](evidence/dev-ordered-settlement-proof-2026-09-28/README.md)
+now compiles in Rust and Verus, composing exact metadata effects with non-Copy
+receipt/profile movement, refusal timing and full malformed-neighbor frames.
+The final signed campaign passes 37 obligations (26 inherited, 11 new), ten new
+solver-negative controls, original/relocated/closing proofs and pinned tool
+closure. Fifteen focused groups, 1816 runtime tests (zero failures, 28 existing
+ignores), 52 doctests and all static checks pass. Native result authentication,
+storage representation, outer unwind and Pending/retain/Context composition
+remain outside this theorem. A1/A2 and accepted checkpoints are unchanged.
+Next prioritize the existing native mixed-duration, observer and retained-depth
+cells with fresh source/ELF/device binding and owned cleanup; no new GPU or
+HIP/HSA performance result is claimed by this proof packet.
+
 The [ordered outer-close join](evidence/dev-ordered-outer-join-2026-09-28/README.md)
 now binds settlement to an exclusive loan of the exact staged pipeline, returned
 only after complete lane success. Exact reentry checks precede native submit;
@@ -31,8 +44,8 @@ receipt deposition precedes profiling. Two compiler-negative controls and one
 compiled premature-confirmation mutation detect the intended violations. Fifteen
 focused groups, 1816 runtime tests (zero failures, 28 existing ignores), 52 doctests
 and all static checks pass. This is Rust ownership and CPU qualification, not
-shared-body Verus composition, native currentness or HIP/HSA parity. A1/A2 and
-accepted checkpoints remain unchanged.
+shared-body Verus composition (added in the follow-up above), native currentness
+or HIP/HSA parity. A1/A2 and accepted checkpoints remain unchanged.
 
 Real pinned completion and outer-close [CPU custody qualification](evidence/dev-runtime-cpu-completion-2026-09-28/README.md)
 adds four clean pin/recycle scenarios, 48 terminal completion cases and eight
