@@ -158,14 +158,17 @@ fn pipeline_capture_demand_scan_pays_actual_sites_with_exact_and_one_short_work(
         if limit == 12 {
             assert!(result.unwrap());
             assert_eq!(budget.work(), 12);
-            assert_eq!(budget.work_budget_v1().failed_work(), None);
         } else {
             assert!(result.is_err());
             assert_eq!(budget.work(), 11);
-            assert_eq!(budget.work_budget_v1().failed_work(), Some(12));
         }
         assert_eq!(budget.storage(), FLOOR);
         assert!(ssa.occurrence_storage().is_none());
+        drop(budget);
+        assert_eq!(
+            work.failed_work(),
+            if limit == 12 { None } else { Some(12) }
+        );
     }
     let (ssa, _) = unused_pipeline_declaration_fixture();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(2);
@@ -212,7 +215,7 @@ fn pipeline_capture_transfer_is_counted_once_and_preexisting_capture_stays_calle
             capture,
             capture_work,
             budget.work(),
-            owner.executable().canonical_bytes().to_vec(),
+            owner.executable().canonical().canonical_bytes().to_vec(),
         ));
         drop(owner);
         budget.release_storage(retained + inherited).unwrap();
@@ -258,7 +261,8 @@ fn actual_pipeline_capture_materialization_exact_and_one_short_resource_cuts_res
             assert!(owner.semantic_ssa().occurrence_storage().is_some());
             assert_eq!((budget.work(), budget.peak_storage()), required);
         } else if work_limit < required.0 {
-            assert!(budget.work_budget_v1().failed_work().is_some());
+            drop(budget);
+            assert!(work.failed_work().is_some());
         } else {
             assert!(budget.failed_storage().is_some());
         }

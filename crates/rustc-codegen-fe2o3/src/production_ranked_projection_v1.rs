@@ -8688,7 +8688,7 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
         &mut uniform_inductions,
         operations,
         next_value,
-        multi,
+        multi.as_deref_mut(),
     )?;
     project_induction_body_predicates_v1(
         types,
@@ -8809,7 +8809,7 @@ struct PendingWorkgroupPipelineV1 {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn project_workgroup_pipeline_effects_v1(
+fn project_workgroup_pipeline_effects_v1<'facts>(
     callables: &[SemanticCallableDeclV1],
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -8820,7 +8820,7 @@ fn project_workgroup_pipeline_effects_v1(
     entry_operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
     scalar_ssa: Option<pipeline_scalar_ssa_v1::Source<'_>>,
-    facts: Option<&mut dyn ProjectedAssertionFactsV1>,
+    facts: Option<&mut (dyn ProjectedAssertionFactsV1 + 'facts)>,
 ) -> Result<Vec<Option<ProjectedPipelineEffectV1>>, ProductionRankedProjectionErrorV1> {
     let mut pending = Vec::<PendingWorkgroupPipelineV1>::new();
     let mut owners = vec![None; function.locals().len()];
@@ -8885,7 +8885,7 @@ fn project_workgroup_pipeline_effects_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn project_workgroup_pipeline_pending_v1(
+fn project_workgroup_pipeline_pending_v1<'facts>(
     callables: &[SemanticCallableDeclV1],
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -8899,7 +8899,7 @@ fn project_workgroup_pipeline_pending_v1(
     mut owners: Vec<Option<usize>>,
     scalar_ssa: Option<(
         &pipeline_scalar_ssa_v1::Index<'_>,
-        &mut dyn ProjectedAssertionFactsV1,
+        &mut (dyn ProjectedAssertionFactsV1 + 'facts),
     )>,
 ) -> Result<Vec<Option<ProjectedPipelineEffectV1>>, ProductionRankedProjectionErrorV1> {
     let scalar_assertion_proofs = SemanticAssertProofsV1::new(types, function)?;
@@ -9191,7 +9191,7 @@ fn pipeline_scalar_multiple_definitions_v1(
     )
 }
 
-struct PipelineScalarProjectorV1<'a> {
+struct PipelineScalarProjectorV1<'a, 'index, 'source, 'borrow, 'facts> {
     types: &'a [SemanticTypeDeclV1],
     function: &'a SemanticFunctionDeclV1,
     index_values: &'a [Option<ProjectedDisjointIndexV1>],
@@ -9202,13 +9202,13 @@ struct PipelineScalarProjectorV1<'a> {
     next_value: &'a mut u32,
     assertion_proofs: SemanticAssertProofsV1<'a>,
     scalar_ssa: Option<(
-        &'a pipeline_scalar_ssa_v1::Index<'a>,
-        &'a mut dyn ProjectedAssertionFactsV1,
+        &'index pipeline_scalar_ssa_v1::Index<'source>,
+        &'borrow mut (dyn ProjectedAssertionFactsV1 + 'facts),
     )>,
     work: usize,
 }
 
-impl PipelineScalarProjectorV1<'_> {
+impl PipelineScalarProjectorV1<'_, '_, '_, '_, '_> {
     fn assignment_visit_key(
         &mut self,
         local: usize,

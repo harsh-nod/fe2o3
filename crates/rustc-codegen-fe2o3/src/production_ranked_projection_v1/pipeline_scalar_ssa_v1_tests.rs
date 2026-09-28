@@ -175,9 +175,11 @@ fn make_uncaptured_owner(
         false,
         false,
         1,
-        vec![SemanticAbiValueV1::new(
-            WORD,
-            SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+        vec![fe2o3_mir_model::SemanticAbiArgumentV1::source(
+            SemanticAbiValueV1::new(
+                WORD,
+                SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+            ),
         )],
         SemanticAbiValueV1::new(UNIT, SemanticAbiPassModeV1::Ignore),
     )
@@ -332,6 +334,53 @@ fn actual_use_ssa_projects_sequential_same_local_and_cross_block_definitions() {
     )
     .unwrap();
     assert_eq!(budget.storage(), FLOOR);
+    owner.verify_replay().unwrap();
+}
+
+#[test]
+fn scoped_pipeline_index_reborrows_facts_across_short_lived_projector_buffers() {
+    let owner = make_owner(sequential(), true);
+    let mut work = Work::new(100_000);
+    let mut budget = Budget::new(&mut work, 100_000);
+    budget.reserve_storage(FLOOR).unwrap();
+    let mut facts = Facts(&mut budget);
+    let identity = facts.helper_value_ledger_v1().unwrap();
+    for _ in 0..2 {
+        let completed = Cell::new(false);
+        pipeline_scalar_ssa_v1::with_pipeline_index(
+            Some(source(&owner)),
+            owner.source_semantic().types(),
+            function(&owner),
+            Some(&mut facts),
+            |scoped| {
+                let (index, facts) = scoped.expect("authentic captured owner");
+                // Each call owns shorter-lived mutable output buffers, while
+                // the scope and concrete facts object remain independently live.
+                let (first, first_operations) = project(index, facts, &owner, 2, site(0, 2))?;
+                assert!(matches!(
+                    first,
+                    ProjectedPipelineScalarV1::Value(ProductionRankedValueV1::Argument(0))
+                ));
+                assert!(first_operations.is_empty());
+                let (last, last_operations) = project(index, facts, &owner, 2, site(2, 0))?;
+                assert!(matches!(
+                    last,
+                    ProjectedPipelineScalarV1::Value(ProductionRankedValueV1::Local(_))
+                ));
+                assert!(matches!(
+                    last_operations.as_slice(),
+                    [ProductionRankedOperationV1::IndexConstant { value: 7, .. }]
+                ));
+                assert!(facts.helper_value_ledger_v1()? == identity);
+                completed.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(completed.get());
+        assert!(facts.helper_value_ledger_v1().unwrap() == identity);
+        assert_eq!(facts.scalar_private_storage_v1().unwrap(), FLOOR);
+    }
     owner.verify_replay().unwrap();
 }
 

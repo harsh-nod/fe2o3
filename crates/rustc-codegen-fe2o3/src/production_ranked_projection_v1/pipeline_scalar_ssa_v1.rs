@@ -436,14 +436,14 @@ fn install(definitions: &mut [Option<Origin>], id: usize, origin: Origin) -> Res
     Ok(())
 }
 
-pub(super) fn with_index<'s, T, C>(
+pub(super) fn with_index<'s, 'facts, T, C>(
     source: Source<'s>,
     function: &'s SemanticFunctionDeclV1,
-    facts: &mut dyn ProjectedAssertionFactsV1,
+    facts: &mut (dyn ProjectedAssertionFactsV1 + 'facts),
     consume: C,
 ) -> Result<T>
 where
-    C: FnOnce(&Index<'s>, &mut dyn ProjectedAssertionFactsV1) -> Result<T>,
+    C: FnOnce(&Index<'s>, &mut (dyn ProjectedAssertionFactsV1 + 'facts)) -> Result<T>,
 {
     let mut pending = Some(consume);
     let mut owned = 0;
@@ -530,15 +530,15 @@ fn drain<T>(value: T) {
     }
 }
 
-pub(super) fn with_pipeline_index<'s, T, C>(
+pub(super) fn with_pipeline_index<'s, 'facts, T, C>(
     source: Option<Source<'s>>,
     types: &'s [SemanticTypeDeclV1],
     function: &'s SemanticFunctionDeclV1,
-    facts: Option<&mut dyn ProjectedAssertionFactsV1>,
+    facts: Option<&mut (dyn ProjectedAssertionFactsV1 + 'facts)>,
     consume: C,
 ) -> Result<T>
 where
-    C: FnOnce(Option<(&Index<'s>, &mut dyn ProjectedAssertionFactsV1)>) -> Result<T>,
+    C: FnOnce(Option<(&Index<'s>, &mut (dyn ProjectedAssertionFactsV1 + 'facts))>) -> Result<T>,
 {
     let Some(source) = source else {
         return consume(None);
