@@ -1654,6 +1654,7 @@ fn terminate_tree(tracees: &mut Tracees) -> Result<(), RetainedFunctionalRefinem
     let mut discovery_failure = None;
     let mut wait_failure = None;
     let mut quiescent = false;
+    let mut kill_failed = false;
     while tracees.unresolved() && Instant::now() < deadline {
         for process in tracees.pids() {
             let task = &tracees[&process];
@@ -1767,23 +1768,31 @@ fn terminate_tree(tracees: &mut Tracees) -> Result<(), RetainedFunctionalRefinem
         if Instant::now() >= deadline {
             break;
         }
-        if quiescent && discovery_failure.is_none() {
+        if quiescent && discovery_failure.is_none() && !kill_failed {
             for process in tracees.pids() {
                 let task = tracees.get_mut(&process).expect("cleanup task");
                 if !task.terminal_consumed && !task.cleanup_kill_sent {
                     if let Err(error) = kill_tracee(process) {
+                        kill_failed = true;
                         failures.push(error);
+                        break;
                     }
                     task.cleanup_kill_sent = true;
                 }
             }
-            for process in tracees.pids() {
-                let task = tracees.get_mut(&process).expect("cleanup task");
-                if !task.terminal_consumed && task.current_stop.is_some() {
-                    match continue_killed_tracee(process) {
-                        Ok(()) => task.current_stop = None,
-                        Err(error) => {
-                            failures.push(format!("continue killed PID {process}: {error}"))
+            // PTRACE_CONT's signal argument is not delivery at a nonsignal
+            // stop. A failed kill (including ESRCH) therefore closes ALL
+            // resumes, even held EXIT stops. Keep exact waits for tasks already
+            // running/exiting, otherwise retain custody at the original bound.
+            if !kill_failed {
+                for process in tracees.pids() {
+                    let task = tracees.get_mut(&process).expect("cleanup task");
+                    if !task.terminal_consumed && task.current_stop.is_some() {
+                        match continue_killed_tracee(process) {
+                            Ok(()) => task.current_stop = None,
+                            Err(error) => {
+                                failures.push(format!("continue killed PID {process}: {error}"))
+                            }
                         }
                     }
                 }
@@ -1816,21 +1825,27 @@ fn terminate_tree(tracees: &mut Tracees) -> Result<(), RetainedFunctionalRefinem
 fn kill_tracee(process: i32) -> Result<(), String> {
     #[cfg(test)]
     stable_tests::record_cleanup_kill_request(process);
-    // SAFETY: the PID is ptrace-owned and unreaped until the cleanup wait.
-    if unsafe { kill(process, SIGKILL) } == 0
-        || io::Error::last_os_error().raw_os_error() == Some(3)
-    {
-        Ok(())
-    } else {
-        Err(format!(
-            "kill PID {process}: {}",
-            io::Error::last_os_error()
-        ))
-    }
+    let delivery = (|| -> io::Result<()> {
+        #[cfg(test)]
+        quarantine_tests::inject_kill_refusal()?;
+        // Linux kill_pid_info resolves this retained TID and signals its group;
+        // it is not a thread-directed terminal observation. ESRCH can race group
+        // teardown and never establishes delivery or releases this task's PID.
+        // SAFETY: the exact PID remains owned and unreaped until an actual wait.
+        if unsafe { kill(process, SIGKILL) } == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    })();
+    delivery.map_err(|error| format!("kill PID {process}: {error}"))
 }
 
 fn continue_killed_tracee(process: i32) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
-    // SAFETY: the tracee is stopped or already gone and only SIGKILL is injected.
+    #[cfg(test)]
+    quarantine_tests::record_cleanup_continue();
+    // SAFETY: cleanup calls this only after its closed kill pass succeeded.
+    // The signal argument cannot substitute for actual SIGKILL delivery.
     if unsafe {
         linux_ptrace(
             PTRACE_CONT,

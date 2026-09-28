@@ -67,6 +67,24 @@ impl DiagnosticDomain {
 thread_local! {
     static MODE: Cell<u8> = const { Cell::new(0) };
     static QUERIES: Cell<usize> = const { Cell::new(0) };
+    static KILL_REFUSALS: Cell<usize> = const { Cell::new(0) };
+    static CLEANUP_CONTINUES: Cell<usize> = const { Cell::new(0) };
+}
+
+pub(super) fn inject_kill_refusal() -> io::Result<()> {
+    let errno = match MODE.get() {
+        7 => 1, // EPERM
+        8 => 3, // ESRCH is not delivery or terminal evidence.
+        _ => return Ok(()),
+    };
+    KILL_REFUSALS.set(KILL_REFUSALS.get() + 1);
+    Err(io::Error::from_raw_os_error(errno))
+}
+
+pub(super) fn record_cleanup_continue() {
+    if matches!(MODE.get(), 7 | 8) {
+        CLEANUP_CONTINUES.set(CLEANUP_CONTINUES.get() + 1);
+    }
 }
 
 pub(super) fn cleanup_deadline(deadline: Instant) -> Instant {
@@ -239,6 +257,13 @@ fn quarantined_attempt_refuses_execution_on_every_thread() {
 #[test]
 fn whole_attempt_gate_is_nonblocking_through_completion() {
     run_domain("gate");
+}
+
+#[test]
+fn cleanup_kill_refusal_never_resumes_a_seized_nonsignal_stop() {
+    for case in ["kill-eperm", "kill-esrch"] {
+        run_domain(case);
+    }
 }
 
 #[test]
@@ -474,6 +499,73 @@ fn exercise_gate() {
     AttemptV1::begin().unwrap().complete().unwrap();
 }
 
+fn exercise_kill_refusal(case: &str) -> Vec<i32> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "printf USERSPACE_RESUMED"]).env_clear();
+    let mut attempt = seized_spawn::spawn(command, vec![], 5, deadline).unwrap();
+    let pid = attempt.id() as i32;
+    let tree = &mut attempt.run().unwrap().tracees;
+    let exec = wait_for_specific(pid, deadline).unwrap();
+    let task = tree.get_mut(&pid).unwrap();
+    task.current_stop = TraceeStop::observed(exec);
+    task.terminal_consumed = !stopped(exec);
+    assert!(stopped(exec) && (exec as u32) >> 16 == PTRACE_EVENT_EXEC);
+
+    // Queue a real INTERRUPT behind the initial EXEC stop, then consume its
+    // actual kernel EVENT_STOP. No synthesized status or admission bypass.
+    ptrace(PTRACE_INTERRUPT, pid, 0).unwrap();
+    resume_tracee(tree, pid, 0).unwrap();
+    let status = wait_for_specific(pid, deadline).unwrap();
+    let task = tree.get_mut(&pid).unwrap();
+    task.current_stop = TraceeStop::observed(status);
+    task.terminal_consumed = !stopped(status);
+    assert!(stopped(status));
+    assert_eq!((status as u32) >> 16, PTRACE_EVENT_STOP);
+    assert_eq!(stop_signal(status), SIGTRAP);
+    let registers = read_registers(pid).unwrap();
+    make_nonblocking(attempt.run().unwrap().child.stdout.as_ref().unwrap()).unwrap();
+
+    // Only kill delivery is refused. CONT is observed, never intercepted, and
+    // cleanup uses its real 500ms bound rather than an injected deadline.
+    MODE.set(if case == "kill-eperm" { 7 } else { 8 });
+    let start = Instant::now();
+    let error = terminate_tree(&mut attempt.run().unwrap().tracees).unwrap_err();
+    assert!(start.elapsed() >= CLEANUP_TIMEOUT);
+    assert!(start.elapsed() < Duration::from_secs(3));
+    assert!(error.to_string().contains("kill PID"));
+    assert!(attempt.complete().is_err());
+    drop(error);
+    drop(attempt);
+    assert_eq!(KILL_REFUSALS.get(), 1);
+    assert_eq!(CLEANUP_CONTINUES.get(), 0);
+    custody::inspect_retained(|run| {
+        run.check_thread().unwrap();
+        assert!(run.tracees.unresolved());
+        let task = &run.tracees[&pid];
+        assert_eq!(task.current_stop.unwrap().status, status);
+        assert!(!task.terminal_consumed);
+        assert!(!task.cleanup_kill_sent);
+        assert!(task.exit_boundary.is_none());
+        // GETREGS proves the real task is still ptrace-stopped; unchanged
+        // registers and zero CONT observations exclude a release/re-stop cycle.
+        assert_eq!(read_registers(pid).unwrap().rip, registers.rip);
+        assert_eq!(read_registers(pid).unwrap().rsp, registers.rsp);
+        let mut pipe = run.child.stdout.as_ref().unwrap();
+        let mut output = Capture {
+            bytes: Vec::new(),
+            eof: false,
+        };
+        drain(&mut pipe, &mut output, 4096).unwrap();
+        assert!(output.bytes.is_empty());
+        assert!(!output.eof);
+    });
+    refuse_on_all_threads();
+    // The diagnostic domain owner, not this quarantined tracer, kills the
+    // still-stopped child and confirms its actual terminal wait after READY.
+    vec![pid]
+}
+
 fn check_inherited_preflight() {
     unsafe extern "C" {
         fn _exit(status: i32) -> !;
@@ -557,6 +649,8 @@ fn quarantine_driver_fixture() {
     let pids = if case == "gate" {
         exercise_gate();
         Vec::new()
+    } else if matches!(case.as_str(), "kill-eperm" | "kill-esrch") {
+        exercise_kill_refusal(&case)
     } else if case == "protected" {
         exercise_protected()
     } else if case == "inherited" {
