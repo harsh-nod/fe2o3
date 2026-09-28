@@ -20899,51 +20899,25 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "row-striped-2d geometry is malformed",
             ));
         }
-        let zero = self.emit_index_constant(operations, 0)?;
-        let one = self.emit_index_constant(operations, 1)?;
-        let maximum = self.emit_index_constant(operations, u64::MAX)?;
         let lanes = self.emit_index_constant(operations, lanes_per_row)?;
         let elements = self.emit_index_constant(operations, elements_per_lane)?;
 
         let row = self.emit_index_binary(operations, BinaryOp::Divide, raw, lanes)?;
         let lane = self.emit_index_binary(operations, BinaryOp::Remainder, raw, lanes)?;
-        let maximum_component =
-            self.emit_index_binary(operations, BinaryOp::Divide, maximum, lanes)?;
-        let component_multiply_safe = self.emit_compare(
+        // Failed bounds predicates cannot make an already evaluated partial
+        // integer operation total. Retain each checked result's own overflow bit.
+        let (column_base, component_multiply_safe) = self.emit_checked_index(
             operations,
-            ComparePredicate::LessThanOrEqual,
+            CheckedBinaryOperator::Multiply,
             component,
-            maximum_component,
+            lanes,
         )?;
-        let column_base =
-            self.emit_index_binary(operations, BinaryOp::Multiply, component, lanes)?;
-        let column = self.emit_index_binary(operations, BinaryOp::Add, column_base, lane)?;
-        let column_add_safe = self.emit_compare(
-            operations,
-            ComparePredicate::LessThanOrEqual,
-            column_base,
-            column,
-        )?;
-
-        let stride_nonzero =
-            self.emit_compare(operations, ComparePredicate::LessThan, zero, row_stride)?;
-        let safe_stride = self.emit_select_index(operations, stride_nonzero, row_stride, one)?;
-        let maximum_row =
-            self.emit_index_binary(operations, BinaryOp::Divide, maximum, safe_stride)?;
-        let row_multiply_safe = self.emit_compare(
-            operations,
-            ComparePredicate::LessThanOrEqual,
-            row,
-            maximum_row,
-        )?;
-        let row_offset = self.emit_index_binary(operations, BinaryOp::Multiply, row, row_stride)?;
-        let index = self.emit_index_binary(operations, BinaryOp::Add, row_offset, column)?;
-        let index_add_safe = self.emit_compare(
-            operations,
-            ComparePredicate::LessThanOrEqual,
-            row_offset,
-            index,
-        )?;
+        let (column, column_add_safe) =
+            self.emit_checked_index(operations, CheckedBinaryOperator::Add, column_base, lane)?;
+        let (row_offset, row_multiply_safe) =
+            self.emit_checked_index(operations, CheckedBinaryOperator::Multiply, row, row_stride)?;
+        let (index, index_add_safe) =
+            self.emit_checked_index(operations, CheckedBinaryOperator::Add, row_offset, column)?;
 
         let component_valid =
             self.emit_compare(operations, ComparePredicate::LessThan, component, elements)?;

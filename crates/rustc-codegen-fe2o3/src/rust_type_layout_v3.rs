@@ -198,11 +198,6 @@ pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
             signature.output()
         )));
     }
-    if signature.inputs().is_empty() {
-        return Err(GeneralTypedExtractError::new(
-            "general typed kernels require at least one argument",
-        ));
-    }
     if signature.inputs().len() > MAX_ABI_FIELDS {
         return Err(GeneralTypedExtractError::new(format!(
             "general typed kernel argument count {} exceeds maximum {MAX_ABI_FIELDS}",
@@ -1262,6 +1257,20 @@ mod tests {
             abi,
             &launch(),
         )
+    }
+
+    #[test]
+    fn zero_argument_contract_has_empty_explicit_abi_and_bound_identity() {
+        let empty = build_abi(&[]).unwrap();
+        assert_eq!((empty.size(), empty.alignment()), (0, 1));
+        assert_eq!(empty.pointer_width(), PointerWidth::Bits64);
+        assert!(empty.fields().is_empty());
+        assert_eq!(identity("empty", &[]), identity_with_abi("empty", &empty));
+        assert_ne!(identity("empty", &[]), identity("other", &[]));
+        assert_ne!(
+            identity("empty", &[]),
+            identity("empty", &three_arguments())
+        );
     }
 
     #[test]

@@ -674,4 +674,5 @@ mod wrapping_arithmetic_v1_tests {
     }
 
     include!("source_launch_indices_v1_tests.rs");
+    include!("row_striped_checked_arithmetic_v1_tests.rs");
 }

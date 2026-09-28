@@ -188,6 +188,7 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "aggregate_pair_array",
     feature = "aggregate_zst",
     feature = "aggregate_nested",
+    feature = "entry_packing_scalars",
     feature = "aggregate_enum",
     feature = "aggregate_pointer",
     feature = "aggregate_drop",
@@ -991,3 +992,27 @@ pub fn barrier_helper(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>) {
         }
     }
 }
+
+#[cfg(feature = "entry_packing_scalars")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn entry_packing_empty() {}
+
+#[cfg(feature = "entry_packing_scalars")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn entry_packing_u8(_value: u8) {}
+
+#[cfg(feature = "entry_packing_scalars")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn entry_packing_u16(_value: u16) {}
+
+#[cfg(feature = "entry_packing_scalars")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn entry_packing_u32(_value: u32) {}
+
+#[cfg(feature = "entry_packing_scalars")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn entry_packing_three_u32(_first: u32, _second: u32, _third: u32) {}
+
+#[cfg(feature = "entry_packing_scalars")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn entry_packing_mixed(_byte: u8, _half: u16, _word: u32, _wide: u64) {}

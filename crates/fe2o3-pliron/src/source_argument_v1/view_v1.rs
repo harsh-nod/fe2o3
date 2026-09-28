@@ -225,7 +225,7 @@ impl<'s> ProductionArgumentViewV1<'s> {
     /// Pointees and active enum variants are not inferred from entry types.
     /// Repeated traversal accumulates work; visitor errors release traversal scratch.
     pub fn visit_nodes(
-        &mut self,
+        &self,
         budget: &mut ArgumentBudgetV1<'_>,
         mut visit: impl for<'n> FnMut(
             ProductionArgumentNodeV1<'n>,
@@ -233,7 +233,45 @@ impl<'s> ProductionArgumentViewV1<'s> {
     ) -> Result<(), ProductionSourceArgumentErrorV1> {
         self.data.check_query_v1(budget)?;
         let floor = budget.storage();
+        budget.reserve_storage(argument_node_dispatch_headers_v1())?;
         let result = self.data.visit_nodes(budget, &mut visit);
+        budget.release_storage(
+            budget
+                .storage()
+                .checked_sub(floor)
+                .ok_or(ArgumentResourceV1::Accounting)?,
+        )?;
+        result
+    }
+
+    /// The same traversal with checked logical consumer work prepaid before
+    /// each callback. This is not a bound on arbitrary callback CPU work.
+    pub fn visit_nodes_with_work<F>(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+        per_node: usize,
+        per_projection: usize,
+        visit: F,
+    ) -> Result<(), ProductionSourceArgumentErrorV1>
+    where
+        F: for<'n> FnMut(
+            ProductionArgumentNodeV1<'n>,
+        ) -> Result<(), ProductionSourceArgumentErrorV1>,
+    {
+        self.data.require_live_v1(budget)?;
+        let floor = budget.storage();
+        let headers = argument_node_work_headers_v1::<F>()?;
+        budget.reserve_storage(headers)?;
+        let visitor = ChargedArgumentNodeVisitorV1 {
+            visit,
+            per_node,
+            per_projection,
+        };
+        let result = (|| {
+            let mut visitor = visitor;
+            self.data.check_query_v1(budget)?;
+            self.data.visit_nodes(budget, &mut visitor)
+        })();
         budget.release_storage(
             budget
                 .storage()
@@ -354,6 +392,127 @@ impl ProductionArgumentViewV1<'_> {
     }
 }
 
+// The unweighted implementation preserves the existing consumer contract and
+// has no stored quota or extra logical debit. Both modes use one walker.
+fn argument_node_dispatch_headers_v1() -> usize {
+    std::mem::size_of::<(
+        &mut (),
+        ProductionArgumentNodeV1<'_>,
+        &mut ArgumentBudgetV1<'_>,
+    )>() + std::mem::size_of::<Result<(), ProductionSourceArgumentErrorV1>>()
+}
+
+type ChargedArgumentVisitFrameV1<'a, 'source, 'work, F> = (
+    &'a ProductionArgumentViewV1<'source>,
+    &'a mut ArgumentBudgetV1<'work>,
+    ChargedArgumentNodeVisitorV1<F>,
+);
+fn argument_node_work_headers_v1<F>() -> Result<usize, ArgumentResourceV1> {
+    use std::mem::{align_of, size_of};
+    argument_sum_v1(&[
+        argument_node_dispatch_headers_v1(),
+        size_of::<ChargedArgumentNodeVisitorV1<F>>(),
+        align_of::<ChargedArgumentNodeVisitorV1<F>>(),
+        size_of::<ChargedArgumentVisitFrameV1<'_, '_, '_, F>>(),
+        align_of::<ChargedArgumentVisitFrameV1<'_, '_, '_, F>>(),
+        size_of::<(&mut ArgumentBudgetV1<'_>, ProductionArgumentNodeV1<'_>)>(),
+        size_of::<&mut ArgumentBudgetV1<'_>>(),
+        size_of::<&mut ChargedArgumentNodeVisitorV1<F>>(),
+        5 * size_of::<usize>(),
+        size_of::<[usize; 2]>(),
+        2 * size_of::<Option<usize>>(),
+        2 * size_of::<Result<(), ProductionSourceArgumentErrorV1>>(),
+        size_of::<Result<(), ArgumentResourceV1>>(),
+        size_of::<Result<usize, ArgumentResourceV1>>(),
+    ])
+}
+
+#[cfg(test)]
+mod node_charge_headers {
+    use super::*;
+    #[test]
+    fn argument_node_visitor_dispatch_and_weighted_headers_are_independent() {
+        use std::mem::{align_of, size_of};
+        type F =
+            for<'n> fn(ProductionArgumentNodeV1<'n>) -> Result<(), ProductionSourceArgumentErrorV1>;
+        let dispatch = size_of::<(
+            &mut (),
+            ProductionArgumentNodeV1<'_>,
+            &mut ArgumentBudgetV1<'_>,
+        )>() + size_of::<Result<(), ProductionSourceArgumentErrorV1>>();
+        assert_eq!(argument_node_dispatch_headers_v1(), dispatch);
+        let expected = dispatch
+            + size_of::<ChargedArgumentNodeVisitorV1<F>>()
+            + align_of::<ChargedArgumentNodeVisitorV1<F>>()
+            + size_of::<ChargedArgumentVisitFrameV1<'_, '_, '_, F>>()
+            + align_of::<ChargedArgumentVisitFrameV1<'_, '_, '_, F>>()
+            + size_of::<(&mut ArgumentBudgetV1<'_>, ProductionArgumentNodeV1<'_>)>()
+            + size_of::<&mut ArgumentBudgetV1<'_>>()
+            + size_of::<&mut ChargedArgumentNodeVisitorV1<F>>()
+            + 5 * size_of::<usize>()
+            + size_of::<[usize; 2]>()
+            + 2 * size_of::<Option<usize>>()
+            + 2 * size_of::<Result<(), ProductionSourceArgumentErrorV1>>()
+            + size_of::<Result<(), ArgumentResourceV1>>()
+            + size_of::<Result<usize, ArgumentResourceV1>>();
+        assert_eq!(argument_node_work_headers_v1::<F>().unwrap(), expected);
+        for bytes in [dispatch, expected] {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+            let mut exact = ArgumentBudgetV1::new(&mut work, bytes);
+            exact.reserve_storage(bytes).unwrap();
+            assert_eq!(exact.storage(), bytes);
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+            let mut short = ArgumentBudgetV1::new(&mut work, bytes - 1);
+            assert!(
+                matches!(short.reserve_storage(bytes), Err(ArgumentResourceV1::Storage(error)) if error.actual()==bytes && error.limit()==bytes-1)
+            );
+            assert_eq!(short.storage(), 0);
+        }
+    }
+}
+
+trait ArgumentNodeVisitorV1 {
+    fn visit(
+        &mut self,
+        node: ProductionArgumentNodeV1<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSourceArgumentErrorV1>;
+}
+impl<F> ArgumentNodeVisitorV1 for F
+where
+    F: for<'n> FnMut(ProductionArgumentNodeV1<'n>) -> Result<(), ProductionSourceArgumentErrorV1>,
+{
+    fn visit(
+        &mut self,
+        node: ProductionArgumentNodeV1<'_>,
+        _: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSourceArgumentErrorV1> {
+        self(node)
+    }
+}
+struct ChargedArgumentNodeVisitorV1<F> {
+    visit: F,
+    per_node: usize,
+    per_projection: usize,
+}
+impl<F> ArgumentNodeVisitorV1 for ChargedArgumentNodeVisitorV1<F>
+where
+    F: for<'n> FnMut(ProductionArgumentNodeV1<'n>) -> Result<(), ProductionSourceArgumentErrorV1>,
+{
+    fn visit(
+        &mut self,
+        node: ProductionArgumentNodeV1<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSourceArgumentErrorV1> {
+        let work = argument_sum_v1(&[
+            self.per_node,
+            argument_product_v1(self.per_projection, node.source_path().len())?,
+        ])?;
+        budget.charge_work(work)?;
+        (self.visit)(node)
+    }
+}
+
 impl<'s> ArgumentViewDataV1<'s> {
     fn require_live_v1(
         &self,
@@ -418,9 +577,7 @@ impl<'s> ArgumentViewDataV1<'s> {
     fn visit_nodes(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
-        visit: &mut impl for<'n> FnMut(
-            ProductionArgumentNodeV1<'n>,
-        ) -> Result<(), ProductionSourceArgumentErrorV1>,
+        visit: &mut impl ArgumentNodeVisitorV1,
     ) -> Result<(), ProductionSourceArgumentErrorV1> {
         let function = &self.semantic.functions()[self.instance.semantic_function.index() as usize];
         let outer = (function.abi().extern_abi()
@@ -450,17 +607,20 @@ impl<'s> ArgumentViewDataV1<'s> {
                     }
                     fe2o3_mir_model::SemanticSourceArgumentBindingV1::ExpandedTuple(_) => None,
                 };
-                visit(ProductionArgumentNodeV1 {
-                    source,
-                    adjusted: None,
-                    ty: source.ty(),
-                    source_path: &[],
-                    local,
-                    ignored: local.and_then(|(id, _)| {
-                        self.ignored.get(id.index() as usize).copied().flatten()
-                    }),
-                    coverage: argument_composite_coverage_v1(first, slot),
-                })?;
+                visit.visit(
+                    ProductionArgumentNodeV1 {
+                        source,
+                        adjusted: None,
+                        ty: source.ty(),
+                        source_path: &[],
+                        local,
+                        ignored: local.and_then(|(id, _)| {
+                            self.ignored.get(id.index() as usize).copied().flatten()
+                        }),
+                        coverage: argument_composite_coverage_v1(first, slot),
+                    },
+                    budget,
+                )?;
             }
         }
         if adjusted.next().is_some() {
@@ -475,9 +635,7 @@ impl<'s> ArgumentViewDataV1<'s> {
         mapped: fe2o3_mir_model::SemanticAdjustedArgumentV1<'_>,
         shape: AdjustedArgumentShapeV1,
         budget: &mut ArgumentBudgetV1<'_>,
-        visit: &mut impl for<'n> FnMut(
-            ProductionArgumentNodeV1<'n>,
-        ) -> Result<(), ProductionSourceArgumentErrorV1>,
+        visit: &mut impl ArgumentNodeVisitorV1,
     ) -> Result<(), ProductionSourceArgumentErrorV1> {
         let floor = budget.storage();
         let result = self.walk_adjusted(source, mapped, shape, budget, visit);
@@ -491,9 +649,7 @@ impl<'s> ArgumentViewDataV1<'s> {
         mapped: fe2o3_mir_model::SemanticAdjustedArgumentV1<'_>,
         shape: AdjustedArgumentShapeV1,
         budget: &mut ArgumentBudgetV1<'_>,
-        visit: &mut impl for<'n> FnMut(
-            ProductionArgumentNodeV1<'n>,
-        ) -> Result<(), ProductionSourceArgumentErrorV1>,
+        visit: &mut impl ArgumentNodeVisitorV1,
     ) -> Result<(), ProductionSourceArgumentErrorV1> {
         let prefix = mapped
             .tuple_field()
@@ -520,19 +676,22 @@ impl<'s> ArgumentViewDataV1<'s> {
             };
             let local_offset =
                 usize::from(mapped.tuple_field().is_some() && mapped.local_field().is_none());
-            visit(ProductionArgumentNodeV1 {
-                source,
-                adjusted: Some(mapped),
-                ty: node.ty,
-                source_path: node.path,
-                local: Some((mapped.local(), &node.path[local_offset..])),
-                ignored: self
-                    .ignored
-                    .get(mapped.local().index() as usize)
-                    .copied()
-                    .flatten(),
-                coverage,
-            })
+            visit.visit(
+                ProductionArgumentNodeV1 {
+                    source,
+                    adjusted: Some(mapped),
+                    ty: node.ty,
+                    source_path: node.path,
+                    local: Some((mapped.local(), &node.path[local_offset..])),
+                    ignored: self
+                        .ignored
+                        .get(mapped.local().index() as usize)
+                        .copied()
+                        .flatten(),
+                    coverage,
+                },
+                budget,
+            )
         };
         if shape.atomic {
             visit_atomic_argument_structure_v1(

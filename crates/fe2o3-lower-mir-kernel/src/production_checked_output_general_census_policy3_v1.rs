@@ -676,6 +676,9 @@ fn native_inner(
             {
                 None
             }
+            OperationKind::Wave(_) if wave_reductions::native(inventory, ordinal, row, budget)? => {
+                None
+            }
             OperationKind::Call { callee, arguments } => {
                 if !helpers.call(inventory, ordinal, budget)? && !exp::call(row.operation, budget)?
                 {

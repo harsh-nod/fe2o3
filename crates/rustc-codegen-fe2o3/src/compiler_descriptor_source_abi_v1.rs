@@ -18,6 +18,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use rustc_middle::ty::Ty;
 use std::mem::{align_of, size_of};
+#[path = "compiler_descriptor_entry_packing_v1.rs"]
+pub(crate) mod entry_packing;
 #[cfg(test)]
 #[path = "compiler_descriptor_source_abi_v1_tests.rs"]
 pub(crate) mod tests;
@@ -131,7 +133,14 @@ type RootFrame<'a, 'source, 'work> = (
     [&'a Module; 4],
 );
 // Value-sized upper bound also covers reference captures of these parameters.
-type CheckCapture<'a, 'work> = CheckFrame<'a, 'work>;
+type RootVisitor<'visit> = dyn for<'scope, 'source, 'work> FnMut(
+        usize,
+        &TypedDescriptorRootV1,
+        &AdmittedInertSemanticMirV1,
+        &mut Plan<'scope, 'source, 'work>,
+    ) -> R<()>
+    + 'visit;
+type CheckCapture<'a, 'work> = (CheckFrame<'a, 'work>, Option<&'a mut RootVisitor<'a>>);
 
 fn frame<T>() -> usize {
     size_of::<T>() + 3 * size_of::<R<T>>() + 2 * size_of::<Result<T, SourceError>>()
@@ -150,6 +159,16 @@ fn headers() -> R<usize> {
         h::<CheckFrame<'_, '_>>(),
         h::<RootFrame<'_, '_, '_>>(),
         h::<CheckCapture<'_, '_>>(),
+        h::<CheckFrame<'_, '_>>(),
+        h::<Option<&mut RootVisitor<'_>>>(),
+        h::<&mut Option<&mut RootVisitor<'_>>>(),
+        h::<&mut RootVisitor<'_>>(),
+        h::<(
+            usize,
+            &TypedDescriptorRootV1,
+            &AdmittedInertSemanticMirV1,
+            &mut Plan<'_, '_, '_>,
+        )>(),
         h::<Subjects<'_>>(),
         h::<OwnerRef<'_>>(),
         h::<SourceAbiSummaryV1>(),
@@ -487,6 +506,18 @@ pub(crate) fn check(
     profile: ProductionAmdTargetProfileV1,
     budget: &mut Budget<'_>,
 ) -> R<SourceAbiSummaryV1> {
+    visit_checked(owner, roots, profile, budget, None)
+}
+
+// Only a complete captured/source/entry join can invoke the private consumer.
+// This is not a constructor from observer rows or detached argument maps.
+fn visit_checked(
+    owner: OwnerRef<'_>,
+    roots: &[TypedDescriptorRootV1],
+    profile: ProductionAmdTargetProfileV1,
+    budget: &mut Budget<'_>,
+    mut visitor: Option<&mut RootVisitor<'_>>,
+) -> R<SourceAbiSummaryV1> {
     let floor = budget.storage();
     budget.reserve_storage(headers()?)?;
     let mut query = || {
@@ -572,7 +603,11 @@ pub(crate) fn check(
             }
             let source = &semantic.functions()[selection.body().index() as usize];
             let checked = with_plan(owner, root, selection.body(), budget, |plan| {
-                check_root(plan, semantic, source, captured, ordinal, endpoints)
+                let counts = check_root(plan, semantic, source, captured, ordinal, endpoints)?;
+                if let Some(visitor) = visitor.as_mut() {
+                    visitor(ordinal, captured, semantic, plan)?;
+                }
+                Ok(counts)
             })?;
             summary.logical = summary
                 .logical

@@ -380,6 +380,10 @@ fn source_abi_plan_foreign_same_shaped_owner_is_sticky_before_query_debit() {
                 };
                 assert!(plan.check_subject(semantic, module).is_err());
                 assert!(plan.counts().is_err());
+                assert!(matches!(
+                    plan.visit_nodes(|_| panic!("foreign source reached a path callback")),
+                    Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+                ));
                 assert_eq!((plan.budget.work(), plan.budget.storage()), stopped);
                 Ok(())
             })
@@ -579,6 +583,7 @@ fn source_abi_plan_header_equation_and_overflow_are_independent() {
         + 12 * size_of::<usize>()
         + 4 * size_of::<u64>()
         + size_of::<&mut ProductionSourceAbiPlanV1<'_, '_, '_>>()
+        + size_of::<&source_arguments_v1::ProductionArgumentViewV1<'_>>()
         + size_of::<&mut ArgumentBudgetV1<'_>>()
         + size_of::<SourceAbiPlanFailureV1>()
         + 2 * size_of::<Option<SourceAbiPlanFailureV1>>();
@@ -613,3 +618,6 @@ fn source_abi_plan_header_equation_and_overflow_are_independent() {
         Err(ArgumentResourceV1::Arithmetic)
     );
 }
+
+#[path = "production_source_abi_paths_v1_tests.rs"]
+mod paths;

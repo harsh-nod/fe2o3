@@ -87,6 +87,7 @@ pub struct ProductionSourceAbiPlanV1<'scope, 'source, 'work> {
     association: &'source SemanticKirFunctionCorrespondenceV1,
     arguments: &'scope [ProductionSourceAbiArgumentV1],
     components: &'scope [ProductionSourceAbiComponentV1<'source>],
+    source_view: &'scope source_arguments_v1::ProductionArgumentViewV1<'source>,
     budget: &'scope mut ArgumentBudgetV1<'work>,
     required: usize,
     first: Option<SourceAbiPlanFailureV1>,
@@ -289,6 +290,7 @@ fn source_abi_plan_headers_v1<R>(
         12 * size_of::<usize>(),
         4 * size_of::<u64>(),
         size_of::<&mut ProductionSourceAbiPlanV1<'_, '_, '_>>(),
+        size_of::<&source_arguments_v1::ProductionArgumentViewV1<'_>>(),
         size_of::<&mut ArgumentBudgetV1<'_>>(),
         size_of::<SourceAbiPlanFailureV1>(),
         2 * size_of::<Option<SourceAbiPlanFailureV1>>(),
@@ -433,6 +435,7 @@ fn with_source_abi_plan_from_view_v1<'source, 'view: 'source, 'work, R>(
             association,
             arguments: &arguments,
             components: &components,
+            source_view: &view.data,
             budget: view.budget,
             required,
             first: None,
@@ -457,6 +460,8 @@ fn with_source_abi_plan_from_view_v1<'source, 'view: 'source, 'work, R>(
     )?;
     result
 }
+
+include!("production_source_abi_paths_v1.rs");
 
 fn source_abi_plan_wrapper_headers_v1<R>(
     capture: usize,

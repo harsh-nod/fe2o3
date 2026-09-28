@@ -1,4 +1,9 @@
 //! Exact tutorial-driver aggregate inputs, stopped before descriptor encoding.
+#[path = "production_rustc_driver_entry_packing_multi_v1_tests.rs"]
+mod packing_multi;
+#[path = "production_rustc_driver_entry_packing_scalars_v1_tests.rs"]
+mod packing_scalars;
+
 use super::*;
 use crate::compiler_descriptor::source_abi_v1::tests::Qualification;
 use fe2o3_kernel_ir::{
@@ -33,6 +38,20 @@ impl Report {
             (12, 12, 3)
         );
         assert_eq!(q.bridge_refusals, 2);
+        assert_eq!(
+            (q.packing.logical, q.packing.physical, q.packing.components),
+            (3, expected, expected + 1)
+        );
+        assert_eq!(q.packing.controls, 14);
+        assert_eq!(q.packing.ignored, usize::from(case == "aggregate_zst"));
+        assert_eq!(
+            q.packing.explicit_bytes,
+            match case {
+                "aggregate_zst" => 24,
+                "aggregate_nested" => 48,
+                _ => 40,
+            }
+        );
         assert_eq!(
             q.same_typed_endpoint_mutants,
             if case == "aggregate_zst" { 0 } else { 3 }

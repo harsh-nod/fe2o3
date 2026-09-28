@@ -11,6 +11,7 @@ pub(crate) struct Qualification {
     pub(crate) same_typed_endpoint_mutants: usize,
     pub(crate) resource_cuts: usize,
     pub(crate) bridge_refusals: usize,
+    pub(crate) packing: entry_packing::tests::Qualification,
 }
 
 fn bridge_refusal_controls(owner: OwnerRef<'_>, floor: usize) -> usize {
@@ -160,6 +161,7 @@ pub(crate) fn qualify(
     budget: &mut Budget<'_>,
 ) -> R<Qualification> {
     let floor = budget.storage();
+    let packing = entry_packing::tests::qualify(owner, roots, profile, floor);
     let positive = check(owner, roots, profile, budget)?;
     assert_eq!(check(owner, roots, profile, budget)?, positive);
     check_if_aggregate(owner, roots, profile, budget)?;
@@ -209,6 +211,17 @@ pub(crate) fn qualify(
             matches!(error, E::Mismatch(_)),
             "capture fault {fault}: {error:?}"
         );
+        let mut packing_entered = false;
+        let error = entry_packing::with_schedule(owner, &changed, profile, budget, |_| {
+            packing_entered = true;
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(!packing_entered);
+        assert!(
+            matches!(error, E::Mismatch(_)),
+            "packing capture fault {fault}: {error:?}"
+        );
         assert_eq!(budget.storage(), floor);
         capture_mutants += 1;
     }
@@ -252,6 +265,7 @@ pub(crate) fn qualify(
         same_typed_endpoint_mutants,
         resource_cuts: 3,
         bridge_refusals,
+        packing,
     })
 }
 
@@ -428,7 +442,15 @@ fn source_abi_capture_selector_and_bridge_have_independent_frame_equations() {
         &'a mut Budget<'work>,
         usize,
     );
-    let selector = 2 * h::<Parameters<'_, '_>>()
+    type Visitor<'a> = dyn for<'scope, 'source, 'work> FnMut(
+            usize,
+            &TypedDescriptorRootV1,
+            &AdmittedInertSemanticMirV1,
+            &mut Plan<'scope, 'source, 'work>,
+        ) -> Result<(), SourceAbiErrorV1>
+        + 'a;
+    let selector = h::<Parameters<'_, '_>>()
+        + h::<(Parameters<'_, '_>, Option<&mut Visitor<'_>>)>()
         + h::<std::slice::Iter<'_, TypedDescriptorRootV1>>()
         + h::<Option<&TypedDescriptorRootV1>>()
         + h::<&TypedDescriptorRootV1>()

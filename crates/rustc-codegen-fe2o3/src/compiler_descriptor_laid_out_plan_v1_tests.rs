@@ -327,10 +327,15 @@ fn laid_out_capture_checks_the_actual_bounded_argument_roster() {
         "scalar packing actual argument count",
     );
     assert_eq!(rows, before);
-    mismatch_is(
-        capture(&mut []).unwrap_err(),
-        "scalar packing actual argument count",
-    );
+    assert_eq!(capture(&mut []).unwrap(), None);
+    check(&root(
+        Vec::new(),
+        Extent {
+            bytes: 0,
+            alignment: 1,
+        },
+    ))
+    .unwrap();
     let mut cursor = Cursor {
         end: u64::MAX,
         alignment: 8,

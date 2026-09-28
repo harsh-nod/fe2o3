@@ -35,6 +35,8 @@ pub fn mutable_slice(a: &mut [f32]) {}
 pub fn aggregate(value: (u32, u32)) {}
 
 #[kernel(typed)]
-pub fn empty() {}
+pub fn empty_nonunit() -> u32 {
+    0
+}
 
 fn main() {}

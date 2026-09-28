@@ -397,7 +397,7 @@ fn check_argument_trace_v1<'w, R>(
     if slot != count || physical.iter().any(|row| !row.used) {
         return Err(mismatch());
     }
-    let mut view = ProductionArgumentViewV1 {
+    let view = ProductionArgumentViewV1 {
         data: ArgumentViewDataV1 {
             work_ledger: budget.work_ledger_identity_v1(),
             budget_slot: budget as *const ArgumentBudgetV1<'_> as usize,

@@ -6,6 +6,9 @@ use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+#[path = "production_pipeline_wave_snapshot_v1_tests.rs"]
+mod wave_details;
+
 pub(crate) const ROOT_ENV: &str = "FE2O3_TEST_CHECKED_OUTPUT_ENDPOINTS_V1";
 const CHILD_ENV: &str = "FE2O3_TEST_CHECKED_OUTPUT_ENDPOINT_DIRECTORY_V1";
 const CANONICAL_LIMIT: usize = 2 * 1024 * 1024;
@@ -91,6 +94,7 @@ struct Endpoint {
     canonical_bytes: usize,
     state: &'static str,
     diagnostic: Option<String>,
+    wave_details: wave_details::Summary,
 }
 
 #[derive(Serialize)]
@@ -224,6 +228,7 @@ fn write_endpoint(
             "unavailable"
         },
         diagnostic,
+        wave_details: wave_details::observe(owner),
     }
 }
 
