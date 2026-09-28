@@ -1092,8 +1092,35 @@
     "block": 21,
     "extern_block": 2
   },
+  "crates/fe2o3-verifier/src/functional_refinement_executor_socket_v1_tests.rs": {
+    "block": 3,
+    "extern_block": 1
+  },
+  "crates/fe2o3-verifier/src/functional_refinement_process_tree_v1_custody.rs": {
+    "block": 3,
+    "extern_block": 1
+  },
   "crates/fe2o3-verifier/src/functional_refinement_process_tree_v1_linux.rs": {
-    "block": 17,
+    "block": 15,
+    "extern_block": 1
+  },
+  "crates/fe2o3-verifier/src/functional_refinement_process_tree_v1_memory_tests.rs": {
+    "block": 3,
+    "extern_block": 1
+  },
+  "crates/fe2o3-verifier/src/functional_refinement_process_tree_v1_quarantine_tests.rs": {
+    "block": 7,
+    "extern_block": 2
+  },
+  "crates/fe2o3-verifier/src/functional_refinement_process_tree_v1_spawn.rs": {
+    "block": 6,
+    "extern_block": 1
+  },
+  "crates/fe2o3-verifier/src/functional_refinement_process_tree_v1_stable.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-verifier/src/functional_refinement_process_tree_v1_stable_tests.rs": {
+    "block": 15,
     "extern_block": 1
   },
   "crates/fe2o3-verifier/src/persistent_freshness_linux.rs": {

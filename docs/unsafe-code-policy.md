@@ -538,6 +538,33 @@ modules. Macro/include sites are counted once where written. This review covers
 OS ownership and unsafe-call contracts, not protected execution, proof-policy
 admission, native production activation, or GPU qualification.
 
+## Retained Proof Controller
+
+The gated proof launcher performs raw fork only after preparing every descriptor,
+C string and argument pointer. Its child performs syscall-only setup and exec;
+it must not allocate, unwind, acquire inherited locks or run Rust destructors.
+Successful pipe creation transfers each descriptor into exactly one owner.
+Current-thread observations use argument-free `gettid`; retained task identifiers
+are not authority to act after their terminal wait has been consumed.
+
+Stable inspection initializes register storage before ptrace writes it and
+checks status before interpreting the result. Task custody is published before
+fallible parent work; unresolved creation, cleanup or unwind remains retained
+in the original process. This does not establish external-writer isolation.
+The artifact spawn lease must separately survive the entire pre-exec interval,
+including failure quarantine: a safe pointer/descriptor inventory cannot replace
+that lifecycle obligation.
+
+Socket, mapping, stable-controller and quarantine fixtures run their raw process
+operations in owned diagnostic domains. Ancillary buffers are initialized and
+bounded. The memory-policy fixture owns one private, writable, non-executable
+mapping, mutates one valid byte, and unmaps it once; it never executes that data.
+Fixture kill/reap and raw syscall operations provide test observations, not
+production launch authority. The reviewed eight-file inventory contains 53
+unsafe blocks and eight extern blocks, including 29 test-only blocks. Its old
+controller allowance shrinks from 17 blocks to 15 as operations move into the
+private spawn and inspection modules. Counts do not qualify protected execution.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:
