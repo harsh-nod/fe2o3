@@ -93,6 +93,10 @@ impl std::error::Error for PresburgerQueryErrorV2 {}
 type Error = PresburgerQueryErrorV2;
 type Result<T> = std::result::Result<T, Error>;
 
+#[path = "pliron_presburger_narrowing_v3.rs"]
+mod narrowing_v3;
+pub use narrowing_v3::PresburgerAffineNarrowingDecisionV3;
+
 /// A decision borrowed only while its charged search backing remains live.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PresburgerQueryDecisionV2<'query> {

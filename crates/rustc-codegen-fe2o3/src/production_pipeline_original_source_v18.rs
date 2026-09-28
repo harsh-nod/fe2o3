@@ -32,6 +32,20 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         )
     }
 
+    /// Exercises genuine original-source preparation and checked optimization,
+    /// then refuses the unavailable general memory/native/publication admission.
+    /// This fixed nominal-preserving continuation is not a default-route fallback.
+    pub(crate) fn original_source_integer_finalizer_refusal_v18(self) -> Result<(), Error> {
+        self.with_original_source_integer_custody_v18::<(), _>(|source, handoff, _, _, budget| {
+            handoff.check_original_source(source.source_ssa(budget)?, budget)?;
+            let _ = handoff.output(budget)?;
+            Err(Error::Unsupported(
+                "original source integer final admission required",
+            ))
+        })
+        .map(SourceOwnedCompilationContinuationV29::into_observation)
+    }
+
     #[cfg(test)]
     pub(crate) fn original_source_ssa_for_test_v18(
         self,

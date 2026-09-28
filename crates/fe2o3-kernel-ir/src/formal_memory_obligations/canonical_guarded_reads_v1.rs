@@ -521,7 +521,30 @@ fn collect_actual_origins<'g, M: GuardMeter>(
     function: &'g Function,
     flow: &IndexedControlFlow,
 ) -> std::result::Result<(), ResourceError> {
-    analysis.ledger.storage(
+    let control = &analysis.control;
+    collect_source_origins_v2(
+        &mut analysis.ledger,
+        function,
+        flow,
+        &mut analysis.runtime_reads.origins,
+        |meter, block| {
+            Ok(meter
+                .find(control, |row| row.block.cmp(&block))?
+                .is_some_and(|index| control[index].interval.is_some()))
+        },
+    )
+}
+
+// Share the exact original-edge census and SCC transfer; callers provide a
+// paid reachability query bound to this same immutable function and CFG.
+pub(super) fn collect_source_origins_v2<'g, M: GuardMeter>(
+    meter: &mut M,
+    function: &'g Function,
+    flow: &IndexedControlFlow,
+    output: &mut Vec<runtime_slice_read_v1::Origin<'g>>,
+    mut reachable: impl FnMut(&mut M, BlockId) -> std::result::Result<bool, ResourceError>,
+) -> std::result::Result<(), ResourceError> {
+    meter.storage(
         3_usize
             .checked_mul(size_of::<Vec<()>>())
             .ok_or(ResourceError::Arithmetic)?,
@@ -531,18 +554,15 @@ fn collect_actual_origins<'g, M: GuardMeter>(
     let mut incoming = Vec::new();
     let mut types = Vec::new();
     for block in &body.blocks {
-        analysis.ledger.charge(2)?;
-        if analysis
-            .control_row(block.id)?
-            .is_none_or(|row| row.interval.is_none())
-        {
+        meter.charge(2)?;
+        if !reachable(meter, block.id)? {
             continue;
         }
         for (ordinal, parameter) in block.parameters.iter().enumerate() {
-            analysis.ledger.charge(4)?;
+            meter.charge(4)?;
             let start = incoming.len();
             if block.id != body.blocks[0].id {
-                analysis.ledger.charge(
+                meter.charge(
                     crate::verification_index_v1::verification_ceil_log2_v1(body.blocks.len())
                         .checked_add(4)
                         .ok_or(ResourceError::Arithmetic)?,
@@ -551,49 +571,37 @@ fn collect_actual_origins<'g, M: GuardMeter>(
                     .incoming_edges(block.id)
                     .ok_or(ResourceError::Accounting)?
                 {
-                    analysis.ledger.charge(8)?;
+                    meter.charge(8)?;
                     let source = flow.edge_source(edge).ok_or(ResourceError::Accounting)?;
-                    if analysis
-                        .control_row(source)?
-                        .is_some_and(|row| row.interval.is_some())
-                    {
+                    if reachable(meter, source)? {
                         let value = *flow
                             .edge_arguments(function, edge)
                             .get(ordinal)
                             .ok_or(ResourceError::Accounting)?;
-                        analysis.ledger.push(&mut incoming, value)?;
+                        meter.push(&mut incoming, value)?;
                     }
                 }
             }
-            analysis.ledger.push(
+            meter.push(
                 &mut inputs,
                 origins::Input {
                     value: parameter.id,
                     incoming: start..incoming.len(),
                 },
             )?;
-            analysis
-                .ledger
-                .push(&mut types, (parameter.id, &parameter.ty))?;
+            meter.push(&mut types, (parameter.id, &parameter.ty))?;
         }
     }
-    analysis
-        .ledger
-        .sort(&mut inputs, 1, |a, b| a.value.cmp(&b.value))?;
-    analysis.ledger.sort(&mut types, 1, |a, b| a.0.cmp(&b.0))?;
-    let resolved = origins::resolve(&mut analysis.ledger, &inputs, &incoming)?;
-    analysis
-        .ledger
-        .reserve(&mut analysis.runtime_reads.origins, inputs.len())?;
+    meter.sort(&mut inputs, 1, |a, b| a.value.cmp(&b.value))?;
+    meter.sort(&mut types, 1, |a, b| a.0.cmp(&b.0))?;
+    let resolved = origins::resolve(meter, &inputs, &incoming)?;
+    meter.reserve(output, inputs.len())?;
     for ((input, origin), (value, ty)) in inputs.into_iter().zip(resolved).zip(types) {
-        analysis.ledger.charge(3)?;
+        meter.charge(3)?;
         if input.value != value {
             return Err(ResourceError::Accounting);
         }
-        analysis
-            .runtime_reads
-            .origins
-            .push(runtime_slice_read_v1::Origin { value, origin, ty });
+        output.push(runtime_slice_read_v1::Origin { value, origin, ty });
     }
     Ok(())
 }

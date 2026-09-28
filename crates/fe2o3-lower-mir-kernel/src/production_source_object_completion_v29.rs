@@ -1,6 +1,7 @@
 // Whole-cell completion shares the existing physical origin/history equations.
 // These helpers authenticate source recipes; they never seed physical origins.
 include!("production_source_static_object_source_v29.rs");
+include!("production_source_array_component_index_v29.rs");
 fn source_address_local_slot_ranges_v29(
     slots: &[ScopedSourceSlotV29],
     local: u32,
@@ -182,6 +183,17 @@ fn source_address_object_payload_v29(
     budget.charge_work(8)?;
     let (endpoint, role) = match (payload.operation, payload.role) {
         (
+            ScopedObjectOperationV29::Project {
+                step: ScopedObjectProjectionV29::ArrayIndex(_),
+                ..
+            },
+            _,
+        ) => {
+            // Project is not a value access. The complete source census joins
+            // its numeric producer; geometry and cell history remain mandatory.
+            return Ok(None);
+        }
+        (
             ScopedObjectOperationV29::ReadValue { .. },
             ScopedObjectRoleV29::ReadValue {
                 source,
@@ -250,7 +262,8 @@ fn source_address_object_payload_v29(
             for component in anchors.object_path(endpoint.source_path, budget)? {
                 budget.charge_work(1)?;
                 if !matches!(component, ScopedObjectComponentV29::Original { projection, selector: None }
-                    if matches!(projection.kind(), SemanticProjectionKindV1::Field(_)))
+                    if matches!(projection.kind(), SemanticProjectionKindV1::Field(_)
+                        | SemanticProjectionKindV1::ConstantIndex { .. }))
                 {
                     return Err(scoped_object_pending_v29());
                 }
@@ -409,10 +422,12 @@ fn source_address_object_direct_v29(
     }
     budget.charge_work(place.projections().len())?;
     if place.projections().len() <= 1
-        && place
-            .projections()
-            .iter()
-            .all(|projection| matches!(projection.kind(), SemanticProjectionKindV1::Field(_)))
+        && place.projections().iter().all(|projection| {
+            matches!(
+                projection.kind(),
+                SemanticProjectionKindV1::Field(_) | SemanticProjectionKindV1::ConstantIndex { .. }
+            )
+        })
     {
         let original = source_reference_access_at_v29(plan, site, place, access, budget)?;
         let projections = plan
@@ -970,17 +985,55 @@ fn check_source_object_effect_census_v29(
         {
             // This original-demand census is independent of the actual Project
             // list, so deleting all generated operations cannot select a weaker lane.
-            let fields = source_object_aggregate_field_types_v29(
-                instances.owner().source_semantic().types(),
-                assignment.destination().ty(),
-                aggregate.kind(),
-                aggregate.operands().len(),
-                budget,
-            )?;
+            let types = instances.owner().source_semantic().types();
+            let declaration = types
+                .get(assignment.destination().ty().index() as usize)
+                .ok_or_else(scoped_object_error_v29)?;
+            let field_count = if let (
+                SemanticTypeShapeV1::Array { element, length },
+                SemanticAggregateKindV1::Array,
+            ) = (declaration.shape(), aggregate.kind())
+            {
+                budget.charge_work(6)?;
+                require_ordinary_execution_representation_v29(declaration)?;
+                let count = usize::try_from(*length).map_err(|_| ArgumentResourceV1::Arithmetic)?;
+                let element_type = types
+                    .get(element.index() as usize)
+                    .ok_or_else(scoped_object_error_v29)?;
+                require_ordinary_execution_representation_v29(element_type)?;
+                if count == 0
+                    || count > MAX_SSA_VALUE_COMPONENTS_V1
+                    || count != aggregate.operands().len()
+                    || !matches!(
+                        element_type.shape(),
+                        SemanticTypeShapeV1::Scalar(_)
+                            | SemanticTypeShapeV1::ValidityScalar(_)
+                            | SemanticTypeShapeV1::Pointer(_)
+                    )
+                {
+                    return Err(scoped_object_pending_v29());
+                }
+                for operand in aggregate.operands() {
+                    budget.charge_work(2)?;
+                    if operand.ty() != *element {
+                        return Err(scoped_object_error_v29());
+                    }
+                }
+                count
+            } else {
+                source_object_aggregate_field_types_v29(
+                    types,
+                    assignment.destination().ty(),
+                    aggregate.kind(),
+                    aggregate.operands().len(),
+                    budget,
+                )?
+                .len()
+            };
             if terminal[index] {
                 return Err(scoped_object_error_v29());
             }
-            for operand in 0..fields.len() {
+            for operand in 0..field_count {
                 budget.charge_work(2)?;
                 if aggregate_fields.get(next_aggregate_field)
                     != Some(&(

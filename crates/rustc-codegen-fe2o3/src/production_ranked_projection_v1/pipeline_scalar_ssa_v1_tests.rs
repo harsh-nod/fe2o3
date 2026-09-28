@@ -179,7 +179,17 @@ fn make_uncaptured_owner(
             fe2o3_mir_model::semantic_mir_v1::SemanticAbiArgumentV1::source(
                 SemanticAbiValueV1::new(
                     WORD,
-                    SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+                    SemanticAbiPassModeV1::Direct(
+                        SemanticAbiValueAttributesV1::new(
+                            fe2o3_mir_model::semantic_mir_v1::SemanticAbiRegularAttributesV1::new(
+                                false, None, false, false, false, true,
+                            ),
+                            fe2o3_mir_model::semantic_mir_v1::SemanticAbiExtensionV1::None,
+                            0,
+                            None,
+                        )
+                        .unwrap(),
+                    ),
                 ),
             ),
         ],

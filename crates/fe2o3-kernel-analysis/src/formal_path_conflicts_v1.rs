@@ -20,6 +20,12 @@ use std::{collections::BTreeMap, error::Error as StdError, fmt};
 mod actual_owner_v18;
 pub use actual_owner_v18::FormalPathConflictsV18;
 
+#[path = "formal_path_exclusions_v19.rs"]
+mod full_coordinate_v19;
+pub use full_coordinate_v19::{
+    FormalPathExclusionDecisionV19, FormalPathExclusionErrorV19, FormalPathExclusionsV19,
+};
+
 /// Standalone analysis caps. These do not claim production shared-ledger custody.
 /// Larger caller values cannot raise the fixed maxima in `Default`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -342,10 +348,10 @@ impl Affine {
     fn subtract(self, other: Self) -> Option<Self> {
         self.add(other.scale(-1)?)
     }
-    fn fits(self, maximum: u64, extent: u64) -> bool {
+    fn fits(self, maximum: u64, coordinate_last: u64) -> bool {
         let last = self
             .coefficient
-            .checked_mul(i128::from(extent - 1))
+            .checked_mul(i128::from(coordinate_last))
             .and_then(|offset| self.constant.checked_add(offset));
         let max = i128::from(maximum);
         self.constant >= 0 && self.constant <= max && last.is_some_and(|v| v >= 0 && v <= max)
@@ -375,7 +381,7 @@ struct Engine<'g> {
     affine_cache: BTreeMap<ValueId, Option<Affine>>,
     guards: Vec<Guard>,
     domains: BTreeMap<BlockId, Vec<Fact>>,
-    extent: u64,
+    coordinate_last: u64,
     index_width: FormalIndexWidth,
     limits: Limits,
     steps: usize,
@@ -389,13 +395,22 @@ impl<'g> Engine<'g> {
         index_width: FormalIndexWidth,
         limits: Limits,
     ) -> Result<Self> {
+        Self::with_coordinate_last(function, cfg, extent - 1, index_width, limits)
+    }
+    fn with_coordinate_last(
+        function: &'g Function,
+        cfg: ControlFlowAnalysis,
+        coordinate_last: u64,
+        index_width: FormalIndexWidth,
+        limits: Limits,
+    ) -> Result<Self> {
         let mut this = Self {
             cfg,
             operations: BTreeMap::new(),
             affine_cache: BTreeMap::new(),
             guards: Vec::new(),
             domains: BTreeMap::new(),
-            extent,
+            coordinate_last,
             index_width,
             limits,
             steps: 0,
@@ -578,7 +593,7 @@ impl<'g> Engine<'g> {
             }
             _ => None,
         }
-        .filter(|value| value.fits(maximum, self.extent));
+        .filter(|value| value.fits(maximum, self.coordinate_last));
         self.affine_cache.insert(value, candidate);
         Ok(candidate)
     }

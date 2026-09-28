@@ -26,17 +26,37 @@ fn unused_pipeline_declaration_fixture() -> (
     )
     .unwrap()
     .with_kernel_entry(original.kernel_entry().unwrap().clone());
-    let admitted = InertSemanticMirRequestV1::new_with_callables(
-        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),
-        semantic.types().to_vec(),
-        vec![],
-        vec![],
-        vec![],
-        vec![function],
-        semantic.callables().to_vec(),
-        vec![SemanticFunctionIdV1::from_index(0)],
-    )
-    .unwrap()
+    assert!(semantic.callables().iter().any(|row| matches!(
+        row,
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. },
+            ..
+        }
+    )));
+    let request = |callables| {
+        InertSemanticMirRequestV1::new_with_callables(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),
+            semantic.types().to_vec(),
+            vec![],
+            vec![],
+            vec![],
+            vec![function.clone()],
+            callables,
+            vec![SemanticFunctionIdV1::from_index(0)],
+        )
+        .unwrap()
+    };
+    // Intrinsic declarations cannot survive outside the exact root closure.
+    // Reject the stale roster before testing its valid no-call replacement.
+    assert!(matches!(
+        request(semantic.callables().to_vec()).admit(SemanticMirLimitsV1::default()),
+        Err(fe2o3_mir_model::semantic_mir_v1::SemanticMirErrorV1::CallableOutsideRootClosure {
+            callable
+        }) if callable.index() == 1
+    ));
+    let admitted = request(vec![SemanticCallableDeclV1::Defined {
+        function: SemanticFunctionIdV1::from_index(0),
+    }])
     .admit(SemanticMirLimitsV1::default())
     .unwrap();
     let ssa = ProductionSemanticSsaOwnerV1::try_new(
@@ -126,13 +146,16 @@ fn actual_nonhelper_pipeline_materialization_captures_original_use_site_ssa() {
 #[test]
 fn unused_pipeline_declarations_keep_production_capture_absent() {
     let (ssa, launch) = unused_pipeline_declaration_fixture();
-    assert!(ssa.source_semantic().callables().iter().any(|row| matches!(
-        row,
-        SemanticCallableDeclV1::CompilerIntrinsic {
-            operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. },
-            ..
-        }
-    )));
+    assert_eq!(ssa.source_semantic().callables().len(), 1);
+    assert!(
+        !ssa.source_semantic().callables().iter().any(|row| matches!(
+            row,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. },
+                ..
+            }
+        ))
+    );
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
     budget.reserve_storage(FLOOR).unwrap();

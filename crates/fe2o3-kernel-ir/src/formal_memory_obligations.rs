@@ -13,6 +13,7 @@ use crate::{
 };
 
 mod actual_owner_v18;
+mod affine_engine_v2;
 mod candidate_pair_bound_v1;
 mod complete_body_v19;
 #[cfg(test)]
@@ -1568,170 +1569,7 @@ fn compute_affine_expressions(
     operations: &BTreeMap<ValueId, (&Operation, FunctionOperationLocation)>,
     block_parameter_origins: &BTreeMap<ValueId, Option<ValueId>>,
 ) -> BTreeMap<ValueId, Result<AffineExpression, IndexExpressionError>> {
-    let mut expressions = BTreeMap::new();
-    let mut visiting = BTreeSet::new();
-    let roots = operations
-        .iter()
-        .filter_map(|(value, (operation, _))| {
-            affine_result_is_supported(operation).then_some(*value)
-        })
-        .collect::<Vec<_>>();
-
-    for root in roots {
-        if expressions.contains_key(&root) {
-            continue;
-        }
-        let mut work = vec![AffineWork::Enter(root)];
-        while let Some(item) = work.pop() {
-            match item {
-                AffineWork::Enter(value) => {
-                    let Some(value) = block_parameter_origins
-                        .get(&value)
-                        .copied()
-                        .unwrap_or(Some(value))
-                    else {
-                        continue;
-                    };
-                    if expressions.contains_key(&value) {
-                        continue;
-                    }
-                    if !visiting.insert(value) {
-                        expressions.insert(value, Err(IndexExpressionError::Unsupported));
-                        continue;
-                    }
-                    work.push(AffineWork::Finish(value));
-                    let Some((operation, _)) = operations.get(&value) else {
-                        continue;
-                    };
-                    if !affine_result_is_supported(operation) {
-                        continue;
-                    }
-                    let dependencies = match &operation.kind {
-                        OperationKind::Binary { lhs, rhs, .. } => [Some(*rhs), Some(*lhs)],
-                        OperationKind::Cast {
-                            kind: CastKind::Bitcast,
-                            value,
-                            to,
-                        } if *to == Type::INDEX => [Some(*value), None],
-                        _ => [None, None],
-                    };
-                    for dependency in dependencies.into_iter().flatten() {
-                        if let Some(dependency) = block_parameter_origins
-                            .get(&dependency)
-                            .copied()
-                            .unwrap_or(Some(dependency))
-                        {
-                            work.push(AffineWork::Enter(dependency));
-                        }
-                    }
-                }
-                AffineWork::Finish(value) => {
-                    visiting.remove(&value);
-                    if expressions.contains_key(&value) {
-                        continue;
-                    }
-                    let expression = operations
-                        .get(&value)
-                        .and_then(|(operation, _)| {
-                            affine_result_is_supported(operation).then_some(*operation)
-                        })
-                        .map_or(
-                            Err(IndexExpressionError::Unsupported),
-                            |operation| match &operation.kind {
-                                OperationKind::Constant(Constant::Index(value))
-                                    if operation.results[0].ty == Type::INDEX =>
-                                {
-                                    Ok(AffineExpression::constant(*value))
-                                }
-                                OperationKind::Constant(Constant::U64(value))
-                                    if operation.results[0].ty == Type::Scalar(ScalarType::U64) =>
-                                {
-                                    Ok(AffineExpression::constant(*value))
-                                }
-                                OperationKind::Cast {
-                                    kind: CastKind::Bitcast,
-                                    value,
-                                    to,
-                                } if *to == Type::INDEX => {
-                                    let origin = block_parameter_origins
-                                        .get(value)
-                                        .copied()
-                                        .unwrap_or(Some(*value))
-                                        .ok_or(IndexExpressionError::Unsupported)?;
-                                    let (source, _) = operations
-                                        .get(&origin)
-                                        .ok_or(IndexExpressionError::Unsupported)?;
-                                    if !matches!(source.results.as_slice(), [result]
-                                        if result.ty == Type::Scalar(ScalarType::U64))
-                                        || !matches!(
-                                            source.kind,
-                                            OperationKind::Constant(Constant::U64(_))
-                                        )
-                                    {
-                                        return Err(IndexExpressionError::Unsupported);
-                                    }
-                                    let literal: AffineExpression = expressions
-                                        .get(&origin)
-                                        .copied()
-                                        .unwrap_or(Err(IndexExpressionError::Unsupported))?;
-                                    if literal.invocation_coefficient != 0 {
-                                        return Err(IndexExpressionError::Unsupported);
-                                    }
-                                    Ok(literal)
-                                }
-                                OperationKind::Intrinsic(intrinsic)
-                                    if intrinsic.kind
-                                        == (IntrinsicKind::InvocationIndex {
-                                            kind: IndexKind::Global,
-                                            axis: Axis::X,
-                                        }) =>
-                                {
-                                    Ok(AffineExpression::INVOCATION)
-                                }
-                                OperationKind::Binary { op, lhs, rhs } => {
-                                    let operand = |value: ValueId| -> Result<
-                                        AffineExpression,
-                                        IndexExpressionError,
-                                    > {
-                                        let value = block_parameter_origins
-                                            .get(&value)
-                                            .copied()
-                                            .unwrap_or(Some(value))
-                                            .ok_or(IndexExpressionError::Unsupported)?;
-                                        expressions
-                                            .get(&value)
-                                            .copied()
-                                            .unwrap_or(Err(IndexExpressionError::Unsupported))
-                                    };
-                                    let lhs = operand(*lhs)?;
-                                    let rhs = operand(*rhs)?;
-                                    match op {
-                                        BinaryOp::Add => lhs
-                                            .checked_add(rhs)
-                                            .ok_or(IndexExpressionError::Overflow),
-                                        BinaryOp::Multiply if lhs.invocation_coefficient == 0 => {
-                                            rhs.checked_multiply_constant(lhs.constant)
-                                                .ok_or(IndexExpressionError::Overflow)
-                                        }
-                                        BinaryOp::Multiply if rhs.invocation_coefficient == 0 => {
-                                            lhs.checked_multiply_constant(rhs.constant)
-                                                .ok_or(IndexExpressionError::Overflow)
-                                        }
-                                        BinaryOp::Multiply => {
-                                            Err(IndexExpressionError::Unsupported)
-                                        }
-                                        _ => Err(IndexExpressionError::Unsupported),
-                                    }
-                                }
-                                _ => Err(IndexExpressionError::Unsupported),
-                            },
-                        );
-                    expressions.insert(value, expression);
-                }
-            }
-        }
-    }
-    expressions
+    affine_engine_v2::legacy(operations, block_parameter_origins)
 }
 
 fn collect_types(function: &Function) -> BTreeMap<ValueId, Type> {
@@ -1756,7 +1594,7 @@ fn collect_types(function: &Function) -> BTreeMap<ValueId, Type> {
     types
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AffineExpression {
     constant: u64,
     invocation_coefficient: u64,
@@ -1807,7 +1645,7 @@ impl AffineExpression {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IndexExpressionError {
     Unsupported,
     Overflow,

@@ -1,4 +1,7 @@
 use super::*;
+
+#[path = "formal_path_exclusions_v19_tests.rs"]
+mod full_coordinate_tests;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrWorkBudgetV1 as Work, CanonicalOwnerFormalScopeV18, IntrinsicOperation,

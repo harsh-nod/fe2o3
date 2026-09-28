@@ -7,6 +7,7 @@ mod source_address_memory_tests_v29;
 
 type SourceAddressOriginV29 = origin_worklist_v1::OriginStateV1<Option<usize>>;
 include!("production_source_static_object_geometry_v29.rs");
+include!("production_source_static_pointer_cells_v29.rs");
 
 include!("production_source_reference_logical_alias_v29.rs");
 
@@ -293,7 +294,10 @@ impl SourceAddressCurrentnessV29<'_, '_> {
                                     current[self.objects.len() + cell] = self.constant(false);
                                 }
                             }
-                            if let Some(cell) = self.graph.pointer_cells[row.slot] {
+                            for cell in self.graph.pointer_cells[row.slot]
+                                .into_iter()
+                                .chain(self.graph.pointer_cell_range(row.slot, budget)?)
+                            {
                                 current[self.objects.len() + cell] = self.constant(false);
                                 cell_origins[cell] = self.graph.unknown();
                             }
@@ -301,7 +305,10 @@ impl SourceAddressCurrentnessV29<'_, '_> {
                         SourceAddressBoundaryKindV29::Kill(index) => {
                             let row = &kills[index];
                             budget.charge_work(2)?;
-                            if let Some(cell) = self.graph.pointer_cells[row.slot] {
+                            for cell in self.graph.pointer_cells[row.slot]
+                                .into_iter()
+                                .chain(self.graph.pointer_cell_range(row.slot, budget)?)
+                            {
                                 current[self.objects.len() + cell] = self.constant(false);
                                 cell_origins[cell] = self.graph.unknown();
                             }
@@ -468,8 +475,9 @@ impl SourceAddressCurrentnessV29<'_, '_> {
                         }
                         OperationKind::Load { .. }
                         | OperationKind::Storage(ScopedObjectOperationV29::ReadValue { .. }) => {
-                            let cell = access
-                                .and_then(|row| self.graph.pointer_cells[row.slot])
+                            let cell = self
+                                .graph
+                                .access_pointer_cell(access, operation, budget)?
                                 .ok_or_else(source_raw_physical_error_v29)?;
                             link(current[self.objects.len() + cell], definition, budget)?;
                         }
@@ -482,7 +490,7 @@ impl SourceAddressCurrentnessV29<'_, '_> {
                     writing: true,
                     ..
                 }) = source_address_value_access_v29(operation)?
-                    && let Some(cell) = access.and_then(|row| self.graph.pointer_cells[row.slot])
+                    && let Some(cell) = self.graph.access_pointer_cell(access, operation, budget)?
                 {
                     current[self.objects.len() + cell] = match self.use_register(
                         block.id,
@@ -911,6 +919,8 @@ struct SourceAddressMemoryV29<'kir> {
     blocks: Vec<(BlockId, &'kir BasicBlock)>,
     pointer_cells: Vec<Option<usize>>,
     pointer_cell_count: usize,
+    pointer_subcells: Vec<SourceStaticPointerCellV29>,
+    pointer_subcell_addresses: Vec<(ValueId, usize)>,
     object_layouts: Vec<SourceStaticObjectLayoutV29>,
     object_schemas: Vec<Option<fe2o3_kernel_ir::StorageLayoutIdV1>>,
     zero_offsets: Vec<bool>,
@@ -1254,6 +1264,8 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
             blocks,
             pointer_cells,
             pointer_cell_count,
+            pointer_subcells: Vec::new(),
+            pointer_subcell_addresses: Vec::new(),
             object_layouts: source_static_object_layouts_v29(layouts, budget)?,
             object_schemas,
             zero_offsets,
@@ -1393,6 +1405,7 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
         budget.release_storage(allocation_bytes)?;
         let unknown = graph.unknown();
         graph.origins[unknown] = SourceAddressOriginV29::Unknown;
+        graph.prepare_pointer_subcells(entry, slots, accesses, budget)?;
         Ok(graph)
     }
 
@@ -1612,7 +1625,10 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                     && (row.block, row.gap) == (block.id, gap)
                 {
                     budget.charge_work(2)?;
-                    if let Some(cell) = self.pointer_cells[row.slot] {
+                    for cell in self.pointer_cells[row.slot]
+                        .into_iter()
+                        .chain(self.pointer_cell_range(row.slot, budget)?)
+                    {
                         current[cell] = self.unknown();
                     }
                     kill += 1;
@@ -1696,7 +1712,8 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                         | ScopedObjectOperationV29::WriteValue { .. },
                     ) => {
                         if let Some(row) = Self::access(accesses, block.id, gap, budget)?
-                            && let Some(cell) = self.pointer_cells[row.slot]
+                            && let Some(cell) =
+                                self.access_pointer_cell(Some(row), operation, budget)?
                         {
                             match &operation.kind {
                                 OperationKind::Load { .. }
@@ -1955,6 +1972,10 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                             // the resulting SSA value is subsequently unused.
                             self.exact(value, budget)?;
                         }
+                        // Observed subcells may transport opaque raw pointer
+                        // bits without pointee authority. Their complete byte
+                        // initialization history is checked independently, and
+                        // validate_uses rejects every opaque address/escape use.
                         claimed = argument_sum_v1(&[claimed, 1])?;
                     }
                     None => {
@@ -1978,6 +1999,10 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
         accesses: &[SourceAddressAccessV29],
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let subcell_base = self
+            .pointer_cell_count
+            .checked_sub(self.pointer_subcells.len())
+            .ok_or(ArgumentResourceV1::Accounting)?;
         for (_, block) in &self.blocks {
             budget.charge_work(argument_sum_v1(&[1, block.operations.len()])?)?;
             for (position, operation) in block.operations.iter().enumerate() {
@@ -1987,8 +2012,25 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                     budget.charge_work(1)?;
                     let component = ordinal;
                     ordinal = argument_sum_v1(&[ordinal, 1])?;
-                    if self.exact(value, budget)?.is_none() {
-                        return Ok(());
+                    match self.origins[self.value(value, budget)?] {
+                        SourceAddressOriginV29::Exact(None) => return Ok(()),
+                        SourceAddressOriginV29::Exact(Some(_)) => {}
+                        SourceAddressOriginV29::Unknown
+                            if component == 1
+                                && matches!(
+                                    operation.kind,
+                                    OperationKind::Storage(
+                                        ScopedObjectOperationV29::WriteValue { .. }
+                                    )
+                                )
+                                && matches!(self.ty(value, budget)?, Type::Pointer(_))
+                                && self
+                                    .access_pointer_cell(access, operation, budget)?
+                                    .is_some_and(|cell| cell >= subcell_base) =>
+                        {
+                            return Ok(());
+                        }
+                        _ => return Err(source_raw_physical_error_v29()),
                     }
                     let allowed = match operation.kind {
                         OperationKind::Cast {
@@ -2004,8 +2046,9 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                         | OperationKind::Storage(ScopedObjectOperationV29::WriteValue { .. }) => {
                             component == 0
                                 || (component == 1
-                                    && access
-                                        .is_some_and(|row| self.pointer_cells[row.slot].is_some()))
+                                    && self
+                                        .access_pointer_cell(access, operation, budget)?
+                                        .is_some())
                         }
                         _ => false,
                     };
@@ -2045,10 +2088,20 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                 let target = self.blocks[self.block(target, budget)?].1;
                 budget.charge_work(arguments.len())?;
                 for (&argument, parameter) in arguments.iter().zip(&target.parameters) {
-                    if matches!(parameter.ty, Type::Pointer(_))
-                        && self.exact(argument, budget)? != self.exact(parameter.id, budget)?
-                    {
-                        return Err(source_raw_physical_error_v29());
+                    if matches!(parameter.ty, Type::Pointer(_)) {
+                        let from = self.origins[self.value(argument, budget)?];
+                        let to = self.origins[self.value(parameter.id, budget)?];
+                        match (from, to) {
+                            (
+                                SourceAddressOriginV29::Exact(left),
+                                SourceAddressOriginV29::Exact(right),
+                            ) if left == right => {}
+                            // In-root typed transport only. The complete use
+                            // census still rejects opaque address and Return uses.
+                            (SourceAddressOriginV29::Unknown, SourceAddressOriginV29::Unknown)
+                                if !self.pointer_subcells.is_empty() => {}
+                            _ => return Err(source_raw_physical_error_v29()),
+                        }
                     }
                 }
                 Ok(())

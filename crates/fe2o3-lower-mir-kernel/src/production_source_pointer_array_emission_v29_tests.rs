@@ -1,5 +1,9 @@
 use super::*;
 
+mod index_producer_tests {
+    include!("production_source_array_component_index_v29_tests.rs");
+}
+
 thread_local! {
     static POINTER_STORAGE_TRANSPORT_COMPLETED_V29: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

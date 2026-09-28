@@ -1,5 +1,8 @@
 //! Genuine Current/nominal imports through the original source-owned entrance.
 use super::*;
+
+#[path = "production_rustc_driver_borrowed_helper_source_v18_tests.rs"]
+mod borrowed_helper_tests;
 use crate::production_pipeline::source_owned_v29::{
     start_preparation_observation_v29, take_preparation_observation_v29,
 };

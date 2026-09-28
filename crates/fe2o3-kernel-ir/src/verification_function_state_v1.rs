@@ -68,81 +68,14 @@ impl<'module> VerificationFunctionStateV1<'module> {
             },
         )?;
 
-        let function_parameter_count = body
-            .parameters
-            .len()
-            .min(function.signature.parameters.len());
-        budget.charge_work(block_count)?;
-        let mut nested_visits = 0_usize;
-        let mut nested_definitions = 0_usize;
-        for block in &body.blocks {
-            nested_definitions = nested_definitions
-                .checked_add(block.parameters.len())
-                .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
-            nested_visits = nested_visits
-                .checked_add(block.operations.len())
-                .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
-        }
-        budget.charge_work(block_count)?;
-        budget.charge_work(nested_visits)?;
-        for block in &body.blocks {
-            for operation in &block.operations {
-                nested_definitions = nested_definitions
-                    .checked_add(operation.results.len())
-                    .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
-            }
-        }
-        let definition_count = function_parameter_count
-            .checked_add(nested_definitions)
-            .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+        let (definition_count, nested_visits) =
+            function_definition_count_v2(function, body, budget)?;
 
         // The flattened source iterator walks the block and operation headers
         // a second time while the index owns the exact definition payload.
         budget.charge_work(block_count)?;
         budget.charge_work(nested_visits)?;
-        let function_parameters = body
-            .parameters
-            .iter()
-            .copied()
-            .zip(function.signature.parameters.iter())
-            .map(|(value, ty)| {
-                (
-                    value,
-                    VerificationDefinitionV1 {
-                        ty,
-                        site: VerificationDefinitionSiteV1::FunctionParameter,
-                    },
-                )
-            });
-        let nested = body.blocks.iter().flat_map(|block| {
-            let parameters = block.parameters.iter().map(|parameter| {
-                (
-                    parameter.id,
-                    VerificationDefinitionV1 {
-                        ty: &parameter.ty,
-                        site: VerificationDefinitionSiteV1::BlockParameter(block.id),
-                    },
-                )
-            });
-            let results = block.operations.iter().enumerate().flat_map(
-                move |(operation_ordinal, operation)| {
-                    operation.results.iter().map(move |result| {
-                        (
-                            result.id,
-                            VerificationDefinitionV1 {
-                                ty: &result.ty,
-                                site: VerificationDefinitionSiteV1::Operation(
-                                    block.id,
-                                    operation_ordinal,
-                                ),
-                            },
-                        )
-                    })
-                },
-            );
-            parameters.chain(results)
-        });
-        let mut source_definitions = function_parameters.chain(nested);
+        let mut source_definitions = function_definition_rows_v2(function, body);
         let definitions = VerificationNumericIndexV1::build(
             definition_count,
             Self::DEFINITION_ROW_STORAGE,
@@ -208,6 +141,95 @@ impl<'module> VerificationFunctionStateV1<'module> {
         definition_result.and(block_result)
     }
 }
+
+fn function_definition_count_v2(
+    function: &Function,
+    body: &crate::FunctionBody,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<(usize, usize), CanonicalKernelIrVerificationResourceErrorV1> {
+    let function_parameter_count = body
+        .parameters
+        .len()
+        .min(function.signature.parameters.len());
+    budget.charge_work(body.blocks.len())?;
+    let mut nested_visits = 0_usize;
+    let mut nested_definitions = 0_usize;
+    for block in &body.blocks {
+        nested_definitions = nested_definitions
+            .checked_add(block.parameters.len())
+            .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+        nested_visits = nested_visits
+            .checked_add(block.operations.len())
+            .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+    }
+    budget.charge_work(body.blocks.len())?;
+    budget.charge_work(nested_visits)?;
+    for block in &body.blocks {
+        for operation in &block.operations {
+            nested_definitions = nested_definitions
+                .checked_add(operation.results.len())
+                .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+        }
+    }
+    let definition_count = function_parameter_count
+        .checked_add(nested_definitions)
+        .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+    Ok((definition_count, nested_visits))
+}
+
+fn function_definition_rows_v2<'source>(
+    function: &'source Function,
+    body: &'source crate::FunctionBody,
+) -> impl Iterator<Item = (ValueId, VerificationDefinitionV1<'source>)> {
+    let function_parameters = body
+        .parameters
+        .iter()
+        .copied()
+        .zip(function.signature.parameters.iter())
+        .map(|(value, ty)| {
+            (
+                value,
+                VerificationDefinitionV1 {
+                    ty,
+                    site: VerificationDefinitionSiteV1::FunctionParameter,
+                },
+            )
+        });
+    let nested =
+        body.blocks.iter().flat_map(|block| {
+            let parameters = block.parameters.iter().map(|parameter| {
+                (
+                    parameter.id,
+                    VerificationDefinitionV1 {
+                        ty: &parameter.ty,
+                        site: VerificationDefinitionSiteV1::BlockParameter(block.id),
+                    },
+                )
+            });
+            let results = block.operations.iter().enumerate().flat_map(
+                move |(operation_ordinal, operation)| {
+                    operation.results.iter().map(move |result| {
+                        (
+                            result.id,
+                            VerificationDefinitionV1 {
+                                ty: &result.ty,
+                                site: VerificationDefinitionSiteV1::Operation(
+                                    block.id,
+                                    operation_ordinal,
+                                ),
+                            },
+                        )
+                    })
+                },
+            );
+            parameters.chain(results)
+        });
+    function_parameters.chain(nested)
+}
+
+#[path = "verification_function_state_bytes_v2.rs"]
+mod typed_bytes;
+pub(crate) use typed_bytes::ByteFunctionStateV2;
 
 #[cfg(test)]
 mod tests {

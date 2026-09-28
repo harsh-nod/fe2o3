@@ -18,6 +18,11 @@ mod meter;
 pub(super) mod origins;
 #[path = "guarded_predicates_v1.rs"]
 mod predicates;
+#[path = "source_context_bytes_v2.rs"]
+pub(super) mod source_context_bytes_v2;
+
+#[path = "affine_source_bytes_v18.rs"]
+pub(super) mod affine_source_bytes_v18;
 pub use canonical_reads::*;
 use meter::GuardMeter;
 

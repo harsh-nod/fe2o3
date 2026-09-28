@@ -2046,8 +2046,33 @@ fn check_expanded_source_memory_inner_v29(
             .scoped_memory_anchors
             .as_ref()
             .ok_or_else(source_raw_physical_error_v29)?;
-        for row in &anchors.rows {
+        for (ordinal, row) in anchors.rows.iter().enumerate() {
             budget.charge_work(1)?;
+            if let ScopedMemoryAnchorKindV29::Object(payload) = row.kind {
+                budget.charge_work(2)?;
+                let payload = anchors
+                    .objects
+                    .get(payload)
+                    .ok_or_else(scoped_object_error_v29)?;
+                if matches!(
+                    payload.operation,
+                    ScopedObjectOperationV29::Project {
+                        step: ScopedObjectProjectionV29::ArrayIndex(_),
+                        ..
+                    }
+                ) {
+                    let instance = sidecar
+                        .source_call_instance
+                        .ok_or_else(scoped_object_error_v29)?;
+                    check_source_array_component_index_v29(
+                        instances,
+                        &source_index,
+                        instance,
+                        ordinal,
+                        budget,
+                    )?;
+                }
+            }
             source_address_object_payload_v29(anchors, row, budget)?;
         }
     }

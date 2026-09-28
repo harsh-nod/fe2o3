@@ -1,3 +1,5 @@
+include!("production_source_static_pointer_cells_v29_tests.rs");
+
 fn scalar_field_layouts_v29() -> Vec<fe2o3_kernel_ir::StorageLayoutV1> {
     use fe2o3_kernel_ir::{
         StorageFieldV1, StorageLayoutIdV1 as Id, StorageLayoutKindV1 as Kind, StorageLayoutV1,

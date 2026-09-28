@@ -130,19 +130,41 @@ fn source_static_object_expected_location_inner_v29(
             .get(place.ty().index() as usize)
             .ok_or_else(scoped_object_error_v29)?;
         require_ordinary_execution_representation_v29(declaration)?;
-        let fields = match (declaration.shape(), aggregate.kind()) {
+        let (ty, components, projection) = match (declaration.shape(), aggregate.kind()) {
             (SemanticTypeShapeV1::Tuple(fields), SemanticAggregateKindV1::Tuple)
             | (SemanticTypeShapeV1::Aggregate(fields), SemanticAggregateKindV1::Aggregate) => {
-                fields.fields()
+                let fields = fields.fields();
+                (
+                    *fields
+                        .get(operand as usize)
+                        .ok_or_else(scoped_object_error_v29)?,
+                    fields.len(),
+                    SemanticProjectionKindV1::Field(operand),
+                )
+            }
+            (SemanticTypeShapeV1::Array { element, length }, SemanticAggregateKindV1::Array) => {
+                budget.charge_work(4)?;
+                if *length == 0
+                    || *length > MAX_SSA_VALUE_COMPONENTS_V1 as u64
+                    || u64::from(operand) >= *length
+                {
+                    return Err(scoped_object_error_v29());
+                }
+                (
+                    *element,
+                    usize::try_from(*length).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                    SemanticProjectionKindV1::ConstantIndex {
+                        offset: u64::from(operand),
+                        minimum_length: *length,
+                        from_end: false,
+                    },
+                )
             }
             _ => return Err(scoped_object_pending_v29()),
         };
-        let ty = *fields
-            .get(operand as usize)
-            .ok_or_else(scoped_object_error_v29)?;
         if !place.projections().is_empty()
-            || fields.len() != aggregate.operands().len()
-            || fields.len() > MAX_SSA_VALUE_COMPONENTS_V1
+            || components != aggregate.operands().len()
+            || components > MAX_SSA_VALUE_COMPONENTS_V1
             || endpoint.path.count != 1
             || aggregate
                 .operands()
@@ -155,13 +177,17 @@ fn source_static_object_expected_location_inner_v29(
                 types
                     .get(ty.index() as usize)
                     .map(SemanticTypeDeclV1::shape),
-                Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+                Some(
+                    SemanticTypeShapeV1::Scalar(_)
+                        | SemanticTypeShapeV1::ValidityScalar(_)
+                        | SemanticTypeShapeV1::Pointer(_)
+                )
             )
         {
             return Err(scoped_object_error_v29());
         }
         Some(
-            SemanticProjectionV1::new(SemanticProjectionKindV1::Field(operand), ty)
+            SemanticProjectionV1::new(projection, ty)
                 .map_err(|_| ArgumentResourceV1::Accounting)?,
         )
     } else {
@@ -196,10 +222,12 @@ fn source_static_object_expected_location_inner_v29(
         return Err(scoped_object_pending_v29());
     }
     budget.charge_work(path.len())?;
-    if path
-        .iter()
-        .any(|projection| !matches!(projection.kind(), SemanticProjectionKindV1::Field(_)))
-    {
+    if path.iter().any(|projection| {
+        !matches!(
+            projection.kind(),
+            SemanticProjectionKindV1::Field(_) | SemanticProjectionKindV1::ConstantIndex { .. }
+        )
+    }) {
         return Err(scoped_object_pending_v29());
     }
     let layouts = plan
@@ -225,6 +253,20 @@ fn source_static_object_expected_location_inner_v29(
                 source_storage_v29::SourceSelectedComponentKindV29::Field {
                     byte_offset, ..
                 } => byte_offset,
+                source_storage_v29::SourceSelectedComponentKindV29::Index { length, stride } => {
+                    budget.charge_work(4)?;
+                    let SemanticProjectionKindV1::ConstantIndex {
+                        offset,
+                        minimum_length,
+                        from_end,
+                    } = component.projection.kind()
+                    else {
+                        return Err(scoped_object_pending_v29());
+                    };
+                    source_static_constant_index_v29(length, offset, minimum_length, from_end)?
+                        .checked_mul(stride)
+                        .ok_or(ArgumentResourceV1::Arithmetic)?
+                }
                 _ => return Err(scoped_object_pending_v29()),
             };
             offset = offset
@@ -243,18 +285,20 @@ fn source_static_object_expected_location_inner_v29(
     {
         return Err(scoped_object_error_v29());
     }
-    if !path.is_empty()
-        && !matches!(
-            instances
-                .owner()
-                .source_semantic()
-                .types()
-                .get(ty.index() as usize)
-                .map(SemanticTypeDeclV1::shape),
-            Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
-        )
-    {
-        return Err(scoped_object_pending_v29());
+    if !path.is_empty() {
+        match instances
+            .owner()
+            .source_semantic()
+            .types()
+            .get(ty.index() as usize)
+            .map(SemanticTypeDeclV1::shape)
+        {
+            Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)) => {}
+            Some(SemanticTypeShapeV1::Pointer(_)) => {
+                let _ = source_object_original_leaf_type_v29(plan, ty, schema, budget)?;
+            }
+            _ => return Err(scoped_object_pending_v29()),
+        }
     }
     Ok(Some(SourceStaticObjectLocationV29 {
         slot,

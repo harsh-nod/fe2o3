@@ -95,9 +95,7 @@ impl SourceAddressMemoryV29<'_> {
             return Err(source_raw_physical_error_v29());
         };
         let ScopedSlotRepresentationV29::Object {
-            schema: root,
-            bytes,
-            alignment,
+            bytes, alignment, ..
         } = slot.representation
         else {
             return Err(source_raw_physical_error_v29());
@@ -123,14 +121,45 @@ impl SourceAddressMemoryV29<'_> {
                 expected == *actual
             }
             (SourceStaticObjectValueV29::Pointer(expected), Type::Pointer(actual)) => {
-                // Pointer subcells need per-subobject memory and relocation
-                // state; only the existing whole pointer-cell path is admitted.
-                if location.offset != 0 || schema != root {
-                    return Err(scoped_object_pending_v29());
-                }
+                let (exact_pointee, exact_cell) = if self.pointer_cells[location.slot].is_some() {
+                    (
+                        actual.pointee.as_ref() == &Type::StorageObject(expected.pointee),
+                        location.offset == 0 && self.object_schemas[location.slot] == Some(schema),
+                    )
+                } else {
+                    budget.charge_work(5)?;
+                    let pointee = self
+                        .object_layouts
+                        .get(expected.pointee.0 as usize)
+                        .ok_or_else(source_raw_physical_error_v29)?;
+                    let exact_pointee = actual.pointee.as_ref()
+                        == &Type::StorageObject(expected.pointee)
+                        || matches!((pointee.value, actual.pointee.as_ref()),
+                            (SourceStaticObjectValueV29::Scalar(left), Type::Scalar(right)) if left == *right);
+                    let cell = self
+                        .pointer_cell(location.slot, pointer, budget)?
+                        .ok_or_else(source_raw_physical_error_v29)?;
+                    let base = self
+                        .pointer_cell_count
+                        .checked_sub(self.pointer_subcells.len())
+                        .ok_or(ArgumentResourceV1::Accounting)?;
+                    let ordinal = cell
+                        .checked_sub(base)
+                        .ok_or(ArgumentResourceV1::Accounting)?;
+                    let exact_cell = self.pointer_subcells.get(ordinal)
+                        == Some(&SourceStaticPointerCellV29 {
+                            slot: location.slot,
+                            offset: location.offset,
+                            schema,
+                        });
+                    (exact_pointee, exact_cell)
+                };
+                // Even an unused pointer load must participate in its own
+                // content-origin and activation-currentness equations.
                 actual.address_space == expected.value_space
                     && actual.access == expected.access
-                    && actual.pointee.as_ref() == &Type::StorageObject(expected.pointee)
+                    && exact_pointee
+                    && exact_cell
             }
             _ => false,
         };
@@ -159,6 +188,16 @@ fn source_static_object_transfer_v29(
     step: ScopedObjectProjectionV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<SourceStaticObjectTransferV29, ProductionSemanticKirErrorV1> {
+    source_static_object_transfer_with_index_v29(layouts, parent, step, None, budget)
+}
+
+fn source_static_object_transfer_with_index_v29(
+    layouts: &[fe2o3_kernel_ir::StorageLayoutV1],
+    parent: fe2o3_kernel_ir::StorageLayoutIdV1,
+    step: ScopedObjectProjectionV29,
+    literal_index: Option<u64>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<SourceStaticObjectTransferV29, ProductionSemanticKirErrorV1> {
     use fe2o3_kernel_ir::StorageLayoutKindV1 as Kind;
     budget.charge_work(7)?;
     let row = layouts
@@ -170,6 +209,26 @@ fn source_static_object_transfer_v29(
                 .get(index as usize)
                 .ok_or_else(source_raw_physical_error_v29)?;
             (field.layout, field.offset)
+        }
+        (
+            ScopedObjectProjectionV29::ArrayIndex(_),
+            Kind::Array {
+                element,
+                length,
+                stride,
+            },
+        ) => {
+            budget.charge_work(4)?;
+            let index = literal_index.ok_or_else(scoped_object_pending_v29)?;
+            if index >= *length {
+                return Err(source_raw_physical_error_v29());
+            }
+            (
+                *element,
+                index
+                    .checked_mul(*stride)
+                    .ok_or(ArgumentResourceV1::Arithmetic)?,
+            )
         }
         // Variant views also observe or constrain the current tag. A geometric
         // offset is insufficient until that independent history is connected.
@@ -186,7 +245,10 @@ fn source_static_object_transfer_v29(
     let child_row = layouts
         .get(child.0 as usize)
         .ok_or_else(source_raw_physical_error_v29)?;
-    if !matches!(child_row.kind, Kind::Scalar(_)) {
+    if !matches!(child_row.kind, Kind::Scalar(_))
+        && !(matches!(child_row.kind, Kind::Pointer(_))
+            && matches!(step, ScopedObjectProjectionV29::ArrayIndex(_)))
+    {
         return Err(scoped_object_pending_v29());
     }
     if offset
@@ -284,7 +346,7 @@ fn source_static_object_projections_v29(
     let mut transfers = emission_vec_v1(count, budget)?;
     for (_, block) in &graph.blocks {
         budget.charge_work(argument_sum_v1(&[1, block.operations.len()])?)?;
-        for operation in &block.operations {
+        for (ordinal, operation) in block.operations.iter().enumerate() {
             let OperationKind::Storage(ScopedObjectOperationV29::Project { base, step }) =
                 operation.kind
             else {
@@ -309,7 +371,31 @@ fn source_static_object_projections_v29(
             {
                 return Err(source_raw_physical_error_v29());
             }
-            let transfer = source_static_object_transfer_v29(layouts, *parent, step, budget)?;
+            let literal = match step {
+                ScopedObjectProjectionV29::ArrayIndex(index) => {
+                    budget.charge_work(3)?;
+                    let previous = ordinal
+                        .checked_sub(1)
+                        .and_then(|n| block.operations.get(n))
+                        .ok_or_else(source_raw_physical_error_v29)?;
+                    let OperationKind::Constant(Constant::Index(value)) = previous.kind else {
+                        return Err(source_raw_physical_error_v29());
+                    };
+                    if !matches!(previous.results.as_slice(), [result] if result.id == index && result.ty == Type::INDEX)
+                    {
+                        return Err(source_raw_physical_error_v29());
+                    }
+                    Some(value)
+                }
+                _ => None,
+            };
+            let transfer = if literal.is_some() {
+                source_static_object_transfer_with_index_v29(
+                    layouts, *parent, step, literal, budget,
+                )?
+            } else {
+                source_static_object_transfer_v29(layouts, *parent, step, budget)?
+            };
             let SourceStaticObjectTransferV29::Project { child, .. } = transfer else {
                 unreachable!()
             };

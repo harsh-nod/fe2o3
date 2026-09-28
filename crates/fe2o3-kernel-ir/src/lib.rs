@@ -178,6 +178,7 @@ mod verification_storage_operation_v1;
 mod verification_storage_v1;
 mod verification_terminator_v1;
 mod verification_type_comparison_v1;
+mod verification_typed_storage_v2;
 mod verification_wave_operation_v1;
 mod verify;
 mod wave_operations;
