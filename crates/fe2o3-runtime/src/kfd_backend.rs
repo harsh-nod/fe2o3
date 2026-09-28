@@ -6761,10 +6761,14 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         })?;
         self.restore_unfinished_stream_tail_v1(removed.stream, submission);
         self.quiescent_sdma_submissions.remove(&submission);
-        self.observe_profile_v1(
-            profile_dispatch
-                .map(|dispatch| KfdRuntimeProfileEventKindV1::SubmissionReleased { dispatch }),
-        );
+        // Copies and unpublished cancellations have no dispatch lifecycle event.
+        // A missing identity for an actual published dispatch still records loss.
+        if removed.profile_dispatch_published {
+            self.observe_profile_v1(
+                profile_dispatch
+                    .map(|dispatch| KfdRuntimeProfileEventKindV1::SubmissionReleased { dispatch }),
+            );
+        }
         Ok(())
     }
 
@@ -17456,6 +17460,8 @@ mod tests {
         backend.shutdown_native_v1().unwrap();
         let capture = backend.finish_profiler_v1().unwrap();
         capture.validate().unwrap();
+        assert!(capture.coverage.complete_runtime_operation_history);
+        assert_eq!(capture.coverage.dropped_events, 0);
         assert_eq!(
             capture
                 .events

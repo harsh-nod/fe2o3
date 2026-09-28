@@ -386,7 +386,20 @@ fn prepared_publication_profiler_records_once_and_exhaustion_does_not_change_exe
             BackendPollV1::Succeeded
         );
         backend.release_submission_v1(submission).unwrap();
+        let recorder = backend.profiler.as_ref().unwrap();
+        let before_copy_release = (
+            recorder.recorded_events_for_test_v1().len(),
+            recorder.dropped_events_for_test_v1(),
+        );
         backend.release_submission_v1(copy).unwrap();
+        let recorder = backend.profiler.as_ref().unwrap();
+        assert_eq!(
+            (
+                recorder.recorded_events_for_test_v1().len(),
+                recorder.dropped_events_for_test_v1()
+            ),
+            before_copy_release
+        );
         backend.unload_module_v1(module).unwrap();
         release_scripted_direct_pair_v1(&mut backend, host, device);
         backend.destroy_stream_v1(stream).unwrap();
@@ -411,7 +424,8 @@ fn prepared_publication_profiler_records_once_and_exhaustion_does_not_change_exe
         assert_eq!(publications, usize::from(capacity == 128));
         assert_eq!(
             capture.coverage.complete_runtime_operation_history,
-            capacity == 128
+            capacity == 128,
+            "capacity={capacity}: {capture:?}"
         );
         assert_eq!(capture.coverage.dropped_events == 0, capacity == 128);
         drop(ManuallyDrop::into_inner(backend));
