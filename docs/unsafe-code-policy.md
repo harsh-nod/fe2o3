@@ -149,6 +149,20 @@ callback assertions; an inventory pass alone does not execute those callbacks.
 - Test ownership and failure behavior, including compile-fail tests where
   applicable. Host tests supplement but do not replace GPU/MMIO validation.
 
+### Nullary Typed Kernel Rejection Fixture
+
+The test-only `fe2o3-macros/src/zero_argument_typed_v1_tests.rs` contains one
+`unsafe fn` inside `parse_quote!`. This is parsed syntax supplied to
+`validate_typed_kernel_profile_v1`, which must reject it even when the kernel
+has no arguments. The declaration is never compiled as a function or called;
+there is no unsafe memory, OS, FFI or GPU operation. Replacing its signature
+with safe Rust would remove the source-safety negative being tested.
+
+The inventory counts macro-template syntax once, so this file receives exactly
+one `function` entry. The tokenizer, validator, fixture and every other
+inventory entry are unchanged. Run the nullary macro tests and the complete
+source-inventory gate. This reconciliation grants no runtime or launch authority.
+
 ## Engineering Dispatch Review
 
 The engineering dispatch preparation and sequence changes (`7abce5c16`), peer

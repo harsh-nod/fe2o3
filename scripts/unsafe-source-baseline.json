@@ -832,6 +832,9 @@
     "function": 13,
     "impl": 6
   },
+  "crates/fe2o3-macros/src/zero_argument_typed_v1_tests.rs": {
+    "function": 1
+  },
   "crates/fe2o3-macros/tests/fixtures/renamed-device/src/main.rs": {
     "function": 1
   },
