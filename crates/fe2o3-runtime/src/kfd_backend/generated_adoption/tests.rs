@@ -135,6 +135,15 @@ impl Drop for Item {
 fn generated_retry_ready_submission_releases_only_after_recorded_native_retirement() {
     let (mut backend, plan) = shells();
     let (_, projection) = source_projection();
+    // Adoption removes control from the host shell. Keep this fixture's inert
+    // control locally; the test does not perform native adoption or disposal.
+    let _control = backend
+        .generated_shells
+        .get_mut(&plan.key)
+        .unwrap()
+        .control
+        .take()
+        .unwrap();
     let mut native = native_state(PhaseV1::Retired, 0);
     // Metadata-only retirement, not evidence of native disposal or API routing.
     native.returned.install(Vec::new());
