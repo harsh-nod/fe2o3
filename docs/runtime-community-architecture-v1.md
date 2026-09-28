@@ -193,8 +193,18 @@ uses actual lower CPU observation/recycle and event pin operations, checking exa
 slot prefixes, unwind state and three-inflight middle-slot reuse. Six compiled
 mutations detect lost receipts and false retries. Runtime timing and logical
 settlement remain in the existing adapter; lower-cell controls do not establish
-full runtime/native owner association or GPU behavior. Indexed metadata scans and
-transitions still need source-shared refinement.
+full runtime/native owner association or GPU behavior.
+
+Pipeline metadata now lives in a private borrowed-table module whose complete
+scans and stage/confirm/withdraw mutations share source with Verus. The
+[pipeline packet](evidence/dev-pipeline-publication-2026-09-28/README.md)
+proves exact raw predicates and owner/slot/head frames without caller-supplied
+validity flags or cloned metadata rosters. Staging fuses duplicate-owner, epoch
+and first-vacancy checks while inspecting the entire suffix before writing.
+Independent CPU references retain the original narrow corruption checks at 64/1024
+slots. Unique-roster and occupancy preservation are separate from raw contracts;
+complete contiguous epochs, promotion/quarantine and native binding remain open.
+Reduced scans are not a measured performance claim.
 
 The direct adapter's same-device copies are native SDMA submissions. Direct
 dependency chains are capped at 256 before ledger mutation, cancellation can

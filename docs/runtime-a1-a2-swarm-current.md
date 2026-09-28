@@ -24,6 +24,18 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Shared pipeline-metadata development (2026-09-28 UTC): actual borrowed slot scans
+and stage/confirm/withdraw writes now share executable bodies with Verus.
+The [pipeline packet](evidence/dev-pipeline-publication-2026-09-28/README.md)
+records 26 verified obligations, 18 genuine solver-negative mutations, 14 focused
+CPU passes and 1800 full-runtime passes with three unwaived telemetry failures
+and 28 ignores. Static checks pass; the aggregate is unsuccessful. Exact raw
+acceptance/refusal and opaque-owner frames, unique-roster/occupancy preservation
+and general stage-to-settlement admissibility are proved. This is not the full
+epoch-chain invariant or native receipt/owner binding. Promotion, quarantine,
+Pending/retain settlement, protected Worker and matched GPU performance remain
+open. A1/A2 and accepted checkpoints are unchanged.
+
 Shared completion-receipt development (2026-09-28 UTC): ordinary native Active
 now holds a concrete Published/Completed/Retired/Consuming cell whose production
 body is compiled by KFD tests with genuine lower receipts. Nine groups cover
@@ -38,8 +50,9 @@ its test-only correction; the aggregate remains unsuccessful. Full runtime
 owner/receipt integration,
 native signal access, GPU execution, native cleanup and formal correspondence
 remain open; the lower tests do not establish nested runtime selector/timestamp
-wiring. Staged metadata needs shared complete scans and mutations, not trusted
-validity flags. No milestone or accepted lane checkpoint is promoted.
+wiring. That checkpoint left complete staged-metadata scans and mutations open;
+the newer entry above establishes their shared-body contracts, not full caller
+composition. No milestone or accepted lane checkpoint is promoted.
 
 Shared publication-receipt development (2026-09-28 UTC): initial binding,
 Prepared retry and ordered publication now use one private concrete receipt cell

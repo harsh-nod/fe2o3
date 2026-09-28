@@ -152,8 +152,17 @@ retirement. Genuine lower CPU pin/refusal/release and three-inflight slot-reuse
 controls exercise the cell and private failure classifier; six compiled mutations
 test sensitivity to lost receipts and false retries. Actual runtime selection,
 Pending handoff, timestamp wiring and logical commit are not newly established
-by those lower fixtures. Native completion, staged metadata refinement, protected
+by those lower fixtures. Native completion, complete pipeline refinement, protected
 Worker and matched performance remain separate gates.
+
+The [pipeline-metadata packet](evidence/dev-pipeline-publication-2026-09-28/README.md)
+now verifies shared complete slot scans and stage/confirm/withdraw bodies over
+borrowed storage and opaque Active payloads. It establishes exact refusal frames,
+generation/epoch handling, roster uniqueness/occupancy and stage-to-settlement
+admissibility, with 26 obligations and 18 solver-negative controls. CPU tests cover
+both 64/1024 profiles. Full contiguous-epoch, promotion/quarantine and native
+receipt/caller composition proofs remain open. No GPU performance or parity
+claim follows from this metadata refinement.
 
 Poll and `wait` never perform deferred compute preparation, but can retry
 publication of an already bound Prepared recipe. Submit may publish immediately
