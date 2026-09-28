@@ -282,13 +282,20 @@ Separate unique-roster/occupancy preservation and general stage-to-settlement
 admissibility are proved; CPU controls cover 64/1024 slots and exhaustion. Existing
 guards remain narrow corruption checks, not a complete healthy-state predicate.
 
-Next prove the full confirmed interval [frontier,H), with mathematical exclusive
-head H=next.unwrap_or(MAX+1) and staged epoch H outside that interval. Share and
-prove take_commit_frontier and quarantine_all, including exact returned-owner and
-untargeted-slot frames. Promotion moves an owner into the separate Active slot;
-it is not physical retirement. Then carry genuine receipts through actual runtime
-selection, Pending publication and settlement, including accepted recipe/lane/
-storage identity and the transient Published/Attempt::Published bridge.
+The [chain follow-up](evidence/dev-pipeline-chain-2026-09-28/README.md) now proves
+the full confirmed interval [frontier,H), with mathematical exclusive head
+H=next.unwrap_or(MAX+1) and staged epoch H outside that interval, across all five
+metadata transitions. Shared take_commit_frontier and quarantine_all bodies have
+exact owner/neighbor frames. Promotion moves an owner into the separate Active
+slot; it is not physical retirement. The 64-launch MI300X ordinary-pipeline smoke
+passes output/order/cleanup checks, without qualifying native quarantine or AUX
+faults. Next carry genuine receipts through actual runtime selection, Pending
+publication and settlement, including accepted recipe/lane/storage identity and
+the transient Published/Attempt::Published bridge. Compose the outer native
+envelope result with the indexed attempt: Published/Retryable storage after an
+outer error or unwind must not authorize confirmation/withdrawal. Preserve the
+pre-confirm published_at mutation in the frame statement. Prove the actual
+successor stream/predecessor/retain/recipe/shape/phase check before promotion.
 Refine logical commit separately from optional/fallible observer emission;
 R60's existing model joins these effects and is not correspondence evidence for
 the indexed adapters. Production-body mutations must detect receipt redirection,

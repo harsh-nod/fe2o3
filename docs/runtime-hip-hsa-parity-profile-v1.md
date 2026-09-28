@@ -160,9 +160,14 @@ now verifies shared complete slot scans and stage/confirm/withdraw bodies over
 borrowed storage and opaque Active payloads. It establishes exact refusal frames,
 generation/epoch handling, roster uniqueness/occupancy and stage-to-settlement
 admissibility, with 26 obligations and 18 solver-negative controls. CPU tests cover
-both 64/1024 profiles. Full contiguous-epoch, promotion/quarantine and native
-receipt/caller composition proofs remain open. No GPU performance or parity
-claim follows from this metadata refinement.
+both 64/1024 profiles. The [chain follow-up](evidence/dev-pipeline-chain-2026-09-28/README.md)
+adds shared promotion/quarantine bodies and full contiguous-epoch preservation
+across all five transitions: 44 obligations and 12 new lifecycle solver controls.
+The full runtime suite passes 1806 tests, with 28 ignored. A fresh MI300X
+64-publication ordinary pipeline passes exact-output, contiguous-completion and
+cleanup checks. Native outcome/receipt/Pending association and full caller
+refinement remain open. Ordered single-stream smoke and metadata proofs do not
+establish concurrent-kernel performance or HIP/HSA parity.
 
 Poll and `wait` never perform deferred compute preparation, but can retry
 publication of an already bound Prepared recipe. Submit may publish immediately

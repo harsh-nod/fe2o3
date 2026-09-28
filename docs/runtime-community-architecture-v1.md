@@ -202,9 +202,13 @@ proves exact raw predicates and owner/slot/head frames without caller-supplied
 validity flags or cloned metadata rosters. Staging fuses duplicate-owner, epoch
 and first-vacancy checks while inspecting the entire suffix before writing.
 Independent CPU references retain the original narrow corruption checks at 64/1024
-slots. Unique-roster and occupancy preservation are separate from raw contracts;
-complete contiguous epochs, promotion/quarantine and native binding remain open.
-Reduced scans are not a measured performance claim.
+slots. The [chain follow-up](evidence/dev-pipeline-chain-2026-09-28/README.md)
+shares promotion/quarantine bodies through another private borrowed-table module,
+and proves the complete confirmed epoch interval across all five transitions.
+Raw corruption acceptance remains separate from that stronger invariant. CPU
+qualification and a fresh 64-launch MI300X ordered-pipeline smoke pass; native
+receipt authentication, Pending/retain settlement and complete caller refinement
+remain open. Linear scans and zero-allocation controls are not measured speedups.
 
 The direct adapter's same-device copies are native SDMA submissions. Direct
 dependency chains are capped at 256 before ledger mutation, cancellation can

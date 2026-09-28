@@ -24,6 +24,21 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Shared pipeline lifecycle/chain development (2026-09-28 UTC): promotion and
+quarantine now share complete executable bodies with Verus. The
+[chain packet](evidence/dev-pipeline-chain-2026-09-28/README.md) proves the full
+confirmed epoch interval and preservation across all five metadata transitions:
+44 obligations, 12 new lifecycle solver controls, 17 focused CPU passes and
+1806 full-runtime passes with zero failures and 28 ignores. Static checks pass;
+the aggregate is successful. The three earlier socket-permission telemetry tests
+pass in the unrestricted environment. A fresh MI300X 64-launch ordinary-pipeline
+smoke validates the full publication prefix, contiguous completion, byte-exact
+output and normal cleanup; its dedicated remote directory was removed. This is
+ordered single-stream execution, not concurrency or performance parity. Native
+outcome/receipt/Pending association, retained-resource composition, protected
+Worker and matched HIP/HSA performance remain open. Issue #182 was refreshed via
+the API and remains OPEN. A1/A2 and accepted checkpoints are unchanged.
+
 Shared pipeline-metadata development (2026-09-28 UTC): actual borrowed slot scans
 and stage/confirm/withdraw writes now share executable bodies with Verus.
 The [pipeline packet](evidence/dev-pipeline-publication-2026-09-28/README.md)
@@ -31,10 +46,10 @@ records 26 verified obligations, 18 genuine solver-negative mutations, 14 focuse
 CPU passes and 1800 full-runtime passes with three unwaived telemetry failures
 and 28 ignores. Static checks pass; the aggregate is unsuccessful. Exact raw
 acceptance/refusal and opaque-owner frames, unique-roster/occupancy preservation
-and general stage-to-settlement admissibility are proved. This is not the full
-epoch-chain invariant or native receipt/owner binding. Promotion, quarantine,
-Pending/retain settlement, protected Worker and matched GPU performance remain
-open. A1/A2 and accepted checkpoints are unchanged.
+and general stage-to-settlement admissibility are proved. That packet did not
+establish the full epoch chain or promotion/quarantine, now covered by the chain
+follow-up above. Native receipt/owner binding, Pending/retain settlement, protected
+Worker and matched GPU performance remain open.
 
 Shared completion-receipt development (2026-09-28 UTC): ordinary native Active
 now holds a concrete Published/Completed/Retired/Consuming cell whose production
