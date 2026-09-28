@@ -24,6 +24,17 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Three-binding completion custody development (2026-09-28 UTC): Active stays
+indexed through consuming completion, all-three restoration, detached-control
+release and reporting. Commit preflight precedes destructive control release;
+partial restoration and post-commit unwind retain their exact ownership prefixes.
+The [development packet](evidence/dev-three-completion-custody-2026-09-28/README.md)
+records 162 new fault subprocesses, zero counted scripted completion allocation,
+492 passing backend tests and separate lower KFD custody checks. The full runtime
+suite retains three unwaived socket-permission failures. Real native receipt
+recovery/rejection coupling, generated execution, formal correspondence and
+matched performance remain open; accepted checkpoints and A1/A2 are unchanged.
+
 Scalar persistent-completion custody development (2026-09-28 UTC): Active now
 stays indexed through consuming poll/wait, recycle, detach, retirement, storage
 restoration and completion reporting. The root reuses bind-recovery boxes and
@@ -31,8 +42,9 @@ reserves only missing native replay storage before binding. The
 [development packet](evidence/dev-scalar-completion-custody-2026-09-28/README.md)
 distinguishes counted scripted completion and 81 fault subprocesses from native
 receipt execution, lower-call unwind, formal correspondence and GPU performance.
-Three-binding completion remains separate work; accepted checkpoints and A1/A2
-status are unchanged.
+Three-binding completion was separate work at that checkpoint; the development
+entry above addresses runtime indexing but leaves native receipt qualification
+open. Accepted checkpoints and A1/A2 status are unchanged.
 
 Single persistent-bind recovery development (2026-09-28 UTC): rejection now
 consumes an origin-bound restoration ticket and reuses the original H2D/replay
