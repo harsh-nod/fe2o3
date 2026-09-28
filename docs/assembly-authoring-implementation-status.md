@@ -1633,3 +1633,41 @@ See [qualification and limits](option-enum-scalar-preparation-qualification-2026
 This stops before provenance and does not change the ordinary production route.
 Later provenance/allocation/capability integration, argument writers and
 production admission remain open. Broad accepted exits remain 6/18.
+
+## Authenticated Option → enum → scalar → provenance checkpoint — 2026-09-28
+
+A separate genuine source-owned entry now reaches BeforeAllocation using the
+actual retained scalar inputs and original budget. All 15 new controls and
+full 356-model / 3,284-backend regressions passed (197 ignored), plus builds and
+five actual Rust-source sessions. The two positive sources completed 36
+numerical helper runs. All provenance DATA matches independent original APIs.
+See [qualification and limits](option-enum-scalar-provenance-preparation-qualification-20260928.md).
+
+This stops before allocation contracts. Capability preparation, later writers,
+joint bounds and ordinary production admission remain open.
+Broad accepted exits remain 6/18.
+
+## Authenticated allocation-contract checkpoint — 2026-09-28
+
+The private source-owned prefix now reaches BeforeCapabilities: actual Option,
+enum, scalar, provenance and allocation analysis share the original owner and
+budget. All 14 component and 17 checkpoint controls passed, with 356 model and
+3,315 backend tests (197 ignored), builds and five actual Rust-source sessions.
+The two positive sources completed 36 numerical helper runs.
+See [qualification and limits](option-enum-scalar-provenance-allocation-preparation-qualification-20260928.md).
+
+Capability preparation, the earlier constant-analysis position, later argument
+writers, joint bounds and ordinary production admission remain open.
+Broad accepted exits remain 6/18.
+
+## Retained original-order capability FIFO — 2026-09-28
+
+The private single-pass capability component now preserves duplicate FIFO
+visits, sorted successors, original semantic charge order and attached partial
+state through failure. All 11 controls and the full 356-model / 3,326-backend
+regression passed (197 ignored), plus authority/policy tests and builds.
+See [qualification and limits](retained-capability-fifo-qualification-20260928.md).
+
+This is not the genuine two-pass capability driver or production admission.
+Actual nominal-query integration, earlier constants and the outer shared-owner
+continuation remain open. Broad accepted exits remain 6/18.
