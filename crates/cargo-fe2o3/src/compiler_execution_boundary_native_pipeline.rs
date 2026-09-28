@@ -16,6 +16,9 @@ use fe2o3_artifact_transaction::{
     CompilerModuleHandoffAdmissionErrorV5, CompilerModuleHandoffReceiptV5 as Receipt,
     consume_compiler_module_handoff_with_currentness_v5 as consume,
 };
+use fe2o3_compiler_closure_capability::{
+    ApprovedCompilerPolicyV1 as Approval, CompilerApprovalErrorV1 as ApprovalError,
+};
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5 as Handoff;
 pub(crate) use fe2o3_hsaco_finalize::ConditionalWorkerRecoveryPolicyV5 as ConditionalRecoveryPolicy;
 use fe2o3_hsaco_finalize::{
@@ -58,6 +61,7 @@ pub(crate) struct ParentDurableConditionalArtifact<'a, 'b, 'w> {
 }
 
 struct ParentArtifactCustody<'a, 'b, 'w> {
+    approval: Approval,
     compiler_execution: Carriage,
     policy_roster: PolicyRoster,
     readiness: Readiness<'b, 'w>,
@@ -69,6 +73,7 @@ impl ParentPreparedConditionalArtifact<'_, '_, '_> {
         - size_of::<Publication>()
         - size_of::<Carriage>()
         - size_of::<PolicyRoster>()
+        - size_of::<Approval>()
         - size_of::<Readiness<'static, 'static>>();
 
     pub(crate) fn artifact(&self) -> &Artifact {
@@ -152,6 +157,7 @@ impl ParentDurableConditionalArtifact<'_, '_, '_> {
         - size_of::<DurablePublication>()
         - size_of::<Carriage>()
         - size_of::<PolicyRoster>()
+        - size_of::<Approval>()
         - size_of::<Readiness<'static, 'static>>();
 
     pub(crate) fn publication(&self) -> &DurablePublication {
@@ -182,6 +188,7 @@ impl ParentArtifactCustody<'_, '_, '_> {
         let floor = publication_storage
             .checked_add(self.compiler_execution.retained_storage())
             .and_then(|n| n.checked_add(self.policy_roster.required_retained_storage()))
+            .and_then(|n| n.checked_add(self.approval.required_retained_storage()))
             .and_then(|n| n.checked_add(self.readiness.retained_storage()))
             .and_then(|n| n.checked_add(header))
             .and_then(|n| n.checked_add(parent_storage))
@@ -192,6 +199,16 @@ impl ParentArtifactCustody<'_, '_, '_> {
         self.readiness.budget.charge_work(1024)?;
         transcript.verify_finalized_coordinates(artifact)?;
         self.readiness.revalidate()?;
+        let closure = *artifact
+            .source()
+            .recovered_handoff()
+            .handoff()
+            .capsule()
+            .invocation()
+            .compiler_closure();
+        self.approval
+            .require_compiler(closure, self.readiness.budget)?;
+        require_approved_profile(&self.approval, &mut self.readiness)?;
         check_pair(
             &mut self.readiness,
             self.invocation,
@@ -232,7 +249,9 @@ impl<'b, 'w> Readiness<'b, 'w> {
         invocation: &'a Invocation,
         policy: &ConditionalRecoveryPolicy<'_>,
         recipe: PreparedNativeProductionBuildConfig,
+        approval: Approval,
     ) -> Result<ParentPreparedConditionalArtifact<'a, 'b, 'w>> {
+        super::require_runtime_enforcement(self.budget)?;
         self.require_completion()?;
         let (worker, providers, options, output, limits, configuration_storage) =
             recipe.into_worker_parts(self.budget)?;
@@ -240,6 +259,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
             .retained_storage()
             .checked_add(invocation.native_retained_storage()?)
             .and_then(|n| n.checked_add(configuration_storage))
+            .and_then(|n| n.checked_add(approval.required_retained_storage()))
             .ok_or(Resource::Arithmetic)?;
         check_account_floor(self.budget, floor)?;
         self.budget.reserve_storage(FRAME)?;
@@ -248,6 +268,8 @@ impl<'b, 'w> Readiness<'b, 'w> {
         let (lease, token) = self.acquire_current_publication(output_dir, producer, attempt)?;
         let closure = invocation
             .match_native_invocation(token.handoff().capsule().invocation(), self.budget)?;
+        approval.require_compiler(closure, self.budget)?;
+        require_approved_profile(&approval, &mut self)?;
         let compiler_execution = self.admit_current_receipt(&lease, &token)?;
 
         // The committed roster must agree with independently supplied policy.
@@ -319,6 +341,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
         let mut prepared = ParentPreparedConditionalArtifact {
             publication,
             custody: ParentArtifactCustody {
+                approval,
                 compiler_execution,
                 policy_roster,
                 readiness: self,
@@ -329,6 +352,25 @@ impl<'b, 'w> Readiness<'b, 'w> {
         prepared.revalidate()?;
         Ok(prepared)
     }
+}
+
+fn require_approved_profile(approval: &Approval, readiness: &mut Readiness<'_, '_>) -> Result<()> {
+    let floor = approval
+        .required_retained_storage()
+        .checked_add(readiness.retained_storage())
+        .ok_or(Resource::Arithmetic)?;
+    check_account_floor(readiness.budget, floor)?;
+    readiness.budget.charge_work(
+        fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V3,
+    )?;
+    if approval.profile().profile().canonical_bytes()
+        != readiness.profile.profile().canonical_bytes()
+    {
+        return Err(
+            ApprovalError::Mismatch("readiness differs from root-approved V3 profile").into(),
+        );
+    }
+    Ok(())
 }
 
 fn check_pair(
@@ -351,7 +393,7 @@ fn check_pair(
         })
 }
 
-fn check_account_floor(
+pub(super) fn check_account_floor(
     b: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     floor: usize,
 ) -> std::result::Result<(), Resource> {
@@ -395,6 +437,7 @@ mod tests {
 pub(crate) struct ContinuationError(Cause);
 #[derive(Debug)]
 enum Cause {
+    Approval(ApprovalError),
     Resource(Resource),
     Readiness(Failure),
     Invocation(CapabilityError),
@@ -421,6 +464,7 @@ macro_rules! causes {
     };
 }
 causes!(Resource => Resource, Failure => Readiness, CapabilityError => Invocation,
+    ApprovalError => Approval,
     PolicyRosterError => PolicyRoster,
     CompilerModuleHandoffAdmissionErrorV5<RecoveryError> => Recovery,
     HandoffError => Transaction, SubjectError => Subject,

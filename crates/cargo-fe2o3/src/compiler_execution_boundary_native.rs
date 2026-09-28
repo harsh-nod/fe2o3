@@ -330,8 +330,17 @@ fn validate_receipt(
     })
 }
 
+// Replace only with retained pre-exec-through-completion enforcement custody.
+// Policy approval, child success and source-proof execution cannot satisfy this gate.
+fn require_runtime_enforcement(budget: &mut Budget<'_>) -> Result<()> {
+    budget.charge_work(8)?;
+    Err(Failure::RuntimeEnforcementUnavailable)
+}
+
 #[derive(Debug)]
 pub(crate) enum Failure {
+    RuntimeEnforcementUnavailable,
+    Approval(fe2o3_compiler_closure_capability::CompilerApprovalErrorV1),
     Completion(CompletionError),
     Child(fe2o3_compiler_execution_client::CompilerExecutionChildChannelErrorV1),
     Policy(fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV3),
@@ -350,14 +359,23 @@ macro_rules! causes {
     ($($ty:ty => $variant:ident),+ $(,)?) => {
         $(impl From<$ty> for Failure { fn from(e: $ty) -> Self { Self::$variant(e) } })+
         impl fmt::Display for Failure { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self { $(Self::$variant(e) => e.fmt(f),)+ Self::Mismatch(s) => f.write_str(s) }
+            match self {
+                $(Self::$variant(e) => e.fmt(f),)+
+                Self::Mismatch(s) => f.write_str(s),
+                Self::RuntimeEnforcementUnavailable =>
+                    f.write_str("native compiler runtime enforcement is not yet available"),
+            }
         } }
         impl Error for Failure { fn source(&self) -> Option<&(dyn Error + 'static)> {
-            match self { $(Self::$variant(e) => Some(e),)+ Self::Mismatch(_) => None }
+            match self {
+                $(Self::$variant(e) => Some(e),)+
+                Self::Mismatch(_) | Self::RuntimeEnforcementUnavailable => None,
+            }
         } }
     };
 }
 causes!(CompletionError=>Completion, Resource=>Resource, CapabilityError=>Capability, SupervisorError=>Supervisor,
+    fe2o3_compiler_closure_capability::CompilerApprovalErrorV1=>Approval,
     fe2o3_compiler_execution_client::CompilerExecutionChildChannelErrorV1=>Child,
     fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV3=>Policy,
     ManifestError=>Manifest, ReadyError=>Ready, HandoffError=>Handoff, SubjectError=>Subject,

@@ -116,14 +116,16 @@ impl PreparedNativeProductionBuildConfig {
     pub(crate) fn finalize_conditional_current<'a, 'b, 'w>(
         self,
         readiness: ParentCompilerExecutionReadinessCustodyV3<'b, 'w>,
+        approval: fe2o3_compiler_closure_capability::ApprovedCompilerPolicyV1,
         output_dir: &Path,
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
         invocation: &'a ParentRustcInvocationCustody,
         policy: &ConditionalRecoveryPolicy<'_>,
     ) -> Result<ParentPreparedConditionalArtifact<'a, 'b, 'w>, ContinuationError> {
-        readiness
-            .finalize_current_publication(output_dir, producer, attempt, invocation, policy, self)
+        readiness.finalize_current_publication(
+            output_dir, producer, attempt, invocation, policy, self, approval,
+        )
     }
 }
 
