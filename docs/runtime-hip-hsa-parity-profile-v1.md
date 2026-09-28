@@ -93,8 +93,18 @@ the explicit cancellation result; the later `Failed(-2)` status alone grants no
 initialization or NoEffect authority. A nonempty pipeline prevents recipe
 retirement, and published work remains `TooLate`. The
 [development evidence](evidence/dev-materialized-cancellation-2026-09-28/README.md)
-is CPU qualification, not native execution or formal refinement. Initial
-ordinary binding and first-submit ownership remain separate open work.
+is CPU qualification, not native execution or formal refinement.
+
+Initial ordinary binding now uses a separate indexed Binding phase before
+native mutation. A never-submitted recipe is not Prepared. Its first-submit
+outcome is stored before the native lane callback closes, and only a confirmed
+retryable outcome becomes cancellable Prepared. Accepted allocation/module
+custody and current descriptors survive terminal failure or unwind, while the
+Pending FIFO/dependency handoff retires once. Attached reuse preserves prior
+metadata until overwrite and the outer lane operation both succeed. The
+[binding evidence](evidence/dev-materialized-binding-2026-09-28/README.md)
+does not close ordinary retry indexing, native coupling, formal refinement or
+matched performance gates.
 
 Poll and `wait` never perform deferred compute preparation, but can retry
 publication of an already bound Prepared recipe. Submit may publish immediately

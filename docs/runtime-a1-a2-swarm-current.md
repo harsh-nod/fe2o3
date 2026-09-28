@@ -24,6 +24,17 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Ordinary initial-binding custody development (2026-09-28 UTC): a distinct
+Binding phase now indexes Active before detach, overwrite, materialization and
+first submit. Recycled metadata survives unsuccessful overwrite/detach, and
+first-submit outcomes are stored before the native lane callback closes. Only
+a confirmed retry becomes Prepared; pending handoff remains one-time. The
+[development packet](evidence/dev-materialized-binding-2026-09-28/README.md)
+records 873 serial backend passes, 1770 full-runtime passes with three unwaived
+socket-inspection failures, and final focused/static checks. Ordinary retry
+publication indexing, coupled native execution, formal correspondence and matched
+performance remain open. Accepted checkpoints and A1/A2 status are unchanged.
+
 Ordinary materialized retry cancellation development (2026-09-28 UTC): explicit
 provenance now selects cancelled-only abort or exact prior-generation recycled
 detach, with indexed Active custody through native retirement and logical
@@ -31,8 +42,9 @@ settlement on primary/AUX lanes. The
 [development packet](evidence/dev-materialized-cancellation-2026-09-28/README.md)
 separates runtime cancellation/successor/fault scripts from genuine lower
 reserve/cancel, detach and rebind CPU fixtures. It records the qualification
-results and unresolved socket-inspection failures. Initial ordinary bind/first-
-submit custody, coupled native execution, formal correspondence and matched
+results and unresolved socket-inspection failures. That checkpoint left initial
+ordinary bind/first-submit custody open; the subsequent entry above addresses
+its runtime indexing. Coupled native execution, formal correspondence and matched
 performance remain open. Accepted checkpoints and A1/A2 status are unchanged.
 
 The preceding [generated retry/Stop repair](evidence/dev-generated-retry-stop-2026-09-28/README.md)

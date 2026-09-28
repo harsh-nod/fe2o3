@@ -113,8 +113,18 @@ across launch preparation. A completed and recycled same-shape dispatch can be
 resubmitted without detaching or rebuilding code, kernarg, or data storage.
 Host writes update an attached coherent allocation before launch, and exact
 native-dirty extents remain authoritative until facade readback or a later
-host-authority requirement. Staging-budget or host-allocation exhaustion is a
-pre-publication `Capacity` rejection.
+host-authority requirement. Pure host staging, program-roster and dispatch
+preallocation failures can reject before binding custody is acquired.
+
+Ordinary initial publication installs a distinct Binding phase before its first
+mutating native action. It retains the accepted recipe, current descriptors,
+writebacks and publication profile. Recycled metadata stays indexed through the
+complete overwrite operation, including the outer lane close. Returned first-
+submit outcomes and detached DATA are rooted inside their native callbacks.
+Failure after indexing retires only the Pending FIFO/dependency handoff and
+retains Active custody; it cannot fabricate completion or a cancellable retry.
+The [binding packet](evidence/dev-materialized-binding-2026-09-28/README.md)
+separates CPU custody qualification from native execution and formal refinement.
 
 Ordinary compute retries retain explicit newly bound or recycled-attached
 provenance. Cancellation keeps Active indexed while the selected primary/AUX
@@ -123,8 +133,8 @@ custody. Returned buffers may remain cached, and cancellation never applies
 unpublished writebacks. The separate
 [cancellation packet](evidence/dev-materialized-cancellation-2026-09-28/README.md)
 distinguishes runtime scripts, lower cleanup fixtures and remaining native/formal
-qualification. Initial ordinary binding and first submission still need indexed
-ownership before their first mutating native action.
+qualification. Ordinary retry submission still needs the same continuously
+indexed publication phase; polling must never repeat binding or materialization.
 
 The direct adapter's same-device copies are native SDMA submissions. Direct
 dependency chains are capped at 256 before ledger mutation, cancellation can

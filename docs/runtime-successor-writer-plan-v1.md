@@ -230,9 +230,15 @@ recycled history. Public scripted admission tests retain ordered and explicit
 success successors through cancellation on primary/AUX lanes; only the cancelled
 owner's allocation/module retains and reservation are released. Lower fixtures
 separately qualify prior-generation detach and detached rebind followed by another
-retry/cancel. This is not coupled GPU or formal correspondence evidence. Initial
-ordinary bind/reuse and first-submit indexing remain open: a confirmed retry
-owner must not be used to represent a recipe that has not yet reserved/cancelled.
+retry/cancel. This is not coupled GPU or formal correspondence evidence.
+[Ordinary initial binding](evidence/dev-materialized-binding-2026-09-28/README.md)
+now uses a distinct indexed Binding phase through reuse, binding and first
+submission. Native callbacks store returned outcomes before their outer loan
+closes; a confirmed retry owner never represents an unattempted recipe. Recycled
+metadata survives unsuccessful overwrite/detach, and errors/unwinds retire only
+the Pending handoff. Ordinary Prepared retry publication still needs continuous
+indexing and explicit attempted-publication provenance. Native coupling,
+Context composition and formal correspondence remain open.
 
 [Single bind rejection](evidence/dev-single-bind-recovery-2026-09-28/README.md)
 now carries the exact original target/source/submission and empty input box
