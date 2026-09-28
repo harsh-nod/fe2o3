@@ -21,7 +21,7 @@ struct Fixture<const N: usize> {
     trailing: u64,
 }
 
-fn pending_facts(pending: &PendingComputeSubmissionV1) -> String {
+pub(super) fn pending_facts(pending: &PendingComputeSubmissionV1) -> String {
     format!(
         "{pending:?} {:p} {:p} {:p} {:p} {:p} {:p}",
         Arc::as_ptr(&pending.launch),

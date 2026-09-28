@@ -3832,8 +3832,15 @@ impl KfdRuntimeBackendV1 {
         } else {
             None
         };
-        let (persistent_input, promotion) =
-            self.take_persistent_compute_input_v1(persistent.allocation, id, persistent.source)?;
+        let (persistent_input, restoration) = self.take_persistent_compute_input_v1(
+            PersistentFullRangeComputeAdmissionV1 {
+                allocation: persistent.allocation,
+                access: persistent.access,
+                source: persistent.source,
+            },
+            id,
+        )?;
+        let promotion = restoration.promotion;
         performance.ready_promotion = promotion;
         let publication_profile = PersistentPublicationProfileV1 {
             launch: profile_launch,
@@ -3842,6 +3849,14 @@ impl KfdRuntimeBackendV1 {
         };
         #[cfg(test)]
         if self.scripted_sdma.is_some() {
+            if self.scripted_persistent_bind_rejections != 0 {
+                self.scripted_persistent_bind_rejections -= 1;
+                self.restore_persistent_bind_input_v1(persistent_input, restoration)?;
+                return Err(Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Native,
+                    "scripted persistent-compute clean bind rejection",
+                ));
+            }
             performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
             performance.user_data_materializations = 0;
             self.active = Some(ActiveSubmissionV1 {
@@ -3869,6 +3884,7 @@ impl KfdRuntimeBackendV1 {
                     profile: publication_profile,
                 }),
             });
+            drop(restoration);
             return self.publish_initial_persistent_prepared_v1();
         }
         #[cfg(not(test))]
@@ -3876,35 +3892,19 @@ impl KfdRuntimeBackendV1 {
         #[cfg(test)]
         let input = match persistent_input {
             KfdRuntimePersistentComputeInputV1::Native(input) => input,
-            input @ KfdRuntimePersistentComputeInputV1::ScriptedStorage(_) => {
-                self.restore_initialized_storage_input_v1(persistent.allocation, id, input)?;
+            input => {
+                let detail = if matches!(
+                    &input,
+                    KfdRuntimePersistentComputeInputV1::ScriptedStorage(_)
+                ) {
+                    "scripted initialized-storage publication has no native queue"
+                } else {
+                    "scripted persistent-compute publication has no native queue"
+                };
+                self.restore_persistent_bind_input_v1(input, restoration)?;
                 return Err(Self::rejected(
                     KfdRuntimeBackendErrorKindV1::Unsupported,
-                    "scripted initialized-storage publication has no native queue",
-                ));
-            }
-            #[cfg(test)]
-            KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => {
-                self.restore_h2d_ready_after_compute_rejection_v1(
-                    persistent.allocation,
-                    id,
-                    ready,
-                )?;
-                return Err(Self::rejected(
-                    KfdRuntimeBackendErrorKindV1::Unsupported,
-                    "scripted persistent-compute publication has no native queue",
-                ));
-            }
-            #[cfg(test)]
-            KfdRuntimePersistentComputeInputV1::ScriptedReplay(device) => {
-                self.restore_persistent_compute_device_input_v1(
-                    persistent.allocation,
-                    id,
-                    KfdRuntimeSdmaStorageV1::Device(Box::new(device)),
-                )?;
-                return Err(Self::rejected(
-                    KfdRuntimeBackendErrorKindV1::Unsupported,
-                    "scripted persistent-compute publication has no native queue",
+                    detail,
                 ));
             }
         };
@@ -3921,11 +3921,9 @@ impl KfdRuntimeBackendV1 {
                 let (detail, custody) = failure.into_parts();
                 return match custody {
                     Gfx942PersistentComputeBindFailureCustodyV1::Retryable(recovered) => {
-                        self.restore_persistent_compute_input_v1(
-                            persistent.allocation,
-                            id,
-                            recovered,
-                            promotion,
+                        self.restore_persistent_bind_input_v1(
+                            KfdRuntimePersistentComputeInputV1::Native(recovered),
+                            restoration,
                         )?;
                         Err(Self::rejected(
                             KfdRuntimeBackendErrorKindV1::Native,
@@ -3973,6 +3971,7 @@ impl KfdRuntimeBackendV1 {
                 profile: publication_profile,
             }),
         });
+        drop(restoration);
         self.publish_initial_persistent_prepared_v1()
     }
 
