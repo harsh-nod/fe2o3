@@ -389,6 +389,7 @@ impl Case {
 }
 
 #[test]
+#[allow(clippy::result_large_err)]
 fn persistent_completed_restore_foreign_poll_returns_exact_published_receipt() {
     let mut original = Case::published_for_queue(3, true, 710);
     let mut foreign = Case::published_for_queue(3, true, 711);
