@@ -602,3 +602,186 @@ fn publication_preserves_narrow_acceptance_for_representable_corruption() {
         assert_eq!(Snapshot::of(&p), before);
     }
 }
+
+fn check_promotion(p: &mut RuntimeComputePipelineV1) {
+    let mut expected = Snapshot::of(p);
+    let index = if expected.staged.is_none() {
+        expected.frontier.and_then(|epoch| {
+            expected.slots.iter().position(|(_, e)| {
+                e.as_ref()
+                    .is_some_and(|e| e.identity.logical_epoch == epoch)
+            })
+        })
+    } else {
+        None
+    };
+    let want = index.map(|i| {
+        let e = expected.slots[i].1.take().unwrap();
+        expected.live = expected.live.checked_sub(1).unwrap();
+        expected.frontier = if expected.live == 0 {
+            None
+        } else {
+            expected.frontier.unwrap().checked_add(1)
+        };
+        (e.phase, e.owner)
+    });
+    let (got, allocations) =
+        super::super::drain_capture::tests::counted(|| p.take_commit_frontier());
+    assert_eq!(allocations, 0);
+    assert_eq!(got.map(|(phase, owner)| (phase, Owner::of(&owner))), want);
+    assert_eq!(Snapshot::of(p), expected);
+}
+
+#[test]
+fn lifecycle_promotion_matches_first_epoch_reference_and_exact_frames() {
+    for capacity in [64, 1024] {
+        for phase in [
+            Phase::Publishing,
+            Phase::Published,
+            Phase::Completed,
+            Phase::PhysicallyRetired,
+            Phase::Quarantined,
+        ] {
+            for case in 0..15 {
+                let (mut p, account) = pipeline(capacity);
+                p.insert_published(active(2)).unwrap();
+                p.insert_published(active(3)).unwrap();
+                relocate(&mut p, 1, capacity - 1);
+                p.slots[0].entry.as_mut().unwrap().phase = phase;
+                match case {
+                    0 => {}
+                    1 => {
+                        p.slots[capacity - 1]
+                            .entry
+                            .as_mut()
+                            .unwrap()
+                            .identity
+                            .logical_epoch = 1;
+                    }
+                    2 => p.slots[0].generation += 1,
+                    3 => p.slots[0].entry.as_mut().unwrap().identity.slot = u16::MAX,
+                    4 => p.slots[0].entry.as_mut().unwrap().identity.submission = 0,
+                    5 => p.slots[0].entry.as_mut().unwrap().active.id = 99,
+                    6 => p.live = usize::MAX,
+                    7 => p.staged = Some(p.slots[0].entry.as_ref().unwrap().identity),
+                    8 => p.commit_frontier = None,
+                    9 => p.commit_frontier = Some(3),
+                    10 => {
+                        p.commit_frontier = Some(0);
+                        p.slots[0].entry.as_mut().unwrap().identity.logical_epoch = 0;
+                    }
+                    11 => p.slots[capacity - 1].entry.as_mut().unwrap().identity.slot = 0,
+                    12 => {
+                        p.commit_frontier = Some(u64::MAX);
+                        p.next_logical_epoch = None;
+                        p.slots[0].entry.as_mut().unwrap().identity.logical_epoch = u64::MAX;
+                    }
+                    13 => {
+                        p.slots[0].entry = None;
+                        p.live = 1;
+                        p.commit_frontier = Some(u64::MAX);
+                        p.next_logical_epoch = None;
+                        let e = p.slots[capacity - 1].entry.as_mut().unwrap();
+                        e.identity.logical_epoch = u64::MAX;
+                        e.phase = phase;
+                    }
+                    14 => {
+                        p.slots[0].entry = None;
+                        p.live = 1;
+                        p.commit_frontier = Some(2);
+                        p.slots[capacity - 1].entry.as_mut().unwrap().phase = phase;
+                    }
+                    _ => unreachable!(),
+                }
+                let usage = account.usage();
+                check_promotion(&mut p);
+                assert_eq!(account.usage(), usage, "case {case}, capacity {capacity}");
+            }
+        }
+    }
+}
+
+#[test]
+fn lifecycle_raw_underflow_preserves_the_existing_destructive_panic_prefix() {
+    for capacity in [64, 1024] {
+        let (mut p, account) = pipeline(capacity);
+        p.insert_published(active(2)).unwrap();
+        p.insert_published(active(3)).unwrap();
+        relocate(&mut p, 1, capacity - 1);
+        p.live = 0;
+        let usage = account.usage();
+        let mut expected = Snapshot::of(&p);
+        expected.slots[0].1 = None;
+        let panic =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| p.take_commit_frontier()))
+                .unwrap_err();
+        assert_eq!(
+            panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied()),
+            Some("pipeline entry was live")
+        );
+        assert_eq!(Snapshot::of(&p), expected);
+        assert_eq!(account.usage(), usage);
+    }
+}
+
+#[test]
+fn lifecycle_quarantine_frames_every_owner_head_and_generation_and_is_idempotent() {
+    for capacity in [64, 1024] {
+        for staged in [false, true] {
+            let (mut p, account) = pipeline(capacity);
+            for id in 2..=6 {
+                p.insert_published(active(id)).unwrap();
+            }
+            let pending = if staged {
+                Some(p.stage_publication_v1(active(7)).unwrap())
+            } else {
+                None
+            };
+            relocate(&mut p, 4, capacity - 1);
+            for (index, phase) in [
+                (0, Phase::Publishing),
+                (1, Phase::Published),
+                (2, Phase::Quarantined),
+                (3, Phase::PhysicallyRetired),
+                (capacity - 1, Phase::Completed),
+            ] {
+                let e = p.slots[index].entry.as_mut().unwrap();
+                e.phase = phase;
+                e.identity.slot = u16::MAX;
+                e.active.id = 0;
+            }
+            if let Some(id) = pending {
+                assert!(Snapshot::of(&p).intact(id));
+            }
+            let usage = account.usage();
+            let mut expected = Snapshot::of(&p);
+            for (_, e) in &mut expected.slots {
+                if let Some(e) = e {
+                    e.phase = Phase::Quarantined;
+                }
+            }
+            for _ in 0..2 {
+                let ((), allocations) =
+                    super::super::drain_capture::tests::counted(|| p.quarantine_all());
+                assert_eq!(allocations, 0);
+                assert_eq!(Snapshot::of(&p), expected);
+                assert_eq!(account.usage(), usage);
+            }
+            if let Some(id) = pending {
+                check_settlement(&mut p, id, true);
+                check_settlement(&mut p, id, false);
+                check_promotion(&mut p);
+            }
+        }
+        let (mut p, account) = pipeline(capacity);
+        let before = Snapshot::of(&p);
+        let usage = account.usage();
+        p.quarantine_all();
+        assert_eq!(Snapshot::of(&p), before);
+        check_promotion(&mut p);
+        assert_eq!(account.usage(), usage);
+    }
+}

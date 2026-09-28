@@ -11,6 +11,9 @@ mod capacity_tests;
 #[path = "compute_state/publication.rs"]
 mod publication;
 
+#[path = "compute_state/lifecycle.rs"]
+mod lifecycle;
+
 #[cfg(test)]
 #[path = "compute_state/publication_tests.rs"]
 mod publication_tests;
@@ -443,9 +446,7 @@ impl RuntimeComputePipelineV1 {
     }
 
     pub(super) fn quarantine_all(&mut self) {
-        for entry in self.slots.iter_mut().filter_map(|slot| slot.entry.as_mut()) {
-            entry.phase = RuntimeComputePipelinePhaseV1::Quarantined;
-        }
+        lifecycle::quarantine(&mut self.slots);
     }
 
     #[cfg(test)]
@@ -497,23 +498,12 @@ impl RuntimeComputePipelineV1 {
     pub(super) fn take_commit_frontier(
         &mut self,
     ) -> Option<(RuntimeComputePipelinePhaseV1, ActiveSubmissionV1)> {
-        if self.staged.is_some() {
-            return None;
-        }
-        let frontier = self.commit_frontier?;
-        let slot = self.slots.iter_mut().find(|slot| {
-            slot.entry
-                .as_ref()
-                .is_some_and(|entry| entry.identity.logical_epoch == frontier)
-        })?;
-        let entry = slot.entry.take().expect("selected commit-frontier entry");
-        self.live = self.live.checked_sub(1).expect("pipeline entry was live");
-        self.commit_frontier = if self.live == 0 {
-            None
-        } else {
-            frontier.checked_add(1)
-        };
-        Some((entry.phase, entry.active))
+        lifecycle::take_frontier(
+            &mut self.slots,
+            &mut self.live,
+            &mut self.commit_frontier,
+            self.staged,
+        )
     }
 
     pub(super) fn identity_for_submission_v1(
