@@ -1558,3 +1558,18 @@ See [qualification and limits](option-first-preparation-qualification-20260928.m
 This is an internal intrinsic suffix, not the complete root chronology or
 production route. Enum/scalar continuation, later writers, joint bounds and
 genuine nonempty Fixed coverage remain open. Broad accepted exits remain 6/18.
+
+## Retained Option/enum continuation — 2026-09-28
+
+The private BeforeScalar checkpoint now retains both Option and enum owners
+through checked postflight, preserving original source order and destruction
+before refund. All 13 new controls, 356 model / 3,209 backend tests
+(197 ignored), builds and five actual Rust-source sessions passed.
+The genuine three-mode observer executed the enum analyzer and compared complete
+DATA against unchanged original APIs under the same source and budget.
+See [qualification and limits](option-enum-preparation-qualification-20260928.md).
+
+This does not establish genuine nonempty enum availability, remaining scalar and
+provenance preparation, argument writers, joint bounds, or production routing.
+Broad accepted exits remain 6/18; no public activation or global compiler pin
+change is implied.

@@ -531,3 +531,13 @@ mod genuine;
 mod tests;
 #[cfg(test)]
 pub(crate) use genuine::observe_option_first_before_enum_for_test_v1;
+
+// Separate source-ordered enum continuation; the BeforeEnum entry is unchanged.
+#[path = "bf16_nominal_option_enum_prelude_v1.rs"]
+mod option_enum_prelude;
+#[cfg(test)]
+pub(crate) use option_enum_prelude::observe_option_enum_before_scalar_for_test_v1;
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use option_enum_prelude::{
+    BeforeScalarV1, with_nominal_option_enum_before_scalar_v1,
+};
