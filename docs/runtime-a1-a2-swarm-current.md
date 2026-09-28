@@ -24,6 +24,17 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Real pinned completion and outer-close [CPU custody qualification](evidence/dev-runtime-cpu-completion-2026-09-28/README.md)
+adds four clean pin/recycle scenarios, 48 terminal completion cases and eight
+terminal Retryable cases through the actual backend SPI. Operation-targeted
+test-only faults preserve both Ready-to-Recycle and already-Completed entry.
+Exact receipt/owner frames, first-Ready timing, retain/reservation custody and
+logical ordering are checked. All ten focused groups and 1816 full-runtime tests
+pass with zero failures and 28 existing ignores; 52 doctests, strict Clippy,
+no-default-feature checking and workspace formatting also pass. This closes the
+prior packet's CPU pin/completion outer-fault coverage gaps, not native currentness, shared-source
+caller refinement, Context/Worker or HIP/HSA parity gates.
+
 Actual backend-SPI [runtime CPU receipt composition](evidence/dev-runtime-cpu-receipts-2026-09-28/README.md)
 now connects initial/Prepared publication, ordered successors and completion to
 genuine lower receipts without scripted execution tags or manual Pending

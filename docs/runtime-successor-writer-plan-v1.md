@@ -314,6 +314,13 @@ cancellation, dirty writeback/readback and populated-arena ordered retry are not
 provided by the fixture. Terminal cases remain isolated processes with unrepaired
 custody retained, not artificial recovery.
 
+The [completion-custody follow-up](evidence/dev-runtime-cpu-completion-2026-09-28/README.md)
+qualifies genuine pinned recycle retries and outer failures after Pending, Ready,
+Retired and Retryable outcomes in actual runtime owners. Both same-call
+Ready-to-Recycle and previously Completed entry are covered. This is CPU evidence
+for indexed handoff and quarantine, not native currentness or formal caller
+correspondence; the latter remains required before promoting production proof.
+
 [Single bind rejection](evidence/dev-single-bind-recovery-2026-09-28/README.md)
 now carries the exact original target/source/submission and empty input box
 through binding, restoring retryable inputs without allocating a replacement.
