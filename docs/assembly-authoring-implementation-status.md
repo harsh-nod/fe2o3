@@ -1659,3 +1659,15 @@ See [qualification and limits](option-enum-scalar-provenance-allocation-preparat
 Capability preparation, the earlier constant-analysis position, later argument
 writers, joint bounds and ordinary production admission remain open.
 Broad accepted exits remain 6/18.
+
+## Retained original-order capability FIFO — 2026-09-28
+
+The private single-pass capability component now preserves duplicate FIFO
+visits, sorted successors, original semantic charge order and attached partial
+state through failure. All 11 controls and the full 356-model / 3,326-backend
+regression passed (197 ignored), plus authority/policy tests and builds.
+See [qualification and limits](retained-capability-fifo-qualification-20260928.md).
+
+This is not the genuine two-pass capability driver or production admission.
+Actual nominal-query integration, earlier constants and the outer shared-owner
+continuation remain open. Broad accepted exits remain 6/18.
