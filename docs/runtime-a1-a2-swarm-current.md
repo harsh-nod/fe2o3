@@ -24,7 +24,24 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-The fresh [native async campaign](evidence/dev-native-async-2026-09-28/README.md)
+The [isolated native async campaign](evidence/dev-native-isolated-2026-09-28/README.md)
+passes six exact MI300X cells: separate Short/Long profiles, later-Short progress
+while earlier Long remains Pending, timeout recovery, dropped-observer progress
+and command-backpressure refund/recovery. Full outputs and lifecycle profiles
+replay. Its final depth cell exits 101 before dispatch: the fixture requests 512
+backing records, but the session limit is 256. All 21 strict endpoints pass;
+complete collection precedes exact owned cleanup and independent absence. The
+complete matrix is not qualified. A compile-time-checked 128 MiB/256-record
+fixture budget and CPU regression preserve the production limit; ten focused
+tests and 1817 full-runtime tests pass, with zero failures and 29 hardware ignores.
+Formatting, diff checks, stopped replay, seven resealed negative controls and a
+fresh 302-file archive restore pass. Next rebuild the correction and bind a new
+campaign, including the corrected 256-record shutdown expectation. Retained
+receipts are not measured unfinished kernels; native depth, physical overlap,
+formal composition and HIP/HSA performance remain open. A1/A2 and accepted lane
+checkpoints are unchanged.
+
+The earlier [native async campaign](evidence/dev-native-async-2026-09-28/README.md)
 stopped at its first cell: Short produced the complete expected output and
 refunded backing, but Long's new backend hit `ActiveDeviceExists` in the same
 process. Linux VM acquisition deliberately retains process-lifetime admission;
@@ -32,7 +49,7 @@ the fixture incorrectly assumed queue shutdown permitted re-admission. No cell
 qualified, and the five subsequent cells were unrun. Three strict endpoint
 observations passed; complete collection preceded owned cleanup and independent
 absence. The correction splits Short/Long into separate exact ignored tests,
-with no weakened generation guard. Next run a newly built seven-cell matrix.
+with no weakened generation guard. The subsequent seven-cell run is recorded above.
 The correction passes four focused CPU regressions, 1816 full-runtime tests
 with zero failures and 29 hardware ignores, formatting and diff checks. The
 stopped-run replay and five resealed negative controls pass; this is failure

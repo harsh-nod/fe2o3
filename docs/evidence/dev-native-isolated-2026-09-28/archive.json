@@ -1,0 +1,25 @@
+{
+  "archive": "raw.tar.gz",
+  "artifacts_sha256": "6661b40efd3817d3149361b1a2bcdaf364c75b63155495e452bab8b1fab0231f",
+  "budget_fix_source": "96adb54316ac5b1038cfc9ce3736cd60dea475f8",
+  "bytes": 46506901,
+  "files": 302,
+  "helper_source": "d65a15d4b9d3366a810a9859f4f7afe506979b24",
+  "restored_replay": {
+    "attempted_cells": 7,
+    "cpu_passes": 1763,
+    "elf_sha256": "0ac04fa80c5a042670a6aa40d190d4dd7f287c56a2ba7c21d213f01241e76767",
+    "failed_cells": 1,
+    "failure": "depth fixture exceeds the 256 backing-record session limit",
+    "formal_refinement": false,
+    "harness_passes": 6,
+    "owned_cleanup": true,
+    "performance_acceptance": false,
+    "qualified": false,
+    "remote_commands": 30,
+    "strict_endpoints": 21,
+    "unrun_cells": 0
+  },
+  "runtime_source": "dda812658d8827e7d508389c9650228844d0f503",
+  "sha256": "6a15bb07d680104ac51bf4fd8c77f19c499171190dfa228e36bd0c13b65d4225"
+}
