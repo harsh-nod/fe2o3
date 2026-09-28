@@ -270,6 +270,10 @@ pub(super) fn inspect(
             budget,
         )
         .map_err(query_error)?;
+        crate::production_ranked_projection_v1::observe_option_first_before_enum_for_test_v1(
+            owner, source, &inventory, budget,
+        )
+        .map_err(query_error)?;
         crate::production_ranked_projection_v1::observe_actual_root_guarded_accesses_for_test_v1(
             owner,
             source,

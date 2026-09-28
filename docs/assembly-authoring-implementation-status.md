@@ -1544,3 +1544,17 @@ fixture was rejected before nominal-owner materialization; genuine nonempty
 Fixed coverage is still open. The Option-first prelude, later writers, joint
 bounds driver and production route also remain open. Broad exits remain 6/18;
 no native capture, public activation or global compiler pin change.
+
+## Source-ordered Option preparation — 2026-09-28
+
+The private BeforeEnum checkpoint now preserves original Option preparation
+order and partial/completed allocation ownership through postflight. All 12 new
+controls passed; full regression passed 356 model and 3,196 backend tests
+(197 ignored), builds and five actual Rust-source sessions. Each eligible
+session compared nonempty Option data against the original APIs under the same
+budget in success/error/panic modes.
+See [qualification and limits](option-first-preparation-qualification-20260928.md).
+
+This is an internal intrinsic suffix, not the complete root chronology or
+production route. Enum/scalar continuation, later writers, joint bounds and
+genuine nonempty Fixed coverage remain open. Broad accepted exits remain 6/18.
