@@ -301,9 +301,11 @@ fn materialized_cancel_preserves_queued_successors_and_their_retains() {
 
 #[test]
 fn materialized_prepared_retry_can_still_publish() {
-    for origin in ORIGINS {
-        let f = Fixture::new(0, origin, false);
-        f.finish(1);
+    for lane in 0..2 {
+        for origin in ORIGINS {
+            let f = Fixture::new(lane, origin, false);
+            f.finish(lane + 1);
+        }
     }
 }
 

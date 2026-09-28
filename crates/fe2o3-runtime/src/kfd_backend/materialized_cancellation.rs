@@ -2,6 +2,73 @@
 
 use super::*;
 
+fn materialized_descriptor_projection_intact_v1(
+    bindings: &[BackendBindingV1],
+    descriptors: &[ResidentDataDescriptorV1],
+    allocations: &AllocationTableV1,
+) -> bool {
+    if descriptors.len() > GFX942_MAX_FIXED_DISPATCH_DATA_V1
+        || bindings.len() > fe2o3_host_api::MAX_DISPATCH_BINDINGS_V1
+    {
+        return false;
+    }
+    // Merge aliases in descriptor slots, preserving first-binding order without
+    // rescanning binding prefixes. Native DATA bounds this work to B * 16.
+    let mut ranges = [None::<(u64, u64)>; GFX942_MAX_FIXED_DISPATCH_DATA_V1];
+    let mut count = 0;
+    for binding in bindings {
+        let allocation = binding.region.allocation;
+        let Some(index) = descriptors.iter().position(|d| d.allocation == allocation) else {
+            return false;
+        };
+        let Some(record) = allocations.get(&allocation) else {
+            return false;
+        };
+        if !record.alignment.is_power_of_two() {
+            return false;
+        }
+        let Some(end) = binding
+            .region
+            .byte_offset
+            .checked_add(binding.region.byte_len)
+        else {
+            return false;
+        };
+        if binding.region.byte_len == 0 || end > record.bytes.len() as u64 {
+            return false;
+        }
+        let start = binding.region.byte_offset & !(record.alignment - 1);
+        ranges[index] = Some(match ranges[index] {
+            Some((prior_start, prior_end)) => (start.min(prior_start), end.max(prior_end)),
+            None => {
+                if index != count {
+                    return false;
+                }
+                count += 1;
+                (start, end)
+            }
+        });
+    }
+    if count != descriptors.len() {
+        return false;
+    }
+    descriptors.iter().enumerate().all(|(index, descriptor)| {
+        let Some((start, end)) = ranges[index] else {
+            return false;
+        };
+        let record = &allocations[&descriptor.allocation];
+        descriptor.kind == record.kind
+            && descriptor.alignment == record.alignment
+            && descriptor.allocation_offset == start
+            && descriptor.byte_len == end - start
+            && !descriptor.device_may_have_modified
+    })
+}
+
+#[cfg(test)]
+#[path = "tests/materialized_descriptor_tests.rs"]
+mod descriptor_tests;
+
 pub(super) fn materialized_return_layout_matches_v1(
     descriptor: &ResidentDataDescriptorV1,
     kind: fe2o3_kfd::Gfx942FixedDispatchDataKindV1,
@@ -49,7 +116,7 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
-    fn materialized_cancel_custody_intact_v1(&self, submission: u64) -> bool {
+    pub(super) fn materialized_prepared_custody_intact_v1(&self, submission: u64) -> bool {
         let Some(active) = self.active.as_ref() else {
             return false;
         };
@@ -105,58 +172,23 @@ impl KfdRuntimeBackendV1 {
         ) {
             return false;
         }
-        let mut count = 0;
-        for (index, binding) in recipe.bindings.iter().enumerate() {
-            let allocation = binding.region.allocation;
-            if recipe.bindings[..index]
-                .iter()
-                .any(|prior| prior.region.allocation == allocation)
-            {
-                continue;
-            }
-            let Some(descriptor) = active.resident_descriptors.get(count) else {
-                return false;
-            };
-            let Some(record) = self.allocations.get(&allocation) else {
-                return false;
-            };
-            if !record.alignment.is_power_of_two() {
-                return false;
-            }
-            let mut start = u64::MAX;
-            let mut end = 0;
-            for alias in recipe
-                .bindings
-                .iter()
-                .filter(|alias| alias.region.allocation == allocation)
-            {
-                let Some(limit) = alias.region.byte_offset.checked_add(alias.region.byte_len)
-                else {
-                    return false;
-                };
-                if alias.region.byte_len == 0 || limit > record.bytes.len() as u64 {
-                    return false;
-                }
-                start = start.min(alias.region.byte_offset & !(record.alignment - 1));
-                end = end.max(limit);
-            }
-            if descriptor.allocation != allocation
-                || descriptor.kind != record.kind
-                || descriptor.alignment != record.alignment
-                || descriptor.allocation_offset != start
-                || descriptor.byte_len != end - start
-                || descriptor.device_may_have_modified
-            {
-                return false;
-            }
-            count += 1;
+        if active.allocations.len() != active.resident_descriptors.len()
+            || !materialized_descriptor_projection_intact_v1(
+                &recipe.bindings,
+                &active.resident_descriptors,
+                &self.allocations,
+            )
+        {
+            return false;
+        }
+        for descriptor in &active.resident_descriptors {
+            let allocation = descriptor.allocation;
             let expected = RuntimeAllocationCustodyOwnerV1 {
                 submission,
                 stream: active.stream,
                 kind: RuntimeAllocationCustodyKindV1::Compute,
             };
             if !active.allocations.contains(&allocation)
-                || !self.allocations.contains_key(&allocation)
                 || !self
                     .allocation_custody
                     .get(&allocation)
@@ -181,7 +213,7 @@ impl KfdRuntimeBackendV1 {
                 return false;
             }
         }
-        count == active.allocations.len() && count == active.resident_descriptors.len()
+        true
     }
 
     pub(super) fn cancel_materialized_prepared_v1(
@@ -193,7 +225,7 @@ impl KfdRuntimeBackendV1 {
         if !self.compute_pipeline.is_empty() {
             return Ok(crate::BackendCancellationV1::TooLate);
         }
-        if !self.materialized_cancel_custody_intact_v1(submission) {
+        if !self.materialized_prepared_custody_intact_v1(submission) {
             return Err(self.terminal_error("materialized cancellation lost logical custody"));
         }
         let native = true;
@@ -327,7 +359,7 @@ impl KfdRuntimeBackendV1 {
         submission: u64,
     ) -> Result<crate::BackendCancellationV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
     {
-        if !self.materialized_cancel_custody_intact_v1(submission)
+        if !self.materialized_prepared_custody_intact_v1(submission)
             || !self.materialized_cancel_return_intact_v1()
             || self
                 .submissions
@@ -413,40 +445,5 @@ impl KfdRuntimeBackendV1 {
             panic!("scripted materialized retirement unwind after return");
         }
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn poll_scripted_materialized_prepared_v1(&mut self) -> Option<BackendPollV1> {
-        let active = self.active.as_mut()?;
-        let Some(ActiveComputeExecutionV1::MaterializedPrepared(prepared)) =
-            active.execution.as_mut()
-        else {
-            return None;
-        };
-        let (_, retries) = prepared.scripted.as_mut()?;
-        if *retries != 0 {
-            *retries -= 1;
-            return Some(BackendPollV1::Pending);
-        }
-        let Some(ActiveComputeExecutionV1::MaterializedPrepared(prepared)) = active
-            .execution
-            .replace(ActiveComputeExecutionV1::ScriptedMaterialized)
-        else {
-            unreachable!()
-        };
-        let (id, stream, kernel, shape) = (
-            active.id,
-            active.stream,
-            active.kernel,
-            active.dispatch_shape_sha256,
-        );
-        self.observe_materialized_dispatch_published_v1(
-            id,
-            stream,
-            kernel,
-            shape,
-            prepared.profile,
-        );
-        Some(BackendPollV1::Pending)
     }
 }

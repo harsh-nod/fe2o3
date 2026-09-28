@@ -1,7 +1,7 @@
 //! Scripted ordinary first submission, not native batch or hardware evidence.
 
 use super::super::materialized_publication::{
-    MaterializedBindingV1, MaterializedFirstSubmissionV1,
+    MaterializedBindingV1, MaterializedSubmissionAttemptV1,
     ScriptedMaterializedPublicationFaultV1 as Fault, with_recycled_materialized_metadata_v1,
 };
 use super::initial_publication_tests::pending_facts;
@@ -10,6 +10,9 @@ use super::*;
 use std::mem::ManuallyDrop;
 use std::os::unix::process::ExitStatusExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+
+#[path = "materialized_retry_tests.rs"]
+mod retry;
 
 const FAULTS: [Fault; 11] = [
     Fault::BindingRejected,
@@ -258,14 +261,19 @@ fn inspect_fault(lane: usize, recycled: bool, fault: Fault, drop_unrepaired: boo
             );
             assert!(match fault {
                 Fault::BindingRejected | Fault::BindingUnwind | Fault::InitialObserverUnwind =>
-                    matches!(root.submission, MaterializedFirstSubmissionV1::Unattempted),
-                Fault::SubmitRejected | Fault::SubmitTerminal | Fault::SubmitUnwind =>
-                    matches!(root.submission, MaterializedFirstSubmissionV1::NativeOwned),
+                    matches!(
+                        root.submission,
+                        MaterializedSubmissionAttemptV1::Unattempted
+                    ),
+                Fault::SubmitRejected | Fault::SubmitTerminal | Fault::SubmitUnwind => matches!(
+                    root.submission,
+                    MaterializedSubmissionAttemptV1::NativeOwned
+                ),
                 Fault::OuterErrorAfterRetry | Fault::OuterUnwindAfterRetry =>
-                    matches!(root.submission, MaterializedFirstSubmissionV1::Retryable),
+                    matches!(root.submission, MaterializedSubmissionAttemptV1::Retryable),
                 Fault::OuterErrorAfterPublish | Fault::OuterUnwindAfterPublish => matches!(
                     root.submission,
-                    MaterializedFirstSubmissionV1::ScriptedPublished
+                    MaterializedSubmissionAttemptV1::ScriptedPublished
                 ),
                 Fault::ProfileUnwind => false,
             });
@@ -442,7 +450,7 @@ fn attached_metadata_is_retained_through_overwrite_and_outer_lane_failure() {
                 );
                 assert!(matches!(
                     root.submission,
-                    MaterializedFirstSubmissionV1::Unattempted
+                    MaterializedSubmissionAttemptV1::Unattempted
                 ));
                 assert_eq!(current.as_ptr(), current_pointer);
                 assert!(

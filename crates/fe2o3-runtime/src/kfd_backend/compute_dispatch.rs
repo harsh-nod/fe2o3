@@ -732,9 +732,8 @@ impl KfdRuntimeBackendV1 {
         lane: usize,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.with_compute_lane_state_v1(lane, |backend| {
-            #[cfg(test)]
-            if let Some(poll) = backend.poll_scripted_materialized_prepared_v1() {
-                return Ok(poll);
+            if backend.materialized_prepared_selected_v1() {
+                return backend.poll_materialized_prepared_v1();
             }
             if backend.persistent_prepared_selected_v1() {
                 return backend.poll_persistent_prepared_v1();
@@ -760,11 +759,7 @@ impl KfdRuntimeBackendV1 {
                 .as_ref()
                 .and_then(|active| active.execution.as_ref())
                 .is_some_and(|execution| {
-                    matches!(
-                        execution,
-                        ActiveComputeExecutionV1::MaterializedPrepared(_)
-                            | ActiveComputeExecutionV1::Materialized(_)
-                    )
+                    matches!(execution, ActiveComputeExecutionV1::Materialized(_))
                 }) {
                 Some(backend.selected_native_compute_lane_v1().map_err(|_| {
                     backend.terminal_error(
@@ -801,100 +796,10 @@ impl KfdRuntimeBackendV1 {
                 );
             };
             match execution {
-                ActiveComputeExecutionV1::MaterializedPrepared(prepared) => {
-                    let native_lane = ordinary_native_lane
-                        .expect("prepared materialized execution validated its native lane");
-                    let publication_started = Instant::now();
-                    let publication =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            backend
-                                .queue
-                                .as_mut()
-                                .expect("prepared materialized submission retains queue")
-                                .with_compute_lane_v1(native_lane, |queue| {
-                                    queue.submit_fixed_dispatch_classified_v1::<1>()
-                                })
-                        }));
-                    let publication = match publication {
-                        Ok(Ok(publication)) => publication,
-                        Ok(Err(error)) => {
-                            active.execution = Some(
-                                ActiveComputeExecutionV1::MaterializedPrepared(prepared),
-                            );
-                            backend.active = Some(active);
-                            return Err(backend.terminal_error(format!(
-                                "KFD compute-lane selection before prepared publication: {error}"
-                            )));
-                        }
-                        Err(payload) => {
-                            active.execution = Some(
-                                ActiveComputeExecutionV1::MaterializedPrepared(prepared),
-                            );
-                            backend.active = Some(active);
-                            let _ = backend.terminal_error(
-                                "KFD prepared materialized publication unwound with logical custody",
-                            );
-                            std::panic::resume_unwind(payload);
-                        }
-                    };
-                    let batch = match publication {
-                        Ok(batch) => batch,
-                        Err(
-                            Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_),
-                        ) => {
-                            active.performance.publication += publication_started.elapsed();
-                            active.execution = Some(
-                                ActiveComputeExecutionV1::MaterializedPrepared(prepared),
-                            );
-                            backend.active = Some(active);
-                            return Ok(BackendPollV1::Pending);
-                        }
-                        Err(Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
-                            error,
-                        )) => {
-                            active.execution = Some(
-                                ActiveComputeExecutionV1::MaterializedPrepared(prepared),
-                            );
-                            backend.active = Some(active);
-                            return Err(backend.terminal_error(format!(
-                                "KFD retained prepared dispatch was rejected before publication: {error}"
-                            )));
-                        }
-                        Err(Gfx942FixedDispatchSubmissionFailureV1::Terminal(error)) => {
-                            active.execution = Some(
-                                ActiveComputeExecutionV1::MaterializedPrepared(prepared),
-                            );
-                            backend.active = Some(active);
-                            return Err(backend.terminal_error(format!(
-                                "KFD prepared dispatch publication became indeterminate: {error}"
-                            )));
-                        }
-                    };
-                    active.performance.publication += publication_started.elapsed();
-                    active.published_at = Instant::now();
-                    active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
-                    let id = active.id;
-                    let stream = active.stream;
-                    let kernel = active.kernel;
-                    let dispatch_shape_sha256 = active.dispatch_shape_sha256;
+                execution @ ActiveComputeExecutionV1::MaterializedPrepared(_) => {
+                    active.execution = Some(execution);
                     backend.active = Some(active);
-                    let profiling =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            backend.observe_materialized_dispatch_published_v1(
-                                id,
-                                stream,
-                                kernel,
-                                dispatch_shape_sha256,
-                                prepared.profile,
-                            );
-                        }));
-                    if let Err(payload) = profiling {
-                        let _ = backend.terminal_error(
-                            "KFD prepared dispatch profiling unwound after publication",
-                        );
-                        std::panic::resume_unwind(payload);
-                    }
-                    Ok(BackendPollV1::Pending)
+                    Err(backend.terminal_error("materialized retry bypassed its indexed path"))
                 }
                 ActiveComputeExecutionV1::Materialized(batch) => {
                     let native_lane = ordinary_native_lane
@@ -963,7 +868,7 @@ impl KfdRuntimeBackendV1 {
                     Err(backend.terminal_error("prepared publication bypassed its indexed path"))
                 }
                 execution @ (ActiveComputeExecutionV1::Persistent { .. }
-                    | ActiveComputeExecutionV1::PersistentCompleting(_)) => {
+                | ActiveComputeExecutionV1::PersistentCompleting(_)) => {
                     active.execution = Some(execution);
                     backend.active = Some(active);
                     Err(backend.terminal_error("scalar completion bypassed its indexed path"))
@@ -974,44 +879,56 @@ impl KfdRuntimeBackendV1 {
                     Err(backend.terminal_error("prepared publication bypassed its indexed path"))
                 }
                 execution @ (ActiveComputeExecutionV1::ThreeBindingPersistent { .. }
-                    | ActiveComputeExecutionV1::ThreeBindingPersistentCompleting(_)) => {
+                | ActiveComputeExecutionV1::ThreeBindingPersistentCompleting(_)) => {
                     active.execution = Some(execution);
                     backend.active = Some(active);
-                    Err(backend.terminal_error("three-binding completion bypassed its indexed path"))
+                    Err(backend
+                        .terminal_error("three-binding completion bypassed its indexed path"))
                 }
                 #[cfg(test)]
                 execution @ ActiveComputeExecutionV1::ScriptedPersistent { .. } => {
                     active.execution = Some(execution);
                     backend.active = Some(active);
-                    Err(backend.terminal_error("scripted scalar completion bypassed its indexed path"))
+                    Err(backend
+                        .terminal_error("scripted scalar completion bypassed its indexed path"))
                 }
                 #[cfg(test)]
                 execution @ ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { .. } => {
                     active.execution = Some(execution);
                     backend.active = Some(active);
-                    Err(backend.terminal_error("scripted three-binding completion bypassed its indexed path"))
+                    Err(backend.terminal_error(
+                        "scripted three-binding completion bypassed its indexed path",
+                    ))
                 }
                 #[cfg(test)]
                 execution @ (ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. }
-                    | ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared { .. }) => {
+                | ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
+                    ..
+                }) => {
                     active.execution = Some(execution);
                     backend.active = Some(active);
-                    Err(backend.terminal_error("scripted prepared publication bypassed its indexed path"))
+                    Err(backend
+                        .terminal_error("scripted prepared publication bypassed its indexed path"))
                 }
                 ActiveComputeExecutionV1::PersistentCancelling(cancellation) => {
-                    active.execution = Some(ActiveComputeExecutionV1::PersistentCancelling(cancellation));
+                    active.execution =
+                        Some(ActiveComputeExecutionV1::PersistentCancelling(cancellation));
                     backend.active = Some(active);
                     Err(backend.terminal_error("prepared cancellation cannot resume publication"))
                 }
                 ActiveComputeExecutionV1::MaterializedCancelling(cancellation) => {
-                    active.execution = Some(ActiveComputeExecutionV1::MaterializedCancelling(cancellation));
+                    active.execution = Some(ActiveComputeExecutionV1::MaterializedCancelling(
+                        cancellation,
+                    ));
                     backend.active = Some(active);
-                    Err(backend.terminal_error("materialized cancellation cannot reenter publication"))
+                    Err(backend
+                        .terminal_error("materialized cancellation cannot reenter publication"))
                 }
                 execution @ ActiveComputeExecutionV1::MaterializedBinding(_) => {
                     active.execution = Some(execution);
                     backend.active = Some(active);
-                    Err(backend.terminal_error("incomplete ordinary binding cannot resume publication"))
+                    Err(backend
+                        .terminal_error("incomplete ordinary binding cannot resume publication"))
                 }
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedMaterialized => {
@@ -2518,8 +2435,7 @@ impl KfdRuntimeBackendV1 {
         prepared: PreparedLaunchV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         use super::materialized_publication::{
-            MaterializedBindingV1, MaterializedFirstSubmissionV1,
-            with_recycled_materialized_metadata_v1,
+            MaterializedBindingV1, with_recycled_materialized_metadata_v1,
         };
 
         self.require_unpinned_native_lane_v1(self.selected_compute_lane)?;
@@ -2920,41 +2836,7 @@ impl KfdRuntimeBackendV1 {
             );
         }
 
-        let publication_started = Instant::now();
-        let native_lane = self.selected_native_compute_lane_v1()?;
-        let root = MaterializedBindingV1::indexed(self.active.as_mut().unwrap());
-        let publication = self
-            .queue
-            .as_mut()
-            .expect("queue was created or rebound")
-            .with_compute_lane_v1(native_lane, |queue| {
-                root.submit(|| match queue.submit_fixed_dispatch_classified_v1::<1>() {
-                    Ok(batch) => Ok(MaterializedFirstSubmissionV1::Published(batch)),
-                    Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)) => {
-                        Ok(MaterializedFirstSubmissionV1::Retryable)
-                    }
-                    Err(error) => Err(error),
-                })
-            })
-            .map_err(|error| self.terminal_error(format!("KFD compute-lane selection: {error}")))?;
-        match publication {
-            Ok(()) => {}
-            Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)) => {
-                unreachable!("retry classification stored inside the native callback")
-            }
-            Err(Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error)) => {
-                return Err(self.terminal_error(format!(
-                    "KFD retained dispatch binding was rejected before publication: {error}"
-                )));
-            }
-            Err(Gfx942FixedDispatchSubmissionFailureV1::Terminal(error)) => {
-                return Err(self.terminal_error(format!(
-                    "KFD dispatch publication became indeterminate: {error}"
-                )));
-            }
-        }
-        self.active.as_mut().unwrap().performance.publication += publication_started.elapsed();
-        self.finish_materialized_binding_v1()
+        self.submit_materialized_binding_v1()
     }
 
     pub(super) fn observe_materialized_dispatch_published_v1(
