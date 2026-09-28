@@ -157,12 +157,15 @@ fn byte_source_index_one_short_construction_restores_floor_and_keeps_denial() {
 #[test]
 fn byte_source_index_preserves_borrowed_types_all_sites_and_empty_suffixes() {
     let mut function = ordered_function(3);
-    function.signature.parameters.push(Type::U64);
+    function
+        .signature
+        .parameters
+        .push(Type::Scalar(crate::ScalarType::U64));
     let body = function.body.as_mut().unwrap();
     // Preserve the legacy zipped-parameter convention for malformed arity.
     body.blocks[1].operations[0].results.push(ValueDef {
         id: ValueId(90),
-        ty: Type::U64,
+        ty: Type::Scalar(crate::ScalarType::U64),
     });
     body.blocks[2].operations.extend((0..7).map(|_| Operation {
         results: vec![],
@@ -286,7 +289,7 @@ fn byte_source_index_sparse_radix_has_independent_exact_overlap_and_one_short_pe
     body.parameters[0] = ValueId(u32::MAX);
     // Both input rosters invert at their first comparison. Radix prepays a
     // scratch copy and four passes, each with 3*N row visits + 512 buckets.
-    let radix_work = |count| 3 + count + 4 * (3 * count + 512);
+    let radix_work = |count: usize| 3 + count + 4 * (3 * count + 512);
     let exact_work = 4 + 4 * 2 + 2 * 4 + 5 + radix_work(2) + radix_work(5);
     let block_rows = bytes::<BlockRow>(2);
     let definition_rows = bytes::<DefinitionRow>(5);

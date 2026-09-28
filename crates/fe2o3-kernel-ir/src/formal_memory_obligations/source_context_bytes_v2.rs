@@ -252,6 +252,32 @@ impl<'source, 'work> ByteSourceContextV2<'source, 'work> {
         self.keep(result)
     }
 
+    pub(in crate::formal_memory_obligations) fn reachable(
+        &mut self,
+        source: &Function,
+        block: BlockId,
+        budget: &mut Budget<'_>,
+    ) -> ContextResult<bool> {
+        self.check(source, budget)?;
+        let result = (|| {
+            let flow = self.flow.indexed_v2(source, budget)?;
+            budget.charge_work(lookup_work_v2(flow.block_count())?)?;
+            Ok(flow.is_reachable(block))
+        })();
+        self.keep(result)
+    }
+
+    pub(in crate::formal_memory_obligations) fn block(
+        &mut self,
+        source: &Function,
+        block: BlockId,
+        budget: &mut Budget<'_>,
+    ) -> ContextResult<Option<&'source crate::BasicBlock>> {
+        self.check(source, budget)?;
+        let result = self.index.block(source, block, budget).map_err(Into::into);
+        self.keep(result)
+    }
+
     pub(in crate::formal_memory_obligations) fn release(
         self,
         budget: &mut Budget<'_>,

@@ -18,6 +18,7 @@ mod candidate_pair_bound_v1;
 mod complete_body_v19;
 #[cfg(test)]
 mod distinct_invocation_v1_tests;
+mod exact_origin_v18;
 mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
 mod report_construction_v18;
@@ -1405,120 +1406,32 @@ impl Definitions<'_> {
         value: ValueId,
         value_types: &BTreeMap<ValueId, Type>,
     ) -> Option<ValueId> {
-        let mut current = value;
-        let mut visited = BTreeSet::new();
-        loop {
-            if !visited.insert(current) {
-                return None;
-            }
-            let origin = self.unique_ssa_origin(current)?;
-            if origin != current {
-                if value_types.get(&current) != value_types.get(&origin) {
-                    return None;
-                }
-                current = origin;
-                continue;
-            }
-            let Some((operation, _)) = self.operations.get(&current) else {
-                return Some(current);
-            };
-            if !matches!(
-                operation.kind,
-                OperationKind::Cast {
-                    kind: CastKind::RestrictPointerAccess
-                        | CastKind::PointerToGeneric
-                        | CastKind::SliceToGeneric,
-                    ..
-                }
-            ) {
-                return Some(current);
-            }
-            let OperationKind::Cast { value: source, .. } = operation.kind else {
-                unreachable!()
-            };
-            current = checked_address_cast_source_v18(operation, value_types.get(&source)?)?;
-        }
+        exact_origin_v18::legacy(self, value, value_types)
     }
 }
 
 fn checked_address_cast_source_v18(operation: &Operation, from: &Type) -> Option<ValueId> {
-    if matches!(
-        operation.kind,
-        OperationKind::Cast {
-            kind: CastKind::SliceToGeneric,
-            ..
-        }
-    ) {
-        checked_slice_cast_source_v18(operation, from)
-    } else {
-        checked_pointer_cast_source_v18(operation, from)
-    }
+    exact_origin_v18::infallible(exact_origin_v18::address(
+        operation,
+        from,
+        &mut exact_origin_v18::LegacyCompare,
+    ))
 }
 
 fn checked_slice_cast_source_v18(operation: &Operation, from: &Type) -> Option<ValueId> {
-    let OperationKind::Cast {
-        kind: CastKind::SliceToGeneric,
-        value,
-        to,
-    } = &operation.kind
-    else {
-        return None;
-    };
-    let [result] = operation.results.as_slice() else {
-        return None;
-    };
-    let (Type::Slice(from), Type::Slice(target)) = (from, to) else {
-        return None;
-    };
-    (result.ty == *to
-        && from.element == target.element
-        && from.access == target.access
-        && matches!(
-            from.address_space,
-            AddressSpace::Global
-                | AddressSpace::Constant
-                | AddressSpace::Private
-                | AddressSpace::Workgroup
-        )
-        && target.address_space == AddressSpace::Generic
-        && (from.address_space != AddressSpace::Constant || from.access == AccessMode::ReadOnly))
-        .then_some(*value)
+    exact_origin_v18::infallible(exact_origin_v18::slice(
+        operation,
+        from,
+        &mut exact_origin_v18::LegacyCompare,
+    ))
 }
 
 fn checked_pointer_cast_source_v18(operation: &Operation, from: &Type) -> Option<ValueId> {
-    let OperationKind::Cast { kind, value, to } = &operation.kind else {
-        return None;
-    };
-    let [result] = operation.results.as_slice() else {
-        return None;
-    };
-    let (Type::Pointer(from), Type::Pointer(target)) = (from, to) else {
-        return None;
-    };
-    if result.ty != *to || from.pointee != target.pointee {
-        return None;
-    }
-    let valid = match kind {
-        CastKind::RestrictPointerAccess => {
-            from.address_space == target.address_space
-                && from.access == AccessMode::ReadWrite
-                && target.access == AccessMode::ReadOnly
-        }
-        CastKind::PointerToGeneric => {
-            matches!(
-                from.address_space,
-                AddressSpace::Global
-                    | AddressSpace::Constant
-                    | AddressSpace::Private
-                    | AddressSpace::Workgroup
-            ) && target.address_space == AddressSpace::Generic
-                && from.access == target.access
-                && (from.address_space != AddressSpace::Constant
-                    || from.access == AccessMode::ReadOnly)
-        }
-        _ => false,
-    };
-    valid.then_some(*value)
+    exact_origin_v18::infallible(exact_origin_v18::pointer(
+        operation,
+        from,
+        &mut exact_origin_v18::LegacyCompare,
+    ))
 }
 
 #[derive(Clone, Copy)]

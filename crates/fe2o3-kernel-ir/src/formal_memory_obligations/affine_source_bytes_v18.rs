@@ -14,6 +14,7 @@ struct Row {
     key: u32,
     expression: Option<Expression>,
     visiting: bool,
+    origin_epoch: usize,
 }
 
 struct Builder<'context, 'source, 'budget, 'work> {
@@ -112,6 +113,7 @@ pub(in crate::formal_memory_obligations) struct ActualOwnerAffineV18<'owner, 'wo
     floor: usize,
     retained: usize,
     first_error: Option<Failure>,
+    next_origin_epoch: usize,
 }
 
 impl<'owner, 'work> ActualOwnerAffineV18<'owner, 'work> {
@@ -159,6 +161,7 @@ impl<'owner, 'work> ActualOwnerAffineV18<'owner, 'work> {
                 key: row.key,
                 expression: None,
                 visiting: false,
+                origin_epoch: 0,
             }));
             let mut builder = Builder {
                 context: &mut context,
@@ -197,6 +200,7 @@ impl<'owner, 'work> ActualOwnerAffineV18<'owner, 'work> {
                     floor,
                     retained,
                     first_error: None,
+                    next_origin_epoch: 0,
                 })
             }
             Ok(Err(error)) => {
@@ -318,3 +322,9 @@ fn frame_bytes_v18() -> usize {
 #[cfg(test)]
 #[path = "affine_source_bytes_v18_tests.rs"]
 mod tests;
+
+#[path = "exact_source_origin_v18.rs"]
+mod exact_source_origin_v18;
+
+#[path = "private_slots_bytes_v18.rs"]
+pub(in crate::formal_memory_obligations) mod private_slots_bytes_v18;
