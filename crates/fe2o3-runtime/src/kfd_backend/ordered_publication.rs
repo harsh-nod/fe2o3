@@ -3,6 +3,20 @@
 use super::materialized_publication::MaterializedSubmissionAttemptV1 as Attempt;
 use super::*;
 
+include!("ordered_publication_settlement_body.rs");
+
+macro_rules! ordered_rust_expr {
+    ($body:expr) => {
+        $body
+    };
+}
+
+macro_rules! ordered_active_fields {
+    ($active:expr) => {
+        $active
+    };
+}
+
 pub(super) struct OrderedPublicationV1 {
     pub(super) profile: PersistentPublicationProfileV1,
     pub(super) attempt: Attempt,
@@ -17,12 +31,7 @@ impl OrderedPublicationV1 {
     }
 
     fn indexed(entry: &mut RuntimeComputePipelineEntryV1) -> &mut Self {
-        let Some(ActiveComputeExecutionV1::MaterializedSuccessorPublication(root)) =
-            entry.active.execution.as_mut()
-        else {
-            unreachable!("staged successor retains its publication root")
-        };
-        root
+        ordered_publication_indexed_body!(ordered_rust_expr, ordered_active_fields, entry)
     }
 
     fn unattempted(entry: &RuntimeComputePipelineEntryV1) -> bool {
@@ -51,51 +60,38 @@ struct OrderedPublicationObservationV1 {
     profile: PersistentPublicationProfileV1,
 }
 
+enum OrderedPublicationSettlementErrorV1 {
+    MissingIdentity,
+    RetryStage,
+    NoOutcome,
+    ConfirmationStage,
+}
+
+impl OrderedPublicationSettlementErrorV1 {
+    fn message(self) -> &'static str {
+        match self {
+            Self::MissingIdentity => "ordered publication lost its returned identity",
+            Self::RetryStage => "ordered retry lost its staged identity",
+            Self::NoOutcome => "ordered publication has no confirmed outcome",
+            Self::ConfirmationStage => "ordered publication lost its staged identity",
+        }
+    }
+}
+
 impl ReturnedOrderedPublicationV1<'_> {
     fn settle(
         self,
         started: Instant,
-    ) -> Result<Option<OrderedPublicationObservationV1>, &'static str> {
+    ) -> Result<Option<OrderedPublicationObservationV1>, OrderedPublicationSettlementErrorV1> {
         let Self { pipeline, identity } = self;
-        let entry = pipeline
-            .entry_mut_v1(identity)
-            .ok_or("ordered publication lost its returned identity")?;
-        entry.active.performance.publication = started.elapsed();
-        let root = OrderedPublicationV1::indexed(entry);
-        if matches!(root.attempt, Attempt::Retryable) {
-            return pipeline
-                .withdraw_publication_v1(identity)
-                .map(|_| None)
-                .ok_or("ordered retry lost its staged identity");
-        }
-        if matches!(root.attempt, Attempt::Unattempted | Attempt::NativeOwned) {
-            return Err("ordered publication has no confirmed outcome");
-        }
-        pipeline.entry_mut_v1(identity).unwrap().active.published_at = Instant::now();
-        pipeline
-            .confirm_publication_v1(identity)
-            .map_err(|()| "ordered publication lost its staged identity")?;
-        let active = &mut pipeline.entry_mut_v1(identity).unwrap().active;
-        let Some(ActiveComputeExecutionV1::MaterializedSuccessorPublication(root)) =
-            active.execution.take()
-        else {
-            unreachable!()
-        };
-        active.execution = Some(match root.attempt {
-            Attempt::Published(batch) => ActiveComputeExecutionV1::Materialized(
-                MaterializedCompletionReceiptV1::Published(batch),
-            ),
-            #[cfg(test)]
-            Attempt::ScriptedPublished => ActiveComputeExecutionV1::ScriptedMaterialized,
-            _ => unreachable!("confirmed publication outcome"),
-        });
-        Ok(Some(OrderedPublicationObservationV1 {
-            id: active.id,
-            stream: active.stream,
-            kernel: active.kernel,
-            shape: active.dispatch_shape_sha256,
-            profile: root.profile,
-        }))
+        ordered_publication_settle_body!(
+            ordered_rust_expr,
+            ordered_active_fields,
+            pipeline,
+            identity,
+            started.elapsed(),
+            Instant::now()
+        )
     }
 }
 
@@ -299,7 +295,7 @@ impl KfdRuntimeBackendV1 {
             };
             let observation = returned
                 .settle(started)
-                .map_err(|error| self.terminal_error(error))?;
+                .map_err(|error| self.terminal_error(error.message()))?;
             let Some(observation) = observation else {
                 return Ok(false);
             };
