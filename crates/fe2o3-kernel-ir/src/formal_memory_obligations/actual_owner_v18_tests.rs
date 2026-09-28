@@ -221,17 +221,34 @@ fn storage_operations_retain_every_original_unsupported_effect() {
     ]);
     with_owner(&module, |owner| {
         let mut scope = CanonicalOwnerFormalScopeV18::new(owner, Default::default()).unwrap();
+        let original = derive_kernel_memory_obligations_from_authenticated_module(
+            owner.module(),
+            &KernelId::new("root"),
+            launch(),
+            FormalIndexWidth::Bits64,
+            None,
+            None,
+            &scope.effects,
+        )
+        .unwrap();
         let report = scope
             .derive(&KernelId::new("root"), launch(), FormalIndexWidth::Bits64)
             .unwrap();
-        let expected: Vec<_> = (first + 1..first + 3)
+        let mut expected: Vec<_> = (first + 1..first + 3)
             .map(
                 |operation_index| FormalMemoryIncompleteReason::UnsupportedMemoryEffect {
                     location: FunctionOperationLocation::new(BlockId(0), operation_index),
                 },
             )
             .collect();
+        // Storage operations are not eligible ordinary private-slot accesses.
+        // The first such use is retained as the slot's exact escape reason.
+        expected.push(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+            location: FunctionOperationLocation::new(BlockId(0), first + 1),
+            pointer: ValueId(8),
+        });
         assert_eq!(report.analysis().incomplete_reasons(), expected);
+        assert_eq!(report.analysis(), &original);
         assert!(matches!(
             owner.module().functions[0].body.as_ref().unwrap().blocks[0].operations[first].kind,
             OperationKind::Alloca {
