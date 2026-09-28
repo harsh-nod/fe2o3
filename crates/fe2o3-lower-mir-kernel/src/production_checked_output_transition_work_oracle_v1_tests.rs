@@ -123,9 +123,9 @@ fn representative(parents: &BTreeMap<ValueId, ValueId>, mut value: ValueId) -> V
 }
 
 // Independent equality saturation over the actual edge payloads. There is no
-// scalar folding in these fixture selectors. Policy6 precedes private-cell
-// promotion, so these actual endpoints have no non-entry phi parameters. The separate
-// synthetic control below still checks dependency-sensitive phi ordering.
+// scalar folding in these fixture selectors. Original Rust SSA can already
+// supply non-entry induction phis before private-cell promotion. Their distinct
+// initial and increment values do not establish an alias in this census.
 // Literal descendant aliases are counted separately from this phi census.
 fn phi_rounds(body: &FunctionBody) -> usize {
     let mut parents = BTreeMap::new();
@@ -265,39 +265,108 @@ fn definition_literal(module: &Module, definition: Definition) -> Option<(&Const
     Some((value, &operation.results.get(result as usize)?.ty))
 }
 
-// This is deliberately not a transition solver. It accepts only the concrete
-// pre-promotion fixture grammar, whose scalar expressions cannot add facts.
-// Equal typed constants are seeded before rounds; all their descendant unions
-// therefore settle in one sweep, followed by one unchanged sweep if needed.
-fn literal_alias_rounds(module: &Module, rows: Candidate<'_>) -> Result<i64, &'static str> {
-    if module.functions.len() != 1 {
-        return Err("fixture function count");
-    }
-    let body = module.functions[0]
-        .body
-        .as_ref()
-        .ok_or("fixture declaration")?;
-    // Initial entry values have no predecessor-proven phi fact. The genuine
-    // transition solver also excludes the first block from phi aliases.
-    if body
-        .blocks
-        .iter()
-        .skip(1)
-        .any(|block| !block.parameters.is_empty())
-    {
-        return Err("fixture phi dependency");
-    }
-    let literals: BTreeMap<_, _> = body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.operations)
-        .filter_map(|operation| match &operation.kind {
-            OperationKind::Constant(value) if operation.results.len() == 1 => {
-                Some((operation.results[0].id, value))
+// A fixture-local equality model, independent of transition State and its
+// indexes. Literal facts are rediscovered from class members, not published by
+// the production scalar evaluator. No candidate pair is an equality premise.
+struct FixtureFacts<'a> {
+    parents: BTreeMap<ValueId, ValueId>,
+    types: BTreeMap<ValueId, &'a Type>,
+    literals: BTreeMap<ValueId, &'a Constant>,
+}
+
+impl<'a> FixtureFacts<'a> {
+    fn new(module: &'a Module) -> Result<Self, &'static str> {
+        if module.functions.len() != 1 {
+            return Err("fixture function count");
+        }
+        let function = &module.functions[0];
+        let body = function.body.as_ref().ok_or("fixture declaration")?;
+        if body.parameters.len() != function.signature.parameters.len() {
+            return Err("fixture function arity");
+        }
+        let mut types = BTreeMap::new();
+        for (value, ty) in body.parameters.iter().zip(&function.signature.parameters) {
+            if types.insert(*value, ty).is_some() {
+                return Err("fixture duplicate value");
             }
-            _ => None,
+        }
+        let mut literals = BTreeMap::new();
+        for block in &body.blocks {
+            for value in block
+                .parameters
+                .iter()
+                .chain(block.operations.iter().flat_map(|op| &op.results))
+            {
+                if types.insert(value.id, &value.ty).is_some() {
+                    return Err("fixture duplicate value");
+                }
+            }
+            for operation in &block.operations {
+                if let OperationKind::Constant(value) = &operation.kind {
+                    if operation.results.len() != 1 {
+                        return Err("fixture constant arity");
+                    }
+                    literals.insert(operation.results[0].id, value);
+                }
+            }
+        }
+        Ok(Self {
+            parents: types.keys().map(|value| (*value, *value)).collect(),
+            types,
+            literals,
         })
-        .collect();
+    }
+
+    fn literal(&self, value: ValueId) -> Result<Option<(&'a Constant, &'a Type)>, &'static str> {
+        if !self.parents.contains_key(&value) {
+            return Err("fixture unknown value");
+        }
+        let root = representative(&self.parents, value);
+        let mut found = None;
+        for (member, literal) in &self.literals {
+            if representative(&self.parents, *member) == root {
+                let fact = (*literal, self.types[member]);
+                if found.is_some_and(|prior| prior != fact) {
+                    return Err("fixture conflicting literals");
+                }
+                found = Some(fact);
+            }
+        }
+        Ok(found)
+    }
+
+    fn equal(&self, a: ValueId, b: ValueId) -> Result<bool, &'static str> {
+        let literal_a = self.literal(a)?;
+        let literal_b = self.literal(b)?;
+        Ok(
+            representative(&self.parents, a) == representative(&self.parents, b)
+                || literal_a.is_some() && literal_a == literal_b,
+        )
+    }
+
+    fn merge(&mut self, a: ValueId, b: ValueId) -> Result<bool, &'static str> {
+        if self.types.get(&a) != self.types.get(&b) {
+            return Err("fixture alias type");
+        }
+        let literal_a = self.literal(a)?;
+        let literal_b = self.literal(b)?;
+        if literal_a.is_some() && literal_b.is_some() && literal_a != literal_b {
+            return Err("fixture unequal literal alias");
+        }
+        let a = representative(&self.parents, a);
+        let b = representative(&self.parents, b);
+        if a == b {
+            return Ok(false);
+        }
+        self.parents.insert(a.max(b), a.min(b));
+        Ok(true)
+    }
+}
+
+fn fixture_scalar_grammar(
+    body: &FunctionBody,
+    facts: &FixtureFacts<'_>,
+) -> Result<(), &'static str> {
     for operation in body.blocks.iter().flat_map(|block| &block.operations) {
         match &operation.kind {
             OperationKind::Binary {
@@ -305,8 +374,8 @@ fn literal_alias_rounds(module: &Module, rows: Candidate<'_>) -> Result<i64, &'s
                 lhs: left,
                 rhs: right,
             } => {
-                let a = literals.get(left).copied();
-                let b = literals.get(right).copied();
+                let a = facts.literal(*left)?.map(|fact| fact.0);
+                let b = facts.literal(*right)?.map(|fact| fact.0);
                 // Actual loop increment and parity mask only; neither is an
                 // integer identity or a constant-folding expression.
                 if !matches!(op, BinaryOp::Add | BinaryOp::BitAnd)
@@ -323,8 +392,8 @@ fn literal_alias_rounds(module: &Module, rows: Candidate<'_>) -> Result<i64, &'s
                 lhs: left,
                 rhs: right,
             } => {
-                let a = literals.get(left).copied();
-                let b = literals.get(right).copied();
+                let a = facts.literal(*left)?.map(|fact| fact.0);
+                let b = facts.literal(*right)?.map(|fact| fact.0);
                 if !matches!(
                     (predicate, a, b),
                     (ComparePredicate::Equal, None, Some(Constant::U32(0)))
@@ -348,6 +417,110 @@ fn literal_alias_rounds(module: &Module, rows: Candidate<'_>) -> Result<i64, &'s
             | OperationKind::Store { .. } => (),
             _ => return Err("fixture operation outside reviewed grammar"),
         }
+    }
+    for block in &body.blocks {
+        let selector = match block
+            .terminator
+            .as_ref()
+            .ok_or("fixture missing terminator")?
+        {
+            Terminator::ConditionalBranch { condition, .. } => Some(*condition),
+            Terminator::Switch { selector, .. } => Some(*selector),
+            Terminator::Branch { .. } | Terminator::Return { .. } => None,
+            _ => return Err("fixture terminator outside reviewed grammar"),
+        };
+        if let Some(selector) = selector {
+            if facts.literal(selector)?.is_some() {
+                return Err("fixture selected-edge dependency");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn fixture_definition_value(module: &Module, definition: Definition) -> Option<ValueId> {
+    match definition {
+        Definition::FunctionArgument { function, argument } => module
+            .functions
+            .get(function.0 as usize)?
+            .body
+            .as_ref()?
+            .parameters
+            .get(argument as usize)
+            .copied(),
+        Definition::BlockArgument { block, argument } => Some(
+            module
+                .functions
+                .get(block.function.0 as usize)?
+                .body
+                .as_ref()?
+                .blocks
+                .get(block.block as usize)?
+                .parameters
+                .get(argument as usize)?
+                .id,
+        ),
+        Definition::Result { operation, result } => Some(
+            module
+                .functions
+                .get(operation.block.function.0 as usize)?
+                .body
+                .as_ref()?
+                .blocks
+                .get(operation.block.block as usize)?
+                .operations
+                .get(operation.operation as usize)?
+                .results
+                .get(result as usize)?
+                .id,
+        ),
+    }
+}
+
+// Only equality-preserving phis and independently equal typed literals can
+// change these fixtures. Check the scalar/selector grammar after every sweep:
+// a phi-derived constant used by arithmetic or control is outside this oracle.
+fn literal_alias_rounds(module: &Module, rows: Candidate<'_>) -> Result<i64, &'static str> {
+    let mut facts = FixtureFacts::new(module)?;
+    let body = module.functions[0].body.as_ref().unwrap();
+    let entry = body.blocks.first().ok_or("fixture missing entry")?.id;
+    fixture_scalar_grammar(body, &facts)?;
+    let incoming: Vec<_> = body
+        .blocks
+        .iter()
+        .flat_map(|block| {
+            edges(block.terminator.as_ref().unwrap())
+                .into_iter()
+                .map(move |(target, values)| (block.id, target, values))
+        })
+        .collect();
+    let mut reachable = BTreeSet::from([entry]);
+    loop {
+        let before = reachable.len();
+        for (source, target, values) in &incoming {
+            let block = body
+                .blocks
+                .iter()
+                .find(|block| block.id == *target)
+                .ok_or("fixture edge target")?;
+            if values.len() != block.parameters.len() {
+                return Err("fixture phi arity");
+            }
+            for (value, parameter) in values.iter().zip(&block.parameters) {
+                if facts.types.get(value).copied() != Some(&parameter.ty) {
+                    return Err("fixture edge type");
+                }
+            }
+            if reachable.contains(source) {
+                reachable.insert(*target);
+            }
+        }
+        if before == reachable.len() {
+            break;
+        }
+    }
+    if reachable.len() != body.blocks.len() {
+        return Err("fixture unreachable block");
     }
     let mut anchors = BTreeMap::new();
     for row in rows.definitions {
@@ -381,7 +554,7 @@ fn literal_alias_rounds(module: &Module, rows: Candidate<'_>) -> Result<i64, &'s
             }
         }
     }
-    let mut aliases = false;
+    let mut aliases = Vec::new();
     for row in rows.definitions {
         let start = row.outputs.start as usize;
         let end = start
@@ -396,18 +569,63 @@ fn literal_alias_rounds(module: &Module, rows: Candidate<'_>) -> Result<i64, &'s
                 .get(&descendant.output)
                 .ok_or("fixture missing anchor")?;
             if row.input != anchor {
-                let source =
-                    definition_literal(module, row.input).ok_or("fixture nonliteral alias")?;
+                let source = fixture_definition_value(module, row.input)
+                    .ok_or("fixture nonliteral alias")?;
                 let target =
-                    definition_literal(module, anchor).ok_or("fixture nonliteral alias")?;
-                if source != target {
-                    return Err("fixture unequal literal alias");
-                }
-                aliases = true;
+                    fixture_definition_value(module, anchor).ok_or("fixture nonliteral alias")?;
+                aliases.push((source, target));
             }
         }
     }
-    Ok(1 + i64::from(aliases))
+    for round in 1..=facts.parents.len() + 1 {
+        let mut changed = false;
+        for block in body.blocks.iter().skip(1) {
+            for (ordinal, parameter) in block.parameters.iter().enumerate() {
+                let mut selected = None;
+                let mut compatible = true;
+                // Incoming lists are prepend-built from lexical edge order.
+                // Keep this order explicit, not inferred from value numbers.
+                for (_, target, values) in incoming.iter().rev() {
+                    if *target != block.id {
+                        continue;
+                    }
+                    let value = values[ordinal];
+                    if representative(&facts.parents, value)
+                        == representative(&facts.parents, parameter.id)
+                    {
+                        continue;
+                    }
+                    if let Some(previous) = selected {
+                        compatible &= facts.equal(previous, value)?;
+                    } else {
+                        selected = Some(value);
+                    }
+                }
+                if compatible {
+                    if let Some(value) = selected {
+                        changed |= facts.merge(parameter.id, value)?;
+                    }
+                }
+            }
+        }
+        fixture_scalar_grammar(body, &facts)?;
+        for (source, target) in &aliases {
+            if facts.equal(*source, *target)? {
+                changed |= facts.merge(*source, *target)?;
+            } else if facts.literal(*source)?.is_some() && facts.literal(*target)?.is_some() {
+                return Err("fixture unequal literal alias");
+            }
+        }
+        if !changed {
+            for (source, target) in &aliases {
+                if !facts.equal(*source, *target)? {
+                    return Err("fixture nonliteral alias");
+                }
+            }
+            return i64::try_from(round).map_err(|_| "fixture round overflow");
+        }
+    }
+    Err("fixture phi equations did not converge")
 }
 
 pub(super) fn assert_policy6_endpoints(
@@ -431,7 +649,7 @@ pub(super) fn assert_policy6_endpoints(
     }
     let mut bc = expected(family, mutation);
     bc.rounds = literal_alias_rounds(owner.bound().module(), third.occurrences().candidate())
-        .expect("B/C fixture must have only independent literal aliases");
+        .expect("B/C fixture must have only reviewed literal/phi dependencies");
     let mut oi = expected(family, mutation);
     oi.rounds = literal_alias_rounds(
         fifth.owner().module(),
@@ -441,7 +659,7 @@ pub(super) fn assert_policy6_endpoints(
             .occurrences()
             .candidate(),
     )
-    .expect("O/I fixture must have only independent literal aliases");
+    .expect("O/I fixture must have only reviewed literal/phi dependencies");
     ReplaySchedule { bc, oi }
 }
 
@@ -641,7 +859,7 @@ fn transition_cache_fixture_literal_alias_rounds_are_exact_and_refuse_other_depe
     module.functions[0].body.as_mut().unwrap().blocks.push(phi);
     assert_eq!(
         literal_alias_rounds(&module, candidate(&definitions, &outputs)),
-        Err("fixture phi dependency")
+        Err("fixture unreachable block")
     );
 }
 
@@ -677,4 +895,363 @@ fn transition_cache_fixture_rounds_follow_phi_dependency_order_not_block_count()
     assert_eq!(phi_rounds(&body), 3);
     body.blocks.swap(1, 2);
     assert_eq!(phi_rounds(&body), 2);
+}
+
+mod phi_controls {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        BasicBlock, CanonicalKirBlockCoordinateV1 as Block,
+        CanonicalKirDefinitionDescendantV1 as Output, CanonicalKirDefinitionTransitionV1 as Row,
+        CanonicalKirFunctionCoordinateV1 as FunctionId,
+        CanonicalKirOperationCoordinateV1 as OperationId, CanonicalKirTransitionRangeV1 as Range,
+        Function, Operation, ScalarType, Signature, SwitchCase, ValueDef,
+    };
+
+    fn ty() -> Type {
+        Type::Scalar(ScalarType::U32)
+    }
+    fn parameter(value: u32) -> ValueDef {
+        ValueDef::new(ValueId(value), ty())
+    }
+    fn constant(value: u32, bits: u32) -> Operation {
+        Operation::effect_free(
+            parameter(value),
+            OperationKind::Constant(Constant::U32(bits)),
+        )
+    }
+    fn jump(target: u32, values: &[u32]) -> Terminator {
+        Terminator::Branch {
+            target: BlockId(target),
+            arguments: values.iter().copied().map(ValueId).collect(),
+        }
+    }
+    fn block(
+        id: u32,
+        parameters: &[u32],
+        operations: Vec<Operation>,
+        terminator: Terminator,
+    ) -> BasicBlock {
+        let mut block = BasicBlock::new(BlockId(id));
+        block.parameters = parameters.iter().copied().map(parameter).collect();
+        block.operations = operations;
+        block.terminator = Some(terminator);
+        block
+    }
+    fn module(parameters: Vec<Type>, values: Vec<ValueId>, blocks: Vec<BasicBlock>) -> Module {
+        let mut module = Module::new("literal_phi_round_control");
+        module.functions.push(Function::kernel_entry(
+            "entry",
+            Signature::new(parameters, vec![]),
+            values,
+            blocks,
+        ));
+        module
+    }
+    fn candidate<'a>(definitions: &'a [Row], outputs: &'a [Output]) -> Candidate<'a> {
+        Candidate {
+            functions: &[],
+            blocks: &[],
+            segments: &[],
+            operations: &[],
+            definitions,
+            definition_outputs: outputs,
+            uses: &[],
+            edges: &[],
+            edge_arguments: &[],
+        }
+    }
+    fn literal_alias() -> ([Row; 2], [Output; 2]) {
+        let definition = |operation| Definition::Result {
+            operation: OperationId {
+                block: Block {
+                    function: FunctionId(0),
+                    block: 0,
+                },
+                operation,
+            },
+            result: 0,
+        };
+        (
+            [
+                Row {
+                    input: definition(0),
+                    outputs: Range { start: 0, len: 1 },
+                },
+                Row {
+                    input: definition(1),
+                    outputs: Range { start: 1, len: 1 },
+                },
+            ],
+            [
+                Output {
+                    output: definition(0),
+                    kind: Descendant::Retained,
+                },
+                Output {
+                    output: definition(0),
+                    kind: Descendant::Substituted,
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn induction_phi_keeps_distinct_initial_and_increment_values_with_literal_aliases() {
+        let module = module(
+            vec![ty()],
+            vec![ValueId(0)],
+            vec![
+                block(
+                    0,
+                    &[],
+                    vec![constant(1, 0), constant(8, 0)],
+                    Terminator::Switch {
+                        selector: ValueId(0),
+                        cases: vec![SwitchCase {
+                            value: 0,
+                            target: BlockId(2),
+                            arguments: vec![ValueId(1)],
+                        }],
+                        default_target: BlockId(1),
+                        default_arguments: vec![],
+                    },
+                ),
+                block(1, &[], vec![constant(2, 1)], jump(2, &[2])),
+                block(
+                    2,
+                    &[3],
+                    vec![
+                        constant(4, 3),
+                        Operation::effect_free(
+                            ValueDef::new(ValueId(5), Type::Scalar(ScalarType::Bool)),
+                            OperationKind::Compare {
+                                predicate: ComparePredicate::LessThan,
+                                lhs: ValueId(3),
+                                rhs: ValueId(4),
+                            },
+                        ),
+                    ],
+                    Terminator::ConditionalBranch {
+                        condition: ValueId(5),
+                        then_target: BlockId(3),
+                        then_arguments: vec![],
+                        else_target: BlockId(4),
+                        else_arguments: vec![],
+                    },
+                ),
+                block(
+                    3,
+                    &[],
+                    vec![
+                        constant(6, 1),
+                        Operation::effect_free(
+                            parameter(7),
+                            OperationKind::Binary {
+                                op: BinaryOp::Add,
+                                lhs: ValueId(3),
+                                rhs: ValueId(6),
+                            },
+                        ),
+                    ],
+                    jump(2, &[7]),
+                ),
+                block(4, &[], vec![], Terminator::Return { values: vec![] }),
+            ],
+        );
+        assert_eq!(literal_alias_rounds(&module, candidate(&[], &[])), Ok(1));
+        let (rows, outputs) = literal_alias();
+        assert_eq!(
+            literal_alias_rounds(&module, candidate(&rows, &outputs)),
+            Ok(2)
+        );
+    }
+
+    #[test]
+    fn phi_cycles_follow_scan_order_for_dynamic_and_literal_roots_without_candidate_premises() {
+        for literal in [false, true] {
+            let mut module = module(
+                if literal { vec![] } else { vec![ty()] },
+                if literal { vec![] } else { vec![ValueId(0)] },
+                vec![
+                    block(
+                        0,
+                        &[],
+                        if literal {
+                            vec![constant(0, 7)]
+                        } else {
+                            vec![]
+                        },
+                        jump(1, &[0]),
+                    ),
+                    block(1, &[1], vec![], jump(2, &[1])),
+                    block(2, &[2], vec![], jump(1, &[2])),
+                ],
+            );
+            assert_eq!(literal_alias_rounds(&module, candidate(&[], &[])), Ok(3));
+            module.functions[0].body.as_mut().unwrap().blocks.swap(1, 2);
+            assert_eq!(literal_alias_rounds(&module, candidate(&[], &[])), Ok(2));
+        }
+        let source = module(
+            vec![ty(), ty()],
+            vec![ValueId(0), ValueId(1)],
+            vec![
+                block(0, &[], vec![], jump(1, &[0])),
+                block(1, &[2], vec![], Terminator::Return { values: vec![] }),
+            ],
+        );
+        let argument = |argument| Definition::FunctionArgument {
+            function: FunctionId(0),
+            argument,
+        };
+        let mut rows = [
+            Row {
+                input: argument(0),
+                outputs: Range { start: 0, len: 1 },
+            },
+            Row {
+                input: Definition::BlockArgument {
+                    block: Block {
+                        function: FunctionId(0),
+                        block: 1,
+                    },
+                    argument: 0,
+                },
+                outputs: Range { start: 1, len: 1 },
+            },
+        ];
+        let mut outputs = [
+            Output {
+                output: argument(0),
+                kind: Descendant::Retained,
+            },
+            Output {
+                output: argument(0),
+                kind: Descendant::Substituted,
+            },
+        ];
+        assert_eq!(
+            literal_alias_rounds(&source, candidate(&rows, &outputs)),
+            Ok(2)
+        );
+        rows[0].input = argument(1);
+        outputs[0].output = argument(1);
+        outputs[1].output = argument(1);
+        assert_eq!(
+            literal_alias_rounds(&source, candidate(&rows, &outputs)),
+            Err("fixture nonliteral alias")
+        );
+    }
+
+    #[test]
+    fn equal_typed_literal_edges_and_descendants_share_one_ordered_fixed_point() {
+        let mut module = module(
+            vec![Type::Scalar(ScalarType::Bool)],
+            vec![ValueId(0)],
+            vec![
+                block(
+                    0,
+                    &[],
+                    vec![constant(1, 7), constant(2, 7)],
+                    Terminator::ConditionalBranch {
+                        condition: ValueId(0),
+                        then_target: BlockId(1),
+                        then_arguments: vec![ValueId(1)],
+                        else_target: BlockId(1),
+                        else_arguments: vec![ValueId(2)],
+                    },
+                ),
+                block(1, &[3], vec![], Terminator::Return { values: vec![] }),
+            ],
+        );
+        assert_eq!(literal_alias_rounds(&module, candidate(&[], &[])), Ok(3));
+        let (rows, outputs) = literal_alias();
+        assert_eq!(
+            literal_alias_rounds(&module, candidate(&rows, &outputs)),
+            Ok(2)
+        );
+        module.functions[0].body.as_mut().unwrap().blocks[0].operations[1].kind =
+            OperationKind::Constant(Constant::U32(8));
+        assert_eq!(literal_alias_rounds(&module, candidate(&[], &[])), Ok(1));
+        assert_eq!(
+            literal_alias_rounds(&module, candidate(&rows, &outputs)),
+            Err("fixture unequal literal alias")
+        );
+    }
+
+    #[test]
+    fn phi_induced_scalar_control_and_malformed_edge_dependencies_stay_refused() {
+        let entry_backedge = module(
+            vec![],
+            vec![],
+            vec![block(0, &[0], vec![constant(1, 7)], jump(0, &[1]))],
+        );
+        assert_eq!(
+            literal_alias_rounds(&entry_backedge, candidate(&[], &[])),
+            Ok(1),
+            "an initial entry parameter is not established by its backedge"
+        );
+        let mut source = module(
+            vec![],
+            vec![],
+            vec![
+                block(0, &[], vec![constant(0, 0)], jump(1, &[0])),
+                block(1, &[1], vec![], Terminator::Return { values: vec![] }),
+            ],
+        );
+        assert_eq!(literal_alias_rounds(&source, candidate(&[], &[])), Ok(2));
+        source.functions[0].body.as_mut().unwrap().blocks[1].operations = vec![
+            constant(2, 1),
+            Operation::effect_free(
+                parameter(3),
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: ValueId(1),
+                    rhs: ValueId(2),
+                },
+            ),
+        ];
+        assert_eq!(
+            literal_alias_rounds(&source, candidate(&[], &[])),
+            Err("fixture scalar alias or folding dependency")
+        );
+        source.functions[0].body.as_mut().unwrap().blocks[1]
+            .operations
+            .clear();
+        source.functions[0].body.as_mut().unwrap().blocks[1].terminator =
+            Some(Terminator::Switch {
+                selector: ValueId(1),
+                cases: vec![SwitchCase {
+                    value: 0,
+                    target: BlockId(2),
+                    arguments: vec![],
+                }],
+                default_target: BlockId(2),
+                default_arguments: vec![],
+            });
+        source.functions[0]
+            .body
+            .as_mut()
+            .unwrap()
+            .blocks
+            .push(block(2, &[], vec![], Terminator::Return { values: vec![] }));
+        assert_eq!(
+            literal_alias_rounds(&source, candidate(&[], &[])),
+            Err("fixture selected-edge dependency")
+        );
+        source.functions[0].body.as_mut().unwrap().blocks.pop();
+        source.functions[0].body.as_mut().unwrap().blocks[1].terminator =
+            Some(Terminator::Return { values: vec![] });
+        source.functions[0].body.as_mut().unwrap().blocks[0].terminator = Some(jump(1, &[]));
+        assert_eq!(
+            literal_alias_rounds(&source, candidate(&[], &[])),
+            Err("fixture phi arity")
+        );
+        source.functions[0].body.as_mut().unwrap().blocks[0].terminator = Some(jump(1, &[0]));
+        source.functions[0].body.as_mut().unwrap().blocks[1].parameters[0].ty =
+            Type::Scalar(ScalarType::I32);
+        assert_eq!(
+            literal_alias_rounds(&source, candidate(&[], &[])),
+            Err("fixture edge type")
+        );
+    }
 }

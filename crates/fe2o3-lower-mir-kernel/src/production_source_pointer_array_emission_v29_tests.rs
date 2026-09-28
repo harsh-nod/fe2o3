@@ -35,7 +35,9 @@ fn original_argument_pointer_array_owner_v29() -> ProductionSemanticSsaOwnerV1 {
     functions[0] = function(
         60,
         SemanticFunctionRoleV1::KernelRoot,
-        abi(61, true, &[pointer]),
+        abi(61, true, &[pointer])
+            .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::RawPointer])
+            .unwrap(),
         vec![
             local(62, UNIT, SemanticLocalRoleV1::Return),
             local(63, pointer, SemanticLocalRoleV1::Argument(0)),
@@ -103,7 +105,9 @@ fn original_argument_pointer_array_owner_v29() -> ProductionSemanticSsaOwnerV1 {
     functions[2] = function(
         210,
         SemanticFunctionRoleV1::InternalHelper,
-        abi(211, false, &[pointer]),
+        abi(211, false, &[pointer])
+            .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::RawPointer])
+            .unwrap(),
         vec![
             local(212, UNIT, SemanticLocalRoleV1::Return),
             local(213, pointer, SemanticLocalRoleV1::Argument(0)),

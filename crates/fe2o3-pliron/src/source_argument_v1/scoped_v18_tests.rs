@@ -2,6 +2,9 @@ use super::*;
 use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, Signature, SliceType};
 use std::cell::Cell;
 
+#[path = "source_raw_helper_v18_tests.rs"]
+mod raw_helper;
+
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const SLICE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);

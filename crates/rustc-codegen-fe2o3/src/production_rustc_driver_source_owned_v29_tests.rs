@@ -26,6 +26,8 @@ struct ScalarResult {
     undercut_refused: bool,
     raw_payload_preserved: bool,
     exact_and_short_storage: bool,
+    publication_bindings_retained: bool,
+    callback_error_preserved: bool,
 }
 
 #[derive(Default)]
@@ -58,8 +60,11 @@ impl Callbacks for ScalarCallbacks {
                 foreign.source_semantic().wire_version(),
                 SemanticMirWireVersionV1::V29
             );
-            let mut report = transaction()?
-                .with_source_owned_scalar_handoff_v29(|source, handoff, budget| {
+            let expected_target = crate::production_target_v1::RetainedProductionTargetV1::authenticate_live_before_collection(tcx)
+                .and_then(|target| target.authenticate_import_session(tcx))
+                .map_err(|error| format!("independent target observation: {error:?}"))?;
+            let continuation = transaction()?
+                .with_source_owned_scalar_custody_v29(|source, handoff, budget| {
                     let original = source.canonical(budget)?;
                     let output = handoff.output(budget)?;
                     assert_eq!(
@@ -91,9 +96,38 @@ impl Callbacks for ScalarCallbacks {
                         undercut_refused: false,
                         raw_payload_preserved: false,
                         exact_and_short_storage: false,
+                        publication_bindings_retained: false,
+                        callback_error_preserved: false,
                     })
                 })
                 .map_err(|error| format!("genuine handoff: {error:?}"))?;
+            continuation.assert_retained_bindings_for_test_v29(&foreign, expected_target.profile());
+            let mut report = continuation.into_observation();
+            report.publication_bindings_retained = true;
+
+            struct DropWitness<'a>(&'a std::cell::Cell<usize>);
+            impl Drop for DropWitness<'_> {
+                fn drop(&mut self) {
+                    self.0.set(self.0.get() + 1);
+                }
+            }
+            let callback_entered = std::cell::Cell::new(false);
+            let callback_dropped = std::cell::Cell::new(0);
+            let entered = &callback_entered;
+            let witness = DropWitness(&callback_dropped);
+            let refused =
+                transaction()?.with_source_owned_scalar_custody_v29::<(), _>(move |_, _, _| {
+                    let _owned = witness;
+                    entered.set(true);
+                    Err(Error::Unsupported("original custody callback refusal"))
+                });
+            assert!(callback_entered.get());
+            assert_eq!(callback_dropped.get(), 1);
+            assert!(matches!(
+                refused,
+                Err(Error::Unsupported("original custody callback refusal"))
+            ));
+            report.callback_error_preserved = true;
 
             let error = transaction()?
                 .with_source_owned_scalar_handoff_v29::<(), _>(|_, handoff, budget| {
@@ -176,11 +210,15 @@ impl Callbacks for ScalarCallbacks {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 transaction()
                     .unwrap()
-                    .with_source_owned_scalar_handoff_v29::<(), _>(|_, _, _| {
+                    .with_source_owned_scalar_custody_v29::<(), _>(|_, _, _| {
                         std::panic::panic_any(0x1762_u32)
                     })
             }));
-            assert_eq!(*result.unwrap_err().downcast::<u32>().unwrap(), 0x1762);
+            let payload = match result {
+                Err(payload) => payload,
+                Ok(_) => panic!("raw callback panic returned a custody continuation"),
+            };
+            assert_eq!(*payload.downcast::<u32>().unwrap(), 0x1762);
             report.raw_payload_preserved = true;
 
             // The exact same function-item callback and result layout is used
@@ -269,6 +307,8 @@ fn check_scalar_sources(cases: &[(&str, &str)], profiles: &[(u8, u8)], changed: 
             assert!(result.foreign_custody_refused && result.undercut_refused);
             assert!(result.raw_payload_preserved);
             assert!(result.exact_and_short_storage);
+            assert!(result.publication_bindings_retained);
+            assert!(result.callback_error_preserved);
             if let Some(previous) = prior.get(label) {
                 assert_eq!(&result, previous);
             } else {

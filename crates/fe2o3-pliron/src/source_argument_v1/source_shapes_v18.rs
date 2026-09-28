@@ -97,6 +97,31 @@ pub fn source_helper_parameter_shape_with_policy_v18(
     mapped: fe2o3_mir_model::SemanticAdjustedArgumentV1<'_>,
     policy: ParameterLeafPolicyV1,
 ) -> Result<(bool, HelperParameterComponentsV1), ProductionSourceArgumentErrorV1> {
+    let argument = mapped.abi();
+    // This carries an admitted raw pointer value, not a pointee region or a
+    // borrow. Legacy helpers and pointer-free aggregate admission stay closed.
+    if policy != ParameterLeafPolicyV1::PointerFree
+        && mapped.source_ownership() == SemanticSourceArgumentOwnershipV1::RawPointer
+        && mapped.tuple_field().is_none()
+        && mapped.local_field().is_none()
+        && argument.value().adjusted().is_none()
+        && argument.value().pointee_override().is_none()
+        && matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
+        && let Some(declaration) = types.get(argument.ty().index() as usize)
+        && let SemanticTypeShapeV1::Pointer(pointer) = declaration.shape()
+        && pointer.kind() == SemanticPointerKindV1::Raw
+        && pointer.metadata() == SemanticPointerMetadataV1::None
+        && pointer.pointer_width_bits() == 64
+        && declaration.layout().size_bytes() == Some(8)
+        && declaration.layout().alignment_bytes() == 8
+        && let SemanticBackendReprV1::Scalar(scalar) = declaration.layout().backend_repr()
+        && matches!(scalar.primitive(), SemanticBackendPrimitiveV1::Pointer {
+            address_space, size_bytes: 8, alignment_bytes: 8
+        } if address_space == pointer.address_space())
+    {
+        let physical = source_parameter_type_v18(types, &[], argument.ty())?;
+        return Ok((false, vec![(Vec::new(), argument.ty(), physical)]));
+    }
     let (shared, mut rows) =
         helper_parameter_shape_with_policy_v1(types, function, function_id, mapped, policy)?;
     for (_, semantic_type, physical) in &mut rows {

@@ -1,5 +1,55 @@
 use super::*;
 
+impl<R> SourceOwnedCompilationContinuationV29<R> {
+    pub(crate) fn assert_retained_bindings_for_test_v29(
+        &self,
+        expected: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        expected_target: TargetProfile,
+    ) {
+        assert_eq!(&self.original_source, expected.source_semantic_sha256());
+        assert_eq!(self.original_ssa, expected.identity());
+        assert_eq!(
+            self.bindings
+                .rustc_preflight_plan
+                .rustc_identity_inventory_sha256(),
+            self.bindings.rustc_identity_inventory.sha256(),
+        );
+        let semantic = expected.source_semantic();
+        assert_eq!(
+            self.bindings.typed_descriptor_roots.len(),
+            semantic.roots().len()
+        );
+        for (root, function) in self
+            .bindings
+            .typed_descriptor_roots
+            .iter()
+            .zip(semantic.roots())
+        {
+            let entry = semantic.functions()[function.index() as usize]
+                .kernel_entry()
+                .expect("retained original kernel root");
+            assert_eq!(
+                root.kernel_binding_bytes(),
+                *entry.kernel_binding_identity().as_bytes()
+            );
+        }
+        assert_eq!(self.bindings.rustc_target.profile(), expected_target);
+        assert!(
+            self.bindings
+                .transaction
+                .compiler_custody
+                .is_extraction_only()
+        );
+        assert_eq!(
+            self.bindings
+                .transaction
+                .compiler_custody
+                .retained_protected_binding_count(),
+            0
+        );
+    }
+}
+
 #[test]
 fn source_owned_projection_storage_and_work_are_prepaid_at_exact_and_one_short_limits() {
     for limit in [56, 57] {
@@ -73,6 +123,10 @@ fn source_owned_entry_header_pays_owned_aligned_capture_and_result_independently
             + align_of::<Result<R, Error>>()
             + size_of::<std::thread::Result<Result<R, Error>>>()
             + size_of::<AssertUnwindSafe<Result<R, Error>>>()
+            + size_of::<SourceOwnedCompilationContinuationV29<R>>()
+            + align_of::<SourceOwnedCompilationContinuationV29<R>>()
+            + size_of::<Result<SourceOwnedCompilationContinuationV29<R>, Error>>()
+            + align_of::<Result<SourceOwnedCompilationContinuationV29<R>, Error>>()
             + size_of::<PreparedSsaMaterializationV29>()
             + align_of::<PreparedSsaMaterializationV29>()
             + size_of::<Vec<Class>>()

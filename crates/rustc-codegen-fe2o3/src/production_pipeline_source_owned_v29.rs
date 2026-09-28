@@ -87,6 +87,36 @@ impl From<target_result::ClosedScalarTargetLlvmErrorV29> for Error {
 const WORK_LIMIT: usize = 500_000_000;
 const STORAGE_LIMIT: usize = 20_000_000;
 
+/// Move-only compiler custody after a lexical source-owned observation.
+///
+/// The actual source and checked output have already been destroyed. Retaining
+/// their original identities and compiler bindings does not retain executable
+/// output or grant descriptor, lineage, worker, or publication authority.
+/// These digests are identity evidence only; they cannot authenticate a later
+/// reconstructed output. Final publication must consume the actual optimized
+/// owner under live source custody or an independently admitted owned snapshot.
+#[must_use = "dropping the continuation abandons retained compiler custody"]
+pub(crate) struct SourceOwnedCompilationContinuationV29<R> {
+    observation: R,
+    original_source: [u8; 32],
+    original_ssa: fe2o3_pliron::ProductionSemanticSsaIdentityV1,
+    bindings: AuthenticatedProductionBindings,
+}
+
+impl<R> SourceOwnedCompilationContinuationV29<R> {
+    /// Observation-only callers explicitly give up the retained compiler custody.
+    pub(crate) fn into_observation(self) -> R {
+        let Self {
+            observation,
+            original_source: _,
+            original_ssa: _,
+            bindings,
+        } = self;
+        drop(bindings);
+        observation
+    }
+}
+
 pub(crate) fn paid_vec<T>(count: usize, budget: &mut Budget<'_>) -> Result<Vec<T>, Error> {
     let requested = count
         .checked_mul(size_of::<T>())
@@ -129,6 +159,10 @@ fn entry_headers<R, F>() -> Result<usize, Resource> {
         align_of::<Result<R, Error>>(),
         size_of::<std::thread::Result<Result<R, Error>>>(),
         size_of::<AssertUnwindSafe<Result<R, Error>>>(),
+        size_of::<SourceOwnedCompilationContinuationV29<R>>(),
+        align_of::<SourceOwnedCompilationContinuationV29<R>>(),
+        size_of::<Result<SourceOwnedCompilationContinuationV29<R>, Error>>(),
+        align_of::<Result<SourceOwnedCompilationContinuationV29<R>, Error>>(),
         size_of::<PreparedSsaMaterializationV29>(),
         align_of::<PreparedSsaMaterializationV29>(),
         size_of::<Vec<Class>>(),
@@ -156,7 +190,24 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             &mut Budget<'work>,
         ) -> Result<R, Error>,
     {
-        self.with_source_owned_scalar_limits_v29(
+        self.with_source_owned_scalar_custody_v29(consume)
+            .map(SourceOwnedCompilationContinuationV29::into_observation)
+    }
+
+    /// Preserve the actual compiler bindings across the callback without
+    /// widening the closed scalar admission or authorizing its observed result.
+    pub(crate) fn with_source_owned_scalar_custody_v29<R, F>(
+        self,
+        consume: F,
+    ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error>
+    where
+        F: for<'view, 'source, 'work> FnOnce(
+            &'view Source<'source>,
+            &Handoff<'view, 'source>,
+            &mut Budget<'work>,
+        ) -> Result<R, Error>,
+    {
+        self.with_source_owned_scalar_custody_limits_v29(
             WORK_LIMIT,
             STORAGE_LIMIT,
             move |source, handoff, _, _, budget| consume(source, handoff, budget),
@@ -169,6 +220,25 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         storage_limit: usize,
         consume: F,
     ) -> Result<R, Error>
+    where
+        F: for<'view, 'source, 'abi, 'work> FnOnce(
+            &'view Source<'source>,
+            &Handoff<'view, 'source>,
+            &[AbiRoot<'abi>],
+            TargetProfile,
+            &mut Budget<'work>,
+        ) -> Result<R, Error>,
+    {
+        self.with_source_owned_scalar_custody_limits_v29(work_limit, storage_limit, consume)
+            .map(SourceOwnedCompilationContinuationV29::into_observation)
+    }
+
+    fn with_source_owned_scalar_custody_limits_v29<R, F>(
+        self,
+        work_limit: usize,
+        storage_limit: usize,
+        consume: F,
+    ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error>
     where
         F: for<'view, 'source, 'abi, 'work> FnOnce(
             &'view Source<'source>,
@@ -310,8 +380,13 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             }
         });
         drop((classes, abi, ranked_roots));
-        drop(bindings);
-        result
+        let observation = result?;
+        Ok(SourceOwnedCompilationContinuationV29 {
+            observation,
+            original_source: original_sha,
+            original_ssa,
+            bindings,
+        })
     }
 }
 

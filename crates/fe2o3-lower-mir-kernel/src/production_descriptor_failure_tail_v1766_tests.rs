@@ -80,7 +80,24 @@ fn descriptor_failure_tail_run_v1766(
                     else {
                         panic!("the diagnostic must retain its emitted scalar value");
                     };
-                    assert_eq!(*ty, Type::Scalar(ScalarType::U64));
+                    // The length is emitted by SliceLength as Index, whereas
+                    // the original by-value index argument retains U64.
+                    let (expected_local, expected_type) = match diagnostics.len() {
+                        0 => (4, Type::INDEX),
+                        1 => (3, Type::Scalar(ScalarType::U64)),
+                        _ => panic!("unexpected bounds-check diagnostic"),
+                    };
+                    assert_eq!(local, expected_local);
+                    assert_eq!(*ty, expected_type);
+                    assert_eq!(
+                        owner.source_semantic().types()
+                            [original.locals()[local as usize].ty().index() as usize]
+                            .shape(),
+                        &SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                            signed: false,
+                            bits: 64,
+                        })
+                    );
                     assert!(!values.contains(id));
                     assert!(root.source_slots.slots.iter().all(|slot| {
                         slot.instance.index() != 0

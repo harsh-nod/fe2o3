@@ -462,6 +462,12 @@ fn check_argument_trace_v18<'w, R>(
                         semantic.types()[mapped.abi().ty().index() as usize].shape(),
                         SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
                     )
+                    || matches!(
+                        semantic.types()[mapped.abi().ty().index() as usize].shape(),
+                        SemanticTypeShapeV1::Pointer(pointer)
+                            if pointer.kind() == SemanticPointerKindV1::Raw
+                                && pointer.metadata() == SemanticPointerMetadataV1::None
+                    )
             }
         };
         shapes.push(AdjustedArgumentShapeV1 {

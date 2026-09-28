@@ -1302,6 +1302,7 @@ fn allocation_receiver_extraction_exact_and_one_short_work_storage_preserve_firs
         + 2 * 5 // Borrowed result and nested-result prepayments each check the owner.
         + (5 + 5 + 8)
         + (5 + 12 + 4 + 4) // Scratch owner check, unwind frame, root growth capture/refund.
+        + 5 // Scratch-header reservation performs its own owner check.
         + (5 + 1) // Original-owner check and Object-versus-Scalar strategy lookup.
         + (5 + 3)
         + (5 + 1)

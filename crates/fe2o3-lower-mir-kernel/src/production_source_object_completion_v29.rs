@@ -1091,6 +1091,9 @@ thread_local! {
     static SOURCE_OBJECT_BASE_USE_CENSUS_WORK_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
     static SOURCE_OBJECT_BASE_USE_FIRST_SCAN_V29: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
     static SOURCE_OBJECT_BASE_USE_STORAGE_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static SOURCE_OBJECT_READ_INDEX_STORAGE_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static SOURCE_OBJECT_READ_CENSUS_WORK_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static SOURCE_OBJECT_READ_FIRST_CLASSIFICATION_V29: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -1178,11 +1181,10 @@ impl SourceObjectPayloadIndexV29 {
                 budget.charge_work(1)?;
                 if matches!(
                     row.kind,
-                    ScopedMemoryAnchorKindV29::Object(_)
-                        | ScopedMemoryAnchorKindV29::Access {
-                            payload: Some(ScopedMemoryPayloadV29::Load { .. }),
-                            ..
-                        }
+                    ScopedMemoryAnchorKindV29::Access {
+                        payload: Some(ScopedMemoryPayloadV29::Load { .. }),
+                        ..
+                    }
                 ) {
                     read_count = argument_sum_v1(&[read_count, 1])?;
                 }
@@ -1191,6 +1193,30 @@ impl SourceObjectPayloadIndexV29 {
                     budget.charge_work(1)?;
                     if matches!(payload.operation, ScopedObjectOperationV29::Project { .. }) {
                         project_count = argument_sum_v1(&[project_count, 1])?;
+                    }
+                    // Capacity counts only original reads. The fill still
+                    // validates the complete payload, endpoint and source path.
+                    #[cfg(test)]
+                    if SOURCE_OBJECT_READ_FIRST_CLASSIFICATION_V29.get().is_none() {
+                        SOURCE_OBJECT_READ_FIRST_CLASSIFICATION_V29.set(Some(budget.work()));
+                    }
+                    budget.charge_work(2)?;
+                    #[cfg(test)]
+                    {
+                        let (classify, final_check) = SOURCE_OBJECT_READ_CENSUS_WORK_V29.get();
+                        SOURCE_OBJECT_READ_CENSUS_WORK_V29.set((classify + 2, final_check));
+                    }
+                    if matches!(
+                        (payload.operation, payload.role),
+                        (
+                            ScopedObjectOperationV29::ReadValue { .. },
+                            ScopedObjectRoleV29::ReadValue {
+                                read: ScopedObjectReadOriginV29::Original(_),
+                                ..
+                            }
+                        )
+                    ) {
+                        read_count = argument_sum_v1(&[read_count, 1])?;
                     }
                 }
             }
@@ -1210,7 +1236,18 @@ impl SourceObjectPayloadIndexV29 {
                 }
                 rows
             },
-            reads: emission_vec_v1(read_count, budget)?,
+            reads: {
+                #[cfg(test)]
+                let before = budget.storage();
+                let rows = emission_vec_v1(read_count, budget)?;
+                #[cfg(test)]
+                {
+                    let (calls, bytes) = SOURCE_OBJECT_READ_INDEX_STORAGE_V29.get();
+                    SOURCE_OBJECT_READ_INDEX_STORAGE_V29
+                        .set((calls + 1, bytes + budget.storage() - before));
+                }
+                rows
+            },
             projects: emission_vec_v1(project_count, budget)?,
         };
         for sidecar in &source_index.pending.sidecars.rows {
@@ -1310,6 +1347,15 @@ impl SourceObjectPayloadIndexV29 {
                 .set((scan, final_check + budget.work() - before_base_use_check));
         }
         if result.occurrences.len() != event_count {
+            return Err(scoped_object_error_v29());
+        }
+        budget.charge_work(1)?;
+        #[cfg(test)]
+        {
+            let (classify, final_check) = SOURCE_OBJECT_READ_CENSUS_WORK_V29.get();
+            SOURCE_OBJECT_READ_CENSUS_WORK_V29.set((classify, final_check + 1));
+        }
+        if result.reads.len() != read_count {
             return Err(scoped_object_error_v29());
         }
         #[cfg(test)]
