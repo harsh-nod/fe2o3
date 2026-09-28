@@ -2,7 +2,7 @@
 
 use super::*;
 
-fn materialized_descriptor_projection_intact_v1(
+pub(super) fn materialized_descriptor_projection_intact_v1(
     bindings: &[BackendBindingV1],
     descriptors: &[ResidentDataDescriptorV1],
     allocations: &AllocationTableV1,

@@ -14,6 +14,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 #[path = "materialized_retry_tests.rs"]
 mod retry;
 
+#[path = "materialized_completion_tests.rs"]
+mod completion;
+
 const FAULTS: [Fault; 11] = [
     Fault::BindingRejected,
     Fault::BindingUnwind,

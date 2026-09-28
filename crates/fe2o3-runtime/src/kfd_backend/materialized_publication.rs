@@ -77,11 +77,7 @@ impl KfdRuntimeBackendV1 {
         )
     }
 
-    fn materialized_retry_writebacks_intact_v1(&self) -> bool {
-        let active = self
-            .active
-            .as_ref()
-            .expect("preflighted materialized custody");
+    pub(super) fn materialized_writebacks_intact_v1(active: &ActiveSubmissionV1) -> bool {
         let recipe = active.ordinary_recipe.as_ref().unwrap();
         let mut count = 0;
         for binding in recipe
@@ -126,7 +122,7 @@ impl KfdRuntimeBackendV1 {
         if !self.materialized_prepared_selected_v1()
             || self.selected_compute_lane >= self.native_compute_lanes.len()
             || !self.materialized_prepared_custody_intact_v1(submission)
-            || !self.materialized_retry_writebacks_intact_v1()
+            || !Self::materialized_writebacks_intact_v1(self.active.as_ref().unwrap())
             || self.native_reconciliation_pins_lane_v1(self.selected_compute_lane)
         {
             return Err(self.terminal_error("materialized retry lost exact prepared custody"));

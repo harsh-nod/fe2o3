@@ -8,6 +8,56 @@ fn payload() -> u64 {
     host_metadata_table_payload_bytes_v1::<RuntimeComputePipelineSlotV1>(1024).unwrap()
 }
 
+#[test]
+fn materialized_completion_pipeline_promotion_checks_occupancy_and_identity() {
+    for case in 0..8 {
+        let mut pipeline = RuntimeComputePipelineV1::vacant();
+        let first = pipeline.insert_published(active(2)).unwrap();
+        let second = pipeline.insert_published(active(3)).unwrap();
+        assert_eq!(
+            pipeline.checked_frontier_v1().unwrap().unwrap().identity,
+            first
+        );
+        match case {
+            0 => {
+                pipeline.live = 0;
+                pipeline.commit_frontier = None;
+            }
+            1 => pipeline.live = 1,
+            2 => pipeline.slots[0].generation += 1,
+            3 => pipeline.slots[0].entry.as_mut().unwrap().identity.slot = 1,
+            4 => pipeline.slots[0].entry.as_mut().unwrap().active.id = 4,
+            5 => {
+                pipeline.slots[1]
+                    .entry
+                    .as_mut()
+                    .unwrap()
+                    .identity
+                    .logical_epoch = first.logical_epoch
+            }
+            6 => {
+                pipeline.slots[1]
+                    .entry
+                    .as_mut()
+                    .unwrap()
+                    .identity
+                    .logical_epoch += 1
+            }
+            7 => pipeline.commit_frontier = None,
+            _ => unreachable!(),
+        }
+        assert!(pipeline.checked_frontier_v1().is_err());
+        assert!(pipeline.slots[0].entry.is_some());
+        assert!(pipeline.slots[1].entry.is_some());
+        if case != 2 && case != 3 && case != 4 {
+            assert!(pipeline.entry_mut_v1(first).is_some());
+        }
+        if case != 5 && case != 6 {
+            assert!(pipeline.entry_mut_v1(second).is_some());
+        }
+    }
+}
+
 fn account(bytes: u64) -> ResourceCreditAccountV1 {
     ResourceCreditAccountV1::new(
         ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, bytes),

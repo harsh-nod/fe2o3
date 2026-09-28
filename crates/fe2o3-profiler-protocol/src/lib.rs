@@ -882,7 +882,23 @@ pub fn push_observed_event_with_encoded_len_v1(
     }
     let sequence =
         u64::try_from(events.len()).map_err(|_| KfdRuntimeProfileErrorV1::SizeOverflow)?;
-    let payload = serde_json::to_vec(&event).map_err(|_| KfdRuntimeProfileErrorV1::JsonEncode)?;
+    // The closed completion payload contains only a fixed identity and eight
+    // u64 timings. Keep its canonical JSON on the stack in the completion path.
+    let mut completion_bytes = [0_u8; 1024];
+    let payload = if matches!(
+        event,
+        KfdRuntimeProfileEventKindV1::DispatchCompleted { .. }
+    ) {
+        let mut writer = std::io::Cursor::new(completion_bytes.as_mut_slice());
+        serde_json::to_writer(&mut writer, &event)
+            .map_err(|_| KfdRuntimeProfileErrorV1::JsonEncode)?;
+        let len = writer.position() as usize;
+        std::borrow::Cow::Borrowed(&completion_bytes[..len])
+    } else {
+        std::borrow::Cow::Owned(
+            serde_json::to_vec(&event).map_err(|_| KfdRuntimeProfileErrorV1::JsonEncode)?,
+        )
+    };
     let identity = derive_event_identity_from_payload_v1(capture_scope, sequence, &payload)?;
     events.push(KfdRuntimeProfileEventV1 {
         sequence,
@@ -1430,6 +1446,45 @@ impl Error for AgentKfdProfilerErrorV1 {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_stack_payload_preserves_canonical_identity_and_size() {
+        let scope = ProfileIdentityV1::new([41; 32]).unwrap();
+        let dispatch = ProfileIdentityV1::new([42; 32]).unwrap();
+        for sequence in [0, 9, 10, 999, 16_383] {
+            for value in [0, 9, 10, u64::MAX] {
+                let event = KfdRuntimeProfileEventKindV1::DispatchCompleted {
+                    dispatch,
+                    host_timing: KfdProfileHostTimingV1 {
+                        preparation_ns: value,
+                        bound_snapshot_ns: value,
+                        authority_ns: value,
+                        native_binding_ns: value,
+                        publication_ns: value,
+                        publish_to_completion_ns: value,
+                        completed_readback_ns: value,
+                        recycle_ns: value,
+                    },
+                };
+                let expected = derive_event_identity_v1(scope, sequence, &event).unwrap();
+                let mut events = vec![
+                    KfdRuntimeProfileEventV1 {
+                        sequence: 0,
+                        identity: dispatch,
+                        origin: ProfileTruthOriginV1::Observed,
+                        event: KfdRuntimeProfileEventKindV1::StreamCreated { stream: dispatch },
+                    };
+                    sequence as usize
+                ];
+                let len =
+                    push_observed_event_with_encoded_len_v1(scope, &mut events, event).unwrap();
+                let recorded = events.last().unwrap();
+                assert_eq!(recorded.identity, expected);
+                assert_eq!(recorded.sequence, sequence);
+                assert_eq!(len, serde_json::to_vec(recorded).unwrap().len() as u64);
+            }
+        }
+    }
 
     fn identity(seed: u8) -> ProfileIdentityV1 {
         ProfileIdentityV1::new([seed; 32]).unwrap()

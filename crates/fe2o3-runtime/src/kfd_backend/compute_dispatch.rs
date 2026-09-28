@@ -754,21 +754,12 @@ impl KfdRuntimeBackendV1 {
             if backend.scalar_completion_selected_v1() {
                 return backend.advance_scalar_completion_v1(None);
             }
-            let ordinary_native_lane = if backend
-                .active
-                .as_ref()
-                .and_then(|active| active.execution.as_ref())
-                .is_some_and(|execution| {
-                    matches!(execution, ActiveComputeExecutionV1::Materialized(_))
-                }) {
-                Some(backend.selected_native_compute_lane_v1().map_err(|_| {
-                    backend.terminal_error(
-                        "published KFD submission lost its exact physical compute lane",
-                    )
-                })?)
-            } else {
-                None
-            };
+            if backend.materialized_completion_selected_v1() {
+                let id = backend.active.as_ref().unwrap().id;
+                return backend.advance_materialized_completion_v1(
+                    super::materialized_completion::MaterializedCompletionTargetV1::Frontier(id),
+                );
+            }
             #[cfg(test)]
             if backend.scripted_persistent_transition_failure
                 == Some(ScriptedPersistentTransitionFailureV1::UnwindBeforeTake)
@@ -801,66 +792,21 @@ impl KfdRuntimeBackendV1 {
                     backend.active = Some(active);
                     Err(backend.terminal_error("materialized retry bypassed its indexed path"))
                 }
-                ActiveComputeExecutionV1::Materialized(batch) => {
-                    let native_lane = ordinary_native_lane
-                        .expect("materialized execution validated its native lane");
-                    let mut batch_owner = Some(batch);
-                    let observation =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            backend
-                                .queue
-                                .as_mut()
-                                .expect("active submission retains queue")
-                                .with_compute_lane_v1(native_lane, |queue| {
-                                    queue.poll_fixed_dispatch(
-                                        batch_owner.take().expect(
-                                            "selected lane consumes the batch exactly once",
-                                        ),
-                                    )
-                                })
-                        }));
-                    let poll = match observation {
-                        Ok(Ok(Ok(poll))) => poll,
-                        Ok(Ok(Err(error))) => {
-                            backend.active = Some(active);
-                            return Err(backend
-                                .terminal_error(format!("KFD completion observation: {error}")));
-                        }
-                        Ok(Err(error)) => {
-                            if let Some(batch) = batch_owner.take() {
-                                active.execution =
-                                    Some(ActiveComputeExecutionV1::Materialized(batch));
-                            }
-                            backend.active = Some(active);
-                            return Err(backend.terminal_error(format!(
-                                "KFD compute-lane selection after publication: {error}"
-                            )));
-                        }
-                        Err(payload) => {
-                            if let Some(batch) = batch_owner.take() {
-                                active.execution =
-                                    Some(ActiveComputeExecutionV1::Materialized(batch));
-                            }
-                            backend.active = Some(active);
-                            let _ = backend.terminal_error(
-                                "KFD completion observation unwound with published custody",
-                            );
-                            std::panic::resume_unwind(payload);
-                        }
-                    };
-                    match poll {
-                        Gfx942DispatchPollV1::Pending(batch) => {
-                            active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
-                            backend.active = Some(active);
-                            Ok(BackendPollV1::Pending)
-                        }
-                        Gfx942DispatchPollV1::Ready(completed) => {
-                            backend.finish_completed(active, completed)
-                        }
-                    }
+                execution @ (ActiveComputeExecutionV1::Materialized(_)
+                | ActiveComputeExecutionV1::MaterializedCompleted(_)
+                | ActiveComputeExecutionV1::MaterializedNativeOwned(_)
+                | ActiveComputeExecutionV1::MaterializedRetired(_)) => {
+                    active.execution = Some(execution);
+                    backend.active = Some(active);
+                    Err(backend.terminal_error("ordinary completion bypassed its indexed path"))
                 }
-                ActiveComputeExecutionV1::MaterializedCompleted(completed) => {
-                    backend.finish_completed(active, completed)
+                #[cfg(test)]
+                execution @ (ActiveComputeExecutionV1::ScriptedMaterializedCompleted
+                | ActiveComputeExecutionV1::ScriptedMaterializedRetired) => {
+                    active.execution = Some(execution);
+                    backend.active = Some(active);
+                    Err(backend
+                        .terminal_error("scripted ordinary completion bypassed its indexed path"))
                 }
                 execution @ ActiveComputeExecutionV1::PersistentPrepared { .. } => {
                     active.execution = Some(execution);
@@ -976,236 +922,19 @@ impl KfdRuntimeBackendV1 {
         Ok(status)
     }
 
-    // Recycle failures retain their exact completed token inline. Boxing that
-    // token would add allocation failure to a linear-custody recovery path.
-    #[allow(clippy::result_large_err)]
     fn poll_pipelined_compute_submission_v1(
         &mut self,
         submission: u64,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        match self.compute_pipeline.phase(submission) {
-            Some(RuntimeComputePipelinePhaseV1::PhysicallyRetired) => {
-                return Ok(BackendPollV1::Pending);
-            }
-            Some(RuntimeComputePipelinePhaseV1::Quarantined) => {
-                return Err(self.terminal_error(
-                    "KFD pipelined submission is quarantined after an indeterminate transition",
-                ));
-            }
-            Some(
-                RuntimeComputePipelinePhaseV1::Published | RuntimeComputePipelinePhaseV1::Completed,
-            ) => {}
-            None => {
-                return Err(Self::rejected(
-                    KfdRuntimeBackendErrorKindV1::UnknownHandle,
-                    "unknown KFD pipelined submission",
-                ));
-            }
-        }
-        let native_lane = self.selected_native_compute_lane_v1().map_err(|_| {
-            self.terminal_error("pipelined KFD submission lost its exact physical compute lane")
-        })?;
-        let Some((identity, mut active)) = self.compute_pipeline.take_physical_owner(submission)
-        else {
-            return Err(
-                self.terminal_error("published KFD pipeline phase lost its exact slot owner")
-            );
+        let Some(identity) = self.compute_pipeline.identity_for_submission_v1(submission) else {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown KFD pipelined submission",
+            ));
         };
-        let Some(execution) = active.execution.take() else {
-            if self
-                .compute_pipeline
-                .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
-                .is_err()
-            {
-                std::process::abort();
-            }
-            return Err(self
-                .terminal_error("published KFD pipeline entry lost its native execution custody"));
-        };
-        let completed = match execution {
-            ActiveComputeExecutionV1::Materialized(batch) => {
-                let mut batch_owner = Some(batch);
-                let observation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    self.queue
-                        .as_mut()
-                        .expect("pipelined submission retains queue")
-                        .with_compute_lane_v1(native_lane, |queue| {
-                            queue.poll_fixed_dispatch(
-                                batch_owner
-                                    .take()
-                                    .expect("selected lane consumes the batch exactly once"),
-                            )
-                        })
-                }));
-                let poll = match observation {
-                    Ok(Ok(poll)) => poll,
-                    Ok(Err(error)) => {
-                        if let Some(batch) = batch_owner.take() {
-                            active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
-                        }
-                        if self
-                            .compute_pipeline
-                            .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
-                            .is_err()
-                        {
-                            std::process::abort();
-                        }
-                        return Err(self.terminal_error(format!(
-                            "KFD compute-lane selection after pipelined publication: {error}"
-                        )));
-                    }
-                    Err(payload) => {
-                        if let Some(batch) = batch_owner.take() {
-                            active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
-                        }
-                        if self
-                            .compute_pipeline
-                            .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
-                            .is_err()
-                        {
-                            std::process::abort();
-                        }
-                        let _ = self.terminal_error(
-                            "KFD pipelined completion observation unwound with published custody",
-                        );
-                        std::panic::resume_unwind(payload);
-                    }
-                };
-                match poll {
-                    Ok(Gfx942DispatchPollV1::Pending(batch)) => {
-                        active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
-                        if self
-                            .compute_pipeline
-                            .restore(identity, RuntimeComputePipelinePhaseV1::Published, active)
-                            .is_err()
-                        {
-                            std::process::abort();
-                        }
-                        return Ok(BackendPollV1::Pending);
-                    }
-                    Ok(Gfx942DispatchPollV1::Ready(completed)) => completed,
-                    Err(error) => {
-                        if self
-                            .compute_pipeline
-                            .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
-                            .is_err()
-                        {
-                            std::process::abort();
-                        }
-                        return Err(self.terminal_error(format!(
-                            "KFD pipelined completion observation: {error}"
-                        )));
-                    }
-                }
-            }
-            ActiveComputeExecutionV1::MaterializedCompleted(completed) => completed,
-            _ => {
-                if self
-                    .compute_pipeline
-                    .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
-                    .is_err()
-                {
-                    std::process::abort();
-                }
-                return Err(self.terminal_error(
-                    "KFD runtime pipeline retained a non-ordinary execution owner",
-                ));
-            }
-        };
-        active.performance.publish_to_completion = active.published_at.elapsed();
-        let recycle_started = Instant::now();
-        let mut completed_owner = Some(completed);
-        let recycling = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.queue
-                .as_mut()
-                .expect("completed pipeline entry retains queue")
-                .with_compute_lane_v1(native_lane, |queue| {
-                    queue.recycle_fixed_dispatch(
-                        completed_owner
-                            .take()
-                            .expect("selected lane consumes completed custody exactly once"),
-                    )
-                })
-        }));
-        let recycle = match recycling {
-            Ok(Ok(recycle)) => recycle,
-            Ok(Err(error)) => {
-                if let Some(completed) = completed_owner.take() {
-                    active.execution =
-                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
-                }
-                if self
-                    .compute_pipeline
-                    .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
-                    .is_err()
-                {
-                    std::process::abort();
-                }
-                return Err(self.terminal_error(format!(
-                    "KFD compute-lane selection after pipelined completion: {error}"
-                )));
-            }
-            Err(payload) => {
-                if let Some(completed) = completed_owner.take() {
-                    active.execution =
-                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
-                }
-                if self
-                    .compute_pipeline
-                    .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
-                    .is_err()
-                {
-                    std::process::abort();
-                }
-                let _ = self.terminal_error(
-                    "KFD pipelined completion recycle unwound with completed custody",
-                );
-                std::panic::resume_unwind(payload);
-            }
-        };
-        match recycle {
-            Ok(_) => {
-                active.performance.completed_readback = Duration::ZERO;
-                active.performance.completion_signal_recycle = recycle_started.elapsed();
-                active.performance.completion_detach_restore = Duration::ZERO;
-                if self
-                    .compute_pipeline
-                    .restore(
-                        identity,
-                        RuntimeComputePipelinePhaseV1::PhysicallyRetired,
-                        active,
-                    )
-                    .is_err()
-                {
-                    std::process::abort();
-                }
-                Ok(BackendPollV1::Pending)
-            }
-            Err(failure) => {
-                let (error, retryable) = failure.into_parts();
-                let phase = if let Some(completed) = retryable {
-                    active.execution =
-                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
-                    RuntimeComputePipelinePhaseV1::Completed
-                } else {
-                    RuntimeComputePipelinePhaseV1::Quarantined
-                };
-                if self
-                    .compute_pipeline
-                    .restore(identity, phase, active)
-                    .is_err()
-                {
-                    std::process::abort();
-                }
-                if phase == RuntimeComputePipelinePhaseV1::Completed {
-                    Ok(BackendPollV1::Pending)
-                } else {
-                    Err(self.terminal_error(format!(
-                        "KFD pipelined completion recycle became indeterminate: {error}"
-                    )))
-                }
-            }
-        }
+        self.advance_materialized_completion_v1(
+            super::materialized_completion::MaterializedCompletionTargetV1::Pipeline(identity),
+        )
     }
 
     pub(super) fn wait_published_persistent_compute_lane_v1(
@@ -1805,7 +1534,10 @@ impl KfdRuntimeBackendV1 {
                         ) | (
                             Some(RuntimeComputePipelinePhaseV1::Completed),
                             Some(ActiveComputeExecutionV1::MaterializedCompleted(_)),
-                        ) | (Some(RuntimeComputePipelinePhaseV1::PhysicallyRetired), None)
+                        ) | (
+                            Some(RuntimeComputePipelinePhaseV1::PhysicallyRetired),
+                            Some(ActiveComputeExecutionV1::MaterializedRetired(_))
+                        )
                     );
                     physical_owner_matches
                         && active.stream == pending.launch.stream
@@ -3359,201 +3091,6 @@ impl KfdRuntimeBackendV1 {
         });
         self.install_scalar_completion_shell_v1(restoration);
         self.publish_initial_persistent_prepared_v1()
-    }
-
-    #[allow(clippy::result_large_err)]
-    pub(super) fn finish_completed(
-        &mut self,
-        mut active: ActiveSubmissionV1,
-        completed: fe2o3_kfd::Gfx942CompletedDispatchBatchV1<1>,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        active.performance.publish_to_completion = active.published_at.elapsed();
-        let native_lane = match self.selected_native_compute_lane_v1() {
-            Ok(native_lane) => native_lane,
-            Err(_) => {
-                active.execution = Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
-                self.active = Some(active);
-                return Err(self.terminal_error(
-                    "completed KFD submission lost its exact physical compute lane",
-                ));
-            }
-        };
-        let recycle_started = Instant::now();
-        let mut completed_owner = Some(completed);
-        let recycling = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.queue
-                .as_mut()
-                .expect("active submission retains queue")
-                .with_compute_lane_v1(native_lane, |queue| {
-                    queue.recycle_fixed_dispatch(
-                        completed_owner
-                            .take()
-                            .expect("selected lane consumes completed custody exactly once"),
-                    )
-                })
-        }));
-        let recycle = match recycling {
-            Ok(Ok(recycle)) => recycle,
-            Ok(Err(error)) => {
-                if let Some(completed) = completed_owner.take() {
-                    active.execution =
-                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
-                }
-                self.active = Some(active);
-                return Err(self.terminal_error(format!(
-                    "KFD compute-lane selection after completion: {error}"
-                )));
-            }
-            Err(payload) => {
-                if let Some(completed) = completed_owner.take() {
-                    active.execution =
-                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
-                }
-                self.active = Some(active);
-                let _ =
-                    self.terminal_error("KFD completion recycle unwound with completed custody");
-                std::panic::resume_unwind(payload);
-            }
-        };
-        match recycle {
-            Ok(_) => {}
-            Err(failure) => {
-                let (error, retryable) = failure.into_parts();
-                if let Some(completed) = retryable {
-                    active.execution =
-                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
-                    self.active = Some(active);
-                    return Ok(BackendPollV1::Pending);
-                }
-                self.active = Some(active);
-                return Err(self.terminal_error(format!(
-                    "KFD completion recycle became indeterminate: {error}"
-                )));
-            }
-        };
-        active.performance.completed_readback = Duration::ZERO;
-        active.performance.completion_signal_recycle = recycle_started.elapsed();
-        active.performance.completion_detach_restore = Duration::ZERO;
-        let stream = active.stream;
-        let commit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.commit_materialized_compute_v1(&mut active);
-        }));
-        if let Err(payload) = commit {
-            self.active = Some(active);
-            let _ = self.terminal_error(
-                "KFD logical completion commit unwound while host custody was retained",
-            );
-            std::panic::resume_unwind(payload);
-        }
-        self.advance_materialized_commit_frontier_v1(stream);
-        Ok(BackendPollV1::Succeeded)
-    }
-
-    fn commit_materialized_compute_v1(&mut self, active: &mut ActiveSubmissionV1) {
-        let deferred_ordered_predecessor = active.deferred_ordered_predecessor_retain.then(|| {
-            active
-                .ordered_predecessor
-                .expect("deferred ordering retain names its exact predecessor")
-        });
-        let compute_lane = self.selected_compute_lane;
-        for writeback in &active.writebacks {
-            let record = self
-                .allocations
-                .get_mut(&writeback.allocation)
-                .expect("active allocation remains retained");
-            record.content_sha256 = None;
-            let extent = NativeDirtyExtentV1 {
-                compute_lane,
-                data_index: writeback.data_index,
-                allocation_offset: writeback.allocation_offset,
-                data_offset: writeback.data_offset,
-                byte_len: writeback.byte_len,
-            };
-            if retain_unique_native_dirty_extent_v1(&mut record.native_dirty, extent) {
-                self.native_dirty_extents = self
-                    .native_dirty_extents
-                    .checked_add(1)
-                    .expect("native-dirty extent count is memory-bounded");
-            }
-            if let Some(descriptor) = active.resident_descriptors.get_mut(writeback.data_index) {
-                descriptor.device_may_have_modified = true;
-                descriptor.host_content_sha256 = None;
-            }
-        }
-        self.recycled_dispatch = Some(RecycledDispatchV1 {
-            kernel: active.kernel,
-            dispatch_shape_sha256: active.dispatch_shape_sha256,
-            descriptors: core::mem::take(&mut active.resident_descriptors),
-        });
-        let module = self
-            .kernels
-            .get(&active.kernel)
-            .expect("active compute retains its kernel")
-            .module;
-        self.release_compute_custody_v1(active.id, module, active.allocations.iter().copied());
-        let status = BackendPollV1::Succeeded;
-        self.submissions.insert(
-            active.id,
-            SubmissionRecordV1 {
-                stream: active.stream,
-                status,
-                dependency_depth: active.dependency_depth,
-                profile_dispatch_published: true,
-            },
-        );
-        self.compute_completion_reservations = self
-            .compute_completion_reservations
-            .checked_sub(1)
-            .expect("published compute reserves one completion slot");
-        self.last_launch_performance = Some(active.performance);
-        let profile_dispatch =
-            self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, active.id);
-        self.observe_profile_v1(profile_dispatch.map(|dispatch| {
-            KfdRuntimeProfileEventKindV1::DispatchCompleted {
-                dispatch,
-                host_timing: profile_host_timing_v1(active.performance),
-            }
-        }));
-        if let Some(predecessor) = deferred_ordered_predecessor {
-            self.release_compute_dependency_retains_v1(core::slice::from_ref(&predecessor));
-        }
-        active.execution = None;
-    }
-
-    fn advance_materialized_commit_frontier_v1(&mut self, stream: u64) {
-        loop {
-            let Some((phase, active)) = self.compute_pipeline.take_commit_frontier() else {
-                self.release_compute_lane_lease_v1(stream, self.selected_compute_lane);
-                return;
-            };
-            match phase {
-                RuntimeComputePipelinePhaseV1::Published
-                | RuntimeComputePipelinePhaseV1::Completed => {
-                    self.active = Some(active);
-                    return;
-                }
-                RuntimeComputePipelinePhaseV1::PhysicallyRetired => {
-                    let mut active = active;
-                    let commit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        self.commit_materialized_compute_v1(&mut active);
-                    }));
-                    if let Err(payload) = commit {
-                        self.active = Some(active);
-                        let _ = self.terminal_error(
-                            "KFD pipelined logical commit unwound while host custody was retained",
-                        );
-                        std::panic::resume_unwind(payload);
-                    }
-                }
-                RuntimeComputePipelinePhaseV1::Quarantined => {
-                    self.active = Some(active);
-                    let _ = self.terminal_error(
-                        "KFD logical commit frontier reached quarantined physical custody",
-                    );
-                    return;
-                }
-            }
-        }
     }
 
     #[cfg(test)]

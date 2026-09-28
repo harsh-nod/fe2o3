@@ -141,6 +141,8 @@ pub(super) enum ActiveComputeExecutionV1 {
     MaterializedCancelling(Box<super::materialized_cancellation::MaterializedCancellationV1>),
     Materialized(Gfx942DispatchBatchV1<1>),
     MaterializedCompleted(fe2o3_kfd::Gfx942CompletedDispatchBatchV1<1>),
+    MaterializedNativeOwned(super::materialized_completion::MaterializedConsumeV1),
+    MaterializedRetired(fe2o3_kfd::Gfx942CompletionRecycleObservationV1),
     PersistentPrepared {
         allocation: u64,
         access: RuntimeAccessV1,
@@ -206,6 +208,10 @@ pub(super) enum ActiveComputeExecutionV1 {
     },
     #[cfg(test)]
     ScriptedMaterialized,
+    #[cfg(test)]
+    ScriptedMaterializedCompleted,
+    #[cfg(test)]
+    ScriptedMaterializedRetired,
 }
 
 #[cfg(test)]
@@ -431,6 +437,7 @@ impl RuntimeComputePipelineV1 {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn take_physical_owner(
         &mut self,
         submission: u64,
@@ -451,6 +458,7 @@ impl RuntimeComputePipelineV1 {
 
     // Restoration returns the exact inline owner to the caller on identity
     // mismatch; boxing it would make terminal custody recovery allocate.
+    #[cfg(test)]
     #[allow(clippy::result_large_err)]
     pub(super) fn restore(
         &mut self,
@@ -494,7 +502,6 @@ impl RuntimeComputePipelineV1 {
         Some((entry.phase, entry.active))
     }
 
-    #[cfg(test)]
     pub(super) fn identity_for_submission_v1(
         &self,
         submission: u64,
@@ -505,6 +512,66 @@ impl RuntimeComputePipelineV1 {
                 .filter(|entry| entry.active.id == submission)
                 .map(|entry| entry.identity)
         })
+    }
+
+    pub(super) fn entry_v1(
+        &self,
+        identity: RuntimeComputePipelineIdentityV1,
+    ) -> Option<&RuntimeComputePipelineEntryV1> {
+        let slot = self.slots.get(identity.slot as usize)?;
+        let entry = slot.entry.as_ref()?;
+        (slot.generation == identity.slot_generation
+            && entry.identity == identity
+            && entry.active.id == identity.submission)
+            .then_some(entry)
+    }
+
+    pub(super) fn entry_mut_v1(
+        &mut self,
+        identity: RuntimeComputePipelineIdentityV1,
+    ) -> Option<&mut RuntimeComputePipelineEntryV1> {
+        self.entry_v1(identity)?;
+        self.slots[identity.slot as usize].entry.as_mut()
+    }
+
+    pub(super) fn checked_frontier_v1(&self) -> Result<Option<&RuntimeComputePipelineEntryV1>, ()> {
+        let mut occupied = 0;
+        let mut found = None;
+        let mut next_count = 0;
+        for (index, slot) in self.slots.iter().enumerate() {
+            let Some(entry) = slot.entry.as_ref() else {
+                continue;
+            };
+            occupied += 1;
+            if entry.identity.slot as usize != index
+                || entry.identity.slot_generation != slot.generation
+                || entry.identity.submission != entry.active.id
+                || entry.identity.submission == 0
+            {
+                return Err(());
+            }
+            if Some(entry.identity.logical_epoch) == self.commit_frontier {
+                if found.is_some() {
+                    return Err(());
+                }
+                found = Some(entry);
+            }
+            if self.commit_frontier.and_then(|epoch| epoch.checked_add(1))
+                == Some(entry.identity.logical_epoch)
+            {
+                next_count += 1;
+            }
+        }
+        if occupied != self.live {
+            return Err(());
+        }
+        if self.live == 0 {
+            return self.commit_frontier.is_none().then_some(None).ok_or(());
+        }
+        if self.live > 1 && next_count != 1 {
+            return Err(());
+        }
+        found.map(Some).ok_or(())
     }
 
     #[cfg(test)]

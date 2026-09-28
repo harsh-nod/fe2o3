@@ -93,6 +93,7 @@ mod compute_peer_gate;
 mod compute_quiescence_control;
 mod compute_settlement;
 mod materialized_cancellation;
+mod materialized_completion;
 mod materialized_publication;
 mod peer_ancestry;
 mod peer_compute_access;
@@ -1409,6 +1410,10 @@ pub struct KfdRuntimeBackendV1 {
     scripted_materialized_cancel_fault:
         Option<materialized_cancellation::ScriptedMaterializedCancelFaultV1>,
     #[cfg(test)]
+    scripted_materialized_completion: Option<
+        std::collections::VecDeque<(u64, materialized_completion::ScriptedCompletionStepV1)>,
+    >,
+    #[cfg(test)]
     scripted_prepared_publication_fault:
         Option<prepared_publication::ScriptedPreparedPublicationFaultV1>,
     #[cfg(test)]
@@ -1911,6 +1916,8 @@ impl KfdRuntimeBackendV1 {
             scripted_materialized_publication_fault: None,
             #[cfg(test)]
             scripted_materialized_cancel_fault: None,
+            #[cfg(test)]
+            scripted_materialized_completion: None,
             #[cfg(test)]
             scripted_prepared_publication_fault: None,
             #[cfg(test)]
@@ -2821,9 +2828,13 @@ impl KfdRuntimeBackendV1 {
                 | ActiveComputeExecutionV1::MaterializedPrepared(_)
                 | ActiveComputeExecutionV1::MaterializedCancelling(_)
                 | ActiveComputeExecutionV1::Materialized(_)
-                | ActiveComputeExecutionV1::MaterializedCompleted(_) => false,
+                | ActiveComputeExecutionV1::MaterializedCompleted(_)
+                | ActiveComputeExecutionV1::MaterializedNativeOwned(_)
+                | ActiveComputeExecutionV1::MaterializedRetired(_) => false,
                 #[cfg(test)]
-                ActiveComputeExecutionV1::ScriptedMaterialized => false,
+                ActiveComputeExecutionV1::ScriptedMaterialized
+                | ActiveComputeExecutionV1::ScriptedMaterializedCompleted
+                | ActiveComputeExecutionV1::ScriptedMaterializedRetired => false,
             })
     }
 
