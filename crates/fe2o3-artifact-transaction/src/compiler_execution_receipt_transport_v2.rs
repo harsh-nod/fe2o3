@@ -3,6 +3,12 @@ use super::super::receipt_transport as shared;
 use super::*;
 use crate::compiler_execution_subject::native_v2::RETAINED as SUBJECT_STORAGE;
 use crate::{CompilerExecutionSubjectErrorV2, InertCompilerExecutionSubjectV2 as Subject};
+#[cfg(test)]
+use shared::envelope::{SUBJECT_END, SUBJECT_START};
+use shared::{
+    envelope::{self, BODY_START, OVERHEAD},
+    native,
+};
 
 #[cfg(test)]
 #[path = "compiler_execution_receipt_transport_v2_tests.rs"]
@@ -14,12 +20,15 @@ pub const MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V2: usize = 64 * 1024;
 pub const COMPILER_EXECUTION_RECEIPT_TRANSPORT_MAGIC_V2: [u8; 8] = *b"F2O3CRT2";
 pub const COMPILER_EXECUTION_RECEIPT_TRANSPORT_VERSION_V2: u16 = 2;
 const DOMAIN: &[u8] = b"fe2o3.compiler-execution-receipt-transport.identity.v2\0";
-const SUBJECT_START: usize = 24;
-const SUBJECT_END: usize = SUBJECT_START + crate::INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V2;
-const BODY_START: usize = SUBJECT_END + 8;
-const OVERHEAD: usize = BODY_START + 32;
 pub const MAX_COMPILER_EXECUTION_RECEIPT_ENVELOPE_BYTES_V2: usize =
     MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V2 + OVERHEAD;
+const WIRE: envelope::Schema = envelope::Schema {
+    magic: COMPILER_EXECUTION_RECEIPT_TRANSPORT_MAGIC_V2,
+    version: COMPILER_EXECUTION_RECEIPT_TRANSPORT_VERSION_V2,
+    domain: DOMAIN,
+    maximum: MAX_COMPILER_EXECUTION_RECEIPT_ENVELOPE_BYTES_V2,
+};
+const _: () = assert!(crate::INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V2 == envelope::SUBJECT_BYTES);
 const FRAME: usize = 4 * size_of::<RecoveredCompilerExecutionReceiptTransportV2>()
     + 4 * size_of::<Error>()
     + 4 * size_of::<shared::Failure>()
@@ -43,6 +52,8 @@ const _: () = {
         + 8 * size_of::<Vec<u8>>()
         + 2 * size_of::<currentness::PinnedFile>()
         + 4 * size_of::<CompilerExecutionReceiptTransportStorageV2>()
+        + size_of::<Result<([u8; 32], usize)>>()
+        + size_of::<envelope::Schema>()
         + 64 * size_of::<usize>();
     assert!(scalars + resources::fixed_scope_overhead::<Scoped<Output>>() <= 4096);
     assert!(
@@ -215,6 +226,7 @@ impl std::error::Error for Error {
 }
 
 impl shared::Subject for Subject {
+    type Error = CompilerExecutionSubjectErrorV2;
     type Schema = Schema;
     type Postcheck = shared::PreparedPostcheck<Schema>;
     const ENTRY: &'static str = ENTRY;
@@ -236,22 +248,9 @@ impl shared::Subject for Subject {
         bytes: Vec<u8>,
         resources: &mut Resources<'_, '_>,
     ) -> shared::Result<()> {
-        let handoff = Schema::decode_payload(record.binding, bytes, resources)?;
-        let (actual, storage) = Subject::from_replay_evidence(
-            self.attempt(),
-            self.slot(),
-            self.transaction_identity(),
-            &handoff,
-            resources.budget()?,
-        )
-        .map_err(shared::Failure::Subject)?;
-        resources.reserve(storage.retained_storage())?;
-        resources.work(2 * crate::INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V2 + 64)?;
-        if actual.canonical_bytes() != self.canonical_bytes() {
-            return Err(shared::Failure::Mismatch);
-        }
-        Ok(())
+        native::validate_payload(self, record, bytes, resources)
     }
+
     fn prepare_postcheck(
         &self,
         _output: &PinnedOutput,
@@ -269,6 +268,35 @@ impl shared::Subject for Subject {
         prepared: Self::Postcheck,
     ) -> shared::Result<()> {
         prepared.finish(output, producer, self.attempt(), slot)
+    }
+}
+
+impl native::NativeSubject for Subject {
+    const WIRE: envelope::Schema = WIRE;
+    fn canonical_bytes(&self) -> &[u8; envelope::SUBJECT_BYTES] {
+        self.canonical_bytes()
+    }
+    fn reconstruct(
+        &self,
+        payload: &Handoff,
+        budget: &mut Budget<'_>,
+    ) -> std::result::Result<(Self, usize), CompilerExecutionSubjectErrorV2> {
+        let (subject, storage) = Self::from_replay_evidence(
+            self.attempt(),
+            self.slot(),
+            self.transaction_identity(),
+            payload,
+            budget,
+        )?;
+        Ok((subject, storage.retained_storage()))
+    }
+    fn from_receipt(
+        receipt: CompilerModuleHandoffReceiptV4,
+        payload: &Handoff,
+        budget: &mut Budget<'_>,
+    ) -> std::result::Result<(Self, usize), CompilerExecutionSubjectErrorV2> {
+        let (subject, storage) = Self::from_publication(receipt, payload, budget)?;
+        Ok((subject, storage.retained_storage()))
     }
 }
 
@@ -314,10 +342,9 @@ fn publish(
                 maximum: MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V2,
             });
         }
-        let wire = encode(subject, body, r)?;
-        let receipt = inspect(&wire, subject, r)?;
-        shared::publish(output, producer, subject, &wire, r, hooks)?;
-        Ok(receipt)
+        let (digest, length) =
+            native::publish::<Subject, Error>(output, producer, subject, body, r, hooks)?;
+        Ok(receipt(subject, digest, length))
     })
 }
 
@@ -371,19 +398,14 @@ pub fn recover_compiler_execution_receipt_transport_with_currentness_v2(
         .ok_or(Resource::Arithmetic)?;
     entry(budget, floor, |r| {
         lease.validate_current_token(token)?;
-        currentness::metadata(&token.binding, r)?;
-        let (actual, storage) =
-            Subject::from_publication(lease.receipt(), &token.content, r.budget()?)?;
-        r.reserve(storage.retained_storage())?;
-        r.work(2 * crate::INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V2 + 64)?;
-        if actual.canonical_bytes() != subject.canonical_bytes() {
-            return Err(Error::SubjectBindingMismatch);
-        }
-        let wire = shared::read::<Subject>(&token.binding.slot_directory, r)?
-            .ok_or(Error::NotPublished)?;
-        let result = recovered(wire, subject, r)?;
-        currentness::metadata(&token.binding, r)?;
-        Ok(result)
+        let recovered = native::recover_locked::<Subject, Error>(
+            &token.binding,
+            &token.content,
+            subject,
+            HEADERS,
+            r,
+        )?;
+        Ok(finish_recovered(recovered, subject))
     })
 }
 
@@ -395,79 +417,65 @@ fn recovered(
     RecoveredCompilerExecutionReceiptTransportV2,
     CompilerExecutionReceiptTransportStorageV2,
 )> {
-    let receipt = inspect(&wire, subject, r)?;
-    let headers = size_of::<RecoveredCompilerExecutionReceiptTransportV2>()
-        + size_of::<CompilerExecutionReceiptTransportStorageV2>();
-    r.reserve(headers)?;
-    let storage = CompilerExecutionReceiptTransportStorageV2(
-        wire.capacity()
-            .checked_add(headers)
-            .ok_or(Resource::Arithmetic)?,
-    );
-    Ok((
-        RecoveredCompilerExecutionReceiptTransportV2 { receipt, wire },
-        storage,
-    ))
+    let recovered = native::recovered::<Subject, Error>(wire, subject, HEADERS, r)?;
+    Ok(finish_recovered(recovered, subject))
 }
 
+const HEADERS: usize = size_of::<RecoveredCompilerExecutionReceiptTransportV2>()
+    + size_of::<CompilerExecutionReceiptTransportStorageV2>();
+const _: () = assert!(size_of::<native::Recovered>() <= HEADERS);
+
+fn finish_recovered(
+    recovered: native::Recovered,
+    subject: &Subject,
+) -> (
+    RecoveredCompilerExecutionReceiptTransportV2,
+    CompilerExecutionReceiptTransportStorageV2,
+) {
+    (
+        RecoveredCompilerExecutionReceiptTransportV2 {
+            receipt: receipt(subject, recovered.digest, recovered.length),
+            wire: recovered.wire,
+        },
+        CompilerExecutionReceiptTransportStorageV2(recovered.storage),
+    )
+}
+
+fn receipt(
+    subject: &Subject,
+    digest: [u8; 32],
+    length: usize,
+) -> CompilerExecutionReceiptTransportReceiptV2 {
+    CompilerExecutionReceiptTransportReceiptV2 {
+        subject: subject.identity(),
+        identity: CompilerExecutionReceiptTransportIdentityV2(digest),
+        length,
+    }
+}
+
+impl envelope::Error for Error {
+    fn invalid(reason: &'static str) -> Self {
+        Self::InvalidTransport(reason)
+    }
+    fn mismatch() -> Self {
+        Self::SubjectBindingMismatch
+    }
+}
+
+#[cfg(test)]
 fn identity(prefix: &[u8]) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(DOMAIN);
-    hash.update((prefix.len() as u64).to_le_bytes());
-    hash.update(prefix);
-    hash.finalize().into()
+    WIRE.identity(prefix)
 }
+#[cfg(test)]
 fn encode(subject: &Subject, body: &[u8], r: &mut Resources<'_, '_>) -> Result<Vec<u8>> {
-    let n = OVERHEAD + body.len();
-    r.work(4 * n + 4096)?;
-    let mut wire = r.buffer(n)?;
-    wire.resize(n, 0);
-    wire[..8].copy_from_slice(&COMPILER_EXECUTION_RECEIPT_TRANSPORT_MAGIC_V2);
-    wire[8..10].copy_from_slice(&COMPILER_EXECUTION_RECEIPT_TRANSPORT_VERSION_V2.to_le_bytes());
-    wire[12..20].copy_from_slice(&(n as u64).to_le_bytes());
-    wire[SUBJECT_START..SUBJECT_END].copy_from_slice(subject.canonical_bytes());
-    wire[SUBJECT_END..BODY_START].copy_from_slice(&(body.len() as u64).to_le_bytes());
-    wire[BODY_START..n - 32].copy_from_slice(body);
-    let digest = identity(&wire[..n - 32]);
-    wire[n - 32..].copy_from_slice(&digest);
-    Ok(wire)
+    WIRE.encode(subject.canonical_bytes(), body, r)
 }
+#[cfg(test)]
 fn inspect(
     wire: &[u8],
     expected: &Subject,
     r: &mut Resources<'_, '_>,
 ) -> Result<CompilerExecutionReceiptTransportReceiptV2> {
-    let n = wire.len();
-    if !(OVERHEAD + 1..=MAX_COMPILER_EXECUTION_RECEIPT_ENVELOPE_BYTES_V2).contains(&n) {
-        return Err(Error::InvalidTransport("length"));
-    }
-    r.work(4 * n + 4096)?;
-    let u64_at = |offset| -> Result<u64> {
-        Ok(u64::from_le_bytes(
-            wire[offset..offset + 8]
-                .try_into()
-                .map_err(|_| Error::InvalidTransport("truncated"))?,
-        ))
-    };
-    if wire[..8] != COMPILER_EXECUTION_RECEIPT_TRANSPORT_MAGIC_V2
-        || wire[8..10] != COMPILER_EXECUTION_RECEIPT_TRANSPORT_VERSION_V2.to_le_bytes()
-        || wire[10..12] != [0; 2]
-        || wire[20..24] != [0; 4]
-        || u64_at(12)? != n as u64
-        || u64_at(SUBJECT_END)? != (n - OVERHEAD) as u64
-    {
-        return Err(Error::InvalidTransport("header"));
-    }
-    if &wire[SUBJECT_START..SUBJECT_END] != expected.canonical_bytes() {
-        return Err(Error::SubjectBindingMismatch);
-    }
-    let digest = identity(&wire[..n - 32]);
-    if wire[n - 32..] != digest {
-        return Err(Error::InvalidTransport("identity"));
-    }
-    Ok(CompilerExecutionReceiptTransportReceiptV2 {
-        subject: expected.identity(),
-        identity: CompilerExecutionReceiptTransportIdentityV2(digest),
-        length: n - OVERHEAD,
-    })
+    let (digest, length) = WIRE.inspect::<Error>(wire, expected.canonical_bytes(), r)?;
+    Ok(receipt(expected, digest, length))
 }

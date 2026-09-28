@@ -29,6 +29,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[path = "compiler_module_handoff_resources.rs"]
 pub(crate) mod resources;
 use resources::Resources;
+#[path = "compiler_module_handoff_v5.rs"]
+pub(crate) mod conditional_v5;
 #[path = "compiler_module_handoff_currentness.rs"]
 mod currentness;
 #[path = "compiler_module_handoff_v4.rs"]
@@ -719,6 +721,7 @@ enum HandoffEngineError {
     PayloadAllocationFailed { requested: usize },
     InvalidCanonicalV3(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV3),
     InvalidCanonicalV4(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV4),
+    InvalidCanonicalV5(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV5),
     Resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     Busy,
 }
@@ -770,6 +773,10 @@ impl HandoffEngineError {
             Self::InvalidCanonicalV4(error) => invalid_slot(
                 Path::new(""),
                 format!("legacy handoff unexpectedly required V4 decoding: {error:?}"),
+            ),
+            Self::InvalidCanonicalV5(error) => invalid_slot(
+                Path::new(""),
+                format!("legacy handoff unexpectedly required V5 decoding: {error:?}"),
             ),
             Self::Resource(error) => invalid_slot(Path::new(""), error.to_string()),
             Self::Busy => invalid_slot(Path::new(""), "handoff currentness lock is held"),
@@ -4579,6 +4586,7 @@ pub(crate) mod semantic_v3 {
     }
 
     impl receipt_transport::Subject for crate::InertCompilerExecutionSubjectV1 {
+        type Error = crate::CompilerExecutionSubjectErrorV2;
         type Schema = HandoffV3Schema;
         type Postcheck = ();
         const ENTRY: &'static str = COMPILER_EXECUTION_RECEIPT_ENTRY_V1;

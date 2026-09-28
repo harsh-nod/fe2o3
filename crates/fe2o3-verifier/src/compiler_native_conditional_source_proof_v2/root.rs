@@ -1,6 +1,6 @@
 use super::*;
 use crate::portable_reference_v1::codec::{
-    NativeCpuAssociationV1, with_decoded_native_cpu_input_v1,
+    DecodedNativeCpuInputV1, NativeCpuAssociationV1, with_decoded_native_cpu_input_v1,
 };
 use fe2o3_functional_proof::{
     FunctionalRefinementBoundaryV2, FunctionalRefinementImportPolicyV2,
@@ -72,6 +72,36 @@ pub(super) fn reconstruct_root(
     policy: &NativeConditionalRootPolicyV2<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<ReplayedRoot, E> {
+    reconstruct_root_using(
+        source,
+        row,
+        policy,
+        budget,
+        |request, decoded, budget| {
+            crate::import_and_retain_conditional_ranked_formula_v2(
+                request,
+                decoded,
+                row.formula_receipt,
+                policy.formula,
+                budget,
+            )
+        },
+        |formula| formula.map_err(|error| E(Cause::Formula(error))),
+    )
+}
+
+pub(super) fn reconstruct_root_using<R, Failure: From<E> + From<Resource>>(
+    source: &ReplayedNativeSourceV1,
+    row: &NativeConditionalSourceRootV2<'_>,
+    policy: &NativeConditionalRootPolicyV2<'_>,
+    budget: &mut Budget<'_>,
+    import: impl FnOnce(
+        &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
+        &DecodedNativeCpuInputV1,
+        &mut Budget<'_>,
+    ) -> R,
+    finish: impl FnOnce(R) -> Result<RetainedProductionConditionalFormulaV2, Failure>,
+) -> Result<ReplayedRoot, Failure> {
     with_decoded_native_cpu_input_v1(row.cpu_input_bytes, budget, |decoded, budget| {
         let cpu = decoded.input_v1();
         association(
@@ -111,13 +141,7 @@ pub(super) fn reconstruct_root(
         let ledger = budget.work_ledger_identity_v1();
         let result =
             with_conditional_root_request_v1(source.source(), input, budget, |request, budget| {
-                crate::import_and_retain_conditional_ranked_formula_v2(
-                    request,
-                    decoded,
-                    row.formula_receipt,
-                    policy.formula,
-                    budget,
-                )
+                import(request, decoded, budget)
             });
         // The lower continuation reserves its returned input anew. Only after
         // every lower postcheck succeeds can its original reservation transfer.
@@ -126,7 +150,7 @@ pub(super) fn reconstruct_root(
             return Err(Resource::Accounting.into());
         }
         let (formula, input) = result.map_err(|error| E(Cause::Continuation(error)))?;
-        let formula = formula.map_err(|error| E(Cause::Formula(error)))?;
+        let formula = finish(formula)?;
         budget.release_storage(prior)?;
         Ok(ReplayedRoot { input, formula })
     })

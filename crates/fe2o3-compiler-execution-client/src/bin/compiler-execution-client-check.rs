@@ -58,7 +58,10 @@ fn main() {
                 std::process::exit(1);
             }
         },
-        Ok(Mode::Child) => match run_child() {
+        // SAFETY: this dedicated child entry runs once, before opening files or
+        // starting threads. Any occupied protocol slots came through exec, have
+        // no Rust owners here, and cannot be closed or replaced concurrently.
+        Ok(Mode::Child) => match unsafe { run_child() } {
             Ok(report) => {
                 let encoded = report.encode();
                 if ChildReportV1::decode(encoded.as_bytes()).as_ref() != Ok(&report) {
@@ -188,13 +191,39 @@ fn run_parent() -> Result<ParentReportV1, String> {
     Ok(report)
 }
 
-fn run_child() -> Result<ChildReportV1, String> {
+/// # Safety
+/// Called once at child startup with exclusive custody of the inherited policy
+/// and service slots, before creating descriptor owners or competing threads.
+/// Missing slots must remain vacant until the preflight rejects them.
+unsafe fn run_child() -> Result<ChildReportV1, String> {
+    // Check both slots before policy admission can allocate a private duplicate
+    // into an absent service slot. Flags validate inheritance, not ownership.
+    for fd in [
+        COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
+        COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+    ] {
+        // SAFETY: F_GETFD takes no pointers and does not transfer ownership.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags < 0 {
+            return Err(format!(
+                "FD {fd} preflight failed: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        if flags & libc::FD_CLOEXEC != 0 {
+            return Err(format!("FD {fd} preflight failed: close-on-exec slot"));
+        }
+    }
     let policy = CompilerExecutionPolicyCapabilityV1::from_inherited_child().map_err(|error| {
         format!("FD {COMPILER_EXECUTION_POLICY_CHILD_FD_V1} admission failed: {error}")
     })?;
-    let client = CompilerExecutionClientV1::admit_inherited_child(CLIENT_CHECK_TIMEOUT).map_err(
-        |error| format!("FD {COMPILER_EXECUTION_SERVICE_CHILD_FD_V1} admission failed: {error}"),
-    )?;
+    // SAFETY: the caller transferred exclusive startup custody. The preflight
+    // kept policy duplication out of the occupied service slot; no Rust owner
+    // has been made for that slot, and this is its only consuming admission.
+    let client = unsafe { CompilerExecutionClientV1::admit_inherited_child(CLIENT_CHECK_TIMEOUT) }
+        .map_err(|error| {
+            format!("FD {COMPILER_EXECUTION_SERVICE_CHILD_FD_V1} admission failed: {error}")
+        })?;
     policy
         .revalidate()
         .map_err(|error| format!("inherited policy revalidation failed: {error}"))?;

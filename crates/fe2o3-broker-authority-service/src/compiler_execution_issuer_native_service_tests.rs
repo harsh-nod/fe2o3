@@ -46,6 +46,32 @@ fn directory() -> (tempfile::TempDir, File) {
     let file = File::open(directory.path()).unwrap();
     (directory, file)
 }
+
+// Actual durable consumers and sealed fixture keys, never a protected Admission.
+pub(super) fn recover_family_fixture(
+    root: &File,
+    published: bool,
+    b: &mut Budget<'_>,
+) -> Result<()> {
+    b.with_prepaid_scope(b.storage(), 8, 8, 65536, |b| {
+        let (p, key) = custody(b);
+        let mut ledger = Ledger::recover(root.as_fd(), &p, &key, b)?;
+        b.reserve_storage(Ledger::STORAGE)?;
+        if published {
+            let (request, publication) = worker_tests::issued(&mut ledger, &p, &key, 1, b);
+            let (_, advanced) = ledger.publish(
+                &p,
+                &key,
+                &request,
+                &publication,
+                &mut worker_tests::proposed,
+                b,
+            )?;
+            assert!(advanced);
+        }
+        ledger.validate(b)
+    })
+}
 #[test]
 fn native_consumer_genesis_recovery_holds_the_shared_singleton() {
     let mut work = Work::new(usize::MAX);

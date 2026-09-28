@@ -59,4 +59,3 @@ and a complete source-corresponding recipe on the original ledger. Those
 integration and genuine-source qualifications are separate from this model
 checkpoint. No artifact, native execution, GPU dispatch, physical capture or
 milestone completion is claimed.
-

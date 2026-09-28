@@ -20,6 +20,9 @@ const TRANSACTION: usize = SLOT + 1;
 const LIMITS: usize = HEADER_BYTES + 40 + 1 + WORKER.len() + 1 + LLVM.len();
 const PROVIDERS: usize = LIMITS + 28 + 8;
 
+#[path = "conditional_worker_compact_replay_tests.rs"]
+mod conditional_tests;
+
 fn fixture(providers: usize, options: usize, derivation_grammar: bool) -> Vec<u8> {
     let worker =
         WorkerMeasurementV1::new(ContentIdentityV1::from_parts([4; 32], 1), WORKER, LLVM).unwrap();

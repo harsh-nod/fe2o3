@@ -77,28 +77,7 @@ pub const INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V4: usi
 /// any parser, toolchain, nesting or limit changes; this is not an instruction
 /// count, a measured runtime bound, or a substitute for semantic replay.
 pub fn inert_semantic_compiler_module_handoff_decode_work_v4(n: usize) -> Result<usize, Failure> {
-    use crate::{
-        MAX_COMPILER_FFI_ENVELOPE_BYTES_V1 as ENVELOPE,
-        MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1 as MANIFEST,
-    };
-    use fe2o3_rustc_invocation::MAX_DESCRIPTOR_BYTES_V3 as INVOCATION;
-    if !(MIN_OUTER_BYTES_V3..=MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V4).contains(&n) {
-        return Err(InertSemanticCompilerModuleHandoffErrorV3::InvalidLength(n as u64).into());
-    }
-    let mut work: usize = 4 * 1024 * 1024 + 128 * 127 * (128 + 3 * 32 + 4);
-    for (bytes, factor) in [
-        (n, 8),
-        (n.min(INVOCATION), 128),
-        (n.min(ENVELOPE), 128),
-        (n.min(MANIFEST), 320),
-        ((n / 5).min(16384), 4096),
-    ] {
-        work = bytes
-            .checked_mul(factor)
-            .and_then(|w| work.checked_add(w))
-            .ok_or(InertSemanticCompilerModuleHandoffErrorV3::LengthOverflow)?;
-    }
-    Ok(work)
+    Ok(native::decode_work(n)?)
 }
 const _: () = {
     assert!(fe2o3_rustc_invocation::MAX_DESCRIPTOR_BYTES_V3 == 262338);
@@ -160,9 +139,6 @@ impl InertSemanticCompilerModuleHandoffLayoutV4 {
     /// Region for unchanged V2 compiler module handoff bytes.
     pub fn module_handoff_range(self) -> Range<usize> {
         self.capsule_range().end..self.capsule_range().end + self.module_len
-    }
-    fn pair_range(self) -> Range<usize> {
-        self.module_handoff_range().end..self.total - SHA256_BYTES
     }
 }
 
@@ -226,52 +202,20 @@ pub fn seal_inert_semantic_compiler_module_handoff_v4<E>(
     bytes: &mut [u8],
     capsule: InertProductionSemanticCapsuleIdentityV4,
     module: CompilerModuleHandoffIdentityV2,
-    mut charge_work: impl FnMut(usize) -> Result<(), E>,
+    charge_work: impl FnMut(usize) -> Result<(), E>,
 ) -> Result<InertSemanticCompilerModuleHandoffIdentityV4, Failure<E>> {
-    if bytes.len() != layout.total
-        || capsule.byte_len() != layout.capsule_len as u64
-        || module.byte_len() != layout.module_len as u64
-    {
-        return Err(
-            InertSemanticCompilerModuleHandoffErrorV3::InvalidLength(bytes.len() as u64).into(),
-        );
-    }
-    // Hash both preimages and prepay fixed pair/header writes and digest copies.
-    let work = layout
-        .total
-        .checked_add(
-            WIRE_V4.outer_domain.len()
-                + WIRE_V4.pair_domain.len()
-                + 16
-                + 256
-                + PAIR_BINDING_PREIMAGE_BYTES_V3
-                + 3 * INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V4
-                + 2 * HEADER_BYTES_V3,
-        )
-        .ok_or(InertSemanticCompilerModuleHandoffErrorV3::LengthOverflow)?;
-    charge_work(work).map_err(Failure::Charge)?;
-    drop(charge_work);
-    let (pair, _) = encode_pair_binding(
+    let sha256 = native::seal(
         &WIRE_V4,
-        capsule.sha256(),
-        capsule.byte_len(),
-        module.sha256(),
-        module.byte_len(),
-    )?;
-    bytes[..HEADER_BYTES_V3].fill(0);
-    bytes[..8].copy_from_slice(&WIRE_V4.magic);
-    bytes[8..10].copy_from_slice(&WIRE_V4.version.to_le_bytes());
-    bytes[12..20].copy_from_slice(&(layout.total as u64).to_le_bytes());
-    bytes[24..32].copy_from_slice(&(layout.capsule_len as u64).to_le_bytes());
-    bytes[32..40].copy_from_slice(&(layout.module_len as u64).to_le_bytes());
-    bytes[layout.pair_range()].copy_from_slice(&pair);
-    let sha256 =
-        derive_identity_sha256(WIRE_V4.outer_domain, &bytes[..layout.total - SHA256_BYTES]).ok_or(
-            InertSemanticCompilerModuleHandoffErrorV3::ZeroIdentity {
-                field: "inert semantic compiler module handoff",
-            },
-        )?;
-    bytes[layout.total - SHA256_BYTES..].copy_from_slice(&sha256);
+        (layout.capsule_len, layout.module_len, layout.total),
+        bytes,
+        (capsule.sha256(), capsule.byte_len()),
+        (module.sha256(), module.byte_len()),
+        charge_work,
+    )
+    .map_err(|e| match e {
+        native::SealError::Charge(e) => Failure::Charge(e),
+        native::SealError::Wire(e) => Failure::Framing(e),
+    })?;
     Ok(InertSemanticCompilerModuleHandoffIdentityV4 {
         sha256,
         byte_len: layout.total as u64,
@@ -328,49 +272,25 @@ impl InertSemanticCompilerModuleHandoffV4 {
             range.start + wire.capsule_range.start..range.start + wire.capsule_range.end,
         )
         .map_err(Failure::Capsule)?;
-        let module = CompilerModuleHandoffV2::decode_shared_vec_range(
-            backing.clone(),
-            range.start + wire.module_handoff_range.start,
-            wire.module_handoff_range.len(),
-        )
-        .map_err(InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoff)?;
-        let pair = wire.parsed_pair_binding;
-        if capsule.identity().sha256() != &pair.capsule_sha256
-            || capsule.identity().byte_len() != pair.capsule_len
-        {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::CapsuleIdentityMismatch.into());
-        }
-        if module.identity().sha256() != &pair.module_handoff_sha256
-            || module.identity().byte_len() != pair.module_handoff_len
-        {
-            return Err(
-                InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffIdentityMismatch.into(),
-            );
-        }
-        let layout = preflight_inert_semantic_compiler_module_handoff_v4(&capsule, &module)?;
-        if layout.encoded_len() != range.len() {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::NonCanonicalEncoding.into());
-        }
-        let (canonical_pair, binding_sha256) = encode_pair_binding(
+        let finished = native::finish(
             &WIRE_V4,
-            capsule.identity().sha256(),
-            capsule.identity().byte_len(),
-            module.identity().sha256(),
-            module.identity().byte_len(),
+            &backing,
+            &range,
+            &wire,
+            (capsule.identity().sha256(), capsule.identity().byte_len()),
+            |module| {
+                preflight_inert_semantic_compiler_module_handoff_v4(&capsule, module)
+                    .map(|layout| layout.encoded_len())
+            },
         )?;
-        let pair_range =
-            range.start + wire.pair_binding_range.start..range.start + wire.pair_binding_range.end;
-        if backing[pair_range.clone()] != canonical_pair || binding_sha256 != pair.binding_sha256 {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::NonCanonicalEncoding.into());
-        }
         Ok(Self {
             capsule,
-            module,
+            module: finished.module,
             backing,
             range,
-            pair_range,
+            pair_range: finished.pair_range,
             pair_identity: InertCompilerModulePairBindingIdentityV4 {
-                sha256: binding_sha256,
+                sha256: finished.pair_sha256,
             },
             identity: InertSemanticCompilerModuleHandoffIdentityV4 {
                 sha256: wire.outer_sha256,

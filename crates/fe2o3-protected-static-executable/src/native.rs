@@ -14,6 +14,10 @@ use fe2o3_runtime_protocol::{
 use std::{error::Error, fmt, fs::File, mem::size_of};
 
 const ENTRY_WORK: usize = 8;
+
+#[cfg(test)]
+#[path = "native_running_tests.rs"]
+mod running_tests;
 type Result<T> = std::result::Result<T, ProtectedStaticExecutableErrorV2>;
 
 /// Operation whose logical resource envelope is queried before admission.
@@ -81,7 +85,20 @@ impl ProtectedStaticExecutableV2 {
         measurement: Measurement,
         operation: ProtectedStaticExecutableOperationV2,
     ) -> Result<ProtectedStaticExecutableQuotaV2> {
-        let n = usize::try_from(measurement.byte_len()).map_err(|_| Resource::Arithmetic)?;
+        Self::quota_for_length(measurement.byte_len(), operation)
+    }
+
+    /// Queries the same envelope before an expected digest is available. A positive
+    /// representable length is inert configuration, never an admitted executable.
+    /// Callers must separately enforce their role's maximum image length.
+    pub fn quota_for_length(
+        byte_len: u64,
+        operation: ProtectedStaticExecutableOperationV2,
+    ) -> Result<ProtectedStaticExecutableQuotaV2> {
+        if byte_len == 0 {
+            return Err(ImageError::InvalidMeasurement.into());
+        }
+        let n = usize::try_from(byte_len).map_err(|_| Resource::Arithmetic)?;
         let passes = match operation {
             ProtectedStaticExecutableOperationV2::Admit => 4,
             ProtectedStaticExecutableOperationV2::Revalidate => 2,
@@ -113,7 +130,16 @@ impl ProtectedStaticExecutableV2 {
 
     /// Full incoming/outgoing File plus logical image charge, even for a shared inode.
     pub fn file_storage(measurement: Measurement) -> Result<usize> {
-        usize::try_from(measurement.byte_len())
+        Self::file_storage_for_length(measurement.byte_len())
+    }
+
+    /// Inert full source charge before a digest is available. The caller separately
+    /// enforces its role ceiling; this does not validate or admit any file.
+    pub fn file_storage_for_length(byte_len: u64) -> Result<usize> {
+        if byte_len == 0 {
+            return Err(ImageError::InvalidMeasurement.into());
+        }
+        usize::try_from(byte_len)
             .ok()
             .and_then(|n| n.checked_add(size_of::<(File, ProtectedStaticExecutableStorageV2)>()))
             .ok_or(Resource::Arithmetic.into())
@@ -143,6 +169,56 @@ impl ProtectedStaticExecutableV2 {
         Self::admit_scope(measurement, budget, || {
             Image::admit_sealed_with::<true>(image, measurement, owner, role)
         })
+    }
+
+    /// Opens `/proc/self/exe` and freshly admits its sealed image on this ledger.
+    /// Consumes no caller File; returns the FULL unreserved owner charge. Work
+    /// and scratch are prepaid before open, including bounded image inspection.
+    /// This authenticates image facts, not deployment provenance or process custody.
+    pub fn admit_running(
+        measurement: Measurement,
+        owner: Owner,
+        role: &'static str,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, ProtectedStaticExecutableStorageV2)> {
+        Self::admit_running_with(measurement, owner, role, budget, || {
+            rustix::fs::open(
+                c"/proc/self/exe",
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map(File::from)
+            .map_err(|source| ImageError::Io {
+                operation: "open running protected static executable",
+                source: source.into(),
+            })
+        })
+    }
+
+    fn admit_running_with(
+        measurement: Measurement,
+        owner: Owner,
+        role: &'static str,
+        budget: &mut Budget<'_>,
+        open: impl FnOnce() -> std::result::Result<File, ImageError>,
+    ) -> Result<(Self, ProtectedStaticExecutableStorageV2)> {
+        budget.charge_work(ENTRY_WORK)?;
+        Self::scope(
+            measurement,
+            ProtectedStaticExecutableOperationV2::Admit,
+            0,
+            budget,
+            || {
+                let image = Self(Image::admit_sealed_with::<true>(
+                    open()?,
+                    measurement,
+                    owner,
+                    role,
+                )?);
+                let full = image.retained_storage();
+                Ok((image, ProtectedStaticExecutableStorageV2(full)))
+            },
+        )
     }
 
     fn admit_scope(

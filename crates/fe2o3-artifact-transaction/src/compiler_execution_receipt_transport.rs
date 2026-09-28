@@ -2,6 +2,11 @@
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
 
+#[path = "compiler_execution_receipt_envelope.rs"]
+pub(super) mod envelope;
+#[path = "compiler_execution_receipt_native.rs"]
+pub(super) mod native;
+
 pub(super) struct Coordinates<S: currentness::Schema> {
     pub attempt: BuildAttempt,
     pub slot: S::Slot,
@@ -10,6 +15,7 @@ pub(super) struct Coordinates<S: currentness::Schema> {
 }
 
 pub(super) trait Subject {
+    type Error;
     type Schema: currentness::Schema;
     type Postcheck;
     const ENTRY: &'static str;
@@ -20,14 +26,14 @@ pub(super) trait Subject {
         record: &HandoffRecord<Self::Schema>,
         bytes: Vec<u8>,
         resources: &mut Resources<'_, '_>,
-    ) -> Result<()>;
+    ) -> Result<(), Self::Error>;
     fn prepare_postcheck(
         &self,
         output: &PinnedOutput,
         producer: &ProducerIdentity,
         slot: &PinnedDirectory,
         resources: &mut Resources<'_, '_>,
-    ) -> Result<Self::Postcheck>;
+    ) -> Result<Self::Postcheck, Self::Error>;
     /// No native allocation or budget refusal may first occur after commit.
     fn postcheck(
         &self,
@@ -35,48 +41,72 @@ pub(super) trait Subject {
         producer: &ProducerIdentity,
         slot: &PinnedDirectory,
         prepared: Self::Postcheck,
-    ) -> Result<()>;
+    ) -> Result<(), Self::Error>;
 }
 
 #[derive(Debug)]
-pub(super) enum Failure {
+pub(super) enum Failure<E = crate::CompilerExecutionSubjectErrorV2> {
     Handoff(HandoffEngineError),
-    Subject(crate::CompilerExecutionSubjectErrorV2),
+    Subject(E),
     InvalidSize { actual: usize, maximum: usize },
     NotPublished,
     Conflict,
     Mismatch,
 }
-pub(super) type Result<T> = std::result::Result<T, Failure>;
-impl From<HandoffEngineError> for Failure {
+pub(super) type Result<T, E = crate::CompilerExecutionSubjectErrorV2> =
+    std::result::Result<T, Failure<E>>;
+
+// The legacy specialization remains layout-identical: version adapters bill
+// these error/result headers in their existing fixed scratch allowance.
+const _: () = {
+    #[allow(dead_code)]
+    enum Before {
+        Handoff(HandoffEngineError),
+        Subject(crate::CompilerExecutionSubjectErrorV2),
+        InvalidSize { actual: usize, maximum: usize },
+        NotPublished,
+        Conflict,
+        Mismatch,
+    }
+    use std::mem::{align_of, size_of};
+    assert!(size_of::<Failure>() == size_of::<Before>());
+    assert!(align_of::<Failure>() == align_of::<Before>());
+    assert!(size_of::<Result<()>>() == size_of::<std::result::Result<(), Before>>());
+    assert!(
+        size_of::<std::thread::Result<Result<Vec<u8>>>>()
+            == size_of::<std::thread::Result<std::result::Result<Vec<u8>, Before>>>()
+    );
+};
+
+impl<E> From<HandoffEngineError> for Failure<E> {
     fn from(e: HandoffEngineError) -> Self {
         Self::Handoff(e)
     }
 }
-impl From<CompilerModuleHandoffErrorV1> for Failure {
+impl<E> From<CompilerModuleHandoffErrorV1> for Failure<E> {
     fn from(e: CompilerModuleHandoffErrorV1) -> Self {
         Self::Handoff(e.into())
     }
 }
-impl From<std::io::Error> for Failure {
+impl<E> From<std::io::Error> for Failure<E> {
     fn from(e: std::io::Error) -> Self {
         Self::Handoff(e.into())
     }
 }
-impl From<EmitError> for Failure {
+impl<E> From<EmitError> for Failure<E> {
     fn from(e: EmitError) -> Self {
         Self::Handoff(e.into())
     }
 }
-impl From<Resource> for Failure {
+impl<E> From<Resource> for Failure<E> {
     fn from(e: Resource) -> Self {
         Self::Handoff(e.into())
     }
 }
 
-pub(super) fn size(length: usize, maximum: usize) -> Result<()> {
+pub(super) fn size<E>(length: usize, maximum: usize) -> Result<(), E> {
     if length == 0 || length > maximum {
-        return Err(Failure::InvalidSize {
+        return Err(Failure::<E>::InvalidSize {
             actual: length,
             maximum,
         });
@@ -84,12 +114,12 @@ pub(super) fn size(length: usize, maximum: usize) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn authorize_recovery(
+pub(super) fn authorize_recovery<E>(
     output: &PinnedOutput,
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
     allow_consumed: bool,
-) -> Result<()> {
+) -> Result<(), E> {
     if !allow_consumed {
         return authorize(output, producer, attempt).map_err(Into::into);
     }
@@ -129,10 +159,10 @@ fn open<T: Subject>(
     subject: &T,
     allow_consumed: bool,
     resources: &mut Resources<'_, '_>,
-) -> Result<(PinnedDirectory, PinnedDirectory)> {
+) -> Result<(PinnedDirectory, PinnedDirectory), T::Error> {
     output.verify_path_identity()?;
     let c = subject.coordinates();
-    authorize_recovery(output, producer, c.attempt, allow_consumed)?;
+    authorize_recovery::<T::Error>(output, producer, c.attempt, allow_consumed)?;
     let producer_id = producer_identity_for::<T::Schema>(producer);
     let slot_id = slot_identity_for::<T::Schema>(producer_id, c.attempt, c.slot);
     let parent = open_private_directory(
@@ -170,7 +200,7 @@ pub(super) fn validate<T: Subject>(
     allow_consumed: bool,
     payload: bool,
     resources: &mut Resources<'_, '_>,
-) -> Result<()> {
+) -> Result<(), T::Error> {
     resources.scoped(|r| {
         Ok(validate_inner(
             output,
@@ -192,10 +222,10 @@ fn validate_inner<T: Subject>(
     allow_consumed: bool,
     payload: bool,
     resources: &mut Resources<'_, '_>,
-) -> Result<()> {
+) -> Result<(), T::Error> {
     output.verify_path_identity()?;
     let c = subject.coordinates();
-    authorize_recovery(output, producer, c.attempt, allow_consumed)?;
+    authorize_recovery::<T::Error>(output, producer, c.attempt, allow_consumed)?;
     slot.verify()?;
     let entries = slot_entries(slot)?;
     let record_entry = match (
@@ -206,7 +236,7 @@ fn validate_inner<T: Subject>(
         (false, true) if allow_consumed => CONSUMED_ENTRY,
         (false, true) => return Err(CompilerModuleHandoffErrorV1::AlreadyConsumed.into()),
         (false, false) => return Err(CompilerModuleHandoffErrorV1::NotPublished.into()),
-        (true, true) => return Err(Failure::Mismatch),
+        (true, true) => return Err(Failure::<T::Error>::Mismatch),
     };
     let bytes = if T::Schema::METERED {
         let pinned = currentness::pin(slot, record_entry, T::Schema::RECORD_BYTES)?;
@@ -219,11 +249,12 @@ fn validate_inner<T: Subject>(
             resources,
         )?
     } else {
-        read_private_file(slot, record_entry, T::Schema::RECORD_BYTES)?.ok_or(Failure::Mismatch)?
+        read_private_file(slot, record_entry, T::Schema::RECORD_BYTES)?
+            .ok_or(Failure::<T::Error>::Mismatch)?
     };
-    let record = matching_record::<T::Schema>(&bytes, producer, &c, resources)?;
+    let record = matching_record::<T::Schema, T::Error>(&bytes, producer, &c, resources)?;
     if T::Schema::METERED && !payload && record_entry == READY_ENTRY {
-        let pinned = pin_payload(slot, &record)?;
+        let pinned = pin_payload::<T::Schema, T::Error>(slot, &record)?;
         if allow_consumed {
             currentness::prepay_payload_stream(&record, resources)?;
             currentness::stream_payload(slot, &pinned, &record)?;
@@ -239,20 +270,20 @@ fn validate_inner<T: Subject>(
         subject.validate_payload(&record, bytes, resources)?;
     }
     output.verify_path_identity()?;
-    authorize_recovery(output, producer, c.attempt, allow_consumed)?;
+    authorize_recovery::<T::Error>(output, producer, c.attempt, allow_consumed)?;
     slot.verify()?;
     Ok(())
 }
 
-fn matching_record<S: currentness::Schema>(
+fn matching_record<S: currentness::Schema, E>(
     bytes: &[u8],
     producer: &ProducerIdentity,
     c: &Coordinates<S>,
     resources: &mut Resources<'_, '_>,
-) -> Result<HandoffRecord<S>> {
+) -> Result<HandoffRecord<S>, E> {
     resources.reserve(std::mem::size_of::<HandoffRecord<S>>() + std::mem::size_of::<Sha256>())?;
     resources.work(S::RECORD_BYTES * 4)?;
-    let record = HandoffRecord::<S>::decode(bytes).map_err(|_| Failure::Mismatch)?;
+    let record = HandoffRecord::<S>::decode(bytes).map_err(|_| Failure::<E>::Mismatch)?;
     let producer_id = producer_identity_for::<S>(producer);
     if record.producer != producer_id
         || record.slot != slot_identity_for::<S>(producer_id, c.attempt, c.slot)
@@ -261,7 +292,7 @@ fn matching_record<S: currentness::Schema>(
         || record.identity != c.transaction
         || record.length as u64 != c.outer.byte_len
     {
-        return Err(Failure::Mismatch);
+        return Err(Failure::<E>::Mismatch);
     }
     Ok(record)
 }
@@ -269,20 +300,20 @@ fn matching_record<S: currentness::Schema>(
 pub(super) fn read<T: Subject>(
     slot: &PinnedDirectory,
     resources: &mut Resources<'_, '_>,
-) -> Result<Option<Vec<u8>>> {
+) -> Result<Option<Vec<u8>>, T::Error> {
     let stat = match statat(&slot.fd, T::ENTRY, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(stat) => stat,
         Err(e) if e == rustix::io::Errno::NOENT => return Ok(None),
         Err(e) => return Err(std::io::Error::from(e).into()),
     };
     if !is_private_file(&stat) {
-        return Err(Failure::Mismatch);
+        return Err(Failure::<T::Error>::Mismatch);
     }
-    let n = usize::try_from(stat.st_size).map_err(|_| Failure::InvalidSize {
+    let n = usize::try_from(stat.st_size).map_err(|_| Failure::<T::Error>::InvalidSize {
         actual: usize::MAX,
         maximum: T::MAX_BYTES,
     })?;
-    size(n, T::MAX_BYTES)?;
+    size::<T::Error>(n, T::MAX_BYTES)?;
     if T::Schema::METERED {
         let pinned = currentness::pin(slot, T::ENTRY, n)?;
         Ok(Some(currentness::read_file(
@@ -295,7 +326,7 @@ pub(super) fn read<T: Subject>(
         )?))
     } else {
         Ok(Some(
-            read_private_file(slot, T::ENTRY, n)?.ok_or(Failure::NotPublished)?,
+            read_private_file(slot, T::ENTRY, n)?.ok_or(Failure::<T::Error>::NotPublished)?,
         ))
     }
 }
@@ -307,15 +338,15 @@ pub(super) fn publish<T: Subject>(
     wire: &[u8],
     resources: &mut Resources<'_, '_>,
     hooks: &mut impl HandoffHooks,
-) -> Result<()> {
-    size(wire.len(), T::MAX_BYTES)?;
+) -> Result<(), T::Error> {
+    size::<T::Error>(wire.len(), T::MAX_BYTES)?;
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
     let (parent, slot) = open(&output, producer, subject, false, resources)?;
     if let Some(existing) = read::<T>(&slot, resources)? {
         resources.work(2 * wire.len().max(existing.len()) + 64)?;
         if existing != wire {
-            return Err(Failure::Conflict);
+            return Err(Failure::<T::Error>::Conflict);
         }
         let prepared = subject.prepare_postcheck(&output, producer, &slot, resources)?;
         fsync(&slot.fd).map_err(std::io::Error::from)?;
@@ -332,7 +363,7 @@ pub(super) fn publish<T: Subject>(
     hooks.hit(FaultPoint::PayloadSynced)?;
     let stat = fstat(&temporary).map_err(std::io::Error::from)?;
     if !is_private_file(&stat) || usize::try_from(stat.st_size).ok() != Some(wire.len()) {
-        return Err(Failure::Mismatch);
+        return Err(Failure::<T::Error>::Mismatch);
     }
     validate(&output, producer, subject, &slot, false, false, resources)?;
     let prepared = subject.prepare_postcheck(&output, producer, &slot, resources)?;
@@ -348,7 +379,7 @@ pub(super) fn publish<T: Subject>(
     // All native read-back/validation buffers and work are now prepaid.
     match renameat_with(&slot.fd, &name, &slot.fd, T::ENTRY, RenameFlags::NOREPLACE) {
         Ok(()) => {}
-        Err(e) if e == rustix::io::Errno::EXIST => return Err(Failure::Conflict),
+        Err(e) if e == rustix::io::Errno::EXIST => return Err(Failure::<T::Error>::Conflict),
         Err(e) => return Err(std::io::Error::from(e).into()),
     }
     hooks.hit(FaultPoint::RecordRenamed)?;
@@ -361,10 +392,10 @@ pub(super) fn publish<T: Subject>(
             currentness::read_file_into(&slot, T::ENTRY, &pinned, &mut bytes)?;
             bytes
         }
-        None => read::<T>(&slot, resources)?.ok_or(Failure::NotPublished)?,
+        None => read::<T>(&slot, resources)?.ok_or(Failure::<T::Error>::NotPublished)?,
     };
     if committed != wire {
-        return Err(Failure::Conflict);
+        return Err(Failure::<T::Error>::Conflict);
     }
     subject.postcheck(&output, producer, &slot, prepared)?;
     parent.verify()?;
@@ -376,11 +407,11 @@ pub(super) fn recover<T: Subject>(
     producer: &ProducerIdentity,
     subject: &T,
     resources: &mut Resources<'_, '_>,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u8>, T::Error> {
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
     let (parent, slot) = open(&output, producer, subject, true, resources)?;
-    let bytes = read::<T>(&slot, resources)?.ok_or(Failure::NotPublished)?;
+    let bytes = read::<T>(&slot, resources)?.ok_or(Failure::<T::Error>::NotPublished)?;
     validate(&output, producer, subject, &slot, true, false, resources)?;
     parent.verify()?;
     Ok(bytes)
@@ -395,12 +426,12 @@ pub(super) struct PreparedPostcheck<S: currentness::Schema> {
     record: HandoffRecord<S>,
 }
 impl<S: currentness::Schema> PreparedPostcheck<S> {
-    pub(super) fn new(
+    pub(super) fn new<E>(
         slot: &PinnedDirectory,
         producer: &ProducerIdentity,
         c: &Coordinates<S>,
         resources: &mut Resources<'_, '_>,
-    ) -> Result<Self> {
+    ) -> Result<Self, E> {
         resources.reserve(std::mem::size_of::<Self>())?;
         let file = currentness::pin(slot, READY_ENTRY, S::RECORD_BYTES)?;
         let original = currentness::read_file(
@@ -411,8 +442,8 @@ impl<S: currentness::Schema> PreparedPostcheck<S> {
             S::RECORD_BYTES,
             resources,
         )?;
-        let record = matching_record::<S>(&original, producer, c, resources)?;
-        let payload = pin_payload(slot, &record)?;
+        let record = matching_record::<S, E>(&original, producer, c, resources)?;
+        let payload = pin_payload::<S, E>(slot, &record)?;
         resources.scoped(|r| {
             currentness::prepay_payload_stream(&record, r)?;
             currentness::stream_payload(slot, &payload, &record)
@@ -429,35 +460,35 @@ impl<S: currentness::Schema> PreparedPostcheck<S> {
             record,
         })
     }
-    pub(super) fn finish(
+    pub(super) fn finish<E>(
         mut self,
         output: &PinnedOutput,
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
         slot: &PinnedDirectory,
-    ) -> Result<()> {
+    ) -> Result<(), E> {
         output.verify_path_identity()?;
-        authorize_recovery(output, producer, attempt, false)?;
+        authorize_recovery::<E>(output, producer, attempt, false)?;
         slot.verify()?;
         currentness::shape::<S>(slot)?;
         currentness::validate_file(slot, PAYLOAD_ENTRY, &self.payload)?;
         currentness::read_file_into(slot, READY_ENTRY, &self.file, &mut self.readback)?;
         if self.original != self.readback {
-            return Err(Failure::Mismatch);
+            return Err(Failure::<E>::Mismatch);
         }
         currentness::stream_payload(slot, &self.payload, &self.record)?;
         output.verify_path_identity()?;
-        authorize_recovery(output, producer, attempt, false)?;
+        authorize_recovery::<E>(output, producer, attempt, false)?;
         currentness::validate_file(slot, PAYLOAD_ENTRY, &self.payload)?;
         slot.verify()?;
         Ok(())
     }
 }
 
-fn pin_payload<S: HandoffSchema>(
+fn pin_payload<S: HandoffSchema, E>(
     slot: &PinnedDirectory,
     record: &HandoffRecord<S>,
-) -> Result<currentness::PinnedFile> {
+) -> Result<currentness::PinnedFile, E> {
     let pinned = currentness::pin(slot, PAYLOAD_ENTRY, record.length)?;
     if pinned.identity != record.file {
         return Err(invalid_slot(

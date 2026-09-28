@@ -25,6 +25,9 @@ use crate::inert_rustc_invocation_capture::{
     InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV3,
 };
 
+#[path = "protected_compiler_handoff_native.rs"]
+mod native;
+
 /// Move-only parent custody of the exact protected invocation prepared for one
 /// production rustc child.
 ///

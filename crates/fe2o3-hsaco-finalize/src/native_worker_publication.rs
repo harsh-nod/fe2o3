@@ -564,10 +564,24 @@ fn precheck_finalized_storage(finalized: &PreparedFinalizedNativeWorkerHsacoV1) 
     let outer = source.recovered_handoff().handoff();
     let module = outer.module_handoff().module_identity();
     let module = ContentIdentityV1::from_parts(*module.sha256(), module.byte_len());
+    precheck_plan_storage(
+        module,
+        source.plan(),
+        outer.canonical_bytes().len(),
+        finalized.exact_finalized_bytes().len(),
+    )
+}
+
+fn precheck_plan_storage(
+    module: ContentIdentityV1,
+    plan: &crate::MultiInputLinkPlanV1,
+    outer_len: usize,
+    output_len: usize,
+) -> Result<()> {
     let mut modules = 0;
     let mut count = 0;
     let mut bytes = 0;
-    for input in source.plan().inputs() {
+    for input in plan.inputs() {
         if input.identity() == module {
             modules += 1;
         } else {
@@ -580,13 +594,7 @@ fn precheck_finalized_storage(finalized: &PreparedFinalizedNativeWorkerHsacoV1) 
     if modules != 1 {
         return Err(Error::Mismatch("exact module in Worker plan"));
     }
-    check_shape(
-        outer.canonical_bytes().len(),
-        count,
-        bytes,
-        None,
-        finalized.exact_finalized_bytes().len(),
-    )
+    check_shape(outer_len, count, bytes, None, output_len)
 }
 
 fn check_shape(
@@ -629,6 +637,25 @@ fn storage_attachments(
         "transcript",
     )?;
     let parts = extract_native_worker_external_providers_v1(&prepared.finalized)?;
+    copy_storage_attachments(
+        prepared
+            .finalized
+            .source_evidence()
+            .recovered_handoff()
+            .handoff()
+            .canonical_bytes(),
+        transcript,
+        prepared.finalized.exact_finalized_bytes(),
+        parts,
+    )
+}
+
+fn copy_storage_attachments(
+    outer: &[u8],
+    transcript: &[u8],
+    output: &[u8],
+    parts: crate::first_build_worker_v3::OwnedWorkerV3RequestReplayPartsV1,
+) -> Result<(WorkerV3FinalizerReplayAttachmentsV1, Vec<u8>)> {
     let mut providers = Vec::new();
     providers
         .try_reserve_exact(parts.external_providers.len())
@@ -641,23 +668,14 @@ fn storage_attachments(
     }
     // Shared constructors recheck actual provider capacities and aggregate owner
     // capacity; no write occurs before they and the store's input checks pass.
-    let outer = copy_attachment(
-        prepared
-            .finalized
-            .source_evidence()
-            .recovered_handoff()
-            .handoff()
-            .canonical_bytes(),
-        MAX_COMPILER_MODULE_HANDOFF_BYTES_V3,
-        "outer",
-    )?;
+    let outer = copy_attachment(outer, MAX_COMPILER_MODULE_HANDOFF_BYTES_V3, "outer")?;
     let transcript = copy_attachment(
         transcript,
         MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1,
         "transcript",
     )?;
     let output = copy_attachment(
-        prepared.finalized.exact_finalized_bytes(),
+        output,
         MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1,
         "output",
     )?;
@@ -690,25 +708,12 @@ fn raw_hash(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
-struct NativePlanInputs {
-    package: PackageIdentityV1,
-    attempt: BuildAttempt,
-    slot: u8,
-    transaction: [u8; 32],
-    outer: ContentIdentityV1,
-    binding: [u8; 32],
-    source: [u8; 32],
-    worker: [u8; 32],
-    finalized: [u8; 32],
-    transcript: [u8; 32],
-    link_plan: [u8; 32],
-    manifest: ContentIdentityV1,
-    policy: [u8; 32],
-    raw: ContentIdentityV1,
-    output: ContentIdentityV1,
-    descriptor: ContentIdentityV1,
-    canonical_digest: [u8; 32],
-}
+#[path = "worker_publication_plan.rs"]
+mod plan;
+use plan::Inputs as NativePlanInputs;
+#[path = "conditional_worker_publication.rs"]
+mod conditional;
+pub use conditional::*;
 
 fn derive_intent(
     package: PackageIdentityV1,
@@ -768,106 +773,26 @@ fn derive_intent(
 }
 
 fn derive_plan(input: NativePlanInputs) -> NativeWorkerPublicationIntentV1 {
-    // Complete native source/Worker identity already commits all response,
-    // measurement, provider and option axes. Include it with the finalization,
-    // transcript, producer and full occurrence in every new native identity.
-    let mut hash = Sha256::new();
-    hash.update(CONTEXT_DOMAIN);
-    hash.update(input.package.as_bytes());
-    hash_attempt(&mut hash, input.attempt);
-    hash.update([input.slot]);
-    for identity in [
-        input.transaction,
-        input.binding,
-        input.source,
-        input.worker,
-        input.finalized,
-        input.transcript,
-        input.link_plan,
-        input.policy,
-        input.canonical_digest,
-    ] {
-        hash.update(identity);
-    }
-    for content in [
-        input.outer,
-        input.manifest,
-        input.raw,
-        input.output,
-        input.descriptor,
-    ] {
-        hash.update(content.sha256());
-        hash.update(content.byte_len().to_le_bytes());
-    }
-    let context: [u8; 32] = hash.finalize().into();
-    let domain = |domain: &[u8]| hash_parts(domain, &[&context]);
-    // Scope and worker coordinates keep their meaning across attempts; the
-    // complete request/plan/intent identities, not the scope, bind occurrence.
-    let scope = LinkPublicationScopeV1::new(
-        input.package,
-        KernelSetIdentityV1::from_bytes(hash_parts(
-            KERNEL_DOMAIN,
-            &[
-                input.manifest.sha256(),
-                &input.manifest.byte_len().to_le_bytes(),
-            ],
-        )),
-        TargetIdentityV1::from_bytes(hash_parts(TARGET_DOMAIN, &[&input.policy])),
-    );
-    let plan = DurableLinkPublicationPlanV1::new(
-        input.attempt,
-        scope,
-        CanonicalLinkRequestIdentityV1::from_bytes(domain(REQUEST_DOMAIN)),
-        PinnedWorkerIdentityV1::from_bytes(input.worker),
-        ValidatedResponseIdentityV1::from_bytes(hash_parts(
-            RESPONSE_DOMAIN,
-            &[
-                &input.source,
-                input.raw.sha256(),
-                &input.raw.byte_len().to_le_bytes(),
-            ],
-        )),
-        LinkedOutputIdentityV1::from_bytes(*input.raw.sha256()),
-        FinalizationIdentityV1::from_bytes(hash_parts(
-            FINALIZATION_DOMAIN,
-            &[
-                &input.finalized,
-                &input.canonical_digest,
-                input.descriptor.sha256(),
-                &input.descriptor.byte_len().to_le_bytes(),
-                input.output.sha256(),
-                &input.output.byte_len().to_le_bytes(),
-            ],
-        )),
-        FinalizedOutputIdentityV1::from_bytes(*input.output.sha256()),
-        AtomicPublicationIdentityV1::from_bytes(domain(PUBLICATION_DOMAIN)),
-    );
-    let plan_identity = NativeWorkerPublicationPlanIdentityV1(hash_parts(
-        PLAN_DOMAIN,
-        &[
-            &context,
-            scope.package().as_bytes(),
-            scope.kernel_set().as_bytes(),
-            scope.target().as_bytes(),
-            plan.request().as_bytes(),
-            plan.worker().as_bytes(),
-            plan.response().as_bytes(),
-            plan.linked_output().as_bytes(),
-            plan.finalization().as_bytes(),
-            plan.finalized_output().as_bytes(),
-            plan.publication().as_bytes(),
-        ],
-    ));
-    let identity = NativeWorkerPublicationIntentIdentityV1(hash_parts(
-        INTENT_DOMAIN,
-        &[&context, plan_identity.as_bytes()],
-    ));
+    let domains = plan::Domains {
+        context: CONTEXT_DOMAIN,
+        request: REQUEST_DOMAIN,
+        plan: PLAN_DOMAIN,
+        intent: INTENT_DOMAIN,
+        kernel: KERNEL_DOMAIN,
+        target: TARGET_DOMAIN,
+        worker: WORKER_DOMAIN,
+        response: RESPONSE_DOMAIN,
+        finalization: FINALIZATION_DOMAIN,
+        publication: PUBLICATION_DOMAIN,
+    };
+    let (identity, plan_identity, plan) = plan::derive(input, &domains);
     NativeWorkerPublicationIntentV1 {
-        identity,
-        plan_identity,
+        identity: NativeWorkerPublicationIntentIdentityV1(identity),
+        plan_identity: NativeWorkerPublicationPlanIdentityV1(plan_identity),
         plan,
     }
 }
+
 fn hash_attempt(hash: &mut Sha256, attempt: BuildAttempt) {
     hash.update(attempt.generation().to_le_bytes());
     hash.update(attempt.session().as_bytes());

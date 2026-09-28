@@ -18,6 +18,9 @@ mod optimized_assert_origins_v1_tests;
 #[path = "production_slice_view_v1_tests.rs"]
 mod slice_view_v1_tests;
 
+#[path = "production_conditional_source_output_v1_tests.rs"]
+mod conditional_source_output_v1_tests;
+
 #[path = "production_masked_assertion_consumers_v1_tests.rs"]
 mod masked_assertion_consumers_v1_tests;
 

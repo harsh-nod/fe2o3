@@ -23,6 +23,7 @@ mod authority;
 mod authority_v2;
 #[cfg(test)]
 mod authority_v2_test_process;
+mod authority_v3;
 #[allow(unsafe_code)]
 mod deployment;
 mod handoff;
@@ -33,22 +34,36 @@ mod handoff_v2;
 mod handoff_v2_io;
 #[cfg(test)]
 mod handoff_v2_test_process;
+mod handoff_v3;
 mod launch;
 mod launch_checks;
 mod launch_v2;
+mod launch_v3;
 mod listener;
 #[cfg(test)]
 mod native_consuming_test_process;
 #[allow(unsafe_code)]
+mod native_deployment_io;
+#[allow(unsafe_code)]
+mod native_entrypoint;
+#[allow(unsafe_code)]
 mod process;
-mod process_cleanup;
+mod process_cleanup {
+    pub(crate) use fe2o3_protected_service_spawn::cleanup_bridge::{ChildCleanupV1, CleanupPollV1};
+}
 mod process_reaper;
 mod process_staging;
 mod program_v2;
+mod program_v3;
 mod provisioning;
+mod provisioning_v2;
 mod root_checks;
+mod shared_adapter;
 pub use program_v2::{
     AdmittedIssuerProgramV2, IssuerProgramAdmissionErrorV2, IssuerProgramStorageV2,
+};
+pub use program_v3::{
+    AdmittedIssuerProgramV3, IssuerProgramAdmissionErrorV3, IssuerProgramStorageV3,
 };
 mod session;
 
@@ -60,6 +75,10 @@ pub use authority::{
 pub use authority_v2::{
     ProtectedIssuerSupervisorErrorV2, ProtectedIssuerSupervisorStorageV2,
     ProtectedIssuerSupervisorV2,
+};
+pub use authority_v3::{
+    ProtectedIssuerSupervisorErrorV3, ProtectedIssuerSupervisorStorageV3,
+    ProtectedIssuerSupervisorV3,
 };
 pub use deployment::{
     COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1,
@@ -76,15 +95,36 @@ pub use handoff_v2::{
     AcceptedCompilerExecutionHandoffV2, ProtectedIssuerHandoffErrorV2,
     ProtectedIssuerHandoffStorageV2,
 };
+pub use handoff_v3::{
+    AcceptedCompilerExecutionHandoffV3, ProtectedIssuerHandoffErrorV3,
+    ProtectedIssuerHandoffStorageV3,
+};
 pub use launch::{PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1};
 pub use launch_v2::{
     PreparedProtectedIssuerLaunchV2, ProtectedIssuerLaunchPreparationErrorV2,
     ProtectedIssuerLaunchStorageV2,
 };
+pub use launch_v3::{
+    PreparedProtectedIssuerLaunchV3, ProtectedIssuerLaunchPreparationErrorV3,
+    ProtectedIssuerLaunchStorageV3,
+};
 pub use listener::{
-    ProtectedIssuerServiceErrorV1, ProtectedIssuerServiceReportV1,
-    ProtectedIssuerServiceShutdownV1, ProtectedIssuerServiceV1,
-    ProtectedIssuerServiceWorkerCountV1, ProtectedIssuerSessionOutcomeV1,
+    ProtectedIssuerDispatchLimitsV2, ProtectedIssuerDispatchLimitsV3,
+    ProtectedIssuerDispatchReportV2, ProtectedIssuerDispatchReportV3,
+    ProtectedIssuerDispatchStopV2, ProtectedIssuerDispatchStopV3, ProtectedIssuerServiceErrorV1,
+    ProtectedIssuerServiceErrorV2, ProtectedIssuerServiceErrorV3, ProtectedIssuerServiceReportV1,
+    ProtectedIssuerServiceShutdownV1, ProtectedIssuerServiceStorageV2,
+    ProtectedIssuerServiceStorageV3, ProtectedIssuerServiceV1, ProtectedIssuerServiceV2,
+    ProtectedIssuerServiceV3, ProtectedIssuerServiceWorkerCountV1, ProtectedIssuerSessionOutcomeV1,
+    ProtectedIssuerSessionReportV2, ProtectedIssuerSessionReportV3,
+};
+pub use native_deployment_io::NativeIssuerStartupIoErrorV2;
+pub use native_entrypoint::{
+    NATIVE_ISSUER_PROCESS_STORAGE_V2, NATIVE_ISSUER_PROCESS_WORK_V2,
+    NATIVE_ISSUER_STARTUP_FRAME_STORAGE_V2, NATIVE_ISSUER_STARTUP_INPUT_STORAGE_V2,
+    NATIVE_ISSUER_STARTUP_INPUT_STORAGE_V3, NATIVE_ISSUER_STARTUP_WORK_V2,
+    ProtectedIssuerDeploymentErrorV2, ProtectedIssuerDeploymentErrorV3,
+    run_inherited_protected_issuer_service_v2, run_inherited_protected_issuer_service_v3,
 };
 pub use process::{
     ExitedProtectedIssuerV1, LaunchedProtectedIssuerV1, MAX_PROTECTED_ISSUER_PROCESSES_V1,
@@ -96,6 +136,15 @@ pub use process::{
     PROTECTED_ISSUER_LAUNCH_WORK_V2, ProtectedIssuerBoundaryV2, ProtectedIssuerLaunchErrorV2,
     ProtectedIssuerWaitV2, ReadyProtectedIssuerV2, ServingProtectedIssuerV2,
 };
+pub use process::{
+    ExitedProtectedIssuerV3, LaunchedProtectedIssuerV3, PROTECTED_ISSUER_LAUNCH_SCRATCH_V3,
+    PROTECTED_ISSUER_LAUNCH_WORK_V3, ProtectedIssuerBoundaryV3, ProtectedIssuerLaunchErrorV3,
+    ProtectedIssuerWaitV3, ReadyProtectedIssuerV3, ServingProtectedIssuerV3,
+};
+pub use process::{
+    ProtectedIssuerSessionErrorV2, ProtectedIssuerSessionErrorV3, ProtectedIssuerSessionLimitsV2,
+    ProtectedIssuerSessionLimitsV3,
+};
 pub use process_reaper::{
     ProtectedIssuerCleanupAdmissionErrorV2, ProtectedIssuerCleanupErrorV2,
     ProtectedIssuerCleanupReportV2, ProtectedIssuerCleanupReservationV2,
@@ -104,6 +153,10 @@ pub use process_reaper::{
 pub use provisioning::{
     ProtectedIssuerServiceDeploymentInputsV1, ProtectedIssuerServiceProvisioningErrorV1,
     ProvisionedProtectedIssuerServiceInputsV1,
+};
+pub use provisioning_v2::{
+    ProtectedIssuerServiceProvisioningErrorV2, ProtectedIssuerServiceProvisioningStorageV2,
+    ProvisionedProtectedIssuerServiceInputsV2,
 };
 pub use session::{
     ProtectedIssuerSessionErrorV1, ProtectedIssuerSessionTimeoutErrorV1,
@@ -524,5 +577,7 @@ fn map_protected_executable_error(
     }
 }
 
+#[cfg(test)]
+mod eof_test_process;
 #[cfg(test)]
 mod tests;

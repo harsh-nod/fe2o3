@@ -7,6 +7,10 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
+use fe2o3_process_identity::{
+    COMPILER_IMAGE_MEASUREMENT_STORAGE_V1, CompilerImageMeasurementErrorV1, CompilerImageRoleV1,
+    measure_compiler_image_file_sha256_v1,
+};
 use std::mem::size_of;
 
 // Canonical V3 argv/environment encodings contain every observed byte plus
@@ -241,39 +245,45 @@ fn measured(file: File, executable: bool, b: &mut Budget<'_>) -> Result<Retained
     require_close_on_exec(&file, "observed image")?;
     let snapshot =
         measure_file_snapshot(&file, "observed image", MAX_EXECUTABLE_BYTES_V3, executable)?;
-    let length = usize::try_from(snapshot.length).map_err(|_| Resource::Arithmetic)?;
-    let work = length
-        .checked_mul(64)
-        .and_then(|n| n.checked_add(64 * 1024))
-        .ok_or(Resource::Arithmetic)?;
-    let sha256 = b.with_prepaid_scope(size_of::<File>(), 8, work, 128 * 1024, |_| {
-        let mut hash = Sha256::new();
-        let mut buffer = [0; 64 * 1024];
-        let mut offset = 0;
-        while offset < length {
-            let count = (length - offset).min(buffer.len());
-            let n = rustix::io::pread(&file, &mut buffer[..count], offset as u64)
-                .map_err(|e| inspect_io("hash observed image", e))?;
-            if n != count {
-                return Err(CompilerExecutionSupervisionErrorV1::InvalidObservation(
-                    "short observed image read",
-                )
-                .into());
-            }
-            hash.update(&buffer[..count]);
-            offset += count;
-        }
-        let mut extra = [0];
-        if rustix::io::pread(&file, &mut extra[..], snapshot.length)
-            .map_err(|e| inspect_io("check image EOF", e))?
-            != 0
-            || measure_file_snapshot(&file, "observed image", MAX_EXECUTABLE_BYTES_V3, executable)?
+    let role = if executable {
+        CompilerImageRoleV1::Executable
+    } else {
+        CompilerImageRoleV1::CodegenBackend
+    };
+    let sha256 = b.with_prepaid_scope(
+        size_of::<File>(),
+        8,
+        8 + 64 * 1024,
+        COMPILER_IMAGE_MEASUREMENT_STORAGE_V1
+            + size_of::<CompilerImageMeasurementErrorV1<Resource>>(),
+        |b| {
+            let digest =
+                measure_compiler_image_file_sha256_v1(&file, role, |work| b.charge_work(work))
+                    .map_err(|error| match error {
+                        CompilerImageMeasurementErrorV1::Work(e) => {
+                            NativeObservationError::Resource(e)
+                        }
+                        CompilerImageMeasurementErrorV1::Io(source) => {
+                            CompilerExecutionSupervisionErrorV1::Io {
+                                operation: "hash observed image",
+                                source,
+                            }
+                            .into()
+                        }
+                        CompilerImageMeasurementErrorV1::Invalid(reason) => {
+                            CompilerExecutionSupervisionErrorV1::InvalidObservation(reason).into()
+                        }
+                    })?;
+            // Preserve the supervisor's stronger retained-object predicate, including
+            // owner/link metadata, around the shared streaming measurement.
+            if measure_file_snapshot(&file, "observed image", MAX_EXECUTABLE_BYTES_V3, executable)?
                 != snapshot
-        {
-            return Err(CompilerExecutionSupervisionErrorV1::IdentityChanged.into());
-        }
-        Ok::<_, NativeObservationError>(hash.finalize().into())
-    })?;
+            {
+                return Err(CompilerExecutionSupervisionErrorV1::IdentityChanged.into());
+            }
+            Ok::<_, NativeObservationError>(digest)
+        },
+    )?;
     Ok(RetainedMeasuredFileV1 {
         file,
         snapshot,
@@ -288,4 +298,58 @@ fn inspect_io(operation: &'static str, e: rustix::io::Errno) -> NativeObservatio
         source: io::Error::from(e),
     }
     .into()
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use std::io::Write;
+
+    fn image() -> File {
+        let mut file = File::from(
+            rustix::fs::memfd_create(c"fe2o3-native-image-test", rustix::fs::MemfdFlags::CLOEXEC)
+                .unwrap(),
+        );
+        file.write_all(b"native compiler image").unwrap();
+        file
+    }
+
+    #[test]
+    fn shared_measurement_retains_the_supervisor_snapshot_on_the_original_budget() {
+        let file = image();
+        let snapshot =
+            measure_file_snapshot(&file, "test", MAX_EXECUTABLE_BYTES_V3, false).unwrap();
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, 1024 * 1024);
+        budget.reserve_storage(size_of::<File>()).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let retained = measured(file, false, &mut budget).unwrap();
+        assert_eq!(retained.snapshot, snapshot);
+        let digest: [u8; 32] = Sha256::digest(b"native compiler image").into();
+        assert_eq!(retained.sha256, digest);
+        assert_eq!(budget.storage(), size_of::<File>());
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(
+            budget.work(),
+            8 + 5 * 64 * 1024 + b"native compiler image".len()
+        );
+        assert_eq!(budget.failed_work(), None);
+    }
+
+    #[test]
+    fn shared_measurement_payload_denial_preserves_resource_error_and_scratch_accounting() {
+        let total = 8 + 5 * 64 * 1024 + b"native compiler image".len();
+        let mut work = Work::new(total - 1);
+        let mut budget = Budget::new(&mut work, 1024 * 1024);
+        budget.reserve_storage(size_of::<File>()).unwrap();
+        assert!(matches!(
+            measured(image(), false, &mut budget),
+            Err(NativeObservationError::Resource(Resource::Work(_)))
+        ));
+        assert_eq!(budget.storage(), size_of::<File>());
+        assert_eq!(budget.work(), 8 + 2 * 64 * 1024);
+        assert_eq!(budget.failed_work(), Some(total));
+        assert!(budget.peak_storage() > size_of::<File>());
+    }
 }

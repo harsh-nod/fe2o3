@@ -14,6 +14,9 @@ pub const TRANSACTION_IDENTITY_MAX_LEN_V1: usize = 4096;
 const CHALLENGE_MAGIC: [u8; 8] = *b"F2ARBA1\0";
 const OBSERVATION_MAGIC: [u8; 8] = *b"F2ARBO1\0";
 const SIGNING_DOMAIN: &[u8] = b"FE2O3/EXTERNAL-MONOTONIC-ANCHOR/OBSERVATION/V1\0";
+/// Exact size of the domain-separated Ed25519 observation message.
+pub const ANCHOR_OBSERVATION_SIGNING_BYTES_V1: usize =
+    SIGNING_DOMAIN.len() + ANCHOR_OBSERVATION_SIGNED_LEN_V1;
 const KEY_ID_DOMAIN: &[u8] = b"FE2O3/EXTERNAL-MONOTONIC-ANCHOR/KEY-ID/V1\0";
 const HEAD_DOMAIN: &[u8] = b"FE2O3/EXTERNAL-MONOTONIC-ANCHOR/HASH-CHAIN-HEAD/V1\0";
 const TRANSACTION_DIGEST_DOMAIN: &[u8] = b"FE2O3/EXTERNAL-MONOTONIC-ANCHOR/TRANSACTION-DIGEST/V1\0";
@@ -300,10 +303,12 @@ impl UnsignedAnchorObservationV1 {
 
     /// Returns the exact domain-separated bytes an external anchor must sign.
     pub fn signing_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(SIGNING_DOMAIN.len() + self.bytes.len());
-        bytes.extend_from_slice(SIGNING_DOMAIN);
-        bytes.extend_from_slice(&self.bytes);
-        bytes
+        self.signing_bytes_fixed().to_vec()
+    }
+
+    /// The same wire transcript without allocation; conveys no persistence evidence.
+    pub fn signing_bytes_fixed(&self) -> [u8; ANCHOR_OBSERVATION_SIGNING_BYTES_V1] {
+        signing_message(&self.bytes)
     }
 
     /// Attaches signature bytes without claiming they are valid.
@@ -363,13 +368,20 @@ pub(crate) fn verify_observation(
     let mut signature_bytes = [0_u8; 64];
     signature_bytes.copy_from_slice(&bytes[SIGNATURE_OFFSET..]);
     let signature = Signature::from_bytes(&signature_bytes);
-    let mut message = Vec::with_capacity(SIGNING_DOMAIN.len() + signed.len());
-    message.extend_from_slice(SIGNING_DOMAIN);
-    message.extend_from_slice(signed);
+    let message = signing_message(signed.try_into().expect("validated observation length"));
     key.verifying_key()
         .verify_strict(&message, &signature)
         .map_err(|_| AnchorProtocolErrorV1::SignatureRejected)?;
     Ok(position)
+}
+
+fn signing_message(
+    signed: &[u8; ANCHOR_OBSERVATION_SIGNED_LEN_V1],
+) -> [u8; ANCHOR_OBSERVATION_SIGNING_BYTES_V1] {
+    let mut bytes = [0; ANCHOR_OBSERVATION_SIGNING_BYTES_V1];
+    bytes[..SIGNING_DOMAIN.len()].copy_from_slice(SIGNING_DOMAIN);
+    bytes[SIGNING_DOMAIN.len()..].copy_from_slice(signed);
+    bytes
 }
 
 fn validate_common(bytes: &[u8], magic: [u8; 8]) -> Result<(), AnchorProtocolErrorV1> {

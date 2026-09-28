@@ -5,6 +5,7 @@ use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
+mod child_inheritance;
 mod native;
 
 pub(super) const REQUIRED_SEALS: rustix::fs::SealFlags = rustix::fs::SealFlags::WRITE
@@ -185,66 +186,8 @@ impl SealedCapabilityImage {
         command: &mut Command,
         child_fd: RawFd,
     ) -> Result<(), String> {
-        self.revalidate()?;
-        validate_child_fd(child_fd, self.role)?;
-        // SAFETY: F_GETFD does not dereference memory and reports an unused descriptor via EBADF.
-        let target_flags = unsafe { libc::fcntl(child_fd, libc::F_GETFD) };
-        if target_flags >= 0 {
-            return Err(format!(
-                "reserved {} descriptor {child_fd} is already in use",
-                self.role.name
-            ));
-        }
-        let target_error = std::io::Error::last_os_error();
-        if target_error.raw_os_error() != Some(libc::EBADF) {
-            return Err(format!(
-                "cannot inspect reserved {} descriptor {child_fd}: {target_error}",
-                self.role.name
-            ));
-        }
-
-        let reserved = rustix::io::fcntl_dupfd_cloexec(&self.image, child_fd)
-            .map_err(|error| format!("cannot retain {} for child: {error}", self.role.name))?;
-        if reserved.as_raw_fd() != child_fd {
-            return Err(format!(
-                "reserved {} descriptor {child_fd} was concurrently claimed",
-                self.role.name
-            ));
-        }
-        let device = self.device;
-        let inode = self.inode;
-        let length = self.length as i64;
-        // SAFETY: `reserved` occupies the exact target descriptor until the command is dropped,
-        // remains open through every spawn, and every callback operation is an async-signal-safe
-        // descriptor syscall.
-        unsafe {
-            command.pre_exec(move || {
-                if rustix::fs::fcntl_get_seals(&reserved).map_err(std::io::Error::from)?
-                    != REQUIRED_SEALS
-                    || !rustix::io::fcntl_getfd(&reserved)
-                        .map_err(std::io::Error::from)?
-                        .contains(rustix::io::FdFlags::CLOEXEC)
-                {
-                    return Err(std::io::Error::from_raw_os_error(
-                        rustix::io::Errno::PERM.raw_os_error(),
-                    ));
-                }
-                let stat = rustix::fs::fstat(&reserved).map_err(std::io::Error::from)?;
-                if stat.st_mode != libc::S_IFREG | 0o400
-                    || stat.st_size != length
-                    || stat.st_dev != device
-                    || stat.st_ino != inode
-                {
-                    return Err(std::io::Error::from_raw_os_error(
-                        rustix::io::Errno::STALE.raw_os_error(),
-                    ));
-                }
-                rustix::io::fcntl_setfd(&reserved, rustix::io::FdFlags::empty())
-                    .map_err(std::io::Error::from)?;
-                Ok(())
-            });
-        }
-        Ok(())
+        self.inherit_fixed(command, child_fd)
+            .map_err(|error| format!("cannot inherit {}: {error}", self.role.name))
     }
 
     #[cfg(test)]

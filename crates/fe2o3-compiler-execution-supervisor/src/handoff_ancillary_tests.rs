@@ -47,15 +47,20 @@ fn bytes(guard: &mut Guard) -> &mut [u8] {
     unsafe { std::slice::from_raw_parts_mut(guard.backing.bytes.as_mut_ptr().cast::<u8>(), BYTES) }
 }
 
+fn header(length: usize, level: i32, kind: i32) -> libc::cmsghdr {
+    // SAFETY: all fields, including musl's explicit integer padding, permit zero.
+    let mut header: libc::cmsghdr = unsafe { std::mem::zeroed() };
+    header.cmsg_len = length.try_into().expect("fixture length fits native ABI");
+    header.cmsg_level = level;
+    header.cmsg_type = kind;
+    header
+}
+
 fn record(guard: &mut Guard, offset: usize, level: i32, kind: i32, payload: &[u8]) -> usize {
     let length = HEADER + payload.len();
     let end = offset + length;
     assert!(end <= BYTES);
-    let header = libc::cmsghdr {
-        cmsg_len: length,
-        cmsg_level: level,
-        cmsg_type: kind,
-    };
+    let header = header(length, level, kind);
     let buffer = bytes(guard);
     // SAFETY: the complete header and payload fit in the initialized backing.
     unsafe {
@@ -93,6 +98,8 @@ fn backing_is_zeroed_aligned_and_includes_rustix_padding() {
         rustix::cmsg_space!(ScmRights(3), ScmRights(1))
     );
     assert_eq!((buffer.as_ptr() as usize) % align_of::<libc::cmsghdr>(), 0);
+    assert!(align_of::<Backing>() >= align_of::<usize>());
+    assert_eq!((buffer.as_ptr() as usize) % align_of::<usize>(), 0);
     assert!(!*armed);
     // SAFETY: Guard::new initializes every byte.
     assert!(buffer.iter().all(|byte| unsafe { byte.assume_init() } == 0));
@@ -216,14 +223,12 @@ fn malformed_auxiliary_lengths_and_negative_values_do_not_adopt() {
 fn complete_auxiliary_prefix_closes_before_malformed_tail_refusal() {
     let fixture = Fixture::new();
     let baseline = fixture.references();
-    for length in [1, BYTES + 1, usize::MAX] {
+    let mut maximum = header(0, 0, 0);
+    maximum.cmsg_len = !0;
+    for length in [1, BYTES + 1, usize::try_from(maximum.cmsg_len).unwrap()] {
         let mut guard = Guard::new();
         let next = descriptor_record(&mut guard, 0, SCM_PIDFD, fixture.duplicate());
-        let header = libc::cmsghdr {
-            cmsg_len: length,
-            cmsg_level: libc::SOL_SOCKET,
-            cmsg_type: SCM_PIDFD,
-        };
+        let header = header(length, libc::SOL_SOCKET, SCM_PIDFD);
         // SAFETY: only a complete header is written. Its invalid length must
         // be refused without examining any out-of-bounds or fabricated FD.
         unsafe {

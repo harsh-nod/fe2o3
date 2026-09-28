@@ -12,9 +12,14 @@ publish = false
 test-support = []
 
 [dependencies]
+fe2o3-artifact-transaction.workspace = true
+fe2o3-kernel-ir.workspace = true
 fe2o3-protected-service-profile.workspace = true
 libc.workspace = true
-rustix = { workspace = true, features = ["pipe", "process", "thread"] }
+rustix = { workspace = true, features = ["event", "pipe", "process", "thread"] }
+
+[dev-dependencies]
+tempfile = "=3.21.0"
 
 [lints.rust]
 unsafe_code = "deny"

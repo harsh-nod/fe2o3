@@ -2,6 +2,11 @@
 
 ## Status
 
+Native V2/V3 key-owning durable anchors now share V1's persistence engine. See
+the [native state contract](compiler-execution-native-anchor-state.md) for bounded
+state I/O, error/unwind poisoning and accounting. The V1 entrypoints described
+below have not been switched to native owners.
+
 The canonical authority-free packet codec and the consumed Linux service loop
 are implemented. The loop operates only on an already admitted
 `ProtectedCompilerExecutionIssuerV1`; it does not create a second compiler or

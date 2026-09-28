@@ -1,5 +1,135 @@
 # fe2o3 compiler-execution coordinator
 
+The production composition below currently uses V1 owners. Native V2/V3 trust
+and preparation now compose genuine deployment/policy/key custody, three freshly
+sealed images, listener/root inputs, root-bound lifecycle leases and a managed
+anchor on the original resource ledger. Consuming native supervisor launch now
+transfers that complete preparation into ordered child custody before clone.
+Native inherited descriptor admission and anchor-first composition now exist.
+The installed entrypoint still uses V1. A fixed V3 runner now consumes the
+composed startup/cleanup limits and bounded activation mechanics. Matching
+provisioning and installed-binary migration remain unfinished. These APIs do not
+establish 47/47 safe GPU launch. See the
+[funding checkpoint](../../docs/evidence/conditional-native-startup-funding-20260926.md).
+
+## Native Preparation
+
+`CompilerExecutionSupervisorTrustV2/V3` bind actual same-family deployment,
+policy and signing-key owners. `PreparedCompilerExecutionSupervisorV2/V3`
+consume this trust plus the native service inputs, two native lifecycle leases
+and a genuine managed anchor. Both leases must protect the canonical sibling
+of the retained service root; independent validity alone is insufficient.
+Preparation pins exact root credentials, process and namespaces, and the three
+sealed supervisor/launcher/issuer images against their actual contexts.
+
+The input-storage and quota queries include complete source ownership, cumulative
+image growth and nested scratch. Reserve returned growth before retaining an
+owner, keep all consumed charges live, and retire the full retained charge only
+after Drop. Calls restore entry storage without resetting work or denial history.
+No V1 authority conversion, raw-descriptor accessor or public signing operation
+is exposed. The V1 program-source bundle is reused only as three untrusted Files.
+
+## Native Launch
+
+`PreparedCompilerExecutionSupervisorV2/V3::launch` validates the already installed
+cleanup guard against its actual root-bound lifecycle. The anchor must install
+that guard before the first child; compiler preparation cannot replace it. Exact
+final staged Files are checked against retained native owners before spawn.
+
+The existing bounded scheduler requires profile readiness and context checks
+before gate release, then exact same-family Ready bound to the actual child PID
+and deployment, EOF, repeated profile/context validation and liveness before exec
+confirmation. `RootManagedCompilerExecutionServiceV2/V3` retain the typed child,
+complete preparation and nominal readiness with metered continuity checks.
+
+Deferred or quarantined supervisor cleanup retains preparation and its live
+anchor. Exact supervisor termination permits nested anchor cancellation outside
+pool locks; that cancellation may itself defer. The original persistent cleanup
+account funds the complete payload independently of the original request ledger.
+No new pool or budget reset is introduced. Component tests and compile checks
+are not a successful protected deployment or a completed production GPU path.
+
+## Native Inherited Inputs
+
+`InheritedCompilerExecutionDeploymentV2/V3::admit` consumes the fixed fourteen
+source descriptors under an explicit unsafe ownership contract. Before adoption,
+the coordinator checks descriptor flags, directory roles, bounded executable
+lengths and exact record/seed sizes. A fixed-buffer thread check requires only
+the main PID. Three independent leases bind both state roots to the same
+canonical lifecycle before either signing seed is read.
+
+Actual root-owned canonical records are read twice and decoded against their
+same-family contexts before fresh capabilities are sealed. Seed buffers are
+zeroizing on success, refusal and unwind. Shared filesystem mechanics construct
+the exact non-listening listener; cleanup checks an established inode identity
+before unlinking. All five declared image lengths are bounded before seed reads.
+
+Consuming `launch` installs the canonical cleanup guard before the anchor, then
+uses native compiler preparation and retained supervisor launch on the original
+request and cleanup accounts. `SOURCE_STORAGE` covers the raw inputs only;
+`admission_quota()` additionally covers all nested admission work and retained/
+temporary storage at the fixed image ceilings. This inert query needs no
+descriptor, seed or admitted owner.
+
+`startup_quota(monitor_ticks, cleanup_turns)` composes activation, admission,
+anchor/compiler launch, monitoring and bounded cleanup into independent request
+and persistent-cleanup limits. The latter funds the guard, full retained
+preparation, complete pool scans and shutdown attempts. Both positive turn counts
+are checked for overflow. The same component cost calculations serve actual
+owners and inert maximum-size queries; no placeholder admitted owner is created.
+These are root-coordinator logical bounds, not executed-program or RSS limits.
+No phase or tick may renew an account, and finite funding cannot promise reaping.
+The installed runner does not yet consume this plan.
+
+## Native Runner
+
+`run_inherited_compiler_execution_coordinator_v3` consumes the funding plan in
+one dedicated root process. It has no version selector or fallback. One request
+account and one independent persistent cleanup account cover its entire finite
+schedule: at most 86,400 monitoring attempts and 20 cleanup turns. Each signal
+wait is at most one second; interruptions also consume a turn. The monitoring
+limit is a refusal, not successful shutdown or a renewable lease.
+
+Native activation mechanics bound command-line and environment reads,
+validate all fourteen roles and the main PID, clear the validated environment,
+and meter one-shot readiness and finite termination waits. Startup admits the
+inherited V3 graph and launches anchor-first before publishing readiness.
+Every normal return path after cleanup admission cancels foreground service
+custody, then attempts empty-pool shutdown. Pending cleanup receives only the
+funded full-pool scans. Cleanup control is prepaid before side effects, so a
+request-budget failure does not stop scans on the independent cleanup account.
+
+The signal mask is restored only after empty-pool shutdown. Busy, quarantined,
+exhausted or unwinding custody remains charged in the pool; dropping the controller
+does not release it. Every runner return requires dedicated-process termination,
+and the service manager must enforce whole-cgroup termination. This is not a
+guarantee of eventual reaping. Logical request reservations remain until owners
+drop and the outer scope closes; no phase renews either account.
+
+The runner is compiled and control-flow tested, not selected by `main.rs`.
+Installation must change provisioning records, protected images and client
+profiles together. Genuine root-path failure tests and protected boot validation
+remain required.
+
+## Native Provisioning Records
+
+`CompilerExecutionProvisioningBundleV3::new` builds the same-family public record
+graph from borrowed, prepaid measured inputs. It composes the policy, supervisor,
+anchor deployment, anchor provisioning and client profile on the original ledger.
+The profile owns the single policy; the bundle borrows it without cloning.
+Executable roles must have distinct measurements, and all five image lengths
+must satisfy the native root runner's ceilings.
+
+The bundle exposes fixed work/scratch envelopes and a full unreserved return
+charge. Construction restores entry storage while preserving work, peaks and
+first denials. It accepts public keys only, not signing seeds. Inputs are inert:
+this pure constructor does not authenticate measurements, inspect files, publish
+records, or grant authority. The same-host installer and client consumers still
+need migration from V1. See the
+[runner and records checkpoint](../../docs/evidence/conditional-native-runner-provisioning-20260926.md).
+
+## Existing V1 Deployment
+
 This package owns the sole root-to-protected-supervisor deployment transition.
 It admits and pins the exact supervisor, static pre-exec launcher, and issuer
 images against the canonical deployment and issuer policy; retains the exact

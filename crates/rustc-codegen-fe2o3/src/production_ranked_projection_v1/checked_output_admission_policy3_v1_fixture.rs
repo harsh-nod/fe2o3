@@ -239,6 +239,27 @@ fn with_backend_checked_ranked_bound_types_functions_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
+    with_backend_checked_ranked_bound_types_functions_with_storage_limit_v1(
+        profile,
+        stores,
+        transform,
+        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+        next,
+    );
+}
+
+fn with_backend_checked_ranked_bound_types_functions_with_storage_limit_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    stores: Option<usize>,
+    transform: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
+    storage_limit: usize,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1,
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
         CanonicalKernelIrWorkBudgetV1 as Work,
@@ -246,10 +267,7 @@ fn with_backend_checked_ranked_bound_types_functions_v1(
     let mut work = Work::new(
         usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
     );
-    let mut budget = Budget::new(
-        &mut work,
-        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
-    );
+    let mut budget = Budget::new(&mut work, storage_limit);
     let (receipt, bound, verification, retained) =
         prepare_backend_checked_ranked_bound_types_functions_v1(
             profile,

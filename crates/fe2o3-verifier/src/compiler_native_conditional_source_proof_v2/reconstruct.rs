@@ -6,7 +6,7 @@ use fe2o3_lower_mir_kernel::{
 };
 use fe2o3_mir_model::{
     InertCanonicalSemanticU32InductionEvidenceV1 as Induction,
-    analyze_semantic_u32_induction_no_overflow_v1,
+    analyze_semantic_u32_induction_no_overflow_v1, semantic_mir_v1::SemanticFunctionIdV1,
 };
 
 pub(super) fn roster(
@@ -58,6 +58,44 @@ pub(super) fn reconstruct(
     ),
     E,
 > {
+    reconstruct_using(
+        packet,
+        accepted,
+        budget,
+        |source, packet, roots, retained, budget| {
+            reconstruct_roots(
+                source,
+                packet,
+                accepted,
+                roots,
+                retained,
+                budget,
+                |source, row, policy, _, budget| {
+                    root::reconstruct_root(source, row, policy, budget)
+                },
+            )
+        },
+    )
+}
+
+pub(super) fn reconstruct_using<Failure: From<E> + From<Resource>>(
+    packet: NativeConditionalSourcePacketInputV2<'_>,
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    budget: &mut Budget<'_>,
+    visit: impl FnOnce(
+        &ReplayedNativeSourceV1,
+        &NativeConditionalSourcePacketInputV2<'_>,
+        &mut Vec<ReplayedRoot>,
+        &mut usize,
+        &mut Budget<'_>,
+    ) -> Result<(), Failure>,
+) -> Result<
+    (
+        ReplayedNativeConditionalSourceV2,
+        NativeConditionalSourceStorageV2,
+    ),
+    Failure,
+> {
     roster(&packet, accepted, budget)?;
     budget.charge_work(packet.native_module.len())?;
     let native = NativeNeutralModuleRefV1::decode(packet.native_module)
@@ -97,7 +135,7 @@ pub(super) fn reconstruct(
         || packet.roots.len() != source.source().source_launch().roots().len()
         || packet.roots.len() != graph.module().kernels.len()
     {
-        return Err(E::invalid("complete reconstructed source/N/catalog roots"));
+        return Err(E::invalid("complete reconstructed source/N/catalog roots").into());
     }
     let header = size_of::<ReplayedNativeConditionalSourceV2>()
         .checked_sub(size_of::<ReplayedNativeSourceV1>())
@@ -115,21 +153,7 @@ pub(super) fn reconstruct(
         .and_then(|n| n.checked_add(root_storage))
         .and_then(|n| n.checked_add(order_storage))
         .ok_or(Resource::Arithmetic)?;
-    for (ordinal, (row, policy)) in packet.roots.iter().zip(accepted).enumerate() {
-        check_source_root(&source, ordinal, row, budget)?;
-        let root = root::reconstruct_root(&source, row, policy, budget)?;
-        let payload = root
-            .input
-            .retained_storage_v1()?
-            .checked_add(root.formula.retained_storage_v2())
-            .ok_or(Resource::Arithmetic)?
-            .checked_sub(size_of::<RetainedProductionConditionalFormulaV2>())
-            .ok_or(Resource::Accounting)?;
-        roots.push(root);
-        // The prepaid root slot now owns the formula's inline receipt header.
-        budget.release_storage(size_of::<RetainedProductionConditionalFormulaV2>())?;
-        retained = retained.checked_add(payload).ok_or(Resource::Arithmetic)?;
-    }
+    visit(&source, &packet, &mut roots, &mut retained, budget)?;
     Ok((
         ReplayedNativeConditionalSourceV2 {
             source,
@@ -140,12 +164,45 @@ pub(super) fn reconstruct(
     ))
 }
 
+pub(super) fn reconstruct_roots<Failure: From<E> + From<Resource>>(
+    source: &ReplayedNativeSourceV1,
+    packet: &NativeConditionalSourcePacketInputV2<'_>,
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    roots: &mut Vec<ReplayedRoot>,
+    retained: &mut usize,
+    budget: &mut Budget<'_>,
+    mut visit: impl FnMut(
+        &ReplayedNativeSourceV1,
+        &NativeConditionalSourceRootV2<'_>,
+        &NativeConditionalRootPolicyV2<'_>,
+        SemanticFunctionIdV1,
+        &mut Budget<'_>,
+    ) -> Result<ReplayedRoot, Failure>,
+) -> Result<(), Failure> {
+    for (ordinal, (row, policy)) in packet.roots.iter().zip(accepted).enumerate() {
+        let body = check_source_root(source, ordinal, row, budget)?;
+        let root = visit(source, row, policy, body, budget)?;
+        let payload = root
+            .input
+            .retained_storage_v1()?
+            .checked_add(root.formula.retained_storage_v2())
+            .ok_or(Resource::Arithmetic)?
+            .checked_sub(size_of::<RetainedProductionConditionalFormulaV2>())
+            .ok_or(Resource::Accounting)?;
+        roots.push(root);
+        // The prepaid root slot now owns the formula's inline receipt header.
+        budget.release_storage(size_of::<RetainedProductionConditionalFormulaV2>())?;
+        *retained = retained.checked_add(payload).ok_or(Resource::Arithmetic)?;
+    }
+    Ok(())
+}
+
 fn check_source_root(
     source: &ReplayedNativeSourceV1,
     ordinal: usize,
     row: &NativeConditionalSourceRootV2<'_>,
     budget: &mut Budget<'_>,
-) -> Result<(), E> {
+) -> Result<SemanticFunctionIdV1, E> {
     let semantic = source.source().semantic_ssa().source_semantic();
     let semantic_root = semantic.roots()[ordinal];
     let function = &semantic.functions()[semantic_root.index() as usize];
@@ -216,5 +273,5 @@ fn check_source_root(
     if induction.canonical_bytes() != row.induction_bytes {
         return Err(E::invalid("exact conditional source induction replay"));
     }
-    Ok(())
+    Ok(selection.body())
 }

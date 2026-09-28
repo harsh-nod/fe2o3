@@ -4,6 +4,8 @@
 //! `(sequence, hash-chain head)` pair. An advance is signed as `Proposed` only after the new
 //! state file and its atomic directory rename have both been synced. Recovery challenges never
 //! mutate state. Exact retries of an already committed advance are idempotent.
+//! Persistence errors and unwinds poison the live instance until it is reopened. State-file
+//! reads and writes are single attempts: short transfers and interruptions fail closed.
 //!
 //! The descriptor-only entrypoint admits the exact locked process profile, sealed deployment and
 //! key capabilities, existing durable root, and connected peer before entering this engine. Root
@@ -11,14 +13,13 @@
 
 use std::error::Error;
 use std::fmt;
-use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io;
 use std::os::fd::OwnedFd;
 
 use ed25519_dalek::{Signer, SigningKey};
 use fe2o3_external_anchor_protocol::{
-    ANCHOR_OBSERVATION_WIRE_LEN_V1, AnchorChallengeV1, AnchorPositionV1, AnchorProtocolErrorV1,
-    ChallengeKindV1, HashChainHeadV1, PinnedAnchorKeyV1, UnsignedAnchorObservationV1,
+    ANCHOR_OBSERVATION_WIRE_LEN_V1, AnchorProtocolErrorV1, HashChainHeadV1, PinnedAnchorKeyV1,
+    UnsignedAnchorObservationV1,
 };
 use rustix::fs::{
     AtFlags, FileType, FlockOperation, Mode, OFlags, flock, fstat, fsync, openat, renameat,
@@ -27,10 +28,40 @@ use rustix::fs::{
 use rustix::process::geteuid;
 use sha2::{Digest, Sha256};
 
+mod durable_core;
 #[allow(unsafe_code)]
 mod entrypoint;
+mod native;
+mod native_adapter;
+#[allow(unsafe_code)]
+mod native_entrypoint;
+mod native_peer;
+mod native_v2;
+mod native_v3;
+#[allow(unsafe_code)]
+mod peer_io;
+mod peer_loop;
 #[allow(unsafe_code)]
 mod service;
+
+pub(crate) use durable_core::DurableAnchorCoreV1;
+
+pub use native::{NativeExternalAnchorErrorV2, NativeExternalAnchorStorageV2};
+pub use native_entrypoint::{
+    NATIVE_EXTERNAL_ANCHOR_PROCESS_STORAGE_LIMIT_V2, NATIVE_EXTERNAL_ANCHOR_PROCESS_WORK_LIMIT_V2,
+    NATIVE_EXTERNAL_ANCHOR_STARTUP_FRAME_STORAGE_V2,
+    NATIVE_EXTERNAL_ANCHOR_STARTUP_INPUT_STORAGE_V2,
+    NATIVE_EXTERNAL_ANCHOR_STARTUP_INPUT_STORAGE_V3, NATIVE_EXTERNAL_ANCHOR_STARTUP_WORK_V2,
+    NativeExternalAnchorEntrypointErrorV2, run_inherited_external_anchor_service_v2,
+    run_inherited_external_anchor_service_v3,
+};
+pub use native_peer::{
+    NATIVE_EXTERNAL_ANCHOR_PEER_FRAME_STORAGE_V2, NATIVE_EXTERNAL_ANCHOR_PEER_REPORT_STORAGE_V2,
+    NATIVE_EXTERNAL_ANCHOR_PEER_STORAGE_V2, NATIVE_EXTERNAL_ANCHOR_PEER_WORK_V2,
+    serve_connected_peer_v2, serve_connected_peer_v3,
+};
+pub use native_v2::DurableExternalAnchorV2;
+pub use native_v3::DurableExternalAnchorV3;
 
 pub use entrypoint::{
     EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1, EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1,
@@ -135,11 +166,8 @@ impl DurableAnchorStateV1 {
 /// advisory lock for the lifetime of the service. The directory must be owned by the effective
 /// service UID and have mode `0700`.
 pub struct DurableExternalAnchorV1 {
-    root: OwnedFd,
+    core: DurableAnchorCoreV1,
     signing_key: SigningKey,
-    pinned_key: PinnedAnchorKeyV1,
-    state: DurableAnchorStateV1,
-    poisoned: bool,
 }
 
 /// Whether atomic durable-state admission opened existing state or created genesis.
@@ -155,10 +183,10 @@ impl fmt::Debug for DurableExternalAnchorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("DurableExternalAnchorV1")
-            .field("sequence", &self.state.sequence)
-            .field("head", &self.state.head)
-            .field("key_identity", &self.pinned_key.identity())
-            .field("poisoned", &self.poisoned)
+            .field("sequence", &self.core.sequence())
+            .field("head", &self.core.head())
+            .field("key_identity", &self.core.key_identity())
+            .field("poisoned", &self.core.is_poisoned())
             .finish_non_exhaustive()
     }
 }
@@ -170,17 +198,8 @@ impl DurableExternalAnchorV1 {
         signing_key: SigningKey,
     ) -> Result<Self, ExternalAnchorServiceErrorV1> {
         let pinned_key = pinned_key(&signing_key)?;
-        admit_and_lock_root(&root)?;
-        remove_leftover_next(&root)?;
-        let state = DurableAnchorStateV1::genesis();
-        create_initial_state(&root, &state.encode(&pinned_key))?;
-        Ok(Self {
-            root,
-            signing_key,
-            pinned_key,
-            state,
-            poisoned: false,
-        })
+        let core = DurableAnchorCoreV1::initialize(root, pinned_key)?;
+        Ok(Self { core, signing_key })
     }
 
     /// Opens and strictly validates an existing canonical state file.
@@ -189,16 +208,8 @@ impl DurableExternalAnchorV1 {
         signing_key: SigningKey,
     ) -> Result<Self, ExternalAnchorServiceErrorV1> {
         let pinned_key = pinned_key(&signing_key)?;
-        admit_and_lock_root(&root)?;
-        remove_leftover_next(&root)?;
-        let state = read_state(&root, &pinned_key)?;
-        Ok(Self {
-            root,
-            signing_key,
-            pinned_key,
-            state,
-            poisoned: false,
-        })
+        let core = DurableAnchorCoreV1::open(root, pinned_key)?;
+        Ok(Self { core, signing_key })
     }
 
     /// Atomically opens existing state or creates genesis only when the state file is absent.
@@ -211,35 +222,16 @@ impl DurableExternalAnchorV1 {
         signing_key: SigningKey,
     ) -> Result<(Self, DurableExternalAnchorOpenDispositionV1), ExternalAnchorServiceErrorV1> {
         let pinned_key = pinned_key(&signing_key)?;
-        admit_and_lock_root(&root)?;
-        remove_leftover_next(&root)?;
-        let (state, disposition) = match read_state(&root, &pinned_key) {
-            Ok(state) => (state, DurableExternalAnchorOpenDispositionV1::Existing),
-            Err(error) if error.is_missing_state_file() => {
-                let state = DurableAnchorStateV1::genesis();
-                create_initial_state(&root, &state.encode(&pinned_key))?;
-                (state, DurableExternalAnchorOpenDispositionV1::Initialized)
-            }
-            Err(error) => return Err(error),
-        };
-        Ok((
-            Self {
-                root,
-                signing_key,
-                pinned_key,
-                state,
-                poisoned: false,
-            },
-            disposition,
-        ))
+        let (core, disposition) = DurableAnchorCoreV1::open_or_initialize(root, pinned_key)?;
+        Ok((Self { core, signing_key }, disposition))
     }
 
     pub const fn sequence(&self) -> u64 {
-        self.state.sequence
+        self.core.sequence()
     }
 
     pub const fn head(&self) -> HashChainHeadV1 {
-        self.state.head
+        self.core.head()
     }
 
     pub fn verifying_key_bytes(&self) -> [u8; 32] {
@@ -263,46 +255,12 @@ impl DurableExternalAnchorV1 {
         challenge_bytes: &[u8],
         hooks: &mut H,
     ) -> Result<[u8; ANCHOR_OBSERVATION_WIRE_LEN_V1], ExternalAnchorServiceErrorV1> {
-        if self.poisoned {
-            return Err(ExternalAnchorServiceErrorV1::Poisoned);
-        }
-        let challenge = AnchorChallengeV1::decode(challenge_bytes)?;
-        if challenge.anchor_key_identity() != self.pinned_key.identity() {
-            return Err(ExternalAnchorServiceErrorV1::ChallengeKeyIdentityMismatch);
-        }
-
-        let at_prior = self.state.sequence.checked_add(1) == Some(challenge.expected_sequence())
-            && self.state.head == challenge.prior_head();
-        let at_proposed = self.state.sequence == challenge.expected_sequence()
-            && self.state.head == challenge.proposed_head();
-        if !at_prior && !at_proposed {
-            return Err(ExternalAnchorServiceErrorV1::ChallengeStateMismatch);
-        }
-
-        let position = match (challenge.kind(), at_prior, at_proposed) {
-            (ChallengeKindV1::Advance, true, false) => {
-                let next = DurableAnchorStateV1 {
-                    sequence: challenge.expected_sequence(),
-                    head: challenge.proposed_head(),
-                };
-                if let Err(error) =
-                    replace_state_with_hooks(&self.root, &next.encode(&self.pinned_key), hooks)
-                {
-                    self.poisoned = true;
-                    return Err(error);
-                }
-                self.state = next;
-                AnchorPositionV1::Proposed
-            }
-            (ChallengeKindV1::Advance | ChallengeKindV1::Recover, false, true) => {
-                AnchorPositionV1::Proposed
-            }
-            (ChallengeKindV1::Recover, true, false) => AnchorPositionV1::Prior,
-            _ => return Err(ExternalAnchorServiceErrorV1::ChallengeStateMismatch),
-        };
-
+        let (challenge, position) = self.core.observe_with_hooks(challenge_bytes, hooks)?;
         let unsigned = UnsignedAnchorObservationV1::from_challenge(&challenge, position);
-        let signature = self.signing_key.sign(&unsigned.signing_bytes()).to_bytes();
+        let signature = self
+            .signing_key
+            .sign(&unsigned.signing_bytes_fixed())
+            .to_bytes();
         Ok(unsigned.attach_signature(signature))
     }
 }
@@ -361,7 +319,7 @@ fn create_initial_state(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PersistenceBoundaryV1 {
+pub(crate) enum PersistenceBoundaryV1 {
     BeforeCleanup,
     AfterCleanup,
     BeforeCreate,
@@ -411,11 +369,11 @@ impl PersistenceBoundaryV1 {
     }
 }
 
-trait PersistenceHooksV1 {
+pub(crate) trait PersistenceHooksV1 {
     fn checkpoint(&mut self, boundary: PersistenceBoundaryV1) -> io::Result<()>;
 }
 
-struct NoopPersistenceHooksV1;
+pub(crate) struct NoopPersistenceHooksV1;
 
 impl PersistenceHooksV1 for NoopPersistenceHooksV1 {
     fn checkpoint(&mut self, _boundary: PersistenceBoundaryV1) -> io::Result<()> {
@@ -440,22 +398,13 @@ fn replace_state_with_hooks<H: PersistenceHooksV1>(
     )
     .map_err(|source| io_error("create next anchor state", source))?;
     checkpoint(hooks, PersistenceBoundaryV1::AfterCreate)?;
-    let mut file = File::from(fd);
     checkpoint(hooks, PersistenceBoundaryV1::BeforeWrite)?;
-    file.write_all(bytes)
-        .map_err(|source| ExternalAnchorServiceErrorV1::Io {
-            operation: "write next anchor state",
-            source,
-        })?;
+    write_state_once(&fd, bytes, "write next anchor state")?;
     checkpoint(hooks, PersistenceBoundaryV1::AfterWrite)?;
     checkpoint(hooks, PersistenceBoundaryV1::BeforeFileSync)?;
-    file.sync_all()
-        .map_err(|source| ExternalAnchorServiceErrorV1::Io {
-            operation: "sync next anchor state",
-            source,
-        })?;
+    fsync(&fd).map_err(|source| io_error("sync next anchor state", source))?;
     checkpoint(hooks, PersistenceBoundaryV1::AfterFileSync)?;
-    drop(file);
+    drop(fd);
     checkpoint(hooks, PersistenceBoundaryV1::BeforeRename)?;
     renameat(root, NEXT_STATE_FILE, root, STATE_FILE)
         .map_err(|source| io_error("publish next anchor state", source))?;
@@ -479,24 +428,54 @@ fn checkpoint<H: PersistenceHooksV1>(
 
 fn write_and_sync(
     fd: OwnedFd,
-    bytes: &[u8],
+    bytes: &[u8; EXTERNAL_ANCHOR_STATE_BYTES_V1],
     operation: &'static str,
 ) -> Result<(), ExternalAnchorServiceErrorV1> {
-    let mut file = File::from(fd);
-    file.write_all(bytes)
-        .map_err(|source| ExternalAnchorServiceErrorV1::Io { operation, source })?;
-    file.sync_all()
-        .map_err(|source| ExternalAnchorServiceErrorV1::Io { operation, source })
+    write_state_once(&fd, bytes, operation)?;
+    fsync(&fd).map_err(|source| io_error(operation, source))
+}
+
+// Deliberately no retries: native callers can bound each fixed state transfer.
+// Partial progress and EINTR are terminal, even when retrying could finish the file.
+fn write_state_once(
+    fd: &OwnedFd,
+    bytes: &[u8; EXTERNAL_ANCHOR_STATE_BYTES_V1],
+    operation: &'static str,
+) -> Result<(), ExternalAnchorServiceErrorV1> {
+    let written = rustix::io::write(fd, bytes).map_err(|source| io_error(operation, source))?;
+    if written != bytes.len() {
+        return Err(ExternalAnchorServiceErrorV1::Io {
+            operation,
+            source: io::ErrorKind::WriteZero.into(),
+        });
+    }
+    Ok(())
+}
+
+fn read_state_once(
+    fd: &OwnedFd,
+    bytes: &mut [u8; EXTERNAL_ANCHOR_STATE_BYTES_V1],
+) -> Result<(), ExternalAnchorServiceErrorV1> {
+    let read = rustix::io::read(fd, bytes.as_mut_slice())
+        .map_err(|source| io_error("read anchor state", source))?;
+    if read != bytes.len() {
+        return Err(ExternalAnchorServiceErrorV1::Io {
+            operation: "read anchor state",
+            source: io::ErrorKind::UnexpectedEof.into(),
+        });
+    }
+    Ok(())
 }
 
 fn read_state(
     root: &OwnedFd,
     key: &PinnedAnchorKeyV1,
 ) -> Result<DurableAnchorStateV1, ExternalAnchorServiceErrorV1> {
+    // A hostile FIFO must reach metadata rejection without blocking in openat.
     let fd = openat(
         root,
         STATE_FILE,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
         Mode::empty(),
     )
     .map_err(|source| io_error("open anchor state", source))?;
@@ -508,20 +487,11 @@ fn read_state(
     {
         return Err(ExternalAnchorServiceErrorV1::InvalidStateFileMetadata);
     }
-    let mut file = File::from(fd);
     let mut bytes = [0_u8; EXTERNAL_ANCHOR_STATE_BYTES_V1];
-    file.read_exact(&mut bytes)
-        .map_err(|source| ExternalAnchorServiceErrorV1::Io {
-            operation: "read anchor state",
-            source,
-        })?;
+    read_state_once(&fd, &mut bytes)?;
     let mut trailing = [0_u8; 1];
-    if file
-        .read(&mut trailing)
-        .map_err(|source| ExternalAnchorServiceErrorV1::Io {
-            operation: "check anchor state length",
-            source,
-        })?
+    if rustix::io::read(&fd, trailing.as_mut_slice())
+        .map_err(|source| io_error("check anchor state length", source))?
         != 0
     {
         return Err(ExternalAnchorServiceErrorV1::InvalidStateLength {

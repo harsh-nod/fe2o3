@@ -20,6 +20,8 @@ pub const INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1: u16 = 1;
 const SUBJECT_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/INERT-COMPILER-EXECUTION-SUBJECT/V1\0";
 #[path = "compiler_execution_subject_codec.rs"]
 mod codec;
+#[path = "compiler_execution_subject_v3.rs"]
+pub(crate) mod conditional_v3;
 #[path = "compiler_execution_subject_v2.rs"]
 pub(crate) mod native_v2;
 #[cfg(test)]

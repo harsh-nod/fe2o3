@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
 use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, recvmsg};
 
-use crate::{COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, validate_seqpacket_peer};
+use crate::{
+    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, CompilerExecutionClientErrorV1, validate_seqpacket_peer,
+};
 
 const TRANSFER_MAGIC: [u8; 8] = *b"FE2CEC2\0";
 const TRANSFER_VERSION: u32 = 2;
@@ -87,8 +89,7 @@ impl CompilerExecutionServiceLaunchV1 {
         {
             return Err(CompilerExecutionChildChannelErrorV1::ParentCredentialsMismatch);
         }
-        validate_seqpacket_peer(&self.service_peer)
-            .map_err(|_| CompilerExecutionChildChannelErrorV1::InvalidServicePeer)?;
+        validate_seqpacket_peer(&self.service_peer).map_err(service_peer_error)?;
         require_close_on_exec(&self.service_peer)?;
         require_close_on_exec(&self.client_pidfd)?;
         if peer_identity(&self.service_peer)? != self.client {
@@ -122,6 +123,17 @@ impl fmt::Debug for PendingCompilerExecutionChildChannelV1 {
 }
 
 impl PendingCompilerExecutionChildChannelV1 {
+    /// Checks both fixed child slots before installing an issuer policy or a
+    /// service-channel hook. This observes but does not reserve either slot;
+    /// each installer must still reserve its exact slot without replacement.
+    pub fn preflight_with_issuer_policy() -> Result<(), CompilerExecutionChildChannelErrorV1> {
+        require_reserved_descriptor_unused()?;
+        require_descriptor_unused(
+            fe2o3_compiler_closure_capability::COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
+            CompilerExecutionChildChannelErrorV1::ReservedPolicyDescriptorInUse,
+        )
+    }
+
     /// Registers exact child-side channel creation on one rustc command.
     pub fn prepare(command: &mut Command) -> Result<Self, CompilerExecutionChildChannelErrorV1> {
         require_reserved_descriptor_unused()?;
@@ -197,8 +209,7 @@ impl PendingCompilerExecutionChildChannelV1 {
         if transferred_parent_pid != std::process::id() {
             return Err(CompilerExecutionChildChannelErrorV1::ParentPidMismatch);
         }
-        validate_seqpacket_peer(&service_peer)
-            .map_err(|_| CompilerExecutionChildChannelErrorV1::InvalidServicePeer)?;
+        validate_seqpacket_peer(&service_peer).map_err(service_peer_error)?;
         require_close_on_exec(&service_peer)?;
         let client = peer_identity(&service_peer)?;
         if client.pid() != child_pid {
@@ -225,6 +236,17 @@ impl PendingCompilerExecutionChildChannelV1 {
     }
 }
 
+fn service_peer_error(
+    error: CompilerExecutionClientErrorV1,
+) -> CompilerExecutionChildChannelErrorV1 {
+    match error {
+        CompilerExecutionClientErrorV1::Descriptor(error) => {
+            CompilerExecutionChildChannelErrorV1::Descriptor(error)
+        }
+        _ => CompilerExecutionChildChannelErrorV1::InvalidServicePeer,
+    }
+}
+
 fn require_child_channel_deadline(
     deadline: Instant,
 ) -> Result<(), CompilerExecutionChildChannelErrorV1> {
@@ -236,10 +258,20 @@ fn require_child_channel_deadline(
 }
 
 fn require_reserved_descriptor_unused() -> Result<(), CompilerExecutionChildChannelErrorV1> {
+    require_descriptor_unused(
+        COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+        CompilerExecutionChildChannelErrorV1::ReservedDescriptorInUse,
+    )
+}
+
+fn require_descriptor_unused(
+    fd: RawFd,
+    occupied: CompilerExecutionChildChannelErrorV1,
+) -> Result<(), CompilerExecutionChildChannelErrorV1> {
     // SAFETY: F_GETFD uses only the scalar descriptor and reports absence through EBADF.
-    let result = unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) };
+    let result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     if result >= 0 {
-        return Err(CompilerExecutionChildChannelErrorV1::ReservedDescriptorInUse);
+        return Err(occupied);
     }
     let error = io::Error::last_os_error();
     if error.raw_os_error() != Some(libc::EBADF) {
@@ -598,6 +630,7 @@ fn duration_to_poll_millis(duration: Duration) -> i32 {
 /// Stable failure for exact child-channel construction and transfer.
 #[derive(Debug)]
 pub enum CompilerExecutionChildChannelErrorV1 {
+    ReservedPolicyDescriptorInUse,
     InvalidChildPid,
     InvalidTimeout,
     DeadlineOverflow,
@@ -625,6 +658,11 @@ pub enum CompilerExecutionChildChannelErrorV1 {
 impl fmt::Display for CompilerExecutionChildChannelErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ReservedPolicyDescriptorInUse => write!(
+                formatter,
+                "reserved rustc issuer-policy descriptor {} is already in use",
+                fe2o3_compiler_closure_capability::COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
+            ),
             Self::InvalidChildPid => formatter.write_str("rustc child PID must be nonzero"),
             Self::InvalidTimeout => formatter.write_str("rustc channel timeout must be nonzero"),
             Self::DeadlineOverflow => formatter.write_str("rustc channel deadline overflowed"),
@@ -683,5 +721,49 @@ impl Error for CompilerExecutionChildChannelErrorV1 {
             | Self::PeerCredentials(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_peer_validation_preserves_os_error_and_source() {
+        for code in [libc::EPERM, libc::EINTR, libc::EBADF, libc::ENOTSOCK] {
+            let error = service_peer_error(CompilerExecutionClientErrorV1::Descriptor(
+                io::Error::from_raw_os_error(code),
+            ));
+            let source = error.source().unwrap().downcast_ref::<io::Error>().unwrap();
+            assert_eq!(source.raw_os_error(), Some(code));
+            assert!(error.to_string().contains(&source.to_string()));
+        }
+    }
+
+    #[test]
+    fn service_peer_shape_refusals_remain_shape_refusals() {
+        for cause in [
+            CompilerExecutionClientErrorV1::NotSeqpacket,
+            CompilerExecutionClientErrorV1::NamedOrNonUnixPeer,
+        ] {
+            let error = service_peer_error(cause);
+            assert!(matches!(
+                error,
+                CompilerExecutionChildChannelErrorV1::InvalidServicePeer
+            ));
+            assert!(error.source().is_none());
+        }
+    }
+
+    #[test]
+    fn service_peer_validation_preserves_actual_socket_query_refusal() {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let expected = rustix::net::sockopt::socket_type(&file).unwrap_err();
+        let peer = OwnedFd::from(file);
+        let error = validate_seqpacket_peer(&peer)
+            .map_err(service_peer_error)
+            .unwrap_err();
+        let source = error.source().unwrap().downcast_ref::<io::Error>().unwrap();
+        assert_eq!(source.raw_os_error(), Some(expected.raw_os_error()));
     }
 }

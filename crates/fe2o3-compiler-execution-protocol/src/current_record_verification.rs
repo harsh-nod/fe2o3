@@ -12,6 +12,8 @@ use sha2::{Digest, Sha256};
 
 #[path = "current_record_native.rs"]
 mod native;
+#[path = "current_record_native_v3.rs"]
+mod native_v3;
 
 use crate::{
     CompilerExecutionExternalAnchorTransactionErrorV1,

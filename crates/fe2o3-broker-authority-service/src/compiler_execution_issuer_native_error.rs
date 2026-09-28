@@ -9,17 +9,17 @@ enum Failure {
     Resource(Resource),
     Admission(super::super::Error),
     Key(KeyError),
-    Attestation(fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV2),
-    Publication(fe2o3_compiler_execution_protocol::CompilerExecutionReceiptPublicationErrorV2),
-    Protocol(fe2o3_compiler_execution_protocol::CompilerExecutionServiceProtocolErrorV2),
-    Manifest(fe2o3_compiler_execution_protocol::CompilerExecutionServiceLaunchManifestErrorV2),
-    Readiness(fe2o3_compiler_execution_protocol::CompilerExecutionServiceReadyErrorV2),
-    Subject(fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV2),
-    Journal(fe2o3_compiler_execution_protocol::CompilerExecutionNativeJournalErrorV2),
-    Worker(fe2o3_compiler_execution_protocol::CompilerExecutionWorkerAnchorJournalErrorV2),
+    Attestation(AttestationError),
+    Publication(PublicationError),
+    Protocol(ProtocolError),
+    Manifest(ManifestError),
+    Readiness(ReadyError),
+    Subject(SubjectError),
+    Journal(JournalError),
+    Worker(WorkerJournalError),
     Directory(fe2o3_artifact_transaction::RetainedDurableDirectoryErrorV2),
     DirectoryAdmission(fe2o3_artifact_transaction::RetainedDurableDirectoryErrorV1),
-    Occurrence(crate::compiler_execution_occurrence::NativeOccurrenceError),
+    Occurrence(OccurrenceError),
     Transport(crate::CompilerExecutionServiceErrorV1),
     Anchor(fe2o3_external_anchor_protocol::AnchorProtocolErrorV1),
     AnchorAdmission(crate::ProtectedExternalAnchorServiceErrorV2),
@@ -38,36 +38,15 @@ macro_rules! from_error {
     };
 }
 from_error!(Resource, Resource);
-from_error!(
-    fe2o3_compiler_execution_protocol::CompilerExecutionServiceLaunchManifestErrorV2,
-    Manifest
-);
-from_error!(
-    fe2o3_compiler_execution_protocol::CompilerExecutionServiceReadyErrorV2,
-    Readiness
-);
+from_error!(ManifestError, Manifest);
+from_error!(ReadyError, Readiness);
 from_error!(super::super::Error, Admission);
 from_error!(KeyError, Key);
-from_error!(
-    fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV2,
-    Attestation
-);
-from_error!(
-    fe2o3_compiler_execution_protocol::CompilerExecutionReceiptPublicationErrorV2,
-    Publication
-);
-from_error!(
-    fe2o3_compiler_execution_protocol::CompilerExecutionServiceProtocolErrorV2,
-    Protocol
-);
-from_error!(
-    fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV2,
-    Subject
-);
-from_error!(
-    fe2o3_compiler_execution_protocol::CompilerExecutionNativeJournalErrorV2,
-    Journal
-);
+from_error!(AttestationError, Attestation);
+from_error!(PublicationError, Publication);
+from_error!(ProtocolError, Protocol);
+from_error!(SubjectError, Subject);
+from_error!(JournalError, Journal);
 from_error!(
     fe2o3_artifact_transaction::RetainedDurableDirectoryErrorV2,
     Directory
@@ -76,10 +55,7 @@ from_error!(
     fe2o3_artifact_transaction::RetainedDurableDirectoryErrorV1,
     DirectoryAdmission
 );
-from_error!(
-    crate::compiler_execution_occurrence::NativeOccurrenceError,
-    Occurrence
-);
+from_error!(OccurrenceError, Occurrence);
 from_error!(crate::CompilerExecutionServiceErrorV1, Transport);
 from_error!(
     fe2o3_external_anchor_protocol::AnchorProtocolErrorV1,
@@ -87,10 +63,7 @@ from_error!(
 );
 from_error!(rustix::io::Errno, Io);
 from_error!(std::io::Error, Lock);
-from_error!(
-    fe2o3_compiler_execution_protocol::CompilerExecutionWorkerAnchorJournalErrorV2,
-    Worker
-);
+from_error!(WorkerJournalError, Worker);
 from_error!(
     crate::ProtectedExternalAnchorServiceErrorV2,
     AnchorAdmission
@@ -106,13 +79,15 @@ impl NativeIssuerServiceError {
     pub fn resource(&self) -> Option<Resource> {
         match &self.0 {
             Failure::Resource(e) => Some(*e),
-            Failure::Manifest(fe2o3_compiler_execution_protocol::CompilerExecutionServiceLaunchManifestErrorV2::Resource(e)) => Some(*e),
-            Failure::Readiness(fe2o3_compiler_execution_protocol::CompilerExecutionServiceReadyErrorV2::Resource(e)) => Some(*e),
+            Failure::Manifest(ManifestError::Resource(e)) => Some(*e),
+            Failure::Readiness(ReadyError::Resource(e)) => Some(*e),
             Failure::Admission(e) => e.resource(),
             Failure::AnchorAdmission(e) => e.resource(),
-            Failure::AnchorTransport(crate::ProtectedCompilerExecutionExternalAnchorErrorV1::Resource(e)) => Some(*e),
-            Failure::Worker(fe2o3_compiler_execution_protocol::CompilerExecutionWorkerAnchorJournalErrorV2::Resource(e)) => Some(*e),
-            Failure::Journal(fe2o3_compiler_execution_protocol::CompilerExecutionNativeJournalErrorV2::Resource(e)) => Some(*e),
+            Failure::AnchorTransport(
+                crate::ProtectedCompilerExecutionExternalAnchorErrorV1::Resource(e),
+            ) => Some(*e),
+            Failure::Worker(WorkerJournalError::Resource(e)) => Some(*e),
+            Failure::Journal(JournalError::Resource(e)) => Some(*e),
             Failure::Key(KeyError::Resource(e)) => Some(*e),
             Failure::Directory(
                 fe2o3_artifact_transaction::RetainedDurableDirectoryErrorV2::Resource(e),

@@ -319,6 +319,7 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "fe2o3-kernel-opt",
  "fe2o3-kfd",
  "fe2o3-lower-mir-kernel",
  "fe2o3-mir-model",
@@ -825,6 +826,7 @@ dependencies = [
  "ed25519-dalek",
  "fe2o3-build-authority",
  "fe2o3-compiler-execution-protocol",
+ "fe2o3-external-anchor-protocol",
  "fe2o3-kernel-ir",
  "fe2o3-rustc-invocation",
  "libc",
@@ -861,6 +863,7 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-execution-supervisor",
  "fe2o3-external-anchor-coordinator",
+ "fe2o3-kernel-ir",
  "fe2o3-protected-service-profile",
  "fe2o3-protected-service-spawn",
  "fe2o3-protected-static-executable",
@@ -908,6 +911,7 @@ name = "fe2o3-compiler-execution-lifecycle"
 version = "0.1.0"
 dependencies = [
  "fe2o3-compiler-execution-protocol",
+ "fe2o3-kernel-ir",
  "rustix",
  "tempfile",
 ]
@@ -937,12 +941,14 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-kernel-ir",
  "fe2o3-protected-service-profile",
+ "fe2o3-protected-service-spawn",
  "fe2o3-protected-static-executable",
  "fe2o3-runtime-protocol",
  "fe2o3-static-preexec-manifest",
  "libc",
  "rustix",
  "sha2 0.11.0",
+ "tempfile",
 ]
 
 [[package]]
@@ -1072,6 +1078,7 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-external-anchor-protocol",
  "fe2o3-external-anchor-provisioner",
+ "fe2o3-kernel-ir",
  "fe2o3-protected-service-profile",
  "fe2o3-protected-service-spawn",
  "fe2o3-protected-static-executable",
@@ -1098,6 +1105,7 @@ dependencies = [
  "fe2o3-compiler-execution-lifecycle",
  "fe2o3-compiler-execution-protocol",
  "fe2o3-external-anchor-service",
+ "fe2o3-kernel-ir",
  "fe2o3-protected-service-profile",
  "fe2o3-protected-static-executable",
  "fe2o3-runtime-protocol",
@@ -1117,6 +1125,7 @@ dependencies = [
  "fe2o3-compiler-execution-lifecycle",
  "fe2o3-compiler-execution-protocol",
  "fe2o3-external-anchor-protocol",
+ "fe2o3-kernel-ir",
  "fe2o3-protected-service-profile",
  "fe2o3-protected-static-executable",
  "fe2o3-runtime-protocol",
@@ -1267,6 +1276,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "fe2o3-kernel-opt",
  "fe2o3-llvm-handoff",
  "fe2o3-llvm-text",
  "fe2o3-lower-mir-kernel",
@@ -1642,9 +1652,12 @@ dependencies = [
 name = "fe2o3-protected-service-spawn"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-kernel-ir",
  "fe2o3-protected-service-profile",
  "libc",
  "rustix",
+ "tempfile",
 ]
 
 [[package]]
@@ -3139,6 +3152,7 @@ dependencies = [
  "pliron",
  "reserved-fe2o3-symbols",
  "rmpv",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.0",

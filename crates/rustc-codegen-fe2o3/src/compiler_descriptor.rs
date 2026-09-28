@@ -71,6 +71,8 @@ use std::{
 };
 
 const ADMITTED_PRODUCTION_PROCESSORS: [&str; 2] = ["gfx942", "gfx950"];
+#[path = "compiler_descriptor_conditional_native_v5.rs"]
+pub(crate) mod conditional_native_v5;
 #[path = "compiler_descriptor_nominal_v3.rs"]
 pub(crate) mod nominal_v3;
 #[cfg(test)]

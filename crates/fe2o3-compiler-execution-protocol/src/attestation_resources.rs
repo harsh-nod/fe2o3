@@ -21,6 +21,16 @@ impl CompilerExecutionAttestationStorageV2 {
     }
 }
 
+/// Additional unreserved storage for a V3 operation. Consumed input charges
+/// transfer to the result; borrowed decoding returns its full retained charge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompilerExecutionAttestationStorageV3(pub(crate) usize);
+impl CompilerExecutionAttestationStorageV3 {
+    pub const fn additional_storage(self) -> usize {
+        self.0
+    }
+}
+
 // The callback cannot access or replace the ledger. Nested fixed codecs must
 // be included in the caller's quota, not run with a new/unlimited budget.
 pub(crate) fn fixed<T, E: From<Resource>>(

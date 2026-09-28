@@ -45,6 +45,33 @@ fn constants_and_authority_are_frozen() {
 }
 
 #[test]
+fn fixed_signing_transcript_matches_independent_domain_and_legacy_bytes() {
+    let (signing, key) = keys(8);
+    for position in [AnchorPositionV1::Prior, AnchorPositionV1::Proposed] {
+        let pending = prepare(9, [4; 32], [5; 32], &key)
+            .begin_advance(CallerNonceV1::from_bytes([6; 32]), &key)
+            .unwrap();
+        let unsigned = UnsignedAnchorObservationV1::from_challenge(pending.challenge(), position);
+        let message = unsigned.signing_bytes_fixed();
+        let domain = b"FE2O3/EXTERNAL-MONOTONIC-ANCHOR/OBSERVATION/V1\0";
+        let wire = unsigned.clone().attach_signature([0; 64]);
+        assert_eq!(message.len(), domain.len() + 224);
+        assert_eq!(&message[..domain.len()], domain);
+        assert_eq!(&message[domain.len()..], &wire[..224]);
+        assert_eq!(message.as_slice(), unsigned.signing_bytes());
+        let signature = signing.sign(&message).to_bytes();
+        let signed = unsigned.attach_signature(signature);
+        assert_eq!(
+            matches!(
+                pending.verify(&signed).unwrap(),
+                AnchorDecisionV1::Commit(_)
+            ),
+            position == AnchorPositionV1::Proposed
+        );
+    }
+}
+
+#[test]
 fn canonical_challenge_binds_every_transition_field() {
     let (_, key) = keys(7);
     let pending = prepare(41, [1; 32], [2; 32], &key)

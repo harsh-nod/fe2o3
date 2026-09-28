@@ -97,8 +97,9 @@ that request ledger: it lives in the independently funded service pool.
 Discarding an unused reservation returns its slot without new work charges.
 Having enough service work for one turn does not promise eventual reaping of
 every retained child; later progress still depends on funding and observations.
-Connecting that private reservation to the native consuming launch is still
-required, together with the parent's and child's finite protocol envelopes.
+Native consuming launch now connects this reservation to the guarded child and
+finite parent/child protocol envelopes; protected deployment validation remains
+a separate gate.
 
 The pool charge includes the fixed table, controller/account metadata, embedded
 records and spawn obligations, plus a logical descriptor charge per slot. It
@@ -110,7 +111,79 @@ allowance; further attempts require additional work. No handle may reset or
 replace the account while retained custody exists. An admitted shutdown attempt
 stops new reservations even when it finds the pool busy; pumping remains allowed.
 
+## Retained Dependencies
+
+The shared slot can also own complete service dependencies before clone.
+`reserve_launch_retaining` consumes the fully charged input and returns a typed
+view plus request GROWTH. Keep the original input reservation and reserve that
+growth before retaining the view. The original service account independently
+pays full payload storage and lifetime work before allocation. No replacement
+ledger or second cleanup table is created.
+
+The accounting invariant becomes `Cleanup::STORAGE + retained_payload_bytes`.
+Fixed slot/controller metadata remains in `STORAGE`; dynamic payloads include
+the declared transitive storage and mutex/Arc allocation overhead. The request
+also pays the full payload while holding its view, since that view can outlive
+slot retirement. Quota methods use checked arithmetic. Storage or work refusal
+keeps original counters and denial history, stops service admission as appropriate,
+and never publishes a partially funded payload.
+
+`spawn_retaining` follows the existing root checks and clone/adoption path. Its
+reservation already holds the dependencies before clone, so even a failed parent
+pidfd check cannot release them while the new child is unresolved. The typed
+child wrapper returns growth over the consumed input, includes the complete owner
+floor in operations, and grants no admitted service authority.
+
+An unused pre-clone reservation rolls back. After clone, only exact consuming
+terminal reaping permits retirement; exec confirmation, signal success, NOWAIT,
+ECHILD and Pending do not. A `RETIRING` slot stays unavailable while dependencies
+drop outside both cell and account mutexes. Their destructors may therefore
+defer another child into this same pool. Only afterward does accounting retire
+and the slot become empty. A destructor contract violation or accounting
+mismatch quarantines the slot instead of publishing reuse.
+
+The view uses `Arc<Mutex<T>>` and requires `T: Send`, not `Sync`. Metered scoped
+access borrows only `&T`; it exposes no mutable guard, raw pointer, Arc clone or
+owner extraction. Panic poisons subsequent access. Recursive access to the same
+view is forbidden. The trusted construction boundary still requires all
+transitive resources to survive shared access and all destruction to be bounded,
+nonpanicking and funded, including existing nested cancellation prepayments.
+These mechanical APIs do not validate a caller's declared charge or deployment.
+
+The native compiler coordinator now transfers its actual prepared owner, live
+anchor and both lifecycle leases through this path. It validates the final
+staged Files and uses nominal readiness, EOF and continuity checks before exec
+confirmation. Native inherited descriptor composition now uses the same guard
+before anchor launch; installed native activation and protected deployment
+validation remain outstanding. The generic wrapper alone establishes neither provenance
+nor successful startup. See the
+[compiler launch checkpoint](evidence/conditional-native-compiler-launch-20260926.md).
+
 ## Remaining Limits
+
+Native pool storage also prepays one close-only deployment-guard descriptor.
+`retain_deployment_guard` consumes the caller-authenticated lock File and debits
+both original ledgers before transfer. Only an empty, admission-open pool with
+no guard accepts it; there is no detach or replacement operation. Refusal closes
+the incoming File, not an existing guard. The caller retires its full input
+charge after return; successful transfer remains charged to the persistent pool.
+The generic cleanup API grants no deployment authority and checks no pathname.
+
+`try_clone_deployment_guard` charges both original ledgers before one CLOEXEC
+duplication at FD 256 or above. The full new File and scratch overlap are charged
+on the request; persistent custody remains on the cleanup account. A controlled
+clone can outlive pool shutdown and must never be explicitly unlocked. Native
+anchor preparation installs its actual root-bound alias before the first child;
+consuming launch validates the installed guard against the actual retained lease.
+The clone itself proves neither deployment identity nor uninterrupted past custody.
+
+Native supervisor startup supplies a duplicate of its actual admitted lifecycle
+lease before any child launch. Controller Drop, late request failure, unwind,
+quarantine and work exhaustion preserve that alias. Verified exec releases only
+the separate artifact-spawn obligation, never this deployment guard. Empty
+shutdown closes the guard only after every slot is terminal and the pool's
+storage invariant holds. This custody lasts within the process; outer root
+custody and recovery remain necessary for service death.
 
 These are finite syscall-attempt and capacity bounds, not hard elapsed-time
 bounds. Syscalls, mutex acquisition and scheduling can take unbounded time.
@@ -139,4 +212,10 @@ Native account tests cover exact/short quotas, cumulative recovery, exclusive
 modes, rotating funded turns, retained quarantine and empty shutdown. Owned
 ledger tests cover shared accounting across views, scratch rollback/unwind and
 non-escaping borrows.
+Five isolated real-flock schedules check guard transfer, exclusion, refusal,
+recovery, unwind and exhaustion with synthetic slot events. The existing real
+child subprocess cases also check lock retention after exec, request-budget
+refusal, unwind and reaping, with release only at empty shutdown. Isolation avoids
+temporary lock inheritance by unrelated concurrent test forks; strict immediate
+lock assertions remain intact.
 These are cleanup tests, not protected-runtime or GPU qualification evidence.

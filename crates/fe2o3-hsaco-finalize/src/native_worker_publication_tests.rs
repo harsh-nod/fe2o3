@@ -8,7 +8,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-fn attempt(generation: u64, session: u8, invocation: u8) -> BuildAttempt {
+pub(super) fn attempt(generation: u64, session: u8, invocation: u8) -> BuildAttempt {
     BuildAttempt::from_env_value(&format!(
         "{generation}:{}:{}",
         format!("{session:02x}").repeat(16),
@@ -17,7 +17,7 @@ fn attempt(generation: u64, session: u8, invocation: u8) -> BuildAttempt {
     .unwrap()
 }
 
-fn inputs() -> NativePlanInputs {
+pub(super) fn inputs() -> NativePlanInputs {
     NativePlanInputs {
         package: PackageIdentityV1::from_bytes([1; 32]),
         attempt: attempt(1, 2, 3),
@@ -37,6 +37,33 @@ fn inputs() -> NativePlanInputs {
         descriptor: ContentIdentityV1::from_parts([19; 32], 20),
         canonical_digest: [21; 32],
     }
+}
+
+#[test]
+fn native_plan_extraction_preserves_frozen_v1_identities() {
+    // Independently calculated SHA-256 vectors for the original V1 framing.
+    let intent = derive_plan(inputs());
+    assert_eq!(
+        intent.durable_plan().request().as_bytes(),
+        &[
+            142, 248, 161, 155, 68, 77, 73, 76, 219, 211, 251, 199, 115, 174, 112, 17, 135, 219,
+            15, 147, 236, 30, 199, 123, 228, 149, 110, 89, 111, 228, 239, 111,
+        ]
+    );
+    assert_eq!(
+        intent.plan_identity().as_bytes(),
+        &[
+            222, 74, 143, 24, 177, 119, 195, 202, 34, 63, 186, 126, 213, 152, 157, 45, 3, 125, 35,
+            60, 221, 230, 101, 26, 170, 20, 188, 7, 102, 182, 212, 172,
+        ]
+    );
+    assert_eq!(
+        intent.identity().as_bytes(),
+        &[
+            27, 250, 208, 224, 240, 185, 177, 216, 40, 178, 200, 92, 36, 155, 205, 166, 174, 43,
+            143, 12, 254, 198, 163, 133, 16, 47, 25, 191, 199, 119, 207, 227,
+        ]
+    );
 }
 
 #[test]
@@ -62,7 +89,26 @@ fn native_plan_is_deterministic_and_preserves_raw_output_and_attempt_coordinates
 #[test]
 fn every_native_source_worker_finalizer_producer_and_attempt_axis_binds_all_three_domains() {
     let original = derive_plan(inputs());
-    let mutations: &[fn(&mut NativePlanInputs)] = &[
+    for (index, mutate) in mutations().iter().enumerate() {
+        let mut changed = inputs();
+        mutate(&mut changed);
+        let changed = derive_plan(changed);
+        assert_ne!(
+            changed.durable_plan().request(),
+            original.durable_plan().request(),
+            "axis {index}"
+        );
+        assert_ne!(
+            changed.plan_identity(),
+            original.plan_identity(),
+            "axis {index}"
+        );
+        assert_ne!(changed.identity(), original.identity(), "axis {index}");
+    }
+}
+
+pub(super) fn mutations() -> &'static [fn(&mut NativePlanInputs)] {
+    &[
         |x| x.package = PackageIdentityV1::from_bytes([91; 32]),
         |x| x.attempt = attempt(2, 2, 3),
         |x| x.attempt = attempt(1, 4, 3),
@@ -87,23 +133,7 @@ fn every_native_source_worker_finalizer_producer_and_attempt_axis_binds_all_thre
         |x| x.descriptor = ContentIdentityV1::from_parts([95; 32], x.descriptor.byte_len()),
         |x| x.descriptor = ContentIdentityV1::from_parts(*x.descriptor.sha256(), 99),
         |x| x.canonical_digest[0] ^= 1,
-    ];
-    for (index, mutate) in mutations.iter().enumerate() {
-        let mut changed = inputs();
-        mutate(&mut changed);
-        let changed = derive_plan(changed);
-        assert_ne!(
-            changed.durable_plan().request(),
-            original.durable_plan().request(),
-            "axis {index}"
-        );
-        assert_ne!(
-            changed.plan_identity(),
-            original.plan_identity(),
-            "axis {index}"
-        );
-        assert_ne!(changed.identity(), original.identity(), "axis {index}");
-    }
+    ]
 }
 
 #[test]
@@ -293,9 +323,9 @@ fn native_scope_rejects_unpaid_floor_one_short_limits_and_oversized_native_cap()
     }
 }
 
-struct Scratch(PathBuf);
+pub(super) struct Scratch(pub(super) PathBuf);
 impl Scratch {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(

@@ -340,3 +340,59 @@ fn secret_validation_checks_current_uid_and_gid_when_chown_is_available() {
         image.validate_secret_fixed().unwrap();
     }
 }
+
+#[test]
+fn expected_secret_owner_checks_both_credentials_without_claiming_root_provenance() {
+    let uid = rustix::process::geteuid().as_raw();
+    let gid = rustix::process::getegid().as_raw();
+    let writable = image();
+    assert_rejected(
+        writable.validate_secret_owner_fixed(uid, gid),
+        "sealed secret image is not an anonymous expected-owner read-only image",
+    );
+    let image = writable.into_read_only_fixed::<N>().unwrap();
+    image.validate_secret_owner_fixed(uid, gid).unwrap();
+    for (expected_uid, expected_gid) in [(uid ^ 1, gid), (uid, gid ^ 1)] {
+        assert_rejected(
+            image.validate_secret_owner_fixed(expected_uid, expected_gid),
+            "sealed secret image is not an anonymous expected-owner read-only image",
+        );
+    }
+    if uid != 0 || gid != 0 {
+        assert_rejected(
+            image.validate_secret_owner_fixed(0, 0),
+            "sealed secret image is not an anonymous expected-owner read-only image",
+        );
+    }
+}
+
+#[test]
+fn expected_owner_post_read_refusal_and_unwind_keep_staging_guarded() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let uid = rustix::process::geteuid().as_raw();
+    let gid = rustix::process::getegid().as_raw();
+    let image = image().into_read_only_fixed::<N>().unwrap();
+    for unwind in [false, true] {
+        let mut bytes = [0; N];
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let guard = SecretBuffer(&mut bytes);
+            image.validate_secret_owner_fixed(uid, gid)?;
+            image.read_fixed_into(guard.0)?;
+            assert_eq!(*guard.0, PAYLOAD);
+            if unwind {
+                panic!("secret template consumer unwound");
+            }
+            image.validate_secret_owner_fixed(uid ^ 1, gid)
+        }));
+        assert_eq!(bytes, [0; N]);
+        if unwind {
+            assert!(result.is_err());
+        } else {
+            assert_rejected(
+                result.unwrap(),
+                "sealed secret image is not an anonymous expected-owner read-only image",
+            );
+        }
+        image.validate_secret_owner_fixed(uid, gid).unwrap();
+    }
+}

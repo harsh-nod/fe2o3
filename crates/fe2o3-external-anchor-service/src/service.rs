@@ -2,23 +2,19 @@
 
 use std::error::Error;
 use std::fmt;
-use std::io::{self, IoSliceMut};
+use std::io;
+#[cfg(test)]
 use std::mem::MaybeUninit;
 use std::os::fd::OwnedFd;
-use std::os::fd::{AsRawFd, RawFd};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use fe2o3_external_anchor_protocol::{
     ANCHOR_CHALLENGE_WIRE_LEN_V1, ANCHOR_OBSERVATION_WIRE_LEN_V1,
 };
-use rustix::event::{PollFd, PollFlags, poll};
-use rustix::fs::OFlags;
-use rustix::net::{
-    AddressFamily, RecvAncillaryBuffer, RecvFlags, ReturnFlags, SendFlags, SocketType, recvmsg,
-    send,
-};
+#[cfg(test)]
+use rustix::net::{SendFlags, SocketType, send};
 
-use crate::{DurableExternalAnchorV1, ExternalAnchorServiceErrorV1};
+use crate::{DurableExternalAnchorV1, ExternalAnchorServiceErrorV1, peer_io};
 
 /// Maximum time allowed to publish one already-computed observation to the protected peer.
 pub const EXTERNAL_ANCHOR_RESPONSE_TIMEOUT_V1: Duration = Duration::from_secs(30);
@@ -26,7 +22,7 @@ pub const EXTERNAL_ANCHOR_RESPONSE_TIMEOUT_V1: Duration = Duration::from_secs(30
 /// Terminal report after the sole connected peer closes cleanly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExternalAnchorServiceReportV1 {
-    exchanges: u64,
+    pub(crate) exchanges: u64,
 }
 
 impl ExternalAnchorServiceReportV1 {
@@ -58,7 +54,7 @@ fn serve_connected_peer_with_timeout(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ServiceBoundaryV1 {
+pub(crate) enum ServiceBoundaryV1 {
     BeforeReceive,
     AfterReceive,
     BeforeExchange,
@@ -69,7 +65,7 @@ enum ServiceBoundaryV1 {
 
 impl ServiceBoundaryV1 {
     #[cfg(test)]
-    const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::BeforeReceive,
         Self::AfterReceive,
         Self::BeforeExchange,
@@ -90,11 +86,11 @@ impl ServiceBoundaryV1 {
     }
 }
 
-trait ServiceHooksV1 {
+pub(crate) trait ServiceHooksV1 {
     fn checkpoint(&mut self, boundary: ServiceBoundaryV1) -> io::Result<()>;
 }
 
-struct NoopServiceHooksV1;
+pub(crate) struct NoopServiceHooksV1;
 
 impl ServiceHooksV1 for NoopServiceHooksV1 {
     fn checkpoint(&mut self, _boundary: ServiceBoundaryV1) -> io::Result<()> {
@@ -108,29 +104,41 @@ fn serve_connected_peer_with_hooks<H: ServiceHooksV1>(
     response_timeout: Duration,
     hooks: &mut H,
 ) -> Result<ExternalAnchorServiceReportV1, ExternalAnchorDaemonErrorV1> {
-    if response_timeout.is_zero() {
-        return Err(ExternalAnchorDaemonErrorV1::InvalidResponseTimeout);
+    crate::peer_loop::run(&mut LegacyPeer(anchor), &peer, response_timeout, hooks)
+}
+
+struct LegacyPeer<'a>(&'a mut DurableExternalAnchorV1);
+
+impl crate::peer_loop::PeerSession for LegacyPeer<'_> {
+    type Error = ExternalAnchorDaemonErrorV1;
+    type Observation = [u8; ANCHOR_OBSERVATION_WIRE_LEN_V1];
+
+    fn receive(
+        &mut self,
+        peer: &OwnedFd,
+    ) -> Result<Option<[u8; ANCHOR_CHALLENGE_WIRE_LEN_V1]>, Self::Error> {
+        receive_challenge(peer)
     }
-    let mut exchanges = 0_u64;
-    loop {
-        service_checkpoint(hooks, ServiceBoundaryV1::BeforeReceive)?;
-        let Some(challenge) = receive_challenge(&peer)? else {
-            return Ok(ExternalAnchorServiceReportV1 { exchanges });
-        };
-        service_checkpoint(hooks, ServiceBoundaryV1::AfterReceive)?;
-        service_checkpoint(hooks, ServiceBoundaryV1::BeforeExchange)?;
-        let observation = anchor.exchange(&challenge)?;
-        service_checkpoint(hooks, ServiceBoundaryV1::AfterExchange)?;
-        service_checkpoint(hooks, ServiceBoundaryV1::BeforeSend)?;
-        send_observation(&peer, &observation, response_timeout)?;
-        service_checkpoint(hooks, ServiceBoundaryV1::AfterSend)?;
-        exchanges = exchanges
-            .checked_add(1)
-            .ok_or(ExternalAnchorDaemonErrorV1::ExchangeCountOverflow)?;
+    fn exchange(
+        &mut self,
+        challenge: &[u8; ANCHOR_CHALLENGE_WIRE_LEN_V1],
+    ) -> Result<Self::Observation, Self::Error> {
+        Ok(self.0.exchange(challenge)?)
+    }
+    fn send(
+        &mut self,
+        peer: &OwnedFd,
+        observation: &Self::Observation,
+        timeout: Duration,
+    ) -> Result<(), Self::Error> {
+        send_observation(peer, observation, timeout)
+    }
+    fn retire(&mut self, _observation: Self::Observation) -> Result<(), Self::Error> {
+        Ok(())
     }
 }
 
-fn service_checkpoint<H: ServiceHooksV1>(
+pub(crate) fn service_checkpoint<H: ServiceHooksV1>(
     hooks: &mut H,
     boundary: ServiceBoundaryV1,
 ) -> Result<(), ExternalAnchorDaemonErrorV1> {
@@ -142,211 +150,22 @@ fn service_checkpoint<H: ServiceHooksV1>(
         })
 }
 
-fn validate_peer(peer: &OwnedFd) -> Result<(), ExternalAnchorDaemonErrorV1> {
-    let descriptor_flags = rustix::io::fcntl_getfd(peer)
-        .map_err(|source| io_error("inspect external-anchor peer descriptor flags", source))?;
-    if !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC) {
-        return Err(ExternalAnchorDaemonErrorV1::PeerNotCloseOnExec);
-    }
-    let status = rustix::fs::fcntl_getfl(peer)
-        .map_err(|source| io_error("inspect external-anchor peer status flags", source))?;
-    if status != OFlags::RDWR | OFlags::NONBLOCK {
-        return Err(ExternalAnchorDaemonErrorV1::InvalidPeerStatus);
-    }
-    let domain = rustix::net::sockopt::socket_domain(peer)
-        .map_err(|source| io_error("inspect external-anchor peer domain", source))?;
-    if domain != AddressFamily::UNIX {
-        return Err(ExternalAnchorDaemonErrorV1::InvalidPeerDomain);
-    }
-    let socket_type = rustix::net::sockopt::socket_type(peer)
-        .map_err(|source| io_error("inspect external-anchor peer socket type", source))?;
-    if socket_type != SocketType::SEQPACKET {
-        return Err(ExternalAnchorDaemonErrorV1::InvalidPeerSocketType);
-    }
-    require_unnamed(peer.as_raw_fd(), AddressSideV1::Local)?;
-    require_unnamed(peer.as_raw_fd(), AddressSideV1::Remote)
+pub(crate) fn validate_peer(peer: &OwnedFd) -> Result<(), ExternalAnchorDaemonErrorV1> {
+    peer_io::validate_peer(peer, &mut |_| Ok(()))
 }
 
-#[derive(Clone, Copy)]
-enum AddressSideV1 {
-    Local,
-    Remote,
-}
-
-fn require_unnamed(peer: RawFd, side: AddressSideV1) -> Result<(), ExternalAnchorDaemonErrorV1> {
-    let mut address = MaybeUninit::<libc::sockaddr_un>::zeroed();
-    let mut length = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_un>())
-        .expect("sockaddr_un size fits socklen_t");
-    // SAFETY: the address buffer is writable for its declared size, `length` is initialized to
-    // that size, and `peer` remains owned by the caller throughout this inspection.
-    let result = unsafe {
-        match side {
-            AddressSideV1::Local => libc::getsockname(
-                peer,
-                address.as_mut_ptr().cast::<libc::sockaddr>(),
-                &mut length,
-            ),
-            AddressSideV1::Remote => libc::getpeername(
-                peer,
-                address.as_mut_ptr().cast::<libc::sockaddr>(),
-                &mut length,
-            ),
-        }
-    };
-    if result != 0 {
-        let source = io::Error::last_os_error();
-        return if matches!(side, AddressSideV1::Remote)
-            && matches!(source.raw_os_error(), Some(libc::ENOTCONN))
-        {
-            Err(ExternalAnchorDaemonErrorV1::PeerNotConnected)
-        } else {
-            Err(ExternalAnchorDaemonErrorV1::Io {
-                operation: match side {
-                    AddressSideV1::Local => "inspect external-anchor local address",
-                    AddressSideV1::Remote => "inspect external-anchor remote address",
-                },
-                source,
-            })
-        };
-    }
-    // SAFETY: a successful name query initialized at least the family field and the buffer was
-    // zeroed before the kernel wrote it.
-    let address = unsafe { address.assume_init() };
-    if i32::from(address.sun_family) != libc::AF_UNIX {
-        return Err(ExternalAnchorDaemonErrorV1::InvalidPeerDomain);
-    }
-    let unnamed_length = std::mem::offset_of!(libc::sockaddr_un, sun_path);
-    if usize::try_from(length).ok() == Some(unnamed_length) {
-        Ok(())
-    } else {
-        Err(match side {
-            AddressSideV1::Local => ExternalAnchorDaemonErrorV1::NamedLocalAddress,
-            AddressSideV1::Remote => ExternalAnchorDaemonErrorV1::NamedRemoteAddress,
-        })
-    }
-}
-
-fn receive_challenge(
+pub(crate) fn receive_challenge(
     peer: &OwnedFd,
 ) -> Result<Option<[u8; ANCHOR_CHALLENGE_WIRE_LEN_V1]>, ExternalAnchorDaemonErrorV1> {
-    let mut bytes = [0_u8; ANCHOR_CHALLENGE_WIRE_LEN_V1];
-    loop {
-        wait_for(peer, PollFlags::IN, None)?;
-        let mut vectors = [IoSliceMut::new(&mut bytes)];
-        let mut ancillary = RecvAncillaryBuffer::default();
-        match recvmsg(
-            peer,
-            &mut vectors,
-            &mut ancillary,
-            RecvFlags::DONTWAIT | RecvFlags::TRUNC | RecvFlags::CMSG_CLOEXEC,
-        ) {
-            Ok(message) => {
-                if message.flags.contains(ReturnFlags::CTRUNC) || ancillary.drain().next().is_some()
-                {
-                    return Err(ExternalAnchorDaemonErrorV1::AncillaryData);
-                }
-                if message.flags.contains(ReturnFlags::TRUNC)
-                    || message.bytes > ANCHOR_CHALLENGE_WIRE_LEN_V1
-                {
-                    return Err(ExternalAnchorDaemonErrorV1::PacketTruncated);
-                }
-                if message.bytes == 0 {
-                    return Ok(None);
-                }
-                if message.bytes != ANCHOR_CHALLENGE_WIRE_LEN_V1 {
-                    return Err(ExternalAnchorDaemonErrorV1::InvalidChallengeLength {
-                        actual: message.bytes,
-                    });
-                }
-                return Ok(Some(bytes));
-            }
-            Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => {}
-            Err(rustix::io::Errno::CONNRESET | rustix::io::Errno::NOTCONN) => return Ok(None),
-            Err(source) => {
-                return Err(io_error("receive external-anchor challenge", source));
-            }
-        }
-    }
+    peer_io::receive_challenge(peer, &mut |_| Ok(()))
 }
 
-fn send_observation(
+pub(crate) fn send_observation(
     peer: &OwnedFd,
     observation: &[u8; ANCHOR_OBSERVATION_WIRE_LEN_V1],
     timeout: Duration,
 ) -> Result<(), ExternalAnchorDaemonErrorV1> {
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .ok_or(ExternalAnchorDaemonErrorV1::DeadlineOverflow)?;
-    loop {
-        wait_for(peer, PollFlags::OUT, Some(deadline))?;
-        match send(peer, observation, SendFlags::DONTWAIT | SendFlags::NOSIGNAL) {
-            Ok(count) if count == observation.len() => return Ok(()),
-            Ok(_) => return Err(ExternalAnchorDaemonErrorV1::PartialSend),
-            Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => {}
-            Err(
-                rustix::io::Errno::PIPE | rustix::io::Errno::CONNRESET | rustix::io::Errno::NOTCONN,
-            ) => {
-                return Err(ExternalAnchorDaemonErrorV1::PeerClosed);
-            }
-            Err(source) => return Err(io_error("send external-anchor observation", source)),
-        }
-    }
-}
-
-fn wait_for(
-    peer: &OwnedFd,
-    wanted: PollFlags,
-    deadline: Option<Instant>,
-) -> Result<(), ExternalAnchorDaemonErrorV1> {
-    loop {
-        let timeout = match deadline {
-            Some(deadline) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Err(ExternalAnchorDaemonErrorV1::ResponseTimeout);
-                }
-                Some(
-                    rustix::event::Timespec::try_from(remaining)
-                        .map_err(|_| ExternalAnchorDaemonErrorV1::DeadlineOverflow)?,
-                )
-            }
-            None => None,
-        };
-        let mut descriptors = [PollFd::new(
-            peer,
-            wanted | PollFlags::ERR | PollFlags::HUP | PollFlags::RDHUP,
-        )];
-        match poll(&mut descriptors, timeout.as_ref()) {
-            Ok(0) => return Err(ExternalAnchorDaemonErrorV1::ResponseTimeout),
-            Ok(_) => {
-                let ready = descriptors[0].revents();
-                if ready.contains(PollFlags::NVAL) {
-                    return Err(ExternalAnchorDaemonErrorV1::InvalidPeer);
-                }
-                if ready.contains(PollFlags::ERR) {
-                    return Err(ExternalAnchorDaemonErrorV1::PeerFailed);
-                }
-                if ready.contains(wanted) {
-                    return Ok(());
-                }
-                if ready.intersects(PollFlags::HUP | PollFlags::RDHUP) {
-                    if wanted == PollFlags::IN {
-                        return Ok(());
-                    }
-                    return Err(ExternalAnchorDaemonErrorV1::PeerClosed);
-                }
-            }
-            Err(rustix::io::Errno::INTR) => {}
-            Err(source) => return Err(io_error("poll external-anchor peer", source)),
-        }
-    }
-}
-
-fn io_error(operation: &'static str, source: rustix::io::Errno) -> ExternalAnchorDaemonErrorV1 {
-    ExternalAnchorDaemonErrorV1::Io {
-        operation,
-        source: io::Error::from(source),
-    }
+    peer_io::send_observation(peer, observation, timeout, &mut |_| Ok(()))
 }
 
 #[derive(Debug)]

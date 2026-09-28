@@ -18,19 +18,13 @@ use crate::{
     WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerResponseV2,
     first_build_worker_engine::{
         ReproducibleFirstBuildEngineError as EngineError, ReproducibleFirstBuildEnginePreflight,
-        execute_preflighted_reproducible_first_build_engine,
-        preflight_reproducible_first_build_engine,
     },
     first_build_worker_native_binding::{
         ProtectedCompilerNativeHandoffBindingErrorV1, ProtectedCompilerNativeHandoffBindingV1,
         native_handoff_storage_floor,
     },
     first_build_worker_native_resources::NativeWorkerResourceQuote,
-    first_build_worker_v3::{
-        calculate_worker_evidence_identity_parts, enforce_worker_working_set_budget,
-        validate_replay_parts,
-    },
-    request_construction::decode_compiler_module_handoff_v2,
+    native_worker_engine::{execute_native_engine, prepare_native_engine},
     worker_executor::InertWorkerExecutionV2,
 };
 
@@ -332,72 +326,39 @@ pub fn preflight_native_reproducible_first_build_worker_v1(
                 budget,
             )?;
             let handoff = source.handoff();
-            if providers.len() >= crate::MAX_LINK_INPUTS || options.len() > crate::MAX_LINK_OPTIONS
-            {
-                return Err(failure(
-                    "working set",
-                    "provider or option count exceeds the shared bound",
-                ));
-            }
-            // Two bounded length censuses plus the shared aggregate guard, before any
-            // sorting, variable-byte hashing, decoding or Worker request construction.
-            budget.charge_work(2048)?;
-            enforce_worker_working_set_budget(
+            let (engine, quote) = prepare_native_engine(
+                (&binding).into(),
                 handoff.canonical_bytes().len(),
                 handoff.module_handoff(),
-                &providers,
-                &options,
-            )
-            .map_err(|e| failure("working set", e))?;
-            let quote = NativeWorkerResourceQuote::new(
-                handoff.module_handoff(),
-                &providers,
-                &options,
-                &output,
+                worker,
+                providers,
+                options,
+                output,
                 limits,
-            )
-            .map_err(|e| failure("resource quote", format_args!("{e:?}")))?;
+                size_of::<PreparedNativeFirstBuildWorkerV1>(),
+                budget,
+            )?;
             let storage = NativeFirstBuildWorkerStorageV1(
                 quote
                     .preflight_storage
                     .checked_add(size_of::<PreparedNativeFirstBuildWorkerV1>())
                     .ok_or(Resource::Arithmetic)?,
             );
-            budget.with_prepaid_scope(
-                native_handoff_storage_floor(source)?,
-                0,
-                quote.preflight_work,
-                storage.0,
-                |budget| {
-                    let decoded = decode_compiler_module_handoff_v2(
-                        handoff.module_handoff().canonical_bytes(),
-                    )
-                    .map_err(|e| failure("module decode", e))?;
-                    let engine = preflight_reproducible_first_build_engine(
-                        (&binding).into(),
-                        decoded,
-                        worker,
-                        providers,
-                        options,
-                        output,
-                    )
-                    .map_err(engine_error)?;
-                    token
-                        .revalidate_locked_currentness(budget)
-                        .map_err(currentness_error)?;
-                    Ok((
-                        PreparedNativeFirstBuildWorkerV1 {
-                            binding,
-                            worker: worker.measurement().clone(),
-                            limits,
-                            quote,
-                            engine,
-                            storage,
-                        },
-                        storage,
-                    ))
+            budget.reserve_storage(storage.0)?;
+            token
+                .revalidate_locked_currentness(budget)
+                .map_err(currentness_error)?;
+            Ok((
+                PreparedNativeFirstBuildWorkerV1 {
+                    binding,
+                    worker: worker.measurement().clone(),
+                    limits,
+                    quote,
+                    engine,
+                    storage,
                 },
-            )
+                storage,
+            ))
         },
     )
 }
@@ -461,35 +422,8 @@ pub fn execute_preflighted_native_reproducible_first_build_worker_v1(
             .checked_add(size_of::<InertNativeFirstBuildWorkerEvidenceV1>())
             .ok_or(Resource::Arithmetic)?;
         budget.with_prepaid_scope(floor, 0, quote.execution_work, scratch, |_| {
-            let result = execute_preflighted_reproducible_first_build_engine(
-                (&binding).into(),
-                engine,
-                worker,
-                limits,
-            )
-            .map_err(engine_error)?;
-            validate_replay_parts(
-                (&binding).into(),
-                &measurement,
-                &result.decoded,
-                &result.plan,
-                &result.candidate_request_bytes,
-                result.candidate.response(),
-                &result.authorized_request_bytes,
-                result.authorized.response(),
-            )
-            .map_err(|e| failure("transcript replay", e))?;
-            let identity = calculate_worker_evidence_identity_parts(
-                (&binding).into(),
-                &measurement,
-                limits,
-                &result.plan,
-                &result.candidate_request_bytes,
-                result.candidate.response().canonical_bytes(),
-                &result.authorized_request_bytes,
-                result.authorized.response().canonical_bytes(),
-            )
-            .map_err(|e| failure("evidence identity", e))?;
+            let (result, identity) =
+                execute_native_engine((&binding).into(), engine, &measurement, limits, worker)?;
             Ok((
                 InertNativeFirstBuildWorkerEvidenceV1 {
                     source: NativeWorkerSource::Consumed(consumed),
@@ -538,6 +472,7 @@ pub(crate) fn recover_prepaid_native_worker_evidence_v1(
         worker,
         limits,
     } = input;
+    let identity = exchanges.validate_identity((&binding).into(), decoded, &worker, limits)?;
     let crate::worker_finalizer_replay_engine::ReconstructedWorkerExchanges {
         plan,
         bootstrap_request_bytes,
@@ -545,28 +480,6 @@ pub(crate) fn recover_prepaid_native_worker_evidence_v1(
         replay_request_bytes,
         replay_response,
     } = exchanges;
-    validate_replay_parts(
-        (&binding).into(),
-        &worker,
-        decoded,
-        &plan,
-        &bootstrap_request_bytes,
-        &bootstrap_response,
-        &replay_request_bytes,
-        &replay_response,
-    )
-    .map_err(|e| failure("recovered transcript replay", e))?;
-    let identity = calculate_worker_evidence_identity_parts(
-        (&binding).into(),
-        &worker,
-        limits,
-        &plan,
-        &bootstrap_request_bytes,
-        bootstrap_response.canonical_bytes(),
-        &replay_request_bytes,
-        replay_response.canonical_bytes(),
-    )
-    .map_err(|e| failure("recovered evidence identity", e))?;
     let storage = NativeFirstBuildWorkerStorageV1(
         quote
             .returned_retained_storage()
@@ -687,7 +600,10 @@ impl fmt::Display for NativeFirstBuildWorkerErrorV1 {
 
 impl std::error::Error for NativeFirstBuildWorkerErrorV1 {}
 
-fn failure(phase: &'static str, error: impl fmt::Display) -> NativeFirstBuildWorkerErrorV1 {
+pub(crate) fn failure(
+    phase: &'static str,
+    error: impl fmt::Display,
+) -> NativeFirstBuildWorkerErrorV1 {
     NativeFirstBuildWorkerErrorV1::Worker {
         phase,
         diagnostic: NativeWorkerDiagnosticV1::from_display(error),
@@ -703,7 +619,7 @@ fn currentness_error(
     }
 }
 
-fn engine_error(error: EngineError) -> NativeFirstBuildWorkerErrorV1 {
+pub(crate) fn engine_error(error: EngineError) -> NativeFirstBuildWorkerErrorV1 {
     match error {
         EngineError::LinkPlan(e) => failure("link plan", e),
         EngineError::RequestConstruction(e) => failure("request construction", e),

@@ -2,12 +2,22 @@
 
 `ProtectedIssuerSupervisorV2::launch` consumes `PreparedProtectedIssuerLaunchV2`
 through the same clone3, descriptor-installation, pidfd and cleanup engine as V1.
+The corresponding V3 operation consumes `PreparedProtectedIssuerLaunchV3` into
+nominal V3 launched, ready, serving and exited owners. Both native families use
+the same lifecycle body in
+[`process_native_body.rs`](../crates/fe2o3-compiler-execution-supervisor/src/process_native_body.rs),
+with concrete family-specific supervisor, capability, readiness and error types.
 Native admission never constructs an admitted V1 owner or falls back to V1 on
 refusal. Shared V1-named static wire and termination records are inert data.
+Process-profile observations and persistent cleanup use the same policy-neutral
+native V2 machinery in both families; that reuse grants no policy authority.
 
 This is a library lifecycle, not activation of the native production issuer or
-service. All four isolated distinct-UID synthetic consuming fixtures passed on
+service. All four isolated distinct-UID **V2** synthetic consuming fixtures passed on
 MI350 under Ubuntu 24.04/Linux 6.8.0-124-generic through the actual static launcher.
+V3 has deterministic lifecycle/accounting tests and exact readiness-join tests,
+plus an opt-in consuming fixture. No isolated V3 consuming or protected-runtime
+execution is credited yet.
 Protected proof execution, GPU qualification, M0-M7 acceptance and 47/47 completion
 are not established by this implementation or its deterministic unit tests.
 
@@ -31,6 +41,13 @@ are not established by this implementation or its deterministic unit tests.
 5. **Exited:** consume exactly one terminal pidfd wait and disarm custody before
    fallible result handling. The returned PID, readiness and termination are
    inert, and retain their original funding until dropped.
+
+Readiness framing is shared across native families. Decoding a frame as V3 is
+not authorization: the join must also match the exact live child, V3 manifest
+and independently admitted V3 policy. Tests construct actual V2-bound wire with
+otherwise matching inputs, decode it as V3, and require rejection at that join.
+Compile-fail examples reject mixed-family prepared owners, wait policies,
+readiness types and premature access to the original borrowed account.
 
 Consuming failure or cancellation performs at most one prepaid emergency cleanup
 step. Pending or uncertain custody transfers into the existing persistently
@@ -64,7 +81,8 @@ are both charged during overlap. Readiness growth is reserved after its temporar
 scope restores the entry floor. Owners close or transfer before funding retires;
 no consumed reservation is released inside a protected temporary scope.
 
-Work is cumulative and never refunded. `ProtectedIssuerWaitV2` accepts 1-4096
+Work is cumulative and never refunded. `ProtectedIssuerWaitV2` and
+`ProtectedIssuerWaitV3` each accept 1-4096
 attempts and a positive timeout up to 120 seconds. EINTR, EAGAIN, partial reads
 and pending observations consume finite attempts. Four weighted syscall units
 per parent attempt cover I/O, liveness, failure probes and optional polling.
@@ -109,7 +127,7 @@ namespace APIs retain their existing permission checks and refusal behavior.
 ## Isolated Validation
 
 The four opt-in `native_consuming_test_process::native_consuming_` tests exercise
-the public native lifecycle with separately measured, sealed static test issuers:
+the public V2 lifecycle with separately measured, sealed static test issuers:
 
 - Exact child-produced readiness, publication to the real submitter, a client
   stop packet and natural exit with status zero.
@@ -117,8 +135,19 @@ the public native lifecycle with separately measured, sealed static test issuers
 - Trailing readiness bytes, refused before a ready owner exists.
 - Dropping launched custody before a silent child produces readiness.
 
+The corresponding `native_consuming_test_process::v3::native_consuming_` tests
+exercise V3 through the same coordinator, locked profile, client protocol,
+descriptor witnesses and cleanup assertions. The supervisor, submitter and
+static issuer use genuine V3 owners; private fixture routing is not a conversion
+or production selector. The issuer's family is fixed at compilation, never
+selected from the child's environment or arguments.
+
 Every case checks original-ledger continuity, funded cleanup, descriptor and
 pidfd restoration, terminal reaping and all fixture-role completion packets.
+After negative-case cleanup, the submitter requires exact EOF on its public
+readiness socket. Queued publication and an empty but still-open peer both fail;
+rootless socket-pair tests cover those checks for both families. The silent-drop
+case establishes cleanup before readiness, not completed child input admission.
 The isolated run uses distinct UIDs 65532/65533/65534, one CPU, no network or GPU
 devices, and unconfined container seccomp for clone3. The supervisor and child
 still enforce the exact locked process profile. Container and private scratch
@@ -136,12 +165,99 @@ FE2O3_RUN_NATIVE_CONSUMING_SUPERVISOR_V2_TEST=1 "$SUPERVISOR_TEST_BIN" \
   --ignored --nocapture --test-threads=1
 ```
 
+For V3, build a separate set with
+`bash scripts/build-native-ready-fixture.sh DIR v3`. The builder emits distinct
+`native-ready-fixture-v3-*` artifacts and `FE2O3_NATIVE_READY_FIXTURE_V3_*` paths.
+Supply those paths and the same independently measured static launcher in the
+isolated root environment, then select only the V3 coordinator cases:
+
+```sh
+FE2O3_RUN_NATIVE_CONSUMING_SUPERVISOR_V3_TEST=1 "$SUPERVISOR_TEST_BIN" \
+  native_consuming_test_process::v3::native_consuming_ \
+  --ignored --nocapture --test-threads=1
+```
+
+Omitting the builder's family argument preserves V2 behavior. Invalid selectors
+fail before build setup. Building or listing these tests does not establish
+successful isolated execution.
+
 These test issuers never sign, compile requests, create durable state or recover
 a service. Positive fixture stages allow 30 seconds because unoptimized custody
 repeatedly measures full static images; the initial five-second fixture deadline
 expired at the exec boundary. Successful gated launch took 5.8-5.9 seconds on the
 one-CPU run. Production limits, exact profile checks and finite attempt budgets
 were unchanged. The missing-EOF case retains its separate 200ms refusal bound.
+
+## Public Session Validation
+
+Separate public-session coordinators call `run_session` itself, with no production
+stage hooks. In the same disposable root environment, with the corresponding
+measured fixtures and launcher supplied, select the three cases for each family:
+
+```sh
+FE2O3_RUN_NATIVE_SESSION_SUPERVISOR_V2_TEST=1 "$SUPERVISOR_TEST_BIN" \
+  native_consuming_test_process::session::v2::native_session_ \
+  --ignored --nocapture --test-threads=1
+FE2O3_RUN_NATIVE_SESSION_SUPERVISOR_V3_TEST=1 "$SUPERVISOR_TEST_BIN" \
+  native_consuming_test_process::session::v3::native_session_ \
+  --ignored --nocapture --test-threads=1
+```
+
+The submitter receives and verifies the actual public readiness packet, then
+signals the original client to stop. The supervisor compares those exact bytes
+with its terminal owner's record. Negative cases require readiness-stage refusal
+and public EOF without unread publication after independently funded cleanup.
+Work/storage denial history and descriptor inventories must survive the complete
+session. Because this entry point has no private readiness hook, its missing-EOF
+case uses a three-second readiness bound and establishes bounded readiness
+refusal, not an independent observation that the child wrote the full frame.
+All six public-session cases remain unexecuted in the isolated profile.
+
+Native service `bind` and `serve_one` now compose the fixed listener with the
+corresponding native session. Acceptance charges every finite poll/accept turn
+before observation. Session owners are retired before post-session continuity
+checks; continuity errors override session outcomes as on the existing path.
+Only inert terminal facts are returned. Native worker dispatch, provisioning,
+recovery and listener-to-issuer validation remain outstanding.
+
+Native `run_turns` supplies bounded sequential dispatch over this admitted service,
+not a second supervisor or background reaper. Its nominal `DispatchLimitsV2/V3`
+contains 1-4096 turns, the exact native accept wait, and a cleanup scan of 1 through
+the fixed pool capacity. It prepays bookkeeping and temporary metadata on the
+original request account. The separately funded cleanup account must allow new
+admission and afford the selected post-dispatch scan before each accept attempt.
+Every attempted session is followed by that scan, including session-resource
+failure. An unfunded controller call also attempts independently funded cleanup.
+
+Accept deadline/attempt exhaustion counts as idle. Any other dispatch refusal
+stops the batch, preserving its exact error alongside the last cleanup result.
+The result counts completed sessions and retains their last inert observation,
+not every session identity or any authority. Both borrowed accounts retain their
+accepted prefixes and first denials across calls. The caller keeps exclusive
+cleanup control and must explicitly drain/shut down; returning a completed batch
+does not prove terminal cleanup, and neither account is silently renewed.
+
+## Native Deployment Records
+
+Native `CompilerExecutionSupervisorDeploymentV2` and `V3` are distinct, inert
+184-byte configuration records. Their identities bind exact supervisor/launcher
+measurements, dedicated service and anchor credentials, and the complete native
+policy identity. Native decoding requires that actual same-family policy on the
+original budget; V1 records are not upgraded. Independently pinning the trusted
+configuration and admitting its transport remain provisioning obligations.
+
+`CompilerExecutionSupervisorReadyV2` and `V3` are distinct 88-byte bootstrap
+records. Creation borrows the deployment; decoding requires the expected child
+PID and that exact native deployment as well as canonical framing. Every working
+operation is prepaid, restores entry storage and returns an explicit full owner
+charge. Rehashing an altered PID or substituting a deployment cannot satisfy the
+original contextual join. A sender can still construct matching public bytes:
+these records do not establish root-parent provenance, a private bootstrap pipe,
+child liveness, actual service admission, recovery, or compiler execution.
+
+The deployed root coordinator, inherited service entry point and anchor
+configuration still use V1. These native record APIs are dependencies of that
+migration, not an activated replacement or another production authority path.
 
 ## Remaining Production Work
 
@@ -160,3 +276,5 @@ also pass, but do not establish their combined divergent-thread consuming case.
 Malformed gated-child report and post-clone budget-failure cleanup need additional
 process integration coverage. Neither these fixtures nor their unit tests replace
 protected source/proof, production service/recovery or GPU qualification.
+Cross-family consuming substitutions also need isolated coverage; the existing
+exact-policy-join unit tests are separate evidence, not a substitute for it.

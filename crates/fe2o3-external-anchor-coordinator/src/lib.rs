@@ -4,10 +4,38 @@
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 compile_error!("fe2o3-external-anchor-coordinator requires Linux x86-64");
 
+mod launch_io;
+mod native;
+mod native_adapter;
+mod native_launch;
+mod native_launch_adapter;
+mod native_transfer_adapter;
+mod native_v2;
+mod native_v3;
+pub use native::{
+    ExternalAnchorPreparationErrorV2, ExternalAnchorPreparationFailureV2,
+    ExternalAnchorPreparationQuotaV2, ExternalAnchorPreparationStorageV2,
+};
+pub use native_launch::{
+    ExternalAnchorLaunchErrorV2, ExternalAnchorLaunchQuotaV2, ExternalAnchorLaunchStorageV2,
+};
+pub use native_transfer_adapter::{
+    ExternalAnchorSupervisorTransferQuotaV2, ExternalAnchorSupervisorTransferStorageV2,
+};
+pub use native_v2::{
+    ExternalAnchorSupervisorTransferV2, PreparedExternalAnchorOccurrenceV2,
+    RootManagedExternalAnchorV2,
+};
+pub use native_v3::{
+    ExternalAnchorSupervisorTransferV3, PreparedExternalAnchorOccurrenceV3,
+    RootManagedExternalAnchorV3,
+};
+
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
-use std::io::{self, IoSliceMut};
+use std::io;
+#[cfg(test)]
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, OwnedFd};
 use std::time::{Duration, Instant};
@@ -32,8 +60,8 @@ use fe2o3_compiler_execution_protocol::{
     MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1,
 };
 use fe2o3_external_anchor_provisioner::{
-    EXTERNAL_ANCHOR_HELPER_LIFECYCLE_FD_V1, EXTERNAL_ANCHOR_PROVISIONING_READY_BYTES_V1,
-    ExternalAnchorProvisioningReadyDispositionV1, ExternalAnchorProvisioningReadyV1,
+    EXTERNAL_ANCHOR_HELPER_LIFECYCLE_FD_V1, ExternalAnchorProvisioningReadyDispositionV1,
+    ExternalAnchorProvisioningReadyV1,
 };
 use fe2o3_protected_service_profile::{
     ProtectedServiceCredentialProfileErrorV1, ProtectedServiceCredentialProfileV1,
@@ -41,7 +69,6 @@ use fe2o3_protected_service_profile::{
     validate_protected_service_process_v1,
 };
 use fe2o3_protected_service_spawn::{
-    PROTECTED_SERVICE_GATE_RELEASE_V1, PROTECTED_SERVICE_PROFILE_READY_V1,
     ProtectedServiceDescriptorBindingV1, ProtectedServiceSpawnErrorV1,
     RootOwnedProtectedServiceChildV1, StagedProtectedServiceExecV1, require_exact_root_identity_v1,
 };
@@ -49,15 +76,9 @@ use fe2o3_protected_static_executable::{
     ProtectedStaticExecutableErrorV1, ProtectedStaticExecutableMeasurementV1,
     ProtectedStaticExecutableOwnerV1, ProtectedStaticExecutableV1,
 };
-use rustix::fs::{FileType, OFlags};
-use rustix::net::{
-    AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SocketFlags,
-    SocketType, recv, recvmsg, socketpair,
-};
+use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 use rustix::pipe::{PipeFlags, pipe_with};
 
-const MAX_LAUNCH_TIMEOUT_V1: Duration = Duration::from_secs(120);
-const POLL_INTERVAL_V1: Duration = Duration::from_millis(1);
 const STATE_ROOT_MODE_V1: u32 = 0o700;
 
 /// Immutable root-prepared inputs for one exact external-anchor occurrence.
@@ -318,7 +339,7 @@ impl PreparedExternalAnchorOccurrenceV1 {
             validate_protected_service_process_v1(credentials, child.pid())
                 .map_err(ExternalAnchorCoordinatorErrorV1::Profile)?;
             self.revalidate_inner::<true>()?;
-            release_child(&gate_writer)?;
+            release_child(&gate_writer, &child, deadline)?;
             drop(gate_writer);
 
             let (ready, endpoint) = receive_ready(&root_bootstrap, &child, deadline)?;
@@ -563,31 +584,9 @@ fn validate_state_root(
     root: &File,
     service: CompilerExecutionExternalAnchorServiceIdentityV1,
 ) -> Result<StateRootSnapshotV1, ExternalAnchorCoordinatorErrorV1> {
-    let descriptor_flags = rustix::io::fcntl_getfd(root)
-        .map_err(|source| io_error("inspect anchor state-root descriptor", source.into()))?;
-    let status = rustix::fs::fcntl_getfl(root)
-        .map_err(|source| io_error("inspect anchor state-root status", source.into()))?;
-    let stat = rustix::fs::fstat(root)
-        .map_err(|source| io_error("inspect anchor state root", source.into()))?;
-    let forbidden = OFlags::APPEND | OFlags::ASYNC | OFlags::DIRECT | OFlags::PATH;
-    if !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC)
-        || status & OFlags::ACCMODE != OFlags::RDONLY
-        || status.intersects(forbidden)
-        || FileType::from_raw_mode(stat.st_mode) != FileType::Directory
-        || stat.st_mode & 0o7777 != STATE_ROOT_MODE_V1
-        || stat.st_uid != service.uid()
-        || stat.st_gid != service.gid()
-        || stat.st_nlink == 0
-    {
-        return Err(ExternalAnchorCoordinatorErrorV1::InvalidStateRoot);
-    }
-    Ok(StateRootSnapshotV1 {
-        device: stat.st_dev,
-        inode: stat.st_ino,
-        mode: stat.st_mode,
-        uid: stat.st_uid,
-        gid: stat.st_gid,
-        links: stat.st_nlink,
+    native::state_root(root, service).map_err(|error| match error {
+        native::RootError::Invalid => ExternalAnchorCoordinatorErrorV1::InvalidStateRoot,
+        native::RootError::Io(operation, source) => io_error(operation, source.into()),
     })
 }
 
@@ -632,29 +631,22 @@ fn await_profile_ready(
     child: &RootOwnedAnchorChildV1,
     deadline: Instant,
 ) -> Result<(), ExternalAnchorCoordinatorErrorV1> {
-    let mut bytes = [0_u8; 2];
-    loop {
-        match rustix::io::read(profile, &mut bytes) {
-            Ok(1) if bytes[0] == PROTECTED_SERVICE_PROFILE_READY_V1 => return Ok(()),
-            Ok(0) => return Err(child_failure(bootstrap, child, "child profile")),
-            Ok(_) => return Err(ExternalAnchorCoordinatorErrorV1::NoncanonicalProfileReady),
-            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
-                await_profile_progress(bootstrap, child, deadline)?;
-            }
-            Err(source) => return Err(io_error("read child-profile record", source.into())),
-        }
-    }
+    launch_io::await_profile_ready(
+        profile.as_fd(),
+        bootstrap.as_fd(),
+        &mut LegacyObserver(child),
+        deadline,
+    )
+    .map_err(|e| legacy_launch_error(e, child))
 }
 
-fn release_child(gate: &OwnedFd) -> Result<(), ExternalAnchorCoordinatorErrorV1> {
-    loop {
-        match rustix::io::write(gate, &[PROTECTED_SERVICE_GATE_RELEASE_V1]) {
-            Ok(1) => return Ok(()),
-            Ok(_) => return Err(ExternalAnchorCoordinatorErrorV1::NoncanonicalGateRelease),
-            Err(rustix::io::Errno::INTR) => {}
-            Err(source) => return Err(io_error("release measured helper child", source.into())),
-        }
-    }
+fn release_child(
+    gate: &OwnedFd,
+    child: &RootOwnedAnchorChildV1,
+    deadline: Instant,
+) -> Result<(), ExternalAnchorCoordinatorErrorV1> {
+    launch_io::release_child(gate.as_fd(), &mut LegacyObserver(child), deadline)
+        .map_err(|e| legacy_launch_error(e, child))
 }
 
 fn receive_ready(
@@ -662,50 +654,8 @@ fn receive_ready(
     child: &RootOwnedAnchorChildV1,
     deadline: Instant,
 ) -> Result<(ExternalAnchorProvisioningReadyV1, OwnedFd), ExternalAnchorCoordinatorErrorV1> {
-    loop {
-        let mut payload = [0_u8; EXTERNAL_ANCHOR_PROVISIONING_READY_BYTES_V1];
-        let mut vectors = [IoSliceMut::new(&mut payload)];
-        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
-        let mut ancillary = RecvAncillaryBuffer::new(&mut space);
-        match recvmsg(
-            bootstrap,
-            &mut vectors,
-            &mut ancillary,
-            RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
-        ) {
-            Ok(received) => {
-                let mut descriptors = Vec::with_capacity(1);
-                for message in ancillary.drain() {
-                    match message {
-                        RecvAncillaryMessage::ScmRights(received) => descriptors.extend(received),
-                        _ => {
-                            return Err(ExternalAnchorCoordinatorErrorV1::MalformedReadyTransfer);
-                        }
-                    }
-                }
-                if received.bytes == 1 && descriptors.is_empty() {
-                    return Err(ExternalAnchorCoordinatorErrorV1::ChildStage(payload[0]));
-                }
-                if received.bytes != payload.len()
-                    || received
-                        .flags
-                        .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
-                {
-                    return Err(ExternalAnchorCoordinatorErrorV1::MalformedReadyTransfer);
-                }
-                if descriptors.len() != 1 {
-                    return Err(ExternalAnchorCoordinatorErrorV1::MalformedReadyTransfer);
-                }
-                let ready = ExternalAnchorProvisioningReadyV1::decode(&payload)
-                    .map_err(|_| ExternalAnchorCoordinatorErrorV1::MalformedReadyTransfer)?;
-                return Ok((ready, descriptors.pop().expect("length checked")));
-            }
-            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
-                await_child_progress(child, deadline, "helper-ready transfer")?;
-            }
-            Err(source) => return Err(io_error("receive helper-ready transfer", source.into())),
-        }
-    }
+    launch_io::receive_ready(bootstrap.as_fd(), &mut LegacyObserver(child), deadline)
+        .map_err(|e| legacy_launch_error(e, child))
 }
 
 fn await_exec_eof(
@@ -713,74 +663,41 @@ fn await_exec_eof(
     child: &RootOwnedAnchorChildV1,
     deadline: Instant,
 ) -> Result<(), ExternalAnchorCoordinatorErrorV1> {
-    let mut payload = [0_u8; 2];
-    loop {
-        match recv(bootstrap, &mut payload, RecvFlags::DONTWAIT) {
-            Ok((0, 0)) => return Ok(()),
-            Ok((1, _)) => return Err(ExternalAnchorCoordinatorErrorV1::ChildStage(payload[0])),
-            Ok(_) => return Err(ExternalAnchorCoordinatorErrorV1::MalformedExecStatus),
-            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
-                await_child_progress(child, deadline, "daemon exec EOF")?;
-            }
-            Err(source) => return Err(io_error("observe daemon exec EOF", source.into())),
-        }
+    launch_io::await_exec_eof(bootstrap.as_fd(), &mut LegacyObserver(child), deadline)
+        .map_err(|e| legacy_launch_error(e, child))
+}
+
+struct LegacyObserver<'a>(&'a RootOwnedAnchorChildV1);
+impl launch_io::Observer for LegacyObserver<'_> {
+    type Error = ExternalAnchorCoordinatorErrorV1;
+    fn before_attempt(&mut self, _: launch_io::Boundary) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn is_live(&mut self) -> Result<bool, Self::Error> {
+        self.0.is_live()
     }
 }
 
-fn await_profile_progress(
-    bootstrap: &OwnedFd,
+fn legacy_launch_error(
+    error: launch_io::Error<ExternalAnchorCoordinatorErrorV1>,
     child: &RootOwnedAnchorChildV1,
-    deadline: Instant,
-) -> Result<(), ExternalAnchorCoordinatorErrorV1> {
-    if let Some(stage) = receive_child_stage(bootstrap)? {
-        return Err(ExternalAnchorCoordinatorErrorV1::ChildStage(stage));
-    }
-    if !child.is_live()? {
-        return Err(child.exited_error("child profile"));
-    }
-    if Instant::now() >= deadline {
-        return Err(ExternalAnchorCoordinatorErrorV1::Timeout("child profile"));
-    }
-    std::thread::sleep(POLL_INTERVAL_V1);
-    Ok(())
-}
-
-fn await_child_progress(
-    child: &RootOwnedAnchorChildV1,
-    deadline: Instant,
-    boundary: &'static str,
-) -> Result<(), ExternalAnchorCoordinatorErrorV1> {
-    if !child.is_live()? {
-        return Err(child.exited_error(boundary));
-    }
-    if Instant::now() >= deadline {
-        return Err(ExternalAnchorCoordinatorErrorV1::Timeout(boundary));
-    }
-    std::thread::sleep(POLL_INTERVAL_V1);
-    Ok(())
-}
-
-fn receive_child_stage(
-    bootstrap: &OwnedFd,
-) -> Result<Option<u8>, ExternalAnchorCoordinatorErrorV1> {
-    let mut payload = [0_u8; 2];
-    match recv(bootstrap, &mut payload, RecvFlags::DONTWAIT) {
-        Ok((0, 0)) => Ok(None),
-        Ok((1, _)) => Ok(Some(payload[0])),
-        Ok(_) => Err(ExternalAnchorCoordinatorErrorV1::MalformedExecStatus),
-        Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => Ok(None),
-        Err(source) => Err(io_error("read child failure stage", source.into())),
-    }
-}
-
-fn child_failure(
-    bootstrap: &OwnedFd,
-    child: &RootOwnedAnchorChildV1,
-    boundary: &'static str,
 ) -> ExternalAnchorCoordinatorErrorV1 {
-    match receive_child_stage(bootstrap) {
-        Ok(Some(stage)) => ExternalAnchorCoordinatorErrorV1::ChildStage(stage),
-        _ => child.exited_error(boundary),
+    use launch_io::{Error as E, Failure as F};
+    match error {
+        E::Observer(e) => e,
+        E::Failure(f) => match f {
+            F::Io { operation, source } => io_error(operation, source.into()),
+            F::InvalidTimeout => ExternalAnchorCoordinatorErrorV1::InvalidTimeout,
+            F::ChildStage(s) => ExternalAnchorCoordinatorErrorV1::ChildStage(s),
+            F::ChildExited(s) => child.exited_error(s),
+            F::Timeout(s) => ExternalAnchorCoordinatorErrorV1::Timeout(s),
+            F::NoncanonicalProfileReady => {
+                ExternalAnchorCoordinatorErrorV1::NoncanonicalProfileReady
+            }
+            F::NoncanonicalGateRelease => ExternalAnchorCoordinatorErrorV1::NoncanonicalGateRelease,
+            F::MalformedReadyTransfer => ExternalAnchorCoordinatorErrorV1::MalformedReadyTransfer,
+            F::MalformedExecStatus => ExternalAnchorCoordinatorErrorV1::MalformedExecStatus,
+        },
     }
 }
 
@@ -793,12 +710,8 @@ fn require_coordinator_identity<const REQUIRE_ROOT: bool>()
 }
 
 fn bounded_deadline(timeout: Duration) -> Result<Instant, ExternalAnchorCoordinatorErrorV1> {
-    if timeout.is_zero() || timeout > MAX_LAUNCH_TIMEOUT_V1 {
-        return Err(ExternalAnchorCoordinatorErrorV1::InvalidTimeout);
-    }
-    Instant::now()
-        .checked_add(timeout)
-        .ok_or(ExternalAnchorCoordinatorErrorV1::InvalidTimeout)
+    launch_io::bounded_deadline(timeout)
+        .map_err(|_| ExternalAnchorCoordinatorErrorV1::InvalidTimeout)
 }
 
 fn io_error(operation: &'static str, source: io::Error) -> ExternalAnchorCoordinatorErrorV1 {
@@ -1241,7 +1154,7 @@ mod tests {
             .unwrap()
     }
 
-    fn static_pause_elf() -> Vec<u8> {
+    pub(crate) fn static_pause_elf() -> Vec<u8> {
         const HEADER: usize = 64;
         const PROGRAM: usize = 56;
         const PROGRAMS: usize = 4;

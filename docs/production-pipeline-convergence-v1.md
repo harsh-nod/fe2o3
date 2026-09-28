@@ -248,6 +248,43 @@ bytes after payload deletion. One move-only buffer retains the body, with actual
 capacity charged and all native postcommit readback work prepaid. This is inert
 transport, not protected issuance or an activated production consumer.
 
+The separate [conditional V5 checkpoint](evidence/conditional-native-handoff-20260926.md)
+adds CPU-bound source/history packing, independent conditional recovery and its
+distinct execution SubjectV3. The normal conditional entry still refuses before
+publication. It cannot reuse the ordinary V4/SubjectV2 family as authority;
+protected acquisition, parent intake, Worker/finalizer and safe launch remain
+required integration work.
+
+The [conditional execution custody checkpoint](evidence/conditional-execution-custody-20260926.md)
+adds nominal V3 sealed policy/key custody and exact anchor/currentness joins.
+These share existing implementations but do not activate production V3 custody;
+trusted profile selection and the original-account client lifetime remain explicit
+integration dependencies.
+
+The later [conditional service/profile checkpoint](evidence/conditional-service-profile-20260926.md)
+adds actual V3 profiles, terminal service/client packets, lifecycle records and
+sealed launch-object custody through shared native implementations.
+The [conditional issuer checkpoint](evidence/conditional-native-issuer-20260926.md)
+connects those owners to the same fixed-FD entrypoint, packet loop, durable
+recovery and Worker/anchor state machine, with actual locked V5 observation.
+Distinct record families share one singleton namespace and reject mixed state
+before mutation. Focused issuer/durable cases pass; local socket checks fail with
+permission denials, and protected live-service validation remains outstanding.
+The [early-account checkpoint](evidence/conditional-early-account-20260926.md)
+moves conditional TARGET-account creation before normal admission/collection and
+passes that same account through conditional preparation. Native clients now
+support consuming preparation with original-account postchecks, and the isolated
+V3 admission/readiness/Cancel harness shares the actual V2 case bodies.
+The [inherited-admission/completion checkpoint](evidence/conditional-inherited-completion-20260926.md)
+adds fixed-slot native peer admission and a consuming preparation/publication/
+receipt/completion client flow on the original account. Publication follows
+preparation postchecks; receipt storage and peer closure precede completion.
+The normal backend still admits V1 execution custody. Trusted native family
+selection, genuine policy/Prepared ownership through this flow, parent intake
+and machine refinement still need production integration.
+The new socket cases also fail with local permission denials; isolated protected
+harness cases have not run. No new kernel receives production or GPU credit.
+
 The [native Worker adapter](../crates/fe2o3-hsaco-finalize/README.md#native-sourcef-worker-integration)
 now borrows the locked recovered token for preflight and consumes that exact
 occurrence through the existing candidate/replay engine. Its separate identity

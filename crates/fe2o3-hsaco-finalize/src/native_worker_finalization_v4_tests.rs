@@ -417,7 +417,7 @@ fn native_v4_identity_is_separate_and_binds_every_existing_axis() {
         finish(DescriptorSchema::NominalV4, &raw, &wire, &mut budget).unwrap();
     let output = ContentIdentityV1::calculate(&bytes);
     let descriptor = ContentIdentityV1::calculate(&descriptor);
-    let identity = |mode,
+    let identity = |mode: NativeDescriptorMode,
                     source,
                     binding,
                     inspection: &SharedWorkerV3HsacoInspectionV1,
@@ -425,7 +425,13 @@ fn native_v4_identity_is_separate_and_binds_every_existing_axis() {
                     descriptor,
                     digest| {
         finalization_identity(
-            mode, source, binding, inspection, output, descriptor, digest,
+            mode.identity_domain(),
+            source,
+            binding,
+            inspection,
+            output,
+            descriptor,
+            digest,
         )
     };
     let original = identity(

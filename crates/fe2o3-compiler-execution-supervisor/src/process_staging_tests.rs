@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::eof_test_process::isolated_eof_case;
 use rustix::fs::{MemfdFlags, SeekFrom, fcntl_getfl, fstat, memfd_create, seek};
 use rustix::io::{FdFlags, fcntl_dupfd_cloexec, fcntl_getfd, read};
 use rustix::pipe::{PipeFlags, pipe_with};
@@ -181,7 +182,8 @@ fn cleanup_probes() -> [(OwnedFd, OwnedFd); 18] {
 }
 
 fn assert_probes_closed(probes: [(OwnedFd, OwnedFd); 18]) {
-    // EOF proves every staged writer closed; unrelated descriptor reuse cannot affect it.
+    // In the isolated process, EOF proves every staged writer closed. Neither
+    // unrelated descriptor reuse nor a concurrent harness fork can affect it.
     for (index, (reader, writer)) in probes.into_iter().enumerate() {
         drop(writer);
         assert_eq!(
@@ -194,63 +196,73 @@ fn assert_probes_closed(probes: [(OwnedFd, OwnedFd); 18]) {
 
 #[test]
 fn every_duplication_failure_closes_partial_staging_and_preserves_borrowed_inputs() {
-    let fixture = Fixture::new();
-    for (fail_at, operation) in DUPLICATION_OPERATIONS.into_iter().enumerate() {
-        let probes = cleanup_probes();
-        let mut calls = 0;
-        let result = StagedLaunchV1::new_with_duplicate(
-            fixture.input(),
-            &fixture.profile_ready.1,
-            &fixture.gate.0,
-            &fixture.exec_status.1,
-            |_, floor| {
-                let index = calls;
-                calls += 1;
-                if index == fail_at {
-                    return Err(Errno::MFILE);
-                }
-                fcntl_dupfd_cloexec(&probes[index].1, floor)
-            },
-        );
-        assert_eq!(
-            result.err(),
-            Some(StagedLaunchErrorV1::Io {
-                operation,
-                source: Errno::MFILE,
-            }),
-        );
-        assert_eq!(
-            calls,
-            fail_at + 1,
-            "duplication must stop at the first error"
-        );
-        assert_probes_closed(probes);
-        fixture.assert_originals_live();
-    }
+    isolated_eof_case(
+        "process_staging::tests::every_duplication_failure_closes_partial_staging_and_preserves_borrowed_inputs",
+        || {
+            let fixture = Fixture::new();
+            for (fail_at, operation) in DUPLICATION_OPERATIONS.into_iter().enumerate() {
+                let probes = cleanup_probes();
+                let mut calls = 0;
+                let result = StagedLaunchV1::new_with_duplicate(
+                    fixture.input(),
+                    &fixture.profile_ready.1,
+                    &fixture.gate.0,
+                    &fixture.exec_status.1,
+                    |_, floor| {
+                        let index = calls;
+                        calls += 1;
+                        if index == fail_at {
+                            return Err(Errno::MFILE);
+                        }
+                        fcntl_dupfd_cloexec(&probes[index].1, floor)
+                    },
+                );
+                assert_eq!(
+                    result.err(),
+                    Some(StagedLaunchErrorV1::Io {
+                        operation,
+                        source: Errno::MFILE,
+                    }),
+                );
+                assert_eq!(
+                    calls,
+                    fail_at + 1,
+                    "duplication must stop at the first error"
+                );
+                assert_probes_closed(probes);
+                fixture.assert_originals_live();
+            }
+        },
+    );
 }
 
 #[test]
 fn dropping_completed_staging_closes_all_eighteen_duplicates() {
-    let fixture = Fixture::new();
-    let probes = cleanup_probes();
-    let mut calls = 0;
-    let staged = StagedLaunchV1::new_with_duplicate(
-        fixture.input(),
-        &fixture.profile_ready.1,
-        &fixture.gate.0,
-        &fixture.exec_status.1,
-        |_, floor| {
-            let index = calls;
-            calls += 1;
-            fcntl_dupfd_cloexec(&probes[index].1, floor)
+    isolated_eof_case(
+        "process_staging::tests::dropping_completed_staging_closes_all_eighteen_duplicates",
+        || {
+            let fixture = Fixture::new();
+            let probes = cleanup_probes();
+            let mut calls = 0;
+            let staged = StagedLaunchV1::new_with_duplicate(
+                fixture.input(),
+                &fixture.profile_ready.1,
+                &fixture.gate.0,
+                &fixture.exec_status.1,
+                |_, floor| {
+                    let index = calls;
+                    calls += 1;
+                    fcntl_dupfd_cloexec(&probes[index].1, floor)
+                },
+            )
+            .unwrap();
+            assert_eq!(calls, 18);
+            for (reader, _) in &probes {
+                assert_eq!(read(reader, &mut [0_u8]), Err(Errno::AGAIN));
+            }
+            drop(staged);
+            assert_probes_closed(probes);
+            fixture.assert_originals_live();
         },
-    )
-    .unwrap();
-    assert_eq!(calls, 18);
-    for (reader, _) in &probes {
-        assert_eq!(read(reader, &mut [0_u8]), Err(Errno::AGAIN));
-    }
-    drop(staged);
-    assert_probes_closed(probes);
-    fixture.assert_originals_live();
+    );
 }

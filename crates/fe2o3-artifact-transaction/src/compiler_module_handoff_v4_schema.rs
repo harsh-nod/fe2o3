@@ -187,7 +187,8 @@ impl From<HandoffEngineError> for CompilerModuleHandoffErrorV4 {
             HandoffEngineError::PayloadAllocationFailed { requested } => {
                 Self::PayloadAllocationFailed { requested }
             }
-            HandoffEngineError::InvalidCanonicalV3(_) => Self::Resource(Resource::Accounting),
+            HandoffEngineError::InvalidCanonicalV3(_)
+            | HandoffEngineError::InvalidCanonicalV5(_) => Self::Resource(Resource::Accounting),
         }
     }
 }

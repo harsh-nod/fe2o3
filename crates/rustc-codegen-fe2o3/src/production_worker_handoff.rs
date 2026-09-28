@@ -487,7 +487,7 @@ fn assemble_production_worker_handoff(
     })
 }
 
-fn derive_production_compiler_ffi_envelope(
+pub(crate) fn derive_production_compiler_ffi_envelope(
     target: fe2o3_compiler_ffi::DeviceTargetV1,
     module: &Module,
     compiler_module: &crate::kernel_ir_codegen::InertCompilerModuleTextV1,

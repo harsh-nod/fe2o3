@@ -59,6 +59,13 @@ mod attempt;
 mod attempt_scoped_hsaco_publication;
 mod compiler_artifact_generation_v1;
 mod compiler_execution_subject;
+pub use compiler_execution_subject::conditional_v3::{
+    CompilerExecutionSubjectErrorV3, INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V3,
+    INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V3, INERT_COMPILER_EXECUTION_SUBJECT_STORAGE_V3,
+    INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V3, INERT_COMPILER_EXECUTION_SUBJECT_WORK_V3,
+    InertCompilerExecutionSubjectIdentityV3, InertCompilerExecutionSubjectStorageV3,
+    InertCompilerExecutionSubjectV3,
+};
 pub use compiler_execution_subject::native_v2::{
     CompilerExecutionSubjectErrorV2, INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V2,
     INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V2, INERT_COMPILER_EXECUTION_SUBJECT_STORAGE_V2,
@@ -67,6 +74,29 @@ pub use compiler_execution_subject::native_v2::{
     InertCompilerExecutionSubjectV2,
 };
 mod compiler_module_handoff;
+pub use compiler_module_handoff::conditional_v5::receipt_transport_v3::{
+    COMPILER_EXECUTION_RECEIPT_TRANSPORT_MAGIC_V3, COMPILER_EXECUTION_RECEIPT_TRANSPORT_VERSION_V3,
+    CompilerExecutionReceiptTransportErrorV3, CompilerExecutionReceiptTransportIdentityV3,
+    CompilerExecutionReceiptTransportReceiptV3, CompilerExecutionReceiptTransportStorageV3,
+    MAX_COMPILER_EXECUTION_RECEIPT_ENVELOPE_BYTES_V3,
+    MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V3,
+    RecoveredCompilerExecutionReceiptTransportV3, publish_compiler_execution_receipt_transport_v3,
+    recover_compiler_execution_receipt_transport_v3,
+    recover_compiler_execution_receipt_transport_with_currentness_v3,
+};
+pub use compiler_module_handoff::conditional_v5::{
+    CompilerModuleHandoffAdmissionCauseV5, CompilerModuleHandoffAdmissionErrorV5,
+    CompilerModuleHandoffConsumptionTokenV5, CompilerModuleHandoffCurrentnessLeaseV5,
+    CompilerModuleHandoffErrorV5, CompilerModuleHandoffPublicationV5,
+    CompilerModuleHandoffReceiptV5, CompilerModuleHandoffSlotV5, CompilerModuleHandoffStorageV5,
+    CompilerModuleHandoffTransactionIdentityV5, ConsumedCompilerModuleHandoffV5,
+    MAX_COMPILER_MODULE_HANDOFF_BYTES_V5, MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5,
+    acquire_compiler_module_handoff_currentness_lease_v5,
+    consume_compiler_module_handoff_with_currentness_v5, publish_compiler_module_handoff_v5,
+    publish_compiler_module_handoff_with_currentness_v5,
+    recover_compiler_module_handoff_receipt_v5,
+    rederive_compiler_module_handoff_receipt_for_replay_v5,
+};
 pub use compiler_module_handoff::native_v4::receipt_transport_v2::{
     COMPILER_EXECUTION_RECEIPT_TRANSPORT_MAGIC_V2, COMPILER_EXECUTION_RECEIPT_TRANSPORT_VERSION_V2,
     CompilerExecutionReceiptTransportErrorV2, CompilerExecutionReceiptTransportIdentityV2,
@@ -2148,24 +2178,37 @@ mod tests {
             command.arg("30");
             let ready_fd = ready_child.as_raw_fd();
             let release_fd = release_child.as_raw_fd();
-            // SAFETY: the callback performs only async-signal-safe single-byte descriptor I/O.
+            // SAFETY: the callback uses only async-signal-safe poll and single-byte I/O.
             unsafe {
                 command.pre_exec(move || {
                     let ready = [1_u8];
                     if libc::write(ready_fd, ready.as_ptr().cast(), ready.len()) != 1 {
                         return Err(io::Error::last_os_error());
                     }
+                    // The child also inherited the peer descriptor, so a parent panic/drop
+                    // cannot guarantee EOF. Bound cleanup without releasing the spawn lease
+                    // before exec or terminal child disposal. EINTR fails, never resets time.
+                    let mut readiness = libc::pollfd {
+                        fd: release_fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    match libc::poll(&mut readiness, 1, 10_000) {
+                        -1 => return Err(io::Error::last_os_error()),
+                        0 => return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT)),
+                        _ => {}
+                    }
+                    if readiness.revents & libc::POLLNVAL != 0 {
+                        return Err(io::Error::from_raw_os_error(libc::EBADF));
+                    }
+                    if readiness.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
+                        return Err(io::Error::from_raw_os_error(libc::EIO));
+                    }
                     let mut release = [0_u8];
-                    loop {
-                        let read =
-                            libc::read(release_fd, release.as_mut_ptr().cast(), release.len());
-                        if read == 1 {
-                            return Ok(());
-                        }
-                        let error = io::Error::last_os_error();
-                        if error.kind() != io::ErrorKind::Interrupted {
-                            return Err(error);
-                        }
+                    match libc::read(release_fd, release.as_mut_ptr().cast(), release.len()) {
+                        1 => Ok(()),
+                        0 => Err(io::Error::from_raw_os_error(libc::EPIPE)),
+                        _ => Err(io::Error::last_os_error()),
                     }
                 });
             }

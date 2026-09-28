@@ -47,6 +47,21 @@ pub(crate) const V2: Schema = Schema {
         domain: b"FE2O3/COMPILER-EXECUTION-RECEIPT-CARRIAGE/V2\0",
     },
 };
+pub(crate) const V3: Schema = Schema {
+    version: 3,
+    publication: Wire {
+        magic: *b"F2O3CES3",
+        domain: b"FE2O3/COMPILER-EXECUTION-RECEIPT-PUBLICATION/V3\0",
+    },
+    ack: Wire {
+        magic: *b"F2O3CEA3",
+        domain: b"FE2O3/COMPILER-EXECUTION-RECEIPT-PUBLICATION-ACK/V3\0",
+    },
+    carriage: Wire {
+        magic: *b"F2O3CRG3",
+        domain: b"FE2O3/COMPILER-EXECUTION-RECEIPT-CARRIAGE/V3\0",
+    },
+};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) struct Bindings {

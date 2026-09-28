@@ -1,8 +1,14 @@
 //! Shared move-only transport for native public trust and identity records.
 use crate::sealed_image::{CapabilityRole, SealedCapabilityImage};
 use fe2o3_compiler_execution_protocol::{
-    CompilerExecutionAttestationErrorV2, CompilerExecutionClientProfileErrorV2,
-    CompilerExecutionServiceLaunchManifestErrorV2,
+    CompilerExecutionAttestationErrorV2, CompilerExecutionAttestationErrorV3,
+    CompilerExecutionClientProfileErrorV2, CompilerExecutionClientProfileErrorV3,
+    CompilerExecutionExternalAnchorDeploymentErrorV2,
+    CompilerExecutionExternalAnchorDeploymentErrorV3,
+    CompilerExecutionExternalAnchorProvisioningErrorV2,
+    CompilerExecutionExternalAnchorProvisioningErrorV3, CompilerExecutionNativeJournalErrorV3,
+    CompilerExecutionServiceLaunchManifestErrorV2, CompilerExecutionServiceLaunchManifestErrorV3,
+    CompilerExecutionSupervisorDeploymentErrorV2, CompilerExecutionSupervisorDeploymentErrorV3,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -31,8 +37,18 @@ pub(crate) use CompilerExecutionCapabilityStorageV2 as Storage;
 pub enum CompilerExecutionCapabilityErrorV2 {
     Resource(Resource),
     Policy(CompilerExecutionAttestationErrorV2),
+    PolicyV3(CompilerExecutionAttestationErrorV3),
+    JournalV3(CompilerExecutionNativeJournalErrorV3),
     Profile(CompilerExecutionClientProfileErrorV2),
+    ProfileV3(CompilerExecutionClientProfileErrorV3),
     Launch(CompilerExecutionServiceLaunchManifestErrorV2),
+    LaunchV3(CompilerExecutionServiceLaunchManifestErrorV3),
+    Deployment(CompilerExecutionSupervisorDeploymentErrorV2),
+    DeploymentV3(CompilerExecutionSupervisorDeploymentErrorV3),
+    ExternalAnchorDeployment(CompilerExecutionExternalAnchorDeploymentErrorV2),
+    ExternalAnchorDeploymentV3(CompilerExecutionExternalAnchorDeploymentErrorV3),
+    ExternalAnchorProvisioning(CompilerExecutionExternalAnchorProvisioningErrorV2),
+    ExternalAnchorProvisioningV3(CompilerExecutionExternalAnchorProvisioningErrorV3),
     Io { operation: &'static str, errno: i32 },
     Rejected(&'static str),
 }
@@ -67,9 +83,52 @@ impl From<CompilerExecutionClientProfileErrorV2> for CompilerExecutionCapability
         Self::Profile(value)
     }
 }
+impl From<CompilerExecutionAttestationErrorV3> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionAttestationErrorV3) -> Self {
+        Self::PolicyV3(value)
+    }
+}
+impl From<CompilerExecutionClientProfileErrorV3> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionClientProfileErrorV3) -> Self {
+        Self::ProfileV3(value)
+    }
+}
+impl From<CompilerExecutionServiceLaunchManifestErrorV3> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionServiceLaunchManifestErrorV3) -> Self {
+        Self::LaunchV3(value)
+    }
+}
+impl From<CompilerExecutionNativeJournalErrorV3> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionNativeJournalErrorV3) -> Self {
+        match value {
+            CompilerExecutionNativeJournalErrorV3::Resource(resource) => Self::Resource(resource),
+            error => Self::JournalV3(error),
+        }
+    }
+}
 impl From<CompilerExecutionServiceLaunchManifestErrorV2> for CompilerExecutionCapabilityErrorV2 {
     fn from(value: CompilerExecutionServiceLaunchManifestErrorV2) -> Self {
         Self::Launch(value)
+    }
+}
+impl From<CompilerExecutionSupervisorDeploymentErrorV2> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionSupervisorDeploymentErrorV2) -> Self {
+        Self::Deployment(value)
+    }
+}
+impl From<CompilerExecutionSupervisorDeploymentErrorV3> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionSupervisorDeploymentErrorV3) -> Self {
+        Self::DeploymentV3(value)
+    }
+}
+impl From<CompilerExecutionExternalAnchorDeploymentErrorV2> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionExternalAnchorDeploymentErrorV2) -> Self {
+        Self::ExternalAnchorDeployment(value)
+    }
+}
+impl From<CompilerExecutionExternalAnchorDeploymentErrorV3> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionExternalAnchorDeploymentErrorV3) -> Self {
+        Self::ExternalAnchorDeploymentV3(value)
     }
 }
 impl fmt::Display for CompilerExecutionCapabilityErrorV2 {
@@ -77,8 +136,18 @@ impl fmt::Display for CompilerExecutionCapabilityErrorV2 {
         match self {
             Self::Resource(e) => e.fmt(f),
             Self::Policy(e) => e.fmt(f),
+            Self::PolicyV3(e) => e.fmt(f),
+            Self::JournalV3(e) => e.fmt(f),
             Self::Profile(e) => e.fmt(f),
+            Self::ProfileV3(e) => e.fmt(f),
             Self::Launch(e) => e.fmt(f),
+            Self::LaunchV3(e) => e.fmt(f),
+            Self::Deployment(e) => e.fmt(f),
+            Self::DeploymentV3(e) => e.fmt(f),
+            Self::ExternalAnchorDeployment(e) => e.fmt(f),
+            Self::ExternalAnchorDeploymentV3(e) => e.fmt(f),
+            Self::ExternalAnchorProvisioning(e) => e.fmt(f),
+            Self::ExternalAnchorProvisioningV3(e) => e.fmt(f),
             Self::Io { operation, errno } => {
                 write!(f, "native capability {operation}: errno {errno}")
             }
@@ -91,19 +160,51 @@ impl Error for CompilerExecutionCapabilityErrorV2 {
         match self {
             Self::Resource(e) => Some(e),
             Self::Policy(e) => Some(e),
+            Self::PolicyV3(e) => Some(e),
+            Self::JournalV3(e) => Some(e),
             Self::Profile(e) => Some(e),
+            Self::ProfileV3(e) => Some(e),
             Self::Launch(e) => Some(e),
+            Self::LaunchV3(e) => Some(e),
+            Self::Deployment(e) => Some(e),
+            Self::DeploymentV3(e) => Some(e),
+            Self::ExternalAnchorDeployment(e) => Some(e),
+            Self::ExternalAnchorDeploymentV3(e) => Some(e),
+            Self::ExternalAnchorProvisioning(e) => Some(e),
+            Self::ExternalAnchorProvisioningV3(e) => Some(e),
             Self::Io { .. } | Self::Rejected(_) => None,
         }
     }
 }
 
+impl From<CompilerExecutionExternalAnchorProvisioningErrorV2>
+    for CompilerExecutionCapabilityErrorV2
+{
+    fn from(e: CompilerExecutionExternalAnchorProvisioningErrorV2) -> Self {
+        Self::ExternalAnchorProvisioning(e)
+    }
+}
+impl From<CompilerExecutionExternalAnchorProvisioningErrorV3>
+    for CompilerExecutionCapabilityErrorV2
+{
+    fn from(e: CompilerExecutionExternalAnchorProvisioningErrorV3) -> Self {
+        Self::ExternalAnchorProvisioningV3(e)
+    }
+}
+
 pub(crate) trait Record<const N: usize>: Sized {
+    type Context<'a>: Copy;
     const ROLE: CapabilityRole;
     fn bytes(&self) -> &[u8; N];
     fn retained_storage(&self) -> usize;
+    // Context owners are borrowed, never consumed or included in returned growth.
+    fn context_storage(context: Self::Context<'_>) -> Result<usize>;
     // Reserve the decoded owner's returned charge immediately on this ledger.
-    fn decode_retained(bytes: &[u8; N], budget: &mut Budget<'_>) -> Result<Self>;
+    fn decode_retained(
+        bytes: &[u8; N],
+        context: Self::Context<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<Self>;
 }
 
 pub(crate) struct NativeCapability<T, const N: usize> {
@@ -138,6 +239,7 @@ impl<T: Record<N>, const N: usize> NativeCapability<T, N> {
             8 * size_of::<CompilerExecutionCapabilityErrorV2>()
                 + 64 * size_of::<usize>()
                 + size_of::<LedgerIdentity>()
+                + 4 * size_of::<T::Context<'static>>()
                 + size_of::<std::result::Result<(), Resource>>()
                 + 2 * size_of::<bool>()
                 + 512
@@ -186,11 +288,18 @@ impl<T: Record<N>, const N: usize> NativeCapability<T, N> {
     }
 
     /// Consumes the prepaid File reservation, returning only capability growth.
-    pub(crate) fn from_file(image: File, budget: &mut Budget<'_>) -> Result<(Self, Storage)> {
-        Self::scope(budget, Self::FILE_STORAGE, |budget| {
+    pub(crate) fn from_file(
+        image: File,
+        context: T::Context<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, Storage)> {
+        let floor = Self::FILE_STORAGE
+            .checked_add(T::context_storage(context)?)
+            .ok_or(Resource::Arithmetic)?;
+        Self::scope(budget, floor, |budget| {
             let image = SealedCapabilityImage::from_file_fixed::<N>(image, T::ROLE)?;
             Ok((
-                Self::decode_image(image, budget)?,
+                Self::decode_image(image, context, budget)?,
                 Storage(Self::RETAINED - Self::FILE_STORAGE),
             ))
         })
@@ -198,21 +307,35 @@ impl<T: Record<N>, const N: usize> NativeCapability<T, N> {
 
     /// Borrows an inherited source descriptor. Its reservation stays live;
     /// the distinct retained descriptor/capability returns the FULL charge.
-    pub(crate) fn from_inherited_at(fd: RawFd, budget: &mut Budget<'_>) -> Result<(Self, Storage)> {
-        Self::scope(budget, Self::FILE_STORAGE, |budget| {
+    pub(crate) fn from_inherited_at(
+        fd: RawFd,
+        context: T::Context<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, Storage)> {
+        let floor = Self::FILE_STORAGE
+            .checked_add(T::context_storage(context)?)
+            .ok_or(Resource::Arithmetic)?;
+        Self::scope(budget, floor, |budget| {
             let image = SealedCapabilityImage::from_inherited_fixed::<N>(fd, T::ROLE)?;
-            Ok((Self::decode_image(image, budget)?, Storage(Self::RETAINED)))
+            Ok((
+                Self::decode_image(image, context, budget)?,
+                Storage(Self::RETAINED),
+            ))
         })
     }
 
-    fn decode_image(image: SealedCapabilityImage, budget: &mut Budget<'_>) -> Result<Self> {
+    fn decode_image(
+        image: SealedCapabilityImage,
+        context: T::Context<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<Self> {
         let bytes = image.read_fixed::<N>()?;
-        let record = T::decode_retained(&bytes, budget)?;
+        let record = T::decode_retained(&bytes, context, budget)?;
         Ok(Self { record, image })
     }
 
     fn check(&self) -> Result<()> {
-        // The immutable in-memory record was admitted by its nominal V2
+        // The immutable in-memory record was admitted by its nominal native
         // constructor/decoder. Byte equality therefore needs no second decode.
         if &self.image.read_fixed::<N>()? != self.record.bytes() {
             return Err(CompilerExecutionCapabilityErrorV2::Rejected(
@@ -249,6 +372,21 @@ impl<T: Record<N>, const N: usize> NativeCapability<T, N> {
             Ok(())
         })
     }
+
+    pub(crate) fn inherit_for_child_at(
+        &self,
+        command: &mut std::process::Command,
+        child_fd: RawFd,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        // The caller retains the alias/hook reservation until Command drops.
+        // IO_WORK covers checks, reservation and the child's four descriptor calls;
+        // spawning and Command allocation are separately prepaid by the caller.
+        Self::scope(budget, Self::RETAINED + Self::FILE_STORAGE, |_| {
+            self.check()?;
+            self.image.inherit_fixed(command, child_fd)
+        })
+    }
 }
 
 pub(crate) const fn envelope_overhead<T, E>() -> usize {
@@ -259,3 +397,7 @@ pub(crate) const fn envelope_overhead<T, E>() -> usize {
 #[cfg(test)]
 #[path = "native_capability_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "native_capability_context_tests.rs"]
+mod context_tests;

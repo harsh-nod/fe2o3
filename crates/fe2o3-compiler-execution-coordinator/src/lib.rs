@@ -63,11 +63,60 @@ mod entrypoint;
 #[allow(unsafe_code)]
 mod inherited;
 mod lifecycle;
+mod native;
+mod native_activation;
+mod native_adapter;
+mod native_entrypoint;
+mod native_inherited;
+mod native_inherited_adapter;
+mod native_inherited_v2;
+mod native_inherited_v3;
+mod native_launch;
+mod native_launch_adapter;
+mod native_provisioner;
+mod native_provisioning;
+mod native_root_source;
+mod native_trust_adapter;
+mod native_trust_v2;
+mod native_trust_v3;
+mod native_v2;
+mod native_v3;
 mod provisioning;
 #[allow(unsafe_code)]
 mod provisioning_entrypoint;
+mod runtime_listener;
 
 pub use entrypoint::run_inherited_compiler_execution_coordinator_v1;
+pub use native::{
+    CompilerExecutionPreparationErrorV2, CompilerExecutionPreparationQuotaV2,
+    CompilerExecutionPreparationStorageV2,
+};
+pub use native_entrypoint::run_inherited_compiler_execution_coordinator_v3;
+pub use native_inherited::{
+    CompilerExecutionRootAdmissionQuotaV2, CompilerExecutionRootDeploymentErrorV2,
+    CompilerExecutionRootStorageV2, CompilerExecutionStartupQuotaV2,
+};
+pub use native_inherited_v2::InheritedCompilerExecutionDeploymentV2;
+pub use native_inherited_v3::InheritedCompilerExecutionDeploymentV3;
+pub use native_launch::{
+    CompilerExecutionLaunchErrorV2, CompilerExecutionLaunchQuotaV2,
+    CompilerExecutionLaunchStorageV2,
+};
+pub use native_provisioner::{
+    CompilerExecutionProvisioningInstallErrorV3, run_compiler_execution_reference_provisioner_v3,
+};
+pub use native_provisioning::{
+    CompilerExecutionProvisioningBundleV3, CompilerExecutionProvisioningErrorV3,
+    CompilerExecutionProvisioningInputsV3, CompilerExecutionProvisioningStorageV3,
+};
+pub use native_root_source::RootSourceErrorV2;
+pub use native_trust_adapter::{
+    CompilerExecutionSupervisorTrustErrorV2, CompilerExecutionSupervisorTrustStorageV2,
+};
+pub use native_trust_v2::CompilerExecutionSupervisorTrustV2;
+pub use native_trust_v3::CompilerExecutionSupervisorTrustV3;
+pub use native_v2::{PreparedCompilerExecutionSupervisorV2, RootManagedCompilerExecutionServiceV2};
+pub use native_v3::{PreparedCompilerExecutionSupervisorV3, RootManagedCompilerExecutionServiceV3};
 
 pub use inherited::{
     COMPILER_EXECUTION_COORDINATOR_ANCHOR_DAEMON_FD_V1,

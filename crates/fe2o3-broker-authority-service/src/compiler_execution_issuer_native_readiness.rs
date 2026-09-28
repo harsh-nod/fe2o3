@@ -1,8 +1,6 @@
 //! Private pipe publication after the real service has acquired durable custody.
 use super::{Admission, Budget, Error, Manifest, Policy, Result};
-use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_SERVICE_READY_BYTES_V2 as BYTES, CompilerExecutionServiceReadyV2 as Ready,
-};
+use super::{READY_BYTES as BYTES, Ready};
 use rustix::{
     fs::{FileType, OFlags},
     io::FdFlags,

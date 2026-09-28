@@ -69,6 +69,35 @@ fn quote() -> NativeWorkerReplayResourceQuote {
     .unwrap()
 }
 
+#[test]
+fn conditional_evidence_shell_is_prepaid_without_discounting_the_shared_schedule() {
+    type Evidence = crate::InertConditionalFirstBuildWorkerEvidenceV2;
+    let original = quote();
+    let conditional = original.for_evidence::<Evidence>().unwrap();
+    let extra =
+        size_of::<Evidence>().saturating_sub(size_of::<InertNativeFirstBuildWorkerEvidenceV1>());
+    assert_eq!(conditional.first_build, original.first_build);
+    assert_eq!(
+        conditional.reconstruction_work,
+        original.reconstruction_work + extra
+    );
+    assert_eq!(
+        conditional.reconstruction_storage,
+        original.reconstruction_storage + extra
+    );
+    assert_eq!(original.for_evidence::<()>().unwrap(), original);
+    type Large = [u8; 2 * size_of::<InertNativeFirstBuildWorkerEvidenceV1>()];
+    for exhausted_work in [false, true] {
+        let mut bad = original;
+        if exhausted_work {
+            bad.reconstruction_work = usize::MAX;
+        } else {
+            bad.reconstruction_storage = usize::MAX;
+        }
+        assert!(bad.for_evidence::<Large>().is_err());
+    }
+}
+
 fn v2_dimensions() -> ResponseDimensions {
     ResponseDimensions::from_metadata(metadata())
 }

@@ -461,6 +461,18 @@ impl CompilerModuleHandoffV2 {
         self.canonical_bytes.as_slice()
     }
 
+    /// Complete retained payload allocation extent, including unselected bytes
+    /// and Vec spare capacity. Box/Arc-slice backing reports its full length.
+    /// This excludes envelope/manifest metadata and does not prove reservation.
+    pub fn backing_capacity(&self) -> usize {
+        match &self.canonical_bytes {
+            CanonicalHandoffBytesV2::Vec(bytes) => bytes.capacity(),
+            CanonicalHandoffBytesV2::Box(bytes) => bytes.len(),
+            CanonicalHandoffBytesV2::Shared { backing, .. } => backing.len(),
+            CanonicalHandoffBytesV2::SharedVector { backing, .. } => backing.capacity(),
+        }
+    }
+
     pub fn into_parts(self) -> CompilerModuleHandoffPartsV2 {
         let Self {
             kind,

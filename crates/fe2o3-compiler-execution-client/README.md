@@ -2,21 +2,102 @@
 
 ## Diagnostic Native Client
 
-`CompilerExecutionClientV2` consumes a connected unnamed `SOCK_SEQPACKET` peer
-and exclusively borrows the original canonical resource budget. It supports
+`CompilerExecutionClientV2` and `CompilerExecutionClientV3` consume a connected unnamed `SOCK_SEQPACKET` peer
+and exclusively borrow the original canonical resource budget. They support
 native receipt acquisition, journal-stage recovery, and fresh-challenge
-currentness authentication without converting native owners or retrying V1.
+currentness authentication using actual owners from their own family. Neither
+retries V1 or the other native family. The V3 client joins conditional SubjectV3
+records and uses `verify_native_v3` for currentness; the identity-only
+current-record V3 wire is unchanged. Both share one private exchange body.
 Transport, randomness attempts, protocol work and retained storage use that
 same ledger. Inputs must be prepaid; successful admission transfers the peer's
 charge, which is released when the terminal session closes. On admission
 failure the closed peer's original reservation remains caller-owned. Returned
 values include their full, unreserved logical output charge.
 
+Both native families can instead consume the fixed inherited child slot with
+`admit_inherited_child`. The original account prepays the peer, descriptor
+inspection and private duplication; resource denial still closes the input.
+Successful admission retains one private CLOEXEC duplicate and consumes FD 195.
+No policy-family discovery or decoder fallback occurs at this transport step.
+
 This API is diagnostic: it does **not** activate a protected native issuer.
 Signed fixture transcripts do not prove protected signing-key custody, live
 compiler observation, durable commit-before-publication, independently
 administered anchors, or safe GPU launch. The shipping production route remains
 V1 until those native service integrations are validated.
+
+The consuming `prepare` step lends that same account to compiler preparation.
+It returns the client and prepared value only after checking account identity
+and the inherited storage floor. Errors or unwind close the peer, retain inner
+charges, and never repair a replaced account. Preparation does not extend the
+session deadline. This permits preparation before the terminal exchange without
+a fresh admission budget; it does not select a protected V3 launch policy or
+activate the V3 path in the compiler.
+
+`prepare_and_acquire` connects preparation, subject publication, one receipt
+acquisition and transport completion on that same account. Publication cannot
+run until preparation's postchecks pass and the unchanged deadline is live.
+The publication callback prepays its subject and carries required prepared
+owners forward; the completion callback receives a fully reserved carriage
+after the peer closes. Callbacks cannot refund inherited floors. Inner failure
+or unwind stays charged and never triggers a retry. The caller still supplies
+the real compiler ownership and independently pinned policy; this API does not
+turn callback results or inert records into compiler authority.
+
+The following type example relays an already-published, prepaid inert subject;
+it does not construct compiler preparation or grant publication authority:
+
+```rust
+use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV3 as Subject;
+use fe2o3_compiler_execution_client::{CompilerExecutionClientV3 as Client,
+    CompilerExecutionClientErrorV3 as Error};
+use fe2o3_compiler_execution_protocol::{CompilerExecutionIssuerPolicyV3 as Policy,
+    CompilerExecutionReceiptCarriageV3 as Carriage};
+fn relay(client: Client<'_, '_>, policy: &Policy, subject: Subject) -> Result<Carriage, Error> {
+    client.prepare_and_acquire(policy, |_| Ok(subject),
+        |subject, _| Ok((subject, ())), |carriage, (), _| Ok(carriage))
+}
+```
+
+An original budget borrow cannot escape through the completion result:
+
+```compile_fail
+use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV3 as Subject;
+use fe2o3_compiler_execution_client::{CompilerExecutionClientV3 as Client,
+    CompilerExecutionClientErrorV3 as Error};
+use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerPolicyV3 as Policy;
+use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+fn escape<'b, 'w>(client: Client<'b, 'w>, policy: &Policy, subject: Subject)
+    -> &'b mut Budget<'w> {
+    client.prepare_and_acquire::<_, _, _, Error>(policy, |_| Ok(subject),
+        |subject, _| Ok((subject, ())), |_, (), budget| Ok(budget)).unwrap()
+}
+```
+
+## Native V3 Supervisor Handoff
+
+`CompilerExecutionServiceLaunchV1::handoff_to_supervisor_v3_until` consumes the
+existing child-created descriptor pair, sends a native V3 handoff to the fixed
+supervisor endpoint, and receives one credential-bound V3 readiness packet plus
+EOF. The child-channel V1 suffix versions descriptor construction; this method
+does not admit V1 policy, manifest or readiness records.
+
+Transfer and readiness share one continuously borrowed resource account and one
+absolute deadline. There is no public pending continuation that could outlive
+the account's borrow. Every transport step makes one attempt; EINTR, AGAIN,
+short packets, extra descriptors and trailing packets refuse. Per-message
+credentials distinguish an empty packet from EOF. The returned move-only
+`CompilerExecutionSupervisorReadinessV3` exposes only the manifest and readiness
+records, not descriptors or compiler authority.
+
+Prepay the full profile and `CHILD_LAUNCH_STORAGE`; retain that input reservation
+and add the returned storage growth after success. Both successful and failed
+calls restore entry storage without refunding work or denial history. Child
+preparation/spawning and profile authentication remain caller obligations.
+`HANDOFF_WORK` and `HANDOFF_SCRATCH` bound logical work/storage, not kernel memory,
+OS latency or process RSS. This API is not yet selected by Cargo, client-check or
+the installed deployment, and local fixtures do not establish protected boot.
 
 ## Production V1 Client
 

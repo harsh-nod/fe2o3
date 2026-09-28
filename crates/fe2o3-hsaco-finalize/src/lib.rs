@@ -20,8 +20,12 @@ use fe2o3_kernel_descriptor::{
 
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
+mod conditional_worker_finalization;
+mod conditional_worker_replay;
 mod engineering_hsaco;
 mod first_build_worker_binding;
+mod first_build_worker_conditional;
+mod first_build_worker_conditional_binding;
 mod first_build_worker_engine;
 mod first_build_worker_native;
 mod first_build_worker_native_binding;
@@ -29,6 +33,7 @@ mod first_build_worker_native_resources;
 mod first_build_worker_v3;
 mod link_plan;
 mod native_worker_compact_replay;
+mod native_worker_engine;
 mod native_worker_finalization;
 mod native_worker_publication;
 mod native_worker_replay;
@@ -85,6 +90,11 @@ pub use compiler_ffi_observation::{
     StagedCompilerFfiEnvelopeInspectionV1, StagedCompilerFfiEnvelopeV1,
     stage_compiler_ffi_envelope_v1,
 };
+pub use conditional_worker_finalization::{
+    ConditionalWorkerFinalizationStorageV5, PreparedFinalizedConditionalWorkerHsacoV5,
+    finalize_conditional_worker_hsaco_v5,
+};
+pub use conditional_worker_replay::revalidate_conditional_worker_finalizer_v5;
 pub use engineering_hsaco::{
     EngineeringHsacoErrorV1, EngineeringHsacoObservationV1, EngineeringProviderObservationV1,
     observe_engineering_hsaco_v1,
@@ -103,6 +113,13 @@ pub use fe2o3_compiler_ffi::{
     MAX_COMPILER_FFI_ENVELOPE_BYTES_V1, MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1,
     MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1,
 };
+pub use first_build_worker_conditional::{
+    ConditionalFirstBuildWorkerStorageV2, InertConditionalFirstBuildWorkerEvidenceV2,
+    PreparedConditionalFirstBuildWorkerV2,
+    execute_preflighted_conditional_reproducible_first_build_worker_v2,
+    preflight_conditional_reproducible_first_build_worker_v2,
+};
+pub use first_build_worker_conditional_binding::ProtectedCompilerConditionalHandoffBindingV2;
 pub use first_build_worker_native::{
     InertNativeFirstBuildWorkerEvidenceV1, NativeFirstBuildWorkerErrorV1,
     NativeFirstBuildWorkerIdentityV1, NativeFirstBuildWorkerStorageV1, NativeWorkerDiagnosticV1,
@@ -130,10 +147,12 @@ pub use link_plan::{
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
 };
 pub use native_worker_compact_replay::{
-    MAX_NATIVE_WORKER_COMPACT_FINALIZER_REPLAY_BYTES_V1,
+    ConditionalWorkerCompactFinalizerReplayV5, ConditionalWorkerCompactReplayIdentityV5,
+    ConditionalWorkerReplayCoordinatesV5, MAX_NATIVE_WORKER_COMPACT_FINALIZER_REPLAY_BYTES_V1,
     NativeWorkerCompactFinalizerReplayIdentityV1, NativeWorkerCompactFinalizerReplayV1,
     NativeWorkerCompactReplayErrorV1, NativeWorkerCompactReplayResourcesV1,
     NativeWorkerCompactReplayStorageV1, NativeWorkerReplayCoordinatesV1,
+    prepare_conditional_worker_compact_finalizer_replay_v5,
     prepare_native_worker_compact_finalizer_replay_v1,
     prepare_native_worker_compact_finalizer_replay_v4,
 };
@@ -144,11 +163,16 @@ pub use native_worker_finalization::{
     finalize_native_worker_hsaco_v1, finalize_native_worker_hsaco_v4,
 };
 pub use native_worker_publication::{
-    NativeWorkerHsacoPublicationErrorV1, NativeWorkerHsacoPublicationStorageV1,
-    NativeWorkerPublicationIntentIdentityV1, NativeWorkerPublicationIntentV1,
-    NativeWorkerPublicationPlanIdentityV1, PreparedNativeWorkerHsacoPublicationV1,
-    RecoveredNativeWorkerHsacoPublicationV1, persist_prepared_native_worker_hsaco_publication_v1,
-    prepare_native_worker_hsaco_publication_v1, recover_native_worker_hsaco_publication_v1,
+    ConditionalWorkerHsacoPublicationErrorV5, ConditionalWorkerPublicationIntentV5,
+    ConditionalWorkerRecoveryPolicyV5, NativeWorkerHsacoPublicationErrorV1,
+    NativeWorkerHsacoPublicationStorageV1, NativeWorkerPublicationIntentIdentityV1,
+    NativeWorkerPublicationIntentV1, NativeWorkerPublicationPlanIdentityV1,
+    PreparedConditionalWorkerHsacoPublicationV5, PreparedNativeWorkerHsacoPublicationV1,
+    RecoveredConditionalWorkerHsacoPublicationV5, RecoveredNativeWorkerHsacoPublicationV1,
+    persist_prepared_conditional_worker_hsaco_publication_v5,
+    persist_prepared_native_worker_hsaco_publication_v1,
+    prepare_conditional_worker_hsaco_publication_v5, prepare_native_worker_hsaco_publication_v1,
+    recover_conditional_worker_hsaco_publication_v5, recover_native_worker_hsaco_publication_v1,
 };
 pub use native_worker_replay::{
     NativeWorkerReplayErrorV1, NativeWorkerReplayStorageV1, revalidate_native_worker_finalizer_v1,

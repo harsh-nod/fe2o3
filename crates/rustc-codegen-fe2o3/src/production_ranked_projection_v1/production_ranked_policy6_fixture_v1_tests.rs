@@ -10,6 +10,21 @@ pub(crate) fn with_backend_checked_output_policy6_owned_v1(
     with_backend_checked_output_policy6_roster_v1(profile, |owner, _, budget| next(owner, budget));
 }
 
+pub(crate) fn with_backend_checked_output_policy6_owned_with_storage_limit_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    storage_limit: usize,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    with_backend_checked_output_policy6_roster_with_storage_limit_v1(
+        profile,
+        storage_limit,
+        |owner, _, budget| next(owner, budget),
+    );
+}
+
 pub(crate) fn with_backend_checked_output_policy6_roster_v1(
     profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
     next: impl FnOnce(
@@ -18,26 +33,49 @@ pub(crate) fn with_backend_checked_output_policy6_roster_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
-    with_backend_checked_ranked_bound_v1(profile, |receipt, bound, ranked, budget| {
-        let checked =
-            fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy5_v1(&bound, budget)
+    with_backend_checked_output_policy6_roster_with_storage_limit_v1(
+        profile,
+        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+        next,
+    );
+}
+
+fn with_backend_checked_output_policy6_roster_with_storage_limit_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    storage_limit: usize,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    with_backend_checked_ranked_bound_types_functions_with_storage_limit_v1(
+        profile,
+        None,
+        |_, _| {},
+        storage_limit,
+        |receipt, bound, ranked, budget| {
+            let checked =
+                fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy5_v1(&bound, budget)
+                    .unwrap();
+            budget.reserve_storage(checked.retained_storage()).unwrap();
+            let checked = fe2o3_kernel_opt::continue_checked_canonical_kernel_ir_policy6_v1(
+                &bound, checked, budget,
+            )
+            .unwrap();
+            let storage = checked.retained_storage();
+            budget.reserve_storage(storage).unwrap();
+            let floor = budget.storage();
+            let admitted =
+                fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1::try_admit_v1(
+                    receipt, bound, checked, budget,
+                )
                 .unwrap();
-        budget.reserve_storage(checked.retained_storage()).unwrap();
-        let checked = fe2o3_kernel_opt::continue_checked_canonical_kernel_ir_policy6_v1(
-            &bound, checked, budget,
-        )
-        .unwrap();
-        let storage = checked.retained_storage();
-        budget.reserve_storage(storage).unwrap();
-        let floor = budget.storage();
-        let admitted = fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1::try_admit_v1(
-            receipt, bound, checked, budget,
-        )
-        .unwrap();
-        next(admitted, ranked, budget);
-        assert_eq!(budget.storage(), floor);
-        budget.release_storage(storage).unwrap();
-    });
+            next(admitted, ranked, budget);
+            assert_eq!(budget.storage(), floor);
+            budget.release_storage(storage).unwrap();
+        },
+    );
 }
 
 pub(crate) fn with_backend_erased_output_policy6_owned_v1(

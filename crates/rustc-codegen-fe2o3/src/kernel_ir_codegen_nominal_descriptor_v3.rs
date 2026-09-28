@@ -53,6 +53,24 @@ pub(crate) enum NominalModuleErrorV3 {
 }
 pub(crate) type E = NominalModuleErrorV3;
 pub(crate) type R<T> = Result<T, E>;
+// Only version-neutral mechanics are shared. Source/table queries and stored
+// identity tags remain in their typed V3/V5 callers.
+pub(super) trait TextError: From<Resource> {
+    fn construction(error: CompilerModuleConstructionError) -> Self;
+    fn metadata(rule: &'static str) -> Self;
+    fn panicked() -> Self;
+}
+impl TextError for E {
+    fn construction(error: CompilerModuleConstructionError) -> Self {
+        Self::Construction(error)
+    }
+    fn metadata(rule: &'static str) -> Self {
+        Self::Metadata(rule)
+    }
+    fn panicked() -> Self {
+        Self::Panicked
+    }
+}
 impl From<Resource> for E {
     fn from(e: Resource) -> Self {
         Self::Resource(e)
@@ -86,11 +104,18 @@ pub(crate) fn scoped<'w, T>(
     budget: &mut Budget<'w>,
     run: impl FnOnce(&mut Budget<'w>) -> R<T>,
 ) -> R<T> {
+    scoped_using::<T, E>(budget, run)
+}
+
+pub(super) fn scoped_using<'w, T, F: TextError>(
+    budget: &mut Budget<'w>,
+    run: impl FnOnce(&mut Budget<'w>) -> Result<T, F>,
+) -> Result<T, F> {
     let floor = budget.storage();
     let ledger = budget.work_ledger_identity_v1();
     let slot = budget as *const Budget<'w> as usize;
     let paid = SCOPE_STORAGE
-        .checked_add(size_of::<R<T>>())
+        .checked_add(size_of::<Result<T, F>>())
         .ok_or(Resource::Arithmetic)?;
     budget.reserve_storage(paid)?;
     let mut payloads: [Option<Payload>; 2] = [None, None];
@@ -98,7 +123,7 @@ pub(crate) fn scoped<'w, T>(
         Ok(r) => r,
         Err(p) => {
             payloads[0] = Some(p);
-            Err(E::Panicked)
+            Err(F::panicked())
         }
     };
     let same =
@@ -121,7 +146,7 @@ pub(crate) fn scoped<'w, T>(
     result
 }
 
-fn compare(a: &str, b: &str, budget: &mut Budget<'_>) -> R<Ordering> {
+fn compare<F: TextError>(a: &str, b: &str, budget: &mut Budget<'_>) -> Result<Ordering, F> {
     budget.charge_work(
         a.len()
             .checked_add(b.len())
@@ -130,14 +155,18 @@ fn compare(a: &str, b: &str, budget: &mut Budget<'_>) -> R<Ordering> {
     )?;
     Ok(a.cmp(b))
 }
-fn sort<T>(rows: &mut [T], name: impl Fn(&T) -> &str, budget: &mut Budget<'_>) -> R<()> {
-    fn sift<T>(
+fn sort<T, F: TextError>(
+    rows: &mut [T],
+    name: impl Fn(&T) -> &str,
+    budget: &mut Budget<'_>,
+) -> Result<(), F> {
+    fn sift<T, F: TextError>(
         rows: &mut [T],
         mut root: usize,
         end: usize,
         name: &impl Fn(&T) -> &str,
         budget: &mut Budget<'_>,
-    ) -> R<()> {
+    ) -> Result<(), F> {
         loop {
             budget.charge_work(1)?;
             let left = root
@@ -149,13 +178,13 @@ fn sort<T>(rows: &mut [T], name: impl Fn(&T) -> &str, budget: &mut Budget<'_>) -
             }
             let right = left.checked_add(1).ok_or(Resource::Arithmetic)?;
             let child = if right < end
-                && compare(name(&rows[left]), name(&rows[right]), budget)? == Ordering::Less
+                && compare::<F>(name(&rows[left]), name(&rows[right]), budget)? == Ordering::Less
             {
                 right
             } else {
                 left
             };
-            if compare(name(&rows[root]), name(&rows[child]), budget)? != Ordering::Less {
+            if compare::<F>(name(&rows[root]), name(&rows[child]), budget)? != Ordering::Less {
                 return Ok(());
             }
             budget.charge_work(1)?;
@@ -165,19 +194,26 @@ fn sort<T>(rows: &mut [T], name: impl Fn(&T) -> &str, budget: &mut Budget<'_>) -
     }
     let count = rows.len();
     for root in (0..count / 2).rev() {
-        sift(rows, root, count, &name, budget)?;
+        sift::<T, F>(rows, root, count, &name, budget)?;
     }
     for end in (1..rows.len()).rev() {
         budget.charge_work(1)?;
         rows.swap(0, end);
-        sift(rows, 0, end, &name, budget)?;
+        sift::<T, F>(rows, 0, end, &name, budget)?;
     }
     Ok(())
 }
 
 // The enclosing paid module/closure header owns the Vec headers. This helper
 // pays actual backing only; each initialized String header lives in a Vec slot.
+#[cfg(test)]
 fn payload_vector<T>(count: usize, budget: &mut Budget<'_>) -> R<Vec<T>> {
+    payload_vector_using::<T, E>(count, budget)
+}
+fn payload_vector_using<T, F: TextError>(
+    count: usize,
+    budget: &mut Budget<'_>,
+) -> Result<Vec<T>, F> {
     budget.charge_work(2)?;
     let requested = count
         .checked_mul(size_of::<T>())
@@ -193,7 +229,15 @@ fn payload_vector<T>(count: usize, budget: &mut Budget<'_>) -> R<Vec<T>> {
     budget.reserve_storage(actual.checked_sub(requested).ok_or(Resource::Accounting)?)?;
     Ok(rows)
 }
+#[cfg(test)]
 fn push_name(rows: &mut Vec<String>, name: &str, budget: &mut Budget<'_>) -> R<()> {
+    push_name_using::<E>(rows, name, budget)
+}
+fn push_name_using<F: TextError>(
+    rows: &mut Vec<String>,
+    name: &str,
+    budget: &mut Budget<'_>,
+) -> Result<(), F> {
     budget.charge_work(name.len().checked_add(2).ok_or(Resource::Arithmetic)?)?;
     if rows.len() == rows.capacity() {
         return Err(Resource::Accounting.into());
@@ -213,7 +257,7 @@ fn push_name(rows: &mut Vec<String>, name: &str, budget: &mut Budget<'_>) -> R<(
     rows.push(value);
     Ok(())
 }
-fn preflight(owner: &Owner, budget: &mut Budget<'_>) -> R<()> {
+pub(super) fn preflight<F: TextError>(owner: &Owner, budget: &mut Budget<'_>) -> Result<(), F> {
     // Verified canonical bytes bound every visited record/type/name. The old
     // allocation-free bounds helper traverses only this actual verified graph.
     budget.charge_work(
@@ -225,23 +269,26 @@ fn preflight(owner: &Owner, budget: &mut Budget<'_>) -> R<()> {
             .and_then(|n| n.checked_add(1))
             .ok_or(Resource::Arithmetic)?,
     )?;
-    enforce_compiler_module_bounds(owner.module()).map_err(E::Construction)
+    enforce_compiler_module_bounds(owner.module()).map_err(F::construction)
 }
-fn symbols(owner: &Owner, budget: &mut Budget<'_>) -> R<CompilerModuleSymbolClosureV1> {
+pub(super) fn symbols<F: TextError>(
+    owner: &Owner,
+    budget: &mut Budget<'_>,
+) -> Result<CompilerModuleSymbolClosureV1, F> {
     let module = owner.module();
     let count = module.functions.len();
     let mut value = CompilerModuleSymbolClosureV1 {
-        kernel_entries: payload_vector(module.kernels.len(), budget)?,
-        device_definitions: payload_vector(count, budget)?,
-        internal_helpers: payload_vector(count, budget)?,
-        device_ffi_exports: payload_vector(count, budget)?,
-        external_declarations: payload_vector(
+        kernel_entries: payload_vector_using::<_, F>(module.kernels.len(), budget)?,
+        device_definitions: payload_vector_using::<_, F>(count, budget)?,
+        internal_helpers: payload_vector_using::<_, F>(count, budget)?,
+        device_ffi_exports: payload_vector_using::<_, F>(count, budget)?,
+        external_declarations: payload_vector_using::<_, F>(
             count.checked_mul(2).ok_or(Resource::Arithmetic)?,
             budget,
         )?,
     };
     for kernel in &module.kernels {
-        push_name(&mut value.kernel_entries, kernel.id.as_str(), budget)?;
+        push_name_using::<F>(&mut value.kernel_entries, kernel.id.as_str(), budget)?;
     }
     for function in &module.functions {
         budget.charge_work(
@@ -255,18 +302,18 @@ fn symbols(owner: &Owner, budget: &mut Budget<'_>) -> R<CompilerModuleSymbolClos
         )?;
         match function.role {
             FunctionRole::InternalHelper => {
-                push_name(&mut value.internal_helpers, function.id.as_str(), budget)?;
-                push_name(&mut value.device_definitions, function.id.as_str(), budget)?;
+                push_name_using::<F>(&mut value.internal_helpers, function.id.as_str(), budget)?;
+                push_name_using::<F>(&mut value.device_definitions, function.id.as_str(), budget)?;
             }
             FunctionRole::DeviceFfiExport => {
-                push_name(&mut value.device_ffi_exports, function.id.as_str(), budget)?;
-                push_name(&mut value.device_definitions, function.id.as_str(), budget)?;
+                push_name_using::<F>(&mut value.device_ffi_exports, function.id.as_str(), budget)?;
+                push_name_using::<F>(&mut value.device_definitions, function.id.as_str(), budget)?;
             }
             FunctionRole::ExternalImport
                 if FloatOperation::from_intrinsic_id(&function.id).is_none()
                     && AmdGpuDiagnosticOperation::from_intrinsic_id(&function.id).is_none() =>
             {
-                push_name(
+                push_name_using::<F>(
                     &mut value.external_declarations,
                     function.id.as_str(),
                     budget,
@@ -277,7 +324,7 @@ fn symbols(owner: &Owner, budget: &mut Budget<'_>) -> R<CompilerModuleSymbolClos
     }
     // Paid by preflight plus the per-ID fixed comparison allowance above.
     for name in ocml_link_imports(module) {
-        push_name(&mut value.external_declarations, name, budget)?;
+        push_name_using::<F>(&mut value.external_declarations, name, budget)?;
     }
     for rows in [
         &mut value.kernel_entries,
@@ -286,7 +333,7 @@ fn symbols(owner: &Owner, budget: &mut Budget<'_>) -> R<CompilerModuleSymbolClos
         &mut value.device_ffi_exports,
         &mut value.external_declarations,
     ] {
-        sort(rows, String::as_str, budget)?;
+        sort::<_, F>(rows, String::as_str, budget)?;
     }
     Ok(value)
 }
@@ -294,6 +341,12 @@ pub(crate) fn module_storage(
     module: &InertCompilerModuleTextV1,
     budget: &mut Budget<'_>,
 ) -> R<usize> {
+    module_storage_using::<E>(module, budget)
+}
+pub(super) fn module_storage_using<F: TextError>(
+    module: &InertCompilerModuleTextV1,
+    budget: &mut Budget<'_>,
+) -> Result<usize, F> {
     let mut retained = size_of::<InertCompilerModuleTextV1>()
         .checked_add(module.llvm_ir.capacity())
         .ok_or(Resource::Arithmetic)?;
@@ -320,25 +373,37 @@ pub(crate) fn module_storage(
     }
     Ok(retained)
 }
+#[cfg(test)]
 fn suffix_length(bytes: usize) -> R<usize> {
+    suffix_length_using::<E>(bytes, PREFIX)
+}
+pub(super) fn suffix_length_using<F: TextError>(bytes: usize, section: &str) -> Result<usize, F> {
     let chunks = bytes.checked_add(15).ok_or(Resource::Arithmetic)? / 16;
     bytes
         .checked_mul(6)
         .and_then(|n| chunks.checked_mul(18).and_then(|m| n.checked_add(m)))
-        .and_then(|n| n.checked_add(PREFIX.len()))
+        .and_then(|n| n.checked_add(section.len()))
         .ok_or(Resource::Arithmetic.into())
 }
 fn embedded_text(prefix: &str, wire: &[u8], budget: &mut Budget<'_>) -> R<String> {
+    embedded_text_using::<E>(prefix, wire, PREFIX, budget)
+}
+pub(super) fn embedded_text_using<F: TextError>(
+    prefix: &str,
+    wire: &[u8],
+    section: &str,
+    budget: &mut Budget<'_>,
+) -> Result<String, F> {
     budget.charge_work(prefix.len().checked_add(1).ok_or(Resource::Arithmetic)?)?;
     if prefix.contains(".fe2o3.kd.") {
-        return Err(E::Metadata("descriptor section already present"));
+        return Err(F::metadata("descriptor section already present"));
     }
     let length = prefix
         .len()
-        .checked_add(suffix_length(wire.len())?)
+        .checked_add(suffix_length_using::<F>(wire.len(), section)?)
         .ok_or(Resource::Arithmetic)?;
     if prefix.is_empty() || length > dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES {
-        return Err(E::Metadata("complete native text bound"));
+        return Err(F::metadata("complete native text bound"));
     }
     budget.charge_work(length)?;
     budget.reserve_storage(length)?;
@@ -351,20 +416,8 @@ fn embedded_text(prefix: &str, wire: &[u8], budget: &mut Budget<'_>) -> R<String
             .ok_or(Resource::Accounting)?,
     )?;
     text.push_str(prefix);
-    text.push_str(PREFIX);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    for chunk in wire.chunks(16) {
-        text.push_str("module asm \".byte ");
-        for (index, byte) in chunk.iter().copied().enumerate() {
-            if index != 0 {
-                text.push_str(", ");
-            }
-            text.push_str("0x");
-            text.push(HEX[usize::from(byte >> 4)] as char);
-            text.push(HEX[usize::from(byte & 15)] as char);
-        }
-        text.push_str("\"\n");
-    }
+    text.push_str(section);
+    append_module_asm_bytes(&mut text, wire);
     if text.len() != length {
         return Err(Resource::Accounting.into());
     }
@@ -385,33 +438,38 @@ pub(crate) fn revalidate_source(source: &Source, budget: &mut Budget<'_>) -> R<(
     budget.release_storage(scratch)?;
     Ok(())
 }
-fn contains(rows: &[String], name: &str, budget: &mut Budget<'_>) -> R<()> {
+fn contains<F: TextError>(rows: &[String], name: &str, budget: &mut Budget<'_>) -> Result<(), F> {
     let mut start = 0;
     let mut end = rows.len();
     while start < end {
         budget.charge_work(1)?;
         let mid = start + (end - start) / 2;
-        match compare(&rows[mid], name, budget)? {
+        match compare::<F>(&rows[mid], name, budget)? {
             Ordering::Less => start = mid + 1,
             Ordering::Greater => end = mid,
             Ordering::Equal => return Ok(()),
         }
     }
-    Err(E::Metadata("missing actual symbol"))
+    Err(F::metadata("missing actual symbol"))
 }
-fn expect(rows: &[String], count: &mut usize, name: &str, budget: &mut Budget<'_>) -> R<()> {
-    contains(rows, name, budget)?;
+fn expect<F: TextError>(
+    rows: &[String],
+    count: &mut usize,
+    name: &str,
+    budget: &mut Budget<'_>,
+) -> Result<(), F> {
+    contains::<F>(rows, name, budget)?;
     *count = count.checked_add(1).ok_or(Resource::Arithmetic)?;
     Ok(())
 }
 // This checker walks actual roles and tests membership/counts of the stored
 // sorted lists. It neither calls the producer closure nor reconstructs a manifest
 // from the same stored metadata. No borrowed/owned symbol list is allocated.
-fn check_symbols(
+pub(super) fn check_symbols<F: TextError>(
     owner: &Owner,
     module: &InertCompilerModuleTextV1,
     budget: &mut Budget<'_>,
-) -> R<()> {
+) -> Result<(), F> {
     let lists = [
         &module.kernel_entries,
         &module.device_definitions,
@@ -423,14 +481,14 @@ fn check_symbols(
     for rows in lists {
         budget.charge_work(rows.len().checked_add(1).ok_or(Resource::Arithmetic)?)?;
         for pair in rows.windows(2) {
-            if compare(&pair[0], &pair[1], budget)? != Ordering::Less {
-                return Err(E::Metadata("unordered or duplicate symbol"));
+            if compare::<F>(&pair[0], &pair[1], budget)? != Ordering::Less {
+                return Err(F::metadata("unordered or duplicate symbol"));
             }
         }
     }
     let mut counts = [0usize; 5];
     for root in &owner.module().kernels {
-        expect(lists[0], &mut counts[0], root.id.as_str(), budget)?;
+        expect::<F>(lists[0], &mut counts[0], root.id.as_str(), budget)?;
     }
     for function in &owner.module().functions {
         budget.charge_work(
@@ -444,18 +502,18 @@ fn check_symbols(
         )?;
         let name = function.id.as_str();
         if function.role == FunctionRole::InternalHelper {
-            expect(lists[1], &mut counts[1], name, budget)?;
-            expect(lists[2], &mut counts[2], name, budget)?;
+            expect::<F>(lists[1], &mut counts[1], name, budget)?;
+            expect::<F>(lists[2], &mut counts[2], name, budget)?;
         }
         if function.role == FunctionRole::DeviceFfiExport {
-            expect(lists[1], &mut counts[1], name, budget)?;
-            expect(lists[3], &mut counts[3], name, budget)?;
+            expect::<F>(lists[1], &mut counts[1], name, budget)?;
+            expect::<F>(lists[3], &mut counts[3], name, budget)?;
         }
         let float = FloatOperation::from_intrinsic_id(&function.id);
         let diagnostic = AmdGpuDiagnosticOperation::from_intrinsic_id(&function.id);
         if function.role == FunctionRole::ExternalImport && float.is_none() && diagnostic.is_none()
         {
-            expect(lists[4], &mut counts[4], name, budget)?;
+            expect::<F>(lists[4], &mut counts[4], name, budget)?;
         }
         if let Some(FloatOperation::F32Math {
             function,
@@ -471,9 +529,9 @@ fn check_symbols(
                 F32MathFunction::Ln => "__ocml_log_f32",
                 F32MathFunction::Log2 => "__ocml_log2_f32",
                 F32MathFunction::Log10 => "__ocml_log10_f32",
-                _ => return Err(E::Metadata("invalid OCML intrinsic role")),
+                _ => return Err(F::metadata("invalid OCML intrinsic role")),
             };
-            expect(lists[4], &mut counts[4], external, budget)?;
+            expect::<F>(lists[4], &mut counts[4], external, budget)?;
         }
     }
     budget.charge_work(5)?;
@@ -482,14 +540,56 @@ fn check_symbols(
         .zip(counts)
         .any(|(actual, expected)| actual.len() != expected)
     {
-        return Err(E::Metadata("complete actual symbol closure"));
+        return Err(F::metadata("complete actual symbol closure"));
     }
     budget.release_storage(size_of::<[usize; 5]>() + size_of::<[&Vec<String>; 5]>())?;
     Ok(())
 }
-struct DescriptorName<'a> {
-    entry: &'a str,
-    symbol: &'a str,
+pub(super) struct DescriptorName<'a> {
+    pub(super) entry: &'a str,
+    pub(super) symbol: &'a str,
+}
+pub(super) const DESCRIPTOR_NAMES_HEADER_STORAGE: usize = size_of::<Vec<DescriptorName<'static>>>();
+
+pub(super) fn check_descriptor_names<'a, F: TextError>(
+    module: &InertCompilerModuleTextV1,
+    count: usize,
+    budget: &mut Budget<'_>,
+    mut row: impl FnMut(usize, &mut Budget<'_>) -> Result<DescriptorName<'a>, F>,
+) -> Result<(), F> {
+    let mut names = payload_vector_using::<_, F>(count, budget)?;
+    for index in 0..count {
+        let row = row(index, budget)?;
+        budget.charge_work(1)?;
+        if names.len() == names.capacity() {
+            return Err(Resource::Accounting.into());
+        }
+        names.push(row);
+    }
+    sort::<_, F>(&mut names, |row| row.entry, budget)?;
+    budget.charge_work(1)?;
+    if names.is_empty() || names.len() != module.kernel_entries.len() {
+        return Err(F::metadata("descriptor/kernel closure"));
+    }
+    for (row, name) in names.iter().zip(&module.kernel_entries) {
+        if compare::<F>(row.entry, name, budget)? != Ordering::Equal {
+            return Err(F::metadata("descriptor entry pair"));
+        }
+        budget.charge_work(
+            row.symbol
+                .len()
+                .checked_add(1)
+                .ok_or(Resource::Arithmetic)?,
+        )?;
+        let symbol = row
+            .symbol
+            .strip_suffix(".kd")
+            .ok_or_else(|| F::metadata("descriptor symbol suffix"))?;
+        if compare::<F>(symbol, name, budget)? != Ordering::Equal {
+            return Err(F::metadata("descriptor symbol pair"));
+        }
+    }
+    Ok(())
 }
 fn check_descriptor_symbols(
     module: &InertCompilerModuleTextV1,
@@ -509,43 +609,15 @@ fn check_descriptor_symbols(
             .map_err(E::Source)?;
         budget
             .reserve_storage(DESCRIPTOR_QUERY_STORAGE_V3 + size_of::<Vec<DescriptorName<'_>>>())?;
-        let mut names = payload_vector(table.kernel_count(), budget)?;
-        for index in 0..table.kernel_count() {
+        check_descriptor_names::<E>(module, table.kernel_count(), budget, |index, budget| {
             let row = table
                 .kernel(index, &mut |w| budget.charge_work(w))
                 .map_err(E::Descriptor)?;
-            budget.charge_work(1)?;
-            if names.len() == names.capacity() {
-                return Err(Resource::Accounting.into());
-            }
-            names.push(DescriptorName {
+            Ok(DescriptorName {
                 entry: row.entry_name(),
                 symbol: row.descriptor_symbol(),
-            });
-        }
-        sort(&mut names, |row| row.entry, budget)?;
-        budget.charge_work(1)?;
-        if names.is_empty() || names.len() != module.kernel_entries.len() {
-            return Err(E::Metadata("descriptor/kernel closure"));
-        }
-        for (row, name) in names.iter().zip(&module.kernel_entries) {
-            if compare(row.entry, name, budget)? != Ordering::Equal {
-                return Err(E::Metadata("descriptor entry pair"));
-            }
-            budget.charge_work(
-                row.symbol
-                    .len()
-                    .checked_add(1)
-                    .ok_or(Resource::Arithmetic)?,
-            )?;
-            let symbol = row
-                .symbol
-                .strip_suffix(".kd")
-                .ok_or(E::Metadata("descriptor symbol suffix"))?;
-            if compare(symbol, name, budget)? != Ordering::Equal {
-                return Err(E::Metadata("descriptor symbol pair"));
-            }
-        }
+            })
+        })?;
     }
     budget.release_storage(
         budget
@@ -565,7 +637,7 @@ pub(crate) fn check_nominal_compiler_module_metadata_v3(
     budget: &mut Budget<'_>,
 ) -> R<()> {
     scoped(budget, |budget| {
-        preflight(owner, budget)?;
+        preflight::<E>(owner, budget)?;
         revalidate_source(source, budget)?;
         budget.charge_work(size_of::<CompilerDescriptorSourceIdentityV3>() + 2)?;
         if module.descriptor_source_identity
@@ -573,7 +645,7 @@ pub(crate) fn check_nominal_compiler_module_metadata_v3(
         {
             return Err(E::Metadata("V3 binding tag/identity"));
         }
-        check_symbols(owner, module, budget)?;
+        check_symbols::<E>(owner, module, budget)?;
         check_descriptor_symbols(module, source, budget)
     })
 }
@@ -588,10 +660,10 @@ pub(crate) fn retain_nominal_compiler_module_text_v3(
     budget: &mut Budget<'_>,
 ) -> R<(InertCompilerModuleTextV1, NominalModuleStorageV3)> {
     scoped(budget, |budget| {
-        preflight(owner, budget)?;
+        preflight::<E>(owner, budget)?;
         revalidate_source(source, budget)?;
         budget.reserve_storage(size_of::<InertCompilerModuleTextV1>())?;
-        let closure = symbols(owner, budget)?;
+        let closure = symbols::<E>(owner, budget)?;
         let llvm_ir = embedded_text(llvm22_prefix, source.canonical_bytes(), budget)?;
         let module = InertCompilerModuleTextV1 {
             llvm_ir,
@@ -622,6 +694,7 @@ impl InertCompilerModuleTextV1 {
             None => None,
             Some(DescriptorSourceIdentity::V1(_)) => Some(1),
             Some(DescriptorSourceIdentity::V3(_)) => Some(3),
+            Some(DescriptorSourceIdentity::V5(_)) => Some(5),
         }
     }
 }

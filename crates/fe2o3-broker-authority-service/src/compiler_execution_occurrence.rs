@@ -27,6 +27,11 @@ const OCCURRENCE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-COMPILER-EXECUTIO
 #[path = "compiler_execution_occurrence_native.rs"]
 mod native;
 pub(crate) use native::{NativeOccurrence, NativeOccurrenceError};
+#[path = "compiler_execution_occurrence_native_v3.rs"]
+mod native_v3;
+pub(crate) use native_v3::{
+    NativeOccurrence as NativeOccurrenceV3, NativeOccurrenceError as NativeOccurrenceErrorV3,
+};
 
 enum CompilerExecutionOccurrenceCustodyV1 {
     Current {

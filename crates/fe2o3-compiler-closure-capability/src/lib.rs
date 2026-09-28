@@ -2,10 +2,11 @@
 //!
 //! Record descriptors carry coordination evidence only. Signing-key capabilities carry
 //! service-owned secrets without a direct seed getter. Their transport Files contain readable
-//! secret material and must remain with trusted custody owners. Issuer custody has no signing operation; exact
-//! external-anchor custody can only be consumed into its key after deployment binding is
-//! revalidated. None of these capabilities grants compiler, publication, linking,
-//! receipt-issuance, loading, launch, or execution authority.
+//! secret material and must remain with trusted custody owners. Legacy anchor custody can
+//! be consumed into its raw key; native custody instead retains the key and meters signing.
+//! Signatures authenticate bytes, not the claimed compiler occurrence or durable state.
+//! None of these capabilities alone grants compiler, publication, linking, loading, launch,
+//! or execution authority.
 
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
@@ -17,53 +18,88 @@ use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 
 mod compiler_execution_client_profile;
+mod compiler_execution_client_profile_native;
 mod compiler_execution_client_profile_v2;
+mod compiler_execution_client_profile_v3;
 mod compiler_execution_external_anchor_deployment;
+mod compiler_execution_external_anchor_deployment_native;
+mod compiler_execution_external_anchor_deployment_v2;
+mod compiler_execution_external_anchor_deployment_v3;
 mod compiler_execution_external_anchor_provisioning;
+mod compiler_execution_external_anchor_provisioning_native;
+mod compiler_execution_external_anchor_provisioning_v2;
+mod compiler_execution_external_anchor_provisioning_v3;
 mod compiler_execution_external_anchor_signing_key;
+mod compiler_execution_external_anchor_signing_key_native;
+mod compiler_execution_external_anchor_signing_key_v2;
+mod compiler_execution_external_anchor_signing_key_v3;
 mod compiler_execution_policy;
+mod compiler_execution_policy_native;
 mod compiler_execution_policy_v2;
+mod compiler_execution_policy_v3;
 mod compiler_execution_service_launch;
+mod compiler_execution_service_launch_native;
 mod compiler_execution_service_launch_v2;
+mod compiler_execution_service_launch_v3;
 mod compiler_execution_signing_key;
+mod compiler_execution_signing_key_native;
 mod compiler_execution_signing_key_v2;
+mod compiler_execution_signing_key_v3;
 mod compiler_execution_supervisor_deployment;
+mod compiler_execution_supervisor_deployment_native;
+mod compiler_execution_supervisor_deployment_v2;
+mod compiler_execution_supervisor_deployment_v3;
 mod native_capability;
+#[cfg(test)]
+mod native_policy_inheritance_tests;
+mod native_secret;
 mod rustc_invocation;
 mod sealed_image;
 mod trusted_profile_tree;
 
 pub use compiler_execution_client_profile::CompilerExecutionClientProfileCapabilityV1;
 pub use compiler_execution_client_profile_v2::CompilerExecutionClientProfileCapabilityV2;
+pub use compiler_execution_client_profile_v3::CompilerExecutionClientProfileCapabilityV3;
 pub use compiler_execution_external_anchor_deployment::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
     CompilerExecutionExternalAnchorDeploymentCapabilityV1,
 };
+pub use compiler_execution_external_anchor_deployment_v2::CompilerExecutionExternalAnchorDeploymentCapabilityV2;
+pub use compiler_execution_external_anchor_deployment_v3::CompilerExecutionExternalAnchorDeploymentCapabilityV3;
 pub use compiler_execution_external_anchor_provisioning::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_FD_V1,
     CompilerExecutionExternalAnchorProvisioningCapabilityV1,
 };
+pub use compiler_execution_external_anchor_provisioning_v2::CompilerExecutionExternalAnchorProvisioningCapabilityV2;
+pub use compiler_execution_external_anchor_provisioning_v3::CompilerExecutionExternalAnchorProvisioningCapabilityV3;
 pub use compiler_execution_external_anchor_signing_key::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
     CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
 };
+pub use compiler_execution_external_anchor_signing_key_v2::CompilerExecutionExternalAnchorSigningKeyCapabilityV2;
+pub use compiler_execution_external_anchor_signing_key_v3::CompilerExecutionExternalAnchorSigningKeyCapabilityV3;
 pub use compiler_execution_policy::{
     COMPILER_EXECUTION_POLICY_CHILD_FD_V1, CompilerExecutionPolicyCapabilityV1,
 };
 pub use compiler_execution_policy_v2::CompilerExecutionPolicyCapabilityV2;
+pub use compiler_execution_policy_v3::CompilerExecutionPolicyCapabilityV3;
 pub use compiler_execution_service_launch::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_CHILD_FD_V1,
     CompilerExecutionServiceLaunchCapabilityV1,
 };
 pub use compiler_execution_service_launch_v2::CompilerExecutionServiceLaunchCapabilityV2;
+pub use compiler_execution_service_launch_v3::CompilerExecutionServiceLaunchCapabilityV3;
 pub use compiler_execution_signing_key::{
     COMPILER_EXECUTION_SIGNING_KEY_ISSUER_FD_V1, CompilerExecutionSigningKeyCapabilityV1,
 };
 pub use compiler_execution_signing_key_v2::CompilerExecutionSigningKeyCapabilityV2;
+pub use compiler_execution_signing_key_v3::CompilerExecutionSigningKeyCapabilityV3;
 pub use compiler_execution_supervisor_deployment::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1,
     CompilerExecutionSupervisorDeploymentCapabilityV1,
 };
+pub use compiler_execution_supervisor_deployment_v2::CompilerExecutionSupervisorDeploymentCapabilityV2;
+pub use compiler_execution_supervisor_deployment_v3::CompilerExecutionSupervisorDeploymentCapabilityV3;
 pub use native_capability::{
     CompilerExecutionCapabilityErrorV2, CompilerExecutionCapabilityStorageV2,
 };

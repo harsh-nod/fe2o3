@@ -15,6 +15,38 @@ use fe2o3_compiler_execution_client::{
 static RESERVED_FD_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
+fn policy_channel_preflight_preserves_either_occupied_slot() {
+    use fe2o3_compiler_closure_capability::COMPILER_EXECUTION_POLICY_CHILD_FD_V1 as POLICY;
+    let _guard = RESERVED_FD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for target in [COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, POLICY] {
+        PendingCompilerExecutionChildChannelV1::preflight_with_issuer_policy().unwrap();
+        let file = File::open("/dev/null").unwrap();
+        let occupied = rustix::io::fcntl_dupfd_cloexec(&file, target).unwrap();
+        assert_eq!(occupied.as_raw_fd(), target);
+        let before = rustix::fs::fstat(&occupied).unwrap();
+        let flags = rustix::io::fcntl_getfd(&occupied).unwrap();
+        let error =
+            PendingCompilerExecutionChildChannelV1::preflight_with_issuer_policy().unwrap_err();
+        assert!(match error {
+            CompilerExecutionChildChannelErrorV1::ReservedDescriptorInUse =>
+                target == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+            CompilerExecutionChildChannelErrorV1::ReservedPolicyDescriptorInUse => target == POLICY,
+            _ => false,
+        });
+        let after = rustix::fs::fstat(&occupied).unwrap();
+        assert_eq!(
+            (before.st_dev, before.st_ino, before.st_mode),
+            (after.st_dev, after.st_ino, after.st_mode)
+        );
+        assert_eq!(rustix::io::fcntl_getfd(&occupied).unwrap(), flags);
+        drop(occupied);
+        PendingCompilerExecutionChildChannelV1::preflight_with_issuer_policy().unwrap();
+    }
+}
+
+#[test]
 fn child_creates_exact_pid_bound_service_channel() {
     let _guard = RESERVED_FD_LOCK
         .lock()

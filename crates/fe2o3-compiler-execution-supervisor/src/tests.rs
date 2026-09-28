@@ -903,7 +903,7 @@ fn session_timeouts() -> ProtectedIssuerSessionTimeoutsV1 {
     .unwrap()
 }
 
-fn bound_named_seqpacket_socket(path: &Path) -> OwnedFd {
+pub(super) fn bound_named_seqpacket_socket(path: &Path) -> OwnedFd {
     let socket = socket_with(
         AddressFamily::UNIX,
         SocketType::SEQPACKET,

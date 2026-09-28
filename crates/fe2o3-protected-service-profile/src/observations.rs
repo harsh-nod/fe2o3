@@ -18,8 +18,14 @@ use std::{fmt, mem::size_of};
 mod bounded_io;
 #[path = "child_namespace_report.rs"]
 mod child_report;
+#[path = "observation_invocation.rs"]
+mod invocation;
 #[path = "observation_status.rs"]
 mod status;
+pub use invocation::{
+    DESCRIPTOR_INVOCATION_SCRATCH, DESCRIPTOR_INVOCATION_WORK, MAX_DESCRIPTOR_ARGV0_BYTES,
+    require_descriptor_only_invocation,
+};
 
 #[cfg(test)]
 pub(crate) use child_report::current_namespace_report_for_test;
@@ -65,6 +71,11 @@ const STATUS_SCRATCH: usize = MAX_PROC_STATUS_BYTES
     + 8 * size_of::<Error>()
     + 1024;
 const CEILING_SCRATCH: usize = MAX_CAP_LAST_CAP_BYTES + 1 + 1024;
+
+/// Work to observe the bounded kernel capability ceiling, including descriptor cleanup.
+pub const CAPABILITY_CEILING_WORK: usize = CEILING_WORK;
+/// Fixed staging allowance for `read_cap_last_cap`; not generated stack or RSS.
+pub const CAPABILITY_CEILING_SCRATCH: usize = CEILING_SCRATCH;
 
 /// Worst-case work for `validate_process` and `ProcessProfile::revalidate_process`.
 pub const PROCESS_VALIDATE_WORK: usize = STATUS_WORK;
@@ -312,7 +323,10 @@ pub fn require_owned_sigchld() -> Result<(), Error> {
     Ok(())
 }
 
-fn read_cap_last_cap() -> Result<u32, Error> {
+/// Observes a capability ceiling in 0..=63 using a fixed buffer and finite reads.
+/// Prepay CAPABILITY_CEILING_WORK/SCRATCH before entry. EINTR fails closed.
+/// This inert configuration value grants no process or deployment authority.
+pub fn read_cap_last_cap() -> Result<u32, Error> {
     let file = bounded_io::open(
         c"/proc/sys/kernel/cap_last_cap",
         "read kernel capability ceiling",

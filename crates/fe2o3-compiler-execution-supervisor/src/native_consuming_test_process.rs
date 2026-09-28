@@ -38,6 +38,14 @@ const MAX_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
 #[path = "native_issuer_test_process.rs"]
 mod native_issuer;
 
+#[path = "native_consuming_family_tests.rs"]
+mod family;
+pub(crate) use family::{Family, Mode};
+#[path = "native_session_process_tests.rs"]
+mod session;
+#[path = "native_consuming_v3_process_tests.rs"]
+mod v3;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Case {
     Ready,
@@ -68,12 +76,7 @@ impl Case {
     }
 
     pub(crate) fn image_env(self) -> &'static str {
-        match self {
-            Self::Ready => "FE2O3_NATIVE_READY_FIXTURE_READY",
-            Self::MissingEof => "FE2O3_NATIVE_READY_FIXTURE_NO_EOF",
-            Self::Trailing => "FE2O3_NATIVE_READY_FIXTURE_TRAILING",
-            Self::DropBeforeReady => "FE2O3_NATIVE_READY_FIXTURE_SILENT",
-        }
+        Family::V2.image_env(self)
     }
 }
 
@@ -143,29 +146,33 @@ impl MeasuredImage {
 #[test]
 #[ignore = "opt-in isolated root container; real static native readiness and publication"]
 fn native_consuming_ready() {
-    coordinate(Case::Ready);
+    coordinate(Case::Ready, Family::V2);
 }
 
 #[test]
 #[ignore = "opt-in isolated root container; native readiness without private EOF"]
 fn native_consuming_missing_eof() {
-    coordinate(Case::MissingEof);
+    coordinate(Case::MissingEof, Family::V2);
 }
 
 #[test]
 #[ignore = "opt-in isolated root container; native readiness with trailing data"]
 fn native_consuming_trailing() {
-    coordinate(Case::Trailing);
+    coordinate(Case::Trailing, Family::V2);
 }
 
 #[test]
 #[ignore = "opt-in isolated root container; drop live native custody before readiness"]
 fn native_consuming_drop_before_ready() {
-    coordinate(Case::DropBeforeReady);
+    coordinate(Case::DropBeforeReady, Family::V2);
 }
 
-fn coordinate(case: Case) {
-    assert_eq!(std::env::var(OPT_IN).as_deref(), Ok("1"));
+fn coordinate(case: Case, family: Family) {
+    coordinate_mode(case, family, Mode::Stages);
+}
+
+fn coordinate_mode(case: Case, family: Family, mode: Mode) {
+    assert_eq!(std::env::var(mode.opt_in(family)).as_deref(), Ok("1"));
     assert_eq!(rustix::process::getuid().as_raw(), 0);
     assert_eq!(rustix::process::geteuid().as_raw(), 0);
     assert_eq!(rustix::process::getegid().as_raw(), 0);
@@ -195,7 +202,7 @@ fn coordinate(case: Case) {
     assert!(cap_last <= 63);
     // Fail on missing inputs before starting any persistent fixture role.
     drop(MeasuredImage::from_env("FE2O3_STATIC_PREEXEC_LAUNCHER"));
-    drop(MeasuredImage::from_env(case.image_env()));
+    drop(MeasuredImage::from_env(family.image_env(case)));
 
     let (anchor_control, child_control) = pair();
     let mut anchor = spawn_role(
@@ -213,14 +220,19 @@ fn coordinate(case: Case) {
 
     let (submitter_control, child_control) = pair();
     let mut submitter = spawn_role(
-        "handoff_v2_test_process::native_consuming_submitter_process_helper",
-        "native-consuming-submitter",
+        mode.submitter_helper(family),
+        mode.submitter_role(family),
         65_532,
         child_control,
     );
-    send_packet(&submitter_control, &frame(b"NCF2", case.id()), &[]).unwrap();
+    send_packet(
+        &submitter_control,
+        &frame(mode.case_tag(family), case.id()),
+        &[],
+    )
+    .unwrap();
     let (supervisor_control, child_control) = pair();
-    let mut supervisor = spawn_locked_supervisor(case, cap_last, child_control);
+    let mut supervisor = spawn_locked_supervisor(case, family, mode, cap_last, child_control);
     assert_eq!(
         rustix::thread::capabilities_secure_bits().unwrap(),
         parent_securebits
@@ -249,22 +261,31 @@ fn coordinate(case: Case) {
             .unwrap()
             .success()
     );
-    eprintln!("native consuming {case:?}: verified completion packet and all role exits");
+    eprintln!("native {mode:?} {family:?} {case:?}: verified completion packet and all role exits");
 }
 
-fn spawn_locked_supervisor(case: Case, cap_last: u32, control: OwnedFd) -> ChildGuard {
+fn spawn_locked_supervisor(
+    case: Case,
+    family: Family,
+    mode: Mode,
+    cap_last: u32,
+    control: OwnedFd,
+) -> ChildGuard {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args([
             "--exact",
-            "native_consuming_test_process::locked_supervisor_process_helper",
+            mode.supervisor_helper(family),
             "--ignored",
             "--nocapture",
             "--test-threads=1",
         ])
-        .env(ROLE, "native-consuming-supervisor")
+        .env(ROLE, mode.supervisor_role(family))
         .env(CASE, case.id().to_string())
-        .env_remove(OPT_IN)
+        .env_remove(Family::V2.opt_in())
+        .env_remove(Family::V3.opt_in())
+        .env_remove(Mode::Session.opt_in(Family::V2))
+        .env_remove(Mode::Session.opt_in(Family::V3))
         .env_remove("FE2O3_RUN_PRIVILEGED_SUPERVISOR_V2_TEST");
     spawn_locked_role(command, cap_last, control)
 }
@@ -345,10 +366,22 @@ fn install_profile(cap_last: u32) -> io::Result<()> {
 #[test]
 #[ignore = "private locked supervisor role, selected only by the consuming coordinator"]
 fn locked_supervisor_process_helper() {
+    locked_supervisor(Family::V2, crate::launch_v2::tests::exercise_consuming);
+}
+
+fn locked_supervisor(family: Family, exercise: fn(Case, &OwnedFd, &OwnedFd, &OwnedFd)) {
+    locked_supervisor_mode(family, Mode::Stages, exercise);
+}
+
+fn locked_supervisor_mode(
+    family: Family,
+    mode: Mode,
+    exercise: fn(Case, &OwnedFd, &OwnedFd, &OwnedFd),
+) {
     // Dynamic libtest exec resets dumpability. This is test bootstrap, not
     // evidence of the static issuer's secure entry or a native profile bypass.
     rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable).unwrap();
-    require_child_credentials("native-consuming-supervisor", SUPERVISOR_UID);
+    require_child_credentials(mode.supervisor_role(family), SUPERVISOR_UID);
     let case = Case::from_id(std::env::var(CASE).unwrap().parse().unwrap());
     let control = inherited_control();
     let (payload, [peer, pidfd, submitter]) =
@@ -356,7 +389,7 @@ fn locked_supervisor_process_helper() {
     assert_eq!(&payload[..4], b"ANC2");
     let anchor_pid = u32::from_le_bytes(payload[4..].try_into().unwrap());
     assert_ne!(anchor_pid, 0);
-    crate::launch_v2::tests::exercise_consuming(case, &peer, &pidfd, &submitter);
+    exercise(case, &peer, &pidfd, &submitter);
     send_packet(&submitter, &frame(b"STOP", 0), &[]).unwrap();
     let (completed, []) = receive_packet::<0>(&submitter, Instant::now() + IO_TIMEOUT).unwrap();
     assert_eq!(&completed[..4], b"DONE");

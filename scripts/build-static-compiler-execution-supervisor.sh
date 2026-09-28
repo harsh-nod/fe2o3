@@ -3,9 +3,21 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly repo_root
-readonly target_dir="${FE2O3_STATIC_SUPERVISOR_TARGET_DIR:-${repo_root}/target/static-supervisor}"
+if [[ $# -gt 1 ]]; then
+  printf 'usage: %s [v1|v2|v3]\n' "$0" >&2
+  exit 2
+fi
+case "${1:-v1}" in
+  v1) suffix="" ;;
+  v2|v3) suffix="-$1" ;;
+  *) printf 'unknown compiler-execution supervisor family: %s\n' "$1" >&2; exit 2 ;;
+esac
+readonly suffix
+readonly binary="fe2o3-compiler-execution-supervisor${suffix}"
+readonly target_dir="${FE2O3_STATIC_SUPERVISOR_TARGET_DIR:-${repo_root}/target/static-supervisor${suffix}}"
+readonly profile_target_dir="${FE2O3_STATIC_SUPERVISOR_PROFILE_TARGET_DIR:-${target_dir}/profile-test}"
 readonly target="x86_64-unknown-linux-musl"
-readonly executable="${target_dir}/${target}/release/fe2o3-compiler-execution-supervisor"
+readonly executable="${target_dir}/${target}/release/${binary}"
 
 cd -- "${repo_root}"
 CARGO_TARGET_DIR="${target_dir}" cargo rustc \
@@ -13,7 +25,7 @@ CARGO_TARGET_DIR="${target_dir}" cargo rustc \
   --release \
   --target "${target}" \
   -p fe2o3-compiler-execution-supervisor \
-  --bin fe2o3-compiler-execution-supervisor \
+  --bin "${binary}" \
   -- \
   -C target-feature=+crt-static \
   -C relocation-model=static \
@@ -21,7 +33,7 @@ CARGO_TARGET_DIR="${target_dir}" cargo rustc \
   -C link-arg=-no-pie \
   -C link-arg=-Wl,-e,fe2o3_secure_start_v1
 
-readonly report="${target_dir}/fe2o3-compiler-execution-supervisor.readelf.txt"
+readonly report="${target_dir}/${binary}.readelf.txt"
 /usr/bin/readelf -hW -lW -dW -sW -- "${executable}" >"${report}"
 /usr/bin/grep -Eq 'Class:[[:space:]]+ELF64' "${report}"
 /usr/bin/grep -Eq 'Type:[[:space:]]+EXEC' "${report}"
@@ -47,7 +59,7 @@ if [[ -n "${undefined_symbols}" ]]; then
 fi
 
 FE2O3_STATIC_COMPILER_EXECUTION_SUPERVISOR="${executable}" \
-  CARGO_TARGET_DIR="${target_dir}/profile-test" \
+  CARGO_TARGET_DIR="${profile_target_dir}" \
   cargo test --locked -p fe2o3-compiler-execution-supervisor \
     --test static_image \
     release_image_is_loader_independent_static_elf \
@@ -55,7 +67,7 @@ FE2O3_STATIC_COMPILER_EXECUTION_SUPERVISOR="${executable}" \
 
 set +e
 smoke_output="$({ /usr/bin/env -i "${executable}" \
-  3<&- 4<&- 5<&- 6<&- 7<&- 8<&- 9<&- 10<&- 11<&- 220<&-; } 2>&1)"
+  3<&- 4<&- 5<&- 6<&- 7<&- 8<&- 9<&- 10<&- 11<&- 12<&- 220<&-; } 2>&1)"
 smoke_status=$?
 set -e
 if [[ ${smoke_status} -ne 1 || -n "${smoke_output}" ]]; then

@@ -8,6 +8,8 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+#[path = "production_pipeline_conditional_preparation_tests.rs"]
+mod preparation_tests;
 #[path = "production_pipeline_conditional_final_results_v1.rs"]
 mod results;
 #[path = "production_pipeline_conditional_final_results_v1_tests.rs"]
@@ -21,11 +23,107 @@ static LATE_MODE: AtomicUsize = AtomicUsize::new(0);
 static FAULT_OBSERVED: AtomicBool = AtomicBool::new(false);
 static FINAL_IDENTITY: Mutex<Option<results::Identity>> = Mutex::new(None);
 static TARGET: AtomicUsize = AtomicUsize::new(0);
+static BRIDGE: Mutex<BridgeVisit> = Mutex::new(BridgeVisit::Uncalled);
 const ARGS: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_ARGS";
 const ARGS_SHA256: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_ARGS_SHA256";
 const PROFILE: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_TARGET";
 const MODE: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_MODE";
 const RESULT: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_RESULT";
+
+#[test]
+fn conditional_normal_entry_reaches_f_before_ordinary_attachment() {
+    // Source wiring only, not protected compiler or proof execution evidence.
+    let source = include_str!("production_pipeline.rs");
+    let normal = source
+        .split_once("pub(crate) fn lower_production_target(")
+        .unwrap()
+        .1
+        .split_once("pub(crate) fn export_simulation_bundle_v1(")
+        .unwrap()
+        .0;
+    let verify = normal.find(".verify_general_kernel_checks()?").unwrap();
+    let branch = normal
+        .find("if ranked.has_direct_conditional_roots_v2()")
+        .unwrap();
+    let refusal = normal
+        .find("return Err(ranked.conditional_production_finalizer_refusal_v5(target_budget));")
+        .unwrap();
+    let attach = normal.find(".attach_target_neutral_checks()?").unwrap();
+    assert!(verify < branch && branch < refusal && refusal < attach);
+
+    let prefix = include_str!("production_pipeline_conditional_prefix_v1.rs");
+    let entry = prefix
+        .split_once("fn conditional_production_finalizer_refusal_v5(")
+        .unwrap()
+        .1
+        .split_once("pub(crate) fn has_direct_conditional_roots_v2(")
+        .unwrap()
+        .0;
+    assert!(!entry.contains("WorkBudgetV1::new("));
+    assert!(!entry.contains("Budget::new("));
+    assert!(entry.contains("budget: &mut Budget<'_>"));
+    assert!(entry.contains("self.conditional_finalizer_refusal_v2("));
+    assert!(entry.contains("CanonicalKirLoopLimitsV1::default()"));
+    assert!(entry.contains("CanonicalKirCrossBlockForwardingLimitsV1::default()"));
+    assert!(!entry.contains("reserve_storage"));
+    assert!(!entry.contains("release_storage"));
+}
+
+// This records the outer call/return/install only, not internal import counts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BridgeVisit {
+    Uncalled,
+    Called(bridge::ObservedContentV5),
+    Completed(bridge::ObservedContentV5),
+    Installed(bridge::ObservedContentV5),
+}
+impl BridgeVisit {
+    fn call(&mut self, content: bridge::ObservedContentV5) -> Result<(), &'static str> {
+        if *self != Self::Uncalled {
+            return Err("duplicate bridge consumer call");
+        }
+        *self = Self::Called(content);
+        Ok(())
+    }
+
+    fn complete(&mut self) -> Result<(), &'static str> {
+        let Self::Called(content) = *self else {
+            return Err("bridge completion without exactly one pending call");
+        };
+        *self = Self::Completed(content);
+        Ok(())
+    }
+
+    fn install(&mut self) -> Result<bridge::ObservedContentV5, &'static str> {
+        let Self::Completed(content) = *self else {
+            return Err("installation without exactly one completed bridge");
+        };
+        *self = Self::Installed(content);
+        Ok(content)
+    }
+}
+
+pub(super) fn observing_bridge() -> bool {
+    OBSERVING.load(Ordering::SeqCst)
+}
+
+pub(super) fn bridge_consumer_called(content: bridge::ObservedContentV5) {
+    if observing_bridge() {
+        assert_eq!(AGREEMENTS.load(Ordering::SeqCst), 1);
+        assert_eq!(REPLAY_COMPLETED.load(Ordering::SeqCst), 1);
+        assert_eq!(INSTALLED.load(Ordering::SeqCst), 0);
+        let result = BRIDGE.lock().unwrap().call(content);
+        result.unwrap();
+    }
+}
+
+pub(super) fn bridge_completed() {
+    if observing_bridge() {
+        assert_eq!(INSTALLED.load(Ordering::SeqCst), 0);
+        let result = BRIDGE.lock().unwrap().complete();
+        result.unwrap();
+    }
+}
 
 fn identity(output: &Owner) -> results::Identity {
     let identity = output.canonical().identity();
@@ -65,6 +163,8 @@ pub(super) fn source_replayed() -> Result<(), ProductionPipelineError> {
 
 pub(super) fn installed(value: &ConditionalPrefixForFV1) {
     if OBSERVING.load(Ordering::SeqCst) {
+        let called = BRIDGE.lock().unwrap().install();
+        value.content.assert_observed_v5(value, called.unwrap());
         assert_eq!(AGREEMENTS.load(Ordering::SeqCst), 1);
         assert_eq!(REPLAY_COMPLETED.load(Ordering::SeqCst), 1);
         assert!(value.preparation.ranked.has_conditional_roots_v1());
@@ -88,6 +188,57 @@ pub(super) fn installed(value: &ConditionalPrefixForFV1) {
 }
 
 #[test]
+fn conditional_bridge_observer_requires_call_completion_install_order() {
+    // Local diagnostic state only; no source, Request, proof or owner fixture.
+    let content = bridge::ObservedContentV5::from_bytes([b"fixture"; 5]);
+    let mut visit = BridgeVisit::Uncalled;
+    for expected in [
+        BridgeVisit::Uncalled,
+        BridgeVisit::Called(content),
+        BridgeVisit::Completed(content),
+        BridgeVisit::Installed(content),
+    ] {
+        assert_eq!(visit, expected);
+        let before = visit;
+        if expected != BridgeVisit::Uncalled {
+            assert!(visit.call(content).is_err());
+            assert_eq!(visit, before);
+        }
+        if !matches!(expected, BridgeVisit::Called(_)) {
+            assert!(visit.complete().is_err());
+            assert_eq!(visit, before);
+        }
+        if !matches!(expected, BridgeVisit::Completed(_)) {
+            assert!(visit.install().is_err());
+            assert_eq!(visit, before);
+        }
+        match expected {
+            BridgeVisit::Uncalled => visit.call(content).unwrap(),
+            BridgeVisit::Called(_) => visit.complete().unwrap(),
+            BridgeVisit::Completed(_) => assert_eq!(visit.install().unwrap(), content),
+            BridgeVisit::Installed(_) => {}
+        }
+    }
+}
+
+#[test]
+fn conditional_bridge_observer_stamps_every_member_in_order() {
+    let bytes: [&[u8]; 5] = [b"packet", b"history", b"catalog", b"descriptor", b"text"];
+    let observed = bridge::ObservedContentV5::from_bytes(bytes);
+    assert_eq!(observed, bridge::ObservedContentV5::from_bytes(bytes));
+    for index in 0..bytes.len() {
+        for substitute in [b"changed".as_slice(), b"".as_slice()] {
+            let mut changed = bytes;
+            changed[index] = substitute;
+            assert_ne!(observed, bridge::ObservedContentV5::from_bytes(changed));
+        }
+    }
+    let mut swapped = bytes;
+    swapped.swap(0, 1);
+    assert_ne!(observed, bridge::ObservedContentV5::from_bytes(swapped));
+}
+
+#[test]
 fn conditional_packet_terminal_error_and_unwind_are_not_refunded_by_f_entry() {
     use crate::production_native_source_lineage_v1::ConditionalPacketErrorV2 as PacketError;
     for unwind in [false, true] {
@@ -96,16 +247,20 @@ fn conditional_packet_terminal_error_and_unwind_are_not_refunded_by_f_entry() {
         budget.reserve_storage(19).unwrap();
         let account = budget.work_ledger_identity_v1();
         let result = catch_unwind(AssertUnwindSafe(|| {
-            conditional_refusal(&mut budget, |budget| {
-                budget.reserve_storage(23).map_err(resource)?;
-                budget.charge_work(7).map_err(resource)?;
-                if unwind {
-                    panic!("component terminal failure");
-                }
-                Err(ProductionPipelineError::conditional_packet_v2(
-                    PacketError::Resource(Resource::Accounting),
-                ))
-            })
+            conditional_refusal(
+                &mut budget,
+                |budget| {
+                    budget.reserve_storage(23).map_err(resource)?;
+                    budget.charge_work(7).map_err(resource)?;
+                    if unwind {
+                        panic!("component terminal failure");
+                    }
+                    Err(ProductionPipelineError::conditional_packet_v2(
+                        PacketError::Resource(Resource::Accounting),
+                    ))
+                },
+                |error, _| error,
+            )
         }));
         assert_eq!(result.is_err(), unwind);
         assert_eq!(budget.storage(), 42);
@@ -123,23 +278,27 @@ fn conditional_packet_refusal_scope_releases_only_completed_gate_and_checks_acco
         let mut foreign = Work::new(100);
         let mut budget = Budget::new(&mut work, 100);
         budget.reserve_storage(19).unwrap();
-        let error = conditional_refusal(&mut budget, |budget| {
-            budget.reserve_storage(23).map_err(resource)?;
-            let gate = ProductionPipelineError::RankedVerification(
-                RankedError::ConditionalFinalizerRequired { root: 0 },
-            );
-            if mode == 1 {
-                return Err(gate);
-            }
-            if mode == 2 {
-                budget.release_storage(24).map_err(resource)?;
-            }
-            if mode == 3 {
-                *budget = Budget::new(&mut foreign, 100);
-                budget.reserve_storage(42).map_err(resource)?;
-            }
-            Ok(gate)
-        });
+        let error = conditional_refusal(
+            &mut budget,
+            |budget| {
+                budget.reserve_storage(23).map_err(resource)?;
+                let gate = ProductionPipelineError::RankedVerification(
+                    RankedError::ConditionalFinalizerRequired { root: 0 },
+                );
+                if mode == 1 {
+                    return Err(gate);
+                }
+                if mode == 2 {
+                    budget.release_storage(24).map_err(resource)?;
+                }
+                if mode == 3 {
+                    *budget = Budget::new(&mut foreign, 100);
+                    budget.reserve_storage(42).map_err(resource)?;
+                }
+                Ok(gate)
+            },
+            |error, _| error,
+        );
         if mode < 2 {
             assert!(matches!(
                 error,
@@ -389,7 +548,13 @@ impl rustc_driver::Callbacks for Callbacks {
         );
         let work_limit =
             usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap();
-        let storage_limit = crate::production_canonical_phase_policy_v1::STORAGE_LIMIT;
+        // F serializes the complete native history on this original account;
+        // fixed6 and early resource controls retain their original limits.
+        let storage_limit = if self.mode == "f" || self.mode.starts_with("late-") {
+            fe2o3_compiler_ffi::MAX_INERT_REFINED_FORWARDING_STORAGE_V1
+        } else {
+            crate::production_canonical_phase_policy_v1::STORAGE_LIMIT
+        };
         let mut work = Work::new(if self.mode == "work" { 0 } else { work_limit });
         let mut budget = Budget::new(
             &mut work,
@@ -423,9 +588,40 @@ impl rustc_driver::Callbacks for Callbacks {
                 .expect("conditional F prefix must not produce native output")
         };
         OBSERVING.store(false, Ordering::SeqCst);
-        assert_eq!(std::ptr::from_mut(&mut budget), address);
-        assert!(budget.work_ledger_identity_v1() == account);
-        assert_eq!(budget.storage(), 19);
+        let visit = *BRIDGE.lock().unwrap();
+        let resources = (
+            budget.work(),
+            budget.storage(),
+            budget.peak_storage(),
+            budget.failed_work(),
+            budget.failed_storage(),
+        );
+        if self.mode == "f" {
+            assert!(
+                matches!(visit, BridgeVisit::Installed(_)),
+                "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
+            );
+        } else {
+            assert_eq!(
+                visit,
+                BridgeVisit::Uncalled,
+                "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
+            );
+        }
+        assert_eq!(
+            std::ptr::from_mut(&mut budget),
+            address,
+            "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
+        );
+        assert!(
+            budget.work_ledger_identity_v1() == account,
+            "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
+        );
+        assert_eq!(
+            budget.storage(),
+            19,
+            "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
+        );
         let (terminal, resource_kind) = if matches!(self.mode.as_str(), "f" | "fixed6") {
             assert!(
                 matches!(
@@ -434,7 +630,7 @@ impl rustc_driver::Callbacks for Callbacks {
                         RankedError::ConditionalFinalizerRequired { .. }
                     )
                 ),
-                "{error}"
+                "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
             );
             assert!(budget.work() > 0);
             ("conditional-finalizer-required", None)

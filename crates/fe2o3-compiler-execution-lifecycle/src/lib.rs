@@ -9,6 +9,16 @@
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #![deny(missing_docs, unsafe_code)]
 
+mod native;
+mod provisioning;
+
+pub use native::{
+    CompilerExecutionServiceLifecycleLeaseV2, LifecycleLeaseErrorV2, LifecycleLeaseStorageV2,
+};
+pub use provisioning::{
+    CompilerExecutionProvisioningLifecycleLeaseV2, ProvisioningLifecycleLeaseStorageV2,
+};
+
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
@@ -562,7 +572,8 @@ mod tests {
         )
         .unwrap();
         lease.revalidate().unwrap();
-        println!("{HOLDER_READY}");
+        // The test harness may print its case prefix without a trailing newline.
+        println!("\n{HOLDER_READY}");
         std::io::stdout().flush().unwrap();
         let mut command = [0_u8; 1];
         std::io::stdin().read_exact(&mut command).unwrap();

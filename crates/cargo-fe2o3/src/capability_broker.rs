@@ -513,19 +513,24 @@ mod platform {
             Ok(binding)
         }
 
+        /// Reads an untrusted routing claim only. `receive` must authenticate it
+        /// before its configuration identity can authorize manifest preparation.
         pub(crate) fn from_environment_for_client(
             profile: CapabilityProfileV1,
-            config_identity: Option<[u8; CONFIG_ID_BYTES]>,
         ) -> Result<Self, String> {
             let encoded_route = std::env::var(CAPABILITY_BROKER_ENV).map_err(|_| {
                 format!("managed rustc invocation is missing {CAPABILITY_BROKER_ENV}")
             })?;
             let route = BrokerRouteV3::parse(&encoded_route)?;
-            if route.binding.profile != profile || route.binding.config_identity != config_identity
-            {
-                return Err("capability broker route has the wrong profile/config identity".into());
+            if route.binding.profile != profile {
+                return Err("capability broker route has the wrong profile".into());
             }
             Ok(route.binding)
+        }
+
+        /// A routing claim until `receive` authenticates this exact binding.
+        pub(crate) const fn config_identity(self) -> Option<[u8; CONFIG_ID_BYTES]> {
+            self.config_identity
         }
 
         pub(crate) const fn compiler_closure_sha256(self) -> [u8; 32] {
@@ -1412,7 +1417,7 @@ mod platform {
     ) -> Result<BrokeredCapabilities, String> {
         if route.binding != binding {
             return Err(
-                "capability broker route does not match the prepared profile/config/rustc identity"
+                "capability broker route does not match the requested profile/config/rustc identity"
                     .into(),
             );
         }
@@ -2359,6 +2364,46 @@ mod platform {
         }
 
         #[test]
+        fn configuration_presence_and_identity_bind_request_and_response_authentication() {
+            let session = BuildSession::from_bytes([0x31; 16]);
+            let challenge = [0x32; CHALLENGE_BYTES];
+            let secret = [0x33; SECRET_BYTES];
+            let binding = CapabilityBindingV3::new(
+                CapabilityProfileV1::Ordinary,
+                Some([0x34; CONFIG_ID_BYTES]),
+                [0x35; 32],
+                [0x36; 32],
+                [0x37; 32],
+            )
+            .unwrap();
+            let request = request_bytes(session, binding, challenge, &secret);
+            let auth = |request: &[u8]| -> [u8; REQUEST_AUTH_BYTES] {
+                request[REQUEST_BYTES - REQUEST_AUTH_BYTES..]
+                    .try_into()
+                    .unwrap()
+            };
+            let response = response_bytes(&secret, challenge, auth(&request));
+            for identity in [
+                None,
+                Some([0; CONFIG_ID_BYTES]),
+                Some([0x38; CONFIG_ID_BYTES]),
+            ] {
+                let changed = CapabilityBindingV3 {
+                    config_identity: identity,
+                    ..binding
+                };
+                assert_eq!(changed.config_identity(), identity);
+                let changed_request = request_bytes(session, changed, challenge, &secret);
+                assert_ne!(changed_request, request);
+                assert_ne!(auth(&changed_request), auth(&request));
+                assert_ne!(
+                    response_bytes(&secret, challenge, auth(&changed_request)),
+                    response
+                );
+            }
+        }
+
+        #[test]
         fn invocation_request_dispatch_preserves_v1_and_accepts_exact_v2_width() {
             let v1 = BrokeredInvocationCapabilityRequestV1::Release.encode();
             assert!(matches!(
@@ -2998,9 +3043,12 @@ mod unsupported {
 
         pub(crate) fn from_environment_for_client(
             _profile: CapabilityProfileV1,
-            _config_identity: Option<[u8; 32]>,
         ) -> Result<Self, String> {
             Err("Cargo capability transport requires Linux".to_owned())
+        }
+
+        pub(crate) const fn config_identity(self) -> Option<[u8; 32]> {
+            None
         }
 
         pub(crate) fn new_protected(

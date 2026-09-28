@@ -448,6 +448,96 @@ error and unwind paths, and budget cleanup. Run the CPU codec tests and the
 source-inventory gate after integration. This allocation primitive authenticates
 no CPU source, proof, compiler artifact, or GPU launch.
 
+### Shared Compiler-Execution Input Slots
+
+The selected compiler admission and the native V3 preparation share one private
+guard for inherited policy slot 202 and service slot 195. Both must be live and
+non-CLOEXEC before policy duplication: otherwise the duplicate could occupy a
+missing service slot and acquire a second closer. Admission exclusively consumes
+these protocol slots. The two production unsafe blocks inspect scalar F_GETFD
+flags and close an owned slot once; neither fabricates a BorrowedFd or OwnedFd
+for a potentially absent input. Ownership is cleared before closing or passing
+the service slot to its consuming client, and close is never retried. The native
+path still charges its original account before inspecting either descriptor.
+
+Three test-only unsafe blocks cover isolated-child pre-exec cleanup, F_GETFD
+absence checks, and adoption of one installed live descriptor after disarming
+the guard. Pre-exec performs only scalar close/error handling on child copies.
+Each child has a finite deadline and is reaped on timeout or polling failure.
+All descriptor duplication uses the existing rustix safe API without replacing
+live owners. The native test now shares those helpers and has no unsafe blocks.
+Tests cover missing/CLOEXEC inputs, policy and client refusal, the actual
+descriptor-allocation collision, unwind cleanup and transferred ownership.
+
+The inventory adds only the three reviewed test blocks. The selected production
+file remains at two; the native production and test files now contain none.
+Unrelated inventory mismatches are not approved by this entry. These refusal
+tests grant no protected execution, native activation or GPU qualification.
+
+### Native Process Boundaries
+
+The native compiler-execution and external-anchor startup families need raw
+descriptor operations at their isolated-process entrypoints. Their callers must
+transfer exclusive ownership of the fixed input slots; inspecting a descriptor
+or authenticating its bytes does not establish Rust I/O ownership. Validate the
+whole input table before opening or duplicating files. Duplication leaves the
+source owned until the guard is disarmed immediately before its consuming close.
+Close errors never permit a retry, including during unwinding. Resource refusal
+must obey the same ownership contract as successful admission.
+
+Rustc's dynamic loader does not provide that transfer contract: it can construct
+multiple backends after initializing threads. The safe backend factory therefore
+only duplicates slots into new close-on-exec owners, without adopting or closing
+the originals. Scalar `fcntl` errors do not fabricate borrowed descriptors. The
+original slots remain process/caller-owned until compiler exit; successful
+capture marks both close-on-exec. Failed capture can leave originals inheritable
+and does not assume their cleanup obligations. Successful child completion is
+required before finalization. An owned, mutex-protected input is consumed once
+per backend instance by the later safe callback, not once per process.
+Capture errors retain no vacancy reservation, and repeated loading never closes
+another backend's descriptors. Consuming client/host intake APIs remain unsafe
+and require a real exclusive transfer. This distinction adds no execution or
+signer-policy authority.
+
+Sealed-image inheritance and the Cargo binding-wrapper hooks retain their source
+owners through spawn. Child hooks use descriptor syscalls and scalar error
+handling without allocation or locking. Coordinator argv/environment intake
+requires stable readable backing; NSS calls use matching buffer lengths, check
+both status and returned-pointer identity, and copy only scalar account IDs.
+Signal-mask storage is initialized and thread-affine, with restoration following
+successful cleanup.
+
+Native supervisor startup destructively closes unrelated descriptors only under
+its dedicated-process contract, preserving exactly slots `3..12` and `220`.
+Readiness transport uses initialized, aligned control storage and bounded payload
+lengths. Received `SCM_RIGHTS` and rejected `SCM_PIDFD` descriptors acquire distinct
+owners immediately and are dropped on refusal. GNU/musl ancillary fixtures zero
+initialize the pinned integer-field header, including musl padding, before
+bounded writes. Synthetic ancillary tests do not establish actual `SCM_PIDFD`
+reception on a deployed kernel.
+
+The protected-service spawn and supervisor cleanup bridges reserve custody
+before clone and adopt the returned PID, pidfd and spawn lease before fallible
+parent work. Post-clone callbacks are finite and allocation-free; credential
+changes re-arm and check parent-death signaling. Exec confirmation releases only
+the spawn lease. Pending or quarantined children retain dependencies; only a
+consuming terminal wait permits retirement. `WNOWAIT` and `ECHILD` are not that
+evidence. See [cleanup custody](compiler-execution-cleanup-custody.md).
+
+Fixed-slot, credential and process-transition fixtures run in isolated children.
+Their source descriptors stay above the destination slots; raw adoption happens
+once after successful creation. Polling failures and timeouts must kill and reap
+the test child. Descriptor-free cleanup fixtures exercise only the documented
+inert exception. The shared issuer launch-input tests retain the same obligations
+after their V2-specific filename is removed. The compiler image-budget fixture
+uses safe `rustix` memfd creation and needs no raw-descriptor adoption.
+
+Inventory reconciliation records moved implementation sites, shrinking the old
+sealed-image, client, provisioner and service allowances alongside their new
+modules. Macro/include sites are counted once where written. This review covers
+OS ownership and unsafe-call contracts, not protected execution, proof-policy
+admission, native production activation, or GPU qualification.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

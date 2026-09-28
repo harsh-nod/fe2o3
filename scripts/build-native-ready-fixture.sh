@@ -10,9 +10,21 @@ fail() {
   exit 1
 }
 
-if [[ $# -ne 1 ]]; then
-  fail 'usage: bash scripts/build-native-ready-fixture.sh EXISTING_EMPTY_PRIVATE_OUTPUT_DIR'
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  fail 'usage: bash scripts/build-native-ready-fixture.sh EXISTING_EMPTY_PRIVATE_OUTPUT_DIR [v2|v3]'
 fi
+readonly family="${2-v2}"
+case "${family}" in
+  v2)
+    readonly artifact_prefix='native-ready-fixture'
+    readonly export_prefix='FE2O3_NATIVE_READY_FIXTURE'
+    ;;
+  v3)
+    readonly artifact_prefix='native-ready-fixture-v3'
+    readonly export_prefix='FE2O3_NATIVE_READY_FIXTURE_V3'
+    ;;
+  *) fail 'family must be v2 or v3' ;;
+esac
 readonly repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly toolchain='nightly-2026-04-03'
 readonly host='x86_64-unknown-linux-gnu'
@@ -68,13 +80,13 @@ cd -- "${repo_root}"
 # native C linker/binutils and a populated dependency cache; no network fetches.
 # Honor the primary's shared CARGO_TARGET_DIR/CARGO_HOME; only one primary may
 # build into that cache at a time. The clean environment removes inherited
-# RUSTFLAGS, wrappers and runtime fixture mode variables.
+# RUSTFLAGS, wrappers and runtime fixture mode/family variables.
 for mode in ready no-eof trailing silent; do
-  artifact="${output}/native-ready-fixture-${mode}"
+  artifact="${output}/${artifact_prefix}-${mode}"
   report="${artifact}.readelf.txt"
   log="${artifact}.build.log"
   printf 'building native readiness fixture mode %s\n' "${mode}" >&2
-  if ! timeout --signal=TERM --kill-after=10s 900s \
+  if timeout --signal=TERM --kill-after=10s 900s \
     prlimit --cpu=900:900 --as=8589934592:8589934592 \
       --fsize=1073741824:1073741824 --nofile=512:512 --core=0:0 -- \
     /usr/bin/env -i \
@@ -91,13 +103,18 @@ for mode in ready no-eof trailing silent; do
         -p "${package}" --example "${example}" -- \
         --check-cfg 'cfg(fe2o3_native_ready_fixture, values("ready", "no-eof", "trailing", "silent"))' \
         --cfg "fe2o3_native_ready_fixture=\"${mode}\"" \
+        --check-cfg 'cfg(fe2o3_native_ready_fixture_family, values("v2", "v3"))' \
+        --cfg "fe2o3_native_ready_fixture_family=\"${family}\"" \
         -C target-feature=+crt-static \
         -C relocation-model=static \
         -C link-arg=-static \
         -C link-arg=-no-pie \
         -C link-arg=-Wl,-e,fe2o3_secure_start_v1 \
         >"${log}" 2>&1; then
-    fail "build failed or exceeded its bound; inspect ${log}"
+    :
+  else
+    status=$?
+    fail "build failed or exceeded its bound (status ${status}); inspect ${log}"
   fi
 
   readelf -hW -lW -dW -sW -- "${executable}" >"${report}"
@@ -129,12 +146,12 @@ done
 
 # Record identities after all modes pass. No smoke execution or libtest launch.
 sha256sum -- \
-  "${output}/native-ready-fixture-ready" \
-  "${output}/native-ready-fixture-no-eof" \
-  "${output}/native-ready-fixture-trailing" \
-  "${output}/native-ready-fixture-silent" >"${output}/SHA256SUMS"
+  "${output}/${artifact_prefix}-ready" \
+  "${output}/${artifact_prefix}-no-eof" \
+  "${output}/${artifact_prefix}-trailing" \
+  "${output}/${artifact_prefix}-silent" >"${output}/SHA256SUMS"
 printf '# Synthetic native readiness fixtures only; supply FE2O3_STATIC_PREEXEC_LAUNCHER separately.\n'
-printf 'export FE2O3_NATIVE_READY_FIXTURE_READY=%q\n' "${output}/native-ready-fixture-ready"
-printf 'export FE2O3_NATIVE_READY_FIXTURE_NO_EOF=%q\n' "${output}/native-ready-fixture-no-eof"
-printf 'export FE2O3_NATIVE_READY_FIXTURE_TRAILING=%q\n' "${output}/native-ready-fixture-trailing"
-printf 'export FE2O3_NATIVE_READY_FIXTURE_SILENT=%q\n' "${output}/native-ready-fixture-silent"
+printf 'export %s_READY=%q\n' "${export_prefix}" "${output}/${artifact_prefix}-ready"
+printf 'export %s_NO_EOF=%q\n' "${export_prefix}" "${output}/${artifact_prefix}-no-eof"
+printf 'export %s_TRAILING=%q\n' "${export_prefix}" "${output}/${artifact_prefix}-trailing"
+printf 'export %s_SILENT=%q\n' "${export_prefix}" "${output}/${artifact_prefix}-silent"

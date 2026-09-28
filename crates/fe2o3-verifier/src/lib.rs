@@ -18,6 +18,13 @@ mod authenticated_proof_binding;
 mod authenticated_verus_execution_v2;
 mod compiler_multi_root_proof_v1;
 mod compiler_multi_root_target_lineage_v1;
+mod compiler_native_conditional_handoff_v5;
+pub use compiler_native_conditional_handoff_v5::{
+    CompilerConditionalNativeSemanticHandoffErrorV5,
+    RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
+    RecoveredCompilerConditionalNativeSemanticHandoffV5,
+    recover_compiler_conditional_native_semantic_handoff_v5,
+};
 pub mod compiler_native_conditional_source_packet_v2;
 pub use compiler_native_conditional_source_packet_v2::{
     NativeConditionalPacketErrorV2, NativeConditionalSourcePacketInputV2,
@@ -25,10 +32,12 @@ pub use compiler_native_conditional_source_packet_v2::{
     encode_native_conditional_source_packet_v2, with_decoded_native_conditional_source_packet_v2,
 };
 mod compiler_native_source_proof_v1;
+mod compiler_native_symbol_manifest_v1;
 mod compiler_nominal_abi_v3;
 mod compiler_proof_binding_v3;
 mod compiler_refined_forwarding_output_v1;
 mod compiler_target_lineage_v1;
+mod conditional_contract_request_v2;
 mod conditional_ranked_formulas_v1;
 pub mod conditional_reference_v1;
 mod control_flow_binding;
@@ -51,6 +60,10 @@ mod retained_functional_refinement_runtime_v1;
 mod static_view_proof;
 
 pub mod compiler_native_conditional_source_proof_v2;
+pub use compiler_native_conditional_source_proof_v2::final_replay::{
+    NativeConditionalFinalErrorV2, NativeConditionalFinalInputsV2,
+    validate_native_conditional_source_through_f_v2,
+};
 pub use compiler_native_conditional_source_proof_v2::{
     NativeConditionalRootPolicyV2, NativeConditionalSourceProofErrorV2,
     NativeConditionalSourceStorageV2, ReplayedNativeConditionalSourceV2,

@@ -1,14 +1,11 @@
 //! Signed native issuer state. Subject/occurrence authority stays outside this
 //! codec and enters only through the consuming service's live occurrence guard.
 use super::*;
-use ed25519_dalek::{Signature, VerifyingKey};
-use fe2o3_artifact_transaction::INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V2 as S;
-use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V2 as H,
-    COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V2 as R,
-    COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V2 as Q,
-    COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V2 as A,
+use super::{
+    ACK_BYTES as A, ATTESTATION_REQUEST_BYTES as Q, CHALLENGE_BYTES as H, RECEIPT_BYTES as R,
+    SUBJECT_BYTES as S,
 };
+use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
 
 const ACK: usize = 104;
@@ -17,9 +14,9 @@ const BODY: usize = OCCURRENCE + 32;
 const SIGNATURE: usize = BODY + Q + R;
 const IDENTITY: usize = SIGNATURE + 64;
 pub(super) const BYTES: usize = IDENTITY + 32;
-const MAGIC: &[u8; 8] = b"F2O3CEJ3";
-const SIGN_DOMAIN: &[u8] = b"FE2O3/NATIVE-ISSUER-JOURNAL-SIGNATURE/V3\0";
-const ID_DOMAIN: &[u8] = b"FE2O3/NATIVE-ISSUER-JOURNAL-IDENTITY/V3\0";
+use super::{
+    ISSUER_ID_DOMAIN as ID_DOMAIN, ISSUER_MAGIC as MAGIC, ISSUER_SIGN_DOMAIN as SIGN_DOMAIN,
+};
 
 pub(super) enum Body {
     Ready,
@@ -75,7 +72,7 @@ impl Record {
                 record.check(p, b)?;
                 let wire = &mut record.wire;
                 wire[..8].copy_from_slice(MAGIC);
-                wire[8..10].copy_from_slice(&3u16.to_le_bytes());
+                wire[8..10].copy_from_slice(&JOURNAL_VERSION.to_le_bytes());
                 wire[12..20].copy_from_slice(&(BYTES as u64).to_le_bytes());
                 wire[32..64].copy_from_slice(p.identity().as_bytes());
                 wire[64..72].copy_from_slice(&sequence.to_le_bytes());
@@ -117,7 +114,7 @@ impl Record {
             |b| {
                 if bytes.len() != BYTES
                     || &bytes[..8] != MAGIC
-                    || bytes[8..10] != 3u16.to_le_bytes()
+                    || bytes[8..10] != JOURNAL_VERSION.to_le_bytes()
                     || bytes[10..12] != [0; 2]
                     || bytes[12..20] != (BYTES as u64).to_le_bytes()
                     || bytes[20..24] != [0; 4]
@@ -429,8 +426,8 @@ pub(super) fn signed_unsupported_ready_for_test(
             // Construct an inert ACK claim, not Worker publication authority.
             // Its public decoder must accept it before it enters the signed fixture.
             let mut ack = [0; A];
-            ack[..8].copy_from_slice(b"F2O3CEA2");
-            ack[8..10].copy_from_slice(&2u16.to_le_bytes());
+            ack[..8].copy_from_slice(ACK_MAGIC);
+            ack[8..10].copy_from_slice(&SUBJECT_VERSION.to_le_bytes());
             ack[12..20].copy_from_slice(&(A as u64).to_le_bytes());
             ack[24..56].copy_from_slice(p.identity().as_bytes());
             for (field, value) in ack[56..216].chunks_exact_mut(32).zip(1u8..=5) {
@@ -439,7 +436,7 @@ pub(super) fn signed_unsupported_ready_for_test(
             ack[216..224].copy_from_slice(&1u64.to_le_bytes());
             ack[224..256].fill(6);
             let mut digest = Sha256::new();
-            digest.update(b"FE2O3/COMPILER-EXECUTION-RECEIPT-PUBLICATION-ACK/V2\0");
+            digest.update(ACK_DOMAIN);
             digest.update(256u64.to_le_bytes());
             digest.update(&ack[..256]);
             ack[256..].copy_from_slice(&digest.finalize());

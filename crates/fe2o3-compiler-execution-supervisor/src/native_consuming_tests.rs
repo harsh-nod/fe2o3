@@ -1,14 +1,11 @@
-//! Invoked only in a fresh, locked, distinct-UID supervisor subprocess.
+// Invoked only in a fresh, locked, distinct-UID supervisor subprocess.
 use super::*;
 use crate::authority_v2_test_process::receive_sized_packet;
 use crate::native_consuming_test_process::{Case, LIFECYCLE_TIMEOUT, MeasuredImage};
 use crate::{
-    MAX_PROTECTED_ISSUER_PROCESSES_V1 as CAPACITY, ProtectedIssuerBoundaryV2 as Boundary,
-    ProtectedIssuerCleanupErrorV2 as CleanupError, ProtectedIssuerCleanupServiceV2 as Cleanup,
-    ProtectedIssuerLaunchErrorV2 as LaunchError, ProtectedIssuerTerminationV1 as Termination,
-    ProtectedIssuerWaitV2 as Wait,
+    MAX_PROTECTED_ISSUER_PROCESSES_V1 as CAPACITY, ProtectedIssuerCleanupErrorV2 as CleanupError,
+    ProtectedIssuerCleanupServiceV2 as Cleanup, ProtectedIssuerTerminationV1 as Termination,
 };
-use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SERVICE_READY_BYTES_V2 as READY_BYTES;
 use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account;
 use fe2o3_protected_service_profile::{
     ProtectedServiceProcessProfileV2 as Profile, require_owned_sigchld_v2,
@@ -68,9 +65,9 @@ pub(crate) fn exercise(case: Case, peer: &OwnedFd, pidfd: &OwnedFd, submitter: &
         assert_eq!(budget.storage(), EXTRA);
 
         let root = Root::new();
-        let supervisor = crate::authority_v2::tests::bound_consuming_fixture(
+        let supervisor = bound_consuming_fixture(
             MeasuredImage::from_env("FE2O3_STATIC_PREEXEC_LAUNCHER"),
-            MeasuredImage::from_env(case.image_env()),
+            MeasuredImage::from_env(FAMILY.image_env(case)),
             &root.0,
             peer,
             pidfd,
@@ -96,7 +93,7 @@ pub(crate) fn exercise(case: Case, peer: &OwnedFd, pidfd: &OwnedFd, submitter: &
         assert_eq!(service_before.failed_work, None);
 
         let (accepted, handoff, client_pid, client_pidfds) =
-            accept(&supervisor, submitter, &mut budget);
+            accept_with_witness(&supervisor, submitter, &mut budget);
         let expected_manifest = accepted.manifest().identity();
         let expected_policy = supervisor.policy().identity();
         let consumed = accepted.retained_storage();
@@ -268,7 +265,7 @@ pub(crate) fn exercise(case: Case, peer: &OwnedFd, pidfd: &OwnedFd, submitter: &
         assert_eq!(budget.failed_storage(), None);
         assert_eq!(fd_inventory(), initial_fds);
         eprintln!(
-            "native consuming {case:?}: request work={} prefix={REQUEST_PREFIX} storage={} \
+            "native consuming {FAMILY:?} {case:?}: request work={} prefix={REQUEST_PREFIX} storage={} \
          cleanup work={} storage={} fd baseline restored; issuer reaped",
             budget.work(),
             budget.storage(),

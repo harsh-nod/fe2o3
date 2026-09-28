@@ -17,8 +17,9 @@ use fe2o3_lower_mir_kernel::{
 };
 use fe2o3_verifier::{
     NativeConditionalRootPolicyV2, NativeConditionalSourcePacketInputV2,
-    NativeConditionalSourceRootV2, ReplayedNativeConditionalSourceV2 as Proof,
-    encode_native_conditional_source_packet_v2, validate_native_conditional_source_packet_v2,
+    NativeConditionalSourceRootV2, NativeConditionalSourceStorageV2,
+    ReplayedNativeConditionalSourceV2 as Proof, encode_native_conditional_source_packet_v2,
+    validate_native_conditional_source_packet_v2,
 };
 use std::{
     fmt,
@@ -77,7 +78,41 @@ pub(crate) fn prepare_retained_native_conditional_source_packet_v2(
     descriptors: &[TypedDescriptorRootV1],
     target: &mut Budget<'_>,
 ) -> Result<(Ranked, PreparedConditionalSourcePacketV2), E> {
-    retain(target, |target| {
+    prepare_retained_native_conditional_source_packet_using_v2(
+        ranked,
+        descriptors,
+        target,
+        |_, _, _, bytes, policies, budget| {
+            let (proof, storage) =
+                validate_native_conditional_source_packet_v2(bytes, policies, budget)
+                    .map_err(E::Replay)?;
+            Ok((proof, storage, (), 0))
+        },
+    )
+    .map(|(ranked, packet, ())| (ranked, packet))
+}
+
+/// Same producer/encoding visit with a typed consumer selected by the F entry.
+/// Consumer output is installed only after both original accounts' postchecks.
+/// The extra owner must already be paid; source storage is reserved here before
+/// any further controlled allocation. Errors and unwind never earn a refund.
+pub(crate) fn prepare_retained_native_conditional_source_packet_using_v2<T, C>(
+    ranked: Ranked,
+    descriptors: &[TypedDescriptorRootV1],
+    target: &mut Budget<'_>,
+    consume: impl FnOnce(
+        &Source,
+        &[Root],
+        &[u32],
+        &[u8],
+        &[NativeConditionalRootPolicyV2<'_>],
+        &mut Budget<'_>,
+    ) -> Result<(Proof, NativeConditionalSourceStorageV2, T, usize), C>,
+) -> Result<(Ranked, PreparedConditionalSourcePacketV2, T), C>
+where
+    C: From<E> + From<Resource>,
+{
+    retain_using(target, |target| {
         let (ranked, result) = ranked
             .with_conditional_producer_inputs_v2(|source, roots, source_budget| {
                 // Preserve the nested Result until the owning source postcheck.
@@ -85,23 +120,35 @@ pub(crate) fn prepare_retained_native_conditional_source_packet_v2(
                     if source_budget.work_ledger_identity_v1() == target.work_ledger_identity_v1() {
                         Err(Resource::Accounting.into())
                     } else {
-                        assemble(source, roots, descriptors, target)
+                        assemble_using(source, roots, descriptors, target, consume)
                     },
                 )
             })
             .map_err(E::SourcePhase)?;
-        let packet = result?;
-        let retained = packet.retained_storage().map_err(E::Lineage)?;
-        Ok(((ranked, packet), retained))
+        let (packet, extra, extra_storage) = result?;
+        let retained = packet
+            .retained_storage()
+            .map_err(E::Lineage)?
+            .checked_add(extra_storage)
+            .ok_or(Resource::Arithmetic)?;
+        Ok(((ranked, packet, extra), retained))
     })
 }
 
 // Refund only known scratch on successful transfer. Unknown inner accounting
 // failures and panics deliberately retain their terminal reservations.
+#[cfg(test)]
 fn retain<'w, T>(
     budget: &mut Budget<'w>,
     run: impl FnOnce(&mut Budget<'w>) -> Result<(T, usize), E>,
 ) -> Result<T, E> {
+    retain_using(budget, run)
+}
+
+fn retain_using<'w, T, C: From<Resource>>(
+    budget: &mut Budget<'w>,
+    run: impl FnOnce(&mut Budget<'w>) -> Result<(T, usize), C>,
+) -> Result<T, C> {
     let floor = budget.storage();
     let account = budget.work_ledger_identity_v1();
     let address = budget as *const Budget<'_> as usize;
@@ -136,12 +183,23 @@ struct Payload {
     rows: Vec<u8>,
 }
 
-fn assemble(
+fn assemble_using<T, C>(
     source: &Source,
     roots: &[Root],
     descriptors: &[TypedDescriptorRootV1],
     budget: &mut Budget<'_>,
-) -> Result<PreparedConditionalSourcePacketV2, E> {
+    consume: impl FnOnce(
+        &Source,
+        &[Root],
+        &[u32],
+        &[u8],
+        &[NativeConditionalRootPolicyV2<'_>],
+        &mut Budget<'_>,
+    ) -> Result<(Proof, NativeConditionalSourceStorageV2, T, usize), C>,
+) -> Result<(PreparedConditionalSourcePacketV2, T, usize), C>
+where
+    C: From<E> + From<Resource>,
+{
     let semantic = source.semantic_ssa().source_semantic();
     let launches = source.source_launch().roots();
     budget.charge_work(5)?;
@@ -153,7 +211,7 @@ fn assemble(
         || roots.len() != descriptors.len()
         || roots.len() != source.executable().module().kernels.len()
     {
-        return Err(E::Mismatch("complete original Direct conditional roster"));
+        return Err(E::Mismatch("complete original Direct conditional roster").into());
     }
     budget.reserve_storage(owned_packet::packet_header::<Proof>().map_err(E::Lineage)?)?;
     let (native_module, _) = packet::encode_original_native_envelope_v1(
@@ -191,9 +249,7 @@ fn assemble(
             || input.input.semantic_root != root.semantic_root().index()
             || input.input.launch_rank != root.source_rank()
         {
-            return Err(E::Mismatch(
-                "ordered original root/collector/source identities",
-            ));
+            return Err(E::Mismatch("ordered original root/collector/source identities").into());
         }
         require_launch(descriptor, launch.source_launch())?;
         let kernel = input.input.pending.kernel().map_err(E::Session)?;
@@ -256,9 +312,8 @@ fn assemble(
     )
     .map_err(E::Packet)?;
     budget.reserve_storage(storage.retained_storage())?;
-    let (proof, storage) =
-        validate_native_conditional_source_packet_v2(&source_packet, &policies, budget)
-            .map_err(E::Replay)?;
+    let (proof, storage, extra, extra_storage) =
+        consume(source, roots, &order, &source_packet, &policies, budget)?;
     budget.reserve_storage(storage.retained_storage())?;
     let retained = owned_packet::packet_header::<Proof>()
         .map_err(E::Lineage)?
@@ -267,13 +322,14 @@ fn assemble(
         .and_then(|n| n.checked_add(source_packet.capacity()))
         .ok_or(Resource::Arithmetic)?;
     // Borrowed views and encoded scratch die before retain() releases scratch.
-    PreparedNativeSourceProofPacketV1::from_parts(packet::NativeSourcePacketPartsV1 {
+    let packet = PreparedNativeSourceProofPacketV1::from_parts(packet::NativeSourcePacketPartsV1 {
         proof,
         native_module,
         source_packet,
         retained,
     })
-    .map_err(E::Lineage)
+    .map_err(E::Lineage)?;
+    Ok((packet, extra, extra_storage))
 }
 
 fn require_launch(

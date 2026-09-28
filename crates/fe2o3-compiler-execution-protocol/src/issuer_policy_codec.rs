@@ -28,6 +28,12 @@ pub(crate) const V2: Schema = Schema {
     subject_version: fe2o3_artifact_transaction::INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V2,
     domain: b"FE2O3/COMPILER-EXECUTION-ISSUER-POLICY/V2\0",
 };
+pub(crate) const V3: Schema = Schema {
+    magic: *b"F2O3CEP3",
+    version: 3,
+    subject_version: fe2o3_artifact_transaction::INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V3,
+    domain: b"FE2O3/COMPILER-EXECUTION-ISSUER-POLICY/V3\0",
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Fields {

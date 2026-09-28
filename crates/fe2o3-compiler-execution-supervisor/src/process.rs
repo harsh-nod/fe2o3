@@ -3,6 +3,9 @@
 #[path = "process_native.rs"]
 mod native;
 pub use native::*;
+#[path = "process_native_v3.rs"]
+mod native_v3;
+pub use native_v3::*;
 
 #[path = "process_profile_report.rs"]
 mod profile_report;
@@ -34,7 +37,7 @@ use rustix::net::SendFlags;
 use rustix::pipe::{PipeFlags, pipe_with};
 
 use crate::process_cleanup::{ChildCleanupV1, CleanupPollV1};
-use crate::process_reaper::{ReapSlotV1, deferred_reaper};
+use crate::process_reaper::{ReapSlotV1, reserve_legacy};
 use crate::process_staging::{StagedLaunchErrorV1, StagedLaunchInputV1, StagedLaunchV1};
 use crate::{
     IssuerServiceCredentialProfileV1, PreparedProtectedIssuerLaunchV1,
@@ -76,14 +79,17 @@ const PR_CAP_AMBIENT_IS_SET: c_int = 1;
 const RLIMIT_CORE: c_int = 4;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const GATE_RELEASE_V1: u8 = 0x5a;
-const MAX_CHILD_GATE_ATTEMPTS: usize = 64;
+use fe2o3_protected_service_spawn::pre_exec::{
+    MAX_CHILD_GATE_ATTEMPTS_V2 as MAX_CHILD_GATE_ATTEMPTS, read_child_gate,
+};
 const MAX_LAUNCH_WAIT_V1: Duration = Duration::from_secs(120);
 const POLL_INTERVAL_V1: Duration = Duration::from_millis(1);
 const MAX_CANCEL_POLLS_V1: usize = 1024;
 const MAX_CANCEL_WAIT_V1: Duration = Duration::from_secs(2);
 
 /// Maximum number of protected issuer children owned or awaiting deferred reaping.
-pub const MAX_PROTECTED_ISSUER_PROCESSES_V1: usize = 64;
+pub const MAX_PROTECTED_ISSUER_PROCESSES_V1: usize =
+    fe2o3_protected_service_spawn::MAX_PROTECTED_SERVICE_PROCESSES_V2;
 
 unsafe extern "C" {
     fn close(descriptor: c_int) -> c_int;
@@ -684,7 +690,7 @@ impl ProtectedIssuerSupervisorV1 {
         };
         require_owned_sigchld_v1().map_err(map_profile_error)?;
         let namespaces = NamespaceSetV1::capture_self().map_err(map_profile_error)?;
-        let reap_slot = deferred_reaper().reserve()?;
+        let reap_slot = reserve_legacy()?;
 
         let (profile_ready_reader, profile_ready_writer) =
             protected_pipe(PipeFlags::NONBLOCK, "create child-profile pipe")?;
@@ -875,7 +881,9 @@ fn spawn_child(
         // SAFETY: successful CLONE_PIDFD installed one newly owned descriptor.
         Some(unsafe { OwnedFd::from_raw_fd(pidfd_raw) })
     };
-    let cleanup = ChildCleanupV1::new(pidfd, pid, Some(spawn_lease));
+    // SAFETY: atomic clone result and exclusive wait custody are adopted together
+    // with the pre-clone slot and spawn lease before any fallible parent operation.
+    let cleanup = unsafe { ChildCleanupV1::adopt(pidfd, pid, Some(spawn_lease)) };
     let process = IssuerChild::new(cleanup, reap_slot);
     if pidfd_raw < 0 {
         return Err(ChildProcessError::State(
@@ -1043,18 +1051,6 @@ unsafe fn child_exec(
         );
         child_fail(staged.exec_status_writer.as_raw_fd(), 10);
     }
-}
-
-fn read_child_gate(mut read: impl FnMut(&mut u8) -> rustix::io::Result<usize>) -> Result<u8, ()> {
-    let mut release = 0_u8;
-    for _ in 0..MAX_CHILD_GATE_ATTEMPTS {
-        match read(&mut release) {
-            Ok(1) => return Ok(release),
-            Err(rustix::io::Errno::INTR) => {}
-            Ok(_) | Err(_) => return Err(()),
-        }
-    }
-    Err(())
 }
 
 unsafe fn arm_parent_death(expected_parent_pid: i32) -> c_int {
@@ -1438,7 +1434,8 @@ impl IssuerChild {
 
     fn release_spawn_after_exec(&mut self) {
         if let Some(cleanup) = self.cleanup.as_mut() {
-            cleanup.release_spawn_after_exec();
+            // SAFETY: callers verified exact exec status before discharging this lease.
+            unsafe { cleanup.confirm_exec() };
         }
     }
 
@@ -1607,13 +1604,16 @@ impl IssuerChild {
 
     fn complete_reaped(&mut self) {
         if let Some(cleanup) = self.cleanup.as_mut() {
-            cleanup.terminal_reaped();
+            // SAFETY: reached only after this owner consumed an exact terminal wait.
+            unsafe { cleanup.confirm_terminal_reap() };
         }
         drop(self.cleanup.take());
-        self.reap_slot
+        let slot = self
+            .reap_slot
             .take()
-            .expect("live issuer child retains one reap slot")
-            .complete();
+            .expect("live issuer child retains one reap slot");
+        // SAFETY: terminal custody was recorded and dropped immediately above.
+        unsafe { slot.retire_reaped() };
         self.cleanup_poll = CleanupPollV1::Reaped;
     }
 

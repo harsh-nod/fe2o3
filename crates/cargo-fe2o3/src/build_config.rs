@@ -24,8 +24,15 @@ use fe2o3_hsaco_finalize::{
     WorkerProtocolError, execute_preflighted_protected_reproducible_first_build_worker_v3,
     preflight_protected_reproducible_first_build_worker_v3,
 };
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+
+#[path = "build_config_native.rs"]
+pub(crate) mod native;
 
 pub(crate) const QUALIFICATION_ORACLE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
 const OBSOLETE_CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
@@ -161,7 +168,7 @@ pub(crate) struct PreparedProductionBuildConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ProductionBuildConfigVersion {
+pub(crate) enum ProductionBuildConfigVersion {
     V1,
     V2(ProductionSourceIsaObservationKindV1),
 }
@@ -421,60 +428,52 @@ pub(crate) fn validate_expected_build_config_identity_values(
     }
 }
 
-fn prepare_production_manifest_v1(
-    path: &Path,
-) -> Result<PreparedProductionBuildConfig, BuildConfigError> {
-    require_absolute_path(path, "configuration")?;
-    let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
-    let value: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| BuildConfigError::Json(error.to_string()))?;
-    let canonical =
-        serde_json::to_vec(&value).map_err(|error| BuildConfigError::Json(error.to_string()))?;
-    if canonical != bytes {
+/// The broker's authenticated digest binds the schema, manifest and transitive
+/// inputs; environment agreement alone cannot establish this binding.
+pub(crate) fn validate_brokered_build_config_identity(
+    config: Option<&PreparedProductionBuildConfig>,
+    authenticated_identity: Option<[u8; 32]>,
+) -> Result<(), BuildConfigError> {
+    if config.map(|config| *config.identity().as_bytes()) != authenticated_identity {
         return Err(BuildConfigError::Invalid(
-            "configuration must be compact canonical JSON with lexicographically ordered object keys"
+            "production build configuration differs from the authenticated broker binding"
                 .to_owned(),
         ));
     }
+    Ok(())
+}
 
-    let root = exact_production_root_object(&value)?;
-    if required_string(root, "format", "configuration")? != PRODUCTION_BUILD_CONFIG_FORMAT_V1 {
-        return Err(BuildConfigError::Invalid(format!(
-            "configuration format must be exactly {PRODUCTION_BUILD_CONFIG_FORMAT_V1:?}"
-        )));
-    }
-    let worker = prepare_worker(required_value(root, "worker", "configuration")?)?;
-    let providers = prepare_providers(required_value(root, "providers", "configuration")?)?;
-    let link_options = parse_link_options(required_value(root, "link_options", "configuration")?)?;
-    let candidate_output = WorkerOutputConstraintsV1::new(required_u64(
-        root,
-        "candidate_output_max_bytes",
-        "configuration",
-    )?)
-    .map_err(BuildConfigError::Protocol)?;
-    let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
-    let units = parse_units(required_value(root, "units", "configuration")?)?;
-    let identity =
-        transitive_identity(PRODUCTION_CONFIG_PROFILE_ID_V1, &bytes, &worker, &providers);
-    Ok(PreparedProductionBuildConfig {
-        link: PreparedLinkBuildConfig {
-            identity,
-            worker,
-            providers,
-            link_options,
-            candidate_output,
-            limits,
-            units,
-        },
-        version: ProductionBuildConfigVersion::V1,
-    })
+fn prepare_production_manifest_v1(
+    path: &Path,
+) -> Result<PreparedProductionBuildConfig, BuildConfigError> {
+    prepare_production_manifest(path, ProductionBuildConfigVersion::V1, None)
 }
 
 fn prepare_production_manifest_v2(
     path: &Path,
 ) -> Result<PreparedProductionBuildConfig, BuildConfigError> {
+    prepare_production_manifest(
+        path,
+        ProductionBuildConfigVersion::V2(ProductionSourceIsaObservationKindV1::Summary),
+        None,
+    )
+}
+
+fn prepare_production_manifest(
+    path: &Path,
+    version: ProductionBuildConfigVersion,
+    mut budget: Option<&mut Budget<'_>>,
+) -> Result<PreparedProductionBuildConfig, BuildConfigError> {
     require_absolute_path(path, "configuration")?;
-    let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
+    let bytes = read_bounded(
+        path,
+        MAX_CONFIG_BYTES,
+        "configuration",
+        budget.as_deref_mut(),
+    )?;
+    if let Some(b) = budget.as_deref_mut() {
+        native::prepay_manifest(bytes.len(), b)?;
+    }
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|error| BuildConfigError::Json(error.to_string()))?;
     let canonical =
@@ -486,16 +485,30 @@ fn prepare_production_manifest_v2(
         ));
     }
 
-    let root = exact_production_v2_root_object(&value)?;
-    if required_string(root, "format", "configuration")? != PRODUCTION_BUILD_CONFIG_FORMAT_V2 {
+    let (root, format) = match version {
+        ProductionBuildConfigVersion::V1 => (
+            exact_production_root_object(&value)?,
+            PRODUCTION_BUILD_CONFIG_FORMAT_V1,
+        ),
+        ProductionBuildConfigVersion::V2(_) => (
+            exact_production_v2_root_object(&value)?,
+            PRODUCTION_BUILD_CONFIG_FORMAT_V2,
+        ),
+    };
+    if required_string(root, "format", "configuration")? != format {
         return Err(BuildConfigError::Invalid(format!(
-            "configuration format must be exactly {PRODUCTION_BUILD_CONFIG_FORMAT_V2:?}"
+            "configuration format must be exactly {format:?}"
         )));
     }
-    let observation_kind =
-        parse_source_isa_observation(required_value(root, "observation", "configuration")?)?;
+    let version = match version {
+        ProductionBuildConfigVersion::V1 => version,
+        ProductionBuildConfigVersion::V2(_) => ProductionBuildConfigVersion::V2(
+            parse_source_isa_observation(required_value(root, "observation", "configuration")?)?,
+        ),
+    };
     let worker = prepare_worker(required_value(root, "worker", "configuration")?)?;
-    let providers = prepare_providers(required_value(root, "providers", "configuration")?)?;
+    let providers =
+        prepare_providers_on_account(required_value(root, "providers", "configuration")?, budget)?;
     let link_options = parse_link_options(required_value(root, "link_options", "configuration")?)?;
     let candidate_output = WorkerOutputConstraintsV1::new(required_u64(
         root,
@@ -505,13 +518,20 @@ fn prepare_production_manifest_v2(
     .map_err(BuildConfigError::Protocol)?;
     let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
     let units = parse_units(required_value(root, "units", "configuration")?)?;
-    if observation_kind == ProductionSourceIsaObservationKindV1::Characteristic && units.len() != 1
+    if version.source_isa_observation_kind()
+        == Some(ProductionSourceIsaObservationKindV1::Characteristic)
+        && units.len() != 1
     {
         return Err(BuildConfigError::Invalid(
             "source-isa-characteristic-v1 requires exactly one configured unit".to_owned(),
         ));
     }
-    let identity = transitive_identity_v2(&bytes, &worker, &providers);
+    let identity = match version {
+        ProductionBuildConfigVersion::V1 => {
+            transitive_identity(PRODUCTION_CONFIG_PROFILE_ID_V1, &bytes, &worker, &providers)
+        }
+        ProductionBuildConfigVersion::V2(_) => transitive_identity_v2(&bytes, &worker, &providers),
+    };
     Ok(PreparedProductionBuildConfig {
         link: PreparedLinkBuildConfig {
             identity,
@@ -522,7 +542,7 @@ fn prepare_production_manifest_v2(
             limits,
             units,
         },
-        version: ProductionBuildConfigVersion::V2(observation_kind),
+        version,
     })
 }
 
@@ -666,6 +686,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[derive(Debug)]
 pub(crate) enum BuildConfigError {
+    Resource(Resource),
     MissingConfiguration,
     Io {
         kind: &'static str,
@@ -682,6 +703,7 @@ pub(crate) enum BuildConfigError {
 impl fmt::Display for BuildConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Resource(error) => error.fmt(formatter),
             Self::MissingConfiguration => {
                 write!(
                     formatter,
@@ -707,12 +729,19 @@ impl fmt::Display for BuildConfigError {
 impl Error for BuildConfigError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Resource(error) => Some(error),
             Self::Io { error, .. } => Some(error),
             Self::LinkPlan(error) => Some(error),
             Self::Protocol(error) => Some(error),
             Self::Worker(error) => Some(error),
             Self::MissingConfiguration | Self::Json(_) | Self::Invalid(_) => None,
         }
+    }
+}
+
+impl From<Resource> for BuildConfigError {
+    fn from(error: Resource) -> Self {
+        Self::Resource(error)
     }
 }
 
@@ -729,7 +758,15 @@ fn prepare_worker(value: &Value) -> Result<PinnedWorkerV1, BuildConfigError> {
     PinnedWorkerV1::open(path, measurement).map_err(BuildConfigError::Worker)
 }
 
+#[cfg(test)]
 fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, BuildConfigError> {
+    prepare_providers_on_account(value, None)
+}
+
+fn prepare_providers_on_account(
+    value: &Value,
+    budget: Option<&mut Budget<'_>>,
+) -> Result<Vec<WorkerInputV1>, BuildConfigError> {
     let values = value
         .as_array()
         .ok_or_else(|| BuildConfigError::Invalid("providers must be an array".to_owned()))?;
@@ -739,13 +776,23 @@ fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, BuildConfigErr
         )));
     }
 
-    let mut providers = Vec::with_capacity(values.len());
+    // Admit all metadata and the aggregate payload before opening any provider.
+    let mut declared = Vec::with_capacity(values.len());
+    let mut total_bytes = 0_u64;
     let mut previous = None;
     for (index, value) in values.iter().enumerate() {
         let context = format!("providers[{index}]");
         let object = exact_object(value, PROVIDER_KEYS, &context)?;
         let path = absolute_json_path(required_string(object, "path", &context)?, &context)?;
         let identity = declared_identity(object, &context)?;
+        total_bytes = total_bytes
+            .checked_add(identity.byte_len())
+            .filter(|total| *total <= fe2o3_hsaco_finalize::MAX_WORKER_TOTAL_INPUT_BYTES as u64)
+            .ok_or_else(|| {
+                BuildConfigError::Invalid(
+                    "provider payloads exceed the total input limit".to_owned(),
+                )
+            })?;
         if previous.is_some_and(|previous| previous >= identity) {
             return Err(BuildConfigError::Invalid(
                 "providers must be strictly ordered by declared content identity".to_owned(),
@@ -762,17 +809,18 @@ fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, BuildConfigErr
                 )));
             }
         };
-        let bytes = read_bounded(
-            &path,
-            fe2o3_hsaco_finalize::MAX_WORKER_TOTAL_INPUT_BYTES,
-            "provider",
-        )?;
-        providers.push(
-            WorkerInputV1::from_declared(kind, identity, bytes)
-                .map_err(BuildConfigError::Protocol)?,
-        );
+        declared.push((path, kind, identity));
     }
-    Ok(providers)
+    if let Some(b) = budget {
+        native::prepay_providers(total_bytes as usize, declared.len(), b)?;
+    }
+    declared
+        .into_iter()
+        .map(|(path, kind, identity)| {
+            let bytes = read_bounded(&path, identity.byte_len() as usize, "provider", None)?;
+            WorkerInputV1::from_declared(kind, identity, bytes).map_err(BuildConfigError::Protocol)
+        })
+        .collect()
 }
 
 fn parse_link_options(value: &Value) -> Result<Vec<LinkOptionV1>, BuildConfigError> {
@@ -997,6 +1045,7 @@ fn read_bounded(
     path: &Path,
     maximum: usize,
     kind: &'static str,
+    budget: Option<&mut Budget<'_>>,
 ) -> Result<Vec<u8>, BuildConfigError> {
     let mut file = OpenOptions::new()
         .read(true)
@@ -1021,9 +1070,13 @@ fn read_bounded(
             path.display()
         )));
     }
-    let mut bytes = Vec::with_capacity(initial_len.expect("validated bounded length"));
+    let length = initial_len.expect("validated bounded length");
+    if let Some(b) = budget {
+        native::prepay_read(length, b)?;
+    }
+    let mut bytes = Vec::with_capacity(length);
     Read::by_ref(&mut file)
-        .take((maximum + 1) as u64)
+        .take((length + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|error| BuildConfigError::Io {
             kind,
@@ -1087,379 +1140,5 @@ fn valid_selector_text(value: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use super::*;
-
-    static SCRATCH_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    struct ScratchDirectory(PathBuf);
-
-    impl ScratchDirectory {
-        fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "cargo-fe2o3-build-config-v2-{}-{}",
-                std::process::id(),
-                SCRATCH_COUNTER.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir(&path).unwrap();
-            Self(path)
-        }
-
-        fn write_manifest(&self, name: &str, value: &Value) -> PathBuf {
-            let path = self.0.join(name);
-            fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
-            path
-        }
-    }
-
-    impl Drop for ScratchDirectory {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn executable_measurement() -> (PathBuf, [u8; 32], u64) {
-        let path = std::env::current_exe().unwrap();
-        let bytes = fs::read(&path).unwrap();
-        let byte_len = bytes.len() as u64;
-        let sha256 = Sha256::digest(bytes).into();
-        (path, sha256, byte_len)
-    }
-
-    fn complete_manifest(scratch: &ScratchDirectory, version: u8) -> Value {
-        let (worker, sha256, byte_len) = executable_measurement();
-        let mut root = serde_json::json!({
-            "candidate_output_max_bytes": 1048576,
-            "format": if version == 1 {
-                PRODUCTION_BUILD_CONFIG_FORMAT_V1
-            } else {
-                PRODUCTION_BUILD_CONFIG_FORMAT_V2
-            },
-            "limits": {
-                "stderr_bytes": 4096,
-                "stdout_bytes": 4096,
-                "timeout_ms": 1000
-            },
-            "link_options": [
-                {"name": "code-object-version", "value": "5"},
-                {"name": "opt-level", "value": "2"},
-                {"name": "strip-debug", "value": "false"},
-                {"name": "verify-each", "value": "true"}
-            ],
-            "providers": [],
-            "units": [{
-                "crate_name": "kernel",
-                "source": "src/lib.rs",
-                "working_directory": scratch.0.to_str().unwrap()
-            }],
-            "worker": {
-                "byte_len": byte_len,
-                "llvm_build_identity": "llvm-build-v1",
-                "path": worker.to_str().unwrap(),
-                "sha256": hex(&sha256),
-                "worker_build_identity": "worker-build-v1"
-            }
-        });
-        if version == 2 {
-            root.as_object_mut().unwrap().insert(
-                "observation".to_owned(),
-                serde_json::json!({"kind": SOURCE_ISA_SUMMARY_OBSERVATION_KIND_V1}),
-            );
-        }
-        root
-    }
-
-    #[test]
-    fn production_v1_schema_identity_and_inert_observer_behavior_are_frozen() {
-        assert_eq!(
-            PRODUCTION_BUILD_CONFIG_FORMAT_V1,
-            "fe2o3-production-build-config-v1"
-        );
-        assert_eq!(PRODUCTION_CONFIG_PROFILE_ID_V1, "production-v1");
-        assert_eq!(
-            PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1,
-            b"fe2o3-build-config-transitive-v1"
-        );
-        assert_eq!(
-            ROOT_KEYS_V1,
-            [
-                "candidate_output_max_bytes",
-                "format",
-                "limits",
-                "link_options",
-                "providers",
-                "units",
-                "worker",
-            ]
-        );
-        assert!(!ProductionBuildConfigVersion::V1.source_isa_summary_enabled());
-
-        let measurement = WorkerMeasurementV1::new(
-            ContentIdentityV1::from_parts([0x11; 32], 123),
-            "worker-build-v1",
-            "llvm-build-v1",
-        )
-        .unwrap();
-        let identity = transitive_identity_from_measurement(
-            PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1,
-            PRODUCTION_CONFIG_PROFILE_ID_V1,
-            br#"{"format":"frozen-v1"}"#,
-            &measurement,
-            &[],
-        );
-        assert_eq!(
-            identity.to_hex(),
-            "6a8e515a9a85bc48b67ce8cc8af892c8325aab699457ea5d1c2fea2459e8213c"
-        );
-    }
-
-    #[test]
-    fn production_v2_observation_is_exact_and_has_a_distinct_identity_domain() {
-        assert_ne!(
-            PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1,
-            PRODUCTION_CONFIG_IDENTITY_DOMAIN_V2
-        );
-        assert!(
-            ProductionBuildConfigVersion::V2(ProductionSourceIsaObservationKindV1::Summary)
-                .source_isa_summary_enabled()
-        );
-        assert!(
-            parse_source_isa_observation(&serde_json::json!({"kind": "source-isa-summary-v1"}))
-                .is_ok()
-        );
-        assert_eq!(
-            parse_source_isa_observation(
-                &serde_json::json!({"kind": "source-isa-characteristic-v1"})
-            )
-            .unwrap(),
-            ProductionSourceIsaObservationKindV1::Characteristic
-        );
-        for rejected in [
-            serde_json::json!({"kind": "source-isa-summary-v2"}),
-            serde_json::json!({"kind": "source-isa-summary-v1", "output": "stderr"}),
-            serde_json::json!({}),
-        ] {
-            assert!(parse_source_isa_observation(&rejected).is_err());
-        }
-    }
-
-    #[test]
-    fn characteristic_observation_rejects_multi_unit_configuration() {
-        let scratch = ScratchDirectory::new();
-        let mut manifest = complete_manifest(&scratch, 2);
-        manifest["observation"] =
-            serde_json::json!({"kind": SOURCE_ISA_CHARACTERISTIC_OBSERVATION_KIND_V1});
-        manifest["units"] = serde_json::json!([
-            {
-                "crate_name": "kernel",
-                "source": "src/lib.rs",
-                "working_directory": scratch.0.to_str().unwrap()
-            },
-            {
-                "crate_name": "kernel_two",
-                "source": "src/lib.rs",
-                "working_directory": scratch.0.to_str().unwrap()
-            }
-        ]);
-        let path = scratch.write_manifest("characteristic-multi-unit.json", &manifest);
-        assert!(matches!(
-            prepare_production_manifest_v2(&path),
-            Err(BuildConfigError::Invalid(message))
-                if message == "source-isa-characteristic-v1 requires exactly one configured unit"
-        ));
-    }
-
-    #[test]
-    fn complete_v2_manifest_binds_identity_units_and_observer_policy() {
-        let scratch = ScratchDirectory::new();
-        let path = scratch.write_manifest("v2.json", &complete_manifest(&scratch, 2));
-        let config = prepare_production_manifest_v2(&path).unwrap();
-        assert_eq!(
-            config.config_environment_name(),
-            PRODUCTION_BUILD_CONFIG_V2_ENV
-        );
-        assert_eq!(
-            config.expected_identity_environment_name(),
-            PRODUCTION_BUILD_EXPECTED_ID_V2_ENV
-        );
-
-        let source = Path::new("src/lib.rs");
-        let expected = config
-            .source_isa_unit_identity("kernel", source, &scratch.0)
-            .unwrap();
-        let policy = config.source_isa_observer_policy().unwrap().unwrap();
-        assert_eq!(policy.config_identity(), config.identity());
-        assert_eq!(policy.selected_units(), &[expected]);
-        assert_eq!(
-            expected,
-            source_isa_unit_identity(
-                config.identity(),
-                "kernel",
-                "src/lib.rs",
-                scratch.0.to_str().unwrap()
-            )
-        );
-        assert_ne!(
-            expected,
-            source_isa_unit_identity(
-                config.identity(),
-                "kernel-mutated",
-                "src/lib.rs",
-                scratch.0.to_str().unwrap()
-            )
-        );
-        assert_ne!(
-            expected,
-            source_isa_unit_identity(
-                config.identity(),
-                "kernel",
-                "src/other.rs",
-                scratch.0.to_str().unwrap()
-            )
-        );
-        assert_ne!(
-            expected,
-            source_isa_unit_identity(config.identity(), "kernel", "src/lib.rs", "/other")
-        );
-        assert!(
-            config
-                .source_isa_unit_identity("kernel-mutated", source, &scratch.0)
-                .is_none()
-        );
-        assert!(
-            config
-                .source_isa_unit_identity("kernel", Path::new("src/other.rs"), &scratch.0)
-                .is_none()
-        );
-        assert!(
-            config
-                .source_isa_unit_identity("kernel", source, Path::new("/other"))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn v1_manifest_retains_no_observer_policy() {
-        let scratch = ScratchDirectory::new();
-        let path = scratch.write_manifest("v1.json", &complete_manifest(&scratch, 1));
-        let config = prepare_production_manifest_v1(&path).unwrap();
-        assert_eq!(
-            config.config_environment_name(),
-            PRODUCTION_BUILD_CONFIG_ENV
-        );
-        assert!(config.source_isa_observer_policy().unwrap().is_none());
-        assert!(
-            config
-                .source_isa_unit_identity("kernel", Path::new("src/lib.rs"), &scratch.0)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn expected_identity_namespaces_reject_orphans_wrong_versions_and_dual_values() {
-        let scratch = ScratchDirectory::new();
-        let v2_path = scratch.write_manifest("v2.json", &complete_manifest(&scratch, 2));
-        let v1_path = scratch.write_manifest("v1.json", &complete_manifest(&scratch, 1));
-        let v2 = prepare_production_manifest_v2(&v2_path).unwrap();
-        let v1 = prepare_production_manifest_v1(&v1_path).unwrap();
-        let v2_identity = v2.identity().to_hex();
-        let v1_identity = v1.identity().to_hex();
-        assert_ne!(v1_identity, v2_identity);
-        let wrong = OsStr::new("0000000000000000000000000000000000000000000000000000000000000000");
-
-        assert!(
-            validate_expected_build_config_identity_values(
-                Some(&v2),
-                None,
-                Some(OsStr::new(&v2_identity))
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_expected_build_config_identity_values(
-                Some(&v1),
-                Some(OsStr::new(&v1_identity)),
-                None
-            )
-            .is_ok()
-        );
-        for result in [
-            validate_expected_build_config_identity_values(Some(&v2), None, None),
-            validate_expected_build_config_identity_values(Some(&v2), Some(wrong), None),
-            validate_expected_build_config_identity_values(Some(&v2), None, Some(wrong)),
-            validate_expected_build_config_identity_values(
-                Some(&v2),
-                Some(OsStr::new(&v1_identity)),
-                Some(OsStr::new(&v2_identity)),
-            ),
-            validate_expected_build_config_identity_values(Some(&v1), None, None),
-            validate_expected_build_config_identity_values(Some(&v1), None, Some(wrong)),
-            validate_expected_build_config_identity_values(Some(&v1), Some(wrong), None),
-            validate_expected_build_config_identity_values(
-                Some(&v1),
-                Some(OsStr::new(&v1_identity)),
-                Some(OsStr::new(&v2_identity)),
-            ),
-            validate_expected_build_config_identity_values(None, Some(wrong), None),
-            validate_expected_build_config_identity_values(None, None, Some(wrong)),
-            validate_expected_build_config_identity_values(None, Some(wrong), Some(wrong)),
-        ] {
-            assert!(result.is_err());
-        }
-        assert!(validate_expected_build_config_identity_values(None, None, None).is_ok());
-    }
-
-    #[test]
-    fn v2_hostile_schema_matrix_is_rejected_before_worker_admission() {
-        let scratch = ScratchDirectory::new();
-        let valid = complete_manifest(&scratch, 2);
-        let mut hostile = Vec::new();
-
-        let mut missing_observation = valid.clone();
-        missing_observation
-            .as_object_mut()
-            .unwrap()
-            .remove("observation");
-        hostile.push(missing_observation);
-
-        let mut extra_root = valid.clone();
-        extra_root
-            .as_object_mut()
-            .unwrap()
-            .insert("output".to_owned(), Value::Null);
-        hostile.push(extra_root);
-
-        for observation in [
-            Value::Null,
-            serde_json::json!({}),
-            serde_json::json!({"kind": "source-isa-summary-v2"}),
-            serde_json::json!({"kind": SOURCE_ISA_SUMMARY_OBSERVATION_KIND_V1, "output": "stderr"}),
-        ] {
-            let mut value = valid.clone();
-            value
-                .as_object_mut()
-                .unwrap()
-                .insert("observation".to_owned(), observation);
-            hostile.push(value);
-        }
-
-        for (index, value) in hostile.iter().enumerate() {
-            let path = scratch.write_manifest(&format!("hostile-{index}.json"), value);
-            assert!(
-                prepare_production_manifest_v2(&path).is_err(),
-                "case {index}"
-            );
-        }
-
-        let mut v1_with_observation = complete_manifest(&scratch, 1);
-        v1_with_observation.as_object_mut().unwrap().insert(
-            "observation".to_owned(),
-            serde_json::json!({"kind": SOURCE_ISA_SUMMARY_OBSERVATION_KIND_V1}),
-        );
-        let path = scratch.write_manifest("v1-with-observation.json", &v1_with_observation);
-        assert!(prepare_production_manifest_v1(&path).is_err());
-    }
-}
+#[path = "build_config_tests.rs"]
+pub(crate) mod tests;

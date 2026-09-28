@@ -42,24 +42,10 @@ const FRAME_STORAGE: usize = 4 * schema::RECORD_BYTES
     + size_of::<PublishedHandoff<Schema>>()
     + size_of::<Error>()
     + 256;
-// Three hash preimages, final-block padding, fixed comparisons and receipt
-// extraction. The named-slot prefix is a conservative bound for Production.
-const REPLAY_FIXED_WORK: usize = {
-    let producer = Schema::PRODUCER_DOMAIN.len() + 16;
-    let slot = Schema::NAMED_SLOT_DOMAIN.len() + 32 + 8 + 16 + 32 + 1;
-    // Binding (40), producer/slot/attempt (120), and transport length (8).
-    let transaction = <Schema as currentness::Schema>::TRANSACTION_DOMAIN.len() + 168;
-    producer + slot + transaction + 3 * 128 + 256
-};
 // The shared entry frame already covers one hash state and its error. These
 // additional fixed headers/scratch include the returned (unreserved) receipt;
 // no producer text, transport or decoded owner is copied.
-const REPLAY_SCRATCH_STORAGE: usize = 3 * size_of::<CompilerModuleHandoffReceiptV4>()
-    + 2 * size_of::<PublishedHandoff<Schema>>()
-    + 2 * size_of::<Sha256>()
-    + 8 * 32
-    + 64 * size_of::<usize>()
-    + resources::fixed_scope_overhead::<Result<CompilerModuleHandoffReceiptV4>>();
+const REPLAY_SCRATCH_STORAGE: usize = currentness::replay_scratch_storage::<Schema, Error>();
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
@@ -523,48 +509,26 @@ pub fn rederive_compiler_module_handoff_receipt_for_replay_v4(
 ) -> Result<CompilerModuleHandoffReceiptV4> {
     entry(budget, payload_storage(handoff)?, |resources| {
         resources.reserve(REPLAY_SCRATCH_STORAGE)?;
-        let bytes = handoff.canonical_bytes();
-        let binding = <Schema as currentness::Schema>::payload_binding(handoff);
-        if !Schema::binding_matches_length(binding, bytes.len()) {
-            return Err(Error::HandoffIdentityMismatch);
-        }
-        resources.work(replay_hash_work(
-            producer.stable_source.len(),
-            producer.crate_name.len(),
-            bytes.len(),
-        )?)?;
-        let producer_identity = producer_identity_for::<Schema>(producer);
-        let slot_identity = slot_identity_for::<Schema>(producer_identity, attempt, slot);
-        let identity =
-            Schema::derive_identity(producer_identity, slot_identity, attempt, binding, bytes);
-        if &identity != expected_transaction.as_bytes() {
-            return Err(Error::Coordination(
-                CompilerModuleHandoffErrorV1::DigestMismatch,
-            ));
-        }
-        Ok(<Schema as currentness::Schema>::receipt(
-            PublishedHandoff {
-                attempt,
-                slot,
-                binding,
-                identity,
-                length: bytes.len(),
-            },
+        currentness::rederive_receipt::<Schema>(
+            producer,
+            attempt,
+            slot,
+            expected_transaction.as_bytes(),
             handoff,
-        ))
+            handoff.canonical_bytes(),
+            resources,
+        )
+        .map_err(Error::from)
     })
 }
 
+#[cfg(test)]
 fn replay_hash_work(
     source_bytes: usize,
     crate_bytes: usize,
     transport_bytes: usize,
 ) -> std::result::Result<usize, Resource> {
-    source_bytes
-        .checked_add(crate_bytes)
-        .and_then(|n| n.checked_add(transport_bytes))
-        .and_then(|n| n.checked_add(REPLAY_FIXED_WORK))
-        .ok_or(Resource::Arithmetic)
+    currentness::replay_hash_work::<Schema>(source_bytes, crate_bytes, transport_bytes)
 }
 
 /// The returned lease/header storage is admitted but unreserved; reserve it

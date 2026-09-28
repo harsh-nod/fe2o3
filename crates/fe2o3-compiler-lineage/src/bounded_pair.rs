@@ -95,13 +95,7 @@ pub(crate) fn seal<E>(
     storage_limit: usize,
     mut charge: impl FnMut(usize) -> Result<(), E>,
 ) -> Result<Identity, Error<E>> {
-    ceiling(policy, storage_limit)?;
-    if bytes.len() != layout.encoded_len() {
-        return Err(Error::Length);
-    }
-    let work = hash_work::<E>(policy, layout.payload_end)?
-        .checked_add(2 * HEADER + 32)
-        .ok_or(Error::Arithmetic)?;
+    let work = seal_work(policy, layout, bytes.len(), storage_limit)?;
     charge(work).map_err(Error::Charge)?;
     // A captured value's destructor is user code too; run it before mutation.
     drop(charge);
@@ -119,6 +113,22 @@ pub(crate) fn seal<E>(
         sha256,
         byte_len: bytes.len() as u64,
     })
+}
+
+// Composite callers preflight every seal before invoking any mutable operation.
+pub(crate) fn seal_work<E>(
+    policy: &Policy,
+    layout: Layout,
+    byte_len: usize,
+    storage_limit: usize,
+) -> Result<usize, Error<E>> {
+    ceiling(policy, storage_limit)?;
+    if byte_len != layout.encoded_len() {
+        return Err(Error::Length);
+    }
+    hash_work::<E>(policy, layout.payload_end)?
+        .checked_add(2 * HEADER + 32)
+        .ok_or(Error::Arithmetic)
 }
 
 pub(crate) fn read<E>(

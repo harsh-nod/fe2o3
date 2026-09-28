@@ -204,7 +204,7 @@ pub fn run_inherited_protected_issuer_service_v1()
         .map_err(ProtectedIssuerDeploymentErrorV1::Service)
 }
 
-fn validate_bootstrap<const REQUIRE_ROOT: bool>(
+pub(crate) fn validate_bootstrap<const REQUIRE_ROOT: bool>(
     bootstrap: &OwnedFd,
     expected_parent: Option<rustix::process::Pid>,
 ) -> Result<(), ProtectedIssuerDeploymentErrorV1> {
@@ -308,6 +308,15 @@ fn require_descriptor_only_invocation_v1() -> Result<(), ProtectedIssuerDeployme
 }
 
 fn take_inherited(descriptor: RawFd) -> Result<OwnedFd, ProtectedIssuerDeploymentErrorV1> {
+    let retained = duplicate_inherited(descriptor)?;
+    close_inherited(descriptor)?;
+    Ok(retained)
+}
+
+// Native source custody clears its raw-slot guard before the separate close attempt.
+pub(crate) fn duplicate_inherited(
+    descriptor: RawFd,
+) -> Result<OwnedFd, ProtectedIssuerDeploymentErrorV1> {
     require_inherited(descriptor)?;
     // SAFETY: F_DUPFD_CLOEXEC atomically creates one new owned descriptor or reports an error.
     let retained = unsafe {
@@ -324,12 +333,10 @@ fn take_inherited(descriptor: RawFd) -> Result<OwnedFd, ProtectedIssuerDeploymen
         });
     }
     // SAFETY: successful F_DUPFD_CLOEXEC returned one newly owned descriptor.
-    let retained = unsafe { OwnedFd::from_raw_fd(retained) };
-    close_inherited(descriptor)?;
-    Ok(retained)
+    Ok(unsafe { OwnedFd::from_raw_fd(retained) })
 }
 
-fn require_inherited(descriptor: RawFd) -> Result<(), ProtectedIssuerDeploymentErrorV1> {
+pub(crate) fn require_inherited(descriptor: RawFd) -> Result<(), ProtectedIssuerDeploymentErrorV1> {
     // SAFETY: F_GETFD consumes only the scalar descriptor and reports invalid inputs via errno.
     let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
     if flags < 0 {
@@ -346,7 +353,7 @@ fn require_inherited(descriptor: RawFd) -> Result<(), ProtectedIssuerDeploymentE
     Ok(())
 }
 
-fn close_inherited(descriptor: RawFd) -> Result<(), ProtectedIssuerDeploymentErrorV1> {
+pub(crate) fn close_inherited(descriptor: RawFd) -> Result<(), ProtectedIssuerDeploymentErrorV1> {
     // SAFETY: each caller closes one inherited fixed descriptor exactly once after private
     // close-on-exec custody has been retained.
     if unsafe { libc::close(descriptor) } != 0 {

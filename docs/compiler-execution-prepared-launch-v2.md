@@ -3,13 +3,20 @@
 `ProtectedIssuerSupervisorV2::prepare_launch` consumes a prepaid
 `AcceptedCompilerExecutionHandoffV2` and returns move-only
 `PreparedProtectedIssuerLaunchV2` plus an unreserved storage-growth receipt.
+`ProtectedIssuerSupervisorV3::prepare_launch` provides the corresponding V3
+operation over genuine `AcceptedCompilerExecutionHandoffV3`, policy, signing-key
+and launch-capability owners. The two nominal APIs share one preparation body;
+no admitted owner is converted between families.
 It materializes and revalidates inputs to the static launcher. It does **not**
 create a process, establish child confinement, execute the issuer, publish
 readiness, serve requests, run a protected proof, or qualify a GPU kernel.
 M0-M7 and 47/47 remain incomplete.
 
 The implementation is in
-[`launch_v2.rs`](../crates/fe2o3-compiler-execution-supervisor/src/launch_v2.rs),
+[`launch_v2.rs`](../crates/fe2o3-compiler-execution-supervisor/src/launch_v2.rs)
+and [`launch_v3.rs`](../crates/fe2o3-compiler-execution-supervisor/src/launch_v3.rs),
+with their common body in
+[`launch_native_adapter.rs`](../crates/fe2o3-compiler-execution-supervisor/src/launch_native_adapter.rs),
 with native supervisor transfers in
 [`authority_v2_launch.rs`](../crates/fe2o3-compiler-execution-supervisor/src/authority_v2_launch.rs),
 finite manifest I/O in
@@ -68,7 +75,7 @@ Before returning, the complete prepared chain checks, in order:
 `revalidate` repeats this chain under the same caller ledger. These are ordered
 observations, not an atomic global snapshot, perpetual liveness, or proof that
 no other process holds a descriptor. No public prepared API exposes a descriptor,
-signing operation, `Clone`, or conversion from an admitted V1 prepared owner.
+signing operation, `Clone`, or conversion from another admitted policy family.
 
 ## Bounded Transfers And Parent
 
@@ -129,6 +136,10 @@ EINTR fail without retry. Legacy code uses the same metadata predicate, but its
 existing read/write helpers are not the native finite-I/O path.
 
 ## Resource Contract
+
+The equations below use V2 type names. V3 follows the same call graph with its
+own nominal types and exported quotas; derive sizes from those types rather than
+assuming byte-identical layouts or treating V2 quota numbers as a stable V3 ABI.
 
 Every nested native operation uses the original caller ledger. The borrowed
 supervisor and consumed accepted handoff must already be prepaid. Scopes restore
@@ -238,6 +249,22 @@ stable quota ABI. Constants may adjust during tests and review. Refusal charges
 only reached scopes according to entry/prepayment order, with no refund. Logical
 quotas do not bound generated instructions or stack, allocator behavior, RSS,
 kernel objects/pipe buffers, page cache, syscall scheduling or wall-clock time.
+
+## V3 Fixture
+
+The V3 preparation fixture exercises distinct-UID handoff, quota boundaries,
+transfer/manifest mutations, descriptor restoration and preparation consumption
+without spawning an issuer. In an explicitly disposable root container, run:
+
+```sh
+FE2O3_RUN_PRIVILEGED_PREPARE_V3_TEST=1 "$SUPERVISOR_TEST_BIN" \
+  --exact launch_v3::tests::native_distinct_uid_prepare_v3_fixture \
+  --ignored --nocapture --test-threads=1
+```
+
+This fixture is compiled but not runtime-validated at the
+[V3 launch checkpoint](evidence/conditional-native-launch-20260926.md). It is
+not a substitute for the full consuming-process fixture or deployment validation.
 
 ## Remaining Integration
 

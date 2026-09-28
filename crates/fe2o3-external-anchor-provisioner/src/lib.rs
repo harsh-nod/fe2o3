@@ -6,6 +6,19 @@ compile_error!("fe2o3-external-anchor-provisioner requires Linux x86-64");
 
 #[allow(unsafe_code)]
 mod entrypoint;
+#[allow(unsafe_code)]
+mod helper_io;
+#[allow(unsafe_code)]
+mod native_entrypoint;
+pub use native_entrypoint::{
+    NATIVE_EXTERNAL_ANCHOR_HELPER_FRAME_STORAGE_V2, NATIVE_EXTERNAL_ANCHOR_HELPER_INPUT_STORAGE_V2,
+    NATIVE_EXTERNAL_ANCHOR_HELPER_INPUT_STORAGE_V3,
+    NATIVE_EXTERNAL_ANCHOR_HELPER_PROCESS_STORAGE_V2,
+    NATIVE_EXTERNAL_ANCHOR_HELPER_PROCESS_WORK_V2, NATIVE_EXTERNAL_ANCHOR_HELPER_WORK_V2,
+    NativeExternalAnchorProvisioningHelperErrorV2,
+    run_inherited_external_anchor_provisioning_helper_v2,
+    run_inherited_external_anchor_provisioning_helper_v3,
+};
 
 pub use entrypoint::{
     EXTERNAL_ANCHOR_HELPER_BOOTSTRAP_FD_V1, EXTERNAL_ANCHOR_HELPER_DAEMON_EXECUTABLE_FD_V1,
