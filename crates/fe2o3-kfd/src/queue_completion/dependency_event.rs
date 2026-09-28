@@ -95,6 +95,17 @@ impl CompletionDependencyLedgerV1 {
     }
 }
 
+#[cfg(test)]
+impl CompletionSignalArenaOwnerV1 {
+    pub(crate) fn dependency_ledger_counts_for_test(&self) -> (u64, usize, usize) {
+        (
+            self.dependency_ledger.next_event_id,
+            self.dependency_ledger.events.len(),
+            self.dependency_ledger.readers.len(),
+        )
+    }
+}
+
 /// Publication binding state of an addressless compute-event occurrence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Gfx942ComputeEventBindingStateV1 {

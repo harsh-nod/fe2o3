@@ -2077,14 +2077,23 @@ impl TestOnlyMultiInflightDispatchOwnerV1 {
         queue: QueueKeyV1,
         template: CompletionPacketTemplateV1,
     ) -> Result<DispatchEpochIdentityV1, Gfx942DispatchBindingErrorV1> {
-        let roster = completion_dispatch_roster_v1(&[template.generations()])?;
+        self.reserve_batch(queue, &[template])
+    }
+
+    pub(super) fn reserve_batch<const N: usize>(
+        &mut self,
+        queue: QueueKeyV1,
+        templates: &[CompletionPacketTemplateV1; N],
+    ) -> Result<DispatchEpochIdentityV1, Gfx942DispatchBindingErrorV1> {
+        let roster =
+            completion_dispatch_roster_v1(&templates.map(|template| template.generations()))?;
         self.owner.reserve(queue, roster)
     }
 
-    pub(super) fn mark_published(
+    pub(super) fn mark_published<const N: usize>(
         &mut self,
         identity: DispatchEpochIdentityV1,
-        completion: &Gfx942CompletionBatchV1<1>,
+        completion: &Gfx942CompletionBatchV1<N>,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
         let occurrence = completion
             .occurrence_v1()
@@ -2099,10 +2108,10 @@ impl TestOnlyMultiInflightDispatchOwnerV1 {
         self.owner.cancel_epoch(identity)
     }
 
-    pub(super) fn validate_published(
+    pub(super) fn validate_published<const N: usize>(
         &self,
         identity: DispatchEpochIdentityV1,
-        completion: &Gfx942CompletionBatchV1<1>,
+        completion: &Gfx942CompletionBatchV1<N>,
     ) -> Result<CompletionBatchOccurrenceV1, Gfx942DispatchBindingErrorV1> {
         let occurrence = completion
             .occurrence_v1()
@@ -2119,10 +2128,10 @@ impl TestOnlyMultiInflightDispatchOwnerV1 {
         self.owner.complete_epoch(identity, completion)
     }
 
-    pub(super) fn validate_completed(
+    pub(super) fn validate_completed<const N: usize>(
         &self,
         identity: DispatchEpochIdentityV1,
-        completed: &Gfx942CompletedBatchV1<1>,
+        completed: &Gfx942CompletedBatchV1<N>,
     ) -> Result<CompletionBatchOccurrenceV1, Gfx942DispatchBindingErrorV1> {
         let occurrence = completed
             .occurrence_v1()

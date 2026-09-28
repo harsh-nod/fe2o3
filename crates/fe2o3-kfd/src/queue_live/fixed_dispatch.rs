@@ -2,6 +2,74 @@
 
 use super::*;
 
+// Keep source publication and rollback identical for native recipes and CPU
+// receipt tests. Only the native adapter can access retained device authority.
+pub(super) trait DependencySourceRecipeV1<const N: usize> {
+    fn bind(
+        &mut self,
+        session: &mut ComputeAqlQueueSessionV1,
+    ) -> Result<
+        ([CompletionPacketTemplateV1; N], DispatchEpochIdentityV1),
+        Gfx942DispatchBindingErrorV1,
+    >;
+
+    fn mark_published(
+        &mut self,
+        session: &mut ComputeAqlQueueSessionV1,
+        identity: DispatchEpochIdentityV1,
+        completion: &Gfx942CompletionBatchV1<N>,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1>;
+
+    fn cancel(
+        &mut self,
+        session: &mut ComputeAqlQueueSessionV1,
+        identity: DispatchEpochIdentityV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1>;
+}
+
+struct NativeDependencySourceRecipeV1;
+
+impl<const N: usize> DependencySourceRecipeV1<N> for NativeDependencySourceRecipeV1 {
+    fn bind(
+        &mut self,
+        session: &mut ComputeAqlQueueSessionV1,
+    ) -> Result<
+        ([CompletionPacketTemplateV1; N], DispatchEpochIdentityV1),
+        Gfx942DispatchBindingErrorV1,
+    > {
+        session
+            .dispatch
+            .as_mut()
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
+            .bind_templates::<N>(session.key)
+    }
+
+    fn mark_published(
+        &mut self,
+        session: &mut ComputeAqlQueueSessionV1,
+        identity: DispatchEpochIdentityV1,
+        completion: &Gfx942CompletionBatchV1<N>,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        session
+            .dispatch
+            .as_mut()
+            .expect("dependency source dispatch owner remains retained")
+            .mark_published(identity, completion)
+    }
+
+    fn cancel(
+        &mut self,
+        session: &mut ComputeAqlQueueSessionV1,
+        identity: DispatchEpochIdentityV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        session
+            .dispatch
+            .as_mut()
+            .expect("dependency source dispatch owner remains retained")
+            .cancel_binding(identity)
+    }
+}
+
 impl CheckedGfx942XnackMinusDevice {
     /// Private source-complete preparation path. There is intentionally no
     /// safe public producer for its data premises or typed kernarg images.
@@ -4318,90 +4386,108 @@ impl ComputeAqlQueueSessionV1 {
     pub(super) fn submit_fixed_dispatch_with_dependency_events_inner_v1<const N: usize>(
         &mut self,
         lane: ComputeAqlQueueLaneV1,
-    ) -> Result<Gfx942ComputeDependencySourceBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+    ) -> Result<Gfx942ComputeDependencySourceBatchV1<N>, Gfx942FixedDispatchSubmissionFailureV1>
+    {
+        self.submit_dependency_source_using_v1(
+            lane,
+            &mut NativeDependencySourceRecipeV1,
+            |session, packets| session.submit_prepared_batch_classified(packets),
+        )
+    }
+
+    pub(super) fn submit_dependency_source_using_v1<const N: usize>(
+        &mut self,
+        lane: ComputeAqlQueueLaneV1,
+        recipe: &mut impl DependencySourceRecipeV1<N>,
+        submit: impl FnOnce(
+            &mut Self,
+            AqlPreparedKernelDispatchBatchV2<N>,
+        ) -> Result<u64, NativeAqlSubmissionFailureV1>,
+    ) -> Result<Gfx942ComputeDependencySourceBatchV1<N>, Gfx942FixedDispatchSubmissionFailureV1>
+    {
         let operation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.submit_fixed_dispatch_with_dependency_events_operation_v1::<N>(lane)
+            self.submit_fixed_dispatch_with_dependency_events_operation_v1(lane, recipe, submit)
         }));
         match operation {
-            Ok(result) => result,
+            Ok(result) => self
+                .terminalize_fixed_dispatch_submission_result_v1(result)
+                .map_err(FixedDispatchSubmissionFailureV1::into_public),
             Err(payload) => {
                 self.poison_terminal();
-                permanently_poison_process_global_kfd_runtime_gate_v1();
+                poison_process_global_after_dispatch_terminal_v1();
                 std::panic::resume_unwind(payload)
             }
         }
     }
 
-    pub(super) fn submit_fixed_dispatch_with_dependency_events_operation_v1<const N: usize>(
+    fn submit_fixed_dispatch_with_dependency_events_operation_v1<const N: usize>(
         &mut self,
         lane: ComputeAqlQueueLaneV1,
-    ) -> Result<Gfx942ComputeDependencySourceBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        recipe: &mut impl DependencySourceRecipeV1<N>,
+        submit: impl FnOnce(
+            &mut Self,
+            AqlPreparedKernelDispatchBatchV2<N>,
+        ) -> Result<u64, NativeAqlSubmissionFailureV1>,
+    ) -> Result<Gfx942ComputeDependencySourceBatchV1<N>, FixedDispatchSubmissionFailureV1> {
         if self.terminal_poisoned {
-            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+            return Err(FixedDispatchSubmissionFailureV1::Terminal(
+                Gfx942DispatchBindingErrorV1::Poisoned.into(),
+            ));
         }
         if self.has_any_persistent_compute_attachment_v1() {
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+            return Err(FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
+                Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+            ));
         }
         if N == 0 || N > super::completion::GFX942_MAX_COMPUTE_DEPENDENCY_READERS_V1 {
-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "dependency source packet count must be 1 through 8192",
+            return Err(FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "dependency source packet count must be 1 through 8192",
+                ),
             ));
         }
         let acceptance = match self.dependency_owner.reserve_acceptance_epoch() {
             Ok(acceptance) => acceptance,
             Err(error @ ComputeDependencyTargetUseErrorV1::AcceptanceEpochExhausted) => {
-                self.poison_terminal();
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-                return Err(map_dependency_target_use_error_v1(error));
+                return Err(FixedDispatchSubmissionFailureV1::Terminal(
+                    map_dependency_target_use_error_v1(error),
+                ));
             }
-            Err(error) => return Err(map_dependency_target_use_error_v1(error)),
+            Err(error) => {
+                return Err(FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
+                    map_dependency_target_use_error_v1(error),
+                ));
+            }
         };
-        let binding = self
-            .dispatch
-            .as_mut()
-            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)
-            .and_then(|dispatch| dispatch.bind_templates::<N>(self.key));
-        let (templates, identity) = self
-            .classify_fixed_dispatch_binding(FixedDispatchBindingModeV1::Ordinary, binding)
-            .map_err(FixedDispatchSubmissionFailureV1::into_error)?;
+        let binding = recipe.bind(self);
+        let (templates, identity) =
+            self.classify_fixed_dispatch_binding(FixedDispatchBindingModeV1::Ordinary, binding)?;
         let completion = self.submit_with_dependency_events_classified_v1(
             templates,
             acceptance.session_occurrence(),
             acceptance.epoch(),
+            submit,
         );
         let (completion, events) = match completion {
             Ok(published) => {
-                if let Err(error) = self
-                    .dispatch
-                    .as_mut()
-                    .expect("dependency source dispatch owner remains retained")
-                    .mark_published(identity, &published.0)
-                {
-                    self.poison_terminal();
-                    permanently_poison_process_global_kfd_runtime_gate_v1();
-                    return Err(error.into());
-                }
+                recipe
+                    .mark_published(self, identity, &published.0)
+                    .map_err(|error| FixedDispatchSubmissionFailureV1::Terminal(error.into()))?;
                 published
             }
             Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(error)) => {
-                if self
-                    .dispatch
-                    .as_mut()
-                    .expect("dependency source dispatch owner remains retained")
-                    .cancel_binding(identity)
-                    .is_err()
-                {
-                    self.poison_terminal();
-                    permanently_poison_process_global_kfd_runtime_gate_v1();
-                    return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into());
+                if recipe.cancel(self, identity).is_err() {
+                    return Err(FixedDispatchSubmissionFailureV1::Terminal(
+                        Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
+                    ));
                 }
-                return Err(error);
+                return Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(
+                    error,
+                ));
             }
             Err(FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error))
             | Err(FixedDispatchSubmissionFailureV1::Terminal(error)) => {
-                self.poison_terminal();
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-                return Err(error);
+                return Err(FixedDispatchSubmissionFailureV1::Terminal(error));
             }
         };
         Ok(Gfx942ComputeDependencySourceBatchV1 {
@@ -4418,6 +4504,10 @@ impl ComputeAqlQueueSessionV1 {
         templates: [CompletionPacketTemplateV1; N],
         session_occurrence: u64,
         source_acceptance_epoch: u64,
+        submit: impl FnOnce(
+            &mut Self,
+            AqlPreparedKernelDispatchBatchV2<N>,
+        ) -> Result<u64, NativeAqlSubmissionFailureV1>,
     ) -> Result<
         (
             Gfx942CompletionBatchV1<N>,
@@ -4445,7 +4535,7 @@ impl ComputeAqlQueueSessionV1 {
             )
             .map_err(|error| FixedDispatchSubmissionFailureV1::Terminal(error.into()))?;
         let (packets, retention) = bound.into_parts();
-        match self.submit_prepared_batch_classified(packets) {
+        match submit(self, packets) {
             Ok(last_packet_id) => {
                 let batch = self
                     .completion_owner

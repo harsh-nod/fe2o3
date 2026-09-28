@@ -21,17 +21,17 @@ enum Fault {
     Reset,
 }
 
-struct CpuSignals {
+pub(super) struct CpuSignals {
     observation: AqlCompletionObservationV1,
     fault: Option<Fault>,
     panic: bool,
-    checks: usize,
-    observed: Vec<u32>,
-    resets: Vec<u32>,
+    pub(super) checks: usize,
+    pub(super) observed: Vec<u32>,
+    pub(super) resets: Vec<u32>,
 }
 
 impl CpuSignals {
-    fn new(observation: AqlCompletionObservationV1) -> Self {
+    pub(super) fn new(observation: AqlCompletionObservationV1) -> Self {
         Self {
             observation,
             fault: None,

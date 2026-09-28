@@ -1194,6 +1194,20 @@ impl CompletionSignalArenaOwnerV1 {
         )
     }
 
+    /// Hostile phase injection, never a native publication or completion receipt.
+    #[cfg(test)]
+    pub(super) fn invalidate_bound_phase_for_test(&mut self) {
+        let record = self
+            .slots
+            .iter_mut()
+            .find(|record| matches!(record.phase, CompletionSlotPhaseV1::Bound { .. }))
+            .expect("fault requires a retained bound slot");
+        let CompletionSlotPhaseV1::Bound { batch_id } = record.phase else {
+            unreachable!()
+        };
+        record.phase = CompletionSlotPhaseV1::Published { batch_id };
+    }
+
     pub(super) fn record_dependency_event_batch_v1<const N: usize>(
         &mut self,
         session_occurrence: u64,

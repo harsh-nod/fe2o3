@@ -1350,7 +1350,8 @@ enum FixedDispatchSubmissionFailureV1 {
     Terminal(ComputeAqlQueueSessionErrorV1),
 }
 
-/// Classified result of publishing an already-bound ordinary fixed dispatch.
+/// Classified result of ordinary fixed-dispatch publication, optionally with
+/// exact per-packet source events.
 ///
 /// A rejected or retryable failure proves that no packet became visible. A
 /// retryable failure additionally proves that the immutable binding was
@@ -4573,6 +4574,18 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
     pub fn submit_fixed_dispatch_with_dependency_events_v1<const N: usize>(
         &mut self,
     ) -> Result<Gfx942ComputeDependencySourceBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        self.submit_fixed_dispatch_with_dependency_events_classified_v1::<N>()
+            .map_err(Gfx942FixedDispatchSubmissionFailureV1::into_error)
+    }
+
+    /// Publishes source events while preserving rejection, retry, and terminal
+    /// failure classification. Retry restores event, completion, and dispatch
+    /// capacity, but consumed identity generations and acceptance epochs are
+    /// never rewound. A terminal failure must not be retried.
+    pub fn submit_fixed_dispatch_with_dependency_events_classified_v1<const N: usize>(
+        &mut self,
+    ) -> Result<Gfx942ComputeDependencySourceBatchV1<N>, Gfx942FixedDispatchSubmissionFailureV1>
+    {
         self.session
             .submit_fixed_dispatch_with_dependency_events_inner_v1::<N>(self.lane)
     }
@@ -13727,6 +13740,7 @@ mod runtime_materialized_completion_receipt;
 
 #[cfg(test)]
 mod tests {
+    mod dependency_source_publication_tests;
     mod runtime_completion_tests;
     mod runtime_publication_tests;
 
@@ -18391,7 +18405,12 @@ mod tests {
         assert!(!session.terminal_poisoned);
 
         let source_failure = session
-            .submit_with_dependency_events_classified_v1([test_completion_template(queue, 2)], 1, 1)
+            .submit_with_dependency_events_classified_v1(
+                [test_completion_template(queue, 2)],
+                1,
+                1,
+                |_, _| panic!("full signals must refuse before native submit"),
+            )
             .expect_err("dependency source capacity failure is retryable");
         assert!(matches!(
             source_failure,

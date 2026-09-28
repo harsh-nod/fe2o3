@@ -441,11 +441,18 @@ fn runtime_publication_cell_adapters_use_shared_classifier() {
         include_str!("../../../fe2o3-runtime/src/kfd_backend/materialized_publication.rs"),
         include_str!("../../../fe2o3-runtime/src/kfd_backend/ordered_publication.rs"),
     ] {
-        assert!(
-            source.contains(
-                ".submit_classified(|| queue.submit_fixed_dispatch_classified_v1::<1>())"
-            )
-        );
-        assert!(!source.contains("match queue.submit_fixed_dispatch_classified_v1::<1>()"));
+        assert!(source.contains(".submit_classified(|| queue.submit_classified())"));
+        assert!(!source.contains("match queue.submit_classified()"));
     }
+    let io = include_str!("../../../fe2o3-runtime/src/kfd_backend/ordinary_queue_io.rs");
+    let submit = io
+        .split_once("pub(super) fn submit_classified(")
+        .unwrap()
+        .1
+        .split_once("pub(super) fn poll(")
+        .unwrap()
+        .0;
+    assert!(
+        submit.contains("Self::Native(lane) => lane.submit_fixed_dispatch_classified_v1::<1>()")
+    );
 }

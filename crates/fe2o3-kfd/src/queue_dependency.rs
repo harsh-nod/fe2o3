@@ -140,6 +140,11 @@ impl ComputeDependencySessionOwnerV1 {
         (self.session_occurrence, self.next_acceptance_epoch, active)
     }
 
+    #[cfg(test)]
+    pub(super) fn advance_to_last_acceptance_epoch_for_test(&mut self) {
+        self.next_acceptance_epoch = Some(u64::MAX);
+    }
+
     pub(super) fn ensure_idle(&self) -> Result<(), ComputeDependencyTargetUseErrorV1> {
         if self.poisoned {
             return Err(ComputeDependencyTargetUseErrorV1::Poisoned);
