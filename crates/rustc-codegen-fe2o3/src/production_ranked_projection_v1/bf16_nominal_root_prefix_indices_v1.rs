@@ -912,3 +912,6 @@ pub(crate) use argument_initialization::observe_actual_root_argument_initializat
 pub(crate) use argument_initialization::observe_actual_root_retired_fixed_proof_for_test_v1;
 #[cfg(test)]
 pub(crate) use guarded_genuine_v1::observe_actual_root_guarded_accesses_for_test_v1;
+
+#[cfg(test)]
+pub(crate) use argument_initialization::observe_actual_root_fixed_prefix_comparison_for_test_v1;

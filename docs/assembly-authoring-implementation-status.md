@@ -1519,3 +1519,28 @@ adding runtime calls or owner fields. All 45 source controls, strict CPU builds,
 See [the qualification record](debugger-disabled-type-anchor-qualification-20260927.md).
 Actual nine-type layout, current startup and native capture remain unqualified.
 All public gates remain disabled; accepted broad exits remain 6/18.
+
+## Actual observable debugger nine-type layout — 2026-09-27
+
+All nine required actual-object types now pass static inspection, together with
+152 controls. Scratch measures 624 bytes; the logical adapter reservation is
+15,144 bytes under its unchanged 65,536-byte cap. The complete four-phase build
+custody handoff and strict decoder are qualified separately. See
+[the layout qualification](debugger-observable-layout-qualification-20260927.md).
+This supersedes the earlier layout limitation, not the remaining current-startup
+or native-capture requirements. No debugger or GPU target was executed.
+Public gates remain disabled; accepted broad exits remain 6/18.
+
+## Authentic original/candidate fixed-query connection — 2026-09-28
+
+The [fixed-query connection checkpoint](original-fixed-query-genuine-qualification-20260928.md)
+passed 15 new controls, 356 model / 3,174 backend tests and five actual Rust
+sessions with 36 positive helper CPU runs. The original oracle and candidate
+share authenticated source and the original Budget, retaining payloads through
+postflight and destruction-before-refund.
+
+Those genuine prefixes contain zero Fixed queries. A separate array-bounds
+fixture was rejected before nominal-owner materialization; genuine nonempty
+Fixed coverage is still open. The Option-first prelude, later writers, joint
+bounds driver and production route also remain open. Broad exits remain 6/18;
+no native capture, public activation or global compiler pin change.

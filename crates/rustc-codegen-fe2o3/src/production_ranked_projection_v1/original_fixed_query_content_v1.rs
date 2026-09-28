@@ -636,3 +636,14 @@ fn original_content_headers_name_complete_subtotals_and_overflow() {
     assert!(frame::<ProofContent>(usize::MAX).is_err());
     assert!(sum(&[usize::MAX, 1]).is_err());
 }
+
+// B3 additive independent ORIGINAL source-prefix child; B2 unchanged.
+#[path = "original_fixed_query_genuine_prefix_v1.rs"]
+mod genuine_prefix;
+pub(in crate::production_ranked_projection_v1) use genuine_prefix::{
+    GENUINE_PREFIX_CAP, GenuineErrorDataV1, GenuinePrefixEventV1, GenuinePrefixExpectedV1,
+    GenuinePrefixRowV1, GenuinePrefixStopV1, GenuineSourceStampV1,
+    genuine_candidate_content_frame_v1, genuine_candidate_content_work_v1, genuine_error_data_v1,
+    genuine_live_content_parts_v1, genuine_prefix_frame_v1, genuine_retired_content_parts_v1,
+    genuine_source_stamp_v1, with_original_genuine_prefix_v1,
+};

@@ -921,3 +921,12 @@ pub(in crate::production_ranked_projection_v1) use query_driver::{
     ProofContent, content_added_frame, content_added_work, exact_content_matches,
     original_content_queries, retained_content, retained_content_queries,
 };
+
+// B3 test-only reexports, no Unit A constructor-body change.
+pub(in crate::production_ranked_projection_v1) use query_driver::{
+    GENUINE_PREFIX_CAP, GenuineErrorDataV1, GenuinePrefixEventV1, GenuinePrefixExpectedV1,
+    GenuinePrefixRowV1, GenuinePrefixStopV1, GenuineSourceStampV1,
+    genuine_candidate_content_frame_v1, genuine_candidate_content_work_v1, genuine_error_data_v1,
+    genuine_live_content_parts_v1, genuine_prefix_frame_v1, genuine_retired_content_parts_v1,
+    genuine_source_stamp_v1, with_original_genuine_prefix_v1,
+};

@@ -510,3 +510,8 @@ pub(in crate::production_ranked_projection_v1) fn empty_observation_snapshot_fra
     ];
     sum(&rows)
 }
+
+// B3 read-only actual-side DATA; never an independent expected oracle.
+#[cfg(test)]
+#[path = "lazy_fixed_proof_content_observation_v1_tests.rs"]
+pub(in crate::production_ranked_projection_v1) mod genuine_content;
