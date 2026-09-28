@@ -1429,6 +1429,11 @@ impl ProductionRefinementStagingPolicyV2 {
         self.signer_identities.contains(&signer)
     }
 
+    /// Original immutable accepted identities; this grants no compiler authority.
+    pub fn signer_identities(&self) -> &BTreeSet<DigestV1> {
+        &self.signer_identities
+    }
+
     pub const fn toolchain(&self) -> VerusToolchainIdentityV2 {
         self.toolchain
     }

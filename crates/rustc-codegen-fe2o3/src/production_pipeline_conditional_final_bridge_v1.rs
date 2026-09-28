@@ -46,6 +46,8 @@ use std::{convert::Infallible, fmt, mem::size_of};
 
 #[path = "production_pipeline_conditional_native_handoff_v5.rs"]
 pub(super) mod native;
+#[path = "production_pipeline_conditional_policy_capture_v1.rs"]
+mod policy_capture;
 
 /// Typed but terminal: no source chain for ordinary refund classifiers.
 #[derive(Debug)]
@@ -63,6 +65,7 @@ pub(crate) enum Error {
     Text(ConditionalModuleErrorV5),
     Composition(NativeConditionalFinalErrorV2),
     Lineage(ProductionTargetLineageErrorV3),
+    PolicyRoster(fe2o3_compiler_lineage::NativeConditionalPolicyRosterErrorV1<Resource>),
     Native(native::Error),
     Mismatch(&'static str),
 }
@@ -92,6 +95,9 @@ impl fmt::Display for Error {
             Self::Text(e) => ("text", e),
             Self::Composition(e) => ("composition", e),
             Self::Lineage(e) => ("lowering identity", e),
+            Self::PolicyRoster(e) => {
+                return write!(f, "conditional F/V5 producer policy roster: {e:?}");
+            }
             Self::Native(e) => ("native handoff", e),
             Self::Mismatch(e) => ("subjects", e),
         };
@@ -107,6 +113,7 @@ pub(super) struct RetainedFinalContentV5 {
     descriptor: CompilerDescriptorSourceV5,
     module: InertCompilerModuleTextV1,
     pre_descriptor_llvm: TargetLineageIdentityV3,
+    policy_roster: Vec<u8>,
     retained: usize,
 }
 
@@ -170,6 +177,52 @@ impl RetainedFinalContentV5 {
         );
 
         let ranked = &value.preparation.ranked;
+        let roster = fe2o3_compiler_lineage::read_native_conditional_policy_roster_v1(
+            &self.policy_roster,
+            fe2o3_compiler_lineage::MAX_NATIVE_CONDITIONAL_STORAGE_V1,
+            |_| Ok::<_, Infallible>(()),
+        )
+        .unwrap();
+        use sha2::{Digest, Sha256};
+        assert_eq!(
+            roster.source_packet_sha256(),
+            &<[u8; 32]>::from(Sha256::digest(value.packet.source_packet())),
+        );
+        assert_eq!(
+            roster.source_packet_len(),
+            value.packet.source_packet().len() as u64
+        );
+        assert_eq!(roster.root_count(), ranked.roots().len());
+        for (row, root) in roster.roots().zip(ranked.roots()) {
+            let producer = root.conditional_producer_inputs_v2().unwrap();
+            assert_eq!(row.semantic_root(), root.semantic_root().index());
+            assert_eq!(row.kernel_binding(), root.kernel_binding());
+            assert_eq!(
+                row.effect_signers(),
+                producer
+                    .effect_policy
+                    .signer_identities()
+                    .iter()
+                    .map(|signer| *signer.as_bytes())
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(
+                row.effect_toolchain(),
+                &policy_capture::toolchain(producer.effect_policy.toolchain())
+            );
+            assert_eq!(
+                row.formula_verifying_key(),
+                producer.formula_policy.verifying_key()
+            );
+            assert_eq!(
+                row.formula_toolchain(),
+                &policy_capture::toolchain(producer.formula_policy.toolchain())
+            );
+            assert_eq!(
+                row.formula_boundary(),
+                producer.formula_policy.boundary() as u8
+            );
+        }
         let original = ranked.materialized();
         let proof = value.packet.proof();
         let replayed = proof.source().source();
@@ -339,6 +392,14 @@ pub(super) fn prepare(
                     .checked_add(size_of::<Error>())
                     .ok_or(Resource::Arithmetic)?,
             )?;
+            let policy_roster = policy_capture::capture(
+                packet,
+                policies,
+                roots
+                    .iter()
+                    .map(|root| (root.semantic_root().index(), *root.kernel_binding())),
+                budget,
+            )?;
             let history =
                 encode_refined_forwarding_history_v1(chain.inputs(bound, checked), budget)
                     .map_err(Error::History)?;
@@ -381,11 +442,13 @@ pub(super) fn prepare(
             drop(prefix);
             budget.release_storage(prefix_storage)?;
             drop(contracts);
+            let policy_storage = policy_capture::retained_storage(&policy_roster)?;
             let retained = header()?
                 .checked_add(history.storage().retained_storage())
                 .and_then(|n| n.checked_add(storage.retained_storage()))
                 .and_then(|n| n.checked_add(descriptor.storage().retained_storage()))
                 .and_then(|n| n.checked_add(module_storage.retained_storage()))
+                .and_then(|n| n.checked_add(policy_storage))
                 .ok_or(Resource::Arithmetic)?;
             let content = RetainedFinalContentV5 {
                 history,
@@ -393,6 +456,7 @@ pub(super) fn prepare(
                 descriptor,
                 module,
                 pre_descriptor_llvm,
+                policy_roster,
                 retained,
             };
             let frame =
@@ -459,6 +523,7 @@ fn header() -> Result<usize, Resource> {
         .and_then(|n| n.checked_sub(size_of::<Catalog>()))
         .and_then(|n| n.checked_sub(size_of::<CompilerDescriptorSourceV5>()))
         .and_then(|n| n.checked_sub(size_of::<InertCompilerModuleTextV1>()))
+        .and_then(|n| n.checked_sub(size_of::<Vec<u8>>()))
         .ok_or(Resource::Arithmetic)
 }
 

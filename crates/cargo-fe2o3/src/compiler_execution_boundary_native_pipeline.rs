@@ -34,6 +34,9 @@ use fe2o3_hsaco_finalize::{
 };
 use fe2o3_verifier::{
     CompilerConditionalNativeSemanticHandoffErrorV5 as RecoveryError,
+    InertNativeConditionalPolicyRosterV1 as PolicyRoster,
+    NativeConditionalPolicyReconstructionErrorV1 as PolicyRosterError,
+    reconstruct_inert_native_conditional_policy_roster_v1 as reconstruct_policies,
     recover_compiler_conditional_native_semantic_handoff_v5 as recover,
 };
 use std::{fmt, mem::size_of, path::Path};
@@ -56,6 +59,7 @@ pub(crate) struct ParentDurableConditionalArtifact<'a, 'b, 'w> {
 
 struct ParentArtifactCustody<'a, 'b, 'w> {
     compiler_execution: Carriage,
+    policy_roster: PolicyRoster,
     readiness: Readiness<'b, 'w>,
     invocation: &'a Invocation,
     configuration_storage: usize,
@@ -64,6 +68,7 @@ impl ParentPreparedConditionalArtifact<'_, '_, '_> {
     const HEADER: usize = size_of::<Self>()
         - size_of::<Publication>()
         - size_of::<Carriage>()
+        - size_of::<PolicyRoster>()
         - size_of::<Readiness<'static, 'static>>();
 
     pub(crate) fn artifact(&self) -> &Artifact {
@@ -96,6 +101,9 @@ impl<'a, 'b, 'w> ParentPreparedConditionalArtifact<'a, 'b, 'w> {
         policy: ConditionalRecoveryPolicy<'_>,
     ) -> Result<ParentDurableConditionalArtifact<'a, 'b, 'w>> {
         self.revalidate()?;
+        self.custody
+            .policy_roster
+            .require_expected_policies(policy.roots, self.custody.readiness.budget)?;
         let retired = self
             .publication
             .required_retained_storage()
@@ -143,6 +151,7 @@ impl ParentDurableConditionalArtifact<'_, '_, '_> {
     const HEADER: usize = size_of::<Self>()
         - size_of::<DurablePublication>()
         - size_of::<Carriage>()
+        - size_of::<PolicyRoster>()
         - size_of::<Readiness<'static, 'static>>();
 
     pub(crate) fn publication(&self) -> &DurablePublication {
@@ -172,6 +181,7 @@ impl ParentArtifactCustody<'_, '_, '_> {
         let parent_storage = self.invocation.native_retained_storage()?;
         let floor = publication_storage
             .checked_add(self.compiler_execution.retained_storage())
+            .and_then(|n| n.checked_add(self.policy_roster.required_retained_storage()))
             .and_then(|n| n.checked_add(self.readiness.retained_storage()))
             .and_then(|n| n.checked_add(header))
             .and_then(|n| n.checked_add(parent_storage))
@@ -240,6 +250,17 @@ impl<'b, 'w> Readiness<'b, 'w> {
             .match_native_invocation(token.handoff().capsule().invocation(), self.budget)?;
         let compiler_execution = self.admit_current_receipt(&lease, &token)?;
 
+        // The committed roster must agree with independently supplied policy.
+        // Neither an embedded key nor this receipt alone approves a compiler runtime.
+        let (policy_roster, storage) = reconstruct_policies(
+            token.handoff().capsule().policy_roster_bytes(),
+            token.handoff().capsule().source_packet_bytes(),
+            self.budget,
+        )?;
+        self.budget.reserve_storage(storage.retained_storage())?;
+        policy_roster.require_expected_policies(policy.roots, self.budget)?;
+        token.revalidate_locked_currentness(self.budget)?;
+
         // No blanket-refund scope may enclose this concrete terminal recovery.
         let (token, storage) = token.try_map_handoff(self.budget, |handoff, b| {
             recover(
@@ -299,6 +320,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
             publication,
             custody: ParentArtifactCustody {
                 compiler_execution,
+                policy_roster,
                 readiness: self,
                 invocation,
                 configuration_storage,
@@ -376,6 +398,7 @@ enum Cause {
     Resource(Resource),
     Readiness(Failure),
     Invocation(CapabilityError),
+    PolicyRoster(PolicyRosterError),
     Recovery(CompilerModuleHandoffAdmissionErrorV5<RecoveryError>),
     Transaction(HandoffError),
     Subject(SubjectError),
@@ -398,6 +421,7 @@ macro_rules! causes {
     };
 }
 causes!(Resource => Resource, Failure => Readiness, CapabilityError => Invocation,
+    PolicyRosterError => PolicyRoster,
     CompilerModuleHandoffAdmissionErrorV5<RecoveryError> => Recovery,
     HandoffError => Transaction, SubjectError => Subject,
     NativeFirstBuildWorkerErrorV1 => Worker, NativeWorkerFinalizationErrorV1 => Finalizer,

@@ -13,7 +13,9 @@ mod multi_root_target_lineage_v2;
 mod multi_root_target_lineage_v3;
 mod native_conditional_carrier_v1;
 mod native_conditional_metadata_v1;
+mod native_conditional_metadata_v2;
 mod native_conditional_output_v1;
+mod native_conditional_policy_roster_v1;
 mod native_lowering_association_v1;
 mod native_neutral_module_v1;
 mod native_neutral_subject_v1;
@@ -71,7 +73,9 @@ pub use multi_root_target_lineage_v3::{
 };
 pub use native_conditional_carrier_v1::*;
 pub use native_conditional_metadata_v1::*;
+pub use native_conditional_metadata_v2::*;
 pub use native_conditional_output_v1::*;
+pub use native_conditional_policy_roster_v1::*;
 pub use native_lowering_association_v1::*;
 pub use native_neutral_module_v1::{
     NativeNeutralModuleErrorV1, NativeNeutralModuleRefV1, encode_native_neutral_module_v1,

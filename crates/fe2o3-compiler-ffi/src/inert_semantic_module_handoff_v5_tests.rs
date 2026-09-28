@@ -58,10 +58,31 @@ fn capsule(profile: Profile, seed: u8) -> InertProductionSemanticCapsuleV5 {
         final_module_commitment: final_module.canonical_bytes(),
     };
     let ml = NativeConditionalMetadataLayoutV1::new::<()>(input).unwrap();
-    let l =
-        InertProductionSemanticCapsuleLayoutV5::new::<()>(ml.encoded_len(), carrier.len()).unwrap();
+    // Public synthetic policies exercise framing only, never production admission.
+    let roots = [NativeConditionalPolicyRootInputV1 {
+        semantic_root: 9,
+        kernel_binding: [1; 32],
+        effect_signers: &[[2; 32]],
+        effect_toolchain: [[3; 32]; 5],
+        formula_verifying_key: [4; 32],
+        formula_toolchain: [[5; 32]; 5],
+        formula_boundary: 1,
+    }];
+    let roster = encode_native_conditional_policy_roster_v1(
+        NativeConditionalPolicyRosterInputV1 {
+            source_packet: b"source",
+            roots: &roots,
+        },
+        LIMIT,
+        |_| Ok::<_, ()>(()),
+    )
+    .unwrap();
+    let ml2 = NativeConditionalMetadataLayoutV2::new::<()>(ml.encoded_len(), roster.len()).unwrap();
+    let l = InertProductionSemanticCapsuleLayoutV5::new::<()>(ml2.encoded_len(), carrier.len())
+        .unwrap();
     let mut bytes = vec![0; l.encoded_len()];
-    let m = &mut bytes[l.metadata_range()];
+    let envelope = &mut bytes[l.metadata_range()];
+    let m = &mut envelope[ml2.metadata_range()];
     for (range, payload) in [
         (ml.invocation_range(), input.invocation),
         (ml.rustc_inventory_range(), input.rustc_inventory),
@@ -79,6 +100,8 @@ fn capsule(profile: Profile, seed: u8) -> InertProductionSemanticCapsuleV5 {
         m[range].copy_from_slice(payload);
     }
     seal_native_conditional_metadata_v1(ml, m, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    envelope[ml2.policy_roster_range()].copy_from_slice(&roster);
+    seal_native_conditional_metadata_v2(ml2, envelope, LIMIT, |_| Ok::<_, ()>(())).unwrap();
     bytes[l.carrier_range()].copy_from_slice(&carrier);
     seal_inert_production_semantic_capsule_v5(l, &mut bytes, LIMIT, |_| Ok::<_, ()>(())).unwrap();
     InertProductionSemanticCapsuleV5::decode_owned(bytes).unwrap()
@@ -141,6 +164,14 @@ fn conditional_outer_v5_shared_capacity_ranges_and_both_profiles() {
         );
         assert_eq!(owner.capsule().history_bytes(), b"history");
         assert_eq!(owner.capsule().source_packet_bytes(), b"source");
+        let roster = read_native_conditional_policy_roster_v1(
+            owner.capsule().policy_roster_bytes(),
+            LIMIT,
+            |_| Ok::<_, ()>(()),
+        )
+        .unwrap();
+        assert_eq!(roster.source_packet_len(), 6);
+        assert_eq!(roster.roots().next().unwrap().semantic_root(), 9);
         assert!(!owner.grants_authority());
         assert!(!owner.capsule().grants_authority());
         let final_receipt = owner.capsule().final_compiler_module_commitment();
@@ -233,16 +264,16 @@ fn conditional_outer_v5_caps_and_decode_schedule_preserve_v4_terms() {
         );
         assert_eq!(
             inert_semantic_compiler_module_handoff_decode_work_v5(n).unwrap(),
-            old + 6 * n
+            old + 12 * n + 36608
         );
         assert_eq!(
             inert_semantic_compiler_module_handoff_decode_work_v5(n).unwrap(),
-            14 * n
+            20 * n
                 + 128 * n.min(262338)
                 + 128 * n.min(524288)
                 + 320 * n.min(16777216)
                 + 4096 * (n / 5).min(16384)
-                + 7900672
+                + 7937280
         );
     }
     for n in [

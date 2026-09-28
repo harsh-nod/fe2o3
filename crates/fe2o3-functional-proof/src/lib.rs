@@ -390,6 +390,11 @@ impl FunctionalRefinementImportPolicyV2 {
         })
     }
 
+    /// Original immutable public key; this grants no compiler authority.
+    pub fn verifying_key(&self) -> &[u8; 32] {
+        self.verifying_key.as_bytes()
+    }
+
     pub const fn signer_identity(&self) -> DigestV1 {
         self.signer_identity
     }

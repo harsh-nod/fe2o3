@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 const SCRATCH: usize = NATIVE_CONDITIONAL_OUTPUT_WORKING_STORAGE_V1
     + NATIVE_CONDITIONAL_CARRIER_WORKING_STORAGE_V1
     + NATIVE_CONDITIONAL_METADATA_WORKING_STORAGE_V1
+    + NATIVE_CONDITIONAL_METADATA_WORKING_STORAGE_V2
     + INERT_PRODUCTION_SEMANTIC_CAPSULE_WORKING_STORAGE_V5
     + INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_SEAL_STORAGE_V5
     + size_of::<NativeLoweringAssociationInputsV1>()
@@ -158,7 +159,7 @@ pub(super) fn prepare(prefix: &Prefix, module: &Module, budget: &mut Budget<'_>)
         native_lowering: lowering.canonical_bytes(),
         final_module_commitment: commitment.canonical_bytes(),
     };
-    finish_carrier(bytes, input, module, budget)
+    finish_carrier(bytes, input, &content.policy_roster, module, budget)
 }
 
 // Framing only. The caller retains the original owners and prepays SCRATCH;
@@ -166,12 +167,16 @@ pub(super) fn prepare(prefix: &Prefix, module: &Module, budget: &mut Budget<'_>)
 fn finish_carrier(
     mut bytes: Vec<u8>,
     input: NativeConditionalMetadataInputV1<'_>,
+    policy_roster: &[u8],
     module: &Module,
     budget: &mut Budget<'_>,
 ) -> R<Vec<u8>> {
     let limit = budget.storage_limit();
     let metadata = NativeConditionalMetadataLayoutV1::new(input).map_err(Error::Metadata)?;
-    let capsule = InertProductionSemanticCapsuleLayoutV5::new(metadata.encoded_len(), bytes.len())
+    let wrapper =
+        NativeConditionalMetadataLayoutV2::new(metadata.encoded_len(), policy_roster.len())
+            .map_err(Error::MetadataV2)?;
+    let capsule = InertProductionSemanticCapsuleLayoutV5::new(wrapper.encoded_len(), bytes.len())
         .map_err(Error::Capsule)?;
     let outer = Outer::new(capsule.encoded_len(), module.canonical_bytes().len())
         .map_err(Error::Handoff)?;
@@ -182,7 +187,8 @@ fn finish_carrier(
         0..carrier_len,
         outer.capsule_range().start + capsule.carrier_range().start,
     );
-    let metadata_bytes = &mut bytes[outer.capsule_range()][capsule.metadata_range()];
+    let wrapper_bytes = &mut bytes[outer.capsule_range()][capsule.metadata_range()];
+    let metadata_bytes = &mut wrapper_bytes[wrapper.metadata_range()];
     for (range, field) in [
         (metadata.invocation_range(), input.invocation),
         (metadata.rustc_inventory_range(), input.rustc_inventory),
@@ -201,6 +207,13 @@ fn finish_carrier(
     }
     seal_native_conditional_metadata_v1(metadata, metadata_bytes, limit, |w| budget.charge_work(w))
         .map_err(Error::Metadata)?;
+    copy(
+        &mut wrapper_bytes[wrapper.policy_roster_range()],
+        policy_roster,
+        budget,
+    )?;
+    seal_native_conditional_metadata_v2(wrapper, wrapper_bytes, limit, |w| budget.charge_work(w))
+        .map_err(Error::MetadataV2)?;
     copy(
         &mut bytes[outer.module_handoff_range()],
         module.canonical_bytes(),

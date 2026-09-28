@@ -247,10 +247,34 @@ fn outer_leaves(gfx950: bool, leaf: u8, source_leaf: u8) -> Handoff {
     }
     seal_native_conditional_metadata_v1(metadata_layout, &mut metadata, LIMIT, |_| Ok::<_, ()>(()))
         .unwrap();
+    // Synthetic inert rows bind this fixture's opaque source, not accepted policies.
+    let roots = [NativeConditionalPolicyRootInputV1 {
+        semantic_root: 9,
+        kernel_binding: [1; 32],
+        effect_signers: &[[2; 32]],
+        effect_toolchain: [[3; 32]; 5],
+        formula_verifying_key: [4; 32],
+        formula_toolchain: [[5; 32]; 5],
+        formula_boundary: 1,
+    }];
+    let roster = encode_native_conditional_policy_roster_v1(
+        NativeConditionalPolicyRosterInputV1 {
+            source_packet: &carrier[carrier_layout.source_range()],
+            roots: &roots,
+        },
+        LIMIT,
+        |_| Ok::<_, ()>(()),
+    )
+    .unwrap();
+    let ml2 = NativeConditionalMetadataLayoutV2::new::<()>(metadata.len(), roster.len()).unwrap();
+    let mut envelope = vec![0; ml2.encoded_len()];
+    envelope[ml2.metadata_range()].copy_from_slice(&metadata);
+    envelope[ml2.policy_roster_range()].copy_from_slice(&roster);
+    seal_native_conditional_metadata_v2(ml2, &mut envelope, LIMIT, |_| Ok::<_, ()>(())).unwrap();
     let capsule_layout =
-        InertProductionSemanticCapsuleLayoutV5::new::<()>(metadata.len(), carrier.len()).unwrap();
+        InertProductionSemanticCapsuleLayoutV5::new::<()>(envelope.len(), carrier.len()).unwrap();
     let mut bytes = vec![0; capsule_layout.encoded_len()];
-    bytes[capsule_layout.metadata_range()].copy_from_slice(&metadata);
+    bytes[capsule_layout.metadata_range()].copy_from_slice(&envelope);
     bytes[capsule_layout.carrier_range()].copy_from_slice(&carrier);
     seal_inert_production_semantic_capsule_v5(capsule_layout, &mut bytes, LIMIT, |_| {
         Ok::<_, ()>(())
