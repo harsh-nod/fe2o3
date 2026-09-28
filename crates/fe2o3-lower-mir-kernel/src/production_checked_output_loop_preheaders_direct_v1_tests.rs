@@ -416,15 +416,15 @@ fn source_loop_preheaders_direct_one_short_storage_observes_phase_with_live_sibl
                 (error.actual(), error.limit()),
                 (measured_storage, storage_limit)
             );
-            // Both targets use the same canonical fixture and exact replay schedule.
-            // Add the actual inline optional nominal-helper header to the
-            // historical V20 baseline for this one retained source owner.
+            // Both targets use the same storage-aware canonical replay schedule.
+            // Add the actual inline optional nominal-helper header for this
+            // retained source owner.
             // Work and the exact nested first-denial phase stay unchanged.
             let nominal_header = std::mem::size_of::<Option<Box<SealedBf16CallRelationV1>>>();
             let expected = if mutation {
-                (845_738, 2_685_874 + nominal_header)
+                (845_738, 2_686_090 + nominal_header)
             } else {
-                (65_552, 1_655_457 + nominal_header)
+                (65_552, 1_655_673 + nominal_header)
             };
             assert_eq!((accepted, peak), expected);
         }

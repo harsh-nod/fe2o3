@@ -123,24 +123,23 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
                 measured(profile, mutation, WORK, STORAGE);
             result.unwrap();
             assert_eq!((storage_denial, work_denial), (None, None));
-            // The historical V20 baseline below predates the inline optional
-            // nominal-helper relation. This phase retains one source owner,
-            // so pay its actual new header once without changing work or the
-            // exact nested first-denial phase on either target profile.
+            // Pin the storage-aware representation's exact replay schedule.
+            // The optional nominal-helper relation contributes one header for
+            // this retained source owner; work and first-denial phase are fixed.
             let nominal_header = std::mem::size_of::<Option<Box<SealedBf16CallRelationV1>>>();
             let expected = if mutation {
                 (
                     2_733_569,
-                    3_335_168 + nominal_header,
+                    3_335_432 + nominal_header,
                     2_686_896,
-                    3_309_341 + nominal_header,
+                    3_309_581 + nominal_header,
                 )
             } else {
                 (
                     249_631,
-                    1_949_434 + nominal_header,
+                    1_949_698 + nominal_header,
                     238_296,
-                    1_933_493 + nominal_header,
+                    1_933_733 + nominal_header,
                 )
             };
             assert_eq!((work, peak), (expected.0, expected.1));

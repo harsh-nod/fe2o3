@@ -119,7 +119,7 @@ fn prepare_pair_fixture(
     erased: bool,
     profile: Profile,
     budget: &mut Budget<'_>,
-) -> PreparedPairFixture {
+) -> Box<PreparedPairFixture> {
     assert_eq!(budget.storage(), 0);
     let ledger = budget.work_ledger_identity_v1();
     let (prefix, ranked, p6_storage, source_storage) = if erased {
@@ -136,35 +136,45 @@ fn prepare_pair_fixture(
     assert_eq!(prefix_floor, 29 + source_storage + p6_storage);
     let (native, native_storage) = prepare_checked_fixture(prefix, profile, Some(3), budget);
     assert!(budget.work_ledger_identity_v1() == ledger);
-    PreparedPairFixture {
+    // Keep two complete fixtures off the pair test's stack, retaining each payload once.
+    budget
+        .reserve_storage(pair_fixture_header_storage())
+        .unwrap();
+    Box::new(PreparedPairFixture {
         native,
         ranked,
         native_storage,
         prefix_floor,
         p6_storage,
         source_storage,
-    }
+    })
 }
-fn release_pair_fixture(fixture: PreparedPairFixture, budget: &mut Budget<'_>) {
-    let PreparedPairFixture {
-        native,
-        ranked,
-        native_storage,
-        prefix_floor,
-        p6_storage,
-        source_storage,
-    } = fixture;
+fn pair_fixture_header_storage() -> usize {
+    size_of::<PreparedPairFixture>()
+        .checked_sub(size_of::<PreparedLoopUnrollNativeOutputV1>())
+        .and_then(|n| n.checked_sub(size_of::<AuthenticatedRankedVerificationRosterV1>()))
+        .and_then(|n| n.checked_add(size_of::<Box<PreparedPairFixture>>()))
+        .unwrap()
+}
+#[inline(never)]
+fn release_pair_fixture(fixture: Box<PreparedPairFixture>, budget: &mut Budget<'_>) {
+    let native_storage = fixture.native_storage;
+    let prefix_floor = fixture.prefix_floor;
+    let p6_storage = fixture.p6_storage;
+    let source_storage = fixture.source_storage;
+    let header = pair_fixture_header_storage();
     assert_eq!(
         budget.storage(),
-        prefix_floor + native_storage.retained_storage()
+        prefix_floor + native_storage.retained_storage() + header
     );
-    assert_eq!(ranked.root_count(), 2);
-    drop(native);
+    assert_eq!(fixture.ranked.root_count(), 2);
+    // Drop the pointee in place before refunding either payload or box header.
+    drop(fixture);
+    budget.release_storage(header).unwrap();
     budget
         .release_storage(native_storage.retained_storage())
         .unwrap();
     assert_eq!(budget.storage(), prefix_floor);
-    drop(ranked);
     budget.release_storage(p6_storage).unwrap();
     assert_eq!(budget.storage(), 29 + source_storage);
     budget.release_storage(source_storage).unwrap();
