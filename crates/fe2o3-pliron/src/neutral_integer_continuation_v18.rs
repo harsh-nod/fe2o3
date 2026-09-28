@@ -161,8 +161,8 @@ impl<'input> KirNeutralOptimizationOutputIntegerContinuationV18<'input> {
         KirCheckedNeutralOptimizationErrorV1<E>,
     >
     where
-        F: for<'view, 'inventory, 'input, 'output, 'rows, 'work> FnOnce(
-            &'view CheckedCanonicalKirTransitionV18<'inventory, 'input, 'output, 'rows>,
+        F: for<'view, 'inventory, 'src, 'output, 'rows, 'work> FnOnce(
+            &'view CheckedCanonicalKirTransitionV18<'inventory, 'src, 'output, 'rows>,
             &mut Budget<'work>,
         )
             -> Result<(T, usize), E>,
