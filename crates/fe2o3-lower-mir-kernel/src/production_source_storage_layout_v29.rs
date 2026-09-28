@@ -605,6 +605,15 @@ mod source_storage_v29 {
             }))
         }
 
+        #[cfg(test)]
+        pub(super) fn mutate_row_for_test_v29(
+            &self,
+            row: StorageLayoutIdV1,
+            mutate: impl FnOnce(&mut StorageLayoutV1),
+        ) {
+            mutate(&mut self.physical.borrow_mut().rows[row.0 as usize]);
+        }
+
         pub(super) fn release(self, budget: &mut Budget<'_>) -> Result<(), Error> {
             self.lease.custody(budget)?;
             if self.lease.root.get().is_some() {

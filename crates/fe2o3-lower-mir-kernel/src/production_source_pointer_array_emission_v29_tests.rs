@@ -469,22 +469,22 @@ fn original_pointer_array_leaf_types_authenticate_full_layout_and_sticky_refusal
                     return Ok(());
                 }
                 if mutation < 8 {
-                    let mut physical = layouts.physical.borrow_mut();
-                    let row = &mut physical.rows[schema.0 as usize];
-                    let fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(pointer) = &mut row.kind
-                    else {
-                        panic!("pointer row");
-                    };
-                    match mutation {
-                        1 => pointer.encoded_space = AddressSpace::Private,
-                        2 => pointer.value_space = AddressSpace::Private,
-                        3 => pointer.stored_bits = 32,
-                        4 => pointer.access = AccessMode::ReadWrite,
-                        5 => pointer.pointee = schema,
-                        6 => row.size = 4,
-                        7 => row.alignment = 4,
-                        _ => unreachable!(),
-                    }
+                    layouts.mutate_row_for_test_v29(schema, |row| {
+                        let fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(pointer) = &mut row.kind
+                        else {
+                            panic!("pointer row");
+                        };
+                        match mutation {
+                            1 => pointer.encoded_space = AddressSpace::Private,
+                            2 => pointer.value_space = AddressSpace::Private,
+                            3 => pointer.stored_bits = 32,
+                            4 => pointer.access = AccessMode::ReadWrite,
+                            5 => pointer.pointee = schema,
+                            6 => row.size = 4,
+                            7 => row.alignment = 4,
+                            _ => unreachable!(),
+                        }
+                    });
                 }
                 let bad_schema = if mutation == 8 { array_schema } else { schema };
                 let first = source_object_original_leaf_type_v29(plan, *ty, bad_schema, budget)
