@@ -704,7 +704,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         instance: ProductionCallInstanceIdV1,
         local: Option<SemanticLocalIdV1>,
         depth: usize,
-        memo: &mut BTreeMap<usize, usize>,
+        memo: &mut SourceReferenceMemoV29,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<usize, ProductionSemanticKirErrorV1> {
         if depth >= 256 {
@@ -784,8 +784,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             emission_push_v1(&mut self.plan.nodes, SourceReferenceNodeV29 { kind, descriptor, value_origin: None, ..original }, budget)?;
             value
         };
-        reserve_execution_cfg_map_entry_v29::<usize, usize>(memo.len(), budget)?;
-        memo.insert(node, value);
+        memo.insert(node, value, budget)?;
         Ok(value)
     }
 
@@ -799,28 +798,25 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         if self.plan.raw_origins.is_empty() {
             return Ok(result);
         }
-        budget.reserve_storage(argument_sum_v1(&[
-            std::mem::size_of::<BTreeMap<usize, usize>>(),
-            std::mem::size_of::<Result<Option<usize>, ProductionSemanticKirErrorV1>>(),
-        ])?)?;
-        let mut memo = BTreeMap::new();
-        for index in 0..self.frames.len() {
+        self.with_memo_v29(budget, |this, memo, budget| {
+        for index in 0..this.frames.len() {
             budget.charge_work(1)?;
-            let Some(state) = self.frames[index] else {
+            let Some(state) = this.frames[index] else {
                 continue;
             };
-            for slot in 0..self.plan.states[state].len() {
+            for slot in 0..this.plan.states[state].len() {
                 budget.charge_work(1)?;
-                let Some(node) = self.plan.states[state][slot].node else {
+                let Some(node) = this.plan.states[state][slot].node else {
                     continue;
                 };
-                let node = self.expire_address_node(node, instance, local, 0, &mut memo, budget)?;
-                self.plan.states[state][slot].node = Some(node);
+                let node = this.expire_address_node(node, instance, local, 0, memo, budget)?;
+                this.plan.states[state][slot].node = Some(node);
             }
         }
         result
-            .map(|node| self.expire_address_node(node, instance, local, 0, &mut memo, budget))
+            .map(|node| this.expire_address_node(node, instance, local, 0, memo, budget))
             .transpose()
+        })
     }
 
     fn raw_set(

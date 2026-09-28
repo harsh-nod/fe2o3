@@ -145,20 +145,20 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         if self.plan.enum_observations.is_empty() {
             return Ok(result);
         }
-        budget.reserve_storage(std::mem::size_of::<BTreeMap<usize, usize>>())?;
-        let mut memo = BTreeMap::new();
-        for frame in 0..self.frames.len() {
+        self.with_memo_v29(budget, |this, memo, budget| {
+        for frame in 0..this.frames.len() {
             budget.charge_work(1)?;
-            let Some(state) = self.frames[frame] else { continue };
-            for ordinal in 0..self.plan.states[state].len() {
+            let Some(state) = this.frames[frame] else { continue };
+            for ordinal in 0..this.plan.states[state].len() {
                 budget.charge_work(1)?;
-                if let Some(node) = self.plan.states[state][ordinal].node {
-                    let changed = self.invalidate_discriminant_node(node, instance, local, 0, &mut memo, budget)?;
-                    self.plan.states[state][ordinal].node = Some(changed);
+                if let Some(node) = this.plan.states[state][ordinal].node {
+                    let changed = this.invalidate_discriminant_node(node, instance, local, 0, memo, budget)?;
+                    this.plan.states[state][ordinal].node = Some(changed);
                 }
             }
         }
-        result.map(|node| self.invalidate_discriminant_node(node, instance, local, 0, &mut memo, budget)).transpose()
+        result.map(|node| this.invalidate_discriminant_node(node, instance, local, 0, memo, budget)).transpose()
+        })
     }
 
     fn invalidate_discriminant_node(
@@ -167,7 +167,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         instance: Option<ProductionCallInstanceIdV1>,
         local: Option<SemanticLocalIdV1>,
         depth: usize,
-        memo: &mut BTreeMap<usize, usize>,
+        memo: &mut SourceReferenceMemoV29,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<usize, ProductionSemanticKirErrorV1> {
         if depth >= 256 {
@@ -244,8 +244,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             emission_push_v1(&mut self.plan.nodes, SourceReferenceNodeV29 { kind, descriptor, value_origin: None, ..row }, budget)?;
             next
         };
-        reserve_execution_cfg_map_entry_v29::<usize, usize>(memo.len(), budget)?;
-        memo.insert(node, next);
+        memo.insert(node, next, budget)?;
         Ok(next)
     }
 
@@ -319,7 +318,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         instance: ProductionCallInstanceIdV1,
         local: Option<SemanticLocalIdV1>,
         depth: usize,
-        memo: &mut BTreeMap<usize, usize>,
+        memo: &mut SourceReferenceMemoV29,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<usize, ProductionSemanticKirErrorV1> {
         budget.charge_work(2)?;

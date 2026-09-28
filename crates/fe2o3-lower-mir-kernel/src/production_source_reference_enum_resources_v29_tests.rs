@@ -1,6 +1,64 @@
 use super::*;
 use production_call_instances_v1::with_production_call_instances_v1;
 
+#[test]
+fn memo_credit_real_enum_and_downcast_view_keep_rebuilt_payload_rows_paid() {
+    for expire in [false, true] {
+        with_enum_builder(|builder, budget| {
+            let instance = builder.plan.root;
+            let local = SemanticLocalIdV1::from_index(1);
+            let site = SourceReferenceSiteV29 {
+                instance, block: SemanticBlockIdV1::from_index(0), statement: Some(0),
+            };
+            let (reference, word) = if expire {
+                let origin = builder.plan.raw_origins.len();
+                emission_push_v1(&mut builder.plan.raw_origins, SourceReferenceRawOriginV29 {
+                    site, source: 0, formation: SourceReferenceRawFormationV29::ReferenceCast,
+                    instance, local, generation: 0, ty: WORD, pointer_type: REFERENCE,
+                    first: 0, count: 0, parent: None, mutable: false,
+                }, budget)?;
+                let source = SourceReferenceRawChoicesV29::Singleton(SourceReferenceRawChoiceV29 {
+                    origin, expired: false,
+                });
+                let set = builder.raw_set(source, source, false, budget)?;
+                (builder.node(REFERENCE, SourceReferenceNodeKindV29::Address(set), budget)?, builder.plain(WORD, budget)?)
+            } else {
+                let observation = builder.plan.enum_observations.len();
+                emission_push_v1(&mut builder.plan.enum_observations, SourceReferenceEnumObservationV29 {
+                    site, source: 0, instance, local, generation: 0, ty: WORD, first: 0, count: 0,
+                }, budget)?;
+                (builder.plain(REFERENCE, budget)?, builder.node(WORD, SourceReferenceNodeKindV29::Discriminant(observation), budget)?)
+            };
+            let alternative = builder.intern_enum_alternative(ENUM, 2, &[reference, word], budget)?;
+            let source = builder.intern_enum_value(ENUM, &[alternative], budget)?;
+            let path = enum_field(5, 2, 1);
+            let view = builder.enum_path_node(source, &path.projections()[..1], budget)?;
+            assert!(matches!(builder.plan.nodes[view].kind, SourceReferenceNodeKindV29::EnumView(_)));
+            let retained = budget.storage();
+            let alternatives = builder.plan.enum_alternatives.len();
+            let next = if expire {
+                builder.expire_addresses(instance, Some(local), Some(view), budget)?
+            } else {
+                builder.invalidate_discriminant_values(Some(instance), Some(local), Some(view), budget)?
+            }.unwrap();
+            let SourceReferenceNodeKindV29::EnumView(view) = builder.plan.nodes[next].kind else { panic!("downcast view lost") };
+            let source = builder.plan.enum_views[view].source;
+            let SourceReferenceNodeKindV29::Enum { first, count } = builder.plan.nodes[source].kind else { panic!("enum source lost") };
+            let member = builder.plan.enum_member(first, count, 0, budget)?;
+            let alternative = builder.plan.enum_alternative(member, budget)?;
+            let child = builder.plan.children[alternative.first + usize::from(!expire)];
+            if expire {
+                let SourceReferenceNodeKindV29::Address(set) = builder.plan.nodes[child].kind else { panic!("address payload lost") };
+                let row = builder.plan.raw_sets[set];
+                assert!(builder.plan.raw_choice(SourceReferenceRawChoicesV29::Retained(row), 0, budget)?.unwrap().expired);
+            } else { assert_eq!(builder.plan.nodes[child].kind, SourceReferenceNodeKindV29::Plain(None)); }
+            assert!(builder.plan.enum_alternatives.len() > alternatives);
+            assert!(budget.storage() > retained);
+            Ok(())
+        }).unwrap();
+    }
+}
+
 fn with_enum_builder(
     consume: impl FnOnce(&mut SourceReferenceBuilderV29<'_, '_, '_>, &mut ArgumentBudgetV1<'_>)
         -> Result<(), ProductionSemanticKirErrorV1>,

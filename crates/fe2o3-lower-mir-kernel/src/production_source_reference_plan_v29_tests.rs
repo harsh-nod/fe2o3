@@ -1,4 +1,6 @@
 use super::*;
+#[path = "production_source_reference_memo_v29_tests.rs"]
+mod memo_credit_tests;
 #[path = "production_source_reference_custody_v29_tests.rs"]
 mod custody_tests;
 #[path = "production_source_reference_fixture_closure_v29_tests.rs"]

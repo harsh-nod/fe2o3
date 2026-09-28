@@ -225,6 +225,7 @@ fn source_reference_error_v29(detail: &'static str) -> ProductionSemanticKirErro
 include!("production_source_reference_storage_transfer_v29.rs");
 include!("production_source_reference_inactive_v29.rs");
 include!("production_source_reference_construction_v29.rs");
+include!("production_source_reference_memo_v29.rs");
 include!("production_source_reference_enum_v29.rs");
 include!("production_source_reference_enum_transport_v29.rs");
 include!("production_source_reference_selectors_v29.rs");
