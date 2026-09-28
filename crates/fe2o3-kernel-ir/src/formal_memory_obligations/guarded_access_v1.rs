@@ -1181,6 +1181,34 @@ pub(super) fn report_work(
     Ok(())
 }
 
+impl super::report_construction_v18::ReportMeterV18 for Option<GuardedAnalysisV1<'_>> {
+    fn charge(&mut self, work: usize) -> Result<(), ResourceError> {
+        report_work(self, work)
+    }
+
+    fn push<T>(&mut self, rows: &mut Vec<T>, value: T) -> Result<(), ResourceError> {
+        report_push(self, rows, value)
+    }
+
+    fn sort<T>(
+        &mut self,
+        rows: &mut [T],
+        compare: impl FnMut(&T, &T) -> std::cmp::Ordering,
+    ) -> Result<(), ResourceError> {
+        if let Some(guarded) = self {
+            guarded.ledger.sort(rows, 1, compare)
+        } else {
+            rows.sort_unstable_by(compare);
+            Ok(())
+        }
+    }
+
+    fn retire<T>(&mut self, rows: Vec<T>) -> Result<(), ResourceError> {
+        drop(rows);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[path = "guarded_access_v1_tests.rs"]
 mod tests;

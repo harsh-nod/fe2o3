@@ -19,6 +19,7 @@ mod complete_body_v19;
 mod distinct_invocation_v1_tests;
 mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
+mod report_construction_v18;
 pub(crate) use guarded_access_v1::origins::structural_origins_v1;
 mod closed_scalar_v18;
 mod ordered_composition_v1;
@@ -1924,9 +1925,16 @@ fn derive_alias_requirements(
     accesses: &[FormalMemoryAccess],
     guarded: &mut Option<GuardedAnalysisV1<'_>>,
 ) -> Result<Vec<RuntimeAliasRequirement>, GuardedResourceErrorV1> {
+    derive_alias_requirements_with_meter(accesses, guarded)
+}
+
+fn derive_alias_requirements_with_meter(
+    accesses: &[FormalMemoryAccess],
+    meter: &mut impl report_construction_v18::ReportMeterV18,
+) -> Result<Vec<RuntimeAliasRequirement>, GuardedResourceErrorV1> {
     let mut entries = Vec::<(FormalAllocationIdentity, AllocationEnvelope)>::new();
     for access in accesses {
-        guarded_access_v1::report_work(guarded, 8)?;
+        meter.charge(8)?;
         let range = if access.domain != FormalAccessDomainV1::LaunchEnvelope {
             FormalAliasRegionV1::WholeFormalAllocation
         } else {
@@ -1943,8 +1951,7 @@ fn derive_alias_requirements(
                 }
             }
         };
-        guarded_access_v1::report_push(
-            guarded,
+        meter.push(
             &mut entries,
             (
                 access.allocation,
@@ -1956,14 +1963,10 @@ fn derive_alias_requirements(
             ),
         )?;
     }
-    if let Some(guarded) = guarded.as_mut() {
-        guarded.ledger.sort(&mut entries, 1, |a, b| a.0.cmp(&b.0))?;
-    } else {
-        entries.sort_unstable_by_key(|row| row.0);
-    }
+    meter.sort(&mut entries, |a, b| a.0.cmp(&b.0))?;
     let mut count = 0_usize;
     for index in 0..entries.len() {
-        guarded_access_v1::report_work(guarded, 8)?;
+        meter.charge(8)?;
         let (allocation, next) = entries[index];
         if count != 0 && entries[count - 1].0 == allocation {
             let envelope = &mut entries[count - 1].1;
@@ -1978,12 +1981,11 @@ fn derive_alias_requirements(
     let mut requirements = Vec::new();
     for (left_index, (left, left_envelope)) in entries.iter().enumerate() {
         for (right, right_envelope) in &entries[left_index + 1..] {
-            guarded_access_v1::report_work(guarded, 8)?;
+            meter.charge(8)?;
             if address_spaces_may_alias(left_envelope.address_space, right_envelope.address_space)
                 && (left_envelope.writes || right_envelope.writes)
             {
-                guarded_access_v1::report_push(
-                    guarded,
+                meter.push(
                     &mut requirements,
                     RuntimeAliasRequirement {
                         left: *left,
@@ -1995,6 +1997,7 @@ fn derive_alias_requirements(
             }
         }
     }
+    meter.retire(entries)?;
     Ok(requirements)
 }
 
@@ -2013,10 +2016,17 @@ fn derive_inter_invocation_conflicts(
     accesses: &[FormalMemoryAccess],
     guarded: &mut Option<GuardedAnalysisV1<'_>>,
 ) -> Result<Vec<InterInvocationConflictRequirement>, GuardedResourceErrorV1> {
+    derive_inter_invocation_conflicts_with_meter(accesses, guarded)
+}
+
+fn derive_inter_invocation_conflicts_with_meter(
+    accesses: &[FormalMemoryAccess],
+    meter: &mut impl report_construction_v18::ReportMeterV18,
+) -> Result<Vec<InterInvocationConflictRequirement>, GuardedResourceErrorV1> {
     let mut requirements = Vec::new();
     for (left_index, left) in accesses.iter().enumerate() {
         for right in &accesses[left_index..] {
-            guarded_access_v1::report_work(guarded, 32)?;
+            meter.charge(32)?;
             if left.allocation != right.allocation
                 || (left.kind == FormalMemoryAccessKind::Read
                     && right.kind == FormalMemoryAccessKind::Read)
@@ -2026,8 +2036,7 @@ fn derive_inter_invocation_conflicts(
             {
                 continue;
             }
-            guarded_access_v1::report_push(
-                guarded,
+            meter.push(
                 &mut requirements,
                 InterInvocationConflictRequirement {
                     left: left.location,
