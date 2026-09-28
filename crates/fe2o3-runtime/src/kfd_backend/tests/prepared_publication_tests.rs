@@ -357,6 +357,15 @@ fn prepared_publication_profiler_records_once_and_exhaustion_does_not_change_exe
         let kernel = backend
             .resolve_kernel_v1(module, "vecadd", [7; 32])
             .unwrap();
+        // Scripted dispatch has no native queue constructor; supply its logical
+        // lifecycle envelope so the real recorder can validate publication.
+        let queue = backend.profile_resource_v1(
+            KfdProfileResourceKindV1::NativeQueue,
+            KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1,
+        );
+        backend.observe_profile_v1(
+            queue.map(|queue| KfdRuntimeProfileEventKindV1::NativeQueueCreated { queue }),
+        );
         backend.scripted_persistent_publication_retries = 1;
         let submission =
             submit_scripted_read_v1(&mut backend, stream, kernel, device, byte_len as u64, &[]);
@@ -385,6 +394,7 @@ fn prepared_publication_profiler_records_once_and_exhaustion_does_not_change_exe
         assert!(driver.is_exhausted());
         assert_eq!(driver.live_owner_count(), 0);
         assert_eq!(driver.unexpected_drops(), 0);
+        backend.observe_destroyed_compute_lane_v1(Some(0));
         backend.shutdown_native_v1().unwrap();
         let capture = backend.finish_profiler_v1().unwrap();
         capture.validate().unwrap();

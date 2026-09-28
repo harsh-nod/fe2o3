@@ -17409,6 +17409,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn three_binding_persistent_submit_retains_native_attachment_on_callback_failure() {
         for case in 0..4 {
             assert!(!take_persistent_unwind_process_gate_record_v1());

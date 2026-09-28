@@ -166,6 +166,8 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
+    // Keep the error and linear receipt inline on the recovery path.
+    #[allow(clippy::result_large_err)]
     fn publish_indexed_prepared_v1(
         &mut self,
     ) -> Result<
