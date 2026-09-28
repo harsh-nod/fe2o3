@@ -24,6 +24,16 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Initial persistent-publication custody development (2026-09-28 UTC): successful
+single/three binding now installs Armed Active before queue profiling and first
+submit, reusing the indexed retry transition. Post-index failure retires only
+the pending FIFO/dependency handoff and cannot duplicate or settle Active.
+The [development packet](evidence/dev-initial-compute-publication-2026-09-28/README.md)
+distinguishes 24 scripted fault cases and 12 healthy controls from native bind
+failure recovery, GPU execution and formal correspondence. Native qualification,
+Context composition and matched performance remain open; accepted checkpoints,
+A1/A2 and HIP/HSA parity status are unchanged.
+
 Prepared retry-publication custody development (2026-09-28 UTC): the active
 descriptor now stays indexed while the lower queue consumes its Prepared
 receipt. Exact retry receipts re-arm the owner; terminal/unwind paths retain
@@ -33,7 +43,8 @@ separates runtime scripted fault coverage, real-recorder controls and lower KFD
 constructed-attachment tests from GPU execution and formal correspondence.
 It also fixes spurious profile loss when releasing a copy or an unpublished
 cancellation that has no dispatch lifecycle event.
-Initial bind/first-submit indexing and its pending-owner handoff remain open.
+That checkpoint left initial bind/first-submit indexing and its pending-owner
+handoff open; the subsequent development entry above addresses that transition.
 Accepted lane checkpoints, A1/A2 and HIP/HSA parity are unchanged.
 
 Authenticated completed-compute import development (2026-09-27 UTC): persistent

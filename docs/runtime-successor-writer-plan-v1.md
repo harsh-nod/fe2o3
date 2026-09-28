@@ -215,9 +215,14 @@ not close those gates or the complete Context composition.
 [Prepared retry publication](evidence/dev-prepared-compute-publication-2026-09-28/README.md)
 now retains the indexed descriptor across consuming publication, exact retry,
 terminal return and unwind, installing Published before profiling. Native and
-scripted paths share the receipt transition. Initial bind/first-submit indexing,
-the caller's one-time pending-owner handoff, coupled GPU qualification and
-executable refinement remain open; this does not close the Context composition.
+scripted paths share the receipt transition.
+[Initial publication](evidence/dev-initial-compute-publication-2026-09-28/README.md)
+now indexes Armed immediately after successful binding, before queue profiling
+and first submit, and gives returned errors the same one-time pending-owner
+handoff as unwind. CPU fault tests preserve a trailing queued successor and
+exact shared dependency retains. Native bind failure recovery, coupled GPU
+qualification and executable refinement remain open; this does not close the
+Context composition.
 
 ### Unknown Group Disposal
 
