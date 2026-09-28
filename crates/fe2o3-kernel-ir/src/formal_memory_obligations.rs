@@ -12,6 +12,8 @@ use crate::{
     analyze_control_flow, analyze_interprocedural_effects_from_verified_v1, verify_module_ref,
 };
 
+mod actual_owner_v18;
+mod candidate_pair_bound_v1;
 mod complete_body_v19;
 #[cfg(test)]
 mod distinct_invocation_v1_tests;
@@ -28,6 +30,8 @@ mod private_slots;
 mod receipt_v1;
 mod scalar_cfg_v18;
 mod storage_discriminant_v18;
+pub use actual_owner_v18::*;
+pub use candidate_pair_bound_v1::*;
 pub use closed_scalar_v18::*;
 pub use scalar_cfg_v18::*;
 
