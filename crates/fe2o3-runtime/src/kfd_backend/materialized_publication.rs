@@ -241,7 +241,9 @@ impl KfdRuntimeBackendV1 {
                 return Ok(());
             }
             MaterializedSubmissionAttemptV1::Published(batch) => {
-                active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
+                active.execution = Some(ActiveComputeExecutionV1::Materialized(
+                    MaterializedCompletionReceiptV1::Published(batch),
+                ));
             }
             #[cfg(test)]
             MaterializedSubmissionAttemptV1::ScriptedPublished => {

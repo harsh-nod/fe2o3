@@ -102,7 +102,10 @@ fn native_cut(backend: &KfdRuntimeBackendV1) -> NativeCut {
         let native_lane = backend.native_compute_lanes[lane].unwrap();
         assert_eq!(native_lane.ordinal(), lane);
         for active in frontier.into_iter().chain(pipeline.iter()) {
-            let Some(ActiveComputeExecutionV1::Materialized(batch)) = &active.execution else {
+            let Some(ActiveComputeExecutionV1::Materialized(
+                MaterializedCompletionReceiptV1::Published(batch),
+            )) = &active.execution
+            else {
                 panic!("scale depth requires every original published native receipt");
             };
             let native = queue

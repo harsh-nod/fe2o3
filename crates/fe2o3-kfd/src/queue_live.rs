@@ -3962,6 +3962,22 @@ pub struct Gfx942FixedDispatchRecycleFailureV1<const N: usize> {
 }
 
 impl<const N: usize> Gfx942FixedDispatchRecycleFailureV1<N> {
+    fn from_completion_failure(
+        error: ComputeAqlQueueSessionErrorV1,
+        completed: Gfx942CompletedBatchV1<N>,
+        identity: DispatchEpochIdentityV1,
+    ) -> Self {
+        let retryable_completed = matches!(
+            error,
+            ComputeAqlQueueSessionErrorV1::Completion(Gfx942CompletionErrorV1::SignalPinned { .. })
+        )
+        .then(|| wrap_completed(completed, identity));
+        Self {
+            error,
+            retryable_completed,
+        }
+    }
+
     pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
         &self.error
     }
@@ -13703,7 +13719,12 @@ fn map_dependency_target_use_error_v1(
 mod runtime_materialized_submission_attempt;
 
 #[cfg(test)]
+#[path = "../../fe2o3-runtime/src/kfd_backend/materialized_completion_receipt.rs"]
+mod runtime_materialized_completion_receipt;
+
+#[cfg(test)]
 mod tests {
+    mod runtime_completion_tests;
     mod runtime_publication_tests;
 
     #[test]

@@ -34,14 +34,23 @@ impl KfdRuntimeBackendV1 {
     ) -> bool {
         use RuntimeComputePipelinePhaseV1 as Phase;
         match (phase, active.execution.as_ref()) {
-            (None | Some(Phase::Published), Some(ActiveComputeExecutionV1::Materialized(_)))
+            (
+                None | Some(Phase::Published),
+                Some(ActiveComputeExecutionV1::Materialized(
+                    MaterializedCompletionReceiptV1::Published(_),
+                )),
+            )
             | (
                 None | Some(Phase::Completed),
-                Some(ActiveComputeExecutionV1::MaterializedCompleted(_)),
+                Some(ActiveComputeExecutionV1::Materialized(
+                    MaterializedCompletionReceiptV1::Completed(_),
+                )),
             ) => true,
             (
                 Some(Phase::PhysicallyRetired),
-                Some(ActiveComputeExecutionV1::MaterializedRetired(observation)),
+                Some(ActiveComputeExecutionV1::Materialized(
+                    MaterializedCompletionReceiptV1::Retired(observation),
+                )),
             ) => observation.packet_count() == 1,
             #[cfg(test)]
             (
@@ -289,7 +298,9 @@ impl KfdRuntimeBackendV1 {
             unreachable!()
         };
         active.execution = Some(match root.attempt {
-            Attempt::Published(batch) => ActiveComputeExecutionV1::Materialized(batch),
+            Attempt::Published(batch) => ActiveComputeExecutionV1::Materialized(
+                MaterializedCompletionReceiptV1::Published(batch),
+            ),
             #[cfg(test)]
             Attempt::ScriptedPublished => ActiveComputeExecutionV1::ScriptedMaterialized,
             _ => unreachable!("confirmed publication outcome"),

@@ -21,11 +21,12 @@ use fe2o3_hsaco::{ArgumentAccess, ExplicitValueKind};
 use fe2o3_kfd::topology::Gfx942XgmiRouteV1;
 use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, ComputeAqlQueueLaneDispatchV1, ComputeAqlQueueLaneV1,
-    ComputeAqlQueueSessionV1, DeviceSelector, GFX942_MAX_FIXED_DISPATCH_DATA_V1,
-    GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1,
+    ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1, DeviceSelector,
+    GFX942_MAX_FIXED_DISPATCH_DATA_V1, GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1,
     GFX942_SAME_DEVICE_PERSISTENT_SDMA_MAX_WINDOW_PACKETS_V1, GFX942_SDMA_MAX_IN_FLIGHT_V1,
-    GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942CompletedDispatchReadRequestV1,
-    Gfx942CompletedPersistentComputeDispatchV1, Gfx942DeviceBackingBudgetV1,
+    GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942CompletedDispatchBatchV1,
+    Gfx942CompletedDispatchReadRequestV1, Gfx942CompletedPersistentComputeDispatchV1,
+    Gfx942CompletionRecycleObservationV1, Gfx942DeviceBackingBudgetV1,
     Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942DeviceMemoryLeaseV1,
     Gfx942DeviceMemoryUnmappedV1, Gfx942DevicePoolLimitsV1,
     Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1,
@@ -33,16 +34,17 @@ use fe2o3_kfd::{
     Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1,
     Gfx942DirectionalPersistentSdmaTerminalCustodyV1,
     Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1, Gfx942DispatchBatchV1,
-    Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1,
-    Gfx942FixedDispatchPacketV1, Gfx942FixedDispatchSubmissionFailureV1,
-    Gfx942HostVisibleBackingBudgetV1, Gfx942NativeXgmiSdmaQueueCreationRootV1,
-    Gfx942NativeXgmiSdmaQueueV1, Gfx942PersistentComputeBindFailureCustodyV1,
-    Gfx942PersistentComputeBindTerminalCustodyV1, Gfx942PersistentComputeDispatchV1,
-    Gfx942PersistentComputeEffectV1, Gfx942PersistentComputeInputV1,
-    Gfx942PersistentComputePollAndRecycleFailureV1, Gfx942PersistentComputePollAndRecycleV1,
-    Gfx942PersistentComputeReadyTerminalCustodyV1, Gfx942PersistentComputeTerminalCustodyV1,
-    Gfx942PersistentComputeTransitionFailureCustodyV1, Gfx942PersistentComputeWaitAndRecycleV1,
-    Gfx942PersistentSdmaDirectionV1, Gfx942PreparedPersistentComputeDispatchV1,
+    Gfx942DispatchBindingErrorV1, Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1,
+    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1, Gfx942FixedDispatchRecycleFailureV1,
+    Gfx942FixedDispatchSubmissionFailureV1, Gfx942HostVisibleBackingBudgetV1,
+    Gfx942NativeXgmiSdmaQueueCreationRootV1, Gfx942NativeXgmiSdmaQueueV1,
+    Gfx942PersistentComputeBindFailureCustodyV1, Gfx942PersistentComputeBindTerminalCustodyV1,
+    Gfx942PersistentComputeDispatchV1, Gfx942PersistentComputeEffectV1,
+    Gfx942PersistentComputeInputV1, Gfx942PersistentComputePollAndRecycleFailureV1,
+    Gfx942PersistentComputePollAndRecycleV1, Gfx942PersistentComputeReadyTerminalCustodyV1,
+    Gfx942PersistentComputeTerminalCustodyV1, Gfx942PersistentComputeTransitionFailureCustodyV1,
+    Gfx942PersistentComputeWaitAndRecycleV1, Gfx942PersistentSdmaDirectionV1,
+    Gfx942PreparedPersistentComputeDispatchV1,
     Gfx942PreparedThreeBindingPersistentComputeDispatchV1, Gfx942RecycledDispatchWriteRequestV1,
     Gfx942RecycledPersistentComputeDispatchV1,
     Gfx942RecycledThreeBindingPersistentComputeDispatchV1, Gfx942SdmaBufferV1,
@@ -94,6 +96,8 @@ mod compute_quiescence_control;
 mod compute_settlement;
 mod materialized_cancellation;
 mod materialized_completion;
+mod materialized_completion_receipt;
+use materialized_completion_receipt::MaterializedCompletionReceiptV1;
 mod materialized_publication;
 mod materialized_submission_attempt;
 mod ordered_publication;
@@ -2835,10 +2839,7 @@ impl KfdRuntimeBackendV1 {
                 | ActiveComputeExecutionV1::MaterializedSuccessorPublication(_)
                 | ActiveComputeExecutionV1::MaterializedPrepared(_)
                 | ActiveComputeExecutionV1::MaterializedCancelling(_)
-                | ActiveComputeExecutionV1::Materialized(_)
-                | ActiveComputeExecutionV1::MaterializedCompleted(_)
-                | ActiveComputeExecutionV1::MaterializedNativeOwned(_)
-                | ActiveComputeExecutionV1::MaterializedRetired(_) => false,
+                | ActiveComputeExecutionV1::Materialized(_) => false,
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedMaterialized
                 | ActiveComputeExecutionV1::ScriptedMaterializedCompleted

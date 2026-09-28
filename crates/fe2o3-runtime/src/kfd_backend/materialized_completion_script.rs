@@ -75,7 +75,9 @@ impl KfdRuntimeBackendV1 {
             }
             let (active, phase) = target.parts_mut(&mut self.active, &mut self.compute_pipeline);
             let started = Instant::now();
-            active.execution = Some(ActiveComputeExecutionV1::MaterializedNativeOwned(operation));
+            active.execution = Some(ActiveComputeExecutionV1::Materialized(
+                MaterializedCompletionReceiptV1::Consuming(operation),
+            ));
             if matches!(step, PollUnwind | RecycleUnwind) {
                 panic!("scripted ordinary completion unwind");
             }

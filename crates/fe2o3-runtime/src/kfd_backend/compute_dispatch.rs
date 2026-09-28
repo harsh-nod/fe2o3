@@ -793,10 +793,7 @@ impl KfdRuntimeBackendV1 {
                     backend.active = Some(active);
                     Err(backend.terminal_error("materialized retry bypassed its indexed path"))
                 }
-                execution @ (ActiveComputeExecutionV1::Materialized(_)
-                | ActiveComputeExecutionV1::MaterializedCompleted(_)
-                | ActiveComputeExecutionV1::MaterializedNativeOwned(_)
-                | ActiveComputeExecutionV1::MaterializedRetired(_)) => {
+                execution @ ActiveComputeExecutionV1::Materialized(_) => {
                     active.execution = Some(execution);
                     backend.active = Some(active);
                     Err(backend.terminal_error("ordinary completion bypassed its indexed path"))

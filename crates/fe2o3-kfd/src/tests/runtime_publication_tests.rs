@@ -5,7 +5,7 @@ use super::*;
 
 type DispatchOwner = super::super::super::dispatch_binding::TestOnlyMultiInflightDispatchOwnerV1;
 
-fn fixture(auxiliary: bool) -> (ComputeAqlQueueSessionV1, ComputeAqlQueueLaneV1) {
+pub(super) fn fixture(auxiliary: bool) -> (ComputeAqlQueueSessionV1, ComputeAqlQueueLaneV1) {
     let primary = test_queue_key(186, 1);
     let mut session = persistent_compute_cancellation_test_session(primary, None, None);
     session
@@ -28,7 +28,10 @@ fn fixture(auxiliary: bool) -> (ComputeAqlQueueSessionV1, ComputeAqlQueueLaneV1)
     (session, lane)
 }
 
-fn owner(session: &ComputeAqlQueueSessionV1, ordinal: usize) -> &CompletionSignalArenaOwnerV1 {
+pub(super) fn owner(
+    session: &ComputeAqlQueueSessionV1,
+    ordinal: usize,
+) -> &CompletionSignalArenaOwnerV1 {
     if ordinal == 0 {
         &session.completion_owner
     } else {
@@ -40,7 +43,7 @@ fn owner(session: &ComputeAqlQueueSessionV1, ordinal: usize) -> &CompletionSigna
     }
 }
 
-fn restored(session: &ComputeAqlQueueSessionV1) {
+pub(super) fn restored(session: &ComputeAqlQueueSessionV1) {
     assert_eq!(session.key, test_queue_key(186, 1));
     assert_eq!(session.auxiliary_compute_lanes[0].generation, 7);
     assert_eq!(

@@ -955,7 +955,10 @@ fn native_pending_snapshot(backend: &KfdRuntimeBackendV1, count: usize) -> Nativ
                 .filter_map(|lane| lane.active.as_ref()),
         )
         .map(|active| {
-            let Some(ActiveComputeExecutionV1::Materialized(batch)) = &active.execution else {
+            let Some(ActiveComputeExecutionV1::Materialized(
+                MaterializedCompletionReceiptV1::Published(batch),
+            )) = &active.execution
+            else {
                 panic!("native probe requires an original published ordinary receipt");
             };
             let lane = backend.active_compute_lane_v1(active.id).unwrap();

@@ -140,10 +140,7 @@ pub(super) enum ActiveComputeExecutionV1 {
     MaterializedSuccessorPublication(super::ordered_publication::OrderedPublicationV1),
     MaterializedPrepared(MaterializedPreparedV1),
     MaterializedCancelling(Box<super::materialized_cancellation::MaterializedCancellationV1>),
-    Materialized(Gfx942DispatchBatchV1<1>),
-    MaterializedCompleted(fe2o3_kfd::Gfx942CompletedDispatchBatchV1<1>),
-    MaterializedNativeOwned(super::materialized_completion::MaterializedConsumeV1),
-    MaterializedRetired(fe2o3_kfd::Gfx942CompletionRecycleObservationV1),
+    Materialized(MaterializedCompletionReceiptV1),
     PersistentPrepared {
         allocation: u64,
         access: RuntimeAccessV1,

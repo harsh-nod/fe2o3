@@ -55,7 +55,10 @@ fn long_receipt(backend: &KfdRuntimeBackendV1) -> Option<NativePendingReceipt> {
             kernel.validated.selected_kernel().name() == Variant::Long.kernel_name()
                 && backend.modules[&kernel.module].image_sha256 == Variant::Long.hsaco_sha256()
         })?;
-    let Some(ActiveComputeExecutionV1::Materialized(batch)) = &active.execution else {
+    let Some(ActiveComputeExecutionV1::Materialized(MaterializedCompletionReceiptV1::Published(
+        batch,
+    ))) = &active.execution
+    else {
         return None;
     };
     let lane = backend.active_compute_lane_v1(active.id)?;

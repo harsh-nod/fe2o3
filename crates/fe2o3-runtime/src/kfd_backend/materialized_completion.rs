@@ -2,11 +2,7 @@
 
 use super::*;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum MaterializedConsumeV1 {
-    Poll,
-    Recycle,
-}
+pub(super) use super::materialized_completion_receipt::MaterializedConsumeV1;
 
 #[derive(Clone, Copy)]
 pub(super) enum MaterializedCompletionTargetV1 {
@@ -55,15 +51,20 @@ fn execution_phase(
     execution: Option<&ActiveComputeExecutionV1>,
 ) -> Option<RuntimeComputePipelinePhaseV1> {
     match execution? {
-        ActiveComputeExecutionV1::Materialized(_) => Some(RuntimeComputePipelinePhaseV1::Published),
-        ActiveComputeExecutionV1::MaterializedCompleted(_) => {
+        ActiveComputeExecutionV1::Materialized(MaterializedCompletionReceiptV1::Published(_)) => {
+            Some(RuntimeComputePipelinePhaseV1::Published)
+        }
+        ActiveComputeExecutionV1::Materialized(MaterializedCompletionReceiptV1::Completed(_)) => {
             Some(RuntimeComputePipelinePhaseV1::Completed)
         }
-        ActiveComputeExecutionV1::MaterializedRetired(observation)
-            if observation.packet_count() == 1 =>
-        {
+        ActiveComputeExecutionV1::Materialized(MaterializedCompletionReceiptV1::Retired(
+            observation,
+        )) if observation.packet_count() == 1 => {
             Some(RuntimeComputePipelinePhaseV1::PhysicallyRetired)
         }
+        ActiveComputeExecutionV1::Materialized(MaterializedCompletionReceiptV1::Consuming(
+            MaterializedConsumeV1::Poll | MaterializedConsumeV1::Recycle,
+        )) => None,
         #[cfg(test)]
         ActiveComputeExecutionV1::ScriptedMaterialized => {
             Some(RuntimeComputePipelinePhaseV1::Published)
@@ -93,14 +94,7 @@ fn extent(lane: usize, writeback: &WritebackV1) -> NativeDirtyExtentV1 {
 impl KfdRuntimeBackendV1 {
     pub(super) fn materialized_completion_selected_v1(&self) -> bool {
         match self.active.as_ref().and_then(|a| a.execution.as_ref()) {
-            Some(
-                ActiveComputeExecutionV1::Materialized(_)
-                | ActiveComputeExecutionV1::MaterializedCompleted(_)
-                | ActiveComputeExecutionV1::MaterializedNativeOwned(
-                    MaterializedConsumeV1::Poll | MaterializedConsumeV1::Recycle,
-                )
-                | ActiveComputeExecutionV1::MaterializedRetired(_),
-            ) => true,
+            Some(ActiveComputeExecutionV1::Materialized(_)) => true,
             #[cfg(test)]
             Some(
                 ActiveComputeExecutionV1::ScriptedMaterialized
@@ -274,6 +268,8 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
+    // Returning the original linear receipt must not allocate on recycle retry.
+    #[allow(clippy::result_large_err)]
     fn observe_native_materialized_v1(
         &mut self,
         target: MaterializedCompletionTargetV1,
@@ -295,69 +291,29 @@ impl KfdRuntimeBackendV1 {
             let (active, phase) = target.parts_mut(&mut self.active, &mut self.compute_pipeline);
             let queue = self.queue.as_mut().unwrap();
             let result = queue.with_compute_lane_v1(native_lane, |queue| {
+                let Some(ActiveComputeExecutionV1::Materialized(receipt)) =
+                    active.execution.as_mut()
+                else {
+                    unreachable!("preflighted ordinary completion receipt")
+                };
                 if operation == MaterializedConsumeV1::Poll
-                    && matches!(
-                        active.execution,
-                        Some(ActiveComputeExecutionV1::Materialized(_))
-                    )
+                    && matches!(receipt, MaterializedCompletionReceiptV1::Published(_))
                 {
-                    let Some(ActiveComputeExecutionV1::Materialized(batch)) = active
-                        .execution
-                        .replace(ActiveComputeExecutionV1::MaterializedNativeOwned(
-                            MaterializedConsumeV1::Poll,
-                        ))
-                    else {
-                        unreachable!()
-                    };
-                    match queue.poll_fixed_dispatch(batch)? {
-                        Gfx942DispatchPollV1::Pending(batch) => {
-                            active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
-                            return Ok(());
+                    if receipt.poll_ready(|batch| queue.poll_fixed_dispatch(batch))? {
+                        if let Some(phase) = phase {
+                            *phase = RuntimeComputePipelinePhaseV1::Completed;
                         }
-                        Gfx942DispatchPollV1::Ready(completed) => {
-                            active.execution =
-                                Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
-                            if let Some(phase) = phase {
-                                *phase = RuntimeComputePipelinePhaseV1::Completed;
-                            }
-                            active.performance.publish_to_completion =
-                                active.published_at.elapsed();
-                        }
+                        active.performance.publish_to_completion = active.published_at.elapsed();
                     }
                 } else if operation == MaterializedConsumeV1::Recycle
-                    && matches!(
-                        active.execution,
-                        Some(ActiveComputeExecutionV1::MaterializedCompleted(_))
-                    )
+                    && matches!(receipt, MaterializedCompletionReceiptV1::Completed(_))
+                    && receipt
+                        .recycle_retired(|completed| queue.recycle_fixed_dispatch(completed))?
                 {
-                    let Some(ActiveComputeExecutionV1::MaterializedCompleted(completed)) = active
-                        .execution
-                        .replace(ActiveComputeExecutionV1::MaterializedNativeOwned(
-                            MaterializedConsumeV1::Recycle,
-                        ))
-                    else {
-                        unreachable!()
-                    };
-                    match queue.recycle_fixed_dispatch(completed) {
-                        Ok(observation) => {
-                            active.execution =
-                                Some(ActiveComputeExecutionV1::MaterializedRetired(observation));
-                            active.performance.completed_readback = Duration::ZERO;
-                            active.performance.completion_detach_restore = Duration::ZERO;
-                            if let Some(phase) = phase {
-                                *phase = RuntimeComputePipelinePhaseV1::PhysicallyRetired;
-                            }
-                        }
-                        Err(failure) => {
-                            let (error, returned) = failure.into_parts();
-                            if let Some(completed) = returned {
-                                active.execution = Some(
-                                    ActiveComputeExecutionV1::MaterializedCompleted(completed),
-                                );
-                            } else {
-                                return Err(error);
-                            }
-                        }
+                    active.performance.completed_readback = Duration::ZERO;
+                    active.performance.completion_detach_restore = Duration::ZERO;
+                    if let Some(phase) = phase {
+                        *phase = RuntimeComputePipelinePhaseV1::PhysicallyRetired;
                     }
                 }
                 Ok::<(), fe2o3_kfd::ComputeAqlQueueSessionErrorV1>(())

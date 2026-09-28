@@ -292,11 +292,15 @@ fn fault_case(lane: usize, pipelined: bool, fault: Step, unrepaired_drop: bool) 
     assert!(match fault {
         Step::PollError | Step::PollUnwind => matches!(
             execution,
-            ActiveComputeExecutionV1::MaterializedNativeOwned(MaterializedConsumeV1::Poll)
+            ActiveComputeExecutionV1::Materialized(MaterializedCompletionReceiptV1::Consuming(
+                MaterializedConsumeV1::Poll
+            ))
         ),
         Step::RecycleError | Step::RecycleUnwind => matches!(
             execution,
-            ActiveComputeExecutionV1::MaterializedNativeOwned(MaterializedConsumeV1::Recycle)
+            ActiveComputeExecutionV1::Materialized(MaterializedCompletionReceiptV1::Consuming(
+                MaterializedConsumeV1::Recycle
+            ))
         ),
         Step::PollOuterErrorPending | Step::PollOuterUnwindPending =>
             matches!(execution, ActiveComputeExecutionV1::ScriptedMaterialized),

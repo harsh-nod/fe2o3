@@ -4979,24 +4979,15 @@ impl ComputeAqlQueueSessionV1 {
         let observation = match self.recycle_completion_batch_retaining(completion) {
             Ok(observation) => observation,
             Err((error, completion)) => {
-                if matches!(
-                    error,
-                    ComputeAqlQueueSessionErrorV1::Completion(
-                        Gfx942CompletionErrorV1::SignalPinned { .. }
-                    )
-                ) {
-                    return Err(Gfx942FixedDispatchRecycleFailureV1 {
-                        error,
-                        retryable_completed: Some(wrap_completed(completion, identity)),
-                    });
-                }
-                if let Some(dispatch) = self.dispatch.as_mut() {
+                let failure = Gfx942FixedDispatchRecycleFailureV1::from_completion_failure(
+                    error, completion, identity,
+                );
+                if failure.retryable_completed.is_none()
+                    && let Some(dispatch) = self.dispatch.as_mut()
+                {
                     dispatch.poison();
                 }
-                return Err(Gfx942FixedDispatchRecycleFailureV1 {
-                    error,
-                    retryable_completed: None,
-                });
+                return Err(failure);
             }
         };
         if self
