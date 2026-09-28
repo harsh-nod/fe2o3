@@ -32,9 +32,62 @@ enum OptimizedAttachmentOracleV18 {
     OriginalNoOutput,
 }
 
-fn optimized_source_retained_oracle_v18(
+fn optimized_correspondence_header_oracle_v18<T, E, F>(_: &F) -> usize {
+    use std::mem::{align_of, size_of};
+    use std::panic::AssertUnwindSafe;
+    type Capture<'a, 'w, F> = (
+        &'a ProductionSourceCorrespondenceV18<'a>,
+        &'a fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV18<'a, 'a, 'a, 'a>,
+        &'a mut ArgumentBudgetV1<'w>,
+        &'a std::cell::Cell<usize>,
+        F,
+    );
+    type Entry<'a, F> = (
+        fe2o3_kernel_analysis::CheckedCanonicalKirControlIndexV18<'a, 'a, 'a>,
+        [Vec<usize>; 5],
+        F,
+    );
+    type EntryResult<'a, F> = SourceOwnedResultV18<Entry<'a, F>>;
+    type Invoke<'a, 'w, F> = (
+        &'a ProductionOptimizedSourceCorrespondenceV18<'a>,
+        &'a mut ArgumentBudgetV1<'w>,
+        F,
+    );
+    type Payload = Box<dyn std::any::Any + Send>;
+    let cleanup = size_of::<[Option<Payload>; 2]>()
+        + size_of::<AssertUnwindSafe<[Option<Payload>; 2]>>()
+        + 2 * size_of::<Payload>()
+        + size_of::<AssertUnwindSafe<Payload>>()
+        + 2 * size_of::<Result<(), Payload>>()
+        + size_of::<std::ops::Range<usize>>()
+        + size_of::<usize>()
+        + size_of::<bool>();
+    3 * size_of::<Capture<'_, '_, F>>()
+        + 3 * align_of::<Capture<'_, '_, F>>()
+        + 2 * size_of::<AssertUnwindSafe<Capture<'_, '_, F>>>()
+        + size_of::<Entry<'_, F>>()
+        + 2 * size_of::<EntryResult<'_, F>>()
+        + 2 * size_of::<std::thread::Result<EntryResult<'_, F>>>()
+        + size_of::<AssertUnwindSafe<Entry<'_, F>>>()
+        + size_of::<std::thread::Result<()>>()
+        + size_of::<std::cell::Cell<usize>>()
+        + size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>()
+        + size_of::<SourceOwnedResultV18<()>>()
+        + size_of::<Invoke<'_, '_, F>>()
+        + size_of::<AssertUnwindSafe<Invoke<'_, '_, F>>>()
+        + size_of::<ProductionOptimizedSourceCorrespondenceV18<'_>>()
+        + 5 * size_of::<Vec<usize>>()
+        + size_of::<std::thread::Result<Result<T, E>>>()
+        + size_of::<Result<T, E>>()
+        + size_of::<AssertUnwindSafe<Result<T, E>>>()
+        + 3 * size_of::<usize>()
+        + cleanup
+}
+
+fn optimized_source_retained_oracle_v18<F>(
     original: &ProductionSourceCorrespondenceV18<'_>,
     checked: &fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV18<'_, '_, '_, '_>,
+    consume: &F,
 ) -> usize {
     use fe2o3_kernel_analysis::{
         CanonicalKirBlockControlV1, CanonicalKirEdgeControlV1, CanonicalKirOutputUseV1,
@@ -53,11 +106,10 @@ fn optimized_source_retained_oracle_v18(
         .iter()
         .map(|root| root.coordinates.spans.rows.len())
         .sum();
-    let headers = size_of::<ProductionOptimizedSourceCorrespondenceV18<'_>>()
-        + 5 * size_of::<Vec<usize>>()
-        + size_of::<std::thread::Result<SourceOwnedResultV18<()>>>()
-        + size_of::<SourceOwnedResultV18<()>>()
-        + 3 * size_of::<usize>();
+    let headers =
+        optimized_correspondence_header_oracle_v18::<(), ProductionSourceOwnedViewErrorV18, F>(
+            consume,
+        );
     let control = size_of::<CheckedCanonicalKirControlIndexV18<'_, '_, '_>>()
         + input.blocks().len() * size_of::<CanonicalKirBlockControlV1>()
         + input.edges().len() * size_of::<CanonicalKirEdgeControlV1>()
@@ -86,16 +138,15 @@ fn optimized_source_header_exact_and_one_short_storage_refuse_at_distinct_bounda
             &mut budget,
             |source, checked, budget| {
                 source.with_ranked_correspondence_v18(checked.input(), budget, |original, budget| {
-                let header = size_of::<ProductionOptimizedSourceCorrespondenceV18<'_>>()
-                    + 5 * size_of::<Vec<usize>>()
-                    + size_of::<std::thread::Result<SourceOwnedResultV18<()>>>()
-                    + size_of::<SourceOwnedResultV18<()>>() + 3 * size_of::<usize>();
+                let consume = |_: &ProductionOptimizedSourceCorrespondenceV18<'_>, _: &mut ArgumentBudgetV1<'_>| -> SourceOwnedResultV18<()> {
+                    panic!("entry resource denial reached callback")
+                };
+                let header = optimized_correspondence_header_oracle_v18::<(), ProductionSourceOwnedViewErrorV18, _>(&consume);
                 let padding = budget.storage_limit() - budget.storage() - (header - short);
                 budget.reserve_storage(padding)?;
                 let floor = budget.storage();
                 let work = budget.work();
-                let result = original.with_optimized_correspondence_v18(checked, budget,
-                    |_, _| -> SourceOwnedResultV18<()> { panic!("entry resource denial reached callback") });
+                let result = original.with_optimized_correspondence_v18(checked, budget, consume);
                 assert!(matches!(result, Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(_)))));
                 assert_eq!(budget.storage(), floor, "construction scratch refunded only after drop");
                 if short == 1 {

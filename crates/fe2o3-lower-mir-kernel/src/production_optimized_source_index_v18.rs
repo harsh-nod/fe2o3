@@ -75,6 +75,7 @@ impl SourceIndex {
         original: &ProductionSourceCorrespondenceV18<'_>,
         checked: &Transition<'_, '_, '_, '_>,
         control: &Control<'_, '_, '_>,
+        credit: &std::cell::Cell<usize>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<Self> {
         budget.charge_work(3)?;
@@ -91,10 +92,10 @@ impl SourceIndex {
             .checked_add(input.blocks().len())
             .ok_or(ArgumentResourceV1::Arithmetic)?;
         let mut result = Self {
-            operations: resources::vector(input.operations().len(), budget)?,
-            gap_starts: resources::vector(input.blocks().len(), budget)?,
-            gaps: resources::vector(gap_count, budget)?,
-            attachments: resources::vector(original.attachments.len(), budget)?,
+            operations: resources::owned_vector(input.operations().len(), credit, budget)?,
+            gap_starts: resources::owned_vector(input.blocks().len(), credit, budget)?,
+            gaps: resources::owned_vector(gap_count, credit, budget)?,
+            attachments: resources::owned_vector(original.attachments.len(), credit, budget)?,
             sites: Vec::new(),
         };
         budget.charge_work(input.operations().len())?;
@@ -125,13 +126,14 @@ impl SourceIndex {
             let target = attachments::project(row.location, checked, control, &result, budget)?;
             result.attachments.push(target);
         }
-        result.build_sites(original, budget)?;
+        result.build_sites(original, credit, budget)?;
         Ok(result)
     }
 
     fn build_sites(
         &mut self,
         original: &ProductionSourceCorrespondenceV18<'_>,
+        credit: &std::cell::Cell<usize>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<()> {
         let roots = original.source.root_count(budget)?;
@@ -142,7 +144,7 @@ impl SourceIndex {
                 .checked_add(original.source.root_row(root)?.coordinates.spans.rows.len())
                 .ok_or(ArgumentResourceV1::Arithmetic)?;
         }
-        self.sites = resources::vector(count, budget)?;
+        self.sites = resources::owned_vector(count, credit, budget)?;
         for root in 0..roots {
             let root_row = original.source.root_row(root)?;
             for (ordinal, row) in root_row.coordinates.spans.rows.iter().enumerate() {

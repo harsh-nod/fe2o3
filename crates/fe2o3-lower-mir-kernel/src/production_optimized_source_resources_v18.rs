@@ -1,13 +1,72 @@
 use super::*;
 
-pub(super) fn headers<T, E>() -> Result<usize, ArgumentResourceV1> {
+pub(super) fn headers<T, E, F>(_: &F) -> Result<usize, ArgumentResourceV1> {
+    type Capture<'a, 'work, F> = (
+        &'a ProductionSourceCorrespondenceV18<'a>,
+        &'a Transition<'a, 'a, 'a, 'a>,
+        &'a mut ArgumentBudgetV1<'work>,
+        &'a std::cell::Cell<usize>,
+        F,
+    );
+    type Entry<'a, F> = (Control<'a, 'a, 'a>, SourceIndex, F);
+    type EntryResult<'a, F> = SourceOwnedResultV18<Entry<'a, F>>;
+    type Invoke<'a, 'work, F> = (
+        &'a ProductionOptimizedSourceCorrespondenceV18<'a>,
+        &'a mut ArgumentBudgetV1<'work>,
+        F,
+    );
     argument_sum_v1(&[
+        argument_product_v1(3, size_of::<Capture<'_, '_, F>>())?,
+        argument_product_v1(3, std::mem::align_of::<Capture<'_, '_, F>>())?,
+        argument_product_v1(
+            2,
+            size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, F>>>(),
+        )?,
+        size_of::<Entry<'_, F>>(),
+        argument_product_v1(2, size_of::<EntryResult<'_, F>>())?,
+        argument_product_v1(2, size_of::<std::thread::Result<EntryResult<'_, F>>>())?,
+        size_of::<std::panic::AssertUnwindSafe<Entry<'_, F>>>(),
+        size_of::<std::thread::Result<()>>(),
+        size_of::<std::cell::Cell<usize>>(),
+        size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>(),
+        size_of::<SourceOwnedResultV18<()>>(),
+        size_of::<Invoke<'_, '_, F>>(),
+        size_of::<std::panic::AssertUnwindSafe<Invoke<'_, '_, F>>>(),
         size_of::<ProductionOptimizedSourceCorrespondenceV18<'_>>(),
         size_of::<SourceIndex>(),
         size_of::<std::thread::Result<Result<T, E>>>(),
         size_of::<Result<T, E>>(),
+        size_of::<std::panic::AssertUnwindSafe<Result<T, E>>>(),
         3 * size_of::<usize>(),
+        source_reference_cleanup_headers_v29()?,
     ])
+}
+
+pub(super) fn owned_vector<T>(
+    count: usize,
+    credit: &std::cell::Cell<usize>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<Vec<T>> {
+    budget.charge_work(1)?;
+    optimized_source_consumer_resources_v18::reserve_entry(
+        credit,
+        argument_product_v1(count, size_of::<T>())?,
+        budget,
+    )?;
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(count)
+        .map_err(|_| ArgumentResourceV1::Allocation)?;
+    optimized_source_consumer_resources_v18::reserve_entry(
+        credit,
+        argument_product_v1(
+            rows.capacity()
+                .checked_sub(count)
+                .ok_or(ArgumentResourceV1::Accounting)?,
+            size_of::<T>(),
+        )?,
+        budget,
+    )?;
+    Ok(rows)
 }
 
 pub(super) fn vector<T>(

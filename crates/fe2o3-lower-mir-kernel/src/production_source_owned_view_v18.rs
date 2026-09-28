@@ -221,6 +221,12 @@ impl ProductionPendingScopedSourceOwnerV29 {
                 .checked_sub(existing)
                 .ok_or(ArgumentResourceV1::Accounting)?;
             scoped_source_attempt_v29(cleanup, budget, floor, move |budget| {
+                // The attempt's own transient header is not retained source
+                // credit. Existing occurrences, however, transfer exactly once.
+                let floor = budget
+                    .storage()
+                    .checked_sub(existing)
+                    .ok_or(ArgumentResourceV1::Accounting)?;
                 budget.reserve_storage(size_of::<ProductionPreparedSourceV18>())?;
                 let capture_storage = match owner.occurrence_storage() {
                     Some(receipt) => receipt.retained_storage(),
@@ -342,14 +348,15 @@ impl ProductionPendingScopedSourceOwnerV29 {
             guard: &guard,
             cleanup,
         };
-        let caught = match view.query(budget) {
-            Ok(()) => {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget)))
-            }
-            Err(error) => {
-                drop(consume);
-                Ok(Err(error.into()))
-            }
+        let caught = {
+            let view = &view;
+            let budget = &mut *budget;
+            // A refused first query still disposes the owned callback before
+            // settling this view's already accepted header credit.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                view.query(budget)?;
+                consume(view, budget)
+            }))
         };
         let prior_query_failure = guard.first.get();
         let postflight = if matches!(&caught, Ok(Ok(_))) {
@@ -680,6 +687,51 @@ pub struct ProductionSourceOwnedViewV18<'scope> {
     cleanup: &'scope ScopedSourceCleanupV29,
 }
 
+fn source_analysis_owned_headers_v18<T, E, F>(_: &F) -> Result<usize, ArgumentResourceV1> {
+    type Entry<F> = (usize, F);
+    type Capture<'a, 'work, F> = (
+        &'a ProductionSourceOwnedViewV18<'a>,
+        &'a mut ArgumentBudgetV1<'work>,
+        &'a std::cell::Cell<usize>,
+        F,
+    );
+    type Invoke<'a, F> = (F, &'a std::cell::Cell<bool>);
+    type Framework<'a, 'work, F> = (
+        &'a ProductionSourceOwnedViewV18<'a>,
+        &'a mut ArgumentBudgetV1<'work>,
+        &'a fe2o3_pliron::CanonicalAnalysisCleanupV1<'a>,
+        Invoke<'a, F>,
+    );
+    type Analysis<T, E> = Result<T, SourceAnalysisBoundaryV18<E>>;
+    argument_sum_v1(&[
+        size_of::<Capture<'_, '_, F>>(),
+        std::mem::align_of::<Capture<'_, '_, F>>(),
+        size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, F>>>(),
+        size_of::<Entry<F>>(),
+        std::mem::align_of::<Entry<F>>(),
+        argument_product_v1(2, size_of::<SourceOwnedResultV18<Entry<F>>>())?,
+        size_of::<std::thread::Result<SourceOwnedResultV18<Entry<F>>>>(),
+        size_of::<std::panic::AssertUnwindSafe<Entry<F>>>(),
+        size_of::<std::thread::Result<()>>(),
+        size_of::<std::cell::Cell<usize>>(),
+        argument_product_v1(4, size_of::<usize>())?,
+        size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>(),
+        size_of::<SourceOwnedResultV18<()>>(),
+        size_of::<fe2o3_pliron::CanonicalAnalysisCleanupV1<'_>>(),
+        size_of::<std::cell::Cell<bool>>(),
+        size_of::<Invoke<'_, F>>(),
+        std::mem::align_of::<Invoke<'_, F>>(),
+        size_of::<Framework<'_, '_, F>>(),
+        std::mem::align_of::<Framework<'_, '_, F>>(),
+        size_of::<std::panic::AssertUnwindSafe<Framework<'_, '_, F>>>(),
+        size_of::<Analysis<T, E>>(),
+        size_of::<std::thread::Result<Analysis<T, E>>>(),
+        size_of::<std::thread::Result<Result<T, E>>>(),
+        size_of::<Result<T, E>>(),
+        size_of::<std::panic::AssertUnwindSafe<Result<T, E>>>(),
+    ])
+}
+
 impl ProductionSourceOwnedViewV18<'_> {
     /// Checks the existing source query latch and custody without another debit.
     pub fn check_query_v18(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
@@ -713,32 +765,71 @@ impl ProductionSourceOwnedViewV18<'_> {
         E: From<ProductionSourceOwnedViewErrorV18>
             + From<fe2o3_pliron::CanonicalAnalysisScopeErrorV1>,
     {
-        self.query(budget)?;
         let floor = budget.storage();
-        let headers = scoped_source_attempt_v29(self.cleanup, budget, floor, |budget| {
-            self.retain_construction(|| {
-                let headers = argument_sum_v1(&[
-                    size_of::<fe2o3_pliron::CanonicalAnalysisCleanupV1<'_>>(),
-                    size_of::<std::cell::Cell<bool>>(),
-                    size_of::<std::thread::Result<Result<T, SourceAnalysisBoundaryV18<E>>>>(),
-                ])?;
-                budget.reserve_storage(headers)?;
-                Ok(headers)
-            })
-        })?;
+        let slot = std::ptr::from_ref(budget) as usize;
+        let ledger = budget.work_ledger_identity_v1();
+        let accepted = std::cell::Cell::new(0_usize);
+        // Own F before the first query, including refusal and Drop paths.
+        let caught = {
+            let budget = &mut *budget;
+            let accepted = &accepted;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                self.query(budget)?;
+                let headers = self.retain_query(
+                    source_analysis_owned_headers_v18::<T, E, _>(&consume).map_err(Into::into),
+                )?;
+                self.retain_query(budget.reserve_storage(headers).map_err(Into::into))?;
+                accepted.set(headers);
+                Ok::<_, ProductionSourceOwnedViewErrorV18>((headers, consume))
+            }))
+        };
+        let custody = self.observe_analysis_entry_v18(budget, floor, accepted.get(), slot, ledger);
+        let (headers, consume) = match caught {
+            Ok(Ok(entry)) if custody.is_ok() => entry,
+            Ok(Ok(entry)) => {
+                let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    drop(entry);
+                }));
+                let _ =
+                    self.observe_analysis_entry_v18(budget, floor, accepted.get(), slot, ledger);
+                if let Err(payload) = disposed {
+                    std::panic::resume_unwind(payload);
+                }
+                return self
+                    .retain_query(Err(ArgumentResourceV1::Accounting.into()))
+                    .map_err(Into::into);
+            }
+            Ok(Err(error)) => {
+                if custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    self.cleanup.deny_refund();
+                }
+                return self.retain_query(Err(error)).map_err(Into::into);
+            }
+            Err(payload) => {
+                if custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    self.cleanup.deny_refund();
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
         let cleanup = fe2o3_pliron::CanonicalAnalysisCleanupV1::linked(&self.cleanup.denied);
         let entered = std::cell::Cell::new(false);
-        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            fe2o3_pliron::with_canonical_analysis_scope_v18(
-                &self.owner.inner.pending.graph,
-                budget,
-                &cleanup,
-                |scope| {
-                    entered.set(true);
-                    consume(scope).map_err(SourceAnalysisBoundaryV18::Consumer)
-                },
-            )
-        }));
+        let caught = {
+            let budget = &mut *budget;
+            let cleanup = &cleanup;
+            let entered = &entered;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                fe2o3_pliron::with_canonical_analysis_scope_v18(
+                    &self.owner.inner.pending.graph,
+                    budget,
+                    cleanup,
+                    move |scope| {
+                        entered.set(true);
+                        consume(scope).map_err(SourceAnalysisBoundaryV18::Consumer)
+                    },
+                )
+            }))
+        };
         if cleanup.refund_denied() {
             self.cleanup.deny_refund();
         }
@@ -775,6 +866,23 @@ impl ProductionSourceOwnedViewV18<'_> {
             budget,
             headers,
         )
+    }
+
+    fn observe_analysis_entry_v18(
+        &self,
+        budget: &ArgumentBudgetV1<'_>,
+        floor: usize,
+        accepted: usize,
+        slot: usize,
+        ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    ) -> SourceOwnedResultV18<()> {
+        if slot != std::ptr::from_ref(budget) as usize
+            || ledger != budget.work_ledger_identity_v1()
+            || floor.checked_add(accepted) != Some(budget.storage())
+        {
+            self.cleanup.deny_refund();
+        }
+        self.guard.observe_custody(self.cleanup, budget)
     }
 
     fn query(&self, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {

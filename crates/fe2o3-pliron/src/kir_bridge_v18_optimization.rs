@@ -6,7 +6,7 @@ use crate::{
     fixed_policy_v3::{ExecutionProfileV1, FixedPolicy, POLICY3_CANONICAL_CAP},
     kir_occurrence_capture_v1::{Capture, KirNeutralOccurrenceRowsV1, Limits},
     kir_optimization_map_v12::CaptureV12,
-    optimization_v12::{execute_captured_fixed_policy_v1, policy3_execution_resources_v1},
+    optimization_v12::{execute_captured_fixed_policy_v1, policy3_execution_resources_v18},
 };
 use std::mem::size_of;
 
@@ -37,6 +37,10 @@ fn headers() -> Result<usize, ResourceError> {
         (2, size_of::<Capture>()),
         (2, size_of::<CaptureV12>()),
         (2, size_of::<Limits>()),
+        (
+            2,
+            size_of::<crate::kir_occurrence_capture_v1::ObserverAdmissionV18>(),
+        ),
         (2, size_of::<ExecutionProfileV1>()),
         (2, size_of::<crate::PlironOptimizationPlanV1>()),
         (2, size_of::<crate::OperationGraphAnalysisV1>()),
@@ -62,18 +66,27 @@ pub(crate) fn optimize_v18_graph(
         if input.canonical_bytes().len() > POLICY3_CANONICAL_CAP {
             return Err(Failure::Limit);
         }
-        let (mut graph, imported) =
-            KirPlironGraphV18::import(input, budget).map_err(Failure::Bridge)?;
+        let (mut graph, structural, imported) =
+            super::structural::import(input, budget).map_err(Failure::Bridge)?;
         budget.reserve_storage(imported.retained_storage())?;
         graph.validate_custody(budget).map_err(Failure::Bridge)?;
         let root = graph.session.operations[&graph.root.identity];
-        let limits = Limits::for_graph(&graph.session.context, root, input.module(), budget)
-            .and_then(Limits::for_policy3)
+        let (limits, observer_admission) =
+            crate::kir_occurrence_capture_v1::ObserverAdmissionV18::for_graph(
+                &graph.session.context,
+                root,
+                input.module(),
+                budget,
+            )
             .map_err(Failure::Mapping)?;
-        let (profile, map_limits) =
-            policy3_execution_resources_v1(input.canonical_bytes().len(), limits.nodes)
-                .map_err(Failure::Execution)?;
-        budget.charge_work(limits.work().map_err(Failure::Mapping)?)?;
+        let (profile, map_limits) = policy3_execution_resources_v18(
+            input.canonical_bytes().len(),
+            limits.nodes,
+            observer_admission,
+        )
+        .map_err(Failure::Execution)?;
+        let allowance = observer_admission.work(limits).map_err(Failure::Mapping)?;
+        budget.charge_work(allowance)?;
         budget.reserve_storage(limits.storage().map_err(Failure::Mapping)?)?;
         budget.charge_work(profile.work())?;
         for storage in [
@@ -85,7 +98,6 @@ pub(crate) fn optimize_v18_graph(
             budget.reserve_storage(storage)?;
         }
         let mut roster_work = 0usize;
-        let allowance = limits.work().map_err(Failure::Mapping)?;
         let roster = optimization_roster_metered_v1::<true, _>(
             &graph.session.context,
             root,
@@ -103,18 +115,23 @@ pub(crate) fn optimize_v18_graph(
             },
         )
         .map_err(Failure::Mapping)?;
-        let occurrences = Capture::new_for_policy(
+        let occurrences = Capture::new_v18(
             &graph.session.context,
             root,
             input.module(),
             &roster,
             limits,
             roster_work,
-            FixedPolicy::Checked3,
+            observer_admission,
         )
         .map_err(Failure::Mapping)?;
-        let capture = CaptureV12::new_for_policy(map_limits, &roster, FixedPolicy::Checked3)
-            .map_err(Failure::Mapping)?;
+        let capture = CaptureV12::new_for_policy_admitted(
+            map_limits,
+            &roster,
+            FixedPolicy::Checked3,
+            Some(observer_admission.definition_arity_bound()),
+        )
+        .map_err(Failure::Mapping)?;
         drop(roster);
         let mut passes = Vec::new();
         passes
@@ -160,7 +177,7 @@ pub(crate) fn optimize_v18_graph(
         drop(plan);
         budget.release_storage(profile.temporary_storage())?;
         let (owner, bridge, extracted) = graph
-            .extract_canonical_v18(layouts, budget)
+            .extract(layouts, budget, false, Some(&structural))
             .map_err(Failure::Bridge)?;
         budget.reserve_storage(extracted.retained_storage())?;
         if owner.canonical_bytes().len() > POLICY3_CANONICAL_CAP
@@ -189,7 +206,13 @@ pub(crate) fn optimize_v18_graph(
             .map_err(Failure::Mapping)?;
         budget.reserve_storage(map_storage)?;
         let rows = occurrences
-            .finish_policy3_v18(&graph.session.context, &roster, &map, owner.module())
+            .finish_policy3_v18(
+                &graph.session.context,
+                &roster,
+                &map,
+                owner.module(),
+                budget,
+            )
             .map_err(Failure::Mapping)?;
         let row_storage = rows.retained_storage().map_err(Failure::Mapping)?;
         drop(roster);
@@ -222,6 +245,7 @@ pub(crate) fn optimize_v18_graph(
         .try_fold(0, resources::add)?;
         drop(occurrences);
         drop(capture);
+        drop(structural);
         drop(graph);
         Ok(ExecutedV18Parts {
             owner,

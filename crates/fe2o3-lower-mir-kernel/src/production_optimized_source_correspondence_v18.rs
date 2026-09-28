@@ -12,10 +12,10 @@ use fe2o3_kernel_ir::{
 
 #[path = "production_optimized_source_attachments_v18.rs"]
 mod attachments;
-#[path = "production_optimized_source_control_v18.rs"]
-mod control;
 #[path = "production_optimized_source_cfg_v18.rs"]
 mod cfg;
+#[path = "production_optimized_source_control_v18.rs"]
+mod control;
 #[path = "production_optimized_source_execution_v18.rs"]
 mod execution;
 #[path = "production_optimized_source_index_v18.rs"]
@@ -28,16 +28,23 @@ pub use attachments::{
     ProductionOptimizedSourceGapV18, ProductionOptimizedSourceOperationV18,
     ProductionOptimizedSourceSpanV18, ProductionOptimizedSourceTerminatorV18,
 };
-pub use control::ProductionOptimizedSourceEffectsV18;
 pub use cfg::{ProductionOptimizedSourceCfgEventV18, ProductionOptimizedSourceCfgRootV18};
+pub use control::ProductionOptimizedSourceEffectsV18;
 pub use execution::{
-    ProductionLifecycleCheckedNativePoliciesV18, ProductionPrivateMemoryCheckedNativePoliciesV18,
-    ProductionSourcePrivateMemoryRootRequestV18, ProductionOptimizedExecutionKindV18,
-    ProductionOptimizedExecutionRecipesV18, ProductionSourceNativeLifecycleErrorV18,
-    ProductionSourceNativeLifecycleDiagnosticV18,
+    ProductionLifecycleCheckedNativePoliciesV18, ProductionOptimizedExecutionKindV18,
+    ProductionOptimizedExecutionRecipesV18, ProductionPrivateMemoryCheckedNativePoliciesV18,
+    ProductionSourceNativeLifecycleDiagnosticV18, ProductionSourceNativeLifecycleErrorV18,
+    ProductionSourcePrivateMemoryRootRequestV18,
 };
 pub use index::ProductionOptimizedSourceGapIntervalV18;
 use index::SourceIndex;
+
+#[cfg(test)]
+pub(super) fn owned_headers_for_test_v1744<T, E, F>(
+    consume: &F,
+) -> Result<usize, ArgumentResourceV1> {
+    resources::headers::<T, E, F>(consume)
+}
 pub use memory::{
     ProductionOptimizedSourceAllocationV18, ProductionOptimizedSourceMemoryAccessV18,
     ProductionOptimizedSourcePayloadV18,
@@ -102,55 +109,111 @@ impl ProductionSourceCorrespondenceV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
-        self.query(budget)?;
-        self.retain_query((|| {
-            budget.charge_work(1)?;
-            if !std::ptr::eq(self.inventory, checked.input()) {
-                return self
-                    .source
-                    .missing("optimized source substituted its original inventory");
-            }
-            Ok(())
-        })())?;
         let floor = budget.storage();
-        let (control, index, storage) = scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
-            self.source.retain_construction(|| {
-                let headers = resources::headers::<T, E>()?;
-                budget.reserve_storage(headers)?;
-                let (control, receipt) =
-                    Control::derive_v18(checked, budget).map_err(transition_error)?;
-                budget.reserve_storage(receipt.retained_storage())?;
-                let index = SourceIndex::build(self, checked, &control, budget)?;
-                let storage = budget
-                    .storage()
-                    .checked_sub(floor)
-                    .ok_or(ArgumentResourceV1::Accounting)?;
-                Ok((control, index, storage))
-            })
-        })?;
-            let view = ProductionOptimizedSourceCorrespondenceV18 {
-                original: self,
-                checked,
-                control: &control,
-                index: &index,
-                slot: std::ptr::from_ref(budget) as usize,
-                ledger: budget.work_ledger_identity_v1(),
-                floor: budget.storage(),
-            };
-            let caught = match view.check(budget) {
-                Ok(()) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget))),
-                Err(error) => { drop(consume); Ok(Err(error.into())) }
-            };
-            let prior = self.source.guard.first.get();
-            let postflight = if matches!(&caught, Ok(Ok(_))) {
-                view.check(budget)
-            } else {
-                view.observe_custody(budget)
-            };
-            drop(view);
-            drop(index);
-            drop(control);
-            source_owned_finish_callback_v18(caught, prior, postflight, self.source.cleanup, budget, storage)
+        let slot = std::ptr::from_ref(budget) as usize;
+        let ledger = budget.work_ledger_identity_v1();
+        let accepted = std::cell::Cell::new(0_usize);
+        let caught = {
+            let budget = &mut *budget;
+            let accepted = &accepted;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                self.query(budget)?;
+                self.retain_query((|| {
+                    budget.charge_work(1)?;
+                    if !std::ptr::eq(self.inventory, checked.input()) {
+                        return self
+                            .source
+                            .missing("optimized source substituted its original inventory");
+                    }
+                    Ok(())
+                })())?;
+                self.source.retain_construction(move || {
+                    let headers = resources::headers::<T, E, _>(&consume)?;
+                    optimized_source_consumer_resources_v18::reserve_entry(
+                        accepted, headers, budget,
+                    )?;
+                    let (control, receipt) =
+                        Control::derive_v18(checked, budget).map_err(transition_error)?;
+                    optimized_source_consumer_resources_v18::reserve_entry(
+                        accepted,
+                        receipt.retained_storage(),
+                        budget,
+                    )?;
+                    let index = SourceIndex::build(self, checked, &control, accepted, budget)?;
+                    Ok((control, index, consume))
+                })
+            }))
+        };
+        let entry_custody = optimized_source_consumer_resources_v18::entry_custody(
+            self.source.cleanup,
+            budget,
+            floor,
+            accepted.get(),
+            slot,
+            ledger,
+        )
+        .map_err(Into::into)
+        .and(self.observe_custody(budget));
+        let (control, index, consume) = match caught {
+            Ok(Ok(entry)) if entry_custody.is_ok() => entry,
+            Ok(Ok(entry)) => {
+                let disposed =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(entry)));
+                if let Err(payload) = disposed {
+                    std::panic::resume_unwind(payload);
+                }
+                return self
+                    .retain_query(Err(ArgumentResourceV1::Accounting.into()))
+                    .map_err(Into::into);
+            }
+            Ok(Err(error)) => {
+                if entry_custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    self.source.cleanup.deny_refund();
+                }
+                return self.retain_query(Err(error)).map_err(Into::into);
+            }
+            Err(payload) => {
+                if entry_custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    self.source.cleanup.deny_refund();
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+        let storage = accepted.get();
+        let view = ProductionOptimizedSourceCorrespondenceV18 {
+            original: self,
+            checked,
+            control: &control,
+            index: &index,
+            slot: std::ptr::from_ref(budget) as usize,
+            ledger: budget.work_ledger_identity_v1(),
+            floor: budget.storage(),
+        };
+        let caught = {
+            let view = &view;
+            let budget = &mut *budget;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                view.check(budget).map_err(E::from)?;
+                consume(view, budget)
+            }))
+        };
+        let prior = self.source.guard.first.get();
+        let postflight = if matches!(&caught, Ok(Ok(_))) {
+            view.check(budget)
+        } else {
+            view.observe_custody(budget)
+        };
+        drop(view);
+        drop(index);
+        drop(control);
+        source_owned_finish_callback_v18(
+            caught,
+            prior,
+            postflight,
+            self.source.cleanup,
+            budget,
+            storage,
+        )
     }
 }
 
@@ -163,7 +226,9 @@ impl<'scope> ProductionOptimizedSourceCorrespondenceV18<'scope> {
     ) -> SourceOwnedResultV18<&Inventory<'scope>> {
         original.check(budget)?;
         if !std::ptr::eq(self.original, original) {
-            return original.source.missing("pending global substituted exact correspondence");
+            return original
+                .source
+                .missing("pending global substituted exact correspondence");
         }
         self.check(budget)?;
         Ok(self.checked.output())
@@ -176,7 +241,9 @@ impl<'scope> ProductionOptimizedSourceCorrespondenceV18<'scope> {
     ) -> SourceOwnedResultV18<()> {
         original.check(budget)?;
         if !std::ptr::eq(self.original, original) {
-            return original.source.missing("optimized source substituted its exact correspondence");
+            return original
+                .source
+                .missing("optimized source substituted its exact correspondence");
         }
         self.query(budget)
     }

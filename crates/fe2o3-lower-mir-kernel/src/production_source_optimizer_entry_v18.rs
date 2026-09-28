@@ -113,67 +113,107 @@ impl ProductionSourceOwnedViewV18<'_> {
             &mut ArgumentBudgetV1<'work>,
         ) -> Result<(T, usize), E>,
     {
-        self.query(budget)?;
+        let floor = budget.storage();
+        let slot = std::ptr::from_ref(budget) as usize;
+        let ledger = budget.work_ledger_identity_v1();
+        let accepted = std::cell::Cell::new(0_usize);
         let header_bytes = std::cell::Cell::new(0);
-        let run = |budget: &mut ArgumentBudgetV1<'_>| {
-            let headers = header_bytes.replace(0);
-            self.retain_query(budget.reserve_storage(headers).map_err(Into::into))?;
-            header_bytes.set(headers);
-            self.retain_query(
-                budget
-                    .charge_work(1 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29)
+        let caught = {
+            let budget = &mut *budget;
+            let accepted = &accepted;
+            let header_bytes = &header_bytes;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                self.query(budget)?;
+                let headers = self.retain_query(
+                    optimized_source_consumer_resources_v18::retained_entry_headers::<T, E, F>(
+                        &consume,
+                    )
                     .map_err(Into::into),
-            )?;
-            let output = self
-                .with_checked_optimization_v18(budget, consume)
-                .map_err(SourceConsumerErrorV18)?;
-            // No controlled allocation occurs between the unreserved transfer
-            // and this single reservation, including on arithmetic failure.
-            let reservation = self.retain_query(
-                optimized_source_consumer_resources_v18::reserve_optimizer_transfer(
-                    output.0.storage().retained_storage(),
-                    output.2.retained_storage(),
-                    budget,
-                )
-                .map_err(Into::into),
-            );
-            if let Err(error) = reservation {
-                source_reference_discard_v29(output);
-                return Err(SourceConsumerErrorV18(
-                    ProductionSourceOptimizationErrorV18::Source(error),
-                ));
-            }
-            if let Err(error) = self.guard.check(self.owner, self.cleanup, budget) {
-                source_reference_discard_v29(output);
-                return Err(SourceConsumerErrorV18(
-                    ProductionSourceOptimizationErrorV18::Source(error),
-                ));
-            }
-            if let Err(error) =
-                self.retain_query(budget.release_storage(headers).map_err(Into::into))
-            {
-                source_reference_discard_v29(output);
-                return Err(SourceConsumerErrorV18(
-                    ProductionSourceOptimizationErrorV18::Source(error),
-                ));
-            }
-            header_bytes.set(0);
-            Ok(output)
+                )?;
+                self.retain_query(
+                    optimized_source_consumer_resources_v18::reserve_entry(
+                        accepted, headers, budget,
+                    )
+                    .map_err(Into::into),
+                )?;
+                header_bytes.set(headers);
+                self.retain_query(
+                    budget
+                        .charge_work(1 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29)
+                        .map_err(Into::into),
+                )?;
+                let output = self
+                    .with_checked_optimization_v18(budget, consume)
+                    .map_err(SourceConsumerErrorV18)?;
+                // No controlled allocation occurs between the unreserved transfer
+                // and this single reservation, including on arithmetic failure.
+                let reservation = self.retain_query((|| {
+                    let bytes =
+                        optimized_source_consumer_resources_v18::optimizer_transfer_storage(
+                            output.0.storage().retained_storage(),
+                            output.2.retained_storage(),
+                        )?;
+                    optimized_source_consumer_resources_v18::reserve_entry(accepted, bytes, budget)
+                        .map_err(Into::into)
+                })());
+                if let Err(error) = reservation {
+                    source_reference_discard_v29(output);
+                    return Err(SourceConsumerErrorV18(
+                        ProductionSourceOptimizationErrorV18::Source(error),
+                    ));
+                }
+                if let Err(error) = self.guard.check(self.owner, self.cleanup, budget) {
+                    source_reference_discard_v29(output);
+                    return Err(SourceConsumerErrorV18(
+                        ProductionSourceOptimizationErrorV18::Source(error),
+                    ));
+                }
+                Ok::<_, SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>>(output)
+            }))
         };
-        header_bytes.set(
-            optimized_source_consumer_resources_v18::optimizer_transfer_headers::<T, E>(
-                std::mem::size_of_val(&run),
-            )
-            .map_err(|error| ProductionSourceOptimizationErrorV18::Source(error.into()))?,
-        );
-        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(budget)));
-        let result = source_owned_finish_callback_v18(
-            caught, None, Ok(()), self.cleanup, budget,
-            header_bytes.get(),
-        );
-        result.map_err(
-            |error: SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>| error.0,
+        let custody = optimized_source_consumer_resources_v18::entry_custody(
+            self.cleanup,
+            budget,
+            floor,
+            accepted.get(),
+            slot,
+            ledger,
         )
+        .map_err(Into::into)
+        .and(self.guard.observe_custody(self.cleanup, budget));
+        match caught {
+            Ok(Ok(output)) if custody.is_ok() => {
+                if let Err(error) = self.retain_query(
+                    budget
+                        .release_storage(header_bytes.get())
+                        .map_err(Into::into),
+                ) {
+                    self.cleanup.deny_refund();
+                    source_reference_discard_v29(output);
+                    return Err(ProductionSourceOptimizationErrorV18::Source(error));
+                }
+                Ok(output)
+            }
+            Ok(Ok(output)) => {
+                source_reference_discard_v29(output);
+                let error = self
+                    .retain_query::<()>(Err(ArgumentResourceV1::Accounting.into()))
+                    .unwrap_err();
+                Err(ProductionSourceOptimizationErrorV18::Source(error))
+            }
+            Ok(Err(error)) => {
+                if custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    self.cleanup.deny_refund();
+                }
+                Err(error.0)
+            }
+            Err(payload) => {
+                if custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    self.cleanup.deny_refund();
+                }
+                std::panic::resume_unwind(payload)
+            }
+        }
     }
 
     /// Executes the fixed V18 pass sequence on this actual source-owned graph,
@@ -204,44 +244,107 @@ impl ProductionSourceOwnedViewV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
-        self.query(budget)?;
         let floor = budget.storage();
-        let (observed, headers) = scoped_source_attempt_v29(self.cleanup, budget, floor, |budget| {
-            let headers =
-                optimized_source_consumer_resources_v18::optimizer_entry_headers::<T, E>()?;
-            self.retain_query(budget.reserve_storage(headers).map_err(Into::into))?;
-            self.retain_query(
-                budget
-                    .charge_work(1 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29)
+        let slot = std::ptr::from_ref(budget) as usize;
+        let ledger = budget.work_ledger_identity_v1();
+        let accepted = std::cell::Cell::new(0_usize);
+        let caught = {
+            let budget = &mut *budget;
+            let accepted = &accepted;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                self.query(budget)?;
+                let headers = self.retain_query(
+                    optimized_source_consumer_resources_v18::optimizer_entry_headers::<T, E, _>(
+                        &consume,
+                    )
                     .map_err(Into::into),
-            )?;
-            let layouts = self.limits(budget)?.storage_layout_limits();
-            let observed = fe2o3_pliron::optimize_neutral_kernel_ir_v18(
-                &self.owner.inner.pending.graph,
-                layouts,
-                budget,
-            )
-            .map_err(|error| {
-                let refusal = observed_optimizer_refusal_v18(&error);
-                if matches!(
-                    refusal,
-                    SourceOwnedQueryFailureV18::Resource(ArgumentResourceV1::Accounting)
-                ) {
+                )?;
+                self.retain_query(
+                    optimized_source_consumer_resources_v18::reserve_entry(
+                        accepted, headers, budget,
+                    )
+                    .map_err(Into::into),
+                )?;
+                let adoption_floor = self.retain_query(
+                    floor
+                        .checked_add(headers)
+                        .ok_or_else(|| ArgumentResourceV1::Accounting.into()),
+                )?;
+                self.retain_query(
+                    budget
+                        .charge_work(1 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29)
+                        .map_err(Into::into),
+                )?;
+                let layouts = self.limits(budget)?.storage_layout_limits();
+                let observed = fe2o3_pliron::optimize_neutral_kernel_ir_v18(
+                    &self.owner.inner.pending.graph,
+                    layouts,
+                    budget,
+                )
+                .map_err(|error| {
+                    let refusal = observed_optimizer_refusal_v18(&error);
+                    if matches!(
+                        refusal,
+                        SourceOwnedQueryFailureV18::Resource(ArgumentResourceV1::Accounting)
+                    ) {
+                        self.cleanup.deny_refund();
+                    }
+                    let _ = self.guard.reject::<()>(refusal);
+                    SourceConsumerErrorV18(ProductionSourceOptimizationErrorV18::Observation(error))
+                })?;
+                // The observation and adoption must see this same budget object.
+                self.retain_query(
+                    optimized_source_consumer_resources_v18::reserve_entry(
+                        accepted,
+                        observed.storage().retained_storage(),
+                        budget,
+                    )
+                    .map_err(Into::into),
+                )?;
+                Ok::<_, SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>>((
+                    observed,
+                    headers,
+                    adoption_floor,
+                    consume,
+                ))
+            }))
+        };
+        let entry_custody = optimized_source_consumer_resources_v18::entry_custody(
+            self.cleanup,
+            budget,
+            floor,
+            accepted.get(),
+            slot,
+            ledger,
+        )
+        .map_err(Into::into)
+        .and(self.guard.observe_custody(self.cleanup, budget));
+        let (observed, headers, adoption_floor, consume) = match caught {
+            Ok(Ok(entry)) if entry_custody.is_ok() => entry,
+            Ok(Ok(entry)) => {
+                let disposed =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(entry)));
+                if let Err(payload) = disposed {
+                    std::panic::resume_unwind(payload);
+                }
+                let error = self
+                    .retain_query::<()>(Err(ArgumentResourceV1::Accounting.into()))
+                    .unwrap_err();
+                return Err(ProductionSourceOptimizationErrorV18::Source(error));
+            }
+            Ok(Err(error)) => {
+                if entry_custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
                     self.cleanup.deny_refund();
                 }
-                let _ = self.guard.reject::<()>(refusal);
-                SourceConsumerErrorV18(ProductionSourceOptimizationErrorV18::Observation(error))
-            })?;
-            // The observation and adoption must see this same budget object.
-            self.retain_query(
-                budget
-                    .reserve_storage(observed.storage().retained_storage())
-                    .map_err(Into::into),
-            )?;
-            Ok::<_, SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>>((observed, headers))
-        }).map_err(|error: SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>| error.0)?;
-        let adoption_floor = floor.checked_add(headers)
-            .ok_or_else(|| ProductionSourceOptimizationErrorV18::Source(ArgumentResourceV1::Accounting.into()))?;
+                return Err(error.0);
+            }
+            Err(payload) => {
+                if entry_custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    self.cleanup.deny_refund();
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let adopted = observed.try_check_and_finish_with_v18(budget, |checked, budget| {
                 self.with_ranked_correspondence_v18(checked.input(), budget, |original, budget| {
@@ -310,7 +413,8 @@ impl ProductionSourceOwnedViewV18<'_> {
         {
             self.cleanup.deny_refund();
         }
-        let result = source_owned_finish_callback_v18(caught, None, Ok(()), self.cleanup, budget, headers);
+        let result =
+            source_owned_finish_callback_v18(caught, None, Ok(()), self.cleanup, budget, headers);
         result.map_err(
             |error: SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>| error.0,
         )

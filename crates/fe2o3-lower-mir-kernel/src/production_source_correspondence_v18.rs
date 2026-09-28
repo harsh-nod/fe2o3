@@ -23,7 +23,11 @@ fn source_allocation_shape_headers_v18() -> Result<usize, ArgumentResourceV1> {
         size_of::<&Option<ValueId>>(),
         size_of::<&Type>(),
         size_of::<&u32>(),
-        size_of::<(ScopedAllocationIdentityV29, ScopedAllocationSourceV29, ScopedSlotRepresentationV29)>(),
+        size_of::<(
+            ScopedAllocationIdentityV29,
+            ScopedAllocationSourceV29,
+            ScopedSlotRepresentationV29,
+        )>(),
         size_of::<ScopedScalarArraySlotV29>(),
         size_of::<Result<ScopedScalarArraySlotV29, ProductionSemanticKirErrorV1>>(),
         size_of::<SourceOwnedResultV18<ScopedScalarArraySlotV29>>(),
@@ -40,7 +44,10 @@ fn source_allocation_shape_headers_v18() -> Result<usize, ArgumentResourceV1> {
 fn source_allocation_slot_headers_v18() -> Result<usize, ArgumentResourceV1> {
     argument_sum_v1(&[
         size_of::<SourcePhysicalBackingV18<'_>>(),
-        argument_product_v1(2, size_of::<SourceOwnedResultV18<SourcePhysicalBackingV18<'_>>>())?,
+        argument_product_v1(
+            2,
+            size_of::<SourceOwnedResultV18<SourcePhysicalBackingV18<'_>>>(),
+        )?,
         size_of::<&ScopedModuleRootV29>(),
         size_of::<SourceOwnedResultV18<&ScopedModuleRootV29>>(),
         size_of::<Option<&ScopedSourceSlotV29>>(),
@@ -108,10 +115,31 @@ fn source_attachment_error_v18(
     }
 }
 
+fn reserve_source_correspondence_credit_v18(
+    budget: &mut ArgumentBudgetV1<'_>,
+    accepted: &std::cell::Cell<usize>,
+    bytes: usize,
+) -> SourceOwnedResultV18<()> {
+    let total = argument_sum_v1(&[accepted.get(), bytes])?;
+    budget.reserve_storage(bytes)?;
+    accepted.set(total);
+    Ok(())
+}
+
+#[cfg(test)]
 fn source_attachments_v18(
     source: &ProductionSourceOwnedViewV18<'_>,
     inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<Vec<SourceAttachmentV18>> {
+    source_attachments_owned_v18(source, inventory, budget, &std::cell::Cell::new(0))
+}
+
+fn source_attachments_owned_v18(
+    source: &ProductionSourceOwnedViewV18<'_>,
+    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+    accepted: &std::cell::Cell<usize>,
 ) -> SourceOwnedResultV18<Vec<SourceAttachmentV18>> {
     let mut count = 0usize;
     visit_source_attachment_inventory_v18(source.owner, inventory, budget, |_, _, budget| {
@@ -121,16 +149,20 @@ fn source_attachments_v18(
     })
     .map_err(source_attachment_error_v18)?;
     let bytes = argument_product_v1(count, size_of::<SourceAttachmentV18>())?;
-    budget.reserve_storage(bytes)?;
+    reserve_source_correspondence_credit_v18(budget, accepted, bytes)?;
     let mut rows = Vec::new();
     rows.try_reserve_exact(count)
         .map_err(|_| ArgumentResourceV1::Allocation)?;
-    budget.reserve_storage(argument_product_v1(
-        rows.capacity()
-            .checked_sub(count)
-            .ok_or(ArgumentResourceV1::Accounting)?,
-        size_of::<SourceAttachmentV18>(),
-    )?)?;
+    reserve_source_correspondence_credit_v18(
+        budget,
+        accepted,
+        argument_product_v1(
+            rows.capacity()
+                .checked_sub(count)
+                .ok_or(ArgumentResourceV1::Accounting)?,
+            size_of::<SourceAttachmentV18>(),
+        )?,
+    )?;
     visit_source_attachment_inventory_v18(
         source.owner,
         inventory,
@@ -198,6 +230,58 @@ pub struct ProductionSourceCorrespondenceV18<'scope> {
     floor: usize,
 }
 
+fn source_correspondence_owned_headers_v18<T, E, F>(_: &F) -> Result<usize, ArgumentResourceV1> {
+    type Capture<'a, F> = (
+        &'a ProductionSourceOwnedViewV18<'a>,
+        &'a fe2o3_kernel_analysis::CanonicalKirInventoryV18<'a>,
+        F,
+    );
+    type Catch<'a, 'work, F> = (
+        Capture<'a, F>,
+        &'a mut ArgumentBudgetV1<'work>,
+        &'a std::cell::Cell<usize>,
+    );
+    type Entry<F> = (Vec<SourceAttachmentV18>, usize, F);
+    type Construction<'a, 'work, F> = (
+        &'a ProductionSourceOwnedViewV18<'a>,
+        &'a fe2o3_kernel_analysis::CanonicalKirInventoryV18<'a>,
+        &'a mut ArgumentBudgetV1<'work>,
+        &'a std::cell::Cell<usize>,
+        &'a F,
+    );
+    type Invoke<'a, 'work, F> = (
+        F,
+        &'a ProductionSourceCorrespondenceV18<'a>,
+        &'a mut ArgumentBudgetV1<'work>,
+    );
+    argument_sum_v1(&[
+        argument_product_v1(2, size_of::<Capture<'_, F>>())?,
+        argument_product_v1(2, std::mem::align_of::<Capture<'_, F>>())?,
+        size_of::<Catch<'_, '_, F>>(),
+        size_of::<std::panic::AssertUnwindSafe<Catch<'_, '_, F>>>(),
+        size_of::<Entry<F>>(),
+        argument_product_v1(2, size_of::<SourceOwnedResultV18<Entry<F>>>())?,
+        size_of::<std::thread::Result<SourceOwnedResultV18<Entry<F>>>>(),
+        size_of::<std::panic::AssertUnwindSafe<Entry<F>>>(),
+        size_of::<std::thread::Result<()>>(),
+        size_of::<Construction<'_, '_, F>>(),
+        size_of::<std::panic::AssertUnwindSafe<Construction<'_, '_, F>>>(),
+        size_of::<SourceOwnedResultV18<Vec<SourceAttachmentV18>>>(),
+        size_of::<std::thread::Result<SourceOwnedResultV18<Vec<SourceAttachmentV18>>>>(),
+        size_of::<std::cell::Cell<usize>>(),
+        argument_product_v1(8, size_of::<usize>())?,
+        size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>(),
+        size_of::<SourceOwnedResultV18<()>>(),
+        size_of::<Invoke<'_, '_, F>>(),
+        size_of::<std::panic::AssertUnwindSafe<Invoke<'_, '_, F>>>(),
+        size_of::<ProductionSourceCorrespondenceV18<'_>>(),
+        size_of::<std::thread::Result<Result<T, E>>>(),
+        size_of::<Result<T, E>>(),
+        size_of::<std::panic::AssertUnwindSafe<Result<T, E>>>(),
+        source_reference_cleanup_headers_v29()?,
+    ])
+}
+
 impl ProductionSourceOwnedViewV18<'_> {
     /// Reuses the original attachment mapper over this source and inventory.
     /// No graph/index copy or legacy correspondence owner is constructed.
@@ -215,50 +299,102 @@ impl ProductionSourceOwnedViewV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
-        self.query(budget)?;
-        if !inventory.belongs_to(&self.owner.inner.pending.graph) {
-            return self
-                .missing("foreign canonical inventory")
-                .map_err(Into::into);
-        }
         let floor = budget.storage();
-        let (rows, storage) = scoped_source_attempt_v29(self.cleanup, budget, floor, |budget| {
-            self.retain_construction(|| {
-            let headers = argument_sum_v1(&[
-                size_of::<Vec<SourceAttachmentV18>>(),
-                size_of::<ProductionSourceCorrespondenceV18<'_>>(),
-                size_of::<std::thread::Result<Result<T, E>>>(),
-            ])?;
-            budget.reserve_storage(headers)?;
-            let rows = source_attachments_v18(self, inventory, budget)?;
-            let storage = argument_sum_v1(&[
-                headers,
-                argument_product_v1(rows.capacity(), size_of::<SourceAttachmentV18>())?,
-            ])?;
-            Ok((rows, storage))
-            })
-        })?;
-            let view = ProductionSourceCorrespondenceV18 {
-                source: self,
-                inventory,
-                attachments: &rows,
-                slot: std::ptr::from_ref(budget) as usize,
-                ledger: budget.work_ledger_identity_v1(),
-                floor: budget.storage(),
-            };
-            let caught = match view.check(budget) {
-                Ok(()) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget))),
-                Err(error) => { drop(consume); Ok(Err(error.into())) }
-            };
-            let prior = self.guard.first.get();
-            let postflight = if matches!(&caught, Ok(Ok(_))) {
-                view.check(budget)
-            } else {
-                view.observe_custody(budget)
-            };
-            drop(view);
-            drop(rows);
-            source_owned_finish_callback_v18(caught, prior, postflight, self.cleanup, budget, storage)
+        let slot = std::ptr::from_ref(budget) as usize;
+        let ledger = budget.work_ledger_identity_v1();
+        let accepted = std::cell::Cell::new(0);
+        // The owned callback stays inside the catch through early validation
+        // and every construction refusal. No generic helper credit is borrowed.
+        let caught = {
+            let budget = &mut *budget;
+            let accepted = &accepted;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                self.query(budget)?;
+                if !inventory.belongs_to(&self.owner.inner.pending.graph) {
+                    return self.missing("foreign canonical inventory");
+                }
+                let rows = self.retain_construction(|| {
+                    let headers = source_correspondence_owned_headers_v18::<T, E, _>(&consume)?;
+                    reserve_source_correspondence_credit_v18(budget, accepted, headers)?;
+                    source_attachments_owned_v18(self, inventory, budget, accepted)
+                })?;
+                Ok::<_, ProductionSourceOwnedViewErrorV18>((rows, accepted.get(), consume))
+            }))
+        };
+        let custody =
+            self.observe_correspondence_entry_v18(budget, floor, accepted.get(), slot, ledger);
+        let (rows, storage, consume) = match caught {
+            Ok(Ok(entry)) if custody.is_ok() => entry,
+            Ok(Ok(entry)) => {
+                let disposed =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(entry)));
+                let _ = self.observe_correspondence_entry_v18(
+                    budget,
+                    floor,
+                    accepted.get(),
+                    slot,
+                    ledger,
+                );
+                if let Err(payload) = disposed {
+                    std::panic::resume_unwind(payload);
+                }
+                return self
+                    .retain_query(Err(ArgumentResourceV1::Accounting.into()))
+                    .map_err(Into::into);
+            }
+            Ok(Err(error)) => {
+                if custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    self.cleanup.deny_refund();
+                }
+                return self.retain_query(Err(error)).map_err(Into::into);
+            }
+            Err(payload) => {
+                if custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    self.cleanup.deny_refund();
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+        let view = ProductionSourceCorrespondenceV18 {
+            source: self,
+            inventory,
+            attachments: &rows,
+            slot: std::ptr::from_ref(budget) as usize,
+            ledger: budget.work_ledger_identity_v1(),
+            floor: budget.storage(),
+        };
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            view.check(budget).map_err(E::from)?;
+            consume(&view, budget)
+        }));
+        let prior = self.guard.first.get();
+        let postflight = if matches!(&caught, Ok(Ok(_))) {
+            view.check(budget)
+        } else {
+            view.observe_custody(budget)
+        };
+        drop(view);
+        drop(rows);
+        source_owned_finish_callback_v18(caught, prior, postflight, self.cleanup, budget, storage)
+    }
+
+    fn observe_correspondence_entry_v18(
+        &self,
+        budget: &ArgumentBudgetV1<'_>,
+        floor: usize,
+        accepted: usize,
+        slot: usize,
+        ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    ) -> SourceOwnedResultV18<()> {
+        // No public callback has run yet. Any unexplained construction residue
+        // is retained, rather than being mistaken for caller-owned row credit.
+        if slot != std::ptr::from_ref(budget) as usize
+            || ledger != budget.work_ledger_identity_v1()
+            || floor.checked_add(accepted) != Some(budget.storage())
+        {
+            self.cleanup.deny_refund();
+        }
+        self.guard.observe_custody(self.cleanup, budget)
     }
 }
 
@@ -307,10 +443,14 @@ impl ProductionSourceCorrespondenceV18<'_> {
         operation: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<bool> {
-        let Some(backing) = self.retained_allocation(root, operation, budget)? else { return Ok(false); };
+        let Some(backing) = self.retained_allocation(root, operation, budget)? else {
+            return Ok(false);
+        };
         budget.charge_work(1)?;
         Ok(match backing.slot.representation {
-            ScopedSlotRepresentationV29::ScalarArray(scalar) => scalar.count.is_none() && scalar.length == 1,
+            ScopedSlotRepresentationV29::ScalarArray(scalar) => {
+                scalar.count.is_none() && scalar.length == 1
+            }
             ScopedSlotRepresentationV29::Object { .. } => false,
         })
     }
@@ -514,22 +654,42 @@ impl ProductionSourceCorrespondenceV18<'_> {
             self.query(budget)?;
             budget.charge_work(4)?;
             let expected = self.source.root_row(root)?.function_ordinal;
-            let body = self.inventory.functions().get(expected)
+            let body = self
+                .inventory
+                .functions()
+                .get(expected)
                 .and_then(|row| row.function.body.as_ref())
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("source value function"))?;
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "source value function",
+                ))?;
             let value = match location {
-                TileAttachmentLocationV29::Origin(TileScalarSourceV29::FunctionParameter { function, parameter })
-                    if function == expected => body.parameters.get(parameter).copied(),
-                TileAttachmentLocationV29::Origin(TileScalarSourceV29::BlockParameter { function, block, parameter })
-                    if function == expected => body.blocks.get(block)
-                        .and_then(|row| row.parameters.get(parameter)).map(|row| row.id),
-                TileAttachmentLocationV29::Origin(TileScalarSourceV29::Result { operation, result })
-                    if operation.function == expected => body.blocks.get(operation.block)
-                        .and_then(|row| row.operations.get(operation.operation))
-                        .and_then(|row| row.results.get(result)).map(|row| row.id),
+                TileAttachmentLocationV29::Origin(TileScalarSourceV29::FunctionParameter {
+                    function,
+                    parameter,
+                }) if function == expected => body.parameters.get(parameter).copied(),
+                TileAttachmentLocationV29::Origin(TileScalarSourceV29::BlockParameter {
+                    function,
+                    block,
+                    parameter,
+                }) if function == expected => body
+                    .blocks
+                    .get(block)
+                    .and_then(|row| row.parameters.get(parameter))
+                    .map(|row| row.id),
+                TileAttachmentLocationV29::Origin(TileScalarSourceV29::Result {
+                    operation,
+                    result,
+                }) if operation.function == expected => body
+                    .blocks
+                    .get(operation.block)
+                    .and_then(|row| row.operations.get(operation.operation))
+                    .and_then(|row| row.results.get(result))
+                    .map(|row| row.id),
                 _ => None,
             };
-            value.ok_or(ProductionSourceOwnedViewErrorV18::Binding("source value attachment is not this root's definition"))
+            value.ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "source value attachment is not this root's definition",
+            ))
         })())
     }
 
@@ -552,40 +712,73 @@ impl ProductionSourceCorrespondenceV18<'_> {
             for source in &root_row.coordinates.sources.rows {
                 budget.charge_work(1)?;
                 let instance = source.instance.index();
-                let Some(sidecar) = self.source.optional_sidecar(root, instance, budget)? else { continue; };
-                let Some(anchors) = &sidecar.scoped_memory_anchors else {
-                    return self.source.missing("source instance lacks memory anchor census");
+                let Some(sidecar) = self.source.optional_sidecar(root, instance, budget)? else {
+                    continue;
                 };
-                if anchors.subject.instance != source.instance || anchors.subject.function != source.function
+                let Some(anchors) = &sidecar.scoped_memory_anchors else {
+                    return self
+                        .source
+                        .missing("source instance lacks memory anchor census");
+                };
+                if anchors.subject.instance != source.instance
+                    || anchors.subject.function != source.function
                     || anchors.subject.ledger != self.ledger
                 {
                     return self.source.missing("source memory anchor owner differs");
                 }
                 for (row, anchor) in anchors.rows.iter().enumerate() {
                     budget.charge_work(1)?;
-                    if !matches!(anchor.kind, ScopedMemoryAnchorKindV29::Access { .. } | ScopedMemoryAnchorKindV29::Object(_)) { continue; }
+                    if !matches!(
+                        anchor.kind,
+                        ScopedMemoryAnchorKindV29::Access { .. }
+                            | ScopedMemoryAnchorKindV29::Object(_)
+                    ) {
+                        continue;
+                    }
                     let key = TileAttachmentKeyV29 {
-                        root, family: TileAttachmentFamilyV29::MemoryAnchor, instance, row,
-                        field: TileAttachmentFieldV29::MemoryPosition, component: 0, part: 0,
+                        root,
+                        family: TileAttachmentFamilyV29::MemoryAnchor,
+                        instance,
+                        row,
+                        field: TileAttachmentFieldV29::MemoryPosition,
+                        component: 0,
+                        part: 0,
                     };
                     let [mapped] = self.attachment_range(key, budget)? else {
                         return self.source.missing("source memory access position census");
                     };
-                    if self.mapped_source_operation(mapped.location, budget)? != ProductionSourceOperationV18::Operation(operation) {
+                    if self.mapped_source_operation(mapped.location, budget)?
+                        != ProductionSourceOperationV18::Operation(operation)
+                    {
                         continue;
                     }
                     if matches!(anchor.kind, ScopedMemoryAnchorKindV29::Object(_)) {
-                        return self.source.missing("typed object requires the complete object correspondence query");
+                        return self.source.missing(
+                            "typed object requires the complete object correspondence query",
+                        );
                     }
-                    let [definition] = self.attachment_range(TileAttachmentKeyV29 {
-                        field: TileAttachmentFieldV29::MemoryPointer, ..key
-                    }, budget)? else {
+                    let [definition] = self.attachment_range(
+                        TileAttachmentKeyV29 {
+                            field: TileAttachmentFieldV29::MemoryPointer,
+                            ..key
+                        },
+                        budget,
+                    )?
+                    else {
                         return self.source.missing("source memory access pointer census");
                     };
-                    if found.is_some() || self.attachment_value(root, definition.location, budget)? != pointer {
-                        return self.source.missing("source memory access pointer or occurrence differs");
+                    if found.is_some()
+                        || self.attachment_value(root, definition.location, budget)? != pointer
+                    {
+                        return self
+                            .source
+                            .missing("source memory access pointer or occurrence differs");
                     }
-                    found = Some(SourcePhysicalAccessV18 { instance, row, anchor });
+                    found = Some(SourcePhysicalAccessV18 {
+                        instance,
+                        row,
+                        anchor,
+                    });
                 }
             }
             Ok(found)
@@ -605,36 +798,71 @@ impl ProductionSourceCorrespondenceV18<'_> {
             if operation.block.function.0 as usize != root_row.function_ordinal {
                 return self.source.missing("typed object changed physical root");
             }
-            let actual = self.inventory.functions().get(root_row.function_ordinal)
+            let actual = self
+                .inventory
+                .functions()
+                .get(root_row.function_ordinal)
                 .and_then(|row| row.function.body.as_ref())
                 .and_then(|body| body.blocks.get(operation.block.block as usize))
                 .and_then(|block| block.operations.get(operation.operation as usize))
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("typed object actual operation"))?;
-            if !matches!(actual.kind, OperationKind::Storage(_)) { return Ok(None); }
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "typed object actual operation",
+                ))?;
+            if !matches!(actual.kind, OperationKind::Storage(_)) {
+                return Ok(None);
+            }
             let mut found = None;
             for source in &root_row.coordinates.sources.rows {
                 budget.charge_work(1)?;
                 let instance = source.instance.index();
-                let Some(sidecar) = self.source.optional_sidecar(root, instance, budget)? else { continue; };
-                let anchors = sidecar.scoped_memory_anchors.as_ref()
-                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding("typed object original census"))?;
-                if anchors.subject.instance != source.instance || anchors.subject.function != source.function
+                let Some(sidecar) = self.source.optional_sidecar(root, instance, budget)? else {
+                    continue;
+                };
+                let anchors = sidecar.scoped_memory_anchors.as_ref().ok_or(
+                    ProductionSourceOwnedViewErrorV18::Binding("typed object original census"),
+                )?;
+                if anchors.subject.instance != source.instance
+                    || anchors.subject.function != source.function
                     || anchors.subject.ledger != self.ledger
-                { return self.source.missing("typed object changed original owner"); }
+                {
+                    return self.source.missing("typed object changed original owner");
+                }
                 for (row, anchor) in anchors.rows.iter().enumerate() {
                     budget.charge_work(1)?;
-                    if !matches!(anchor.kind, ScopedMemoryAnchorKindV29::Object(_)) { continue; }
-                    let key = TileAttachmentKeyV29 { root, family: TileAttachmentFamilyV29::MemoryAnchor,
-                        instance, row, field: Field::MemoryPosition, component: 0, part: 0 };
+                    if !matches!(anchor.kind, ScopedMemoryAnchorKindV29::Object(_)) {
+                        continue;
+                    }
+                    let key = TileAttachmentKeyV29 {
+                        root,
+                        family: TileAttachmentFamilyV29::MemoryAnchor,
+                        instance,
+                        row,
+                        field: Field::MemoryPosition,
+                        component: 0,
+                        part: 0,
+                    };
                     let [position] = self.attachment_range(key, budget)? else {
                         return self.source.missing("typed object position census");
                     };
-                    if self.mapped_source_operation(position.location, budget)? != ProductionSourceOperationV18::Operation(operation) { continue; }
-                    if found.is_some() { return self.source.missing("duplicate typed object correspondence"); }
-                    found = Some(self.retained_object_payload_at_v29(root, instance, row, operation, budget)?);
+                    if self.mapped_source_operation(position.location, budget)?
+                        != ProductionSourceOperationV18::Operation(operation)
+                    {
+                        continue;
+                    }
+                    if found.is_some() {
+                        return self.source.missing("duplicate typed object correspondence");
+                    }
+                    found =
+                        Some(self.retained_object_payload_at_v29(
+                            root, instance, row, operation, budget,
+                        )?);
                 }
             }
-            if found.is_none() { return self.source.missing("actual typed operation lacks original correspondence"); }
+            if found.is_none() {
+                return self
+                    .source
+                    .missing("actual typed operation lacks original correspondence");
+            }
             Ok(found)
         })())
     }
@@ -658,46 +886,92 @@ impl ProductionSourceCorrespondenceV18<'_> {
             }
             let (function, _) = self.source.instance(root, instance, budget)?;
             let sidecar = self.source.sidecar(root, instance, budget)?;
-            let anchors = sidecar.scoped_memory_anchors.as_ref()
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("typed object original census"))?;
+            let anchors = sidecar.scoped_memory_anchors.as_ref().ok_or(
+                ProductionSourceOwnedViewErrorV18::Binding("typed object original census"),
+            )?;
             budget.charge_work(5)?;
-            if anchors.subject.instance.index() != instance || anchors.subject.function != function
+            if anchors.subject.instance.index() != instance
+                || anchors.subject.function != function
                 || anchors.subject.ledger != self.ledger
-            { return self.source.missing("typed object changed original owner"); }
-            let anchor = anchors.rows.get(row)
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("typed object original row"))?;
+            {
+                return self.source.missing("typed object changed original owner");
+            }
+            let anchor =
+                anchors
+                    .rows
+                    .get(row)
+                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                        "typed object original row",
+                    ))?;
             if !matches!(anchor.kind, ScopedMemoryAnchorKindV29::Object(_)) {
-                return self.source.missing("typed object row is not an Object anchor");
+                return self
+                    .source
+                    .missing("typed object row is not an Object anchor");
             }
-            let key = TileAttachmentKeyV29 { root, family: TileAttachmentFamilyV29::MemoryAnchor,
-                instance, row, field: Field::MemoryPosition, component: 0, part: 0 };
-            let one = |field, component, budget: &mut ArgumentBudgetV1<'_>| -> SourceOwnedResultV18<_> {
-                let [row] = self.attachment_range(TileAttachmentKeyV29 { field, component, ..key }, budget)? else {
-                    return self.source.missing("typed object attachment census");
-                };
-                budget.charge_work(1)?;
-                if row.key.part != 0 {
-                    return self.source.missing("typed object attachment census");
-                }
-                Ok(row.location)
+            let key = TileAttachmentKeyV29 {
+                root,
+                family: TileAttachmentFamilyV29::MemoryAnchor,
+                instance,
+                row,
+                field: Field::MemoryPosition,
+                component: 0,
+                part: 0,
             };
+            let one =
+                |field, component, budget: &mut ArgumentBudgetV1<'_>| -> SourceOwnedResultV18<_> {
+                    let [row] = self.attachment_range(
+                        TileAttachmentKeyV29 {
+                            field,
+                            component,
+                            ..key
+                        },
+                        budget,
+                    )?
+                    else {
+                        return self.source.missing("typed object attachment census");
+                    };
+                    budget.charge_work(1)?;
+                    if row.key.part != 0 {
+                        return self.source.missing("typed object attachment census");
+                    }
+                    Ok(row.location)
+                };
             let position = one(Field::MemoryPosition, 0, budget)?;
-            if self.mapped_source_operation(position, budget)? != ProductionSourceOperationV18::Operation(operation) {
-                return self.source.missing("typed object row changed its exact operation");
+            if self.mapped_source_operation(position, budget)?
+                != ProductionSourceOperationV18::Operation(operation)
+            {
+                return self
+                    .source
+                    .missing("typed object row changed its exact operation");
             }
-            let actual = self.inventory.functions().get(root_row.function_ordinal)
+            let actual = self
+                .inventory
+                .functions()
+                .get(root_row.function_ordinal)
                 .and_then(|row| row.function.body.as_ref())
                 .and_then(|body| body.blocks.get(operation.block.block as usize))
                 .and_then(|block| block.operations.get(operation.operation as usize))
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("typed object actual operation"))?;
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "typed object actual operation",
+                ))?;
             if !matches!(actual.kind, OperationKind::Storage(_)) {
-                return self.source.missing("typed object row does not name an actual Storage operation");
+                return self
+                    .source
+                    .missing("typed object row does not name an actual Storage operation");
             }
-            let payload = anchors.object_payload(anchor, budget)
+            let payload = anchors
+                .object_payload(anchor, budget)
                 .map_err(|error| source_attachment_error_v18(error.into()))?;
-            for field in [Field::MemoryPointer, Field::MemoryLoadResult, Field::MemoryStoreValue, Field::MemoryStoreUse] {
+            for field in [
+                Field::MemoryPointer,
+                Field::MemoryLoadResult,
+                Field::MemoryStoreValue,
+                Field::MemoryStoreUse,
+            ] {
                 if one(field, 0, budget)? != TileAttachmentLocationV29::NoOutput {
-                    return self.source.missing("typed object acquired scalar payload authority");
+                    return self
+                        .source
+                        .missing("typed object acquired scalar payload authority");
                 }
             }
             let mut values = [None; 2];
@@ -707,17 +981,27 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 let usage = one(Field::ObjectOperandUse, component, budget)?;
                 match original {
                     Some(_) => {
-                        let expected = fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
-                            operation, operand: u32::try_from(component).map_err(|_| ArgumentResourceV1::Arithmetic)?,
-                        };
+                        let expected =
+                            fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
+                                operation,
+                                operand: u32::try_from(component)
+                                    .map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                            };
                         if usage != TileAttachmentLocationV29::Use(expected) {
-                            return self.source.missing("typed object changed exact operand use");
+                            return self
+                                .source
+                                .missing("typed object changed exact operand use");
                         }
                         values[component] = Some(self.attachment_value(root, definition, budget)?);
                         operand_count += 1;
                     }
-                    None if definition == TileAttachmentLocationV29::NoOutput && usage == TileAttachmentLocationV29::NoOutput => {}
-                    None => return self.source.missing("absent typed operand acquired authority"),
+                    None if definition == TileAttachmentLocationV29::NoOutput
+                        && usage == TileAttachmentLocationV29::NoOutput => {}
+                    None => {
+                        return self
+                            .source
+                            .missing("absent typed operand acquired authority");
+                    }
                 }
             }
             let result = one(Field::ObjectResult, 0, budget)?;
@@ -728,14 +1012,27 @@ impl ProductionSourceCorrespondenceV18<'_> {
             };
             let mut mapped = *payload;
             let mut ordinal = 0;
-            mapped.try_map_values(|_| {
-                let value = if ordinal < operand_count { values[ordinal] } else { result };
-                ordinal += 1;
-                value.ok_or_else(scoped_object_error_v29)
-            }).map_err(|error| source_attachment_error_v18(error.into()))?;
-            mapped.check_operation(actual, budget)
+            mapped
+                .try_map_values(|_| {
+                    let value = if ordinal < operand_count {
+                        values[ordinal]
+                    } else {
+                        result
+                    };
+                    ordinal += 1;
+                    value.ok_or_else(scoped_object_error_v29)
+                })
                 .map_err(|error| source_attachment_error_v18(error.into()))?;
-            Ok(SourcePhysicalObjectV18 { instance, row, anchor, source: payload, actual: mapped })
+            mapped
+                .check_operation(actual, budget)
+                .map_err(|error| source_attachment_error_v18(error.into()))?;
+            Ok(SourcePhysicalObjectV18 {
+                instance,
+                row,
+                anchor,
+                source: payload,
+                actual: mapped,
+            })
         })())
     }
 
@@ -749,24 +1046,47 @@ impl ProductionSourceCorrespondenceV18<'_> {
         use TileAttachmentFieldV29 as Field;
         self.retain_query((|| {
             self.query(budget)?;
-            let anchors = self.source.sidecar(root, access.instance, budget)?.scoped_memory_anchors.as_ref()
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar payload original anchor census"))?;
-            if !anchors.rows.get(access.row).is_some_and(|anchor| std::ptr::eq(anchor, access.anchor)) {
-                return self.source.missing("scalar payload changed original owner or instance");
+            let anchors = self
+                .source
+                .sidecar(root, access.instance, budget)?
+                .scoped_memory_anchors
+                .as_ref()
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "scalar payload original anchor census",
+                ))?;
+            if !anchors
+                .rows
+                .get(access.row)
+                .is_some_and(|anchor| std::ptr::eq(anchor, access.anchor))
+            {
+                return self
+                    .source
+                    .missing("scalar payload changed original owner or instance");
             }
             let key = TileAttachmentKeyV29 {
-                root, family: TileAttachmentFamilyV29::MemoryAnchor,
-                instance: access.instance, row: access.row,
-                field: Field::MemoryPosition, component: 0, part: 0,
+                root,
+                family: TileAttachmentFamilyV29::MemoryAnchor,
+                instance: access.instance,
+                row: access.row,
+                field: Field::MemoryPosition,
+                component: 0,
+                part: 0,
             };
             let [position] = self.attachment_range(key, budget)? else {
                 return self.source.missing("scalar payload position census");
             };
-            if self.mapped_source_operation(position.location, budget)? != ProductionSourceOperationV18::Operation(operation) {
-                return self.source.missing("scalar payload changed physical operation");
+            if self.mapped_source_operation(position.location, budget)?
+                != ProductionSourceOperationV18::Operation(operation)
+            {
+                return self
+                    .source
+                    .missing("scalar payload changed physical operation");
             }
-            let one = |field, budget: &mut ArgumentBudgetV1<'_>| -> SourceOwnedResultV18<TileAttachmentLocationV29> {
-                let [row] = self.attachment_range(TileAttachmentKeyV29 { field, ..key }, budget)? else {
+            let one = |field,
+                       budget: &mut ArgumentBudgetV1<'_>|
+             -> SourceOwnedResultV18<TileAttachmentLocationV29> {
+                let [row] = self.attachment_range(TileAttachmentKeyV29 { field, ..key }, budget)?
+                else {
                     return self.source.missing("scalar payload projection census");
                 };
                 Ok(row.location)
@@ -778,8 +1098,13 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 return self.source.missing("scalar payload is not an access");
             };
             let Some(source) = payload else {
-                if [load, store, store_use].iter().any(|location| *location != TileAttachmentLocationV29::NoOutput) {
-                    return self.source.missing("absent scalar payload acquired value authority");
+                if [load, store, store_use]
+                    .iter()
+                    .any(|location| *location != TileAttachmentLocationV29::NoOutput)
+                {
+                    return self
+                        .source
+                        .missing("absent scalar payload acquired value authority");
                 }
                 return Ok(None);
             };
@@ -788,41 +1113,76 @@ impl ProductionSourceCorrespondenceV18<'_> {
             if operation.block.function.0 as usize != expected_function {
                 return self.source.missing("scalar payload physical root differs");
             }
-            let actual = self.inventory.functions().get(operation.block.function.0 as usize)
+            let actual = self
+                .inventory
+                .functions()
+                .get(operation.block.function.0 as usize)
                 .and_then(|row| row.function.body.as_ref())
                 .and_then(|body| body.blocks.get(operation.block.block as usize))
                 .and_then(|block| block.operations.get(operation.operation as usize))
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar payload actual operation"))?;
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "scalar payload actual operation",
+                ))?;
             match source {
                 ScopedMemoryPayloadV29::Load { .. } | ScopedMemoryPayloadV29::IndexLoad { .. } => {
-                    if store != TileAttachmentLocationV29::NoOutput || store_use != TileAttachmentLocationV29::NoOutput
-                        || !matches!(actual.kind, OperationKind::Load { .. } | OperationKind::GuardedLoad { .. })
+                    if store != TileAttachmentLocationV29::NoOutput
+                        || store_use != TileAttachmentLocationV29::NoOutput
+                        || !matches!(
+                            actual.kind,
+                            OperationKind::Load { .. } | OperationKind::GuardedLoad { .. }
+                        )
                     {
-                        return self.source.missing("load payload acquired a Store use or changed operation");
+                        return self
+                            .source
+                            .missing("load payload acquired a Store use or changed operation");
                     }
                     let value = self.attachment_value(root, load, budget)?;
                     let [result] = actual.results.as_slice() else {
                         return self.source.missing("load payload result census");
                     };
-                    if result.id != value { return self.source.missing("load payload changed actual result"); }
-                    Ok(Some(SourcePhysicalPayloadV18 { source, value, store_use: None }))
+                    if result.id != value {
+                        return self.source.missing("load payload changed actual result");
+                    }
+                    Ok(Some(SourcePhysicalPayloadV18 {
+                        source,
+                        value,
+                        store_use: None,
+                    }))
                 }
                 ScopedMemoryPayloadV29::Store { .. } => {
                     if load != TileAttachmentLocationV29::NoOutput {
-                        return self.source.missing("Store payload acquired a load definition");
+                        return self
+                            .source
+                            .missing("Store payload acquired a load definition");
                     }
                     let value = self.attachment_value(root, store, budget)?;
-                    let [pointer] = self.attachment_range(TileAttachmentKeyV29 { field: Field::MemoryPointer, ..key }, budget)? else {
+                    let [pointer] = self.attachment_range(
+                        TileAttachmentKeyV29 {
+                            field: Field::MemoryPointer,
+                            ..key
+                        },
+                        budget,
+                    )?
+                    else {
                         return self.source.missing("Store payload pointer census");
                     };
                     let pointer = self.attachment_value(root, pointer.location, budget)?;
                     let operand = tile_store_payload_operand_v18(actual, pointer, value, budget)
                         .map_err(source_attachment_error_v18)?;
-                    let expected = fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand { operation, operand };
+                    let expected = fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
+                        operation,
+                        operand,
+                    };
                     if store_use != TileAttachmentLocationV29::Use(expected) {
-                        return self.source.missing("Store payload is not the exact actual RHS use");
+                        return self
+                            .source
+                            .missing("Store payload is not the exact actual RHS use");
                     }
-                    Ok(Some(SourcePhysicalPayloadV18 { source, value, store_use: Some(expected) }))
+                    Ok(Some(SourcePhysicalPayloadV18 {
+                        source,
+                        value,
+                        store_use: Some(expected),
+                    }))
                 }
             }
         })())
@@ -874,33 +1234,67 @@ impl ProductionSourceCorrespondenceV18<'_> {
             let function = self.source.instance(root, instance, budget)?.0;
             let sidecar = self.source.sidecar(root, instance, budget)?;
             budget.charge_work(sidecar.generated_terminator_values.len())?;
-            let mut matching = sidecar.generated_terminator_values.iter().enumerate().filter(|(_, row)| {
-                row.correspondence_owner == original_root && row.semantic_function == function
-                    && row.semantic_block == block
-            });
-            let (ordinal, values) = matching.next().ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-                "generated recipe has no original value row",
-            ))?;
+            let mut matching = sidecar
+                .generated_terminator_values
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| {
+                    row.correspondence_owner == original_root
+                        && row.semantic_function == function
+                        && row.semantic_block == block
+                });
+            let (ordinal, values) =
+                matching
+                    .next()
+                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                        "generated recipe has no original value row",
+                    ))?;
             if matching.next().is_some() {
-                return self.source.missing("generated recipe has ambiguous original value rows");
+                return self
+                    .source
+                    .missing("generated recipe has ambiguous original value rows");
             }
             let invocation_rows = match &sidecar.invocation_entry {
-                Some(entry) => argument_sum_v1(&[1, entry.arguments.len(), entry.inputs.len(), entry.components.len()])?,
+                Some(entry) => argument_sum_v1(&[
+                    1,
+                    entry.arguments.len(),
+                    entry.inputs.len(),
+                    entry.components.len(),
+                ])?,
                 None => 0,
             };
-            let row = argument_sum_v1(&[invocation_rows, sidecar.blocks.len(),
-                sidecar.statement_operation_spans.len(), sidecar.terminator_operation_spans.len(), ordinal])?;
+            let row = argument_sum_v1(&[
+                invocation_rows,
+                sidecar.blocks.len(),
+                sidecar.statement_operation_spans.len(),
+                sidecar.terminator_operation_spans.len(),
+                ordinal,
+            ])?;
             let key = TileAttachmentKeyV29 {
-                root, family: TileAttachmentFamilyV29::RawSidecar, instance, row,
-                field: TileAttachmentFieldV29::RawGeneratedInput, component: 0, part: 0,
+                root,
+                family: TileAttachmentFamilyV29::RawSidecar,
+                instance,
+                row,
+                field: TileAttachmentFieldV29::RawGeneratedInput,
+                component: 0,
+                part: 0,
             };
             let [input] = self.attachment_range(key, budget)? else {
-                return self.source.missing("generated recipe input attachment census");
+                return self
+                    .source
+                    .missing("generated recipe input attachment census");
             };
-            let [output] = self.attachment_range(TileAttachmentKeyV29 {
-                field: TileAttachmentFieldV29::RawGeneratedOutput, ..key
-            }, budget)? else {
-                return self.source.missing("generated recipe output attachment census");
+            let [output] = self.attachment_range(
+                TileAttachmentKeyV29 {
+                    field: TileAttachmentFieldV29::RawGeneratedOutput,
+                    ..key
+                },
+                budget,
+            )?
+            else {
+                return self
+                    .source
+                    .missing("generated recipe output attachment census");
             };
             Ok(GeneratedRecipeValuesV18 {
                 destination_local: values.destination_local,
@@ -957,10 +1351,16 @@ impl ProductionSourceCorrespondenceV18<'_> {
             let mut first = None;
             for row in rows {
                 if row.function != function
-                    || !self.source.instance_active(root, row.instance.index(), budget)?
-                { continue; }
+                    || !self
+                        .source
+                        .instance_active(root, row.instance.index(), budget)?
+                {
+                    continue;
+                }
                 if first.replace(row.instance.index()).is_some() {
-                    return self.source.missing("source function has multiple call instances");
+                    return self
+                        .source
+                        .missing("source function has multiple call instances");
                 }
             }
             Ok(first)
@@ -1102,7 +1502,10 @@ impl ProductionSourceCorrespondenceV18<'_> {
                         (Family::InstanceSpans, Field::Span)
                             | (Family::Lifecycle, Field::LifecycleOperation)
                             | (Family::Assertion, Field::AssertFailureBlock)
-                            | (Family::TerminalFailure, Field::FailureCleanup | Field::FailureDiagnostic)
+                            | (
+                                Family::TerminalFailure,
+                                Field::FailureCleanup | Field::FailureDiagnostic
+                            )
                     )
                 {
                     continue;
@@ -1202,7 +1605,9 @@ impl ProductionSourceCorrespondenceV18<'_> {
             {
                 return self.source.missing("source block locator");
             }
-            let Some(sidecar) = self.source.optional_sidecar(root, instance, budget)? else { return Ok(None); };
+            let Some(sidecar) = self.source.optional_sidecar(root, instance, budget)? else {
+                return Ok(None);
+            };
             let rows = &sidecar.blocks;
             budget.charge_work(rows.len())?;
             let mut found = rows

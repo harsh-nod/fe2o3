@@ -55,13 +55,20 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 let mut checked_roots = 0_usize;
                 for root in 0..roots {
                     scoped_raw_admission_v29::with_checked_optimized_source_memory_v18(
-                        self, optimized, root, input, output, budget,
+                        self,
+                        optimized,
+                        root,
+                        input,
+                        output,
+                        budget,
                         |memory, budget| {
                             memory.check_scope_v18(self, optimized, root, budget)?;
-                            budget.charge_work(1)
+                            budget
+                                .charge_work(1)
                                 .map_err(|error| self.retain_query_resource_error_v18(error))?;
-                            checked_roots = checked_roots.checked_add(1)
-                                .ok_or_else(|| self.retain_query_resource_error_v18(ArgumentResourceV1::Arithmetic))?;
+                            checked_roots = checked_roots.checked_add(1).ok_or_else(|| {
+                                self.retain_query_resource_error_v18(ArgumentResourceV1::Arithmetic)
+                            })?;
                             Ok::<_, ProductionSourceOwnedViewErrorV18>(())
                         },
                     )?;
@@ -87,82 +94,155 @@ impl ProductionSourceCorrespondenceV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
-        self.query(budget)?;
-        let input = optimized.input_inventory(budget)?;
-        let output = optimized.output_inventory(budget)?;
-        self.retain_query((|| {
-            budget.charge_work(2)?;
-            if !std::ptr::eq(input, self.inventory)
-                || !std::ptr::eq(optimized.original_source(budget)?, self.source)
-            {
-                return self
-                    .source
-                    .missing("optimized analysis changed original source or inventory");
-            }
-            Ok(())
-        })())?;
         let floor = budget.storage();
-        let storage = scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
-            let storage = optimized_source_consumer_resources_v18::analysis_headers::<T, E>()?;
-            self.retain_query(budget.reserve_storage(storage).map_err(Into::into))?;
-            budget.charge_work(1 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29)?;
-            Ok::<_, ProductionSourceOwnedViewErrorV18>(storage)
-        })?;
-            let mut analyses = ProductionOptimizedSourceAnalysisV18 {
-                original: self,
-                optimized,
-                input,
-                output,
-                input_effects: None,
-                output_effects: None,
-                sparse: None,
-                input_sparse: None,
-                input_memory: None,
-                output_memory: None,
-                cleanup: fe2o3_pliron::CanonicalAnalysisCleanupV1::linked(
-                    &self.source.cleanup.denied,
-                ),
-                slot: std::ptr::from_ref(budget) as usize,
-                ledger: budget.work_ledger_identity_v1(),
-                floor: budget.storage(),
-                storage,
-            };
-            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                consume(&mut analyses, budget)
-            }));
-            let prior = self.source.guard.first.get();
-            let postflight = if matches!(&caught, Ok(Ok(_))) {
-                analyses.check(budget)
-            } else {
-                analyses.observe_custody(budget)
-            };
-            let storage = analyses.storage;
-            drop(analyses);
-            let released = if self.source.cleanup.is_denied() {
-                Err(ArgumentResourceV1::Accounting)
-            } else {
-                budget.release_storage(storage).inspect_err(|_| self.source.cleanup.deny_refund())
-            };
-            match caught {
-                Err(payload) => std::panic::resume_unwind(payload),
-                Ok(Err(error)) => {
-                    let selected = match prior {
-                        Some(first) => {
-                            source_reference_discard_v29(Err::<T, E>(error));
-                            first.error().into()
-                        }
-                        None => error,
-                    };
-                    Err(selected)
+        let slot = std::ptr::from_ref(budget) as usize;
+        let ledger = budget.work_ledger_identity_v1();
+        let accepted = std::cell::Cell::new(0_usize);
+        // Own the callback through early query/refusal cleanup as well as the
+        // paid handoff. Queries precede any charge to a possibly foreign ledger.
+        let caught = {
+            let budget = &mut *budget;
+            let accepted = &accepted;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                self.query(budget)?;
+                let input = optimized.input_inventory(budget)?;
+                let output = optimized.output_inventory(budget)?;
+                self.retain_query((|| {
+                    budget.charge_work(2)?;
+                    if !std::ptr::eq(input, self.inventory)
+                        || !std::ptr::eq(optimized.original_source(budget)?, self.source)
+                    {
+                        return self
+                            .source
+                            .missing("optimized analysis changed original source or inventory");
+                    }
+                    Ok(())
+                })())?;
+                let storage = self.retain_query(
+                    optimized_source_consumer_resources_v18::analysis_headers::<T, E, _>(&consume)
+                        .map_err(Into::into),
+                )?;
+                self.retain_query(budget.reserve_storage(storage).map_err(Into::into))?;
+                accepted.set(storage);
+                budget.charge_work(1 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29)?;
+                Ok::<_, ProductionSourceOwnedViewErrorV18>((input, output, storage, consume))
+            }))
+        };
+        let entry_custody =
+            self.observe_optimized_analysis_entry_v18(budget, floor, accepted.get(), slot, ledger);
+        let (input, output, storage, consume) = match caught {
+            Ok(Ok(entry)) if entry_custody.is_ok() => entry,
+            Ok(Ok(entry)) => {
+                // The successful handoff still owns F. Dispose it within a
+                // catch before settlement; a single Drop panic stays raw.
+                let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    drop(entry);
+                }));
+                let _ = self.observe_optimized_analysis_entry_v18(
+                    budget,
+                    floor,
+                    accepted.get(),
+                    slot,
+                    ledger,
+                );
+                if let Err(payload) = disposed {
+                    std::panic::resume_unwind(payload);
                 }
-                Ok(Ok(value)) => match self.retain_query(postflight.and(released.map_err(Into::into))) {
+                return self
+                    .retain_query(Err(ArgumentResourceV1::Accounting.into()))
+                    .map_err(Into::into);
+            }
+            Ok(Err(error)) => {
+                // F is already dead. Never refund a callback's unrelated
+                // storage delta or replace its selected typed diagnostic.
+                if entry_custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    self.source.cleanup.deny_refund();
+                }
+                return self.retain_query(Err(error)).map_err(Into::into);
+            }
+            Err(payload) => {
+                if entry_custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    self.source.cleanup.deny_refund();
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+        let mut analyses = ProductionOptimizedSourceAnalysisV18 {
+            original: self,
+            optimized,
+            input,
+            output,
+            input_effects: None,
+            output_effects: None,
+            sparse: None,
+            input_sparse: None,
+            input_memory: None,
+            output_memory: None,
+            cleanup: fe2o3_pliron::CanonicalAnalysisCleanupV1::linked(&self.source.cleanup.denied),
+            slot: std::ptr::from_ref(budget) as usize,
+            ledger: budget.work_ledger_identity_v1(),
+            floor: budget.storage(),
+            storage,
+        };
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            consume(&mut analyses, budget)
+        }));
+        let prior = self.source.guard.first.get();
+        let postflight = if matches!(&caught, Ok(Ok(_))) {
+            analyses.check(budget)
+        } else {
+            analyses.observe_custody(budget)
+        };
+        let storage = analyses.storage;
+        drop(analyses);
+        let released = if self.source.cleanup.is_denied() {
+            Err(ArgumentResourceV1::Accounting)
+        } else {
+            budget
+                .release_storage(storage)
+                .inspect_err(|_| self.source.cleanup.deny_refund())
+        };
+        match caught {
+            Err(payload) => std::panic::resume_unwind(payload),
+            Ok(Err(error)) => {
+                let selected = match prior {
+                    Some(first) => {
+                        source_reference_discard_v29(Err::<T, E>(error));
+                        first.error().into()
+                    }
+                    None => error,
+                };
+                Err(selected)
+            }
+            Ok(Ok(value)) => {
+                match self.retain_query(postflight.and(released.map_err(Into::into))) {
                     Ok(()) => Ok(value),
                     Err(error) => {
                         source_reference_discard_v29(Ok::<T, E>(value));
                         Err(error.into())
                     }
-                },
+                }
             }
+        }
+    }
+
+    fn observe_optimized_analysis_entry_v18(
+        &self,
+        budget: &ArgumentBudgetV1<'_>,
+        floor: usize,
+        storage: usize,
+        slot: usize,
+        ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    ) -> SourceOwnedResultV18<()> {
+        if slot != std::ptr::from_ref(budget) as usize
+            || ledger != budget.work_ledger_identity_v1()
+            || floor
+                .checked_add(storage)
+                .is_none_or(|required| budget.storage() < required)
+        {
+            self.source.cleanup.deny_refund();
+        }
+        self.observe_custody(budget)
     }
 }
 

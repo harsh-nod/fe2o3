@@ -10,6 +10,8 @@ use fe2o3_kernel_ir::{
 
 #[path = "kir_bridge_v18_resources.rs"]
 mod resources;
+#[path = "kir_bridge_structural_v18.rs"]
+mod structural;
 pub(crate) use resources::{
     CLEANUP_ATTEMPTS as BOUNDED_PAYLOAD_CLEANUP_ATTEMPTS_V1,
     discard_caught_payload as discard_bounded_payload_v1,
@@ -137,10 +139,10 @@ type ExportResult = Result<
 #[path = "kir_bridge_v18_optimization.rs"]
 mod optimization;
 pub(crate) use optimization::{ExecutedV18Parts, optimize_v18_graph};
-#[path = "kir_bridge_canonical_ranked_v18.rs"]
-mod ranked_policy;
 #[path = "kir_bridge_private_memory_v18.rs"]
 mod private_policy;
+#[path = "kir_bridge_canonical_ranked_v18.rs"]
+mod ranked_policy;
 pub(crate) use private_policy::NativeCanonicalPrivateAdmissionV18;
 
 #[path = "kir_bridge_global_pending_v18.rs"]
@@ -156,7 +158,7 @@ impl<'input> KirPlironGraphV18<'input> {
         let floor = budget.storage();
         let ledger = budget.work_ledger_identity_v1();
         let mut scope = resources::Scope::enter(budget)?;
-        let result = import_inner(input, scope.budget, floor, ledger);
+        let result = import_inner(input, scope.budget, floor, ledger, None);
         let release = scope.finish();
         match result {
             Err(error) => Err(error),
@@ -206,7 +208,7 @@ impl<'input> KirPlironGraphV18<'input> {
         limits: StorageLayoutLimitsV1,
         budget: &mut Budget<'_>,
     ) -> ExportResult {
-        self.extract(limits, budget, false)
+        self.extract(limits, budget, false, None)
     }
 
     /// Additionally requires exact source coordinates, origins and bytes.
@@ -215,7 +217,7 @@ impl<'input> KirPlironGraphV18<'input> {
         limits: StorageLayoutLimitsV1,
         budget: &mut Budget<'_>,
     ) -> ExportResult {
-        self.extract(limits, budget, true)
+        self.extract(limits, budget, true, None)
     }
 
     fn extract(
@@ -223,11 +225,12 @@ impl<'input> KirPlironGraphV18<'input> {
         limits: StorageLayoutLimitsV1,
         budget: &mut Budget<'_>,
         exact: bool,
+        structural: Option<&structural::StructuralBridgeWitnessV18>,
     ) -> ExportResult {
         // A foreign ledger must not acquire a cleanup guard for this owner.
         self.validate_custody(budget)?;
         let mut scope = resources::Scope::enter(budget)?;
-        let result = self.extract_inner(limits, scope.budget, exact);
+        let result = self.extract_inner(limits, scope.budget, exact, structural);
         let release = scope.finish();
         match result {
             Err(error) => Err(error),
@@ -243,6 +246,7 @@ impl<'input> KirPlironGraphV18<'input> {
         limits: StorageLayoutLimitsV1,
         budget: &mut Budget<'_>,
         exact: bool,
+        structural: Option<&structural::StructuralBridgeWitnessV18>,
     ) -> ExportResult {
         let charged_tree = self.session.owned_tree_work[&self.root.identity];
         let source = self.profile.owner();
@@ -251,12 +255,18 @@ impl<'input> KirPlironGraphV18<'input> {
             charged_tree,
         )?)?;
         let root = self.session.operations[&self.root.identity];
-        let (tree, slots) = census_live_graph_v12(&self.session.context, root)?;
+        let (tree, envelope) = if let Some(witness) = structural {
+            structural::extraction_envelope(self, witness, budget)?
+        } else {
+            let (tree, slots) = census_live_graph_v12(&self.session.context, root)?;
+            (
+                tree,
+                resources::envelope(source.canonical_bytes().len(), resources::add(tree, slots)?)?,
+            )
+        };
         if tree != charged_tree {
             return Err(KirBridgeErrorV1::GraphIdentityMismatch.into());
         }
-        let envelope =
-            resources::envelope(source.canonical_bytes().len(), resources::add(tree, slots)?)?;
         budget.charge_work(envelope.work)?;
         budget.reserve_storage(envelope.storage)?;
         let table_bytes = resources::table_bytes(source.module(), budget)?;
@@ -363,20 +373,21 @@ fn import_inner<'input>(
     budget: &mut Budget<'_>,
     floor: usize,
     ledger: CanonicalKernelIrWorkLedgerIdentityV1,
+    admitted: Option<resources::Envelope>,
 ) -> ImportResult<'input> {
     let profile = storage_v18::ProfileV18::new(input, budget)?;
     budget.charge_work(input.canonical_bytes().len())?;
     let tree = source_tree_work_v12(input.module())?;
-    let envelope = resources::envelope(input.canonical_bytes().len(), tree)?;
+    let envelope = match admitted {
+        Some(envelope) => envelope,
+        None => resources::envelope(input.canonical_bytes().len(), tree)?,
+    };
     let coordinate_envelope = resources::coordinate_envelope(tree)?;
     let import_work = resources::add(envelope.work, coordinate_envelope.work)?;
     let import_storage = resources::add(envelope.storage, coordinate_envelope.storage)?;
     budget.charge_work(import_work)?;
     budget.reserve_storage(import_storage)?;
-    let retained = resources::add(
-        import_storage,
-        std::mem::size_of::<KirPlironGraphV18<'_>>(),
-    )?;
+    let retained = resources::add(import_storage, std::mem::size_of::<KirPlironGraphV18<'_>>())?;
     budget.reserve_storage(std::mem::size_of::<KirPlironGraphV18<'_>>())?;
     let result = catch_unwind(AssertUnwindSafe(|| -> ImportResult<'input> {
         let (actual_tree, correspondence) =
@@ -395,7 +406,9 @@ fn import_inner<'input>(
         let transaction = session.begin_checked_operation_graph_mutation_v1(&root)?;
         let pointer = session.operations[&root.identity];
         let mut coordinates = HashMap::new();
-        coordinates.try_reserve(tree).map_err(|_| KirBridgeErrorV18::Allocation)?;
+        coordinates
+            .try_reserve(tree)
+            .map_err(|_| KirBridgeErrorV18::Allocation)?;
         if coordinates.capacity() > resources::mul(tree, 2)? {
             return Err(KirBridgeErrorV18::Allocation);
         }

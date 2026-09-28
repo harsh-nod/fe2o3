@@ -8,8 +8,8 @@ mod census;
 mod native;
 pub use native::{
     ProductionLifecycleCheckedNativePoliciesV18, ProductionPrivateMemoryCheckedNativePoliciesV18,
-    ProductionSourcePrivateMemoryRootRequestV18, ProductionSourceNativeLifecycleErrorV18,
-    ProductionSourceNativeLifecycleDiagnosticV18,
+    ProductionSourceNativeLifecycleDiagnosticV18, ProductionSourceNativeLifecycleErrorV18,
+    ProductionSourcePrivateMemoryRootRequestV18,
 };
 #[cfg(test)]
 #[path = "production_optimized_source_execution_controls_v18_tests.rs"]
@@ -34,6 +34,67 @@ struct Recipe {
     kind: ProductionOptimizedExecutionKindV18,
     input: OpCoordinate,
     output: Option<OpCoordinate>,
+}
+
+fn execution_recipe_owned_headers_v18<T, E, F>(_: &F) -> Result<usize, ArgumentResourceV1> {
+    type Entry<F> = (Vec<Recipe>, usize, F);
+    type Capture<'a, 'work, F> = (
+        &'a ProductionOptimizedSourceCorrespondenceV18<'a>,
+        &'a ProductionSourceOwnedViewV18<'a>,
+        &'a mut ArgumentBudgetV1<'work>,
+        &'a std::cell::Cell<usize>,
+        &'a std::cell::Cell<usize>,
+        F,
+        bool,
+    );
+    type Construct<'a, 'work, F> = (
+        &'a ProductionOptimizedSourceCorrespondenceV18<'a>,
+        &'a ProductionSourceOwnedViewV18<'a>,
+        &'a mut ArgumentBudgetV1<'work>,
+        &'a F,
+        usize,
+    );
+    type OwnedConstruct<'a, F> = (
+        F,
+        &'a ProductionSourceOwnedViewV18<'a>,
+        &'a ProductionOptimizedSourceCorrespondenceV18<'a>,
+    );
+    type Invoke<'a, 'work, F> = (
+        F,
+        &'a ProductionOptimizedExecutionRecipesV18<'a>,
+        &'a mut ArgumentBudgetV1<'work>,
+    );
+    argument_sum_v1(&[
+        argument_product_v1(2, size_of::<Capture<'_, '_, F>>())?,
+        argument_product_v1(2, std::mem::align_of::<Capture<'_, '_, F>>())?,
+        size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, F>>>(),
+        size_of::<Construct<'_, '_, F>>(),
+        size_of::<std::panic::AssertUnwindSafe<Construct<'_, '_, F>>>(),
+        argument_product_v1(2, size_of::<OwnedConstruct<'_, F>>())?,
+        argument_product_v1(2, std::mem::align_of::<OwnedConstruct<'_, F>>())?,
+        size_of::<std::panic::AssertUnwindSafe<OwnedConstruct<'_, F>>>(),
+        size_of::<Entry<F>>(),
+        argument_product_v1(2, size_of::<SourceOwnedResultV18<Entry<F>>>())?,
+        size_of::<std::thread::Result<SourceOwnedResultV18<Entry<F>>>>(),
+        size_of::<std::panic::AssertUnwindSafe<Entry<F>>>(),
+        size_of::<std::thread::Result<()>>(),
+        size_of::<Invoke<'_, '_, F>>(),
+        size_of::<std::panic::AssertUnwindSafe<Invoke<'_, '_, F>>>(),
+        size_of::<ProductionOptimizedExecutionRecipesV18<'_>>(),
+        size_of::<Vec<Recipe>>(),
+        argument_product_v1(2, size_of::<SourceOwnedResultV18<Vec<Recipe>>>())?,
+        size_of::<std::thread::Result<Result<T, E>>>(),
+        size_of::<Result<T, E>>(),
+        size_of::<std::panic::AssertUnwindSafe<Result<T, E>>>(),
+        size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>(),
+        argument_product_v1(12, size_of::<usize>())?,
+        source_reference_cleanup_headers_v29()?,
+    ])
+}
+
+#[cfg(test)]
+thread_local! {
+    static RECIPE_REFUSE_BEFORE_INVOCATION_V18: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A non-escaping original-event/insertion/input/output relation.
@@ -135,6 +196,10 @@ impl ProductionOptimizedExecutionRecipesV18<'_> {
 
 impl ProductionOptimizedSourceCorrespondenceV18<'_> {
     #[cfg(test)]
+    pub(crate) fn test_execution_recipe_refuse_before_invocation_v18(&self) {
+        RECIPE_REFUSE_BEFORE_INVOCATION_V18.set(true);
+    }
+    #[cfg(test)]
     pub(crate) fn test_execution_recipe_controls_v18(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -159,15 +224,7 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
-        self.query(budget)?;
-        self.retain((|| {
-            budget.reserve_storage(argument_sum_v1(&[
-                size_of::<T>(),
-                size_of::<Result<T, E>>(),
-            ])?)?;
-            Ok(())
-        })())?;
-        self.with_execution_recipes_prepaid_v18(budget, consume)
+        self.with_execution_recipes_owned_v18(budget, false, consume)
     }
 
     // Only typed sibling integrations use this entrance. Their enclosing
@@ -184,40 +241,131 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        self.with_execution_recipes_owned_v18(budget, true, consume)
+    }
+
+    fn with_execution_recipes_owned_v18<'work, T, E, F>(
+        &self,
+        budget: &mut ArgumentBudgetV1<'work>,
+        result_prepaid: bool,
+        consume: F,
+    ) -> Result<T, E>
+    where
+        E: From<ProductionSourceOwnedViewErrorV18>,
+        F: for<'scope> FnOnce(
+            &ProductionOptimizedExecutionRecipesV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<T, E>,
+    {
         let source = self.original.source;
         let floor = budget.storage();
-        let rows = scoped_source_attempt_v29(source.cleanup, budget, floor, |budget| {
-            source.retain_construction(|| {
-                budget.reserve_storage(argument_sum_v1(&[
-                    size_of::<ProductionOptimizedExecutionRecipesV18<'_>>(),
-                    size_of::<Vec<Recipe>>(),
-                    2 * size_of::<Result<Vec<Recipe>, ProductionSourceOwnedViewErrorV18>>(),
-                    size_of::<std::thread::Result<Result<T, E>>>(),
-                    size_of::<Result<T, E>>(),
-                    std::mem::size_of_val(&consume),
-                    2 * std::mem::align_of_val(&consume),
-                    12 * size_of::<usize>(),
-                ])?)?;
-                build(self, budget)
-            })
-        })?;
-        let storage = budget.storage().checked_sub(floor).ok_or(
-            ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Accounting),
-        )?;
+        let slot = std::ptr::from_ref(budget) as usize;
+        let ledger = budget.work_ledger_identity_v1();
+        let returned = std::cell::Cell::new(0);
+        let accepted = std::cell::Cell::new(0);
+        // Own F before the original query and result-credit arithmetic. The
+        // closed construction still uses the unchanged scoped scratch helper.
+        let caught = {
+            let budget = &mut *budget;
+            let returned = &returned;
+            let accepted = &accepted;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                if result_prepaid {
+                    self.check(budget)?;
+                } else {
+                    self.query(budget)?;
+                    self.retain((|| {
+                        let bytes = argument_sum_v1(&[size_of::<T>(), size_of::<Result<T, E>>()])?;
+                        budget.reserve_storage(bytes)?;
+                        returned.set(bytes);
+                        Ok(())
+                    })())?;
+                }
+                let headers = self.retain((|| {
+                    let bytes = execution_recipe_owned_headers_v18::<T, E, _>(&consume)?;
+                    budget.reserve_storage(bytes)?;
+                    accepted.set(bytes);
+                    Ok(bytes)
+                })())?;
+                let construction_floor = budget.storage();
+                let (rows, consume) = scoped_source_attempt_v29(
+                    source.cleanup,
+                    budget,
+                    construction_floor,
+                    move |budget| {
+                        let rows = source.retain_construction(|| build(self, budget))?;
+                        Ok::<_, ProductionSourceOwnedViewErrorV18>((rows, consume))
+                    },
+                )?;
+                // The shared helper has settled its own temporary header.
+                let rows_credit = argument_product_v1(rows.capacity(), size_of::<Recipe>())?;
+                let storage = argument_sum_v1(&[headers, rows_credit])?;
+                if construction_floor.checked_add(rows_credit) != Some(budget.storage()) {
+                    source.cleanup.deny_refund();
+                    return Err(ArgumentResourceV1::Accounting.into());
+                }
+                Ok::<_, ProductionSourceOwnedViewErrorV18>((rows, storage, consume))
+            }))
+        };
+        let local = match &caught {
+            Ok(Ok((_, storage, _))) => *storage,
+            _ => accepted.get(),
+        };
+        let custody = if slot == std::ptr::from_ref(budget) as usize
+            && ledger == budget.work_ledger_identity_v1()
+            && floor
+                .checked_add(returned.get())
+                .and_then(|value| value.checked_add(local))
+                == Some(budget.storage())
+        {
+            self.observe_custody(budget)
+        } else {
+            source.cleanup.deny_refund();
+            Err(ArgumentResourceV1::Accounting.into())
+        };
+        let (rows, storage, consume) = match caught {
+            Ok(Ok(entry)) if custody.is_ok() => entry,
+            Ok(Ok(entry)) => {
+                let dropped =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(entry)));
+                let _ = self.observe_custody(budget);
+                if let Err(payload) = dropped {
+                    std::panic::resume_unwind(payload);
+                }
+                return self
+                    .retain(Err(ArgumentResourceV1::Accounting.into()))
+                    .map_err(Into::into);
+            }
+            // The public result credit remains transferred even on failure.
+            // The closed helper already settled only its construction scratch.
+            Ok(Err(error)) => {
+                if custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    source.cleanup.deny_refund();
+                }
+                return self.retain(Err(error)).map_err(Into::into);
+            }
+            Err(payload) => {
+                if custody.is_ok() && budget.release_storage(accepted.get()).is_err() {
+                    source.cleanup.deny_refund();
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
         let view = ProductionOptimizedExecutionRecipesV18 {
             optimized: self,
             rows: &rows,
             floor: budget.storage(),
         };
-        let caught = match view.check(budget) {
-            Ok(()) => {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget)))
-            }
-            Err(error) => {
-                drop(consume);
-                Ok(Err(error.into()))
-            }
-        };
+        #[cfg(test)]
+        if RECIPE_REFUSE_BEFORE_INVOCATION_V18.replace(false) {
+            let _ = self.retain::<()>(Err(ProductionSourceOwnedViewErrorV18::Binding(
+                "execution recipe test pre-invocation refusal",
+            )));
+        }
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            view.check(budget).map_err(E::from)?;
+            consume(&view, budget)
+        }));
         let prior = source.guard.first.get();
         // Observe the new scope's floor even on a consumer error or panic.
         let postflight = if matches!(&caught, Ok(Ok(_))) {

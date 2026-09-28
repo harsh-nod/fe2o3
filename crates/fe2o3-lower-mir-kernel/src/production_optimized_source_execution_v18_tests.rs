@@ -502,3 +502,5 @@ fn lifecycle_recipe_owned_callback_error_is_not_refunded_as_constructor_scratch(
     .unwrap();
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
+
+include!("production_optimized_source_execution_callback_v18_tests.rs");

@@ -108,31 +108,62 @@ fn unrelated_raw_refusals_inside_source_callback_do_not_poison_queries() {
 fn original_kernel_abi_owner_v18() -> ProductionSemanticSsaOwnerV1 {
     let original = module_fixture_owner(ModuleFixture::Ordinary);
     let semantic = original.source_semantic();
-    let functions = semantic.functions().iter().map(|function| {
-        assert_eq!(function.role(), SemanticFunctionRoleV1::KernelRoot);
-        assert_eq!(function.abi().source_input_types(), &[U32]);
-        assert_eq!(function.abi().source_argument_ownership(),
-            &[SemanticSourceArgumentOwnershipV1::Unspecified]);
-        SemanticFunctionDeclV1::new(
-            function.identity(), function.role(), function.item_definition_identity(),
-            function.monomorphization_identity(), function.generic_type_arguments_identity(),
-            function.const_generic_arguments_identity(), function.source(),
-            function.abi().clone().with_source_argument_ownership(
-                vec![SemanticSourceArgumentOwnershipV1::ByValue],
-            ).unwrap(),
-            function.locals().to_vec(), function.entry(), function.blocks().to_vec(),
-        ).unwrap().with_kernel_entry(function.kernel_entry().unwrap().clone())
-    }).collect();
+    let functions = semantic
+        .functions()
+        .iter()
+        .map(|function| {
+            assert_eq!(function.role(), SemanticFunctionRoleV1::KernelRoot);
+            assert_eq!(function.abi().source_input_types(), &[U32]);
+            assert_eq!(
+                function.abi().source_argument_ownership(),
+                &[SemanticSourceArgumentOwnershipV1::Unspecified]
+            );
+            SemanticFunctionDeclV1::new(
+                function.identity(),
+                function.role(),
+                function.item_definition_identity(),
+                function.monomorphization_identity(),
+                function.generic_type_arguments_identity(),
+                function.const_generic_arguments_identity(),
+                function.source(),
+                function
+                    .abi()
+                    .clone()
+                    .with_source_argument_ownership(vec![
+                        SemanticSourceArgumentOwnershipV1::ByValue,
+                    ])
+                    .unwrap(),
+                function.locals().to_vec(),
+                function.entry(),
+                function.blocks().to_vec(),
+            )
+            .unwrap()
+            .with_kernel_entry(function.kernel_entry().unwrap().clone())
+        })
+        .collect();
     let admitted = InertSemanticMirRequestV1::new_with_callables(
-        semantic.target(), semantic.types().to_vec(), semantic.allocations().to_vec(),
-        semantic.statics().to_vec(), semantic.vtables().to_vec(), functions,
-        semantic.callables().to_vec(), semantic.roots().to_vec(),
-    ).unwrap().admit_exact_v29(SemanticMirLimitsV1::default()).unwrap();
+        semantic.target(),
+        semantic.types().to_vec(),
+        semantic.allocations().to_vec(),
+        semantic.statics().to_vec(),
+        semantic.vtables().to_vec(),
+        functions,
+        semantic.callables().to_vec(),
+        semantic.roots().to_vec(),
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
     let owner = ProductionSemanticSsaOwnerV1::try_new(
-        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default()).unwrap(),
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
         ProductionSemanticSsaLimitsV1::default(),
-    ).unwrap();
-    assert_ne!(owner.source_semantic_sha256(), original.source_semantic_sha256());
+    )
+    .unwrap();
+    assert_ne!(
+        owner.source_semantic_sha256(),
+        original.source_semantic_sha256()
+    );
     owner
 }
 
@@ -149,7 +180,13 @@ fn with_original_kernel_abi_input_v18<'work, R>(
     ) -> R,
 ) -> R {
     assert!(matches!(kind, ModuleFixture::Ordinary));
-    with_pending_api_owner_v18(kind, preexisting, budget, original_kernel_abi_owner_v18, use_input)
+    with_pending_api_owner_v18(
+        kind,
+        preexisting,
+        budget,
+        original_kernel_abi_owner_v18,
+        use_input,
+    )
 }
 
 struct OriginalKernelAbiFixtureV18 {
@@ -162,37 +199,63 @@ impl OriginalKernelAbiFixtureV18 {
     fn ordinary(owner: &ProductionSemanticSsaOwnerV1) -> Self {
         use fe2o3_kernel_descriptor as descriptor;
         let semantic = owner.source_semantic();
-        let mut fixture = Self { bindings: vec![], exports: vec![], arguments: vec![] };
+        let mut fixture = Self {
+            bindings: vec![],
+            exports: vec![],
+            arguments: vec![],
+        };
         for &root in semantic.roots() {
             let function = &semantic.functions()[root.index() as usize];
             let entry = function.kernel_entry().unwrap();
-            fixture.bindings.push(*entry.kernel_binding_identity().as_bytes());
-            fixture.exports.push(std::str::from_utf8(entry.export_symbol().as_bytes()).unwrap().to_owned());
+            fixture
+                .bindings
+                .push(*entry.kernel_binding_identity().as_bytes());
+            fixture.exports.push(
+                std::str::from_utf8(entry.export_symbol().as_bytes())
+                    .unwrap()
+                    .to_owned(),
+            );
             assert_eq!(function.abi().source_input_types(), &[U32]);
             let scalar = descriptor::ScalarTypeV1::U32;
-            fixture.arguments.push(vec![ProductionKernelArgumentAbiArgumentV18 {
-                semantic_type_identity: semantic.types()[U32.index() as usize].identity(),
-                kind: ProductionKernelArgumentAbiKindV18::Descriptor {
-                    source: descriptor::SourceTypeDescriptorV3::Scalar(scalar),
-                    argument: descriptor::LogicalArgumentV1::scalar(
-                        0, descriptor::ValidName::new("seed".to_owned()).unwrap(),
-                        &descriptor::SourceTypeRecordV1::new(descriptor::SourceTypeDescriptorV1::scalar(scalar)),
-                        &descriptor::DeviceLayoutRecordV1::new(descriptor::DeviceLayoutDescriptorV1::scalar(scalar)),
-                        0,
-                    ).unwrap(),
-                },
-            }]);
+            fixture
+                .arguments
+                .push(vec![ProductionKernelArgumentAbiArgumentV18 {
+                    semantic_type_identity: semantic.types()[U32.index() as usize].identity(),
+                    kind: ProductionKernelArgumentAbiKindV18::Descriptor {
+                        source: descriptor::SourceTypeDescriptorV3::Scalar(scalar),
+                        argument: descriptor::LogicalArgumentV1::scalar(
+                            0,
+                            descriptor::ValidName::new("seed".to_owned()).unwrap(),
+                            &descriptor::SourceTypeRecordV1::new(
+                                descriptor::SourceTypeDescriptorV1::scalar(scalar),
+                            ),
+                            &descriptor::DeviceLayoutRecordV1::new(
+                                descriptor::DeviceLayoutDescriptorV1::scalar(scalar),
+                            ),
+                            0,
+                        )
+                        .unwrap(),
+                    },
+                }]);
         }
         fixture
     }
 
     fn roots(&self) -> Vec<ProductionKernelArgumentAbiRootV18<'_>> {
-        self.bindings.iter().zip(&self.exports).zip(&self.arguments).map(|((binding, export), arguments)| {
-            ProductionKernelArgumentAbiRootV18 {
-                kernel_binding: binding, export, arguments,
-                explicit_argument_bytes: 4, kernarg_alignment_bytes: 4,
-            }
-        }).collect()
+        self.bindings
+            .iter()
+            .zip(&self.exports)
+            .zip(&self.arguments)
+            .map(
+                |((binding, export), arguments)| ProductionKernelArgumentAbiRootV18 {
+                    kernel_binding: binding,
+                    export,
+                    arguments,
+                    explicit_argument_bytes: 4,
+                    kernarg_alignment_bytes: 4,
+                },
+            )
+            .collect()
     }
 }
 
@@ -201,23 +264,37 @@ fn kernel_argument_profile_does_not_infer_unspecified_source_ownership() {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    with_pending_api_input(ModuleFixture::Ordinary, false, &mut budget,
+    with_pending_api_input(
+        ModuleFixture::Ordinary,
+        false,
+        &mut budget,
         |owner, launch, source, _, budget| {
             let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
             let roots = fixture.roots();
             let floor = budget.storage();
-            let result = ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
-                owner, launch, source, ProductionKernelArgumentAbiInputV18 { roots: &roots },
-                ProductionSemanticKirLimitsV1::default(), budget,
-            );
-            assert!(matches!(result, Err(EntranceError::Source(
-                ProductionPendingScopedSourceErrorV29::Source(ProductionSemanticKirErrorV1::Unsupported {
-                    detail: "kernel argument ABI profile differs from the complete original descriptor/source contract",
-                    ..
-                })
-            ))));
+            let result =
+                ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
+                    owner,
+                    launch,
+                    source,
+                    ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                    ProductionSemanticKirLimitsV1::default(),
+                    budget,
+                );
+            assert!(matches!(
+                result,
+                Err(EntranceError::Source(
+                    ProductionPendingScopedSourceErrorV29::Source(
+                        ProductionSemanticKirErrorV1::Unsupported {
+                            detail: "kernel argument ABI profile differs from the complete original descriptor/source contract",
+                            ..
+                        }
+                    )
+                ))
+            ));
             assert_eq!(budget.storage(), floor);
-        });
+        },
+    );
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
 
@@ -228,7 +305,9 @@ fn original_kernel_argument_profile_survives_prepared_capture_and_real_source_re
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
         let (prepared, fixture, original_sha) = with_original_kernel_abi_input_v18(
-            ModuleFixture::Ordinary, preexisting, &mut budget,
+            ModuleFixture::Ordinary,
+            preexisting,
+            &mut budget,
             |owner, launch, source, _, budget| {
                 let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
                 let roots = fixture.roots();
@@ -238,26 +317,53 @@ fn original_kernel_argument_profile_survives_prepared_capture_and_real_source_re
                     ProductionSemanticKirLimitsV1::default(), budget,
                 ).unwrap();
                 drop(roots);
-                assert_eq!(prepared.source.input.retained_storage, owned_input_payload(&prepared.source.input));
-                assert!(prepared.source.input.kernel_argument_abi.as_ref().unwrap().retained_storage() > 0);
+                assert_eq!(
+                    prepared.source.input.retained_storage,
+                    owned_input_payload(&prepared.source.input)
+                );
+                assert!(
+                    prepared
+                        .source
+                        .input
+                        .kernel_argument_abi
+                        .as_ref()
+                        .unwrap()
+                        .retained_storage()
+                        > 0
+                );
                 (prepared, fixture, sha)
             },
         );
         assert_eq!(budget.storage(), MODULE_FLOOR + prepared.adopted_storage());
         let called = std::cell::Cell::new(false);
-        prepared.with_checked_source_v18(&mut budget, |view, budget| {
-            called.set(true);
-            assert_eq!(view.source_ssa(budget)?.source_semantic_sha256(), &original_sha);
-            let roots = fixture.roots();
-            view.require_kernel_argument_abi_v18(ProductionKernelArgumentAbiInputV18 { roots: &roots }, budget)?;
-            for root in 0..2 {
-                assert_eq!(view.kernel_argument_abi_count(root, budget)?, Some(1));
-                assert_eq!(view.kernel_argument_abi_kind(root, 0, budget)?,
-                    Some(fe2o3_kernel_descriptor::SourceTypeDescriptorV3::Scalar(fe2o3_kernel_descriptor::ScalarTypeV1::U32)));
-            }
-            Ok(())
-        }).unwrap();
-        assert!(called.get(), "the actual source replay callback must execute");
+        prepared
+            .with_checked_source_v18(&mut budget, |view, budget| {
+                called.set(true);
+                assert_eq!(
+                    view.source_ssa(budget)?.source_semantic_sha256(),
+                    &original_sha
+                );
+                let roots = fixture.roots();
+                view.require_kernel_argument_abi_v18(
+                    ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                    budget,
+                )?;
+                for root in 0..2 {
+                    assert_eq!(view.kernel_argument_abi_count(root, budget)?, Some(1));
+                    assert_eq!(
+                        view.kernel_argument_abi_kind(root, 0, budget)?,
+                        Some(fe2o3_kernel_descriptor::SourceTypeDescriptorV3::Scalar(
+                            fe2o3_kernel_descriptor::ScalarTypeV1::U32
+                        ))
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            called.get(),
+            "the actual source replay callback must execute"
+        );
         assert_eq!(budget.storage(), MODULE_FLOOR);
     }
 }
@@ -269,12 +375,17 @@ fn kernel_argument_profile_omission_and_wrong_extent_fail_before_source_emission
             let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
             let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
             budget.reserve_storage(MODULE_FLOOR).unwrap();
-            with_original_kernel_abi_input_v18(ModuleFixture::Ordinary, preexisting, &mut budget,
+            with_original_kernel_abi_input_v18(
+                ModuleFixture::Ordinary,
+                preexisting,
+                &mut budget,
                 |owner, launch, source, capture, budget| {
                     let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
                     let mut roots = fixture.roots();
                     match fault {
-                        0 => { roots.pop(); }
+                        0 => {
+                            roots.pop();
+                        }
                         1 => roots[0].explicit_argument_bytes = 3,
                         2 => roots[0].arguments = &[],
                         _ => unreachable!(),
@@ -284,11 +395,21 @@ fn kernel_argument_profile_omission_and_wrong_extent_fail_before_source_emission
                         owner, launch, source, ProductionKernelArgumentAbiInputV18 { roots: &roots },
                         ProductionSemanticKirLimitsV1::default(), budget,
                     );
-                    assert!(matches!(result, Err(EntranceError::Source(
-                        ProductionPendingScopedSourceErrorV29::Source(ProductionSemanticKirErrorV1::Unsupported { .. })
-                    ))));
-                    assert_eq!(budget.storage(), floor, "both fresh and adopted occurrence credit must settle");
-                });
+                    assert!(matches!(
+                        result,
+                        Err(EntranceError::Source(
+                            ProductionPendingScopedSourceErrorV29::Source(
+                                ProductionSemanticKirErrorV1::Unsupported { .. }
+                            )
+                        ))
+                    ));
+                    assert_eq!(
+                        budget.storage(),
+                        floor,
+                        "both fresh and adopted occurrence credit must settle"
+                    );
+                },
+            );
             assert_eq!(budget.storage(), MODULE_FLOOR);
         }
     }
@@ -299,24 +420,45 @@ fn caught_kernel_argument_profile_rejoin_failure_remains_the_original_query_erro
     let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let prepared = with_original_kernel_abi_input_v18(ModuleFixture::Ordinary, false, &mut budget,
+    let prepared = with_original_kernel_abi_input_v18(
+        ModuleFixture::Ordinary,
+        false,
+        &mut budget,
         |owner, launch, source, _, budget| {
             let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
             let roots = fixture.roots();
             ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
-                owner, launch, source, ProductionKernelArgumentAbiInputV18 { roots: &roots },
-                ProductionSemanticKirLimitsV1::default(), budget,
-            ).unwrap()
-        });
+                owner,
+                launch,
+                source,
+                ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                ProductionSemanticKirLimitsV1::default(),
+                budget,
+            )
+            .unwrap()
+        },
+    );
     let called = std::cell::Cell::new(false);
     let result = prepared.with_checked_source_v18(&mut budget, |view, budget| {
         called.set(true);
         assert_eq!(view.kernel_argument_abi_count(0, budget)?, Some(1));
-        assert!(matches!(view.require_kernel_argument_abi_v18(
-            ProductionKernelArgumentAbiInputV18 { roots: &[] }, budget), Err(EntranceError::Binding(_))));
+        assert!(matches!(
+            view.require_kernel_argument_abi_v18(
+                ProductionKernelArgumentAbiInputV18 { roots: &[] },
+                budget
+            ),
+            Err(EntranceError::Binding(_))
+        ));
         let work = budget.work();
-        assert!(matches!(view.kernel_argument_abi_count(0, budget), Err(EntranceError::Binding(_))));
-        assert_eq!(budget.work(), work, "caught profile failure cannot restore query authority");
+        assert!(matches!(
+            view.kernel_argument_abi_count(0, budget),
+            Err(EntranceError::Binding(_))
+        ));
+        assert_eq!(
+            budget.work(),
+            work,
+            "caught profile failure cannot restore query authority"
+        );
         Ok(())
     });
     assert!(called.get());
@@ -335,60 +477,130 @@ fn original_as0_shared_slice_root_profile_requires_exact_component_and_type_cens
     for fault in 0..6 {
         let mut arguments = Vec::new();
         for (ordinal, ty) in function.abi().source_input_types().iter().enumerate() {
-            let scalar = if ordinal < 2 { descriptor::ScalarTypeV1::U32 } else { descriptor::ScalarTypeV1::U64 };
-            let source = if ordinal < 2 { descriptor::SourceTypeDescriptorV1::shared_slice(scalar) }
-                else { descriptor::SourceTypeDescriptorV1::scalar(scalar) };
-            let layout = if ordinal < 2 { descriptor::DeviceLayoutDescriptorV1::shared_slice(scalar) }
-                else { descriptor::DeviceLayoutDescriptorV1::scalar(scalar) };
+            let scalar = if ordinal < 2 {
+                descriptor::ScalarTypeV1::U32
+            } else {
+                descriptor::ScalarTypeV1::U64
+            };
+            let source = if ordinal < 2 {
+                descriptor::SourceTypeDescriptorV1::shared_slice(scalar)
+            } else {
+                descriptor::SourceTypeDescriptorV1::scalar(scalar)
+            };
+            let layout = if ordinal < 2 {
+                descriptor::DeviceLayoutDescriptorV1::shared_slice(scalar)
+            } else {
+                descriptor::DeviceLayoutDescriptorV1::scalar(scalar)
+            };
             let source = descriptor::SourceTypeRecordV1::new(source);
             let layout = descriptor::DeviceLayoutRecordV1::new(layout);
             let name = descriptor::ValidName::new(format!("arg{ordinal}")).unwrap();
-            let offset = if fault == 4 && ordinal == 1 { 0 } else { ordinal as u32 * 16 };
+            let offset = if fault == 4 && ordinal == 1 {
+                0
+            } else {
+                ordinal as u32 * 16
+            };
             let argument = if ordinal < 2 {
-                descriptor::LogicalArgumentV1::shared_slice(ordinal as u16, name, &source, &layout, offset).unwrap()
-            } else { descriptor::LogicalArgumentV1::scalar(ordinal as u16, name, &source, &layout, offset).unwrap() };
+                descriptor::LogicalArgumentV1::shared_slice(
+                    ordinal as u16,
+                    name,
+                    &source,
+                    &layout,
+                    offset,
+                )
+                .unwrap()
+            } else {
+                descriptor::LogicalArgumentV1::scalar(
+                    ordinal as u16,
+                    name,
+                    &source,
+                    &layout,
+                    offset,
+                )
+                .unwrap()
+            };
             arguments.push(ProductionKernelArgumentAbiArgumentV18 {
                 semantic_type_identity: semantic.types()[ty.index() as usize].identity(),
                 kind: ProductionKernelArgumentAbiKindV18::Descriptor {
-                    source: if ordinal < 2 { descriptor::SourceTypeDescriptorV3::SharedSlice(scalar) }
-                        else { descriptor::SourceTypeDescriptorV3::Scalar(scalar) },
+                    source: if ordinal < 2 {
+                        descriptor::SourceTypeDescriptorV3::SharedSlice(scalar)
+                    } else {
+                        descriptor::SourceTypeDescriptorV3::Scalar(scalar)
+                    },
                     argument,
                 },
             });
         }
         match fault {
-            1 => { arguments.pop(); }
-            2 => arguments[0].semantic_type_identity = semantic.types()[U32.index() as usize].identity(),
-            3 => {
-                let ProductionKernelArgumentAbiKindV18::Descriptor { source, .. } = &mut arguments[0].kind else { unreachable!() };
-                *source = descriptor::SourceTypeDescriptorV3::SharedSlice(descriptor::ScalarTypeV1::F32);
+            1 => {
+                arguments.pop();
             }
-            5 => arguments[0].kind = ProductionKernelArgumentAbiKindV18::CompilerLaidOutByValue { offset: 0 },
+            2 => {
+                arguments[0].semantic_type_identity =
+                    semantic.types()[U32.index() as usize].identity()
+            }
+            3 => {
+                let ProductionKernelArgumentAbiKindV18::Descriptor { source, .. } =
+                    &mut arguments[0].kind
+                else {
+                    unreachable!()
+                };
+                *source =
+                    descriptor::SourceTypeDescriptorV3::SharedSlice(descriptor::ScalarTypeV1::F32);
+            }
+            5 => {
+                arguments[0].kind =
+                    ProductionKernelArgumentAbiKindV18::CompilerLaidOutByValue { offset: 0 }
+            }
             _ => {}
         }
         let binding = entry.kernel_binding_identity();
         let roots = [ProductionKernelArgumentAbiRootV18 {
             kernel_binding: binding.as_bytes(),
-            export: std::str::from_utf8(entry.export_symbol().as_bytes()).unwrap(), arguments: &arguments,
-            explicit_argument_bytes: 40, kernarg_alignment_bytes: 8,
+            export: std::str::from_utf8(entry.export_symbol().as_bytes()).unwrap(),
+            arguments: &arguments,
+            explicit_argument_bytes: 40,
+            kernarg_alignment_bytes: 8,
         }];
         let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
-        let floor = MODULE_FLOOR + size_of::<kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>();
+        let floor =
+            MODULE_FLOOR + size_of::<kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>();
         budget.reserve_storage(floor).unwrap();
         let result = kernel_argument_abi_v18::CapturedKernelArgumentAbiV18::capture(
-            &owner, ProductionKernelArgumentAbiInputV18 { roots: &roots }, &mut budget,
+            &owner,
+            ProductionKernelArgumentAbiInputV18 { roots: &roots },
+            &mut budget,
         );
         match result {
             Ok(profile) => {
                 assert_eq!(fault, 0);
-                profile.matches_original_input(&owner, ProductionKernelArgumentAbiInputV18 { roots: &roots }, &mut budget).unwrap();
+                profile
+                    .matches_original_input(
+                        &owner,
+                        ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                        &mut budget,
+                    )
+                    .unwrap();
                 assert_eq!(profile.argument_count(0).unwrap(), 3);
-                assert_eq!(profile.argument_kind(0, 0).unwrap(), Some(descriptor::SourceTypeDescriptorV3::SharedSlice(descriptor::ScalarTypeV1::U32)));
+                assert_eq!(
+                    profile.argument_kind(0, 0).unwrap(),
+                    Some(descriptor::SourceTypeDescriptorV3::SharedSlice(
+                        descriptor::ScalarTypeV1::U32
+                    ))
+                );
                 for &ty in &function.abi().source_input_types()[..2] {
-                    let SemanticTypeShapeV1::Pointer(pointer) = semantic.types()[ty.index() as usize].shape() else { panic!("original reference shape") };
+                    let SemanticTypeShapeV1::Pointer(pointer) =
+                        semantic.types()[ty.index() as usize].shape()
+                    else {
+                        panic!("original reference shape")
+                    };
                     assert_eq!(pointer.address_space(), 0);
-                    let Type::Slice(slice) = lower_parameter_type(semantic.types(), semantic.callables(), ty).unwrap() else { panic!("original descriptor representation") };
+                    let Type::Slice(slice) =
+                        lower_parameter_type(semantic.types(), semantic.callables(), ty).unwrap()
+                    else {
+                        panic!("original descriptor representation")
+                    };
                     assert_eq!(slice.address_space, AddressSpace::Generic);
                 }
                 drop(profile);
@@ -406,30 +618,46 @@ fn kernel_argument_profile_query_meter_denial_is_sticky_without_additional_work(
     let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let prepared = with_original_kernel_abi_input_v18(ModuleFixture::Ordinary, false, &mut budget,
+    let prepared = with_original_kernel_abi_input_v18(
+        ModuleFixture::Ordinary,
+        false,
+        &mut budget,
         |owner, launch, source, _, budget| {
             let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
             let roots = fixture.roots();
             ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
-                owner, launch, source, ProductionKernelArgumentAbiInputV18 { roots: &roots },
-                ProductionSemanticKirLimitsV1::default(), budget,
-            ).unwrap()
-        });
+                owner,
+                launch,
+                source,
+                ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                ProductionSemanticKirLimitsV1::default(),
+                budget,
+            )
+            .unwrap()
+        },
+    );
     let called = std::cell::Cell::new(false);
     let result = prepared.with_checked_source_v18(&mut budget, |view, budget| {
         called.set(true);
         assert_eq!(view.kernel_argument_abi_count(0, budget)?, Some(1));
         budget.charge_work(MODULE_LIMIT - budget.work())?;
-        assert!(matches!(view.kernel_argument_abi_kind(0, 0, budget),
-            Err(EntranceError::Resource(ArgumentResourceV1::Work(_)))));
+        assert!(matches!(
+            view.kernel_argument_abi_kind(0, 0, budget),
+            Err(EntranceError::Resource(ArgumentResourceV1::Work(_)))
+        ));
         let exhausted = budget.work();
-        assert!(matches!(view.root_count(budget),
-            Err(EntranceError::Resource(ArgumentResourceV1::Work(_)))));
+        assert!(matches!(
+            view.root_count(budget),
+            Err(EntranceError::Resource(ArgumentResourceV1::Work(_)))
+        ));
         assert_eq!(budget.work(), exhausted);
         Ok(())
     });
     assert!(called.get());
-    assert!(matches!(result, Err(EntranceError::Resource(ArgumentResourceV1::Work(_)))));
+    assert!(matches!(
+        result,
+        Err(EntranceError::Resource(ArgumentResourceV1::Work(_)))
+    ));
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
 
@@ -442,15 +670,24 @@ fn retained_kernel_argument_profile_preserves_foreign_floor_and_unwind_custody()
         let mut foreign = ArgumentBudgetV1::new(&mut foreign_work, MODULE_LIMIT);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
         foreign.reserve_storage(97).unwrap();
-        let prepared = with_original_kernel_abi_input_v18(ModuleFixture::Ordinary, false, &mut budget,
+        let prepared = with_original_kernel_abi_input_v18(
+            ModuleFixture::Ordinary,
+            false,
+            &mut budget,
             |owner, launch, source, _, budget| {
                 let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
                 let roots = fixture.roots();
                 ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
-                    owner, launch, source, ProductionKernelArgumentAbiInputV18 { roots: &roots },
-                    ProductionSemanticKirLimitsV1::default(), budget,
-                ).unwrap()
-            });
+                    owner,
+                    launch,
+                    source,
+                    ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                    ProductionSemanticKirLimitsV1::default(),
+                    budget,
+                )
+                .unwrap()
+            },
+        );
         let entered = std::cell::Cell::new(None);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prepared.with_checked_source_v18(&mut budget, |view, budget| {
@@ -461,38 +698,62 @@ fn retained_kernel_argument_profile_preserves_foreign_floor_and_unwind_custody()
                     1 | 2 => budget.release_storage(budget.storage())?,
                     3 => {
                         budget.release_storage(1)?;
-                        assert!(matches!(view.kernel_argument_abi_count(0, budget),
-                            Err(EntranceError::Resource(ArgumentResourceV1::Accounting))));
+                        assert!(matches!(
+                            view.kernel_argument_abi_count(0, budget),
+                            Err(EntranceError::Resource(ArgumentResourceV1::Accounting))
+                        ));
                         budget.reserve_storage(1)?;
                         let work = budget.work();
-                        assert!(matches!(view.kernel_argument_abi_count(0, budget),
-                            Err(EntranceError::Resource(ArgumentResourceV1::Accounting))));
+                        assert!(matches!(
+                            view.kernel_argument_abi_count(0, budget),
+                            Err(EntranceError::Resource(ArgumentResourceV1::Accounting))
+                        ));
                         assert_eq!(budget.work(), work);
                     }
                     _ => unreachable!(),
                 }
-                if fault == 2 { std::panic::resume_unwind(Box::new(0x1226_1226_u64)); }
+                if fault == 2 {
+                    std::panic::resume_unwind(Box::new(0x1226_1226_u64));
+                }
                 Err::<(), _>(EntranceError::Binding("original kernel ABI callback error"))
             })
         }));
-        let entered = entered.get().expect("actual profile-bearing source callback must run");
+        let entered = entered
+            .get()
+            .expect("actual profile-bearing source callback must run");
         match fault {
             0 => {
-                assert!(matches!(result.unwrap(), Err(EntranceError::Binding("original kernel ABI callback error"))));
+                assert!(matches!(
+                    result.unwrap(),
+                    Err(EntranceError::Binding("original kernel ABI callback error"))
+                ));
                 assert_eq!(budget.storage(), 97);
                 assert_eq!(foreign.storage(), entered);
             }
             1 => {
-                assert!(matches!(result.unwrap(), Err(EntranceError::Binding("original kernel ABI callback error"))));
+                assert!(matches!(
+                    result.unwrap(),
+                    Err(EntranceError::Binding("original kernel ABI callback error"))
+                ));
                 assert_eq!(budget.storage(), 0);
             }
             2 => {
-                assert_eq!(*result.unwrap_err().downcast::<u64>().unwrap(), 0x1226_1226_u64);
+                assert_eq!(
+                    *result.unwrap_err().downcast::<u64>().unwrap(),
+                    0x1226_1226_u64
+                );
                 assert_eq!(budget.storage(), 0);
             }
             3 => {
-                assert!(matches!(result.unwrap(), Err(EntranceError::Resource(ArgumentResourceV1::Accounting))));
-                assert_eq!(budget.storage(), entered, "restoring credit does not restore denied cleanup authority");
+                assert!(matches!(
+                    result.unwrap(),
+                    Err(EntranceError::Resource(ArgumentResourceV1::Accounting))
+                ));
+                assert_eq!(
+                    budget.storage(),
+                    entered,
+                    "restoring credit does not restore denied cleanup authority"
+                );
             }
             _ => unreachable!(),
         }
@@ -1402,3 +1663,5 @@ fn source_callback_diagnostic_does_not_replace_an_earlier_c2_query_failure() {
     ));
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
+
+include!("production_source_owned_entry_callbacks_v18_tests.rs");

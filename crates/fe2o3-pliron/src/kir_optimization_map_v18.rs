@@ -53,13 +53,14 @@ impl KirOptimizationMapPolicy3V18 {
         if self.data.input != *input.identity() || self.data.output != *output.identity() {
             return Err(KirOptimizationMapErrorV12::Identity);
         }
-        self.data.check_modules(
+        self.data.check_modules_admitted(
             input.module(),
             output.module(),
             input.canonical_bytes().len(),
             budget,
             FixedPolicy::Checked3,
             digest,
+            true,
         )
     }
     pub(crate) const fn neutral_data_v18(&self) -> &MapData<Identity18> {
@@ -85,7 +86,7 @@ impl CaptureV12 {
         roster: &LiveRosterV12,
         budget: &mut Budget<'_>,
     ) -> Result<(KirOptimizationMapPolicy3V18, usize)> {
-        self.finish_header_data(
+        self.finish_header_data_admitted(
             input.module(),
             output.module(),
             [*input.identity(), *output.identity()],
@@ -93,6 +94,7 @@ impl CaptureV12 {
             budget,
             FixedPolicy::Checked3,
             digest,
+            true,
         )
         .map(|(data, storage)| (KirOptimizationMapPolicy3V18 { data }, storage))
     }

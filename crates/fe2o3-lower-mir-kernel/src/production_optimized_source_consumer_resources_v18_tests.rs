@@ -34,26 +34,39 @@ fn strict_normalized_header_oracle_v18() -> usize {
 #[test]
 fn qualified_ranked_query_header_oracle_preserves_exact_first_storage_refusal() {
     let expected = size_of::<QualifiedSourceRankedIndexV18<'_, '_, '_, '_, '_, '_, '_, '_>>()
-        + size_of::<SourceOwnedResultV18<QualifiedSourceRankedIndexV18<'_, '_, '_, '_, '_, '_, '_, '_>>>()
+        + size_of::<
+            SourceOwnedResultV18<QualifiedSourceRankedIndexV18<'_, '_, '_, '_, '_, '_, '_, '_>>,
+        >()
         + size_of::<SourceOwnedResultV18<()>>()
         + size_of::<Result<SourceOwnedResultV18<()>, ArgumentResourceV1>>()
         + size_of::<&QualifiedSourceRankedDataV18<'_, '_, '_, '_>>()
         + size_of::<&fe2o3_pliron::ProductionRankedKernelV1>();
-    assert_eq!(qualified_source_ranked_query_headers_v18().unwrap(), expected);
+    assert_eq!(
+        qualified_source_ranked_query_headers_v18().unwrap(),
+        expected
+    );
     for one_short in [false, true] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(0);
         let mut budget = ArgumentBudgetV1::new(&mut work, expected - usize::from(one_short));
         let cleanup = normalized_node_cleanup_fixture_v18();
         {
             let ledger = CorrelationLedgerV18::new(&mut budget, &cleanup);
-            let reservation = ledger.with_budget(|budget|
-                budget.reserve_storage(qualified_source_ranked_query_headers_v18()?));
+            let reservation = ledger.with_budget(|budget| {
+                budget.reserve_storage(qualified_source_ranked_query_headers_v18()?)
+            });
             if one_short {
-                let Err(ArgumentResourceV1::Storage(error)) = reservation else { panic!("unpaid query header"); };
+                let Err(ArgumentResourceV1::Storage(error)) = reservation else {
+                    panic!("unpaid query header");
+                };
                 assert_eq!((error.actual(), error.limit()), (expected, expected - 1));
-                assert_eq!(ledger.failure.get(), Some(ArgumentResourceV1::Storage(error)));
-                assert_eq!(ledger.with_budget(|_| panic!("first refusal must stop the query")),
-                    Err::<(), _>(ArgumentResourceV1::Storage(error)));
+                assert_eq!(
+                    ledger.failure.get(),
+                    Some(ArgumentResourceV1::Storage(error))
+                );
+                assert_eq!(
+                    ledger.with_budget(|_| panic!("first refusal must stop the query")),
+                    Err::<(), _>(ArgumentResourceV1::Storage(error))
+                );
             } else {
                 reservation.unwrap();
                 assert_eq!(ledger.failure.get(), None);
@@ -70,29 +83,77 @@ fn normalized_boxed_array_wrapper_preserves_the_measured_legacy_layout() {
     use std::mem::{align_of, size_of};
     #[allow(dead_code)]
     enum LegacyShape {
-        Symbol { symbol: u32, scalar: ProductionSemanticScalarTypeV2 },
-        Constant { scalar: ProductionSemanticScalarTypeV2, bits: u64 },
-        Load { site: SemanticAccessSiteV1, scalar: ProductionSemanticScalarTypeV2 },
-        Unary { operation: ProductionSemanticUnaryOpV2, scalar: ProductionSemanticScalarTypeV2, operand: Box<Self> },
-        Binary { operation: ProductionSemanticBinaryOpV2, scalar: ProductionSemanticScalarTypeV2,
-            overflow: ProductionOverflowContractV2, lhs: Box<Self>, rhs: Box<Self> },
-        Compare { operation: ProductionSemanticComparisonV2, operand_scalar: ProductionSemanticScalarTypeV2,
-            lhs: Box<Self>, rhs: Box<Self> },
-        Select { scalar: ProductionSemanticScalarTypeV2, condition: Box<Self>, when_true: Box<Self>, when_false: Box<Self> },
-        Cast { kind: ProductionSemanticCastV2, source: ProductionSemanticScalarTypeV2,
-            target: ProductionSemanticScalarTypeV2, operand: Box<Self> },
+        Symbol {
+            symbol: u32,
+            scalar: ProductionSemanticScalarTypeV2,
+        },
+        Constant {
+            scalar: ProductionSemanticScalarTypeV2,
+            bits: u64,
+        },
+        Load {
+            site: SemanticAccessSiteV1,
+            scalar: ProductionSemanticScalarTypeV2,
+        },
+        Unary {
+            operation: ProductionSemanticUnaryOpV2,
+            scalar: ProductionSemanticScalarTypeV2,
+            operand: Box<Self>,
+        },
+        Binary {
+            operation: ProductionSemanticBinaryOpV2,
+            scalar: ProductionSemanticScalarTypeV2,
+            overflow: ProductionOverflowContractV2,
+            lhs: Box<Self>,
+            rhs: Box<Self>,
+        },
+        Compare {
+            operation: ProductionSemanticComparisonV2,
+            operand_scalar: ProductionSemanticScalarTypeV2,
+            lhs: Box<Self>,
+            rhs: Box<Self>,
+        },
+        Select {
+            scalar: ProductionSemanticScalarTypeV2,
+            condition: Box<Self>,
+            when_true: Box<Self>,
+            when_false: Box<Self>,
+        },
+        Cast {
+            kind: ProductionSemanticCastV2,
+            source: ProductionSemanticScalarTypeV2,
+            target: ProductionSemanticScalarTypeV2,
+            operand: Box<Self>,
+        },
     }
-    assert_eq!(size_of::<NormalizedScalarNodeV18>(), size_of::<Box<LegacyShape>>());
-    assert_eq!(align_of::<NormalizedScalarNodeV18>(), align_of::<Box<LegacyShape>>());
-    assert_eq!(size_of::<NormalizedScalarExpressionV1>(), size_of::<LegacyShape>());
-    assert_eq!(align_of::<NormalizedScalarExpressionV1>(), align_of::<LegacyShape>());
+    assert_eq!(
+        size_of::<NormalizedScalarNodeV18>(),
+        size_of::<Box<LegacyShape>>()
+    );
+    assert_eq!(
+        align_of::<NormalizedScalarNodeV18>(),
+        align_of::<Box<LegacyShape>>()
+    );
+    assert_eq!(
+        size_of::<NormalizedScalarExpressionV1>(),
+        size_of::<LegacyShape>()
+    );
+    assert_eq!(
+        align_of::<NormalizedScalarExpressionV1>(),
+        align_of::<LegacyShape>()
+    );
     let legacy = NormalizedScalarExpressionV1::Constant {
-        scalar: ProductionSemanticScalarTypeV2::Bool, bits: 1,
+        scalar: ProductionSemanticScalarTypeV2::Bool,
+        bits: 1,
     };
     let expected = format!("{legacy:?}");
     let boxed = NormalizedScalarNodeV18::legacy(legacy);
     assert_eq!(format!("{boxed:?}"), expected);
-    assert_eq!(boxed.clone(), boxed, "legacy clone remains the same expression algebra");
+    assert_eq!(
+        boxed.clone(),
+        boxed,
+        "legacy clone remains the same expression algebra"
+    );
 }
 
 #[test]
@@ -103,10 +164,16 @@ fn strict_normalized_header_one_short_refuses_before_node_or_allocation_work() {
     let cleanup = normalized_node_cleanup_fixture_v18();
     {
         let ledger = CorrelationLedgerV18::new(&mut budget, &cleanup);
-        let Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(error)))
-            = SourceTranslationChargeV18::new(&ledger, 0) else { panic!("header must be prepaid"); };
+        let Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(error))) =
+            SourceTranslationChargeV18::new(&ledger, 0)
+        else {
+            panic!("header must be prepaid");
+        };
         assert_eq!(error.actual(), headers);
-        assert_eq!(ledger.failure.get(), Some(ArgumentResourceV1::Storage(error)));
+        assert_eq!(
+            ledger.failure.get(),
+            Some(ArgumentResourceV1::Storage(error))
+        );
     }
     assert_eq!(budget.storage(), 0);
     assert_eq!(budget.peak_storage(), 0);
@@ -132,25 +199,45 @@ fn strict_normalized_node_prepays_exact_conversion_and_payload_storage() {
             charge.begin_normalized_tree().unwrap();
             charge.normalized_node().unwrap();
             let boxed = charge.boxed_normalized_node(NormalizedScalarExpressionV1::Constant {
-                scalar: ProductionSemanticScalarTypeV2::Bool, bits: 1,
+                scalar: ProductionSemanticScalarTypeV2::Bool,
+                bits: 1,
             });
             if one_short {
                 assert!(boxed.is_none());
-                let Some(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(error)))
-                    = charge.error.as_ref() else { panic!("payload must fail before allocation"); };
+                let Some(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(
+                    error,
+                ))) = charge.error.as_ref()
+                else {
+                    panic!("payload must fail before allocation");
+                };
                 assert_eq!(error.actual(), required);
-                assert_eq!(ledger.failure.get(), Some(ArgumentResourceV1::Storage(*error)));
+                assert_eq!(
+                    ledger.failure.get(),
+                    Some(ArgumentResourceV1::Storage(*error))
+                );
                 assert_eq!(charge.node_credits, 0);
                 assert!(charge.finish_normalized_pair().is_none());
             } else {
                 let boxed = boxed.unwrap();
-                assert!(matches!(boxed.as_ref(), NormalizedScalarExpressionV1::Constant { bits: 1, .. }));
-                assert_eq!(charge.node_credits, size_of::<NormalizedScalarExpressionV1>());
-                assert_eq!(ledger.with_budget(|budget| Ok(budget.storage())).unwrap(), required);
+                assert!(matches!(
+                    boxed.as_ref(),
+                    NormalizedScalarExpressionV1::Constant { bits: 1, .. }
+                ));
+                assert_eq!(
+                    charge.node_credits,
+                    size_of::<NormalizedScalarExpressionV1>()
+                );
+                assert_eq!(
+                    ledger.with_budget(|budget| Ok(budget.storage())).unwrap(),
+                    required
+                );
                 drop(boxed);
                 charge.finish_normalized_pair().unwrap();
                 assert_eq!(charge.node_credits, 0);
-                assert_eq!(ledger.with_budget(|budget| Ok(budget.storage())).unwrap(), FLOOR + headers);
+                assert_eq!(
+                    ledger.with_budget(|budget| Ok(budget.storage())).unwrap(),
+                    FLOOR + headers
+                );
             }
         }
         assert_eq!(budget.work(), 4);
@@ -175,20 +262,32 @@ fn strict_expected_and_actual_nodes_coexist_until_both_are_dropped() {
         let mut build = || {
             charge.begin_normalized_tree().unwrap();
             charge.normalized_node().unwrap();
-            charge.boxed_normalized_node(NormalizedScalarExpressionV1::Constant {
-                scalar: ProductionSemanticScalarTypeV2::Bool, bits: 0,
-            }).unwrap()
+            charge
+                .boxed_normalized_node(NormalizedScalarExpressionV1::Constant {
+                    scalar: ProductionSemanticScalarTypeV2::Bool,
+                    bits: 0,
+                })
+                .unwrap()
         };
         let expected = build();
         let actual = build();
         drop(build);
         assert_eq!(charge.node_credits, 2 * bytes);
-        assert_eq!(ledger.with_budget(|budget| Ok(budget.storage())).unwrap(), headers + 2 * bytes);
+        assert_eq!(
+            ledger.with_budget(|budget| Ok(budget.storage())).unwrap(),
+            headers + 2 * bytes
+        );
         drop(expected);
-        assert_eq!(ledger.with_budget(|budget| Ok(budget.storage())).unwrap(), headers + 2 * bytes);
+        assert_eq!(
+            ledger.with_budget(|budget| Ok(budget.storage())).unwrap(),
+            headers + 2 * bytes
+        );
         drop(actual);
         charge.finish_normalized_pair().unwrap();
-        assert_eq!(ledger.with_budget(|budget| Ok(budget.storage())).unwrap(), headers);
+        assert_eq!(
+            ledger.with_budget(|budget| Ok(budget.storage())).unwrap(),
+            headers
+        );
     }
     budget.release_storage(headers).unwrap();
     assert_eq!(budget.storage(), 0);
@@ -205,12 +304,20 @@ fn strict_expanded_node_limit_cannot_be_reset_after_refusal() {
         let ledger = CorrelationLedgerV18::new(&mut budget, &cleanup);
         let mut charge = SourceTranslationChargeV18::new(&ledger, nodes + 1).unwrap();
         charge.begin_normalized_tree().unwrap();
-        for _ in 0..nodes { charge.normalized_node().unwrap(); }
+        for _ in 0..nodes {
+            charge.normalized_node().unwrap();
+        }
         assert!(charge.normalized_node().is_none());
-        assert!(matches!(charge.error, Some(ProductionSourceOwnedViewErrorV18::Binding(_))));
+        assert!(matches!(
+            charge.error,
+            Some(ProductionSourceOwnedViewErrorV18::Binding(_))
+        ));
         assert!(charge.begin_normalized_tree().is_none());
         assert!(charge.charge_many(1).is_none());
-        assert!(ledger.failure.get().is_none(), "a node limit is not a fabricated work denial");
+        assert!(
+            ledger.failure.get().is_none(),
+            "a node limit is not a fabricated work denial"
+        );
     }
     assert_eq!(budget.work(), nodes);
     assert_eq!(budget.failed_storage(), None);
@@ -219,21 +326,29 @@ fn strict_expanded_node_limit_cannot_be_reset_after_refusal() {
 struct StrictConstantLeavesV18;
 
 impl SemanticExpressionLeavesV18 for StrictConstantLeavesV18 {
-    fn symbol(&self, _: u32, _: ProductionSemanticScalarTypeV2,
-        _: &mut dyn CorrelationChargeV18) -> Option<NormalizedScalarExpressionV1>
-    {
+    fn symbol(
+        &self,
+        _: u32,
+        _: ProductionSemanticScalarTypeV2,
+        _: &mut dyn CorrelationChargeV18,
+    ) -> Option<NormalizedScalarExpressionV1> {
         panic!("strict normalization leaf panic")
     }
 
-    fn load(&self, _: &fe2o3_pliron::ProductionSemanticLoadV2,
-        _: &mut dyn CorrelationChargeV18) -> Option<NormalizedScalarExpressionV1>
-    {
+    fn load(
+        &self,
+        _: &fe2o3_pliron::ProductionSemanticLoadV2,
+        _: &mut dyn CorrelationChargeV18,
+    ) -> Option<NormalizedScalarExpressionV1> {
         None
     }
 }
 
 fn strict_binary_expression_v18(panic_rhs: bool) -> ProductionSemanticExpressionV2 {
-    let scalar = ProductionSemanticScalarTypeV2::Integer { signed: false, bits: 32 };
+    let scalar = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 32,
+    };
     ProductionSemanticExpressionV2::Binary {
         operation: ProductionSemanticBinaryOpV2::Add,
         scalar,
@@ -262,28 +377,54 @@ fn strict_real_normalization_prepays_each_child_without_a_maximum_tree_reservati
             let ledger = CorrelationLedgerV18::new(&mut budget, &cleanup);
             let mut charge = SourceTranslationChargeV18::new(&ledger, 12).unwrap();
             charge.begin_normalized_tree().unwrap();
-            let normalized = normalize_semantic_expression_v18(&expression, &StrictConstantLeavesV18, 0, &mut charge);
-            assert_eq!(charge.remaining_nodes, Some(fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2 - 3));
+            let normalized = normalize_semantic_expression_v18(
+                &expression,
+                &StrictConstantLeavesV18,
+                0,
+                &mut charge,
+            );
+            assert_eq!(
+                charge.remaining_nodes,
+                Some(fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2 - 3)
+            );
             if short {
                 assert!(normalized.is_none());
                 assert_eq!(charge.node_credits, payload / 2);
-                let Some(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(error)))
-                    = charge.error.as_ref() else { panic!("exact second child allocation must refuse"); };
+                let Some(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(
+                    error,
+                ))) = charge.error.as_ref()
+                else {
+                    panic!("exact second child allocation must refuse");
+                };
                 assert_eq!(error.actual(), headers + payload);
                 assert!(charge.finish_normalized_pair().is_none());
             } else {
                 let normalized = normalized.unwrap();
-                let NormalizedScalarExpressionV1::Binary { lhs, rhs, .. } = &normalized else { panic!(); };
-                assert!(matches!(lhs.as_ref(), NormalizedScalarExpressionV1::Constant { bits: 7, .. }));
-                assert!(matches!(rhs.as_ref(), NormalizedScalarExpressionV1::Constant { bits: 9, .. }));
+                let NormalizedScalarExpressionV1::Binary { lhs, rhs, .. } = &normalized else {
+                    panic!();
+                };
+                assert!(matches!(
+                    lhs.as_ref(),
+                    NormalizedScalarExpressionV1::Constant { bits: 7, .. }
+                ));
+                assert!(matches!(
+                    rhs.as_ref(),
+                    NormalizedScalarExpressionV1::Constant { bits: 9, .. }
+                ));
                 assert_eq!(charge.node_credits, payload);
                 drop(normalized);
                 charge.finish_normalized_pair().unwrap();
             }
         }
         assert_eq!(budget.work(), 12);
-        assert_eq!(budget.peak_storage(), headers + if short { payload / 2 } else { payload });
-        assert_eq!(budget.storage(), headers + if short { payload / 2 } else { 0 });
+        assert_eq!(
+            budget.peak_storage(),
+            headers + if short { payload / 2 } else { payload }
+        );
+        assert_eq!(
+            budget.storage(),
+            headers + if short { payload / 2 } else { 0 }
+        );
         assert_eq!(budget.failed_storage(), short.then_some(headers + payload));
     }
 }
@@ -303,7 +444,12 @@ fn strict_partial_tree_unwind_drops_before_eligible_scope_refund() {
             let ledger = CorrelationLedgerV18::new(budget, &cleanup);
             let mut charge = SourceTranslationChargeV18::new(&ledger, 9)?;
             charge.begin_normalized_tree().unwrap();
-            let _tree = normalize_semantic_expression_v18(&expression, &StrictConstantLeavesV18, 0, &mut charge);
+            let _tree = normalize_semantic_expression_v18(
+                &expression,
+                &StrictConstantLeavesV18,
+                0,
+                &mut charge,
+            );
             Ok::<_, ProductionSourceOwnedViewErrorV18>(())
         })
     }));
@@ -324,18 +470,28 @@ fn strict_shared_dag_function_v18() -> Function {
     for index in 1..=2 {
         block.operations.push(Operation::effect_free(
             ValueDef::new(ValueId(index), Type::Scalar(ScalarType::U32)),
-            OperationKind::Binary { op: BinaryOp::BitAnd, lhs: ValueId(index - 1), rhs: ValueId(index - 1) },
+            OperationKind::Binary {
+                op: BinaryOp::BitAnd,
+                lhs: ValueId(index - 1),
+                rhs: ValueId(index - 1),
+            },
         ));
     }
     block.terminator = Some(Terminator::Return { values: vec![] });
-    Function::kernel_entry("strict_shared_dag", Signature::new(vec![], vec![]), vec![], vec![block])
+    Function::kernel_entry(
+        "strict_shared_dag",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    )
 }
 
 #[test]
 fn strict_shared_dag_expansion_pays_all_seven_nodes_and_six_distinct_children() {
     let function = strict_shared_dag_function_v18();
     let mut setup = UnsupportedIndexCorrelationBudgetV1 { remaining: 100_000 };
-    let kir = build_kir_correlation_index(function.body.as_ref().unwrap(), 100, &mut setup).unwrap();
+    let kir =
+        build_kir_correlation_index(function.body.as_ref().unwrap(), 100, &mut setup).unwrap();
     let cleanup = normalized_node_cleanup_fixture_v18();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(100_000);
     let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
@@ -344,22 +500,47 @@ fn strict_shared_dag_expansion_pays_all_seven_nodes_and_six_distinct_children() 
         let mut charge = SourceTranslationChargeV18::new(&ledger, 100_000).unwrap();
         charge.begin_normalized_tree().unwrap();
         let mut visiting = SourceScalarVisitingV18 {
-            rows: [None; MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1], length: 0,
+            rows: [None; MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1],
+            length: 0,
         };
-        let normalized = native_helper_value_expansion_v1::with_source_value_expansion_v18(&ledger, |helpers| {
-            normalize_kir_expression_with_visiting_v18(&function, &kir, &BTreeMap::new(),
-                ValueId(2), 0, &mut visiting, &mut charge, helpers)
+        let normalized =
+            native_helper_value_expansion_v1::with_source_value_expansion_v18(&ledger, |helpers| {
+                normalize_kir_expression_with_visiting_v18(
+                    &function,
+                    &kir,
+                    &BTreeMap::new(),
+                    ValueId(2),
+                    0,
+                    &mut visiting,
+                    &mut charge,
+                    helpers,
+                )
                 .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)
-        }).unwrap();
+            })
+            .unwrap();
         assert_eq!(visiting.length, 0);
-        assert_eq!(charge.remaining_nodes, Some(fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2 - 7));
-        assert_eq!(charge.node_credits, 6 * size_of::<NormalizedScalarExpressionV1>());
-        let NormalizedScalarExpressionV1::Binary { lhs, rhs, .. } = &normalized else { panic!(); };
+        assert_eq!(
+            charge.remaining_nodes,
+            Some(fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2 - 7)
+        );
+        assert_eq!(
+            charge.node_credits,
+            6 * size_of::<NormalizedScalarExpressionV1>()
+        );
+        let NormalizedScalarExpressionV1::Binary { lhs, rhs, .. } = &normalized else {
+            panic!();
+        };
         assert_eq!(lhs, rhs);
-        assert!(!std::ptr::eq(lhs.as_ref(), rhs.as_ref()), "tree children cannot share allocation credits");
+        assert!(
+            !std::ptr::eq(lhs.as_ref(), rhs.as_ref()),
+            "tree children cannot share allocation credits"
+        );
         drop(normalized);
         charge.finish_normalized_pair().unwrap();
-        assert_eq!(ledger.with_budget(|budget| Ok(budget.storage())).unwrap(), strict_normalized_header_oracle_v18());
+        assert_eq!(
+            ledger.with_budget(|budget| Ok(budget.storage())).unwrap(),
+            strict_normalized_header_oracle_v18()
+        );
     }
     assert_eq!(budget.failed_storage(), None);
 }
@@ -367,12 +548,18 @@ fn strict_shared_dag_expansion_pays_all_seven_nodes_and_six_distinct_children() 
 #[test]
 fn source_helper_entrance_refuses_before_legacy_argument_clone_or_template_expansion() {
     let mut function = strict_shared_dag_function_v18();
-    function.body.as_mut().unwrap().blocks[0].operations.push(Operation::effect_free(
-        ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U32)),
-        OperationKind::Call { callee: FunctionId::new("unadmitted_helper"), arguments: vec![ValueId(2)] },
-    ));
+    function.body.as_mut().unwrap().blocks[0]
+        .operations
+        .push(Operation::effect_free(
+            ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U32)),
+            OperationKind::Call {
+                callee: FunctionId::new("unadmitted_helper"),
+                arguments: vec![ValueId(2)],
+            },
+        ));
     let mut setup = UnsupportedIndexCorrelationBudgetV1 { remaining: 100_000 };
-    let kir = build_kir_correlation_index(function.body.as_ref().unwrap(), 100, &mut setup).unwrap();
+    let kir =
+        build_kir_correlation_index(function.body.as_ref().unwrap(), 100, &mut setup).unwrap();
     let cleanup = normalized_node_cleanup_fixture_v18();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(0);
     let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
@@ -380,21 +567,37 @@ fn source_helper_entrance_refuses_before_legacy_argument_clone_or_template_expan
         let ledger = CorrelationLedgerV18::new(&mut budget, &cleanup);
         let mut charge = SourceTranslationChargeV18::new(&ledger, 0).unwrap();
         let mut visiting = SourceScalarVisitingV18 {
-            rows: [None; MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1], length: 0,
+            rows: [None; MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1],
+            length: 0,
         };
         native_helper_value_expansion_v1::with_source_value_expansion_v18(&ledger, |helpers| {
-            let before = ledger.with_budget(|budget| Ok((budget.work(), budget.storage()))).unwrap();
-            let result = helpers.call(&function, &kir, &BTreeMap::new(),
+            let before = ledger
+                .with_budget(|budget| Ok((budget.work(), budget.storage())))
+                .unwrap();
+            let result = helpers.call(
+                &function,
+                &kir,
+                &BTreeMap::new(),
                 FunctionOperationLocation::new(BlockId(0), 3),
                 &function.body.as_ref().unwrap().blocks[0].operations[3],
-                &[ValueId(2)], 0, &mut visiting, &mut charge);
+                &[ValueId(2)],
+                0,
+                &mut visiting,
+                &mut charge,
+            );
             assert!(result.is_none());
-            assert_eq!(ledger.with_budget(|budget| Ok((budget.work(), budget.storage()))).unwrap(), before);
+            assert_eq!(
+                ledger
+                    .with_budget(|budget| Ok((budget.work(), budget.storage())))
+                    .unwrap(),
+                before
+            );
             assert_eq!(visiting.length, 0);
             assert_eq!(charge.node_credits, 0);
             assert!(charge.error.is_none());
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
     assert_eq!(budget.work(), 0);
     assert_eq!(budget.storage(), strict_normalized_header_oracle_v18());
@@ -407,8 +610,11 @@ fn qualified_solver_keys_preserve_original_ordinals_and_separate_invocations() {
     let base = ProductionRankedAccessSourceV1::new(3, Some(1), 5, 4, 7).with_output_extent(extent);
     let mut rows = [
         ProductionSourceRankedAccessV18::new(0, SemanticFunctionIdV1::from_index(2), base),
-        ProductionSourceRankedAccessV18::new(0, SemanticFunctionIdV1::from_index(2),
-            ProductionRankedAccessSourceV1::new(3, Some(1), 9, 4, 8)),
+        ProductionSourceRankedAccessV18::new(
+            0,
+            SemanticFunctionIdV1::from_index(2),
+            ProductionRankedAccessSourceV1::new(3, Some(1), 9, 4, 8),
+        ),
         ProductionSourceRankedAccessV18::new(1, SemanticFunctionIdV1::from_index(2), base),
     ];
     let mut work = CanonicalKernelIrWorkBudgetV1::new(24);
@@ -426,14 +632,20 @@ fn qualified_solver_keys_preserve_original_ordinals_and_separate_invocations() {
     assert_eq!(rows[1].solver.unwrap().ordinal, 1);
     assert_eq!(rows[2].solver.unwrap().block, 1);
     assert_eq!(rows[2].solver.unwrap().ordinal, 0);
-    assert_eq!((rows[0].original().ordinal, rows[1].original().ordinal), (5, 9));
+    assert_eq!(
+        (rows[0].original().ordinal, rows[1].original().ordinal),
+        (5, 9)
+    );
     assert_eq!(rows[0].original().instance, 0);
     assert_eq!(rows[2].original().instance, 1);
     let reader = RankedIndexSourcesV18::Qualified(&rows);
     let decoded = reader.source(0).unwrap();
     assert_eq!(decoded.output_extent(), Some(extent));
     assert_eq!((decoded.ranked_block(), decoded.ranked_operation()), (4, 7));
-    assert_eq!(rows[0].projected, base, "decoding cannot rewrite original source or extent metadata");
+    assert_eq!(
+        rows[0].projected, base,
+        "decoding cannot rewrite original source or extent metadata"
+    );
     assert!(reader.source(3).is_none());
     assert_eq!(budget.work(), 24);
     assert_eq!(budget.storage(), 0);
@@ -443,21 +655,28 @@ fn qualified_solver_keys_preserve_original_ordinals_and_separate_invocations() {
 
 #[test]
 fn qualified_key_work_refusal_and_duplicates_cannot_assign_a_fresh_site() {
-    let row = ProductionSourceRankedAccessV18::new(0, SemanticFunctionIdV1::from_index(0),
-        ProductionRankedAccessSourceV1::new(0, None, 0, 0, 0));
+    let row = ProductionSourceRankedAccessV18::new(
+        0,
+        SemanticFunctionIdV1::from_index(0),
+        ProductionRankedAccessSourceV1::new(0, None, 0, 0, 0),
+    );
     let site = row.original();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(7);
     let mut budget = ArgumentBudgetV1::new(&mut work, 0);
-    assert!(matches!(source_ranked_key_after_v18(None, site, &mut budget),
+    assert!(
+        matches!(source_ranked_key_after_v18(None, site, &mut budget),
         Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(error)))
-            if error.actual() == 8));
+            if error.actual() == 8)
+    );
     assert_eq!(budget.work(), 0);
     assert!(row.solver.is_none());
     let mut work = CanonicalKernelIrWorkBudgetV1::new(16);
     let mut budget = ArgumentBudgetV1::new(&mut work, 0);
     let key = source_ranked_key_after_v18(None, site, &mut budget).unwrap();
-    assert!(matches!(source_ranked_key_after_v18(Some((site, key)), site, &mut budget),
-        Err(ProductionSourceOwnedViewErrorV18::Binding(_))));
+    assert!(matches!(
+        source_ranked_key_after_v18(Some((site, key)), site, &mut budget),
+        Err(ProductionSourceOwnedViewErrorV18::Binding(_))
+    ));
     assert_eq!(budget.work(), 16);
     assert!(row.solver.is_none());
 }
@@ -534,79 +753,149 @@ fn legacy_contract_collection_preserves_its_zero_charge_path() {
 
 #[test]
 fn actual_output_allocation_scratch_uses_dense_rows_and_exact_incidence_capacity() {
-    run_production_optimized_consumer_v18(two_descriptor_reads_at_one_source_site_v18, |original, optimized, budget| {
-        use std::mem::size_of;
-        let floor = budget.storage();
-        let inventory = optimized.output_inventory(budget)?;
-        let function = optimized_source_root_function_v18(original, optimized, 0, budget)?;
-        let definitions = function.definitions.end - function.definitions.start;
-        let incidences = (function.uses.end - function.uses.start)
-            + (function.edge_arguments.end - function.edge_arguments.start) + 1;
-        let mut scratch = SourceAllocationScratchV18::build(inventory, function.coordinate, budget)?;
-        assert_eq!(scratch.marks.len(), definitions);
-        assert_eq!(scratch.pending_limit, incidences);
-        assert_eq!(scratch.pending.capacity(), incidences);
-        assert_eq!(scratch.marks.capacity(), definitions);
-        assert_eq!(budget.storage() - floor,
-            size_of::<SourceAllocationScratchV18>()
-                + size_of::<SourceOwnedResultV18<SourceAllocationScratchV18>>()
-                + size_of::<Vec<usize>>() + size_of::<std::ops::Range<usize>>()
-                + 3 * size_of::<usize>()
-                + definitions * size_of::<usize>() + incidences * size_of::<ValueId>());
-        budget.reserve_storage(
-            size_of::<CorrelationLedgerV18<'_, '_, '_>>()
-                + size_of::<SourceCorrelationChargeV18<'_, '_, '_, '_>>()
-                + 2 * size_of::<InventoryCorrelationV18<'_, '_, '_, '_, '_, '_>>()
-                + size_of::<Gfx942InlineScalarCorrespondenceV30<'_>>()
-                + size_of::<AllocationWalkScratchV18<'_>>()
-        )?;
-        {
-            let ledger = CorrelationLedgerV18::new(budget, original.source.cleanup);
-            let inline = Gfx942InlineScalarCorrespondenceV30::empty();
-            let graph = InventoryCorrelationV18 {
-                origins: None, inventory, function: function.coordinate,
-                ledger: &ledger, inline_scalar: &inline, scalar_source: None,
-            };
-            let foreign = InventoryCorrelationV18 {
-                origins: None, inventory: original.inventory, function: function.coordinate,
-                ledger: &ledger, inline_scalar: &inline, scalar_source: None,
-            };
-            let mut charge = SourceCorrelationChargeV18 {
-                ledger: &ledger,
-                finite: UnsupportedIndexCorrelationBudgetV1 { remaining: 1_000_000 },
-                finite_denied: false,
-            };
-            let body = function.function.body.as_ref().unwrap();
-            let mut tested = 0usize;
-            for (parameter, value) in body.parameters.iter().enumerate() {
-                if !matches!(function.function.signature.parameters[parameter], Type::Pointer(_) | Type::Slice(_)) {
-                    continue;
-                }
-                assert!(scratch.begin(*value, &foreign, &mut charge).is_none());
-                for _ in 0..2 {
-                    scratch.begin(*value, &graph, &mut charge).unwrap();
-                    assert_eq!(external_allocation_parameter_core_v18(function.function, &graph,
-                        &mut AllocationWalkScratchV18::Source(&mut scratch), &mut charge), Some(parameter as u32));
-                }
-                tested += 1;
-            }
-            assert!(tested > 0, "actual output root must have pointer-bearing arguments");
-            scratch.begin(ValueId(u32::MAX), &graph, &mut charge).unwrap();
-            assert!(external_allocation_parameter_core_v18(function.function, &graph,
-                &mut AllocationWalkScratchV18::Source(&mut scratch), &mut charge).is_none());
-            assert_eq!(scratch.marks.len(), definitions, "sparse hostile IDs cannot resize marks");
+    run_production_optimized_consumer_v18(
+        two_descriptor_reads_at_one_source_site_v18,
+        |original, optimized, budget| {
+            use std::mem::size_of;
+            let floor = budget.storage();
+            let inventory = optimized.output_inventory(budget)?;
+            let function = optimized_source_root_function_v18(original, optimized, 0, budget)?;
+            let definitions = function.definitions.end - function.definitions.start;
+            let incidences = (function.uses.end - function.uses.start)
+                + (function.edge_arguments.end - function.edge_arguments.start)
+                + 1;
+            let mut scratch =
+                SourceAllocationScratchV18::build(inventory, function.coordinate, budget)?;
+            assert_eq!(scratch.marks.len(), definitions);
+            assert_eq!(scratch.pending_limit, incidences);
             assert_eq!(scratch.pending.capacity(), incidences);
-            assert!(ledger.failure.get().is_none());
-        }
-        drop(scratch);
-        budget.release_storage(budget.storage() - floor)?;
-        Ok(())
-    });
+            assert_eq!(scratch.marks.capacity(), definitions);
+            assert_eq!(
+                budget.storage() - floor,
+                size_of::<SourceAllocationScratchV18>()
+                    + size_of::<SourceOwnedResultV18<SourceAllocationScratchV18>>()
+                    + size_of::<Vec<usize>>()
+                    + size_of::<std::ops::Range<usize>>()
+                    + 3 * size_of::<usize>()
+                    + definitions * size_of::<usize>()
+                    + incidences * size_of::<ValueId>()
+            );
+            budget.reserve_storage(
+                size_of::<CorrelationLedgerV18<'_, '_, '_>>()
+                    + size_of::<SourceCorrelationChargeV18<'_, '_, '_, '_>>()
+                    + 2 * size_of::<InventoryCorrelationV18<'_, '_, '_, '_, '_, '_>>()
+                    + size_of::<Gfx942InlineScalarCorrespondenceV30<'_>>()
+                    + size_of::<AllocationWalkScratchV18<'_>>(),
+            )?;
+            {
+                let ledger = CorrelationLedgerV18::new(budget, original.source.cleanup);
+                let inline = Gfx942InlineScalarCorrespondenceV30::empty();
+                let graph = InventoryCorrelationV18 {
+                    origins: None,
+                    inventory,
+                    function: function.coordinate,
+                    ledger: &ledger,
+                    inline_scalar: &inline,
+                    scalar_source: None,
+                };
+                let foreign = InventoryCorrelationV18 {
+                    origins: None,
+                    inventory: original.inventory,
+                    function: function.coordinate,
+                    ledger: &ledger,
+                    inline_scalar: &inline,
+                    scalar_source: None,
+                };
+                let mut charge = SourceCorrelationChargeV18 {
+                    ledger: &ledger,
+                    finite: UnsupportedIndexCorrelationBudgetV1 {
+                        remaining: 1_000_000,
+                    },
+                    finite_denied: false,
+                };
+                let body = function.function.body.as_ref().unwrap();
+                let mut tested = 0usize;
+                for (parameter, value) in body.parameters.iter().enumerate() {
+                    if !matches!(
+                        function.function.signature.parameters[parameter],
+                        Type::Pointer(_) | Type::Slice(_)
+                    ) {
+                        continue;
+                    }
+                    assert!(scratch.begin(*value, &foreign, &mut charge).is_none());
+                    for _ in 0..2 {
+                        scratch.begin(*value, &graph, &mut charge).unwrap();
+                        assert_eq!(
+                            external_allocation_parameter_core_v18(
+                                function.function,
+                                &graph,
+                                &mut AllocationWalkScratchV18::Source(&mut scratch),
+                                &mut charge
+                            ),
+                            Some(parameter as u32)
+                        );
+                    }
+                    tested += 1;
+                }
+                assert!(
+                    tested > 0,
+                    "actual output root must have pointer-bearing arguments"
+                );
+                scratch
+                    .begin(ValueId(u32::MAX), &graph, &mut charge)
+                    .unwrap();
+                assert!(
+                    external_allocation_parameter_core_v18(
+                        function.function,
+                        &graph,
+                        &mut AllocationWalkScratchV18::Source(&mut scratch),
+                        &mut charge
+                    )
+                    .is_none()
+                );
+                assert_eq!(
+                    scratch.marks.len(),
+                    definitions,
+                    "sparse hostile IDs cannot resize marks"
+                );
+                assert_eq!(scratch.pending.capacity(), incidences);
+                assert!(ledger.failure.get().is_none());
+            }
+            drop(scratch);
+            budget.release_storage(budget.storage() - floor)?;
+            Ok(())
+        },
+    );
 }
 
-fn optimized_analysis_header_oracle_v18<T, E>() -> usize {
-    use std::{mem::size_of, panic::AssertUnwindSafe};
+fn optimized_analysis_header_oracle_v18<T, E, F>(_: &F) -> usize {
+    use std::{
+        mem::{align_of, size_of},
+        panic::AssertUnwindSafe,
+    };
     type Payload = Box<dyn std::any::Any + Send>;
+    type EntryCapture<'a, F> = (
+        &'a ProductionSourceCorrespondenceV18<'a>,
+        &'a ProductionOptimizedSourceCorrespondenceV18<'a>,
+        F,
+    );
+    type EntryCatch<'a, 'work, F> = (
+        EntryCapture<'a, F>,
+        &'a mut ArgumentBudgetV1<'work>,
+        &'a std::cell::Cell<usize>,
+    );
+    type Entry<'a, F> = (
+        &'a fe2o3_kernel_analysis::CanonicalKirInventoryV18<'a>,
+        &'a fe2o3_kernel_analysis::CanonicalKirInventoryV18<'a>,
+        usize,
+        F,
+    );
+    type EntryResult<'a, F> = Result<Entry<'a, F>, ProductionSourceOwnedViewErrorV18>;
+    type Invoke<'a, 'work, F> = (
+        F,
+        &'a mut ProductionOptimizedSourceAnalysisV18<'a>,
+        &'a mut ArgumentBudgetV1<'work>,
+    );
     let disposal = size_of::<[Option<Payload>; 2]>()
         + size_of::<AssertUnwindSafe<[Option<Payload>; 2]>>()
         + 2 * size_of::<Payload>()
@@ -615,12 +904,30 @@ fn optimized_analysis_header_oracle_v18<T, E>() -> usize {
         + size_of::<std::ops::Range<usize>>()
         + size_of::<usize>()
         + size_of::<bool>();
-    size_of::<ProductionOptimizedSourceAnalysisV18<'_>>()
+    2 * size_of::<EntryCapture<'_, F>>()
+        + 2 * align_of::<EntryCapture<'_, F>>()
+        + size_of::<EntryCatch<'_, '_, F>>()
+        + size_of::<AssertUnwindSafe<EntryCatch<'_, '_, F>>>()
+        + size_of::<Entry<'_, F>>()
+        + 2 * size_of::<EntryResult<'_, F>>()
+        + size_of::<std::thread::Result<EntryResult<'_, F>>>()
+        + size_of::<AssertUnwindSafe<Entry<'_, F>>>()
+        + size_of::<std::thread::Result<()>>()
+        + size_of::<std::cell::Cell<usize>>()
+        + 2 * size_of::<usize>()
+        + size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>()
+        + size_of::<SourceOwnedResultV18<()>>()
+        + size_of::<Invoke<'_, '_, F>>()
+        + size_of::<AssertUnwindSafe<Invoke<'_, '_, F>>>()
+        + size_of::<ProductionOptimizedSourceAnalysisV18<'_>>()
         + size_of::<std::thread::Result<Result<T, E>>>()
         + size_of::<Result<T, E>>()
         + size_of::<AssertUnwindSafe<Result<T, E>>>()
         + disposal
 }
+
+include!("production_optimized_source_analysis_callback_v18_tests.rs");
+include!("production_optimized_source_entry_callbacks_v18_tests.rs");
 
 #[test]
 fn retained_optimizer_transfer_is_one_atomic_exact_or_one_short_reservation() {
@@ -729,18 +1036,24 @@ fn independent_analysis_header_oracle_matches_coexisting_source_and_output_scope
         folding_source_owner_v18,
         |original, optimized, budget| {
             let floor = budget.storage();
-            let expected =
-                optimized_analysis_header_oracle_v18::<(), ProductionSourceOwnedViewErrorV18>();
-            original.with_optimized_analysis_v18(optimized, budget, |analyses, budget| {
-                assert_eq!(budget.storage() - floor, expected);
-                assert_eq!(analyses.storage, expected);
-                assert_eq!(analyses.floor, floor + expected);
+            let expected = std::cell::Cell::new(0);
+            let consume = |analyses: &mut ProductionOptimizedSourceAnalysisV18<'_>,
+                           budget: &mut ArgumentBudgetV1<'_>| {
+                assert_eq!(budget.storage() - floor, expected.get());
+                assert_eq!(analyses.storage, expected.get());
+                assert_eq!(analyses.floor, floor + expected.get());
                 assert!(analyses.input_sparse.is_none() && analyses.sparse.is_none());
                 assert!(analyses.input_effects.is_none() && analyses.output_effects.is_none());
                 assert!(analyses.input_memory.is_none() && analyses.output_memory.is_none());
                 assert!(!std::ptr::eq(analyses.input, analyses.output));
                 Ok::<_, ProductionSourceOwnedViewErrorV18>(())
-            })?;
+            };
+            expected.set(optimized_analysis_header_oracle_v18::<
+                (),
+                ProductionSourceOwnedViewErrorV18,
+                _,
+            >(&consume));
+            original.with_optimized_analysis_v18(optimized, budget, consume)?;
             assert_eq!(budget.storage(), floor);
             Ok(())
         },
@@ -757,15 +1070,19 @@ fn independent_analysis_header_minus_one_records_exact_first_refusal() {
     let result = prepared.with_source_consumer_v18(&mut budget, |source, budget| {
         let attempted =
             source.with_checked_optimization_v18(budget, |original, optimized, budget| {
-                let expected =
-                    optimized_analysis_header_oracle_v18::<(), ProductionSourceOwnedViewErrorV18>();
+                let consume = |_: &mut ProductionOptimizedSourceAnalysisV18<'_>,
+                               _: &mut ArgumentBudgetV1<'_>|
+                 -> SourceOwnedResultV18<()> {
+                    panic!("header minus one admitted")
+                };
+                let expected = optimized_analysis_header_oracle_v18::<
+                    (),
+                    ProductionSourceOwnedViewErrorV18,
+                    _,
+                >(&consume);
                 let filler = MODULE_LIMIT - budget.storage() - expected + 1;
                 budget.reserve_storage(filler)?;
-                let denied = original.with_optimized_analysis_v18(
-                    optimized,
-                    budget,
-                    |_, _| -> SourceOwnedResultV18<()> { panic!("header minus one admitted") },
-                );
+                let denied = original.with_optimized_analysis_v18(optimized, budget, consume);
                 let Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(
                     error,
                 ))) = denied
