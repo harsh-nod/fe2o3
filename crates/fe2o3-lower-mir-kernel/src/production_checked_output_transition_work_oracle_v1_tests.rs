@@ -124,7 +124,7 @@ fn representative(parents: &BTreeMap<ValueId, ValueId>, mut value: ValueId) -> V
 
 // Independent equality saturation over the actual edge payloads. There is no
 // scalar folding in these fixture selectors. Policy6 precedes private-cell
-// promotion, so these actual endpoints have no phi parameters. The separate
+// promotion, so these actual endpoints have no non-entry phi parameters. The separate
 // synthetic control below still checks dependency-sensitive phi ordering.
 // Literal descendant aliases are counted separately from this phi census.
 fn phi_rounds(body: &FunctionBody) -> usize {
@@ -277,7 +277,14 @@ fn literal_alias_rounds(module: &Module, rows: Candidate<'_>) -> Result<i64, &'s
         .body
         .as_ref()
         .ok_or("fixture declaration")?;
-    if body.blocks.iter().any(|block| !block.parameters.is_empty()) {
+    // Initial entry values have no predecessor-proven phi fact. The genuine
+    // transition solver also excludes the first block from phi aliases.
+    if body
+        .blocks
+        .iter()
+        .skip(1)
+        .any(|block| !block.parameters.is_empty())
+    {
         return Err("fixture phi dependency");
     }
     let literals: BTreeMap<_, _> = body
@@ -613,6 +620,25 @@ fn transition_cache_fixture_literal_alias_rounds_are_exact_and_refuse_other_depe
     module.functions[0].body.as_mut().unwrap().blocks[0]
         .parameters
         .push(ValueDef::new(ValueId(2), Type::Scalar(ScalarType::U32)));
+    assert_eq!(
+        literal_alias_rounds(&module, candidate(&definitions, &outputs)),
+        Ok(2),
+        "initial entry parameters do not add a phi round"
+    );
+    outputs[1] = Output {
+        output: definition(1),
+        kind: Descendant::Retained,
+    };
+    assert_eq!(
+        literal_alias_rounds(&module, candidate(&definitions, &outputs)),
+        Ok(1),
+        "initial entry parameters do not require any merge sweep"
+    );
+    let mut phi = BasicBlock::new(BlockId(1));
+    phi.parameters
+        .push(ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U32)));
+    phi.terminator = Some(Terminator::Return { values: vec![] });
+    module.functions[0].body.as_mut().unwrap().blocks.push(phi);
     assert_eq!(
         literal_alias_rounds(&module, candidate(&definitions, &outputs)),
         Err("fixture phi dependency")

@@ -37,14 +37,15 @@ fn descriptor_failure_tail_run_v1766(
                     .scoped_memory_anchors
                     .as_ref()
                     .unwrap();
-                let mut expected = Vec::new();
+                let mut diagnostics = Vec::new();
+                let mut values = Vec::new();
                 for (anchor, row) in anchors.rows.iter().enumerate() {
                     let ScopedMemoryAnchorKindV29::FailureRead { event, local } = row.kind else {
                         continue;
                     };
                     let source_event = &occurrences.events()[event];
                     let frame = row.source.unwrap();
-                    let role = ExecutionOperandV29::AssertMessage(expected.len() as u32);
+                    let role = ExecutionOperandV29::AssertMessage(diagnostics.len() as u32);
                     assert_eq!(
                         frame.site,
                         execution_site_v29(SemanticBlockIdV1::from_index(0), None)
@@ -62,9 +63,33 @@ fn descriptor_failure_tail_run_v1766(
                         panic!("actual descriptor diagnostic operand");
                     };
                     assert_eq!(place.local().index(), local);
-                    expected.push(anchor);
+                    assert!(place.projections().is_empty());
+                    assert!(source_event.is_promoted());
+                    let Some(fe2o3_mir_model::SsaResolvedEventV1::Use { variable, value }) =
+                        source_event.resolved()
+                    else {
+                        panic!("the original diagnostic must resolve to its SSA value");
+                    };
+                    assert_eq!(variable.get(), local);
+                    let archive = root.sidecars.rows[0]
+                        .execution_observation
+                        .as_ref()
+                        .unwrap();
+                    let Some(SemanticValueBindingV1::Value { id, ty }) =
+                        archive.bindings.get(&value)
+                    else {
+                        panic!("the diagnostic must retain its emitted scalar value");
+                    };
+                    assert_eq!(*ty, Type::Scalar(ScalarType::U64));
+                    assert!(!values.contains(id));
+                    assert!(root.source_slots.slots.iter().all(|slot| {
+                        slot.instance.index() != 0
+                            || slot.origin.identity.original_local() != Some(local)
+                    }));
+                    values.push(*id);
+                    diagnostics.push(anchor);
                 }
-                assert_eq!(expected.len(), 2);
+                assert_eq!(diagnostics.len(), 2);
                 source.with_analysis_v18(budget, |scope| {
                     scope.with_sparse_and_memory_ssa_v1(|_, memory, budget| {
                         source.with_ranked_correspondence_v18(
@@ -89,7 +114,12 @@ fn descriptor_failure_tail_run_v1766(
                                             }
                                             Ok(())
                                         })?;
-                                        assert_eq!(reads, expected);
+                                        // Failure anchors describe original diagnostics. Both
+                                        // operands are SSA values, not private memory reads.
+                                        assert!(
+                                            reads.is_empty(),
+                                            "promoted diagnostic reads: {reads:?}"
+                                        );
                                         visited.set(true);
                                         Ok(())
                                     },

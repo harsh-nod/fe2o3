@@ -388,45 +388,52 @@ fn original_lifecycle_native_resource_refusal_preserves_actual_history_through_s
 #[test]
 fn original_lifecycle_native_header_exact_and_one_short_are_independent_boundaries() {
     for short in [false, true] {
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
-        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
-        let headers = native_lifecycle_test_envelopes_v18();
-        budget.reserve_storage(MODULE_FLOOR + headers).unwrap();
-        let prepared = native_lifecycle_prepared_v18(&mut budget);
-        let verified = std::cell::Cell::new(false);
-        let result =
-            with_actual_optimized_source_v18(prepared, &mut budget, |optimized, budget| {
-                let result = with_native_ranked_test_v18(optimized, budget, |checked, budget| {
-                    optimized.test_native_lifecycle_header_v18(
-                        checked,
-                        ProductionSemanticKirLimitsV1::default().storage_layout_limits(),
-                        budget,
-                        MODULE_LIMIT,
-                        short,
-                        &verified,
-                    )
-                });
-                match result {
-                    Err(NativeLifecycleErrorV18::Source(
-                        error @ ProductionSourceOwnedViewErrorV18::Resource(
-                            ArgumentResourceV1::Storage(_),
-                        ),
-                    )) => Err(error),
-                    other => {
-                        panic!("native header cut lost its exact constructor refusal: {other:?}")
-                    }
-                }
-            });
-        assert!(verified.get());
-        assert!(matches!(
-            result,
-            Err(ProductionSourceOwnedViewErrorV18::Resource(
-                ArgumentResourceV1::Storage(_)
-            ))
-        ));
-        budget.release_storage(headers).unwrap();
-        assert_eq!(budget.storage(), MODULE_FLOOR);
+        run_native_lifecycle_header_boundary_v18(short, false);
     }
+}
+
+#[test]
+fn original_lifecycle_native_attempt_header_refusal_stays_first_after_credit_is_restored() {
+    run_native_lifecycle_header_boundary_v18(true, true);
+}
+
+fn run_native_lifecycle_header_boundary_v18(short: bool, attempt_only: bool) {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    let headers = native_lifecycle_test_envelopes_v18();
+    budget.reserve_storage(MODULE_FLOOR + headers).unwrap();
+    let prepared = native_lifecycle_prepared_v18(&mut budget);
+    let verified = std::cell::Cell::new(false);
+    let result = with_actual_optimized_source_v18(prepared, &mut budget, |optimized, budget| {
+        let result = with_native_ranked_test_v18(optimized, budget, |checked, budget| {
+            optimized.test_native_lifecycle_header_v18(
+                checked,
+                ProductionSemanticKirLimitsV1::default().storage_layout_limits(),
+                budget,
+                MODULE_LIMIT,
+                short,
+                attempt_only,
+                &verified,
+            )
+        });
+        match result {
+            Err(NativeLifecycleErrorV18::Source(
+                error @ ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(_)),
+            )) => Err(error),
+            other => {
+                panic!("native header cut lost its exact constructor refusal: {other:?}")
+            }
+        }
+    });
+    assert!(verified.get());
+    assert!(matches!(
+        result,
+        Err(ProductionSourceOwnedViewErrorV18::Resource(
+            ArgumentResourceV1::Storage(_)
+        ))
+    ));
+    budget.release_storage(headers).unwrap();
+    assert_eq!(budget.storage(), MODULE_FLOOR);
 }
 
 #[test]

@@ -308,19 +308,24 @@ fn install_optimized_issued_roles_v18(
     optimized.check_exact_original_v18(original, budget)?;
     optimized_source_endpoints_v18(original, optimized, budget)?;
     let floor = budget.storage();
-    let retained = scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
-        let floor = budget.storage();
-        original.source.retain_construction(|| {
-            budget.reserve_storage(issued_output_headers_v18()?)?;
-            install_optimized_issued_roles_inner_v18(
-                original, optimized, root, leaves, roles, budget,
-            )?;
-            budget
-                .storage()
-                .checked_sub(floor)
-                .ok_or(ArgumentResourceV1::Accounting.into())
-        })
-    })?;
+    let retained = original.retain_query(scoped_source_attempt_v29(
+        original.source.cleanup,
+        budget,
+        floor,
+        |budget| {
+            let floor = budget.storage();
+            original.source.retain_construction(|| {
+                budget.reserve_storage(issued_output_headers_v18()?)?;
+                install_optimized_issued_roles_inner_v18(
+                    original, optimized, root, leaves, roles, budget,
+                )?;
+                budget
+                    .storage()
+                    .checked_sub(floor)
+                    .ok_or(ArgumentResourceV1::Accounting.into())
+            })
+        },
+    ))?;
     original.retain_query(budget.release_storage(retained).map_err(Into::into))
 }
 

@@ -240,11 +240,16 @@ fn every_new_scalar_sibling_source_event_is_mandatory() {
         (Shape::AssertConditionFolded, vec![Role::AssertCondition]),
     ] {
         let mut required = Vec::new();
+        let mut definitions = BTreeSet::new();
         lower_cfg_fixture_with_cursor(
             shape,
             |_| {},
             |cursor| {
                 required.extend_from_slice(&cursor.events.required);
+                definitions.extend(required.iter().copied().filter(|index| {
+                    cursor.occurrences.events()[*index].role()
+                        == ExecutionEventV29::DestinationDefine
+                }));
                 let operands = required
                     .iter()
                     .skip(3)
@@ -285,9 +290,16 @@ fn every_new_scalar_sibling_source_event_is_mandatory() {
                 },
                 |_, _, result| {
                     let error = result.err().expect("an omitted source event must reject");
+                    // Definitions are authenticated while archiving their binding,
+                    // before the next event or block-completion check.
+                    let expected = if definitions.contains(&omitted) {
+                        execution_archive_error_v29()
+                    } else {
+                        execution_availability_error_v29()
+                    };
                     assert_eq!(
                         format!("{error:?}"),
-                        format!("{:?}", execution_availability_error_v29()),
+                        format!("{expected:?}"),
                         "{shape:?}, omitted {omitted}"
                     );
                 },
@@ -646,19 +658,29 @@ fn shared_emitter_consumes_storage_and_ordinary_siblings_of_nominal_roots() {
 #[test]
 fn shared_emitter_rejects_every_omitted_nominal_event_including_the_last() {
     for omitted in [0, 1, 2, 3, 4, 5, 6, 8, 9] {
+        let definition = std::cell::Cell::new(false);
         lower_cfg_fixture_with_cursor(
             Shape::Storage,
             |_| {},
             |cursor| {
+                definition.set(
+                    cursor.occurrences.events()[omitted].role()
+                        == ExecutionEventV29::DestinationDefine,
+                );
                 cursor.skipped_event = Some(omitted);
             },
             |_, _, result| {
                 let error = result
                     .err()
                     .expect("a missing source event cannot produce a lowered function");
+                let expected = if definition.get() {
+                    execution_archive_error_v29()
+                } else {
+                    execution_availability_error_v29()
+                };
                 assert_eq!(
                     format!("{error:?}"),
-                    format!("{:?}", execution_availability_error_v29()),
+                    format!("{expected:?}"),
                     "omitted {omitted}"
                 );
             },

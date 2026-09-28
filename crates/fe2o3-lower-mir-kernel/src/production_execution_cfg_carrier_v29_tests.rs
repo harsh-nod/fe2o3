@@ -608,9 +608,14 @@ fn cfg_carrier_merge_requires_exact_archived_components_and_metadata() {
 #[test]
 fn cfg_carrier_zero_component_rebuild_has_independent_exact_resource_limits() {
     use std::mem::size_of;
+    #[allow(dead_code)]
+    struct AllocationHeader<'a> {
+        budget: Option<&'a mut dyn SemanticEmissionBudgetV1>,
+        representation: ExecutionCfgRepresentationV29,
+    }
     // No heap backing is needed: allocation policy, returned binding envelope,
     // expected type vector envelope, and physical component vector envelope.
-    let bytes = size_of::<Option<&mut dyn SemanticEmissionBudgetV1>>()
+    let bytes = size_of::<AllocationHeader<'_>>()
         + size_of::<SemanticValueBindingV1>()
         + size_of::<Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1>>()
         + size_of::<Vec<Type>>()

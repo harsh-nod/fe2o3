@@ -644,51 +644,70 @@ fn issued_pointer_retained_replay_authenticates_foreign_custody_before_debit() {
 
 #[test]
 fn issued_pointer_retained_replay_header_cut_preserves_first_failure_and_cleanup() {
-    let completed = std::cell::Cell::new(false);
-    let (result, _, _) = run_issued_role_source_v18(
-        true,
-        ISSUED_ROLE_LIMIT,
-        ISSUED_ROLE_LIMIT,
-        |original, budget| {
-            check_issued_role_positive_v18(original, true, budget)?;
-            let rows = issued_rows_v18(original);
-            let floor = budget.storage();
-            let header = source_issued_replay_headers_v18()?;
-            assert!(header > 0);
-            let padding = ISSUED_ROLE_LIMIT - floor - (header - 1);
-            budget.reserve_storage(padding)?;
-            let padded = budget.storage();
-            let error = check_immutable_issued_roles_v18(original, 0, rows, budget).unwrap_err();
-            let ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(error)) =
-                error
-            else {
-                panic!("the first immutable replay header debit must refuse: {error:?}");
-            };
-            assert_eq!(
-                (error.actual(), error.limit()),
-                (ISSUED_ROLE_LIMIT + 1, ISSUED_ROLE_LIMIT)
-            );
-            assert_eq!(budget.storage(), padded);
-            budget.release_storage(padding)?;
-            assert_eq!(budget.storage(), floor);
-            budget.charge_work(ISSUED_ROLE_LIMIT - budget.work())?;
-            let work = budget.work();
-            let second = check_immutable_issued_roles_v18(original, 0, rows, budget).unwrap_err();
-            assert!(
-                matches!(second, ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(found))
+    for cut in 0..3 {
+        let completed = std::cell::Cell::new(false);
+        let (result, _, _) = run_issued_role_source_v18(
+            true,
+            ISSUED_ROLE_LIMIT,
+            ISSUED_ROLE_LIMIT,
+            |original, budget| {
+                check_issued_role_positive_v18(original, true, budget)?;
+                let rows = issued_rows_v18(original);
+                let floor = budget.storage();
+                type Attempt<'a, 's> = (
+                    &'a ProductionSourceCorrespondenceV18<'s>,
+                    &'a usize,
+                    &'a PendingSourceIssuedRolesV29,
+                );
+                let explicit = source_issued_replay_headers_v18()?;
+                let attempt = scoped_source_attempt_header_oracle_v29::<
+                    usize,
+                    ProductionSourceOwnedViewErrorV18,
+                    Attempt<'_, '_>,
+                >();
+                let remaining = match cut {
+                    0 => attempt - 1,
+                    1 => attempt,
+                    _ => attempt + explicit - 1,
+                };
+                let excess = if cut == 1 { explicit } else { 1 };
+                let padding = ISSUED_ROLE_LIMIT - floor - remaining;
+                budget.reserve_storage(padding)?;
+                let padded = budget.storage();
+                let error =
+                    check_immutable_issued_roles_v18(original, 0, rows, budget).unwrap_err();
+                let ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(error)) =
+                    error
+                else {
+                    panic!("the first immutable replay header debit must refuse: {error:?}");
+                };
+                assert_eq!(
+                    (error.actual(), error.limit()),
+                    (ISSUED_ROLE_LIMIT + excess, ISSUED_ROLE_LIMIT)
+                );
+                assert_eq!(budget.storage(), padded);
+                budget.release_storage(padding)?;
+                assert_eq!(budget.storage(), floor);
+                budget.charge_work(ISSUED_ROLE_LIMIT - budget.work())?;
+                let work = budget.work();
+                let second =
+                    check_immutable_issued_roles_v18(original, 0, rows, budget).unwrap_err();
+                assert!(
+                    matches!(second, ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(found))
             if found.actual() == error.actual() && found.limit() == error.limit())
-            );
-            assert_eq!(budget.work(), work);
-            assert_eq!(budget.storage(), floor);
-            completed.set(true);
-            Ok(())
-        },
-    );
-    assert!(completed.get());
-    assert!(
-        matches!(result, Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(error)))
-        if error.actual() == ISSUED_ROLE_LIMIT + 1 && error.limit() == ISSUED_ROLE_LIMIT)
-    );
+                );
+                assert_eq!(budget.work(), work);
+                assert_eq!(budget.storage(), floor);
+                completed.set(true);
+                Ok(())
+            },
+        );
+        assert!(completed.get());
+        assert!(
+            matches!(result, Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(error)))
+        if error.actual() > ISSUED_ROLE_LIMIT && error.limit() == ISSUED_ROLE_LIMIT)
+        );
+    }
 }
 
 fn issued_role_resource_v18(error: ProductionSourceOwnedViewErrorV18) -> ArgumentResourceV1 {

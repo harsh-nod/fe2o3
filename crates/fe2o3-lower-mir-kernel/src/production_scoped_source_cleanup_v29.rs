@@ -295,3 +295,6 @@ fn scoped_source_attempt_headers_v29<T, E, F>() -> Result<usize, ArgumentResourc
         size_of::<Result<(), ArgumentResourceV1>>(),
     ])
 }
+
+#[cfg(test)]
+include!("production_source_attempt_oracle_v29_tests.rs");

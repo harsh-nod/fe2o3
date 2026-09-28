@@ -1240,6 +1240,59 @@ fn header<T>() -> usize {
     std::mem::size_of::<T>() + 2 * std::mem::size_of::<Result<T, ProductionSemanticKirErrorV1>>()
 }
 
+fn allocation_receiver_validation_header_oracle() -> usize {
+    type Args<'a, 'p, 's> = (
+        &'a SourceReferencePlanV29<'p, 's>,
+        &'a SemanticSourceReferenceBindingV29,
+        &'a mut dyn SemanticEmissionBudgetV1,
+    );
+    type Capture<'a, 'p, 's> = (
+        &'a SourceReferencePlanV29<'p, 's>,
+        &'a SemanticSourceReferenceBindingV29,
+        &'a mut dyn SemanticEmissionBudgetV1,
+        Option<&'a source_storage_v29::SourceStorageRootCustodyViewV29<'p, 's>>,
+        &'a mut Option<source_storage_v29::SourceStorageRootGrowthV29<'a, 'p, 's>>,
+    );
+    4 * header::<Args<'_, '_, '_>>()
+        + header::<Capture<'_, '_, '_>>()
+        + std::mem::align_of::<Capture<'_, '_, '_>>()
+        + header::<std::panic::AssertUnwindSafe<Capture<'_, '_, '_>>>()
+        + header::<&SourceReferencePlanV29<'_, '_>>()
+        + header::<&SemanticSourceReferenceBindingV29>()
+        + header::<&mut dyn SemanticEmissionBudgetV1>()
+        + header::<&source_storage_v29::SourceStorageRootCustodyViewV29<'_, '_>>()
+        + header::<Option<&source_storage_v29::SourceStorageRootCustodyViewV29<'_, '_>>>()
+        + header::<&Option<&source_storage_v29::SourceStorageRootCustodyViewV29<'_, '_>>>()
+        + header::<source_storage_v29::SourceStorageRootGrowthV29<'_, '_, '_>>()
+        + header::<Option<source_storage_v29::SourceStorageRootGrowthV29<'_, '_, '_>>>()
+        + header::<&mut Option<source_storage_v29::SourceStorageRootGrowthV29<'_, '_, '_>>>()
+        + header::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>()
+        + 4 * header::<usize>()
+        + header::<Option<usize>>()
+        + header::<bool>()
+        + header::<Result<(), ProductionSemanticKirErrorV1>>()
+        + header::<std::thread::Result<Result<(), ProductionSemanticKirErrorV1>>>()
+        + header::<&std::thread::Result<Result<(), ProductionSemanticKirErrorV1>>>()
+        + header::<Box<dyn std::any::Any + Send>>()
+        + header::<&ProductionSemanticKirErrorV1>()
+        + header::<Option<ProductionSemanticKirErrorV1>>()
+        + header::<(
+            Option<&SourceReferencePlanV29<'_, '_>>,
+            fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+            usize,
+            usize,
+            usize,
+            Option<source_storage_v29::SourceStorageRootGrowthV29<'_, '_, '_>>,
+            Option<usize>,
+            &mut dyn SemanticEmissionBudgetV1,
+        )>()
+        + header::<Option<&SourceReferencePlanV29<'_, '_>>>()
+        + header::<&source_storage_v29::SourceStorageRootGrowthV29<'_, '_, '_>>()
+        + header::<Option<&source_storage_v29::SourceStorageRootGrowthV29<'_, '_, '_>>>()
+        + header::<usize>()
+        + header::<bool>()
+}
+
 #[test]
 fn allocation_receiver_extraction_exact_and_one_short_work_storage_preserve_first_failure() {
     // Each original owner check costs five; only the existing descriptor scan
@@ -1248,6 +1301,7 @@ fn allocation_receiver_extraction_exact_and_one_short_work_storage_preserve_firs
         + 5
         + 2 * 5 // Borrowed result and nested-result prepayments each check the owner.
         + (5 + 5 + 8)
+        + (5 + 12 + 4 + 4) // Scratch owner check, unwind frame, root growth capture/refund.
         + (5 + 1) // Original-owner check and Object-versus-Scalar strategy lookup.
         + (5 + 3)
         + (5 + 1)
@@ -1258,68 +1312,95 @@ fn allocation_receiver_extraction_exact_and_one_short_work_storage_preserve_firs
         + (5 + 5 + 3)
         + (5 + 1)
         + (5 + 8);
-    let extraction_storage = header::<Option<(ValueId, Type)>>()
+    let retained_storage = header::<Option<(ValueId, Type)>>()
         + header::<Result<Option<(ValueId, Type)>, ProductionSemanticKirErrorV1>>()
         + header::<Option<&ValueDef>>()
-        + header::<Result<Option<&ValueDef>, ProductionSemanticKirErrorV1>>()
+        + header::<Result<Option<&ValueDef>, ProductionSemanticKirErrorV1>>();
+    let extraction_peak = retained_storage
+        + allocation_receiver_validation_header_oracle()
         + 3 * header::<Vec<Type>>()
         + 2 * std::mem::size_of::<Type>();
+    const LIMIT: usize = 20_000_000;
     for denial in [None, Some(false), Some(true)] {
         let completed = std::cell::Cell::new(false);
-        let result = run(|plan, budget| {
-            let mut binding = binding(plan, budget);
-            if let Some(storage) = denial {
-                if storage {
-                    budget
-                        .reserve_storage(usize::MAX - budget.storage() - extraction_storage + 1)?;
-                } else {
-                    budget.charge_work(usize::MAX - budget.work() - extraction_work + 1)?;
-                }
-            } else {
-                budget.reserve_storage(usize::MAX - budget.storage() - extraction_storage)?;
-            }
-            let before = (budget.work(), budget.storage());
-            let result = source_reference_allocation_value_v29(
-                plan,
-                plan.instances.owner().source_semantic().types(),
-                &mut binding,
-                BORROW,
-                CARRIER,
-                false,
-                budget,
-            );
-            match denial {
-                None => {
-                    assert_eq!(result.as_ref().unwrap().as_ref().unwrap().0, ValueId(17));
-                    assert_eq!(budget.work() - before.0, extraction_work);
-                    assert_eq!(budget.storage() - before.1, extraction_storage);
-                    assert_eq!(
-                        budget.storage(),
-                        usize::MAX,
-                        "exact independent storage ceiling"
-                    );
-                    completed.set(true);
-                    Ok(())
-                }
-                Some(storage) => {
-                    let Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error)) =
-                        result
-                    else {
-                        panic!("one-short extraction must report a resource failure");
-                    };
-                    assert!(if storage {
-                        matches!(error, ArgumentResourceV1::Storage { .. })
+        let result = super::source_reference_plan_v29_tests::run_owner_with_storage_limits(
+            owner(),
+            LIMIT,
+            LIMIT,
+            |plan, budget| {
+                let mut binding = binding(plan, budget);
+                if let Some(storage) = denial {
+                    if storage {
+                        budget.reserve_storage(LIMIT - budget.storage() - extraction_peak + 1)?;
                     } else {
-                        matches!(error, ArgumentResourceV1::Work { .. })
-                    });
-                    assert!(
-                        matches!(plan.failure.first_error(), Some(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(first)) if first == error)
-                    );
-                    completed.set(true);
-                    Err(error.into())
+                        budget.charge_work(LIMIT - budget.work() - extraction_work + 1)?;
+                    }
+                } else {
+                    budget.reserve_storage(LIMIT - budget.storage() - extraction_peak)?;
                 }
-            }
-        });
+                let before = (budget.work(), budget.storage());
+                let result = source_reference_allocation_value_v29(
+                    plan,
+                    plan.instances.owner().source_semantic().types(),
+                    &mut binding,
+                    BORROW,
+                    CARRIER,
+                    false,
+                    budget,
+                );
+                match denial {
+                    None => {
+                        assert_eq!(result.as_ref().unwrap().as_ref().unwrap().0, ValueId(17));
+                        assert_eq!(budget.work() - before.0, extraction_work);
+                        assert_eq!(budget.storage() - before.1, retained_storage);
+                        assert_eq!(
+                            budget.peak_storage(),
+                            LIMIT,
+                            "exact independent scratch peak"
+                        );
+                        assert!(binding.values.is_empty());
+                        completed.set(true);
+                        Ok(())
+                    }
+                    Some(storage) => {
+                        let Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                            error,
+                        )) = result
+                        else {
+                            panic!("one-short extraction must report a resource failure");
+                        };
+                        assert!(if storage {
+                            matches!(error, ArgumentResourceV1::Storage(bound)
+                            if bound.actual() == LIMIT + 1 && bound.limit() == LIMIT)
+                        } else {
+                            matches!(error, ArgumentResourceV1::Work(bound)
+                            if bound.actual() == LIMIT + 1 && bound.limit() == LIMIT)
+                        });
+                        assert!(
+                            matches!(plan.failure.first_error(), Some(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(first)) if first == error)
+                        );
+                        assert_eq!(budget.storage() - before.1, retained_storage);
+                        assert_eq!(binding.values.len(), 1);
+                        let before_replay = (budget.work(), budget.storage());
+                        let replay = source_reference_allocation_value_v29(
+                            plan,
+                            plan.instances.owner().source_semantic().types(),
+                            &mut binding,
+                            BORROW,
+                            CARRIER,
+                            false,
+                            budget,
+                        );
+                        assert!(
+                            matches!(replay, Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(first)) if first == error)
+                        );
+                        assert_eq!((budget.work(), budget.storage()), before_replay);
+                        completed.set(true);
+                        Err(error.into())
+                    }
+                }
+            },
+        );
         assert!(
             completed.get(),
             "resource assertions completed inside guarded scope"

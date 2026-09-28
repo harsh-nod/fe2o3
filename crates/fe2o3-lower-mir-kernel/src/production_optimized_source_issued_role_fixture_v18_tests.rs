@@ -532,38 +532,40 @@ fn original_issued_descriptor_checked_output_rejects_foreign_result_use_and_same
 
 #[test]
 fn original_issued_descriptor_installer_header_cut_precedes_all_role_publication() {
-    let completed = std::cell::Cell::new(false);
-    let result = run_descriptor_roles_v18(
-        DescriptorRoleEntranceV18::IssuedDisjointSlice,
-        DescriptorRoleSourceV18::Constant,
-        OPTIMIZED_SOURCE_WORK_LIMIT_V18,
-        MODULE_LIMIT,
-        |original, optimized, budget| {
-            check_descriptor_roles_v18(original, optimized, true, budget)?;
-            let root = original.source.root(0, budget)?.1;
-            let recipe =
-                scalar_leaf_collision_recipe_v18(original.inventory.functions()[root].function);
-            original.with_optimized_scalar_leaves_v18(
-                optimized,
-                0,
-                &recipe,
-                budget,
-                |leaves, budget| {
-                    slice_view_v1::test_issued_installer_header_cut_v18(
-                        original, optimized, leaves, &completed, budget,
-                    )
-                },
-            )
-        },
-    )
-    .0;
-    assert!(completed.get(), "{result:?}");
-    assert!(matches!(
-        result,
-        Err(ProductionSourceOwnedViewErrorV18::Resource(
-            ArgumentResourceV1::Storage(_)
-        ))
-    ));
+    for cut in 0..3 {
+        let completed = std::cell::Cell::new(false);
+        let result = run_descriptor_roles_v18(
+            DescriptorRoleEntranceV18::IssuedDisjointSlice,
+            DescriptorRoleSourceV18::Constant,
+            OPTIMIZED_SOURCE_WORK_LIMIT_V18,
+            MODULE_LIMIT,
+            |original, optimized, budget| {
+                check_descriptor_roles_v18(original, optimized, true, budget)?;
+                let root = original.source.root(0, budget)?.1;
+                let recipe =
+                    scalar_leaf_collision_recipe_v18(original.inventory.functions()[root].function);
+                original.with_optimized_scalar_leaves_v18(
+                    optimized,
+                    0,
+                    &recipe,
+                    budget,
+                    |leaves, budget| {
+                        slice_view_v1::test_issued_installer_header_cut_v18(
+                            original, optimized, leaves, cut, &completed, budget,
+                        )
+                    },
+                )
+            },
+        )
+        .0;
+        assert!(completed.get(), "{result:?}");
+        assert!(matches!(
+            result,
+            Err(ProductionSourceOwnedViewErrorV18::Resource(
+                ArgumentResourceV1::Storage(_)
+            ))
+        ));
+    }
 }
 
 fn run_ordered_issued_roles_v18(

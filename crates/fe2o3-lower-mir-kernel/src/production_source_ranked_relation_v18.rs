@@ -1395,8 +1395,13 @@ impl ProductionSourceCorrespondenceV18<'_> {
     {
         self.query(budget)?;
         let floor = budget.storage();
-        let (mut leaves, retained) =
-            scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
+        // Attempt-header refusal happens before the constructor callback can
+        // retain it. It is still the first failure of this source query.
+        let (mut leaves, retained) = self.retain_query(scoped_source_attempt_v29(
+            self.source.cleanup,
+            budget,
+            floor,
+            |budget| {
                 let floor = budget.storage();
                 self.retain_query((|| {
                     let headers = argument_sum_v1(&[
@@ -1413,7 +1418,8 @@ impl ProductionSourceCorrespondenceV18<'_> {
                         .ok_or(ArgumentResourceV1::Accounting)?;
                     Ok((leaves, retained))
                 })())
-            })?;
+            },
+        ))?;
         // The constructor's own callback header has now been settled. Only
         // the still-live leaf scope contributes to the returned custody floor.
         leaves.floor = budget.storage();

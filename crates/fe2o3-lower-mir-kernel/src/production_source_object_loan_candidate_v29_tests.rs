@@ -1006,9 +1006,9 @@ fn original_flat_aggregate_project_index_has_two_scans_and_logarithmic_queries()
             (
                 constructors.0 * roster.0,
                 constructors.0 * roster.0,
-                constructors.0 * roster.1
+                2 * constructors.0 * roster.1
             ),
-            "one count scan, one fill scan, one original event scan per constructor"
+            "one anchor count scan, one anchor fill scan, two original event scans per constructor"
         );
         let mut levels = 1;
         let mut remaining = roster.2;
@@ -1055,3 +1055,5 @@ fn original_flat_aggregate_project_index_has_two_scans_and_logarithmic_queries()
         );
     }
 }
+
+include!("production_source_object_payload_capacity_v29_tests.rs");

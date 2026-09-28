@@ -343,8 +343,12 @@ impl ProductionSourceCorrespondenceV18<'_> {
         optimized.check_exact_original_v18(self, budget)?;
         optimized_source_endpoints_v18(self, optimized, budget)?;
         let outer_floor = budget.storage();
-        let outer_retained =
-            scoped_source_attempt_v29(self.source.cleanup, budget, outer_floor, |budget| {
+        // Retain failures of the attempt envelope as well as its constructor.
+        let outer_retained = self.retain_query(scoped_source_attempt_v29(
+            self.source.cleanup,
+            budget,
+            outer_floor,
+            |budget| {
                 self.source.retain_construction(|| {
                     let headers = descriptor_role_outer_headers_v18::<T, E>(
                         std::mem::size_of_val(&consume),
@@ -353,15 +357,21 @@ impl ProductionSourceCorrespondenceV18<'_> {
                     budget.reserve_storage(headers)?;
                     Ok(headers)
                 })
-            })?;
+            },
+        ))?;
         let outer_scope = DescriptorRoleScopeV18::new(budget);
         let outer_caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let consume_leaves =
                 |leaves: &ProductionOptimizedSourceScalarLeavesV18<'_>,
                  budget: &mut ArgumentBudgetV1<'work>| {
+                    #[cfg(test)]
+                    test_descriptor_rows_attempt_header_v18(budget);
                     let floor = budget.storage();
-                    let (rows, retained) =
-                        scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
+                    let (rows, retained) = self.retain_query(scoped_source_attempt_v29(
+                        self.source.cleanup,
+                        budget,
+                        floor,
+                        |budget| {
                             let floor = budget.storage();
                             self.source.retain_construction(|| {
                                 budget.reserve_storage(descriptor_role_headers_v18::<T, E>()?)?;
@@ -374,7 +384,8 @@ impl ProductionSourceCorrespondenceV18<'_> {
                                     .ok_or(ArgumentResourceV1::Accounting)?;
                                 Ok((rows, retained))
                             })
-                        })?;
+                        },
+                    ))?;
                     let view = CheckedDescriptorSourceRolesV18 {
                         original: self,
                         optimized,

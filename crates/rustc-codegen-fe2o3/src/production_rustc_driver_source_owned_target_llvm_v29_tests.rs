@@ -15,6 +15,7 @@ enum Outcome {
         source: [u8; 32],
         original: [u8; 32],
         optimized: [u8; 32],
+        optimized_identity: [u8; 32],
         optimized_bytes: usize,
         changed: bool,
         target: String,
@@ -115,6 +116,10 @@ impl Callbacks for LlvmCallbacks {
                     assert_eq!(output.owner().module().functions.len(), 2);
                     assert!(output.owner().module().functions[0].body.is_some());
                     assert!(output.owner().module().functions[1].body.is_some());
+                    assert_eq!(
+                        output.owner().identity().canonical_length(),
+                        u64::try_from(output.owner().canonical_bytes().len()).unwrap()
+                    );
                     // This owned copy is only a test transport for the exact text
                     // to the parent process's pinned LLVM parser/verification gate.
                     let copied = paid_text(text, budget)?;
@@ -123,6 +128,7 @@ impl Callbacks for LlvmCallbacks {
                         source: *source.source_ssa(budget)?.source_semantic_sha256(),
                         original: Sha256::digest(original.canonical_bytes()).into(),
                         optimized: Sha256::digest(output.owner().canonical_bytes()).into(),
+                        optimized_identity: *output.owner().identity().digest(),
                         optimized_bytes: output.owner().canonical_bytes().len(),
                         changed: output.owner().canonical_bytes() != output.input_audit_bytes(),
                         target,
@@ -337,6 +343,48 @@ fn two_root_anchor_absence_oracle_binds_reason_output_identity_and_target_withou
     }
 }
 
+#[test]
+fn two_root_anchor_absence_distinguishes_canonical_identity_from_raw_bytes_digest() {
+    // Frozen V18 identity framing, independent of the emitter and owner helper.
+    // This is a metadata-oracle input, not an admitted executable module.
+    let bytes = b"canonical identity oracle";
+    let domain = b"FE2O3/VERIFIED-CANONICAL-KERNEL-IR/V18\0";
+    let mut hash = Sha256::new();
+    hash.update(u32::try_from(domain.len()).unwrap().to_le_bytes());
+    hash.update(domain);
+    hash.update(1_u16.to_le_bytes());
+    hash.update(u64::try_from(bytes.len()).unwrap().to_le_bytes());
+    hash.update(bytes);
+    let identity: [u8; 32] = hash.finalize().into();
+    let raw: [u8; 32] = Sha256::digest(bytes).into();
+    assert_ne!(identity, raw);
+    let hex: String = identity.iter().map(|byte| format!("{byte:02x}")).collect();
+    for target in ["gfx942:xnack-", "gfx950:xnack-"] {
+        let text = format!(
+            "!fe2o3.semantic_anchor.absence.v1 = !{{!2}}\n!2 = !{{!\"multiple_defined_bodies\", !\"sha256:{hex}\", !\"kir-version:18\", i64 {}, !\"target:{target}\"}}\n",
+            bytes.len()
+        );
+        assert!(two_root_absence_matches(
+            &text,
+            &identity,
+            bytes.len(),
+            target
+        ));
+        assert!(!two_root_absence_matches(&text, &raw, bytes.len(), target));
+        let foreign = if target.starts_with("gfx942") {
+            "gfx950:xnack-"
+        } else {
+            "gfx942:xnack-"
+        };
+        assert!(!two_root_absence_matches(
+            &text,
+            &identity,
+            bytes.len(),
+            foreign
+        ));
+    }
+}
+
 fn parse_and_verify_target_llvm(text: &str) {
     let opt = PathBuf::from(
         env::var_os("FE2O3_OPT").expect("FE2O3_OPT must name the explicit pinned LLVM 22 verifier"),
@@ -401,6 +449,7 @@ fn actual_scalar_changed_and_noop_reach_verified_target_llvm_for_both_authentica
                 let Outcome::Llvm {
                     original,
                     optimized,
+                    optimized_identity,
                     optimized_bytes,
                     changed: actual_changed,
                     text,
@@ -417,9 +466,15 @@ fn actual_scalar_changed_and_noop_reach_verified_target_llvm_for_both_authentica
                 assert!(matches!(target.as_str(), "gfx942:xnack-" | "gfx950:xnack-"));
                 assert!(*work < 500_000_000 && *peak <= 20_000_000);
                 assert!(
-                    two_root_absence_matches(text, optimized, *optimized_bytes, target),
+                    two_root_absence_matches(text, optimized_identity, *optimized_bytes, target),
                     "exact V18 output/target-bound multiple-body anchor absence required"
                 );
+                assert!(!two_root_absence_matches(
+                    text,
+                    optimized,
+                    *optimized_bytes,
+                    target
+                ));
                 parse_and_verify_target_llvm(text);
                 if let Some(prior) = previous.get(label) {
                     assert_eq!(&result, prior);

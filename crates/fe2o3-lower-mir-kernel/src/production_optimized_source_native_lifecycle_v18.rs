@@ -128,6 +128,7 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
         budget: &mut ArgumentBudgetV1<'work>,
         limit: usize,
         short: bool,
+        attempt_only: bool,
         verified: &std::cell::Cell<bool>,
     ) -> NativeResult {
         self.query(budget)?;
@@ -138,7 +139,15 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
             |pending, budget| {
                 Ok(
                     self.with_execution_recipes_prepaid_v18(budget, |recipes, budget| {
-                        controls::native_header(recipes, pending, budget, limit, short, verified)
+                        controls::native_header(
+                            recipes,
+                            pending,
+                            budget,
+                            limit,
+                            short,
+                            attempt_only,
+                            verified,
+                        )
                     }),
                 )
             },
@@ -646,20 +655,25 @@ impl ProductionOptimizedExecutionRecipesV18<'_> {
         self.check(budget)?;
         let source = self.optimized.original.source;
         let floor = budget.storage();
-        let rows = scoped_source_attempt_v29(source.cleanup, budget, floor, |budget| {
-            source.retain_construction(|| {
-                budget.reserve_storage(argument_sum_v1(&[
-                    size_of::<Vec<OutputRecipe>>(),
-                    size_of::<ProductionLifecycleCheckedNativePoliciesV18<'_, '_>>(),
-                    2 * size_of::<SourceOwnedResultV18<Vec<OutputRecipe>>>(),
-                    size_of::<std::thread::Result<NativeResult>>(),
-                    2 * size_of::<NativeResult>(),
-                    std::mem::size_of_val(&consume),
-                    2 * std::mem::align_of_val(&consume),
-                ])?)?;
-                self.output_recipes(budget)
-            })
-        })?;
+        let rows = source.retain_query(scoped_source_attempt_v29(
+            source.cleanup,
+            budget,
+            floor,
+            |budget| {
+                source.retain_construction(|| {
+                    budget.reserve_storage(argument_sum_v1(&[
+                        size_of::<Vec<OutputRecipe>>(),
+                        size_of::<ProductionLifecycleCheckedNativePoliciesV18<'_, '_>>(),
+                        2 * size_of::<SourceOwnedResultV18<Vec<OutputRecipe>>>(),
+                        size_of::<std::thread::Result<NativeResult>>(),
+                        2 * size_of::<NativeResult>(),
+                        std::mem::size_of_val(&consume),
+                        2 * std::mem::align_of_val(&consume),
+                    ])?)?;
+                    self.output_recipes(budget)
+                })
+            },
+        ))?;
         let storage = budget
             .storage()
             .checked_sub(floor)

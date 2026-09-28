@@ -435,27 +435,32 @@ fn strict_partial_tree_unwind_drops_before_eligible_scope_refund() {
     let headers = strict_normalized_header_oracle_v18();
     let bytes = size_of::<NormalizedScalarExpressionV1>();
     const FLOOR: usize = 13;
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(9);
-    let mut budget = ArgumentBudgetV1::new(&mut work, FLOOR + headers + bytes);
-    budget.reserve_storage(FLOOR).unwrap();
     let cleanup = normalized_node_cleanup_fixture_v18();
+    let attempt = |budget: &mut ArgumentBudgetV1<'_>| {
+        let ledger = CorrelationLedgerV18::new(budget, &cleanup);
+        let mut charge = SourceTranslationChargeV18::new(&ledger, 9)?;
+        charge.begin_normalized_tree().unwrap();
+        let _tree = normalize_semantic_expression_v18(
+            &expression,
+            &StrictConstantLeavesV18,
+            0,
+            &mut charge,
+        );
+        Ok::<_, ProductionSourceOwnedViewErrorV18>(())
+    };
+    fn attempt_header<F>(_: &F) -> usize {
+        scoped_source_attempt_header_oracle_v29::<(), ProductionSourceOwnedViewErrorV18, F>()
+    }
+    let envelope = attempt_header(&attempt);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(9);
+    let mut budget = ArgumentBudgetV1::new(&mut work, FLOOR + envelope + headers + bytes);
+    budget.reserve_storage(FLOOR).unwrap();
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        scoped_source_attempt_v29(&cleanup, &mut budget, FLOOR, |budget| {
-            let ledger = CorrelationLedgerV18::new(budget, &cleanup);
-            let mut charge = SourceTranslationChargeV18::new(&ledger, 9)?;
-            charge.begin_normalized_tree().unwrap();
-            let _tree = normalize_semantic_expression_v18(
-                &expression,
-                &StrictConstantLeavesV18,
-                0,
-                &mut charge,
-            );
-            Ok::<_, ProductionSourceOwnedViewErrorV18>(())
-        })
+        scoped_source_attempt_v29(&cleanup, &mut budget, FLOOR, attempt)
     }));
     assert!(caught.is_err());
     assert_eq!(budget.work(), 9);
-    assert_eq!(budget.peak_storage(), FLOOR + headers + bytes);
+    assert_eq!(budget.peak_storage(), FLOOR + envelope + headers + bytes);
     assert_eq!(budget.storage(), FLOOR);
     assert_eq!(budget.failed_storage(), None);
     assert!(!cleanup.denied.get());

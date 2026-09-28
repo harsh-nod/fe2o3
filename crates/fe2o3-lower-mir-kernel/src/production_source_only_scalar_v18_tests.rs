@@ -216,49 +216,139 @@ fn source_only_scalar_factor_preserves_ranked_root_name_refusal() {
 #[test]
 fn source_only_scalar_constructor_keeps_first_storage_refusal() {
     for optimized_scope in [false, true] {
+        for attempt_header in [true, false] {
+            let reached = std::cell::Cell::new(false);
+            let result =
+                with_entry_fixture_v18(typed_entry_rhs_owner_v18, |original, optimized, budget| {
+                    let floor = budget.storage();
+                    let headers = std::mem::size_of::<ProductionSourceScalarLeavesV18<'_>>()
+                        + std::mem::size_of::<SourceScalarNamespaceV18<'_>>()
+                        + std::mem::size_of::<&SourceScalarNamespaceV18<'_>>()
+                        + std::mem::size_of::<
+                            std::thread::Result<Result<(), ProductionSourceOwnedViewErrorV18>>,
+                        >();
+                    type Capture<'a, 's> = (
+                        &'a ProductionSourceCorrespondenceV18<'s>,
+                        &'a usize,
+                        &'a SourceScalarNamespaceV18<'s>,
+                    );
+                    let envelope = scoped_source_attempt_header_oracle_v29::<
+                        (SourceScalarLeavesV18<'_, '_>, usize),
+                        ProductionSourceOwnedViewErrorV18,
+                        Capture<'_, '_>,
+                    >();
+                    let target = envelope + if attempt_header { 0 } else { headers };
+                    let padding = MODULE_LIMIT - floor - target + 1;
+                    budget.reserve_storage(padding)?;
+                    let first = if optimized_scope {
+                        original.with_optimized_source_scalar_leaves_v18(
+                            optimized,
+                            0,
+                            budget,
+                            |_, _| panic!("short header cannot enter callback"),
+                        )
+                    } else {
+                        original.with_source_scalar_leaves_v18(0, budget, |_, _| {
+                            panic!("short header cannot enter callback")
+                        })
+                    };
+                    let Err(ProductionSourceOwnedViewErrorV18::Resource(
+                        ArgumentResourceV1::Storage(bound),
+                    )) = first.as_ref()
+                    else {
+                        panic!("exact constructor header cut: {first:?}");
+                    };
+                    assert_eq!(
+                        (bound.actual(), bound.limit()),
+                        (MODULE_LIMIT + 1, MODULE_LIMIT)
+                    );
+                    assert_eq!(budget.storage(), floor + padding);
+                    budget.release_storage(padding)?;
+                    let before = (budget.work(), budget.storage());
+                    let replay: SourceOwnedResultV18<()> =
+                        original.with_source_scalar_leaves_v18(0, budget, |_, _| {
+                            panic!("first resource failure remains sticky")
+                        });
+                    assert_eq!(format!("{first:?}"), format!("{replay:?}"));
+                    assert_eq!((budget.work(), budget.storage()), before);
+                    reached.set(true);
+                    first
+                });
+            assert!(reached.get());
+            assert!(matches!(
+                result,
+                Err(ProductionSourceOwnedViewErrorV18::Resource(
+                    ArgumentResourceV1::Storage(_)
+                ))
+            ));
+        }
+    }
+}
+
+#[test]
+fn optimized_scalar_inner_attempt_header_exact_and_short_keep_first_refusal() {
+    for short in [false, true] {
         let reached = std::cell::Cell::new(false);
         let result =
             with_entry_fixture_v18(typed_entry_rhs_owner_v18, |original, optimized, budget| {
-                let floor = budget.storage();
-                let headers = std::mem::size_of::<ProductionSourceScalarLeavesV18<'_>>()
-                    + std::mem::size_of::<SourceScalarNamespaceV18<'_>>()
-                    + std::mem::size_of::<&SourceScalarNamespaceV18<'_>>()
-                    + std::mem::size_of::<
-                        std::thread::Result<Result<(), ProductionSourceOwnedViewErrorV18>>,
-                    >();
-                let padding = MODULE_LIMIT - floor - headers + 1;
-                budget.reserve_storage(padding)?;
-                let first = if optimized_scope {
-                    original.with_optimized_source_scalar_leaves_v18(
-                        optimized,
-                        0,
-                        budget,
-                        |_, _| panic!("short header cannot enter callback"),
-                    )
-                } else {
-                    original.with_source_scalar_leaves_v18(0, budget, |_, _| {
-                        panic!("short header cannot enter callback")
-                    })
+                let outer_floor = budget.storage();
+                type Capture<'a, 's> = (
+                    &'a ProductionSourceCorrespondenceV18<'s>,
+                    &'a ProductionOptimizedSourceCorrespondenceV18<'s>,
+                    &'a usize,
+                    &'a ProductionSourceScalarLeavesV18<'s>,
+                );
+                let helper = scoped_source_attempt_header_oracle_v29::<
+                    (
+                        Vec<OptimizedSourceScalarReadV18>,
+                        &fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'_>,
+                        usize,
+                    ),
+                    ProductionSourceOwnedViewErrorV18,
+                    Capture<'_, '_>,
+                >();
+                let explicit = size_of::<ProductionOptimizedSourceScalarLeavesV18<'_>>()
+                    + size_of::<Vec<OptimizedSourceScalarReadV18>>()
+                    + size_of::<std::thread::Result<SourceOwnedResultV18<()>>>()
+                    + source_reference_cleanup_headers_v29()?;
+                OPTIMIZED_SCALAR_ATTEMPT_PROBE_V18.set(Some((
+                    helper - usize::from(short),
+                    0,
+                    0,
+                    0,
+                )));
+                let first: SourceOwnedResultV18<()> = original
+                    .with_optimized_source_scalar_leaves_v18(optimized, 0, budget, |_, _| {
+                        panic!("the optimized inner constructor must refuse")
+                    });
+                let (_, padding, inner_floor, calls) =
+                    OPTIMIZED_SCALAR_ATTEMPT_PROBE_V18.replace(None).unwrap();
+                assert_eq!(calls, 1, "the original scalar scope must have succeeded");
+                assert!(inner_floor > outer_floor);
+                let Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(
+                    bound,
+                ))) = first.as_ref()
+                else {
+                    panic!("the actual optimized inner attempt must refuse: {first:?}");
                 };
-                assert!(matches!(
-                    first,
-                    Err(ProductionSourceOwnedViewErrorV18::Resource(
-                        ArgumentResourceV1::Storage(_)
-                    ))
-                ));
-                assert_eq!(budget.storage(), floor + padding);
+                let limit = budget.storage_limit();
+                assert_eq!(
+                    (bound.actual(), bound.limit()),
+                    (limit + if short { 1 } else { explicit }, limit)
+                );
+                assert_eq!(budget.storage(), outer_floor + padding);
                 budget.release_storage(padding)?;
                 let before = (budget.work(), budget.storage());
-                let replay: SourceOwnedResultV18<()> =
-                    original.with_source_scalar_leaves_v18(0, budget, |_, _| {
-                        panic!("first resource failure remains sticky")
+                let replay: SourceOwnedResultV18<()> = original
+                    .with_optimized_source_scalar_leaves_v18(optimized, 0, budget, |_, _| {
+                        panic!("retained inner failure forbids retry")
                     });
                 assert_eq!(format!("{first:?}"), format!("{replay:?}"));
                 assert_eq!((budget.work(), budget.storage()), before);
                 reached.set(true);
                 first
             });
-        assert!(reached.get());
+        assert!(reached.get(), "{result:?}");
         assert!(matches!(
             result,
             Err(ProductionSourceOwnedViewErrorV18::Resource(

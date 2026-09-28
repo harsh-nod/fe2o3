@@ -1,6 +1,7 @@
 use super::*;
 
 const STOP: &str = "original scalar-reference payload control completed";
+const RESOURCE_LIMIT: usize = 1_000_000_000;
 thread_local! {
     static CASE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static COMPLETED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -86,15 +87,38 @@ fn observe(
     let floor = budget.storage();
     let mut required = (0, 0);
     with_canonical_call_scratch_v1(budget, |budget| {
+        // Start at the historical peak so this query's temporary high-water
+        // mark is observable even after earlier emission used more scratch.
+        let padding = budget.peak_storage() - budget.storage();
+        budget.reserve_storage(padding)?;
         let before = (budget.work(), budget.storage());
         check_source_cell_dereference_payload_v29(
             references, site, place, original, pointer, budget,
         )?;
-        required = (budget.work() - before.0, budget.storage() - before.1);
+        required = (budget.work() - before.0, budget.peak_storage() - before.1);
+        assert_eq!(budget.storage(), before.1, "validation scratch is retired");
+        budget.release_storage(padding)?;
         Ok(())
     })?;
     assert_eq!(budget.storage(), floor);
     assert!(required.0 > 0 && required.1 > 0);
+    // Four argument envelopes coexist with the temporary expected payload.
+    // The complete header equation has its own independent regression test.
+    type Arguments<'a, 'p, 's> = (
+        &'a SourceReferencePlanV29<'p, 's>,
+        &'a SemanticSourceReferenceBindingV29,
+        &'a mut dyn SemanticEmissionBudgetV1,
+    );
+    let minimum = 4
+        * (std::mem::size_of::<Arguments<'_, '_, '_>>()
+            + 2 * std::mem::size_of::<Result<Arguments<'_, '_, '_>, ProductionSemanticKirErrorV1>>(
+            ))
+        + std::mem::size_of::<Vec<Type>>()
+        + std::mem::size_of::<Type>();
+    assert!(
+        required.1 > minimum,
+        "validation scratch must include its live headers and payload"
+    );
     let mode = CASE.get();
     if mode == 0 {
         COMPLETED.set(true);
@@ -122,18 +146,20 @@ fn observe(
             _ => {}
         }
         if matches!(mode, 8 | 9) {
-            budget.charge_work(usize::MAX - budget.work() - required.0 + usize::from(mode == 9))?;
+            budget.charge_work(
+                RESOURCE_LIMIT - budget.work() - required.0 + usize::from(mode == 9),
+            )?;
         }
         let filler = if matches!(mode, 10 | 11) {
-            usize::MAX - budget.storage() - required.1 + usize::from(mode == 11)
+            RESOURCE_LIMIT - budget.storage() - required.1 + usize::from(mode == 11)
         } else {
             0
         };
         budget.reserve_storage(filler)?;
         let before = (budget.work(), budget.storage());
         let result = if mode == 12 {
-            let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
-            let mut foreign = ArgumentBudgetV1::new(&mut work, usize::MAX);
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(RESOURCE_LIMIT);
+            let mut foreign = ArgumentBudgetV1::new(&mut work, RESOURCE_LIMIT);
             foreign.reserve_storage(budget.storage())?;
             let query = check_source_cell_dereference_payload_v29(
                 references,
@@ -159,7 +185,7 @@ fn observe(
         if matches!(mode, 8 | 10) {
             result.as_ref().unwrap();
             assert_eq!(budget.work() - before.0, required.0);
-            assert_eq!(budget.storage() - before.1, required.1);
+            assert_eq!(budget.storage(), before.1, "validation scratch is retired");
         } else if matches!(mode, 9 | 11 | 12) {
             let Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error)) = &result
             else {
@@ -171,6 +197,22 @@ fn observe(
                     | (11, ArgumentResourceV1::Storage(_))
                     | (12, ArgumentResourceV1::Accounting)
             ));
+            match error {
+                ArgumentResourceV1::Work(error) => {
+                    assert_eq!(
+                        (error.actual(), error.limit()),
+                        (RESOURCE_LIMIT + 1, RESOURCE_LIMIT)
+                    );
+                }
+                ArgumentResourceV1::Storage(error) => {
+                    assert_eq!(
+                        (error.actual(), error.limit()),
+                        (RESOURCE_LIMIT + 1, RESOURCE_LIMIT)
+                    );
+                }
+                ArgumentResourceV1::Accounting => {}
+                other => panic!("finite exact resource boundary: {other:?}"),
+            }
             let failed = (budget.work(), budget.storage());
             assert!(matches!(check_source_cell_dereference_payload_v29(
                 references, site, place, original, pointer, budget),
@@ -203,7 +245,7 @@ fn genuine_cell_payloads_complete_and_reject_source_loan_and_pointer_substitutio
     for mode in 0..14 {
         CASE.set(mode);
         COMPLETED.set(false);
-        let result = run_suffix(SuffixCase::Cells, capture, usize::MAX, usize::MAX).0;
+        let result = run_suffix(SuffixCase::Cells, capture, RESOURCE_LIMIT, RESOURCE_LIMIT).0;
         assert!(
             COMPLETED.get(),
             "mode={mode}: every inner assertion must complete: {result:?}"

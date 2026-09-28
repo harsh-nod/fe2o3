@@ -6,6 +6,7 @@ pub(super) fn native_header(
     budget: &mut ArgumentBudgetV1<'_>,
     limit: usize,
     short: bool,
+    attempt_only: bool,
     verified: &std::cell::Cell<bool>,
 ) -> NativeResult {
     let diagnostic = DiagnosticCell::new(None);
@@ -19,15 +20,39 @@ pub(super) fn native_header(
         },
     )?;
     diagnostic.set(None);
-    // Independently mirror the fixed native-join constructor, including the
-    // two one-byte alignments of its zero-sized consumer. Exact header leaves
-    // zero bytes for the first retained output recipe backing allocation.
-    let header = size_of::<Vec<OutputRecipe>>()
+    let consume = |_: &ProductionLifecycleCheckedNativePoliciesV18<'_, '_>,
+                   _: &mut ArgumentBudgetV1<'_>|
+     -> NativeResult { panic!("header/backing cut reached native consumer") };
+    let source = recipes.optimized.original.source;
+    // This uninvoked closure mirrors the constructor's three reference
+    // captures; its inferred F supplies layout only, never a production debit.
+    let attempt_header = {
+        let capture = |budget: &mut ArgumentBudgetV1<'_>| {
+            source.retain_construction(|| {
+                let _ = std::mem::size_of_val(&consume);
+                recipes.output_recipes(budget)
+            })
+        };
+        fn header<F>(_: &F) -> usize {
+            crate::production_semantic_kir_v1::scoped_source_attempt_header_oracle_v29::<
+                Vec<OutputRecipe>,
+                ProductionSourceOwnedViewErrorV18,
+                F,
+            >()
+        }
+        header(&capture)
+    };
+    // MAIN keeps the transient attempt frame live through the explicit native
+    // header and first vector reserve. Exact combined headers leave no backing
+    // credit; one-short fails at the explicit header after the attempt prepay.
+    let native_header = size_of::<Vec<OutputRecipe>>()
         + size_of::<ProductionLifecycleCheckedNativePoliciesV18<'_, '_>>()
         + 2 * size_of::<SourceOwnedResultV18<Vec<OutputRecipe>>>()
         + size_of::<std::thread::Result<NativeResult>>()
         + 2 * size_of::<NativeResult>()
         + 2;
+    assert!(!attempt_only || short);
+    let header = attempt_header + if attempt_only { 0 } else { native_header };
     let retained = recipes
         .rows
         .iter()
@@ -38,12 +63,7 @@ pub(super) fn native_header(
     let padding = limit - floor - header + usize::from(short);
     budget.reserve_storage(padding).unwrap();
     let work = budget.work();
-    let result = recipes.with_pending_native_policies_v18(
-        pending,
-        budget,
-        &diagnostic,
-        |_, _| -> NativeResult { panic!("header/backing cut reached native consumer") },
-    );
+    let result = recipes.with_pending_native_policies_v18(pending, budget, &diagnostic, consume);
     let expected = limit
         + if short {
             1
@@ -63,6 +83,24 @@ pub(super) fn native_header(
     assert_eq!(budget.storage(), floor + padding);
     budget.release_storage(padding).unwrap();
     assert_eq!(budget.storage(), floor);
+    // Restoring ample capacity cannot clear the first source refusal or enter
+    // any native stage on a retry of this same retained source and pending view.
+    let retry_work = budget.work();
+    let retry = recipes.with_pending_native_policies_v18(
+        pending,
+        budget,
+        &diagnostic,
+        |_, _| -> NativeResult { panic!("sticky header refusal reached native consumer") },
+    );
+    assert!(
+        matches!(&retry, Err(NativeError::Source(ProductionSourceOwnedViewErrorV18::Resource(
+        ArgumentResourceV1::Storage(error)))) if error.actual() == expected)
+    );
+    assert_eq!(budget.failed_storage(), Some(expected));
+    assert_eq!(budget.work(), retry_work);
+    assert_eq!(budget.storage(), floor);
+    assert!(diagnostic.get().is_none());
+    assert!(!source.cleanup.is_denied());
     verified.set(true);
     result
 }

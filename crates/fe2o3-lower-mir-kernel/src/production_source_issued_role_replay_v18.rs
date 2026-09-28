@@ -160,17 +160,22 @@ fn check_immutable_issued_roles_v18(
 ) -> SourceOwnedResultV18<()> {
     original.query(budget)?;
     let floor = budget.storage();
-    let retained = scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
-        let floor = budget.storage();
-        original.source.retain_construction(|| {
-            budget.reserve_storage(source_issued_replay_headers_v18()?)?;
-            check_immutable_issued_roles_inner_v18(original, root, rows, budget)?;
-            budget
-                .storage()
-                .checked_sub(floor)
-                .ok_or(ArgumentResourceV1::Accounting.into())
-        })
-    })?;
+    let retained = original.retain_query(scoped_source_attempt_v29(
+        original.source.cleanup,
+        budget,
+        floor,
+        |budget| {
+            let floor = budget.storage();
+            original.source.retain_construction(|| {
+                budget.reserve_storage(source_issued_replay_headers_v18()?)?;
+                check_immutable_issued_roles_inner_v18(original, root, rows, budget)?;
+                budget
+                    .storage()
+                    .checked_sub(floor)
+                    .ok_or(ArgumentResourceV1::Accounting.into())
+            })
+        },
+    ))?;
     original.retain_query(budget.release_storage(retained).map_err(Into::into))
 }
 

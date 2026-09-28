@@ -1214,8 +1214,20 @@ pub(super) fn run_owner_with_storage(
         &mut ArgumentBudgetV1<'_>,
     ) -> Result<(), ProductionSemanticKirErrorV1>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
-    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+    run_owner_with_storage_limits(owner, usize::MAX, usize::MAX, consume)
+}
+
+pub(super) fn run_owner_with_storage_limits(
+    owner: ProductionSemanticSsaOwnerV1,
+    work_limit: usize,
+    storage_limit: usize,
+    consume: impl FnOnce(
+        &SourceReferencePlanV29<'_, '_>,
+        &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+    let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
     let demands =
         source_storage_demands_v29::SourceStorageDemandsV29::collect(&owner, &mut budget)?;
     let mut layouts = source_storage_v29::SourceStorageLayoutsV29::new_with_limits(

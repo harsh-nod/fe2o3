@@ -1088,6 +1088,9 @@ thread_local! {
     static SOURCE_OBJECT_PROJECT_INDEX_STORAGE_V29: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static SOURCE_OBJECT_PROJECT_CENSUS_WORK_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
     static SOURCE_OBJECT_PAYLOAD_SCAN_COUNTS_V29: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0)) };
+    static SOURCE_OBJECT_BASE_USE_CENSUS_WORK_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static SOURCE_OBJECT_BASE_USE_FIRST_SCAN_V29: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
+    static SOURCE_OBJECT_BASE_USE_STORAGE_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 #[cfg(test)]
@@ -1141,7 +1144,31 @@ impl SourceObjectPayloadIndexV29 {
             let occurrences = instances
                 .occurrences(instance)
                 .ok_or_else(scoped_object_error_v29)?;
-            event_count = argument_sum_v1(&[event_count, occurrences.events().len()])?;
+            // The index stores BaseUse rows, not every original occurrence.
+            #[cfg(test)]
+            let before_base_use_scan = budget.work();
+            #[cfg(test)]
+            if SOURCE_OBJECT_BASE_USE_FIRST_SCAN_V29.get().is_none() {
+                SOURCE_OBJECT_BASE_USE_FIRST_SCAN_V29
+                    .set(Some((budget.work(), occurrences.events().len())));
+            }
+            budget.charge_work(occurrences.events().len())?;
+            for row in occurrences.events() {
+                #[cfg(test)]
+                {
+                    let (count, fill, events) = SOURCE_OBJECT_PAYLOAD_SCAN_COUNTS_V29.get();
+                    SOURCE_OBJECT_PAYLOAD_SCAN_COUNTS_V29.set((count, fill, events + 1));
+                }
+                if row.role() == ExecutionEventV29::BaseUse {
+                    event_count = argument_sum_v1(&[event_count, 1])?;
+                }
+            }
+            #[cfg(test)]
+            {
+                let (scan, final_check) = SOURCE_OBJECT_BASE_USE_CENSUS_WORK_V29.get();
+                SOURCE_OBJECT_BASE_USE_CENSUS_WORK_V29
+                    .set((scan + budget.work() - before_base_use_scan, final_check));
+            }
             for row in &anchors.rows {
                 #[cfg(test)]
                 {
@@ -1171,7 +1198,18 @@ impl SourceObjectPayloadIndexV29 {
         let mut result = Self {
             pending: source_index.pending as *const PendingScopedRootEmissionV29 as usize,
             ledger: budget.work_ledger_identity_v1(),
-            occurrences: emission_vec_v1(event_count, budget)?,
+            occurrences: {
+                #[cfg(test)]
+                let before = budget.storage();
+                let rows = emission_vec_v1(event_count, budget)?;
+                #[cfg(test)]
+                {
+                    let (calls, bytes) = SOURCE_OBJECT_BASE_USE_STORAGE_V29.get();
+                    SOURCE_OBJECT_BASE_USE_STORAGE_V29
+                        .set((calls + 1, bytes + budget.storage() - before));
+                }
+                rows
+            },
             reads: emission_vec_v1(read_count, budget)?,
             projects: emission_vec_v1(project_count, budget)?,
         };
@@ -1261,6 +1299,18 @@ impl SourceObjectPayloadIndexV29 {
         #[cfg(test)]
         if let Some(observe) = SOURCE_OBJECT_PAYLOAD_INDEX_OBSERVER_V29.get() {
             observe(&mut result, budget)?;
+        }
+        #[cfg(test)]
+        let before_base_use_check = budget.work();
+        budget.charge_work(1)?;
+        #[cfg(test)]
+        {
+            let (scan, final_check) = SOURCE_OBJECT_BASE_USE_CENSUS_WORK_V29.get();
+            SOURCE_OBJECT_BASE_USE_CENSUS_WORK_V29
+                .set((scan, final_check + budget.work() - before_base_use_check));
+        }
+        if result.occurrences.len() != event_count {
+            return Err(scoped_object_error_v29());
         }
         #[cfg(test)]
         let before_census = budget.work();

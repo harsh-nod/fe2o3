@@ -834,9 +834,10 @@ fn original_descriptor_role_outer_header_refuses_before_unsupported_namespace() 
     let positive =
         descriptor_role_boundary_run_v18(entrance, OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT);
     assert!(positive.0.is_ok() && positive.3, "{:?}", positive.0);
-    let completed = std::cell::Cell::new(false);
-    let published = std::cell::Cell::new(false);
-    let result = run_descriptor_roles_v18(entrance,
+    for cut in 0..3 {
+        let completed = std::cell::Cell::new(false);
+        let published = std::cell::Cell::new(false);
+        let result = run_descriptor_roles_v18(entrance,
         DescriptorRoleSourceV18::VolatileRead,
         OPTIMIZED_SOURCE_WORK_LIMIT_V18,
         MODULE_LIMIT,
@@ -860,9 +861,22 @@ fn original_descriptor_role_outer_header_refuses_before_unsupported_namespace() 
                     std::mem::align_of_val(&callback),
                 )
                 .unwrap();
+            // The outer constructor borrows the source and callback while its
+            // attempt envelope remains live across the explicit capture debit.
+            let attempt = scoped_source_attempt_header_oracle_v29::<
+                usize,
+                ProductionSourceOwnedViewErrorV18,
+                (&ProductionSourceOwnedViewV18<'_>, &()),
+            >();
             let floor = budget.storage();
             let limit = budget.storage_limit();
-            let padding = limit.checked_sub(floor + headers - 1).unwrap();
+            let remaining = match cut {
+                0 => attempt - 1,
+                1 => attempt,
+                _ => attempt + headers - 1,
+            };
+            let expected_excess = if cut == 1 { headers } else { 1 };
+            let padding = limit.checked_sub(floor + remaining).unwrap();
             budget.reserve_storage(padding).unwrap();
             let padded_floor = budget.storage();
             let refused =
@@ -875,7 +889,7 @@ fn original_descriptor_role_outer_header_refuses_before_unsupported_namespace() 
                     "outer capture must refuse before the volatile scalar namespace: {refused:?}"
                 );
             };
-            assert_eq!((error.actual(), error.limit()), (limit + 1, limit));
+            assert_eq!((error.actual(), error.limit()), (limit + expected_excess, limit));
             assert_eq!(budget.storage(), padded_floor);
             budget.release_storage(padding).unwrap();
             assert_eq!(budget.storage(), floor);
@@ -883,16 +897,51 @@ fn original_descriptor_role_outer_header_refuses_before_unsupported_namespace() 
             let repeated = original.check(budget);
             assert!(matches!(repeated, Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(repeated))) if repeated.actual() == error.actual() && repeated.limit() == error.limit()));
             assert_eq!((budget.work(), budget.storage()), before);
+            let replay: SourceOwnedResultV18<()> = original.with_descriptor_source_roles_v18(
+                optimized, 0, &recipe, budget, |_, _| panic!("the first constructor failure forbids retry"),
+            );
+            assert!(matches!(replay, Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(repeated))) if repeated.actual() == error.actual() && repeated.limit() == error.limit()));
+            assert_eq!((budget.work(), budget.storage()), before);
             completed.set(true);
             Ok(())
         },
     )
     .0;
-    assert!(completed.get() && !published.get(), "{result:?}");
-    assert!(
-        matches!(result, Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(error))) if error.limit() == MODULE_LIMIT && error.actual() == MODULE_LIMIT + 1),
-        "{result:?}"
-    );
+        assert!(completed.get() && !published.get(), "{result:?}");
+        assert!(
+            matches!(result, Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(error))) if error.limit() == MODULE_LIMIT && error.actual() > MODULE_LIMIT),
+            "{result:?}"
+        );
+    }
+}
+
+#[test]
+fn descriptor_rows_inner_attempt_header_exact_and_short_keep_first_refusal() {
+    for short in [false, true] {
+        let completed = std::cell::Cell::new(false);
+        let result = run_descriptor_roles_v18(
+            DescriptorRoleEntranceV18::IssuedDisjointSlice,
+            DescriptorRoleSourceV18::Constant,
+            OPTIMIZED_SOURCE_WORK_LIMIT_V18,
+            MODULE_LIMIT,
+            |original, optimized, budget| {
+                let root = original.source.root(0, budget)?.1;
+                let recipe =
+                    scalar_leaf_collision_recipe_v18(original.inventory.functions()[root].function);
+                slice_view_v1::test_descriptor_rows_attempt_boundary_v18(
+                    original, optimized, &recipe, short, &completed, budget,
+                )
+            },
+        )
+        .0;
+        assert!(completed.get(), "{result:?}");
+        assert!(matches!(
+            result,
+            Err(ProductionSourceOwnedViewErrorV18::Resource(
+                ArgumentResourceV1::Storage(_)
+            ))
+        ));
+    }
 }
 
 #[test]

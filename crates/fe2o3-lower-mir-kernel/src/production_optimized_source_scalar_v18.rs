@@ -5,6 +5,24 @@ struct OptimizedSourceScalarReadV18 {
     operation: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
 }
 
+#[cfg(test)]
+thread_local! {
+    static OPTIMIZED_SCALAR_ATTEMPT_PROBE_V18: std::cell::Cell<Option<(usize, usize, usize, usize)>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn test_optimized_scalar_attempt_header_v18(budget: &mut ArgumentBudgetV1<'_>) {
+    OPTIMIZED_SCALAR_ATTEMPT_PROBE_V18.with(|probe| {
+        if let Some((remaining, _, _, calls)) = probe.get() {
+            assert_eq!(calls, 0, "the probe must reach one optimized inner attempt");
+            let floor = budget.storage();
+            let padding = budget.storage_limit() - floor - remaining;
+            budget.reserve_storage(padding).unwrap();
+            probe.set(Some((remaining, padding, floor, calls + 1)));
+        }
+    });
+}
+
 /// The original scalar names plus exact optimized read occurrences. This is not
 /// a read-from/currentness proof; those obligations remain independent.
 pub struct ProductionOptimizedSourceScalarLeavesV18<'scope> {
@@ -219,9 +237,14 @@ impl ProductionSourceCorrespondenceV18<'_> {
     {
         optimized_source_endpoints_v18(self, optimized, budget)?;
         self.with_scalar_leaf_namespace_v18(root, namespace, budget, |original, budget| {
+            #[cfg(test)]
+            test_optimized_scalar_attempt_header_v18(budget);
             let floor = budget.storage();
-            let (reads, function, retained) =
-                scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
+            let (reads, function, retained) = self.retain_query(scoped_source_attempt_v29(
+                self.source.cleanup,
+                budget,
+                floor,
+                |budget| {
                     let floor = budget.storage();
                     self.retain_query((|| {
                         budget.reserve_storage(argument_sum_v1(&[
@@ -240,7 +263,8 @@ impl ProductionSourceCorrespondenceV18<'_> {
                             .ok_or(ArgumentResourceV1::Accounting)?;
                         Ok((reads, function, retained))
                     })())
-                })?;
+                },
+            ))?;
             let leaves = ProductionOptimizedSourceScalarLeavesV18 {
                 original,
                 optimized,

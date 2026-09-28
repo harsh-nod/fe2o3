@@ -582,6 +582,6 @@ fn slice_length_metadata_reuses_the_exact_projection_resource_boundary() {
             short,
         )
         .unwrap_err(),
-        expected
+        SemanticMirDecodeErrorV1::Validation(expected)
     );
 }

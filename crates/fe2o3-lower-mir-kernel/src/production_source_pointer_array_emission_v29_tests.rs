@@ -112,9 +112,41 @@ fn original_argument_pointer_array_owner_v29() -> ProductionSemanticSsaOwnerV1 {
         ],
         vec![block(214, statements, SemanticTerminatorKindV1::Return)],
     );
-    let admitted = InertSemanticMirRequestV1::new_with_callables(
+    let missing_pointer_abi = InertSemanticMirRequestV1::new_with_callables(
         semantic.target(),
         semantic.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        functions.clone(),
+        semantic.callables().to_vec(),
+        semantic.roots().to_vec(),
+    )
+    .unwrap();
+    assert!(matches!(
+        missing_pointer_abi.admit_exact_v29(SemanticMirLimitsV1::default()),
+        Err(fe2o3_mir_model::semantic_mir_v1::SemanticMirErrorV1::InvalidFunctionAbi)
+    ));
+    // The template pointer was local-only. Direct ABI use also requires its
+    // exact raw pointee facts; these grant no alignment or dereference promise.
+    let mut types = semantic.types().to_vec();
+    let declaration = &types[pointer.index() as usize];
+    types[pointer.index() as usize] = declaration.clone().with_rustc_abi_properties(
+        declaration.abi_properties().with_scalar_pointee_info(
+            Some(
+                fe2o3_mir_model::semantic_mir_v1::SemanticAbiPointeeInfoV1::new(
+                    fe2o3_mir_model::semantic_mir_v1::SemanticAbiPointeeKindV1::Raw,
+                    0,
+                    1,
+                )
+                .unwrap(),
+            ),
+            None,
+        ),
+    );
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        types,
         vec![],
         vec![],
         vec![],

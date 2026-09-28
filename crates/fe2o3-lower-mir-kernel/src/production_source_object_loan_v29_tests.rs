@@ -1033,6 +1033,46 @@ fn inspect_object_loan_strategy_v29(
                     }
                 }
                 OBJECT_LOAN_UNBACKED_KINDS_V29.set(kinds);
+                if OBJECT_LOAN_CASE_V29.get().temporary {
+                    let instance = instances.instance(origin.instance).unwrap();
+                    let local = &instance.declaration().locals()[origin.local.index() as usize];
+                    assert_eq!(local.role(), SemanticLocalRoleV1::Temporary);
+                    assert!(
+                        !instance
+                            .ssa()
+                            .plan()
+                            .promoted_variables()
+                            .iter()
+                            .any(|local| { local.get() == origin.local.index() })
+                    );
+                    let (demands, _) = plan.storage_demands.unwrap().requests(instances, budget)?;
+                    let demand: Vec<_> = demands
+                        .iter()
+                        .filter(|row| row.instance == origin.instance && row.local == origin.local)
+                        .collect();
+                    assert_eq!(demand.len(), 1);
+                    assert_eq!(demand[0].function, instance.function());
+                    assert_eq!(demand[0].ty, origin.ty);
+                    assert_eq!(
+                        demand[0].kind,
+                        source_storage_demands_v29::DemandKindV29::WholeBackingCandidate
+                    );
+                    assert!(demand[0].path.is_empty());
+                    let cell = plan
+                        .cells
+                        .rows
+                        .iter()
+                        .find(|cell| {
+                            (cell.instance, cell.local, cell.generation)
+                                == (origin.instance, origin.local, origin.generation)
+                        })
+                        .unwrap();
+                    assert_eq!(cell.kind, SourceBackingKindV29::Scalar);
+                    assert_eq!(cell.ty, origin.ty);
+                    // Source storage was selected independently. It does not
+                    // turn this immutable snapshot loan into a cell pointer.
+                    assert!(plan.scalar_cell(loan, budget)?.is_none());
+                }
             }
             checked += 1;
         }
@@ -1129,17 +1169,17 @@ fn original_shared_primitive_loan_strategy_matches_only_its_existing_object_back
     );
     assert!(
         result.is_ok() && completed,
-        "genuine no-cell temporary: {result:?}"
+        "genuine independently backed temporary: {result:?}"
     );
     assert_eq!(OBJECT_LOAN_STRATEGY_VISITS_V29.get(), 3);
     let (absent, scalar) = OBJECT_LOAN_UNBACKED_KINDS_V29.get();
-    assert!(
-        absent > before.0,
-        "new original temporary must remain unbacked"
+    assert_eq!(
+        absent, before.0,
+        "borrowed source temporaries have storage demand"
     );
     assert!(
-        absent > 0 && scalar > 0,
-        "no-cell and legacy-scalar dispositions: absent={absent}, scalar={scalar}"
+        scalar > before.1,
+        "new scalar backing must not change the promoted loan strategy"
     );
 }
 
