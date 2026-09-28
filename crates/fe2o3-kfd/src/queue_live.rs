@@ -14406,8 +14406,37 @@ mod tests {
             .split("pub fn recycled_fixed_dispatch_generation")
             .next()
             .unwrap();
-        assert!(recycle.contains("Gfx942CompletionErrorV1::SignalPinned"));
-        assert!(recycle.contains("retryable_completed: Some(wrap_completed"));
+        // Seal both the shared retry predicate and the native caller's custody handling.
+        let classifier = production
+            .split("fn from_completion_failure(")
+            .nth(1)
+            .unwrap()
+            .split("pub const fn error(")
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .collect::<String>();
+        assert!(classifier.contains(concat!(
+            "letretryable_completed=matches!(error,",
+            "ComputeAqlQueueSessionErrorV1::Completion(",
+            "Gfx942CompletionErrorV1::SignalPinned{..}))",
+            ".then(||wrap_completed(completed,identity));"
+        )));
+        assert!(classifier.contains("Self{error,retryable_completed,}"));
+        let recycle_inner = recycle
+            .split("pub(super) fn recycle_fixed_dispatch_inner<const N: usize>")
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .collect::<String>();
+        assert!(recycle_inner.contains(concat!(
+            "Err((error,completion))=>{",
+            "letfailure=Gfx942FixedDispatchRecycleFailureV1::",
+            "from_completion_failure(error,completion,identity,);",
+            "iffailure.retryable_completed.is_none()",
+            "&&letSome(dispatch)=self.dispatch.as_mut(){dispatch.poison();}",
+            "returnErr(failure);"
+        )));
         assert!(recycle.contains("Gfx942DispatchBindingErrorV1::StaleDispatchGeneration"));
         assert!(recycle.contains("retryable_completed: None"));
     }
