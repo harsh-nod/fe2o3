@@ -4299,16 +4299,7 @@ impl ComputeAqlQueueSessionV1 {
             self.submit_fixed_dispatch_inner_classified::<N>(FixedDispatchBindingModeV1::Ordinary)
         }));
         match operation {
-            Ok(Ok(batch)) => Ok(batch),
-            Ok(Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(error))) => {
-                Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(error))
-            }
-            Ok(Err(FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error))) => {
-                Err(Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error))
-            }
-            Ok(Err(FixedDispatchSubmissionFailureV1::Terminal(error))) => {
-                Err(Gfx942FixedDispatchSubmissionFailureV1::Terminal(error))
-            }
+            Ok(result) => result.map_err(FixedDispatchSubmissionFailureV1::into_public),
             Err(payload) => {
                 self.poison_terminal();
                 permanently_poison_process_global_kfd_runtime_gate_v1();

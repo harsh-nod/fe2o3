@@ -95,6 +95,7 @@ mod compute_settlement;
 mod materialized_cancellation;
 mod materialized_completion;
 mod materialized_publication;
+mod materialized_submission_attempt;
 mod ordered_publication;
 mod peer_ancestry;
 mod peer_compute_access;

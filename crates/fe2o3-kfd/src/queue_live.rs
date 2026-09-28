@@ -1380,6 +1380,18 @@ impl Gfx942FixedDispatchSubmissionFailureV1 {
 }
 
 impl FixedDispatchSubmissionFailureV1 {
+    fn into_public(self) -> Gfx942FixedDispatchSubmissionFailureV1 {
+        match self {
+            Self::RejectedBeforeSideEffect(error) => {
+                Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error)
+            }
+            Self::RetryableBeforeSideEffect(error) => {
+                Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(error)
+            }
+            Self::Terminal(error) => Gfx942FixedDispatchSubmissionFailureV1::Terminal(error),
+        }
+    }
+
     fn into_error(self) -> ComputeAqlQueueSessionErrorV1 {
         match self {
             Self::RejectedBeforeSideEffect(error)
@@ -13687,7 +13699,13 @@ fn map_dependency_target_use_error_v1(
 }
 
 #[cfg(test)]
+#[path = "../../fe2o3-runtime/src/kfd_backend/materialized_submission_attempt.rs"]
+mod runtime_materialized_submission_attempt;
+
+#[cfg(test)]
 mod tests {
+    mod runtime_publication_tests;
+
     #[test]
     fn retained_device_scope_requires_exact_live_queue_phase_and_unpoisoned_owners() {
         use super::ComputeAqlQueuePhaseV1::*;

@@ -1,5 +1,6 @@
 //! Indexed logical custody through ordinary binding and submission attempts.
 
+pub(super) use super::materialized_submission_attempt::MaterializedSubmissionAttemptV1;
 use super::*;
 
 pub(super) fn with_recycled_materialized_metadata_v1<T, E>(
@@ -14,27 +15,6 @@ pub(super) fn with_recycled_materialized_metadata_v1<T, E>(
     // Include the outer lane close in operation: an inner success is insufficient.
     *recycled = None;
     Ok(result)
-}
-
-pub(super) enum MaterializedSubmissionAttemptV1 {
-    Unattempted,
-    NativeOwned,
-    Retryable,
-    Published(Gfx942DispatchBatchV1<1>),
-    #[cfg(test)]
-    ScriptedPublished,
-}
-
-impl MaterializedSubmissionAttemptV1 {
-    pub(super) fn submit<E>(
-        &mut self,
-        operation: impl FnOnce() -> Result<Self, E>,
-    ) -> Result<(), E> {
-        *self = Self::NativeOwned;
-        // Root the returned outcome before the outer native lane loan closes.
-        *self = operation()?;
-        Ok(())
-    }
 }
 
 pub(super) struct MaterializedBindingV1 {
@@ -66,13 +46,6 @@ impl MaterializedBindingV1 {
             unreachable!("ordinary binding remains indexed until publication returns")
         };
         root
-    }
-
-    pub(super) fn submit<E>(
-        &mut self,
-        operation: impl FnOnce() -> Result<MaterializedSubmissionAttemptV1, E>,
-    ) -> Result<(), E> {
-        self.submission.submit(operation)
     }
 }
 
@@ -220,13 +193,8 @@ impl KfdRuntimeBackendV1 {
         };
         let publication = queue
             .with_compute_lane_v1(native_lane, |queue| {
-                root.submit(|| match queue.submit_fixed_dispatch_classified_v1::<1>() {
-                    Ok(batch) => Ok(MaterializedSubmissionAttemptV1::Published(batch)),
-                    Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)) => {
-                        Ok(MaterializedSubmissionAttemptV1::Retryable)
-                    }
-                    Err(error) => Err(error),
-                })
+                root.submission
+                    .submit_classified(|| queue.submit_fixed_dispatch_classified_v1::<1>())
             })
             .map_err(|error| self.terminal_error(format!("KFD compute-lane selection: {error}")))?;
         match publication {
@@ -340,24 +308,25 @@ impl KfdRuntimeBackendV1 {
         }
         let root = MaterializedBindingV1::indexed(self.active.as_mut().unwrap());
         let retry = root.scripted_initial_retry || root.scripted.as_ref().unwrap().1 != 0;
-        root.submit(|| match fault {
-            Some(Fault::SubmitUnwind) => panic!("scripted ordinary submit unwind"),
-            Some(Fault::SubmitRejected | Fault::SubmitTerminal) => Err(()),
-            Some(Fault::OuterErrorAfterRetry | Fault::OuterUnwindAfterRetry) => {
-                Ok(MaterializedSubmissionAttemptV1::Retryable)
-            }
-            _ if retry
-                && fault != Some(Fault::ProfileUnwind)
-                && !matches!(
-                    fault,
-                    Some(Fault::OuterErrorAfterPublish | Fault::OuterUnwindAfterPublish)
-                ) =>
-            {
-                Ok(MaterializedSubmissionAttemptV1::Retryable)
-            }
-            _ => Ok(MaterializedSubmissionAttemptV1::ScriptedPublished),
-        })
-        .map_err(|()| self.terminal_error("scripted ordinary submission failure"))?;
+        root.submission
+            .submit(|| match fault {
+                Some(Fault::SubmitUnwind) => panic!("scripted ordinary submit unwind"),
+                Some(Fault::SubmitRejected | Fault::SubmitTerminal) => Err(()),
+                Some(Fault::OuterErrorAfterRetry | Fault::OuterUnwindAfterRetry) => {
+                    Ok(MaterializedSubmissionAttemptV1::Retryable)
+                }
+                _ if retry
+                    && fault != Some(Fault::ProfileUnwind)
+                    && !matches!(
+                        fault,
+                        Some(Fault::OuterErrorAfterPublish | Fault::OuterUnwindAfterPublish)
+                    ) =>
+                {
+                    Ok(MaterializedSubmissionAttemptV1::Retryable)
+                }
+                _ => Ok(MaterializedSubmissionAttemptV1::ScriptedPublished),
+            })
+            .map_err(|()| self.terminal_error("scripted ordinary submission failure"))?;
         let root = MaterializedBindingV1::indexed(self.active.as_mut().unwrap());
         if fault.is_none() && retry {
             if root.scripted_initial_retry {

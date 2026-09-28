@@ -245,13 +245,7 @@ impl KfdRuntimeBackendV1 {
             .unwrap()
             .with_compute_lane_v1(lane, |queue| {
                 root.attempt
-                    .submit(|| match queue.submit_fixed_dispatch_classified_v1::<1>() {
-                        Ok(batch) => Ok(Attempt::Published(batch)),
-                        Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(
-                            _,
-                        )) => Ok(Attempt::Retryable),
-                        Err(error) => Err(error),
-                    })
+                    .submit_classified(|| queue.submit_fixed_dispatch_classified_v1::<1>())
             });
         match result {
             Ok(Ok(())) => Ok(()),
