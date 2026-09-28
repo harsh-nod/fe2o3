@@ -18,22 +18,47 @@ static FORKS: AtomicUsize = AtomicUsize::new(0);
 static DIAGNOSTIC_DOMAIN: std::sync::Mutex<Option<DiagnosticDomain>> = std::sync::Mutex::new(None);
 
 struct DiagnosticDomain {
-    child: std::process::Child,
+    // None after publication means spawn is in flight or unwound, not no child.
+    child: Option<std::process::Child>,
+    // No Drop cleanup: an unresolved child/domain must retain its scratch.
+    scratch: Option<std::path::PathBuf>,
     out: Capture,
     err: Capture,
     terminals: Vec<i32>,
 }
 
-fn publish_domain(slot: &mut Option<DiagnosticDomain>, command: &mut Command) {
+struct UnspawnedScratch(Option<std::path::PathBuf>);
+
+impl UnspawnedScratch {
+    fn remove(&mut self) -> io::Result<()> {
+        if let Some(path) = &self.0 {
+            std::fs::remove_dir_all(path)?;
+        }
+        self.0 = None;
+        Ok(())
+    }
+}
+
+impl Drop for UnspawnedScratch {
+    fn drop(&mut self) {
+        // Armed only before spawn or after an explicit no-live-child error.
+        let _ = self.remove();
+    }
+}
+
+fn publish_domain(
+    slot: &mut Option<DiagnosticDomain>,
+    command: &mut Command,
+    mut scratch: UnspawnedScratch,
+) -> io::Result<()> {
     assert!(
         slot.is_none(),
         "prior diagnostic domain remains unresolved; no retry"
     );
     let terminals = Vec::with_capacity(MAX_TRACEES + 3);
-    let child = spawn_fixture(command);
-    // No fallible work between spawn and owner publication.
-    *slot = Some(DiagnosticDomain {
-        child,
+    let domain = slot.insert(DiagnosticDomain {
+        child: None,
+        scratch: None,
         terminals,
         out: Capture {
             bytes: Vec::new(),
@@ -44,21 +69,40 @@ fn publish_domain(slot: &mut Option<DiagnosticDomain>, command: &mut Command) {
             eof: false,
         },
     });
+    // Transfer before entering spawn, so even an unknown postfork unwind retains
+    // scratch and the occupied slot refuses retry. No panic is treated as no fork.
+    domain.scratch = scratch.0.take();
+    match crate::executor::spawn_artifact_coordinated_child(command) {
+        Ok(child) => {
+            // No fallible work between spawn and exact child publication.
+            domain.child = Some(child);
+            Ok(())
+        }
+        Err(error) => {
+            // Command::spawn returns Err before fork or after disposing its failed
+            // exec child. The private pre_exec callback cannot create descendants.
+            scratch.0 = slot.take().expect("published spawn refusal").scratch;
+            scratch.remove()?;
+            Err(error)
+        }
+    }
 }
 
 impl DiagnosticDomain {
     fn nonblocking(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
-        make_nonblocking(self.child.stdout.as_ref().expect("fixture stdout"))?;
-        make_nonblocking(self.child.stderr.as_ref().expect("fixture stderr"))
+        let child = self.child.as_ref().expect("published child");
+        make_nonblocking(child.stdout.as_ref().expect("fixture stdout"))?;
+        make_nonblocking(child.stderr.as_ref().expect("fixture stderr"))
     }
     fn drain(&mut self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+        let child = self.child.as_mut().expect("published child");
         drain(
-            self.child.stdout.as_mut().expect("fixture stdout"),
+            child.stdout.as_mut().expect("fixture stdout"),
             &mut self.out,
             65536,
         )?;
         drain(
-            self.child.stderr.as_mut().expect("fixture stderr"),
+            child.stderr.as_mut().expect("fixture stderr"),
             &mut self.err,
             65536,
         )
@@ -241,16 +285,14 @@ fn private_command(fixture: &str, case: &str) -> Command {
     command
 }
 
-fn spawn_fixture(command: &mut Command) -> std::process::Child {
-    crate::executor::spawn_artifact_coordinated_child(command).unwrap()
-}
-
 pub(super) fn run_domain(case: &str) {
     let mut slot = DIAGNOSTIC_DOMAIN.lock().unwrap_or_else(|p| p.into_inner());
     publish_domain(
         &mut slot,
         &mut private_command("quarantine_domain_fixture", case),
-    );
+        UnspawnedScratch(None),
+    )
+    .unwrap();
     let domain = slot.as_mut().expect("published domain");
     let mut read_error = domain.nonblocking().err();
     let deadline = Instant::now() + Duration::from_secs(if case == "protected" { 180 } else { 25 });
@@ -258,7 +300,7 @@ pub(super) fn run_domain(case: &str) {
         if read_error.is_none() {
             read_error = domain.drain().err();
         }
-        match domain.child.try_wait() {
+        match domain.child.as_mut().expect("published child").try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(error) => panic!(
@@ -291,6 +333,45 @@ pub(super) fn run_domain(case: &str) {
         assert!(String::from_utf8_lossy(&domain.out.bytes).contains("CREATOR_TERMINAL_CONFIRMED"));
     }
 }
+
+#[test]
+fn diagnostic_scratch_is_removed_on_no_child_spawn_refusal() {
+    let scratch = UnspawnedScratch(super::spawn_lease_tests::prepare_directory(
+        "lease-no-child-refusal",
+    ));
+    let path = scratch.0.as_ref().unwrap().clone();
+    let mut command = private_command("quarantine_driver_fixture", "lease-no-child-refusal");
+    // Pinned std rejects NUL arguments before I/O setup or fork. This is a real
+    // spawn error with no child, not a fabricated exec or terminal observation.
+    command.arg("\0");
+    let mut slot = DIAGNOSTIC_DOMAIN.lock().unwrap_or_else(|p| p.into_inner());
+    assert!(path.is_dir());
+    let error = publish_domain(&mut slot, &mut command, scratch).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(
+        slot.is_none(),
+        "confirmed no-child refusal needs no custody"
+    );
+    assert!(
+        !path.try_exists().unwrap(),
+        "scratch leaked before driver spawn"
+    );
+}
+
+#[test]
+fn diagnostic_scratch_is_removed_on_pre_spawn_unwind() {
+    let scratch = UnspawnedScratch(super::spawn_lease_tests::prepare_directory(
+        "lease-pre-spawn-unwind",
+    ));
+    let path = scratch.0.as_ref().unwrap().clone();
+    let result = std::panic::catch_unwind(move || {
+        let _scratch = scratch;
+        panic!("fixture setup failed before entering spawn");
+    });
+    assert!(result.is_err());
+    assert!(!path.try_exists().unwrap(), "scratch leaked during setup");
+}
+
 #[test]
 fn cleanup_deadline_retains_owned_tasks_and_resources() {
     run_domain("deadline");
@@ -394,16 +475,16 @@ fn quarantine_domain_fixture() {
     assert_eq!(unsafe { prctl(36, 1_usize, 0_usize, 0_usize, 0_usize) }, 0);
     let case = std::env::var(CASE).unwrap();
     let mut command = private_command("quarantine_driver_fixture", &case);
-    let scratch = super::spawn_lease_tests::prepare_directory(&case);
-    if let Some(path) = &scratch {
+    let scratch = UnspawnedScratch(super::spawn_lease_tests::prepare_directory(&case));
+    if let Some(path) = &scratch.0 {
         command.env(super::spawn_lease_tests::DIRECTORY_ENV, path);
     }
     command.process_group(0);
     let mut slot = DIAGNOSTIC_DOMAIN.lock().unwrap_or_else(|p| p.into_inner());
-    publish_domain(&mut slot, &mut command);
+    publish_domain(&mut slot, &mut command, scratch).unwrap();
     drop(command);
     let domain = slot.as_mut().expect("published driver");
-    let group = domain.child.id() as i32;
+    let group = domain.child.as_ref().expect("published child").id() as i32;
     let deadline = Instant::now() + Duration::from_secs(if case == "protected" { 165 } else { 15 });
     // Catch EVERY postspawn observation failure before fatal teardown. The
     // direct child stays unreaped so its private group ID cannot be recycled.
@@ -459,7 +540,7 @@ fn quarantine_domain_fixture() {
         }
     }
     let domain = slot.take().expect("terminal diagnostic domain");
-    if let Some(path) = scratch {
+    if let Some(path) = &domain.scratch {
         // The exact owned domain is terminal, including any blocked lock releaser.
         std::fs::remove_dir_all(path).unwrap();
     }
