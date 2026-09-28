@@ -24,6 +24,19 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [classified dependency-source publication](evidence/dev-source-publication-classification-2026-09-28/README.md)
+API now preserves rejection, complete-rollback retry and terminal outcomes while
+keeping the legacy error API. Nine new CPU test groups cover N=3 exact source
+events, pins/readers, capacity retry, identity burn, faults and both lane paths.
+The broad KFD run passed 1720 tests and found two test-oracle failures; both were
+corrected without production changes, and all 155 live-queue tests pass. This is
+not a fresh all-green full KFD rerun. Full runtime tests pass 1818/0 with 30
+hardware ignores; 95 doctests, strict Clippy, the no-default-features production
+check and formatting pass. Runtime ownership of native source events, physical
+versus logical target settlement, lane-local storage composition, source-rollback
+refinement, GPU overlap and matched performance remain open. A1/A2 and accepted
+lane checkpoints are unchanged.
+
 The [generated-only composed startup](evidence/dev-generated-composed-startup-2026-09-28/README.md)
 now exposes mandatory Context-request/N1/N2 accounting through both checked-device
 and open constructors and the authenticated current-thread application helper.
