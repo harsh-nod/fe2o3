@@ -635,3 +635,10 @@ mod retained_local_provenance;
 pub(super) use retained_local_provenance::{
     RetainedLocalProvenanceV1, retained_provenance_frame_v1,
 };
+
+#[path = "bf16_nominal_retained_allocation_contracts_v1.rs"]
+mod retained_allocation_contracts;
+#[allow(unused_imports)]
+pub(super) use retained_allocation_contracts::{
+    RetainedAllocationContractsV1, retained_allocation_frame_v1,
+};

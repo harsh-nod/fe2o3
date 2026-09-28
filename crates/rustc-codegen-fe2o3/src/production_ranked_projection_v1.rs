@@ -40498,3 +40498,6 @@ pub(crate) use bf16_nominal_source_preparation_v1::observe_option_enum_scalar_be
 
 #[cfg(test)]
 pub(crate) use bf16_nominal_source_preparation_v1::observe_option_enum_scalar_provenance_before_allocation_for_test_v1;
+
+#[cfg(test)]
+pub(crate) use bf16_nominal_source_preparation_v1::observe_option_enum_scalar_provenance_allocation_before_capabilities_for_test_v1;

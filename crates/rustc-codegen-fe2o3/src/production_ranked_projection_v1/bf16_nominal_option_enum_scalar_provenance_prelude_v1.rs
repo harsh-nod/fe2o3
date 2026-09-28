@@ -406,3 +406,11 @@ mod genuine;
 mod tests;
 #[cfg(test)]
 pub(crate) use genuine::observe_option_enum_scalar_provenance_before_allocation_for_test_v1;
+
+// Separate allocation continuation; the BeforeAllocation entry is unchanged.
+#[path = "bf16_nominal_option_enum_scalar_provenance_allocation_prelude_v1.rs"]
+mod option_enum_scalar_provenance_allocation_prelude;
+#[cfg(test)]
+pub(crate) use option_enum_scalar_provenance_allocation_prelude::observe_option_enum_scalar_provenance_allocation_before_capabilities_for_test_v1;
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use option_enum_scalar_provenance_allocation_prelude::{BeforeCapabilitiesV1, with_nominal_option_enum_scalar_provenance_allocation_before_capabilities_v1};

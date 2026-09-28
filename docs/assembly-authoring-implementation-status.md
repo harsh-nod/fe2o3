@@ -1646,3 +1646,16 @@ See [qualification and limits](option-enum-scalar-provenance-preparation-qualifi
 This stops before allocation contracts. Capability preparation, later writers,
 joint bounds and ordinary production admission remain open.
 Broad accepted exits remain 6/18.
+
+## Authenticated allocation-contract checkpoint — 2026-09-28
+
+The private source-owned prefix now reaches BeforeCapabilities: actual Option,
+enum, scalar, provenance and allocation analysis share the original owner and
+budget. All 14 component and 17 checkpoint controls passed, with 356 model and
+3,315 backend tests (197 ignored), builds and five actual Rust-source sessions.
+The two positive sources completed 36 numerical helper runs.
+See [qualification and limits](option-enum-scalar-provenance-allocation-preparation-qualification-20260928.md).
+
+Capability preparation, the earlier constant-analysis position, later argument
+writers, joint bounds and ordinary production admission remain open.
+Broad accepted exits remain 6/18.

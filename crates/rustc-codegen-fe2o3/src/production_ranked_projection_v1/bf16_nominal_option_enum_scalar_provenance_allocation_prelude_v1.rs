@@ -1,38 +1,36 @@
-//! Source-owned Option -> enum -> scalar continuation, stopping before provenance.
-//! Earlier checkpoint entries, algorithms and ordinary routes are unchanged.
+//! Source-owned Option -> enum -> scalar -> provenance -> allocation continuation.
+//! Stops before capability preparation; prior entries and ordinary routes are unchanged.
 use super::*;
-use crate::production_ranked_projection_v1::bf16_nominal_source_algorithms_v1::RetainedScalarInventoryV1;
+use crate::production_ranked_projection_v1::bf16_nominal_source_algorithms_v1::RetainedAllocationContractsV1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ScalarPhase {
+enum AllocationPhase {
     Fresh,
     Terminal,
-    BeforeProvenance,
+    BeforeCapabilities,
 }
-
-/// The complete earlier owners and scalar partial arrays remain outside the
-/// genuine checked-call catch/postflight, with one accepted-credit counter.
-struct PendingBeforeProvenanceV1 {
-    phase: ScalarPhase,
-    earlier: PendingBeforeScalarV1,
-    scalar: RetainedScalarInventoryV1,
-    scalar_invoked: bool,
+struct PendingBeforeCapabilitiesV1 {
+    phase: AllocationPhase,
+    earlier: PendingBeforeAllocationV1,
+    allocation: RetainedAllocationContractsV1,
+    allocation_invoked: bool,
     failure: Option<Backend>,
 }
-impl PendingBeforeProvenanceV1 {
+impl PendingBeforeCapabilitiesV1 {
     fn new() -> Self {
         Self {
-            phase: ScalarPhase::Fresh,
-            earlier: PendingBeforeScalarV1::new(),
-            scalar: RetainedScalarInventoryV1::new(),
-            scalar_invoked: false,
+            phase: AllocationPhase::Fresh,
+            earlier: PendingBeforeAllocationV1::new(),
+            allocation: RetainedAllocationContractsV1::new(),
+            allocation_invoked: false,
             failure: None,
         }
     }
     fn prepare(&mut self, source: &Source<'_>, resources: &mut Prep<'_, '_>) -> BResult<()> {
-        let fresh =
-            self.phase == ScalarPhase::Fresh && !self.scalar_invoked && self.failure.is_none();
-        self.phase = ScalarPhase::Terminal;
+        let fresh = self.phase == AllocationPhase::Fresh
+            && !self.allocation_invoked
+            && self.failure.is_none();
+        self.phase = AllocationPhase::Terminal;
         if !fresh
             || !resources.is_metered()
             || resources.has_denial()
@@ -41,44 +39,65 @@ impl PendingBeforeProvenanceV1 {
             return Err(accounting());
         }
         resources.work(32)?;
-        // Private preparation, NOT the earlier factory or its refund boundary.
         self.earlier.prepare(source, resources)?;
-        if self.earlier.phase != EnumPhase::BeforeScalar {
+        if self.earlier.phase != ProvenancePhase::BeforeAllocation {
             return Err(accounting());
         }
-        self.scalar_invoked = true;
-        self.scalar.prepare_into(source.function, resources)?;
-        self.scalar.completed_for(source.function, resources)?;
+        // These exact origin rows stay owned by the preceding provenance stage;
+        // both owners and the actual source loan outlive true checked postflight.
+        let earlier = self.earlier.view(source, resources)?;
+        let provenance = earlier.provenance();
+        self.allocation_invoked = true;
+        self.allocation.prepare_into(
+            source.types,
+            source.function,
+            &provenance.allocation_origins,
+            resources,
+        )?;
+        self.allocation.completed_for(
+            source.types,
+            source.function,
+            &provenance.allocation_origins,
+            resources,
+        )?;
         if resources.has_denial() {
             return Err(accounting());
         }
-        self.phase = ScalarPhase::BeforeProvenance;
+        self.phase = AllocationPhase::BeforeCapabilities;
         Ok(())
     }
     fn view<'a>(
         &'a self,
         source: &'a Source<'_>,
         resources: &Prep<'_, '_>,
-    ) -> BResult<BeforeProvenanceV1<'a>> {
-        if self.phase != ScalarPhase::BeforeProvenance || !self.scalar_invoked {
+    ) -> BResult<BeforeCapabilitiesV1<'a>> {
+        if self.phase != AllocationPhase::BeforeCapabilities || !self.allocation_invoked {
             return Err(accounting());
         }
-        Ok(BeforeProvenanceV1 {
-            earlier: self.earlier.view(source, resources)?,
-            scalar: self.scalar.completed_for(source.function, resources)?,
-            scalar_invoked: self.scalar_invoked,
+        let earlier = self.earlier.view(source, resources)?;
+        let provenance = earlier.provenance();
+        let allocation = self.allocation.completed_for(
+            source.types,
+            source.function,
+            &provenance.allocation_origins,
+            resources,
+        )?;
+        Ok(BeforeCapabilitiesV1 {
+            earlier,
+            allocation,
+            allocation_invoked: self.allocation_invoked,
         })
     }
 }
 
-/// Immutable actual source DATA. This is not provenance/allocation/capability
-/// completeness and confers no F2 or ordinary-route readiness.
-pub(in crate::production_ranked_projection_v1) struct BeforeProvenanceV1<'a> {
-    earlier: BeforeScalarV1<'a>,
-    scalar: &'a AssertionDefinitionInventoryV1,
-    scalar_invoked: bool,
+/// Immutable completed pre-capability DATA, not capability authority, later
+/// argument writers, F2, or ordinary-route readiness.
+pub(in crate::production_ranked_projection_v1) struct BeforeCapabilitiesV1<'a> {
+    earlier: BeforeAllocationV1<'a>,
+    allocation: &'a [Option<AllocationContractV1>],
+    allocation_invoked: bool,
 }
-impl BeforeProvenanceV1<'_> {
+impl BeforeCapabilitiesV1<'_> {
     pub(in crate::production_ranked_projection_v1) fn function(&self) -> &SemanticFunctionDeclV1 {
         self.earlier.function()
     }
@@ -103,51 +122,68 @@ impl BeforeProvenanceV1<'_> {
     pub(in crate::production_ranked_projection_v1) fn scalar_inventory(
         &self,
     ) -> &AssertionDefinitionInventoryV1 {
-        self.scalar
+        self.earlier.scalar_inventory()
     }
     pub(in crate::production_ranked_projection_v1) fn scalar_api_invoked(&self) -> bool {
-        self.scalar_invoked
+        self.earlier.scalar_api_invoked()
+    }
+    pub(in crate::production_ranked_projection_v1) fn provenance(&self) -> &LocalProvenanceV1 {
+        self.earlier.provenance()
+    }
+    pub(in crate::production_ranked_projection_v1) fn provenance_api_invoked(&self) -> bool {
+        self.earlier.provenance_api_invoked()
+    }
+    pub(in crate::production_ranked_projection_v1) fn allocation_contracts(
+        &self,
+    ) -> &[Option<AllocationContractV1>] {
+        self.allocation
+    }
+    pub(in crate::production_ranked_projection_v1) fn allocation_api_invoked(&self) -> bool {
+        self.allocation_invoked
     }
 }
 
-const SCALAR_FRAME_ROWS: usize = 21;
-fn scalar_frame_rows<R, F>() -> BResult<[usize; SCALAR_FRAME_ROWS]> {
+const ALLOCATION_FRAME_ROWS: usize = 23;
+fn allocation_frame_rows<R, F>() -> BResult<[usize; ALLOCATION_FRAME_ROWS]> {
     Ok([
-        size_of::<PendingBeforeProvenanceV1>(),
+        size_of::<PendingBeforeCapabilitiesV1>(),
         size_of::<(
-            PendingBeforeScalarV1,
-            RetainedScalarInventoryV1,
-            ScalarPhase,
+            PendingBeforeAllocationV1,
+            RetainedAllocationContractsV1,
+            AllocationPhase,
             bool,
             Option<Backend>,
         )>(),
         size_of::<(
-            &mut PendingBeforeProvenanceV1,
+            &mut PendingBeforeCapabilitiesV1,
             &Source<'static>,
             &mut Prep<'static, 'static>,
             bool,
             BResult<()>,
         )>(),
         size_of::<(
-            BeforeProvenanceV1<'static>,
-            BeforeScalarV1<'static>,
-            &AssertionDefinitionInventoryV1,
-            BResult<&AssertionDefinitionInventoryV1>,
-            BResult<BeforeProvenanceV1<'static>>,
+            BeforeCapabilitiesV1<'static>,
+            BeforeAllocationV1<'static>,
+            &LocalProvenanceV1,
+            &[Option<AllocationContractV1>],
+            BResult<&[Option<AllocationContractV1>]>,
+            BResult<BeforeCapabilitiesV1<'static>>,
         )>(),
         size_of::<(
-            &PendingBeforeProvenanceV1,
+            &PendingBeforeCapabilitiesV1,
             &Source<'static>,
             &Prep<'static, 'static>,
             bool,
         )>(),
         size_of::<(
-            &BeforeProvenanceV1<'static>,
+            &BeforeCapabilitiesV1<'static>,
             &SemanticFunctionDeclV1,
             &[SemanticOptionProducerV1],
             &SemanticOptionDominanceV1,
             &SemanticEnumPayloadDominanceV1,
             &AssertionDefinitionInventoryV1,
+            &LocalProvenanceV1,
+            &[Option<AllocationContractV1>],
             bool,
         )>(),
         size_of::<(
@@ -161,7 +197,7 @@ fn scalar_frame_rows<R, F>() -> BResult<[usize; SCALAR_FRAME_ROWS]> {
             F,
         )>(),
         size_of::<(
-            &mut PendingBeforeProvenanceV1,
+            &mut PendingBeforeCapabilitiesV1,
             &mut usize,
             &ProductionPreRankedKirOwnerV1,
             &CanonicalKirInventoryV1<'static>,
@@ -189,10 +225,10 @@ fn scalar_frame_rows<R, F>() -> BResult<[usize; SCALAR_FRAME_ROWS]> {
         size_of::<(Backend, Option<Backend>, &Backend, QueryError)>(),
         size_of::<(PanicPayload, std::result::Result<Result<R>, PanicPayload>)>(),
         size_of::<(
-            [usize; SCALAR_FRAME_ROWS],
-            [usize; SCALAR_FRAME_ROWS],
-            BResult<[usize; SCALAR_FRAME_ROWS]>,
-            std::array::IntoIter<usize, SCALAR_FRAME_ROWS>,
+            [usize; ALLOCATION_FRAME_ROWS],
+            [usize; ALLOCATION_FRAME_ROWS],
+            BResult<[usize; ALLOCATION_FRAME_ROWS]>,
+            std::array::IntoIter<usize, ALLOCATION_FRAME_ROWS>,
             usize,
             usize,
             Option<usize>,
@@ -200,41 +236,62 @@ fn scalar_frame_rows<R, F>() -> BResult<[usize; SCALAR_FRAME_ROWS]> {
         )>(),
         size_of::<(BResult<usize>, usize, usize, Option<usize>, &usize)>(),
         size_of::<(
-            &mut RetainedScalarInventoryV1,
+            &mut RetainedAllocationContractsV1,
+            &[SemanticTypeDeclV1],
             &SemanticFunctionDeclV1,
+            &Vec<Option<u32>>,
+            &[Option<u32>],
             &mut Prep<'static, 'static>,
             BResult<()>,
         )>(),
         size_of::<(
-            &RetainedScalarInventoryV1,
+            &RetainedAllocationContractsV1,
+            &[SemanticTypeDeclV1],
             &SemanticFunctionDeclV1,
+            &Vec<Option<u32>>,
+            &[Option<u32>],
             &Prep<'static, 'static>,
-            BResult<&AssertionDefinitionInventoryV1>,
+            BResult<&[Option<AllocationContractV1>]>,
         )>(),
         size_of::<(
-            &mut PendingBeforeScalarV1,
+            &mut PendingBeforeAllocationV1,
             &Source<'static>,
             &mut Prep<'static, 'static>,
             BResult<()>,
-            &PendingBeforeScalarV1,
-            BResult<BeforeScalarV1<'static>>,
+            &PendingBeforeAllocationV1,
+            BResult<BeforeAllocationV1<'static>>,
+        )>(),
+        size_of::<(
+            BeforeAllocationV1<'static>,
+            &BeforeAllocationV1<'static>,
+            &LocalProvenanceV1,
+            &Vec<Option<u32>>,
+            &[Option<u32>],
+        )>(),
+        size_of::<(
+            BeforeAllocationV1<'static>,
+            &BeforeAllocationV1<'static>,
+            &LocalProvenanceV1,
+            &Vec<Option<u32>>,
+            &[Option<u32>],
+            &[Option<AllocationContractV1>],
         )>(),
     ])
 }
-fn scalar_frame<R, F>() -> BResult<usize> {
-    // Entire existing Option/enum policy is retained. The scalar component pays
-    // its own exact 17-row policy and original header inside prepare_into.
-    scalar_frame_rows::<R, F>()?
+fn allocation_frame<R, F>() -> BResult<usize> {
+    // Preserve prior checkpoint policy; the retained allocation component charges
+    // its own additional work/frame and complete unchanged donor policy in place.
+    allocation_frame_rows::<R, F>()?
         .into_iter()
-        .try_fold(super::enum_frame::<R, F>()?, |sum, row| {
+        .try_fold(super::provenance_frame::<R, F>()?, |sum, row| {
             sum.checked_add(row).ok_or_else(arithmetic)
         })
 }
 
-/// A separate authenticated entry. Never nests an externally owned scalar
-/// payload inside the older BeforeScalar entry's earlier refund boundary.
+/// A separate authenticated entry. Never nests an externally owned allocation
+/// payload inside the older BeforeAllocation entry's earlier refund boundary.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::production_ranked_projection_v1) fn with_nominal_option_enum_scalar_before_provenance_v1<
+pub(in crate::production_ranked_projection_v1) fn with_nominal_option_enum_scalar_provenance_allocation_before_capabilities_v1<
     'w,
     R,
     F,
@@ -250,16 +307,16 @@ pub(in crate::production_ranked_projection_v1) fn with_nominal_option_enum_scala
 ) -> Result<R>
 where
     R: Copy + 'static,
-    F: for<'a, 'b, 'm> FnOnce(BeforeProvenanceV1<'a>, &mut Prep<'b, 'm>) -> BResult<R>,
+    F: for<'a, 'b, 'm> FnOnce(BeforeCapabilitiesV1<'a>, &mut Prep<'b, 'm>) -> BResult<R>,
 {
     owner.with_bf16_nominal_entry_resources_v1(inventory, budget, move |budget| {
         let before = Custody::take(budget)?;
-        let bytes = scalar_frame::<R, F>().map_err(query_error)?;
+        let bytes = allocation_frame::<R, F>().map_err(query_error)?;
         let mut owned = 0usize;
         PreparationResourcesV1::new(budget, &mut owned)
             .reserve_storage(bytes)
             .map_err(query_error)?;
-        let mut pending = PendingBeforeProvenanceV1::new();
+        let mut pending = PendingBeforeCapabilitiesV1::new();
         let result = owner.with_checked_bf16_nominal_call_v1(
             inventory,
             root,
@@ -274,13 +331,14 @@ where
                     || !std::ptr::eq(checked.source_call(), call)
                 {
                     return Err(QueryError::Unavailable(
-                        "Option/enum/scalar checked source identity differs",
+                        "Option/enum/scalar/provenance/allocation checked source identity differs",
                     ));
                 }
                 let semantic = source_owner.semantic_ssa().source_semantic();
-                let function = semantic.functions().get(caller.index() as usize).ok_or(
-                    QueryError::Unavailable("Option/enum/scalar source caller absent"),
-                )?;
+                let function = semantic
+                    .functions()
+                    .get(caller.index() as usize)
+                    .ok_or(QueryError::Unavailable("Option/enum/scalar/provenance/allocation source caller absent"))?;
                 if semantic.functions().len() != 2
                     || semantic.types().len() > 4096
                     || semantic.callables().len() > 4096
@@ -288,7 +346,7 @@ where
                     || function.locals().len() > 4096
                 {
                     return Err(QueryError::Unavailable(
-                        "Option/enum/scalar source exceeds closed owner profile",
+                        "Option/enum/scalar/provenance/allocation source exceeds closed owner profile",
                     ));
                 }
                 let source = Source {
@@ -334,28 +392,10 @@ where
 }
 
 #[cfg(test)]
-#[path = "bf16_nominal_option_enum_scalar_genuine_v1_tests.rs"]
+#[path = "bf16_nominal_option_enum_scalar_provenance_allocation_genuine_v1_tests.rs"]
 mod genuine;
 #[cfg(test)]
-#[path = "bf16_nominal_option_enum_scalar_prelude_v1_tests.rs"]
+#[path = "bf16_nominal_option_enum_scalar_provenance_allocation_prelude_v1_tests.rs"]
 mod tests;
 #[cfg(test)]
-pub(crate) use genuine::observe_option_enum_scalar_before_provenance_for_test_v1;
-
-// Separate provenance continuation; the BeforeProvenance entry is unchanged.
-#[path = "bf16_nominal_option_enum_scalar_provenance_prelude_v1.rs"]
-mod option_enum_scalar_provenance_prelude;
-#[cfg(test)]
-pub(crate) use option_enum_scalar_provenance_prelude::observe_option_enum_scalar_provenance_before_allocation_for_test_v1;
-#[allow(unused_imports)]
-pub(in crate::production_ranked_projection_v1) use option_enum_scalar_provenance_prelude::{
-    BeforeAllocationV1, with_nominal_option_enum_scalar_provenance_before_allocation_v1,
-};
-
-#[cfg(test)]
-pub(crate) use option_enum_scalar_provenance_prelude::observe_option_enum_scalar_provenance_allocation_before_capabilities_for_test_v1;
-#[allow(unused_imports)]
-pub(in crate::production_ranked_projection_v1) use option_enum_scalar_provenance_prelude::{
-    BeforeCapabilitiesV1,
-    with_nominal_option_enum_scalar_provenance_allocation_before_capabilities_v1,
-};
+pub(crate) use genuine::observe_option_enum_scalar_provenance_allocation_before_capabilities_for_test_v1;
