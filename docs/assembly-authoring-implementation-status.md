@@ -1706,3 +1706,14 @@ builds passed. See [qualification](retained-constant-analysis-qualification-2026
 The genuine actual-source capability join remains separate work, as do earlier
 whole-root analyses, argument writers, joint bounds and production admission.
 Broad accepted exits remain 6/18.
+
+## Supervised debugger startup — 2026-09-28
+
+The fixed MI2 startup now passes under owned service supervision, with all
+1,024 selected inputs revalidated and both process censuses within their
+unchanged bounds. Root checked cleanup and 193 loaded-file observations.
+See [qualification and limits](debugger-supervised-startup-qualification-20260928.md).
+
+The earlier failed census is preserved. A loaded-file profile still needs
+separate review; no inferior, attach, dispatch or physical register capture ran.
+V4/U4 remain open. Broad accepted exits remain 6/18.
