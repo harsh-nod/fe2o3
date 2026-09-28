@@ -133,8 +133,19 @@ custody. Returned buffers may remain cached, and cancellation never applies
 unpublished writebacks. The separate
 [cancellation packet](evidence/dev-materialized-cancellation-2026-09-28/README.md)
 distinguishes runtime scripts, lower cleanup fixtures and remaining native/formal
-qualification. Ordinary retry submission still needs the same continuously
-indexed publication phase; polling must never repeat binding or materialization.
+qualification. Ordinary retry submission now uses the same continuously indexed,
+submit-only Binding phase. Before moving Prepared, it validates logical custody
+and exact descriptor/writeback projection. A fixed native-DATA-sized stack array
+merges aliases without rescanning binding prefixes. Only a confirmed retry
+re-arms Prepared; published custody is installed before profiling. Polling does
+not repeat binding, materialization or the Pending handoff. The
+[retry packet](evidence/dev-materialized-retry-2026-09-28/README.md) qualifies CPU
+scripts and allocation counts, not native latency or formal refinement.
+
+Ordinary published observation/recycle and ordered-successor publication still
+move owners outside their indexes. Logical completion also needs checked,
+allocation-free settlement before profiling. Persistent completion work does
+not establish these ordinary-lifetime transitions.
 
 The direct adapter's same-device copies are native SDMA submissions. Direct
 dependency chains are capped at 256 before ledger mutation, cancellation can

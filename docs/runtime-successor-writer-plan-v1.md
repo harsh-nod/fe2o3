@@ -236,9 +236,25 @@ now uses a distinct indexed Binding phase through reuse, binding and first
 submission. Native callbacks store returned outcomes before their outer loan
 closes; a confirmed retry owner never represents an unattempted recipe. Recycled
 metadata survives unsuccessful overwrite/detach, and errors/unwinds retire only
-the Pending handoff. Ordinary Prepared retry publication still needs continuous
-indexing and explicit attempted-publication provenance. Native coupling,
-Context composition and formal correspondence remain open.
+the Pending handoff.
+[Ordinary Prepared retry](evidence/dev-materialized-retry-2026-09-28/README.md)
+now shares the indexed submit-only transition, preserves preparation across
+confirmed retries, and retains explicit attempted-publication state on failure.
+It does not repeat the Pending handoff. The bounded descriptor reducer and exact
+writeback guard are CPU-qualified separately from native submission.
+
+Next, ordinary frontier/pipeline completion must retain indexed consuming-poll,
+returned-completed, consuming-recycle and retired states. Store returned native
+receipts before the lane callback closes; only an actually returned completed
+receipt permits recycle retry. Preserve pipeline identity and logical order,
+prevalidate logical settlement, and profile after reaching a consistent state.
+Record publish-to-completion timing at the first Ready observation, not again
+on later recycle attempts. Prepublication dirty-vector capacity already exists;
+completion must count distinct missing extents, not reject valid alias/replay
+epochs merely because spare capacity is zero. Ordered-successor submission also
+still precedes pipeline-owner installation and needs its own indexed publication
+phase plus Pending error-handoff repair. Native coupling, Context composition
+and formal correspondence remain open.
 
 [Single bind rejection](evidence/dev-single-bind-recovery-2026-09-28/README.md)
 now carries the exact original target/source/submission and empty input box

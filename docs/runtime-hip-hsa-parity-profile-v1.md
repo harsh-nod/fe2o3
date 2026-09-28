@@ -103,8 +103,17 @@ custody and current descriptors survive terminal failure or unwind, while the
 Pending FIFO/dependency handoff retires once. Attached reuse preserves prior
 metadata until overwrite and the outer lane operation both succeed. The
 [binding evidence](evidence/dev-materialized-binding-2026-09-28/README.md)
-does not close ordinary retry indexing, native coupling, formal refinement or
-matched performance gates.
+does not close native coupling, formal refinement or matched performance gates.
+
+Ordinary Prepared retry now enters that same indexed submit-only phase after
+checking exact custody and descriptor/writeback projection. Confirmed retry
+preserves the existing preparation and profile; successful publication refreshes
+the publication timestamp and profiles only after installing the published
+owner. Terminal outcomes retain the attempted state, never a fabricated retry.
+The [retry evidence](evidence/dev-materialized-retry-2026-09-28/README.md) covers
+CPU fault matrices, corrupt preflight, backing identity and allocation-counted
+retries. It does not qualify native latency, ordinary completion/recycle,
+ordered-successor publication or formal correspondence.
 
 Poll and `wait` never perform deferred compute preparation, but can retry
 publication of an already bound Prepared recipe. Submit may publish immediately

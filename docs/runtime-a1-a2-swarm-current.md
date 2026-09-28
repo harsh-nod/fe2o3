@@ -24,6 +24,19 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Ordinary Prepared retry custody development (2026-09-28 UTC): retry now uses
+the same indexed submit-only Binding transition as first publication, without
+repeating preparation, materialization or Pending settlement. Confirmed native
+outcomes are stored before the lane callback closes; indeterminate attempts
+cannot become Prepared again. Exact descriptor/writeback preflight uses bounded
+stack storage. The [retry packet](evidence/dev-materialized-retry-2026-09-28/README.md)
+records 22 focused passes, 880 serial backend passes, 1777 full-runtime passes
+with three unwaived socket-inspection failures, and passing static checks.
+Ordinary frontier/pipeline completion and ordered-successor publication still
+need continuously indexed transitions. Formal correspondence, native coupling,
+protected Worker and matched performance gates remain open; A1/A2 and accepted
+lane checkpoints are unchanged.
+
 Ordinary initial-binding custody development (2026-09-28 UTC): a distinct
 Binding phase now indexes Active before detach, overwrite, materialization and
 first submit. Recycled metadata survives unsuccessful overwrite/detach, and
@@ -31,9 +44,10 @@ first-submit outcomes are stored before the native lane callback closes. Only
 a confirmed retry becomes Prepared; pending handoff remains one-time. The
 [development packet](evidence/dev-materialized-binding-2026-09-28/README.md)
 records 873 serial backend passes, 1770 full-runtime passes with three unwaived
-socket-inspection failures, and final focused/static checks. Ordinary retry
-publication indexing, coupled native execution, formal correspondence and matched
-performance remain open. Accepted checkpoints and A1/A2 status are unchanged.
+socket-inspection failures, and final focused/static checks. That checkpoint
+left ordinary retry indexing open; the newer entry above addresses it. Coupled
+native execution, formal correspondence and matched performance remain open.
+Accepted checkpoints and A1/A2 status are unchanged.
 
 Ordinary materialized retry cancellation development (2026-09-28 UTC): explicit
 provenance now selects cancelled-only abort or exact prior-generation recycled
