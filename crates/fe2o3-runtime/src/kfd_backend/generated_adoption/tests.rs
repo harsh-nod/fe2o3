@@ -99,7 +99,19 @@ fn generated_submission_release_cannot_discard_unretired_custody() {
     });
     backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
     backend.generated_submissions.insert(100, plan.key);
-    for _ in 0..3 {
+    for receipt in [ReceiptV1::Ready, ReceiptV1::RetryReady, ReceiptV1::Recycled] {
+        backend
+            .generated_shells
+            .get_mut(&plan.key)
+            .unwrap()
+            .native
+            .as_mut()
+            .unwrap()
+            .submission
+            .as_mut()
+            .unwrap()
+            .receipt = receipt;
+        assert!(backend.generated_submission_can_retire_v1(100));
         assert!(matches!(
             backend.release_submission_v1(100),
             Err(RuntimeBackendFailureV1::Rejected(_))
@@ -117,6 +129,35 @@ impl Drop for Item {
     fn drop(&mut self) {
         self.1.borrow_mut().push(self.0);
     }
+}
+
+#[test]
+fn generated_retry_ready_submission_releases_only_after_recorded_native_retirement() {
+    let (mut backend, plan) = shells();
+    let (_, projection) = source_projection();
+    let mut native = native_state(PhaseV1::Retired, 0);
+    // Metadata-only retirement, not evidence of native disposal or API routing.
+    native.returned.install(Vec::new());
+    native.returned.completed = plan.count;
+    native.submission = Some(issue::GeneratedSubmissionV1 {
+        id: 100,
+        roster: GeneratedHostRosterV1::from_projection(&projection).unwrap(),
+        receipt: ReceiptV1::RetryReady,
+    });
+    backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
+    backend.generated_submissions.insert(100, plan.key);
+    backend.release_submission_v1(100).unwrap();
+    assert!(!backend.generated_submissions.contains_key(&100));
+    assert!(
+        backend.generated_shells[&plan.key]
+            .native
+            .as_ref()
+            .unwrap()
+            .submission
+            .is_none()
+    );
+    assert!(backend.validate_generated_shell_disposal_v1(&plan));
+    backend.dispose_generated_shells_v1(&plan);
 }
 
 #[test]

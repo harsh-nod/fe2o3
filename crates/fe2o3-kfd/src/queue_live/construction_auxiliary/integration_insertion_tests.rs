@@ -27,7 +27,7 @@ struct PrimaryDetached {
     identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
     count: usize,
     next: Option<usize>,
-    continuation: Option<PristineDispatchContinuationV1>,
+    continuation: Option<UnpublishedDispatchContinuationV1>,
 }
 
 #[derive(Default)]
@@ -297,7 +297,7 @@ impl InsertionFixture {
         let (operation, retake) = scope
             .parent
             .with_preparation_custody(|memory| {
-                abort = Some(dispatch.take().unwrap().begin_pristine_abort_v1(buffers));
+                abort = Some(dispatch.take().unwrap().begin_unpublished_abort_v1(buffers));
                 abort.as_mut().unwrap().release_controls(memory)?;
                 Ok(())
             })

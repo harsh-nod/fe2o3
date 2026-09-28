@@ -176,7 +176,7 @@ fn constructed_primary_release_after_pristine_abort_requires_settled_detached_le
         .dispatch
         .take()
         .unwrap()
-        .begin_pristine_abort_v1(buffers);
+        .begin_unpublished_abort_v1(buffers);
     abort.release_controls(&mut engine.backend.session).unwrap();
     engine
         .backend

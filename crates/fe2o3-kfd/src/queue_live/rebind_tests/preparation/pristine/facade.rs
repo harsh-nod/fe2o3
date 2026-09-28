@@ -119,7 +119,7 @@ fn pristine_rebind_facade_retains_restored_primary_and_later_auxiliary_slots() {
                                 },
                                 |f| {
                                     f.calls[1] += 1;
-                                    prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1(
+                                    prepare_public_fixed_dispatch_resources_after_unpublished_abort_in_place_v1(
                                         &mut f.memory, programs, preparation, continuation, prepared_generation,
                                     ).map_err(Into::into)
                                 },

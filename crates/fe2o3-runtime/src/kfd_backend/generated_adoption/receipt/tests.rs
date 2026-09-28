@@ -41,16 +41,36 @@ fn returned_publication_is_rooted_before_closing_unwind() {
 }
 
 #[test]
-fn only_explicit_before_effect_retry_restores_ready() {
-    let mut receipt: ReceiptV1<(), ()> = ReceiptV1::Ready;
+fn explicit_before_effect_retry_preserves_cancelled_retirement_then_exact_publication() {
+    let mut receipt: ReceiptV1<Token, Token> = ReceiptV1::Ready;
+    assert_eq!(receipt.retirement(), Some(RetirementV1::Pristine));
     for _ in 0..3 {
         receipt.issue(|| Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(lower_error()))).unwrap();
-        assert!(matches!(receipt, ReceiptV1::Ready));
+        assert!(matches!(receipt, ReceiptV1::RetryReady));
+        assert!(receipt.issue_ready());
+        assert_eq!(receipt.retirement(), Some(RetirementV1::CancelledOnly));
     }
-    receipt.issue(|| Ok(())).unwrap();
-    assert!(matches!(receipt, ReceiptV1::Published(())));
-    for terminal in [false, true] {
-        let mut receipt: ReceiptV1<(), ()> = ReceiptV1::Ready;
+    let (batch, drops) = token();
+    receipt.issue(|| Ok(batch)).unwrap();
+    assert!(!receipt.issue_ready());
+    assert_eq!(receipt.retirement(), None);
+    let ReceiptV1::Published(batch) = &receipt else {
+        panic!("missing returned publication")
+    };
+    assert!(Arc::ptr_eq(&batch.0, &drops));
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(receipt);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn rejected_or_terminal_issue_never_permits_retry_or_retirement() {
+    for (mut receipt, terminal) in [
+        (ReceiptV1::<(), ()>::Ready, false),
+        (ReceiptV1::Ready, true),
+        (ReceiptV1::RetryReady, false),
+        (ReceiptV1::RetryReady, true),
+    ] {
         assert!(
             receipt
                 .issue(|| Err(if terminal {
@@ -64,22 +84,45 @@ fn only_explicit_before_effect_retry_restores_ready() {
             receipt,
             ReceiptV1::HandedToLower(HandoffV1::Issue)
         ));
+        assert!(!receipt.issue_ready());
+        assert_eq!(receipt.retirement(), None);
     }
 }
 
 #[test]
 fn publication_panic_retains_unknown_handoff_not_a_retry_permit() {
-    let mut receipt: ReceiptV1<(), ()> = ReceiptV1::Ready;
-    assert!(
-        catch_unwind(AssertUnwindSafe(
-            || receipt.issue(|| panic!("publication unknown"))
-        ))
-        .is_err()
+    for mut receipt in [ReceiptV1::<(), ()>::Ready, ReceiptV1::RetryReady] {
+        assert!(
+            catch_unwind(AssertUnwindSafe(
+                || receipt.issue(|| panic!("publication unknown"))
+            ))
+            .is_err()
+        );
+        assert!(matches!(
+            receipt,
+            ReceiptV1::HandedToLower(HandoffV1::Issue)
+        ));
+        assert!(!receipt.issue_ready());
+        assert_eq!(receipt.retirement(), None);
+    }
+}
+
+#[test]
+fn retirement_rejects_every_live_or_unknown_handoff_state() {
+    for receipt in [
+        ReceiptV1::Published(()),
+        ReceiptV1::Completed(()),
+        ReceiptV1::HandedToLower(HandoffV1::Issue),
+        ReceiptV1::HandedToLower(HandoffV1::Poll),
+        ReceiptV1::HandedToLower(HandoffV1::Recycle),
+    ] {
+        assert_eq!(receipt.retirement(), None);
+        assert!(!receipt.issue_ready());
+    }
+    assert_eq!(
+        ReceiptV1::<(), ()>::Recycled.retirement(),
+        Some(RetirementV1::Recycled)
     );
-    assert!(matches!(
-        receipt,
-        ReceiptV1::HandedToLower(HandoffV1::Issue)
-    ));
 }
 
 #[test]

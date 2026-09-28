@@ -218,7 +218,7 @@ fn exercise_source(
                         Some(generation) => prepare_public_fixed_dispatch_resources_after_detach_in_place(
                             &mut f.memory, programs, preparation, generation,
                         ),
-                        None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1(
+                        None => prepare_public_fixed_dispatch_resources_after_unpublished_abort_in_place_v1(
                             &mut f.memory, programs, preparation,
                             continuation, prepared_generation,
                         ),
@@ -285,6 +285,59 @@ fn exercise_source(
         },
     );
     let f = fixture.borrow();
+    if matches!(source, Source::PristineInvalid) {
+        assert_eq!(f.calls, [0; 4]);
+        assert!(!result.transport && !session.terminal_poisoned);
+        assert!(matches!(
+            result.result.unwrap(),
+            Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                Gfx942DispatchBindingErrorV1::GenerationExhausted
+            ))
+        ));
+        assert_eq!(
+            session
+                .unpublished_dispatch
+                .continuation
+                .as_ref()
+                .unwrap()
+                .next_generation_for_test(),
+            u64::MAX
+        );
+        assert_eq!(session.detached_data_identities, ledger);
+        assert_eq!(session.detached_data_identities.as_ptr(), ledger_storage);
+        assert_eq!(session.detached_data_count, ledger.len());
+        assert_eq!(session.detached_next_insertion_index, Some(ledger.len()));
+        assert!(session.detached_dispatch_generation.is_none());
+        let retained = retained.borrow();
+        let root = retained.as_ref().unwrap();
+        assert!(root.preparation.is_none() && root.continuation.is_none());
+        assert!(root.prepared_generation.is_none() && root.predecessor.is_none());
+        assert!(root.packets.is_some());
+        let programs = root.programs.as_ref().unwrap();
+        assert_eq!(
+            (programs.as_ptr(), programs.len(), programs.capacity()),
+            programs_storage
+        );
+        assert_eq!(
+            programs
+                .iter()
+                .map(|p| (
+                    p.identity_inputs(),
+                    p.dispatch_abi_identity(),
+                    p.selected_kernel_index()
+                ))
+                .collect::<Vec<_>>(),
+            programs_identity
+        );
+        assert_eq!(
+            fixed_dispatch_storage_identities(root.data.as_ref().unwrap()),
+            ledger
+        );
+        assert_eq!(f.memory.observation(), before);
+        assert_eq!(f.memory.primary_loan_state_v1(&f.foundation), loan_before);
+        assert!(!take_dispatch_terminal_process_gate_record_v1());
+        return;
+    }
     let opened = opening == Opening::None;
     let generation_valid = next_generation.is_some();
     let operation_ok = opened && generation_valid && operation.is_none();

@@ -216,11 +216,11 @@ fn retained_control_facade_restores_exact_selected_owner_before_sticky_parent_tr
 pub(super) fn unpublished_fixture() -> (
     Memory,
     Vec<Gfx942FixedDispatchDataV1>,
-    PristineDispatchContinuationV1,
+    UnpublishedDispatchContinuationV1,
 ) {
     let (mut memory, owner) = control_release_fixture_v1();
     let buffers = owner.prepare_pristine_abort_v1().unwrap();
-    let mut abort = owner.begin_pristine_abort_v1(buffers);
+    let mut abort = owner.begin_unpublished_abort_v1(buffers);
     abort.release_controls(&mut memory).unwrap();
     let (continuation, data, _) = abort.into_detached();
     (memory, data, continuation)

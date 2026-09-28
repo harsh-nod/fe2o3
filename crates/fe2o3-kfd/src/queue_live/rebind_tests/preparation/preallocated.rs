@@ -33,7 +33,7 @@ fn scaled_preallocated_detached_and_pristine_rebind_transfer_one_table_through_v
         session.observation.ring_bytes = 4096;
         session.detached_dispatch_generation = (!pristine).then_some(7);
         session.unpublished_dispatch.continuation = pristine
-            .then(|| PristineDispatchContinuationV1::from_fresh_capacity_for_test(&capacity));
+            .then(|| UnpublishedDispatchContinuationV1::from_fresh_capacity_for_test(&capacity));
         session.detached_data_count = data.len();
         session.detached_data_identities = fixed_dispatch_storage_identities(&data);
         session.detached_next_insertion_index = Some(data.len());
@@ -70,7 +70,7 @@ fn scaled_preallocated_detached_and_pristine_rebind_transfer_one_table_through_v
                     Some(previous) => crate::queue::dispatch_binding::prepare_public_fixed_dispatch_resources_after_detach_with_capacity_in_place(
                         &mut f.memory, programs, preparation, previous, &capacity, prepared,
                     ),
-                    None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1(
+                    None => prepare_public_fixed_dispatch_resources_after_unpublished_abort_in_place_v1(
                         &mut f.memory, programs, preparation, continuation, prepared,
                     ),
                 };

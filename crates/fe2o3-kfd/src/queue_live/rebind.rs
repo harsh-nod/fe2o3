@@ -8,7 +8,7 @@ pub(in crate::queue) struct LiveRebindRootV1<'a, const N: usize> {
     pub(in crate::queue) data: Option<Vec<Gfx942FixedDispatchDataV1>>,
     pub(in crate::queue) preparation: Option<FixedDispatchPreparationCustodyV1<N>>,
     pub(in crate::queue) predecessor: Option<u64>,
-    pub(in crate::queue) continuation: Option<PristineDispatchContinuationV1>,
+    pub(in crate::queue) continuation: Option<UnpublishedDispatchContinuationV1>,
     pub(in crate::queue) prepared_generation: Option<PreparedDispatchGenerationV1>,
     ordinary_entered: bool,
     pristine_entered: bool,
@@ -69,7 +69,7 @@ impl ComputeAqlQueueSessionV1 {
                         Some(predecessor) => super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_after_detach_with_capacity_in_place(
                             memory, programs, preparation, predecessor, &capacity, prepared_generation,
                         ),
-                        None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1(
+                        None => prepare_public_fixed_dispatch_resources_after_unpublished_abort_in_place_v1(
                             memory, programs, preparation,
                             continuation, prepared_generation,
                         ),
@@ -89,7 +89,7 @@ impl ComputeAqlQueueSessionV1 {
             &[fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'a>],
             &mut FixedDispatchPreparationCustodyV1<N>,
             Option<u64>,
-            &mut Option<PristineDispatchContinuationV1>,
+            &mut Option<UnpublishedDispatchContinuationV1>,
             &mut Option<PreparedDispatchGenerationV1>,
         ) -> Result<(), ComputeAqlQueueSessionErrorV1>,
         validate: impl FnOnce(
@@ -190,7 +190,10 @@ impl ComputeAqlQueueSessionV1 {
             .unpublished_dispatch
             .continuation
             .as_ref()
-            .is_some_and(|continuation| !continuation.matches_capacity(&self.dispatch_capacity))
+            .is_some_and(|continuation| {
+                !continuation.matches_capacity(&self.dispatch_capacity)
+                    || !continuation.matches_queue(self.key)
+            })
         {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }

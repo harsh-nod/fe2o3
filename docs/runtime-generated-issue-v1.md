@@ -25,13 +25,14 @@ the ordinary backend completion map or compute completion reservations.
 
 Authority-bracketed Context advancement invokes the original lane's classified
 fixed-dispatch submission. Only its explicit RetryableBeforeSideEffect outcome
-restores Ready, using the same IDs and permit. Generic backend poll/wait/cleanup
-never submit a Ready generated entry. Backend events and ordinary launches do
+restores RetryReady, using the same IDs and permit. The lower ordinary path
+returns this classification only after exact epoch cancellation. Generic backend
+poll/wait/cleanup never submit a Ready or RetryReady generated entry. Backend events and ordinary launches do
 not acquire generated authority or allocation handles.
 
 ## Custody And Settlement
 
-The generated owner retains Ready, Published(batch), Completed(completed),
+The generated owner retains Ready, RetryReady, Published(batch), Completed(completed),
 Recycled, or a precise consuming-lower-handoff marker. Returned publication,
 pending and completed receipts are installed inside the lane callback, before
 outer lane restoration/currentness. Recycle's explicitly returned retryable
@@ -63,6 +64,17 @@ generated driver request disposal. Definitely unpublished Ready work uses the
 existing pristine abort without another issue attempt. Published work receives
 at most two observation/recycle steps, without waiting or publication. Pending
 or ambiguous work remains retained until process exit.
+
+RetryReady uses a separate cancelled-only abort. Native admission requires the
+exact original queue, ordinary control, releasable completion state, all epochs
+vacant, nonzero reservation history and no recycled or detached-predecessor
+history. It shares pristine abort's rooted cleanup, closing retake and terminal
+transport; pristine admission itself still rejects all reservation history.
+The unpublished continuation preserves queue, exact next generation, capacity
+and account identity, not a fabricated recycled generation. Detachment refunds
+epoch-table credit and rebind reacquires it. Rebind checks the historical queue
+before minting a fresh recipe occurrence. An exhausted counter permits Stop
+disposal but rejects rebind/preallocation before consuming custody.
 
 Recycled work uses original recycled detach, not pristine abort. Returned DATA
 is rooted immediately and disposed in forward order. Closing native identity

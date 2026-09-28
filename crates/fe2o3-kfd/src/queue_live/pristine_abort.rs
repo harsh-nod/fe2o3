@@ -1,11 +1,17 @@
 //! Separate unpublished provenance and retained abort custody for each lane.
 
-use super::super::dispatch_binding::pristine_abort::PristineAbortBuffersV1;
+use super::super::dispatch_binding::pristine_abort::UnpublishedAbortBuffersV1;
 use super::*;
 
 type AbortCleanupV1 = Option<std::thread::Result<Result<(), Gfx942DispatchBindingErrorV1>>>;
 type AbortEnvelopeV1 =
     Result<((), Result<(), ComputeAqlQueueSessionErrorV1>), ComputeAqlQueueSessionErrorV1>;
+
+#[derive(Clone, Copy)]
+enum AbortAdmissionV1 {
+    Pristine,
+    CancelledOnly,
+}
 
 pub(super) struct SettledPristineAbortV1 {
     result:
@@ -26,8 +32,8 @@ impl SettledPristineAbortV1 {
 
 #[derive(Default)]
 pub(super) struct UnpublishedDispatchStateV1 {
-    pub(super) continuation: Option<PristineDispatchContinuationV1>,
-    terminal_abort: Option<PristineDispatchAbortV1>,
+    pub(super) continuation: Option<UnpublishedDispatchContinuationV1>,
+    terminal_abort: Option<UnpublishedDispatchAbortV1>,
 }
 
 impl UnpublishedDispatchStateV1 {
@@ -74,6 +80,20 @@ impl ComputeAqlQueueSessionV1 {
         self.finish_pristine_abort_v1(settled, core::mem::forget)
     }
 
+    /// Releases an ordinary recipe with only cancelled reservations on this queue.
+    ///
+    /// Rejects pristine, reserved, published, completed, recycled, persistent and
+    /// completion-pinned state before disposal. Returns the complete original DATA
+    /// roster without a completion receipt. The private continuation retains the
+    /// queue, next generation, capacity and account, including counter exhaustion.
+    /// Cleanup failures have the same terminal custody contract as pristine abort.
+    pub fn abort_cancelled_fixed_dispatch_v1(
+        &mut self,
+    ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
+        let settled = self.abort_cancelled_settled_v1();
+        self.finish_pristine_abort_v1(settled, core::mem::forget)
+    }
+
     fn finish_pristine_abort_v1(
         &mut self,
         settled: SettledPristineAbortV1,
@@ -87,6 +107,12 @@ impl ComputeAqlQueueSessionV1 {
 
     pub(super) fn abort_unpublished_settled_v1(&mut self) -> SettledPristineAbortV1 {
         self.settle_pristine_abort_with_v1(Self::abort_unpublished_native_v1)
+    }
+
+    pub(super) fn abort_cancelled_settled_v1(&mut self) -> SettledPristineAbortV1 {
+        self.settle_pristine_abort_with_v1(|session| {
+            session.abort_admitted_native_v1(AbortAdmissionV1::CancelledOnly)
+        })
     }
 
     fn settle_pristine_abort_with_v1(
@@ -111,14 +137,22 @@ impl ComputeAqlQueueSessionV1 {
     fn abort_unpublished_native_v1(
         &mut self,
     ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
-        self.abort_unpublished_with_v1(
+        self.abort_admitted_native_v1(AbortAdmissionV1::Pristine)
+    }
+
+    fn abort_admitted_native_v1(
+        &mut self,
+        admission: AbortAdmissionV1,
+    ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
+        self.abort_admitted_with_v1(
+            admission,
             |session, buffers, dispatch, abort, cleanup| {
                 session.with_live_queue_memory_model_custody(|memory| {
                     *abort = Some(
                         dispatch
                             .take()
                             .expect("one pristine abort owner")
-                            .begin_pristine_abort_v1(buffers),
+                            .begin_unpublished_abort_v1(buffers),
                     );
                     // Keep the cleanup panic outside retake, including a second panic there.
                     *cleanup = Some(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
@@ -135,13 +169,14 @@ impl ComputeAqlQueueSessionV1 {
         )
     }
 
-    fn abort_unpublished_with_v1(
+    fn abort_admitted_with_v1(
         &mut self,
+        admission: AbortAdmissionV1,
         run: impl FnOnce(
             &mut Self,
-            PristineAbortBuffersV1,
+            UnpublishedAbortBuffersV1,
             &mut Option<DispatchResourceOwnerV1>,
-            &mut Option<PristineDispatchAbortV1>,
+            &mut Option<UnpublishedDispatchAbortV1>,
             &mut AbortCleanupV1,
         ) -> AbortEnvelopeV1,
         poison_process: impl FnOnce(),
@@ -159,11 +194,14 @@ impl ComputeAqlQueueSessionV1 {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
         self.completion_owner.ensure_releasable()?;
-        let buffers = self
+        let owner = self
             .dispatch
             .as_ref()
-            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
-            .prepare_pristine_abort_v1()?;
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+        let buffers = match admission {
+            AbortAdmissionV1::Pristine => owner.prepare_pristine_abort_v1()?,
+            AbortAdmissionV1::CancelledOnly => owner.prepare_cancelled_abort_v1(self.key)?,
+        };
         let mut dispatch = self.dispatch.take();
         let mut abort = None;
         let mut cleanup = None;
@@ -230,6 +268,8 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[path = "cancelled_abort.rs"]
+    mod cancelled_tests;
     #[path = "pristine_abort_transport.rs"]
     mod transport_tests;
     use super::super::tests::{
@@ -269,15 +309,32 @@ mod tests {
         memory: &mut PristineAbortMemoryFixtureV1,
         session: &mut ComputeAqlQueueSessionV1,
         closing: u8,
-        observe: impl FnOnce(&PristineDispatchAbortV1, &PristineAbortMemoryFixtureV1),
+        observe: impl FnOnce(&UnpublishedDispatchAbortV1, &PristineAbortMemoryFixtureV1),
+    ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
+        abort_admission_with_observer(
+            memory,
+            session,
+            AbortAdmissionV1::Pristine,
+            closing,
+            observe,
+        )
+    }
+
+    fn abort_admission_with_observer(
+        memory: &mut PristineAbortMemoryFixtureV1,
+        session: &mut ComputeAqlQueueSessionV1,
+        admission: AbortAdmissionV1,
+        closing: u8,
+        observe: impl FnOnce(&UnpublishedDispatchAbortV1, &PristineAbortMemoryFixtureV1),
     ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
         let gated = std::cell::Cell::new(false);
-        let result = session.abort_unpublished_with_v1(
+        let result = session.abort_admitted_with_v1(
+            admission,
             |_, buffers, dispatch, abort, cleanup| {
                 if closing == 3 {
                     return Err(ComputeAqlQueueSessionErrorV1::Contract("loan rejected"));
                 }
-                *abort = Some(dispatch.take().unwrap().begin_pristine_abort_v1(buffers));
+                *abort = Some(dispatch.take().unwrap().begin_unpublished_abort_v1(buffers));
                 observe(abort.as_ref().unwrap(), memory);
                 *cleanup = Some(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                     || abort.as_mut().unwrap().release_controls(memory),

@@ -24,8 +24,8 @@ pub(in crate::queue) use generation_preflight::{
 #[path = "queue_dispatch_binding/pristine_abort.rs"]
 pub(crate) mod pristine_abort;
 pub(super) use pristine_abort::{
-    PristineDispatchAbortV1, PristineDispatchContinuationV1,
-    prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1,
+    UnpublishedDispatchAbortV1, UnpublishedDispatchContinuationV1,
+    prepare_public_fixed_dispatch_resources_after_unpublished_abort_in_place_v1,
 };
 
 #[cfg(test)]

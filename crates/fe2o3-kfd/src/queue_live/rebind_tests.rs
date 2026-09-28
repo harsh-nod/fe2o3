@@ -38,7 +38,7 @@ fn scaled_pristine_rebind_rejects_equal_budget_wrong_ledger_before_consuming_con
     };
     let left = Gfx942FixedDispatchCapacityV1::qualification_1024(account());
     let right = Gfx942FixedDispatchCapacityV1::qualification_1024(account());
-    let continuation = PristineDispatchContinuationV1::from_fresh_capacity_for_test(&left);
+    let continuation = UnpublishedDispatchContinuationV1::from_fresh_capacity_for_test(&left);
     assert!(continuation.matches_capacity(&left.clone()));
     assert!(!continuation.matches_capacity(&right));
     let (mut session, _) = parent(false, false);
@@ -103,11 +103,11 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
     assert!(root < settle && settle < loan && loan < prepare && prepare < validation);
     assert_eq!(entry.matches("with_live_queue_memory_model(").count(), 1);
     assert!(entry.contains(
-        "None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1("
+        "None => prepare_public_fixed_dispatch_resources_after_unpublished_abort_in_place_v1("
     ));
     assert_eq!(entry.matches("continuation.take()").count(), 0);
     let pristine = include_str!("../queue_dispatch_binding/pristine_abort.rs")
-        .split("fn prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1")
+        .split("fn prepare_public_fixed_dispatch_resources_after_unpublished_abort_in_place_v1")
         .nth(1)
         .unwrap()
         .split("\n}")

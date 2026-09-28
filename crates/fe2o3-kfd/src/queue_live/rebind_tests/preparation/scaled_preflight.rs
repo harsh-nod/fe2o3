@@ -12,8 +12,9 @@ fn scaled_rebind_credit_exhaustion_preserves_continuation_and_exact_inputs() {
             )
             .unwrap();
             let capacity = Gfx942FixedDispatchCapacityV1::qualification_1024(account.clone());
-            let continuation = pristine
-                .then(|| PristineDispatchContinuationV1::from_fresh_capacity_for_test(&capacity));
+            let continuation = pristine.then(|| {
+                UnpublishedDispatchContinuationV1::from_fresh_capacity_for_test(&capacity)
+            });
             let competing = account
                 .reserve(ResourceVectorV1::ZERO.with(
                     ResourceKindV1::ControlResidentBytes,
@@ -111,7 +112,7 @@ fn scaled_rebind_post_entry_failures_retain_the_preallocated_debit() {
                 .unwrap();
                 let capacity = Gfx942FixedDispatchCapacityV1::qualification_1024(account.clone());
                 let continuation = pristine.then(|| {
-                    PristineDispatchContinuationV1::from_fresh_capacity_for_test(&capacity)
+                    UnpublishedDispatchContinuationV1::from_fresh_capacity_for_test(&capacity)
                 });
                 let mut key = test_queue_key(711, 4);
                 key.vm = fixture.foundation.identity().vms()[0].key;
@@ -147,7 +148,7 @@ fn scaled_rebind_post_entry_failures_retain_the_preallocated_debit() {
                         Some(previous) => crate::queue::dispatch_binding::prepare_public_fixed_dispatch_resources_after_detach_with_capacity_in_place(
                             &mut fixture.memory, programs, preparation, previous, &capacity, prepared,
                         ),
-                        None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1(
+                        None => prepare_public_fixed_dispatch_resources_after_unpublished_abort_in_place_v1(
                             &mut fixture.memory, programs, preparation, continuation, prepared,
                         ),
                     }.map_err(Into::into)

@@ -7,7 +7,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-fn selected_parent(
+pub(super) fn selected_parent(
     ordinal: usize,
 ) -> (
     PristineAbortMemoryFixtureV1,
@@ -697,9 +697,10 @@ fn secondary_payload(panic: bool) {
     let primary_pointer = Cell::new(0usize);
     let poisoned = Cell::new(false);
     let result = catch_unwind(AssertUnwindSafe(|| {
-        session.abort_unpublished_with_v1(
+        session.abort_admitted_with_v1(
+            AbortAdmissionV1::Pristine,
             |_, buffers, dispatch, abort, cleanup| {
-                *abort = Some(dispatch.take().unwrap().begin_pristine_abort_v1(buffers));
+                *abort = Some(dispatch.take().unwrap().begin_unpublished_abort_v1(buffers));
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     abort.as_mut().unwrap().release_controls(&mut memory)
                 }));

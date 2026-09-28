@@ -11,6 +11,7 @@ pub(super) enum HandoffV1 {
 
 pub(super) enum ReceiptV1<P, C> {
     Ready,
+    RetryReady,
     Published(P),
     Completed(C),
     Recycled,
@@ -19,22 +20,43 @@ pub(super) enum ReceiptV1<P, C> {
     HandedToLower(HandoffV1),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RetirementV1 {
+    Pristine,
+    CancelledOnly,
+    Recycled,
+}
+
 pub(super) enum PollV1<P, C> {
     Pending(P),
     Completed(C),
 }
 
 impl<P, C> ReceiptV1<P, C> {
+    pub(super) fn issue_ready(&self) -> bool {
+        matches!(self, Self::Ready | Self::RetryReady)
+    }
+
+    pub(super) fn retirement(&self) -> Option<RetirementV1> {
+        match self {
+            Self::Ready => Some(RetirementV1::Pristine),
+            Self::RetryReady => Some(RetirementV1::CancelledOnly),
+            Self::Recycled => Some(RetirementV1::Recycled),
+            Self::Published(_) | Self::Completed(_) | Self::HandedToLower(_) => None,
+        }
+    }
+
     pub(super) fn issue(
         &mut self,
         issue: impl FnOnce() -> Result<P, Gfx942FixedDispatchSubmissionFailureV1>,
     ) -> Result<(), fe2o3_kfd::ComputeAqlQueueSessionErrorV1> {
-        assert!(matches!(self, Self::Ready));
+        assert!(self.issue_ready());
         *self = Self::HandedToLower(HandoffV1::Issue);
         match issue() {
             Ok(batch) => *self = Self::Published(batch),
             Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)) => {
-                *self = Self::Ready;
+                // Ordinary lower retry is returned only after exact epoch cancellation.
+                *self = Self::RetryReady;
             }
             Err(failure) => return Err(failure.into_error()),
         }

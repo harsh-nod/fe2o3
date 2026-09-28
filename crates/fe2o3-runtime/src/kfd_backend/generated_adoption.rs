@@ -8,7 +8,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 mod issue;
 mod readback;
 mod receipt;
-use receipt::ReceiptV1;
+use receipt::{ReceiptV1, RetirementV1};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PhaseV1 {
@@ -459,16 +459,12 @@ impl KfdRuntimeBackendV1 {
                 ))
             };
         };
-        let recycled = native
-            .submission
-            .as_ref()
-            .is_some_and(|submission| matches!(submission.receipt, ReceiptV1::Recycled));
-        let unpublished = native
-            .submission
-            .as_ref()
-            .is_none_or(|submission| matches!(submission.receipt, ReceiptV1::Ready));
+        let retirement = match native.submission.as_ref() {
+            Some(submission) => submission.receipt.retirement(),
+            None => Some(RetirementV1::Pristine),
+        };
         if native.phase != PhaseV1::Adopted
-            || (!recycled && !unpublished)
+            || retirement.is_none()
             || !self.generated_lease_matches_v1(plan)
         {
             return Err(Self::rejected(
@@ -498,10 +494,12 @@ impl KfdRuntimeBackendV1 {
                 .as_mut()
                 .expect("retained generated queue")
                 .with_compute_lane_v1(handle, |lane| {
-                    let data = if recycled {
-                        lane.detach_recycled_fixed_dispatch()?.into_data()
-                    } else {
-                        lane.abort_unpublished_fixed_dispatch_v1()?
+                    let data = match retirement.expect("preflighted retirement state") {
+                        RetirementV1::Pristine => lane.abort_unpublished_fixed_dispatch_v1()?,
+                        RetirementV1::CancelledOnly => lane.abort_cancelled_fixed_dispatch_v1()?,
+                        RetirementV1::Recycled => {
+                            lane.detach_recycled_fixed_dispatch()?.into_data()
+                        }
                     };
                     native.returned.install(data);
                     if native

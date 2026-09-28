@@ -106,17 +106,15 @@ impl KfdRuntimeBackendV1 {
                 "generated issue plan mismatch",
             ));
         }
-        let ready = matches!(
-            self.generated_shells[&plan.key]
-                .native
-                .as_ref()
-                .expect("native owner")
-                .submission
-                .as_ref()
-                .expect("submission")
-                .receipt,
-            ReceiptV1::Ready
-        );
+        let ready = self.generated_shells[&plan.key]
+            .native
+            .as_ref()
+            .expect("native owner")
+            .submission
+            .as_ref()
+            .expect("submission")
+            .receipt
+            .issue_ready();
         if !ready {
             return self.progress_generated_submission_v1(submission);
         }
@@ -171,7 +169,7 @@ impl KfdRuntimeBackendV1 {
                 .as_mut()
                 .expect("retained queue")
                 .with_compute_lane_v1(handle, |lane| match receipt {
-                    ReceiptV1::Ready | ReceiptV1::Recycled => Ok(()),
+                    ReceiptV1::Ready | ReceiptV1::RetryReady | ReceiptV1::Recycled => Ok(()),
                     ReceiptV1::Published(_) => receipt.poll(|batch| {
                         lane.poll_fixed_dispatch(batch).map(|poll| match poll {
                             Gfx942DispatchPollV1::Pending(batch) => receipt::PollV1::Pending(batch),
@@ -220,8 +218,7 @@ impl KfdRuntimeBackendV1 {
             .is_some_and(|native| {
                 native.phase == PhaseV1::Adopted
                     && native.submission.as_ref().is_some_and(|owner| {
-                        owner.id == submission
-                            && matches!(owner.receipt, ReceiptV1::Ready | ReceiptV1::Recycled)
+                        owner.id == submission && owner.receipt.retirement().is_some()
                     })
             })
     }
@@ -253,10 +250,10 @@ impl KfdRuntimeBackendV1 {
             .and_then(|record| record.native.as_mut())
             .expect("indexed native owner");
         if !native.is_retired()
-            || !native.submission.as_ref().is_some_and(|owner| {
-                owner.id == submission
-                    && matches!(owner.receipt, ReceiptV1::Ready | ReceiptV1::Recycled)
-            })
+            || !native
+                .submission
+                .as_ref()
+                .is_some_and(|owner| owner.id == submission && owner.receipt.retirement().is_some())
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,

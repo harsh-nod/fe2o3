@@ -10,7 +10,7 @@ pub(super) fn fixture(
 ) -> (
     LoanFixture,
     Vec<Gfx942FixedDispatchDataV1>,
-    PristineDispatchContinuationV1,
+    UnpublishedDispatchContinuationV1,
     u64,
 ) {
     let (mut f, data) = super::fixture();
@@ -30,7 +30,7 @@ pub(super) fn fixture(
     assert_eq!(owner.primary_fixture_next_generation_v1(), next);
     let occurrence = owner.primary_fixture_recipe_occurrence_v1();
     let buffers = owner.prepare_pristine_abort_v1().unwrap();
-    let mut abort = owner.begin_pristine_abort_v1(buffers);
+    let mut abort = owner.begin_unpublished_abort_v1(buffers);
     abort.release_controls(&mut f.memory).unwrap();
     let (continuation, data, returned_identities) = abort.into_detached();
     assert_eq!(continuation.next_generation_for_test(), next);
@@ -147,7 +147,7 @@ fn pristine_rebind_failed_complete_cannot_be_suppressed() {
 }
 
 #[test]
-fn pristine_rebind_corrupted_continuation_records_failed_generation() {
+fn pristine_rebind_corrupted_continuation_rejects_before_preparation() {
     // A real producer cannot issue MAX. This is defensive internal corruption coverage.
     exercise_source(
         Source::PristineInvalid,

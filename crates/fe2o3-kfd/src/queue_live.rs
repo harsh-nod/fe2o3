@@ -54,10 +54,11 @@ use super::dispatch_binding::{
     Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1, Gfx942FixedDispatchDataV1,
     Gfx942FixedDispatchPacketV1, Gfx942FixedDispatchStorageIdentityV1,
     Gfx942RecycledDispatchWriteRequestV1, PersistentFixedDispatchControlIdentityV1,
-    PreparedDispatchGenerationV1, PristineDispatchAbortV1, PristineDispatchContinuationV1,
-    ReturnedDispatchDataV1, TypedKernargImageV1, persistent_fixed_dispatch_control_identity_v1,
-    prepare_dispatch_resources, prepare_persistent_fixed_dispatch_resources_v1,
-    prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1,
+    PreparedDispatchGenerationV1, ReturnedDispatchDataV1, TypedKernargImageV1,
+    UnpublishedDispatchAbortV1, UnpublishedDispatchContinuationV1,
+    persistent_fixed_dispatch_control_identity_v1, prepare_dispatch_resources,
+    prepare_persistent_fixed_dispatch_resources_v1,
+    prepare_public_fixed_dispatch_resources_after_unpublished_abort_in_place_v1,
     prepare_three_binding_persistent_fixed_dispatch_resources_v1,
     three_binding_persistent_fixed_dispatch_control_identity_v1, unwrap_completed,
     unwrap_published, validate_fixed_batch_ring, wrap_completed, wrap_poll_with_progress,
@@ -4398,6 +4399,13 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
         &mut self,
     ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
         self.forward_pristine_abort_v1(ComputeAqlQueueSessionV1::abort_unpublished_settled_v1)
+    }
+
+    /// Returns complete DATA after cancelled-only reservations on this exact lane.
+    pub fn abort_cancelled_fixed_dispatch_v1(
+        &mut self,
+    ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
+        self.forward_pristine_abort_v1(ComputeAqlQueueSessionV1::abort_cancelled_settled_v1)
     }
 
     /// Releases prepare-once code and kernarg control after persistent data

@@ -3,20 +3,42 @@
 use super::*;
 use crate::shared_memory::ControlCleanupCustodyV1;
 
-pub(crate) struct PristineDispatchContinuationV1 {
+#[cfg(test)]
+#[path = "pristine_abort/cancelled_tests.rs"]
+mod cancelled_tests;
+
+/// Unpublished provenance, not a recycled generation or completion receipt.
+/// Detachment refunds the epoch table; rebind separately reacquires its credit.
+pub(crate) struct UnpublishedDispatchContinuationV1 {
+    queue: Option<QueueKeyV1>,
     next_generation: u64,
     capacity_profile: FixedDispatchCapacityProfileV1,
     account: Option<ResourceCreditAccountV1>,
 }
 
-impl PristineDispatchContinuationV1 {
+#[cfg(test)]
+pub(in crate::queue) fn cancel_unpublished_fixture_epoch_v1(
+    owner: &mut DispatchResourceOwnerV1,
+    queue: QueueKeyV1,
+) {
+    let mut roster = test_completion_roster_v1(owner.generation.next_generation);
+    roster.queue = queue;
+    let epoch = owner.generation.reserve(queue, roster).unwrap();
+    owner.cancel_binding(epoch).unwrap();
+}
+
+impl UnpublishedDispatchContinuationV1 {
+    pub(in crate::queue) fn matches_queue(&self, queue: QueueKeyV1) -> bool {
+        self.queue.is_none_or(|original| original == queue)
+    }
+
     #[cfg(test)]
     pub(in crate::queue) fn from_fresh_capacity_for_test(
         capacity: &Gfx942FixedDispatchCapacityV1,
     ) -> Self {
         DispatchGenerationOwnerV1::with_capacity(1, capacity.profile, capacity.account.as_ref())
             .unwrap()
-            .into_pristine_continuation()
+            .into_unpublished_continuation()
     }
 
     pub(in crate::queue) fn matches_capacity(
@@ -44,22 +66,38 @@ impl PristineDispatchContinuationV1 {
         )
     }
 
+    fn ensure_resumable(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        if self.next_generation == 0 || self.next_generation.checked_add(1).is_none() {
+            return Err(Gfx942DispatchBindingErrorV1::GenerationExhausted);
+        }
+        Ok(())
+    }
+
     pub(in crate::queue) fn preallocate_resume<const N: usize>(
         &self,
     ) -> Result<Option<PreparedDispatchGenerationV1>, Gfx942DispatchBindingErrorV1> {
-        PreparedDispatchGenerationV1::preallocate::<N>(
+        self.ensure_resumable()?;
+        let prepared = PreparedDispatchGenerationV1::preallocate::<N>(
             &Gfx942FixedDispatchCapacityV1 {
                 profile: self.capacity_profile,
                 account: self.account.clone(),
             },
             DispatchGenerationSeedV1::Pristine(self.next_generation),
-        )
+        )?;
+        Ok(prepared.map(|prepared| match self.queue {
+            Some(queue) => prepared.for_queue(queue),
+            None => prepared,
+        }))
     }
 
     pub(in crate::queue) fn ensure_preallocated_resume<const N: usize>(
         &self,
         prepared: &mut Option<PreparedDispatchGenerationV1>,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.ensure_resumable()?;
+        if let Some(queue) = self.queue {
+            PreparedDispatchGenerationV1::validate_target(prepared, Some(queue))?;
+        }
         PreparedDispatchGenerationV1::ensure_preallocated::<N>(
             prepared,
             &Gfx942FixedDispatchCapacityV1 {
@@ -67,13 +105,20 @@ impl PristineDispatchContinuationV1 {
                 account: self.account.clone(),
             },
             DispatchGenerationSeedV1::Pristine(self.next_generation),
-        )
+        )?;
+        if let Some(queue) = self.queue {
+            *prepared = prepared.take().map(|prepared| prepared.for_queue(queue));
+        }
+        Ok(())
     }
 
     fn resume_preallocated(
         &self,
         prepared: &mut Option<PreparedDispatchGenerationV1>,
     ) -> Result<DispatchGenerationOwnerV1, Gfx942DispatchBindingErrorV1> {
+        if let Some(queue) = self.queue {
+            PreparedDispatchGenerationV1::validate_target(prepared, Some(queue))?;
+        }
         PreparedDispatchGenerationV1::take_for(
             prepared,
             &Gfx942FixedDispatchCapacityV1 {
@@ -86,6 +131,24 @@ impl PristineDispatchContinuationV1 {
 }
 
 impl DispatchGenerationOwnerV1 {
+    fn ensure_cancelled_only(&self, queue: QueueKeyV1) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.ensure_prepared()?;
+        if self.recipe_queue != Some(queue) {
+            return Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration);
+        }
+        // Published epochs can become vacant only through recycle, which leaves
+        // its sticky marker. A nonzero slot generation authenticates reserve/cancel.
+        if self.recycled_generation.is_some()
+            || self.predecessor_detached_generation.is_some()
+            || !self.slots.iter().any(|slot| slot.slot_generation != 0)
+            || self.next_generation < 2
+        {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
+        // An exhausted next counter still permits disposal, never another issue.
+        Ok(())
+    }
+
     pub(super) fn ensure_pristine(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
         self.ensure_not_poisoned()?;
         if self.recipe_queue.is_some()
@@ -103,8 +166,9 @@ impl DispatchGenerationOwnerV1 {
         Ok(())
     }
 
-    fn into_pristine_continuation(self) -> PristineDispatchContinuationV1 {
-        PristineDispatchContinuationV1 {
+    fn into_unpublished_continuation(self) -> UnpublishedDispatchContinuationV1 {
+        UnpublishedDispatchContinuationV1 {
+            queue: self.recipe_queue,
             next_generation: self.next_generation,
             capacity_profile: self.capacity_profile,
             account: self.slots.account(),
@@ -112,19 +176,19 @@ impl DispatchGenerationOwnerV1 {
     }
 }
 
-pub(crate) struct PristineAbortBuffersV1 {
+pub(crate) struct UnpublishedAbortBuffersV1 {
     data: Vec<Gfx942FixedDispatchDataV1>,
     identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
 }
 
 /// Remains rooted outside both control disposal and the closing model retake.
-pub(crate) struct PristineDispatchAbortV1 {
+pub(crate) struct UnpublishedDispatchAbortV1 {
     kernarg: Option<KernargAuthority>,
     code: Vec<CodeAuthority>,
     active_control: Option<ControlCleanupCustodyV1>,
     data: Vec<Gfx942FixedDispatchDataV1>,
     identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
-    continuation: PristineDispatchContinuationV1,
+    continuation: UnpublishedDispatchContinuationV1,
     started: bool,
     complete: bool,
 }
@@ -139,6 +203,7 @@ pub(in crate::queue) struct PristineAbortSnapshotV1 {
     identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
     storage: [(usize, usize); 3],
     continuation: u64,
+    continuation_queue: Option<QueueKeyV1>,
     started: bool,
     complete: bool,
 }
@@ -158,6 +223,7 @@ impl PristineAbortSnapshotV1 {
         assert_eq!(self.identities, before.identities);
         assert_eq!(self.storage, before.storage);
         assert_eq!(self.continuation, before.continuation);
+        assert_eq!(self.continuation_queue, before.continuation_queue);
         assert!(self.started);
         assert_eq!(self.complete, complete);
     }
@@ -199,8 +265,22 @@ fn authority_layout(authority: &DispatchDataAuthorityV1) -> Gfx942FixedDispatchD
 impl DispatchResourceOwnerV1 {
     pub(crate) fn prepare_pristine_abort_v1(
         &self,
-    ) -> Result<PristineAbortBuffersV1, Gfx942DispatchBindingErrorV1> {
+    ) -> Result<UnpublishedAbortBuffersV1, Gfx942DispatchBindingErrorV1> {
         self.generation.ensure_pristine()?;
+        self.prepare_unpublished_abort_data_v1()
+    }
+
+    pub(crate) fn prepare_cancelled_abort_v1(
+        &self,
+        queue: QueueKeyV1,
+    ) -> Result<UnpublishedAbortBuffersV1, Gfx942DispatchBindingErrorV1> {
+        self.generation.ensure_cancelled_only(queue)?;
+        self.prepare_unpublished_abort_data_v1()
+    }
+
+    fn prepare_unpublished_abort_data_v1(
+        &self,
+    ) -> Result<UnpublishedAbortBuffersV1, Gfx942DispatchBindingErrorV1> {
         if self.persistent_control != PersistentFixedDispatchControlStateV1::Ordinary
             || self.code.is_empty()
             || self.code.len() > GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1
@@ -223,7 +303,7 @@ impl DispatchResourceOwnerV1 {
                 });
             }
         }
-        let mut buffers = PristineAbortBuffersV1 {
+        let mut buffers = UnpublishedAbortBuffersV1 {
             data: Vec::new(),
             identities: Vec::new(),
         };
@@ -244,10 +324,10 @@ impl DispatchResourceOwnerV1 {
         Ok(buffers)
     }
 
-    pub(crate) fn begin_pristine_abort_v1(
+    pub(crate) fn begin_unpublished_abort_v1(
         self,
-        mut buffers: PristineAbortBuffersV1,
-    ) -> PristineDispatchAbortV1 {
+        mut buffers: UnpublishedAbortBuffersV1,
+    ) -> UnpublishedDispatchAbortV1 {
         for (authority, premise) in self.data.into_iter().zip(self.data_premises) {
             let data = match (authority, premise.initialized_content) {
                 (DispatchDataAuthorityV1::Device(authority), Some(content)) => {
@@ -269,20 +349,20 @@ impl DispatchResourceOwnerV1 {
             buffers.identities.push(data.storage_identity());
             buffers.data.push(data);
         }
-        PristineDispatchAbortV1 {
+        UnpublishedDispatchAbortV1 {
             kernarg: Some(self.kernarg),
             code: self.code,
             active_control: None,
             data: buffers.data,
             identities: buffers.identities,
-            continuation: self.generation.into_pristine_continuation(),
+            continuation: self.generation.into_unpublished_continuation(),
             started: false,
             complete: false,
         }
     }
 }
 
-impl PristineDispatchAbortV1 {
+impl UnpublishedDispatchAbortV1 {
     #[cfg(test)]
     pub(in crate::queue) fn custody_snapshot_for_test(&self) -> PristineAbortSnapshotV1 {
         PristineAbortSnapshotV1 {
@@ -321,6 +401,7 @@ impl PristineDispatchAbortV1 {
                 ),
             ],
             continuation: self.continuation.next_generation,
+            continuation_queue: self.continuation.queue,
             started: self.started,
             complete: self.complete,
         }
@@ -366,7 +447,7 @@ impl PristineDispatchAbortV1 {
     pub(crate) fn into_detached(
         self,
     ) -> (
-        PristineDispatchContinuationV1,
+        UnpublishedDispatchContinuationV1,
         Vec<Gfx942FixedDispatchDataV1>,
         Vec<Gfx942FixedDispatchStorageIdentityV1>,
     ) {
@@ -378,13 +459,13 @@ impl PristineDispatchAbortV1 {
     }
 }
 
-pub(in crate::queue) fn prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1<
+pub(in crate::queue) fn prepare_public_fixed_dispatch_resources_after_unpublished_abort_in_place_v1<
     const N: usize,
 >(
     memory: &mut impl preparation::PreparationMemoryV1,
     programs: &[ValidatedKernelEnvelope<'_>],
     custody: &mut FixedDispatchPreparationCustodyV1<N>,
-    continuation: &mut Option<PristineDispatchContinuationV1>,
+    continuation: &mut Option<UnpublishedDispatchContinuationV1>,
     prepared: &mut Option<PreparedDispatchGenerationV1>,
 ) -> Result<(), Gfx942DispatchBindingErrorV1> {
     let generation = match continuation.as_ref() {
@@ -468,7 +549,7 @@ mod tests {
             for _ in 0..3 {
                 owner.ensure_pristine().unwrap();
                 let occurrence = owner.recipe_occurrence;
-                owner = owner.into_pristine_continuation().resume().unwrap();
+                owner = owner.into_unpublished_continuation().resume().unwrap();
                 assert_eq!(owner.next_generation, next);
                 assert_ne!(owner.recipe_occurrence, occurrence);
                 assert!(matches!(
@@ -542,7 +623,7 @@ mod tests {
         for _ in 0..3 {
             owner.ensure_pristine().unwrap();
             let occurrence = owner.recipe_occurrence;
-            let continuation = owner.into_pristine_continuation();
+            let continuation = owner.into_unpublished_continuation();
             assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
             owner = continuation.resume().unwrap();
             assert_eq!(
@@ -612,7 +693,7 @@ mod tests {
             })
             .collect();
         let buffers = owner.prepare_pristine_abort_v1().unwrap();
-        let mut abort = owner.begin_pristine_abort_v1(buffers);
+        let mut abort = owner.begin_unpublished_abort_v1(buffers);
         let identities = abort.identities.clone();
         abort.release_controls(&mut memory).unwrap();
         assert_eq!(memory.freed(), 3);
@@ -656,7 +737,7 @@ mod tests {
     fn dispatch_retention_after_pristine_abort_preserves_all_five_input_variants() {
         let (mut memory, owner) = pristine_dispatch_fixture_v1(8);
         let buffers = owner.prepare_pristine_abort_v1().unwrap();
-        let mut abort = owner.begin_pristine_abort_v1(buffers);
+        let mut abort = owner.begin_unpublished_abort_v1(buffers);
         abort.release_controls(&mut memory).unwrap();
         let (_, mut data, _) = abort.into_detached();
         let expected: Vec<_> = data
@@ -764,7 +845,7 @@ mod tests {
         }
         let (memory, owner) = pristine_dispatch_fixture_v1(8);
         let buffers = owner.prepare_pristine_abort_v1().unwrap();
-        let mut abort = owner.begin_pristine_abort_v1(buffers);
+        let mut abort = owner.begin_unpublished_abort_v1(buffers);
         let before = abort.custody_snapshot_for_test();
         let calls = memory.native_calls();
         let currentness = memory.currentness_calls();
@@ -809,7 +890,7 @@ mod tests {
                     let (mut memory, owner) = pristine_dispatch_fixture_v1(8);
                     let usage = memory.usage();
                     let buffers = owner.prepare_pristine_abort_v1().unwrap();
-                    let mut abort = owner.begin_pristine_abort_v1(buffers);
+                    let mut abort = owner.begin_unpublished_abort_v1(buffers);
                     let identities = abort.identities.clone();
                     let before = abort.custody_snapshot_for_test();
                     memory.fail_control(ordinal, operation, panic);
@@ -875,7 +956,7 @@ mod tests {
                 let (mut memory, owner) = pristine_dispatch_fixture_v1(8);
                 let usage = memory.usage();
                 let buffers = owner.prepare_pristine_abort_v1().unwrap();
-                let mut abort = owner.begin_pristine_abort_v1(buffers);
+                let mut abort = owner.begin_unpublished_abort_v1(buffers);
                 memory.unmap_control(ordinal, progress, errno);
                 assert!(abort.release_controls(&mut memory).is_err());
                 assert!(!abort.complete);
@@ -893,7 +974,7 @@ mod tests {
     fn pristine_abort_sweeps_currentness_and_partial_control_cleanup() {
         let (mut memory, owner) = pristine_dispatch_fixture_v1(8);
         let buffers = owner.prepare_pristine_abort_v1().unwrap();
-        let mut abort = owner.begin_pristine_abort_v1(buffers);
+        let mut abort = owner.begin_unpublished_abort_v1(buffers);
         let before = memory.currentness_calls();
         abort.release_controls(&mut memory).unwrap();
         let boundaries = memory.currentness_calls() - before;
@@ -904,7 +985,7 @@ mod tests {
                 let (mut memory, owner) = pristine_dispatch_fixture_v1(8);
                 let usage = memory.usage();
                 let buffers = owner.prepare_pristine_abort_v1().unwrap();
-                let mut abort = owner.begin_pristine_abort_v1(buffers);
+                let mut abort = owner.begin_unpublished_abort_v1(buffers);
                 memory.fail_currentness(offset, panic);
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     abort.release_controls(&mut memory)

@@ -24,6 +24,7 @@ fn preallocate_next_binding_v1<const N: usize>(
         if !unpublished.is_detached()
             || detached.is_some()
             || !continuation.matches_capacity(capacity)
+            || !continuation.matches_queue(key)
         {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
