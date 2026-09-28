@@ -25,6 +25,14 @@ use sha2::{Digest, Sha256};
 use crate::shared_memory::SharedGttMappedResourceFactsV1;
 use crate::wait::MonotonicWaitV1;
 
+include!("queue_completion/event_release_body.rs");
+
+macro_rules! completion_rust_expr {
+    ($body:expr) => {
+        $body
+    };
+}
+
 #[path = "queue_completion/dependency_event.rs"]
 mod dependency_event;
 
@@ -2201,11 +2209,7 @@ impl CompletionSignalArenaOwnerV1 {
     }
 
     fn require_ready(&self) -> Result<(), Gfx942CompletionErrorV1> {
-        if self.phase == CompletionOwnerPhaseV1::Ready {
-            Ok(())
-        } else {
-            Err(Gfx942CompletionErrorV1::Poisoned)
-        }
+        completion_require_ready_body!(completion_rust_expr, self)
     }
 
     fn require_probe_active(&self) -> Result<(), Gfx942CompletionErrorV1> {

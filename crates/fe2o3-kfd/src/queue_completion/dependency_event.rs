@@ -635,25 +635,14 @@ impl CompletionSignalArenaOwnerV1 {
         Gfx942ComputeEventReleaseObservationV1,
         (Gfx942CompletionErrorV1, Gfx942ComputeEventOccurrenceV1),
     > {
-        let result = (|| {
-            self.require_ready()?;
-            self.validate_active_event(&event)?;
-            self.validate_live_occurrence(event.exact)?;
-            let record = &self.slots[event.exact.slot.index as usize];
-            let next = record
-                .event_pins
-                .checked_sub(1)
-                .ok_or(Gfx942CompletionErrorV1::StaleEventOccurrence)?;
-            Ok(next)
-        })();
-        let next = match result {
-            Ok(next) => next,
-            Err(error) => return Err((error, event)),
-        };
-        let removed = self.dependency_ledger.events.remove(&event.event_id);
-        debug_assert_eq!(removed, Some(event.exact));
-        self.slots[event.exact.slot.index as usize].event_pins = next;
-        Ok(Gfx942ComputeEventReleaseObservationV1)
+        completion_release_event_body!(completion_rust_expr, self, event)
+    }
+
+    fn event_release_preflight(
+        &self,
+        event: &Gfx942ComputeEventOccurrenceV1,
+    ) -> Result<u32, Gfx942CompletionErrorV1> {
+        completion_event_release_preflight_body!(completion_rust_expr, self, event)
     }
 
     /// Releases an exact event roster atomically with respect to host-ledger
@@ -944,34 +933,14 @@ impl CompletionSignalArenaOwnerV1 {
         &self,
         event: &Gfx942ComputeEventOccurrenceV1,
     ) -> Result<(), Gfx942CompletionErrorV1> {
-        if self.dependency_ledger.events.get(&event.event_id) != Some(&event.exact) {
-            return Err(Gfx942CompletionErrorV1::StaleEventOccurrence);
-        }
-        Ok(())
+        completion_validate_active_event_body!(completion_rust_expr, self, event)
     }
 
     fn validate_live_occurrence(
         &self,
         exact: ExactCompletionOccurrenceV1,
     ) -> Result<(), Gfx942CompletionErrorV1> {
-        if exact.queue != self.queue || exact.signal_mapping != self.signal_mapping {
-            return Err(Gfx942CompletionErrorV1::StaleEventOccurrence);
-        }
-        let Some(record) = self.slots.get(exact.slot.index as usize) else {
-            return Err(Gfx942CompletionErrorV1::StaleEventOccurrence);
-        };
-        if record.generation != exact.slot.generation
-            || !matches!(
-                record.phase,
-                CompletionSlotPhaseV1::Bound { batch_id }
-                    | CompletionSlotPhaseV1::Published { batch_id }
-                    | CompletionSlotPhaseV1::Completed { batch_id }
-                    if batch_id == exact.batch_id
-            )
-        {
-            return Err(Gfx942CompletionErrorV1::StaleEventOccurrence);
-        }
-        Ok(())
+        completion_validate_live_occurrence_body!(completion_rust_expr, self, exact)
     }
 
     fn validate_published_or_completed_occurrence(
@@ -1055,6 +1024,8 @@ fn packet_id_at<const N: usize>(
 
 #[cfg(test)]
 mod tests {
+    include!("event_release_tests.rs");
+
     use super::*;
     use fe2o3_aql::{
         AMD_SIGNAL_ALIGNMENT_V1, AqlCompletionObservationV1, AqlDispatchGeometryV1,
