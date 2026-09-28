@@ -1,5 +1,5 @@
 use fe2o3_kernel_ir::{
-    BasicBlock, BlockId, CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    AddressSpace, BasicBlock, BlockId, CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrWorkBudgetV1 as Work, LaunchDomain, LaunchExtent, Signature,
     StorageLayoutLimitsV1, UnaryOp, ValueDef, ValueId, VerifiedCanonicalKernelIrModuleV18 as Owner,
     WorkgroupSize,
@@ -37,7 +37,12 @@ fn module_v18() -> Module {
 fn admit_v18(module: &Module, budget: &mut Budget<'_>) -> (Owner, usize) {
     let (owner, receipt) = Owner::from_module_ref_with_verification_budget_v18(
         module,
-        StorageLayoutLimitsV1::default(),
+        StorageLayoutLimitsV1 {
+            rows: 64,
+            edges: 256,
+            containment_depth: 32,
+            object_bytes: 4096,
+        },
         budget,
     )
     .unwrap();
