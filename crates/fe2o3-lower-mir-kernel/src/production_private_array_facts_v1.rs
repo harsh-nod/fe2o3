@@ -158,6 +158,20 @@ fn private_retained_slot_facts_v1<W: PrivateArrayChargeV1>(
     ty: SemanticTypeIdV1,
     work: &mut W,
 ) -> Result<Option<PrivateRetainedSlotFactsV1>, W::Error> {
+    private_retained_slot_facts_with_representation_v29(
+        types,
+        ty,
+        ExecutionCfgRepresentationV29::LegacyAbi,
+        work,
+    )
+}
+
+fn private_retained_slot_facts_with_representation_v29<W: PrivateArrayChargeV1>(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    representation: ExecutionCfgRepresentationV29,
+    work: &mut W,
+) -> Result<Option<PrivateRetainedSlotFactsV1>, W::Error> {
     work.charge_private_array_work(1)?;
     let Some(declaration) = types.get(ty.index() as usize) else {
         return Ok(None);
@@ -198,7 +212,15 @@ fn private_retained_slot_facts_v1<W: PrivateArrayChargeV1>(
                 return Ok(None);
             };
             work.charge_private_array_work(1)?;
-            let Ok(space) = lower_address_space(pointer.address_space()) else {
+            let space = match representation {
+                ExecutionCfgRepresentationV29::LegacyAbi => {
+                    lower_address_space(pointer.address_space()).ok()
+                }
+                ExecutionCfgRepresentationV29::OriginalSource => {
+                    source_address_space_v18(pointer.address_space()).ok()
+                }
+            };
+            let Some(space) = space else {
                 return Ok(None);
             };
             work.charge_private_array_work(1)?;
@@ -243,7 +265,24 @@ fn retained_local_slot_type_v1(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Option<(Type, u32)> {
-    let facts = match private_retained_slot_facts_v1(types, ty, &mut PrivateArrayNoWorkV1) {
+    retained_local_slot_type_with_representation_v29(
+        types,
+        ty,
+        ExecutionCfgRepresentationV29::LegacyAbi,
+    )
+}
+
+fn retained_local_slot_type_with_representation_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    representation: ExecutionCfgRepresentationV29,
+) -> Option<(Type, u32)> {
+    let facts = match private_retained_slot_facts_with_representation_v29(
+        types,
+        ty,
+        representation,
+        &mut PrivateArrayNoWorkV1,
+    ) {
         Ok(facts) => facts?,
         Err(never) => match never {},
     };

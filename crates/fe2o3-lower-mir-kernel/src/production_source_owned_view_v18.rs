@@ -466,27 +466,7 @@ impl ProductionPreparedSourceV18 {
         let entry = &entered;
         let result = boundary.run(budget, move |cleanup, budget| {
             entry.set(true);
-            let floor = budget
-                .storage()
-                .checked_sub(self.retained)
-                .ok_or(ArgumentResourceV1::Accounting)?;
-            let (pending, retained) =
-                scoped_source_attempt_v29(cleanup, budget, floor, move |budget| {
-                    let Self {
-                        source,
-                        limits,
-                        capture_storage,
-                        ..
-                    } = self;
-                    let mut donor = Some(source);
-                    let inner = SourceOwnedScopedModuleV29::try_new_with_cleanup(
-                        &mut donor, limits, cleanup, budget,
-                    )?;
-                    let pending = ProductionPendingScopedSourceOwnerV29 { inner };
-                    budget.release_storage(size_of::<Self>())?;
-                    let retained = argument_sum_v1(&[pending.adopted_storage(), capture_storage])?;
-                    Ok::<_, ProductionSourceOwnedViewErrorV18>((pending, retained))
-                })?;
+            let (pending, retained) = self.into_pending_with_cleanup_v18(cleanup, budget)?;
             let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 pending.with_source_consumer_with_cleanup_v18(cleanup, budget, consume)
             }));
@@ -500,6 +480,121 @@ impl ProductionPreparedSourceV18 {
         }
         result
     }
+
+    fn into_pending_with_cleanup_v18(
+        self,
+        cleanup: &ScopedSourceCleanupV29,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<(ProductionPendingScopedSourceOwnerV29, usize)> {
+        let input_storage = self.source.input.retained_storage;
+        if cleanup.is_denied()
+            || self.slot != std::ptr::from_ref(budget) as usize
+            || self.ledger != budget.work_ledger_identity_v1()
+            || self.source.input.ledger != self.ledger
+            || budget.storage() < self.retained
+            || argument_sum_v1(&[size_of::<Self>(), input_storage, self.capture_storage])?
+                != self.retained
+        {
+            cleanup.deny_refund();
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        let floor = budget.storage() - self.retained;
+        let headers = match prepared_source_transition_headers_v18().and_then(|headers| {
+            budget.reserve_storage(headers)?;
+            Ok(headers)
+        }) {
+            Ok(headers) => headers,
+            Err(error) => {
+                let retained = self.retained;
+                drop(self);
+                if budget.release_storage(retained).is_err() {
+                    cleanup.deny_refund();
+                }
+                return Err(error.into());
+            }
+        };
+        let Self {
+            source,
+            limits,
+            capture_storage,
+            slot,
+            ledger,
+            ..
+        } = self;
+        let mut donor = Some(source);
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            SourceOwnedScopedModuleV29::try_new_with_cleanup(&mut donor, limits, cleanup, budget)
+        }));
+        // A failed adopted constructor drops its input before refunding that
+        // input's credit. Its shared cleanup veto remains authoritative even
+        // when donor.take() happened before a caught drop or producer panic.
+        let live_source = match &caught {
+            Ok(Ok(inner)) => inner.retained_storage,
+            _ if donor.is_some() => input_storage,
+            _ => 0,
+        };
+        let remaining =
+            argument_sum_v1(&[headers, size_of::<Self>(), capture_storage, live_source]);
+        let valid = !cleanup.is_denied()
+            && slot == std::ptr::from_ref(budget) as usize
+            && ledger == budget.work_ledger_identity_v1()
+            && remaining
+                .as_ref()
+                .is_ok_and(|&owned| floor.checked_add(owned) == Some(budget.storage()));
+        if !valid {
+            cleanup.deny_refund();
+        }
+        drop(donor);
+        match caught {
+            Ok(Ok(inner)) if valid => {
+                let retained = argument_sum_v1(&[inner.retained_storage, capture_storage])?;
+                budget
+                    .release_storage(argument_sum_v1(&[headers, size_of::<Self>()])?)
+                    .inspect_err(|_| cleanup.deny_refund())?;
+                Ok((ProductionPendingScopedSourceOwnerV29 { inner }, retained))
+            }
+            Ok(Ok(inner)) => {
+                drop(inner);
+                Err(ArgumentResourceV1::Accounting.into())
+            }
+            selected => {
+                if valid && budget.release_storage(remaining.unwrap()).is_err() {
+                    cleanup.deny_refund();
+                }
+                match selected {
+                    Ok(Err(error)) => Err(error.into()),
+                    Err(payload) => std::panic::resume_unwind(payload),
+                    Ok(Ok(_)) => unreachable!(),
+                }
+            }
+        }
+    }
+}
+
+fn prepared_source_transition_headers_v18() -> Result<usize, ArgumentResourceV1> {
+    type Attempt = Result<SourceOwnedScopedModuleV29, ScopedModuleErrorV29>;
+    type Capture<'a, 'work> = (
+        &'a mut Option<ScopedSourceInputsV29>,
+        ProductionSemanticKirLimitsV1,
+        &'a ScopedSourceCleanupV29,
+        &'a mut ArgumentBudgetV1<'work>,
+    );
+    argument_sum_v1(&[
+        size_of::<Option<ScopedSourceInputsV29>>(),
+        size_of::<Capture<'_, '_>>(),
+        std::mem::align_of::<Capture<'_, '_>>(),
+        size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_>>>(),
+        size_of::<Attempt>(),
+        size_of::<std::thread::Result<Attempt>>(),
+        size_of::<SourceOwnedResultV18<(ProductionPendingScopedSourceOwnerV29, usize)>>(),
+        size_of::<(ProductionPendingScopedSourceOwnerV29, usize)>(),
+        size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>(),
+        size_of::<Result<usize, ArgumentResourceV1>>(),
+        size_of::<Result<(), ArgumentResourceV1>>(),
+        size_of::<Box<dyn std::any::Any + Send>>(),
+        9 * size_of::<usize>(),
+        size_of::<bool>(),
+    ])
 }
 
 #[derive(Clone, Copy)]

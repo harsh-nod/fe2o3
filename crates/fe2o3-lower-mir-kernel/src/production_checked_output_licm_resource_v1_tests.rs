@@ -38,11 +38,12 @@ type Measurements = (
     usize,
     Option<usize>,
     Option<usize>,
+    transition_work_oracle::ReplaySchedule,
 );
 
 fn measured(profile: Profile, mutation: bool, limit: usize, storage: usize) -> Measurements {
     let (prefix, inherited) = direct::prefix(profile, mutation);
-    transition_work_oracle::assert_policy6_endpoints(
+    let schedule = transition_work_oracle::assert_policy6_endpoints(
         prefix.prefix().prefix().prefix().prefix(),
         transition_work_oracle::Family::Licm,
         mutation,
@@ -85,25 +86,32 @@ fn measured(profile: Profile, mutation: bool, limit: usize, storage: usize) -> M
             budget.failed_storage(),
         )
     };
-    (result, accepted, peak, failed_storage, work.failed_work())
+    (
+        result,
+        accepted,
+        peak,
+        failed_storage,
+        work.failed_work(),
+        schedule,
+    )
 }
 
 #[test]
 fn source_licm_exact_work_and_one_short_keep_first_denial_and_live_sibling() {
     for profile in [Profile::Gfx942, Profile::Gfx950] {
         for mutation in [false, true] {
-            let (result, work, peak, storage_denial, work_denial) =
+            let (result, work, peak, storage_denial, work_denial, _) =
                 measured(profile, mutation, WORK, STORAGE);
             result.unwrap();
             assert_eq!((storage_denial, work_denial), (None, None));
-            let (result, accepted, actual_peak, storage_denial, work_denial) =
+            let (result, accepted, actual_peak, storage_denial, work_denial, _) =
                 measured(profile, mutation, work, peak);
             result.unwrap();
             assert_eq!(
                 (accepted, actual_peak, storage_denial, work_denial),
                 (work, peak, None, None)
             );
-            let (result, accepted, actual_peak, storage_denial, work_denial) =
+            let (result, accepted, actual_peak, storage_denial, work_denial, _) =
                 measured(profile, mutation, work - 1, peak);
             match result {
                 Err(LicmError::Resource(AssertOriginResourceV1::Work(error))) => {
@@ -124,7 +132,7 @@ fn source_licm_exact_work_and_one_short_keep_first_denial_and_live_sibling() {
 fn source_licm_one_short_storage_preserves_exact_nested_phase() {
     for profile in [Profile::Gfx942, Profile::Gfx950] {
         for mutation in [false, true] {
-            let (result, work, peak, storage_denial, work_denial) =
+            let (result, work, peak, storage_denial, work_denial, schedule) =
                 measured(profile, mutation, WORK, STORAGE);
             result.unwrap();
             assert_eq!((storage_denial, work_denial), (None, None));
@@ -132,8 +140,6 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
             // completes two, then stops at the third P6 map before its O/I check.
             // Keep the old baseline separate from the independently derived
             // selected-edge cache delta. Storage and denial chronology are fixed.
-            let schedule =
-                transition_work_oracle::expected(transition_work_oracle::Family::Licm, mutation);
             let complete = schedule.complete_replay_delta();
             let partial = schedule.map_refused_replay_delta();
             let nominal_header = std::mem::size_of::<Option<Box<SealedBf16CallRelationV1>>>();
@@ -153,8 +159,9 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
                 )
             };
             assert_eq!((work, peak), (expected.0, expected.1));
-            let (result, accepted, actual_peak, storage_denial, work_denial) =
+            let (result, accepted, actual_peak, storage_denial, work_denial, short_schedule) =
                 measured(profile, mutation, work, peak - 1);
+            assert_eq!(short_schedule, schedule);
             let error =
                 result.expect_err("one-short storage cannot complete the same allocation history");
             assert_eq!((storage_denial, work_denial), (Some(peak), None));

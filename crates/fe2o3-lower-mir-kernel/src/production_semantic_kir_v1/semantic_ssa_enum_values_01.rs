@@ -287,15 +287,8 @@ fn analyze_promoted_enum_variants_v1(
     for (local, value) in &control_flow_ssa.entry_definitions {
         budget.charge_work(1)?;
         if control_flow_ssa.ssa_value_locals.contains(local) {
-            let entry_live_in = if control_flow_ssa.representation
-                == ExecutionCfgRepresentationV29::OriginalSource
-            {
-                let live_in = control_flow_ssa.live_in(function.entry().index());
-                budget.charge_work(live_in.len())?;
-                live_in
-            } else {
-                &[]
-            };
+            let entry_live_in = control_flow_ssa.live_in(function.entry().index());
+            budget.charge_work(entry_live_in.len())?;
             let header_value = if entry_live_in.contains(local) {
                 SsaValueV1::BlockArgument {
                     block: SsaBlockIdV1::new(function.entry().index()),

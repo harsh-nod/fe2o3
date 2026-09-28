@@ -4,6 +4,7 @@ enum ClosedUnitCaseV1765 {
     ChangedAndUnit,
     ScalarZeroSized,
     AggregateZeroSized,
+    ConstructedAggregateZeroSized,
 }
 
 fn closed_unit_request_v1765(case: ClosedUnitCaseV1765) -> InertSemanticMirRequestV1 {
@@ -11,7 +12,11 @@ fn closed_unit_request_v1765(case: ClosedUnitCaseV1765) -> InertSemanticMirReque
     let semantic = original.source_semantic();
     let mut types = semantic.types().to_vec();
     let aggregate = SemanticTypeIdV1::from_index(types.len() as u32);
-    if matches!(case, ClosedUnitCaseV1765::AggregateZeroSized) {
+    if matches!(
+        case,
+        ClosedUnitCaseV1765::AggregateZeroSized
+            | ClosedUnitCaseV1765::ConstructedAggregateZeroSized
+    ) {
         types.push(SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256([210; 32]),
             SemanticLayoutIdentityV1::from_sha256([210; 32]),
@@ -52,14 +57,31 @@ fn closed_unit_request_v1765(case: ClosedUnitCaseV1765) -> InertSemanticMirReque
                         SemanticConstantV1::new(U32, SemanticConstantValueV1::ZeroSized),
                     )),
                 )),
-                ClosedUnitCaseV1765::AggregateZeroSized => {
+                ClosedUnitCaseV1765::AggregateZeroSized
+                | ClosedUnitCaseV1765::ConstructedAggregateZeroSized => {
                     let destination = locals.len() as u32;
                     locals.push(local(tag + 10, aggregate, SemanticLocalRoleV1::Temporary));
                     statements.push(assign(
                         place(destination, aggregate),
-                        SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(
-                            SemanticConstantV1::new(aggregate, SemanticConstantValueV1::ZeroSized),
-                        )),
+                        if matches!(case, ClosedUnitCaseV1765::AggregateZeroSized) {
+                            SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(
+                                SemanticConstantV1::new(
+                                    aggregate,
+                                    SemanticConstantValueV1::ZeroSized,
+                                ),
+                            ))
+                        } else {
+                            SemanticRvalueKindV1::Aggregate(
+                                SemanticAggregateRvalueV1::new(
+                                    SemanticAggregateKindV1::Tuple,
+                                    vec![SemanticOperandV1::Constant(SemanticConstantV1::new(
+                                        UNIT,
+                                        SemanticConstantValueV1::ZeroSized,
+                                    ))],
+                                )
+                                .unwrap(),
+                            )
+                        },
                     ));
                 }
                 _ => (),
@@ -233,15 +255,23 @@ fn closed_scalar_zero_sized_scalar_is_rejected_by_exact_mir_admission() {
 
 #[test]
 fn closed_scalar_admitted_zero_sized_aggregate_is_not_unit_authority() {
-    let owner = closed_unit_owner_v1765(ClosedUnitCaseV1765::AggregateZeroSized);
+    let owner = closed_unit_owner_v1765(ClosedUnitCaseV1765::ConstructedAggregateZeroSized);
     let aggregate = owner.source_semantic().types().last().unwrap();
     assert_eq!(aggregate.layout().size_bytes(), Some(0));
     assert!(matches!(aggregate.shape(), SemanticTypeShapeV1::Tuple(_)));
+    assert!(owner.source_semantic().functions().iter().all(|function| {
+        matches!(function.blocks()[0].statements()[0].kind(),
+            SemanticStatementKindV1::Assign(assignment)
+                if matches!(assignment.value().kind(), SemanticRvalueKindV1::Aggregate(value)
+                    if matches!(value.kind(), SemanticAggregateKindV1::Tuple) && value.operands().len() == 1))
+    }));
     let mut work = CanonicalKernelIrWorkBudgetV1::new(500_000_000);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let (prepared, fixture) =
-        closed_unit_prepared_v1765(ClosedUnitCaseV1765::AggregateZeroSized, &mut budget);
+    let (prepared, fixture) = closed_unit_prepared_v1765(
+        ClosedUnitCaseV1765::ConstructedAggregateZeroSized,
+        &mut budget,
+    );
     let roots = fixture.roots();
     prepared
         .with_checked_source_v18(&mut budget, |source, budget| {
@@ -268,5 +298,41 @@ fn closed_scalar_admitted_zero_sized_aggregate_is_not_unit_authority() {
             Ok(())
         })
         .unwrap();
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+}
+
+#[test]
+fn closed_scalar_literal_zero_sized_aggregate_requires_typed_source_construction() {
+    let owner = closed_unit_owner_v1765(ClosedUnitCaseV1765::AggregateZeroSized);
+    let aggregate = owner.source_semantic().types().last().unwrap();
+    assert_eq!(aggregate.layout().size_bytes(), Some(0));
+    assert!(matches!(aggregate.shape(), SemanticTypeShapeV1::Tuple(_)));
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(500_000_000);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let (prepared, _fixture) =
+        closed_unit_prepared_v1765(ClosedUnitCaseV1765::AggregateZeroSized, &mut budget);
+    let entered = std::cell::Cell::new(false);
+    let error = prepared
+        .with_checked_source_v18(&mut budget, |_, _| {
+            entered.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(!entered.get());
+    assert!(
+        matches!(
+            error,
+            ProductionSourceOwnedViewErrorV18::Source(
+                ProductionPendingScopedSourceErrorV29::Source(
+                    ProductionSemanticKirErrorV1::Unsupported {
+                        detail: "source storage value needs its original typed construction state",
+                        ..
+                    }
+                )
+            )
+        ),
+        "{error:?}"
+    );
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }

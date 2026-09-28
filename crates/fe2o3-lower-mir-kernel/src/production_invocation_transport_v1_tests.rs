@@ -5,6 +5,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 
 include!("production_execution_cfg_carrier_v29_tests.rs");
+include!("production_invocation_representation_v29_tests.rs");
 
 fn visitor_scalar(value: u32) -> SemanticValueBindingV1 {
     SemanticValueBindingV1::Value {

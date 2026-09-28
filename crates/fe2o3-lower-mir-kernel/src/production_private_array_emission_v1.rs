@@ -29,6 +29,7 @@ struct PrivateArrayRecorderCheckpointV1 {
 struct PrivateArrayFunctionRecorderV1<'a, 'service> {
     work: PrivateArrayRecorderWorkV1<'service>,
     enabled: bool,
+    representation: ExecutionCfgRepresentationV29,
     limit: usize,
     block: Option<(usize, BlockId)>,
     frame: Option<PrivateArrayStatementFrameV1>,
@@ -230,6 +231,7 @@ impl<'a, 'service> PrivateArrayFunctionRecorderV1<'a, 'service> {
         let Self {
             work,
             enabled,
+            representation,
             limit,
             block,
             frame,
@@ -246,6 +248,7 @@ impl<'a, 'service> PrivateArrayFunctionRecorderV1<'a, 'service> {
             PrivateArrayFunctionRecorderV1 {
                 work: replacement,
                 enabled,
+                representation,
                 limit,
                 block,
                 frame,
@@ -269,9 +272,28 @@ impl<'a, 'service> PrivateArrayFunctionRecorderV1<'a, 'service> {
         outer_payload: PrivateArrayPayloadV1,
         placement: SemanticEmissionPlacementV1,
     ) -> Self {
+        Self::new_with_representation_v29(
+            work,
+            enabled,
+            limit,
+            outer_payload,
+            placement,
+            ExecutionCfgRepresentationV29::LegacyAbi,
+        )
+    }
+
+    fn new_with_representation_v29(
+        work: PrivateArrayRecorderWorkV1<'service>,
+        enabled: bool,
+        limit: usize,
+        outer_payload: PrivateArrayPayloadV1,
+        placement: SemanticEmissionPlacementV1,
+        representation: ExecutionCfgRepresentationV29,
+    ) -> Self {
         Self {
             work,
             enabled,
+            representation,
             limit,
             block: None,
             frame: None,
@@ -375,9 +397,14 @@ impl<'a, 'service> PrivateArrayFunctionRecorderV1<'a, 'service> {
         slot: &SemanticRetainedLocalSlotV1,
         emitted: usize,
     ) -> Result<PrivateRetainedArrayFactsV1, ProductionSemanticKirErrorV1> {
-        let facts =
-            private_retained_array_facts_v1(types, slot.semantic_type, self.limit, &mut self.work)?
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let facts = private_retained_array_facts_with_representation_v29(
+            types,
+            slot.semantic_type,
+            self.limit,
+            self.representation,
+            &mut self.work,
+        )?
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         self.work.charge_private_array_work(3)?;
         let (kernel_type, alignment, array) = slot.storage.scalar_array()?;
         let actual = array.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;

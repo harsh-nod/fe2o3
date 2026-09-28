@@ -12,13 +12,29 @@ fn retained_array_slot_plan_v1(
     ty: SemanticTypeIdV1,
     max_elements: usize,
 ) -> Result<SemanticRetainedLocalSlotPlanV1, ProductionSemanticKirErrorV1> {
+    retained_array_slot_plan_with_representation_v29(
+        types,
+        ty,
+        max_elements,
+        ExecutionCfgRepresentationV29::LegacyAbi,
+    )
+}
+
+fn retained_array_slot_plan_with_representation_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    max_elements: usize,
+    representation: ExecutionCfgRepresentationV29,
+) -> Result<SemanticRetainedLocalSlotPlanV1, ProductionSemanticKirErrorV1> {
     let declaration = types
         .get(ty.index() as usize)
         .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
     let SemanticTypeShapeV1::Array { element, length } = declaration.shape() else {
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
     };
-    let Some((kernel_type, alignment)) = retained_local_slot_type_v1(types, *element) else {
+    let Some((kernel_type, alignment)) =
+        retained_local_slot_type_with_representation_v29(types, *element, representation)
+    else {
         return Err(unsupported(
             0,
             None,

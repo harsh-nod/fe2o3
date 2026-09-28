@@ -145,7 +145,14 @@ fn source_array_cell_facts_v29(
     }
     let owner = plan.instances.owner();
     let types = owner.source_semantic().types();
-    let Some(facts) = private_retained_array_facts_v1(types, row.ty, usize::MAX, budget)? else {
+    let Some(facts) = private_retained_array_facts_with_representation_v29(
+        types,
+        row.ty,
+        usize::MAX,
+        ExecutionCfgRepresentationV29::OriginalSource,
+        budget,
+    )?
+    else {
         return Ok(None);
     };
     if !plan.has_storage_demands || plan.storage_demands.is_none() {

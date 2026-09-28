@@ -871,7 +871,7 @@ fn validate_semantic_anchor_identity_v1(
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v9(&owner) == expected),
         11 => VerifiedCanonicalKernelIrV11::from_module(module.clone())
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v11(&owner) == expected),
-        12 => false,
+        12 | 18 => false,
         _ => unreachable!("semantic anchor identities have a closed version constructor"),
     };
     if !matches {

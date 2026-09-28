@@ -595,9 +595,22 @@ fn append_scoped_source_slots_v29(
                 }
                 candidates[local as usize] = 0;
                 legacy_seen = argument_sum_v1(&[legacy_seen, 1])?;
+                let representation = if matches!(
+                    origin.source,
+                    ScopedAllocationSourceV29::OriginalArray { .. }
+                ) {
+                    ExecutionCfgRepresentationV29::OriginalSource
+                } else {
+                    ExecutionCfgRepresentationV29::LegacyAbi
+                };
                 let (element_type, element, length, count) = if let Some(array) =
-                    private_retained_array_facts_v1(types, local_decl.ty(), max_elements, budget)?
-                {
+                    private_retained_array_facts_with_representation_v29(
+                        types,
+                        local_decl.ty(),
+                        max_elements,
+                        representation,
+                        budget,
+                    )? {
                     let count = scoped_array_slot_v29(
                         lowered,
                         body,

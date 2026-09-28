@@ -1,13 +1,25 @@
-fn physical_empty_callback_v1766(
+fn physical_noop_callback_v1766(
     physical: &scoped_raw_admission_v29::CheckedSourceMemoryV29<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<()> {
-    let mut effects = 0;
-    physical.visit_effects(budget, |_, _| {
-        effects += 1;
+    use scoped_raw_admission_v29::PendingSourceMemoryEffectV29 as Effect;
+    let mut effects = [0; 2];
+    physical.visit_effects(budget, |effect, _| {
+        match effect {
+            Effect::Invocation(instance) => {
+                assert_eq!(instance.index(), 0);
+                effects[0] += 1;
+            }
+            Effect::Return { instance, block } => {
+                assert_eq!(instance.index(), 0);
+                assert_eq!(block.index(), 0);
+                effects[1] += 1;
+            }
+            other => panic!("unexpected no-op source effect: {other:?}"),
+        }
         Ok(())
     })?;
-    assert_eq!(effects, 0);
+    assert_eq!(effects, [1, 1]);
     Ok(())
 }
 
@@ -31,7 +43,7 @@ fn original_memory_scope_excludes_transient_helper_header_and_preserves_callback
                                 None,
                                 budget,
                                 |physical, budget| -> SourceOwnedResultV18<()> {
-                                    physical_empty_callback_v1766(physical, budget)?;
+                                    physical_noop_callback_v1766(physical, budget)?;
                                     budget.reserve_storage(17)?;
                                     calls.set(calls.get() + 1);
                                     Ok(())
@@ -68,7 +80,7 @@ fn original_memory_scope_real_peak_and_one_short_keep_exact_storage_refusal() {
                     let probe_filler = probe_floor - before;
                     budget.reserve_storage(probe_filler)?;
                     scoped_raw_admission_v29::with_checked_source_memory_v29(relation, 0, None, budget,
-                        physical_empty_callback_v1766)?;
+                        physical_noop_callback_v1766)?;
                     assert_eq!(budget.storage(), probe_floor);
                     let peak_delta = budget.peak_storage() - probe_floor;
                     assert!(peak_delta > 0);
@@ -77,7 +89,7 @@ fn original_memory_scope_real_peak_and_one_short_keep_exact_storage_refusal() {
                     let filler = MODULE_LIMIT - before - peak_delta + usize::from(short);
                     budget.reserve_storage(filler)?;
                     let result = scoped_raw_admission_v29::with_checked_source_memory_v29(relation, 0, None, budget,
-                        physical_empty_callback_v1766);
+                        physical_noop_callback_v1766);
                     assert_eq!(budget.storage(), before + filler);
                     budget.release_storage(filler)?;
                     assert_eq!(budget.storage(), before);

@@ -11,6 +11,22 @@ fn private_retained_array_facts_v1<W: PrivateArrayChargeV1>(
     max_elements: usize,
     work: &mut W,
 ) -> Result<Option<PrivateRetainedArrayFactsV1>, W::Error> {
+    private_retained_array_facts_with_representation_v29(
+        types,
+        ty,
+        max_elements,
+        ExecutionCfgRepresentationV29::LegacyAbi,
+        work,
+    )
+}
+
+fn private_retained_array_facts_with_representation_v29<W: PrivateArrayChargeV1>(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    max_elements: usize,
+    representation: ExecutionCfgRepresentationV29,
+    work: &mut W,
+) -> Result<Option<PrivateRetainedArrayFactsV1>, W::Error> {
     work.charge_private_array_work(1)?;
     let Some(declaration) = types.get(ty.index() as usize) else {
         return Ok(None);
@@ -19,7 +35,9 @@ fn private_retained_array_facts_v1<W: PrivateArrayChargeV1>(
     let SemanticTypeShapeV1::Array { element, length } = declaration.shape() else {
         return Ok(None);
     };
-    let Some(element_facts) = private_retained_slot_facts_v1(types, *element, work)? else {
+    let Some(element_facts) =
+        private_retained_slot_facts_with_representation_v29(types, *element, representation, work)?
+    else {
         return Ok(None);
     };
     let layout = declaration.layout();

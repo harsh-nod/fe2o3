@@ -463,6 +463,60 @@ fn scalar_leaf_collision_recipe_v18(function: &Function) -> fe2o3_pliron::Produc
     .unwrap()
 }
 
+#[test]
+fn source_scalar_visitors_and_effect_order_keep_repeated_independent_credits() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let prepared = scalar_payload_prepared_v18(&mut budget);
+    prepared
+        .with_source_consumer_v18(&mut budget, |source, budget| -> SourceOwnedResultV18<()> {
+            source.with_analysis_v18(budget, |scope| {
+                scope.with_inventory_v1(|inventory, budget| {
+                    source.with_ranked_correspondence_v18(inventory, budget, |relation, budget| {
+                        let physical = source.root(0, budget)?.1;
+                        let function = inventory.functions()[physical].function;
+                        let rows = original_store_order_rows_v18(relation, budget)?;
+                        let recipe = effect_order_recipe_v18(function, rows.len(), false);
+                        let outer = budget.storage();
+                        relation.with_source_scalar_leaves_v18(0, budget, |leaves, budget| {
+                            for retained in [19, 31] {
+                                let before = budget.storage();
+                                let mut visited = 0;
+                                let count =
+                                    leaves.visit_store_inputs(budget, |request, budget| {
+                                        request.input(budget)?;
+                                        if visited == 0 {
+                                            budget.reserve_storage(retained)?;
+                                        }
+                                        visited += 1;
+                                        Ok::<_, ProductionSourceOwnedViewErrorV18>(())
+                                    })?;
+                                assert_eq!(count, visited);
+                                assert!(visited >= 4);
+                                assert_eq!(budget.storage(), before + retained);
+                                leaves.check(budget)?;
+                                source_ranked_effect_order_v18(
+                                    relation, 0, &recipe, &rows, budget,
+                                )?;
+                                assert_eq!(budget.storage(), before + retained);
+                                leaves.check(budget)?;
+                                budget.release_storage(retained)?;
+                                assert_eq!(budget.storage(), before);
+                            }
+                            Ok::<_, ProductionSourceOwnedViewErrorV18>(())
+                        })?;
+                        assert_eq!(budget.storage(), outer);
+                        source.check_query_v18(budget)?;
+                        Ok(())
+                    })
+                })
+            })
+        })
+        .unwrap();
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+}
+
 // A control/order fixture only. Allocation/value correspondence is deliberately
 // not inferred from these test-created Access rows.
 fn effect_order_recipe_v18(

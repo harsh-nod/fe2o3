@@ -995,6 +995,7 @@ impl ProductionSourceScalarLeavesV18<'_> {
         let floor = budget.storage();
         let (arguments, inline_scalar, function, retained) =
             scoped_source_attempt_v29(relation.source.cleanup, budget, floor, |budget| {
+                let floor = budget.storage();
                 relation.retain_query((|| {
                     budget.reserve_storage(size_of::<ProductionSourceScalarStoreV18<'_>>())?;
                     let arguments = SourceRootArgumentsV18::build(relation, leaves.root, budget)?;
@@ -3108,6 +3109,7 @@ fn source_ranked_effect_order_endpoint_v18(
         relation.query(budget)?;
         let floor = budget.storage();
         scoped_source_attempt_v29(relation.source.cleanup, budget, floor, |budget| {
+            let floor = budget.storage();
             let (inventory, physical) = match endpoint {
                 SourceEffectEndpointV18::Original => {
                     (relation.inventory, relation.source.root(root, budget)?.1)

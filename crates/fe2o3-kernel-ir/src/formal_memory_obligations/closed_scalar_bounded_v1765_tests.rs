@@ -89,9 +89,18 @@ fn closed_scalar_formal_bounded_scope_shares_actual_owner_effects_and_limits_roo
 fn closed_scalar_formal_bounded_scope_rejects_duplicate_root_and_uncovered_function() {
     let mut module = roots_module(2);
     module.kernels[1].entry = module.kernels[0].entry.clone();
+    // The uncovered definition must not falsely declare itself a kernel entry.
+    module.functions[1].role = crate::FunctionRole::InternalHelper;
     // The generic owner can structurally verify repeated exports of an entry.
     // This final closed subset additionally requires exact one-to-one coverage.
     with_bounded_owner(&module, |owner| {
+        assert_eq!(owner.module().functions.len(), 2);
+        assert_eq!(owner.module().kernels.len(), 2);
+        assert_eq!(
+            owner.module().kernels[0].entry,
+            owner.module().kernels[1].entry
+        );
+        assert_ne!(owner.module().kernels[0].id, owner.module().kernels[1].id);
         assert!(matches!(
             CanonicalClosedScalarFormalScopeV18::new(owner),
             Err(CanonicalClosedScalarFormalErrorV18::Unsupported(
@@ -101,7 +110,14 @@ fn closed_scalar_formal_bounded_scope_rejects_duplicate_root_and_uncovered_funct
     });
     let mut module = roots_module(2);
     module.kernels.pop();
+    module.functions[1].role = crate::FunctionRole::InternalHelper;
     with_bounded_owner(&module, |owner| {
+        assert_eq!(owner.module().functions.len(), 2);
+        assert_eq!(owner.module().kernels.len(), 1);
+        assert_eq!(
+            owner.module().functions[1].role,
+            crate::FunctionRole::InternalHelper
+        );
         assert!(matches!(
             CanonicalClosedScalarFormalScopeV18::new(owner),
             Err(CanonicalClosedScalarFormalErrorV18::Unsupported(

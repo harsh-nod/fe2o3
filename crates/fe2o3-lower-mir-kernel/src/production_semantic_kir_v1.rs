@@ -24017,7 +24017,11 @@ fn lower_workgroup_collective_scratch_with_allocation_v29(
         || semantic_pointer.address_space() != 0
         || semantic_pointer.pointer_width_bits() != 64
         || semantic_pointer.metadata() != SemanticPointerMetadataV1::None
-        || pointer.address_space != AddressSpace::Generic
+        || pointer.address_space
+            != match allocation.representation {
+                ExecutionCfgRepresentationV29::LegacyAbi => AddressSpace::Global,
+                ExecutionCfgRepresentationV29::OriginalSource => AddressSpace::Generic,
+            }
         || pointer.access != AccessMode::ReadWrite
         || *pointer.pointee != scalar
         || slots != &Type::Scalar(ScalarType::U32)

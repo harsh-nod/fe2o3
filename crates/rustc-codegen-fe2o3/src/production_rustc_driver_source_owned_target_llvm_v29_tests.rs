@@ -15,6 +15,7 @@ enum Outcome {
         source: [u8; 32],
         original: [u8; 32],
         optimized: [u8; 32],
+        optimized_bytes: usize,
         changed: bool,
         target: String,
         text: String,
@@ -108,7 +109,12 @@ impl Callbacks for LlvmCallbacks {
                         }
                     };
                     assert!(text.contains(cpu_claim));
-                    assert!(text.contains("!fe2o3.semantic_anchor.v1 ="));
+                    // The existing emitter deliberately withholds operation
+                    // probes for multiple definitions. Bind its exact absence
+                    // record to this output in the unmetered parent process.
+                    assert_eq!(output.owner().module().functions.len(), 2);
+                    assert!(output.owner().module().functions[0].body.is_some());
+                    assert!(output.owner().module().functions[1].body.is_some());
                     // This owned copy is only a test transport for the exact text
                     // to the parent process's pinned LLVM parser/verification gate.
                     let copied = paid_text(text, budget)?;
@@ -117,6 +123,7 @@ impl Callbacks for LlvmCallbacks {
                         source: *source.source_ssa(budget)?.source_semantic_sha256(),
                         original: Sha256::digest(original.canonical_bytes()).into(),
                         optimized: Sha256::digest(output.owner().canonical_bytes()).into(),
+                        optimized_bytes: output.owner().canonical_bytes().len(),
                         changed: output.owner().canonical_bytes() != output.input_audit_bytes(),
                         target,
                         text: copied,
@@ -277,6 +284,59 @@ fn source_owned_dynamic_target_child() {
     child(true);
 }
 
+// This checks the emitter's exact fixed two-root record, not LLVM validity or
+// source authority. The caller must still run the pinned parser/verification gate.
+fn two_root_absence_matches(text: &str, digest: &[u8; 32], bytes: usize, target: &str) -> bool {
+    let digest: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let record = format!(
+        "!2 = !{{!\"multiple_defined_bodies\", !\"sha256:{digest}\", !\"kir-version:18\", i64 {bytes}, !\"target:{target}\"}}"
+    );
+    text.lines()
+        .filter(|line| line.starts_with("!fe2o3.semantic_anchor"))
+        .eq(["!fe2o3.semantic_anchor.absence.v1 = !{!2}"])
+        && text
+            .lines()
+            .filter(|line| line.starts_with("!2 ="))
+            .eq([record.as_str()])
+        && !text.contains("!fe2o3.semantic_anchor.v1")
+        && !text.contains("@llvm.pseudoprobe")
+        && !text.contains("!llvm.pseudo_probe_desc")
+}
+
+#[test]
+fn two_root_anchor_absence_oracle_binds_reason_output_identity_and_target_without_active_claims() {
+    let digest = [0x17; 32];
+    for target in ["gfx942:xnack-", "gfx950:xnack-"] {
+        let text = format!(
+            "!fe2o3.semantic_anchor.absence.v1 = !{{!2}}\n!2 = !{{!\"multiple_defined_bodies\", !\"sha256:{}\", !\"kir-version:18\", i64 123, !\"target:{target}\"}}\n",
+            "17".repeat(32)
+        );
+        assert!(two_root_absence_matches(&text, &digest, 123, target));
+        assert!(!two_root_absence_matches(&text, &[0x18; 32], 123, target));
+        assert!(!two_root_absence_matches(&text, &digest, 124, target));
+        assert!(!two_root_absence_matches(
+            &text,
+            &digest,
+            123,
+            "gfx942:xnack+"
+        ));
+        for forged in [
+            text.replace("multiple_defined_bodies", "no_operations"),
+            text.replace("kir-version:18", "kir-version:12"),
+            text.replace("absence.v1", "v1"),
+            text.replace("!{!2}", "!{!3}"),
+            text.replace("!2 =", "!3 ="),
+            format!("{text}!fe2o3.semantic_anchor.v1 = !{{!3}}\n"),
+            format!("{text}declare void @llvm.pseudoprobe(i64, i64, i32, i64)\n"),
+            format!("{text}!llvm.pseudo_probe_desc = !{{!3}}\n"),
+            format!("{text}{text}"),
+            String::new(),
+        ] {
+            assert!(!two_root_absence_matches(&forged, &digest, 123, target));
+        }
+    }
+}
+
 fn parse_and_verify_target_llvm(text: &str) {
     let opt = PathBuf::from(
         env::var_os("FE2O3_OPT").expect("FE2O3_OPT must name the explicit pinned LLVM 22 verifier"),
@@ -341,6 +401,7 @@ fn actual_scalar_changed_and_noop_reach_verified_target_llvm_for_both_authentica
                 let Outcome::Llvm {
                     original,
                     optimized,
+                    optimized_bytes,
                     changed: actual_changed,
                     text,
                     work,
@@ -355,6 +416,10 @@ fn actual_scalar_changed_and_noop_reach_verified_target_llvm_for_both_authentica
                 assert_eq!(original != optimized, changed);
                 assert!(matches!(target.as_str(), "gfx942:xnack-" | "gfx950:xnack-"));
                 assert!(*work < 500_000_000 && *peak <= 20_000_000);
+                assert!(
+                    two_root_absence_matches(text, optimized, *optimized_bytes, target),
+                    "exact V18 output/target-bound multiple-body anchor absence required"
+                );
                 parse_and_verify_target_llvm(text);
                 if let Some(prior) = previous.get(label) {
                     assert_eq!(&result, prior);

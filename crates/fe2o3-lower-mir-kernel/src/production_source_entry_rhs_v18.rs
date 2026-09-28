@@ -469,6 +469,7 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
         let floor = budget.storage();
         let (rows, arguments, input_inline, output_inline, function, retained) =
             scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
+                let floor = budget.storage();
                 original.retain_query((|| {
                     budget.reserve_storage(argument_sum_v1(&[
                         source_entry_write_headers_v18::<T, E>()?,

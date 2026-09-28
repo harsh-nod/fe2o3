@@ -366,12 +366,21 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         Ok(Self {
             ordered_composition: false,
             fixed_array_analysis: None,
-            private_arrays: PrivateArrayFunctionRecorderV1::new(
+            private_arrays: PrivateArrayFunctionRecorderV1::new_with_representation_v29(
                 private_array_work,
                 private_array_enabled,
                 max_operations,
                 private_array_outer,
                 emission_placement,
+                if execution
+                    .as_ref()
+                    .and_then(|cursor| cursor.references)
+                    .is_some()
+                {
+                    ExecutionCfgRepresentationV29::OriginalSource
+                } else {
+                    ExecutionCfgRepresentationV29::LegacyAbi
+                },
             ),
             types,
             callables,

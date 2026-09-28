@@ -2508,6 +2508,10 @@ fn observed_tag_only_object_emission_cannot_admit_a_final_source_artifact() {
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
 
+mod pointer_array_representation_tests {
+    include!("production_source_pointer_array_emission_v29_tests.rs");
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum SourceArrayModeV29 {
     Scalar,

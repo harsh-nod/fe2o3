@@ -14538,12 +14538,18 @@ fn validate_rvalue(
             }
         }
         SemanticRvalueKindV1::Length(place) => {
-            validate_place(context, function, location, place)?;
-            if !matches!(
-                type_shape(context, place.ty),
-                SemanticTypeShapeV1::Array { .. }
-            ) || !is_unsigned_integer_type(context.request, rvalue.result_type)
-            {
+            let metadata = validate_place_metadata(context, function, location, place)?;
+            let valid = match type_shape(context, place.ty) {
+                SemanticTypeShapeV1::Array { .. } => {
+                    is_unsigned_integer_type(context.request, rvalue.result_type)
+                }
+                SemanticTypeShapeV1::Slice { .. } => {
+                    metadata == Some(SemanticPointerMetadataV1::SliceLength)
+                        && is_unsigned_integer_with_bits(context.request, rvalue.result_type, 64)
+                }
+                _ => false,
+            };
+            if !valid {
                 return invalid_type_operation(SemanticTypeOperationV1::Length, location);
             }
         }
@@ -14910,6 +14916,15 @@ fn validate_place(
     location: SemanticMirLocationV1,
     place: &SemanticPlaceV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    validate_place_metadata(context, function, location, place).map(|_| ())
+}
+
+fn validate_place_metadata(
+    context: &mut ValidationContextV1<'_>,
+    function: &SemanticFunctionDeclV1,
+    location: SemanticMirLocationV1,
+    place: &SemanticPlaceV1,
+) -> Result<Option<SemanticPointerMetadataV1>, SemanticMirErrorV1> {
     context.reference(
         SemanticMirReferenceV1::Local,
         place.local.0,
@@ -14924,6 +14939,7 @@ fn validate_place(
     )?;
     let mut current_type = function.locals[place.local.0 as usize].ty;
     let mut downcast_variant = None;
+    let mut metadata = None;
     for projection in &place.projections {
         context.one()?;
         context.type_reference(projection.result_type, location)?;
@@ -14938,6 +14954,7 @@ fn validate_place(
                 else {
                     return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
                 };
+                metadata = Some(pointer.metadata);
                 pointer.pointee
             }
             SemanticProjectionKindV1::Field(field) => {
@@ -15060,12 +15077,36 @@ fn validate_place(
             }
         };
         require_type(expected, projection.result_type, location)?;
+        // Metadata follows the current unsized place, not an earlier pointer carrier.
+        match projection.kind {
+            SemanticProjectionKindV1::Field(_) => {
+                if context.request.types[current_type.0 as usize]
+                    .layout
+                    .size_bytes
+                    .is_some()
+                    || context.request.types[projection.result_type.0 as usize]
+                        .layout
+                        .size_bytes
+                        .is_some()
+                {
+                    metadata = None;
+                }
+            }
+            SemanticProjectionKindV1::Index(_)
+            | SemanticProjectionKindV1::ConstantIndex { .. }
+            | SemanticProjectionKindV1::Subslice { .. }
+            | SemanticProjectionKindV1::Downcast(_) => metadata = None,
+            SemanticProjectionKindV1::Dereference
+            | SemanticProjectionKindV1::OpaqueCast
+            | SemanticProjectionKindV1::Subtype => {}
+        }
         current_type = projection.result_type;
     }
     if downcast_variant.is_some() {
         return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
     }
-    require_type(current_type, place.ty, location)
+    require_type(current_type, place.ty, location)?;
+    Ok(metadata)
 }
 
 fn invalid_type_operation<T>(

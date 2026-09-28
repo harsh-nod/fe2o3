@@ -893,6 +893,127 @@ fn source_owned_entrance_keeps_original_graph_table_and_instance_attachments() {
 }
 
 #[test]
+fn prepared_source_transition_settles_dropped_input_and_preserves_selected_error() {
+    for preexisting in [false, true] {
+        for skip in [0, 1] {
+            for undercut in [false, true] {
+                let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+                let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+                budget.reserve_storage(MODULE_FLOOR).unwrap();
+                let prepared =
+                    prepared_source_fixture(ModuleFixture::Ordinary, preexisting, &mut budget);
+                let observed = CleanupObservationV29::default();
+                let result = cleanup_probe_v29(
+                    &mut budget,
+                    MODULE_FLOOR,
+                    skip,
+                    ScopedSourceCleanupFaultV29::Error { undercut },
+                    &observed,
+                    |cleanup, budget| prepared.into_pending_with_cleanup_v18(cleanup, budget),
+                )
+                .unwrap();
+                assert!(matches!(
+                    result,
+                    Err(EntranceError::Source(
+                        ProductionPendingScopedSourceErrorV29::Source(
+                            ProductionSemanticKirErrorV1::Unsupported {
+                                detail: "selected source cleanup error",
+                                ..
+                            }
+                        )
+                    ))
+                ));
+                assert!(observed.storage.get().is_some());
+                assert_eq!(observed.denied.get(), undercut);
+                assert_eq!(
+                    budget.storage(),
+                    if undercut {
+                        observed.storage.get().unwrap()
+                    } else {
+                        MODULE_FLOOR
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn prepared_source_transition_header_refusal_releases_only_adopted_credit() {
+    for preexisting in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let prepared = prepared_source_fixture(ModuleFixture::Ordinary, preexisting, &mut budget);
+        let retained = prepared.adopted_storage();
+        let result: SourceOwnedResultV18<()> =
+            with_scoped_source_cleanup_v29(&mut budget, MODULE_FLOOR, |cleanup, budget| {
+                let filler = MODULE_LIMIT - budget.storage();
+                budget.reserve_storage(filler)?;
+                let before = budget.storage();
+                let work = budget.work();
+                let error = match prepared.into_pending_with_cleanup_v18(cleanup, budget) {
+                    Err(error) => error,
+                    Ok(_) => panic!("transition header must refuse before source construction"),
+                };
+                assert!(matches!(
+                    error,
+                    EntranceError::Resource(ArgumentResourceV1::Storage(error))
+                        if error.actual() > MODULE_LIMIT && error.limit() == MODULE_LIMIT
+                            && budget.failed_storage() == Some(error.actual())
+                ));
+                assert_eq!(budget.storage(), before - retained);
+                assert_eq!(budget.work(), work);
+                assert!(!cleanup.is_denied());
+                budget.release_storage(filler)?;
+                Err(error)
+            });
+        assert!(result.is_err());
+        assert_eq!(budget.storage(), MODULE_FLOOR);
+    }
+}
+
+#[test]
+fn prepared_source_transition_keeps_raw_panic_and_denied_input_credit() {
+    for preexisting in [false, true] {
+        for skip in [0, 1] {
+            for undercut in [false, true] {
+                let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+                let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+                budget.reserve_storage(MODULE_FLOOR).unwrap();
+                let prepared =
+                    prepared_source_fixture(ModuleFixture::Ordinary, preexisting, &mut budget);
+                let observed = CleanupObservationV29::default();
+                let serial = 101 + skip;
+                let (payload, address, drops) = cleanup_panic_v29(serial);
+                let result = cleanup_probe_v29(
+                    &mut budget,
+                    MODULE_FLOOR,
+                    skip,
+                    ScopedSourceCleanupFaultV29::Panic { undercut, payload },
+                    &observed,
+                    |cleanup, budget| prepared.into_pending_with_cleanup_v18(cleanup, budget),
+                );
+                assert!(observed.storage.get().is_some());
+                assert_eq!(observed.denied.get(), undercut);
+                assert_eq!(
+                    budget.storage(),
+                    if undercut {
+                        observed.storage.get().unwrap()
+                    } else {
+                        MODULE_FLOOR
+                    }
+                );
+                match result {
+                    Err(payload) => require_cleanup_panic_v29(payload, address, serial, &drops),
+                    Ok(_) => panic!("original source constructor panic was replaced"),
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn source_owned_queries_reject_equal_source_reconstruction_and_keep_first_refusal() {
     for foreign_owner in [false, true] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);

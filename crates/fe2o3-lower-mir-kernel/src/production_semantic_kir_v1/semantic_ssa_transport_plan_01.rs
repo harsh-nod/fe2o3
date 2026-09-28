@@ -385,6 +385,11 @@ impl SemanticControlFlowSsaPlanV1 {
                 .locals()
                 .get(local as usize)
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let representation = if execution.and_then(|cursor| cursor.references).is_some() {
+                ExecutionCfgRepresentationV29::OriginalSource
+            } else {
+                ExecutionCfgRepresentationV29::LegacyAbi
+            };
             let slot = if matches!(
                 types[declaration.ty().index() as usize].shape(),
                 SemanticTypeShapeV1::Array { .. }
@@ -397,16 +402,24 @@ impl SemanticControlFlowSsaPlanV1 {
                         "retained by-value array arguments require source-effect-bound entry scatter",
                     ));
                 }
-                retained_array_slot_plan_v1(types, declaration.ty(), max_analysis_work).map_err(
-                    |error| match error {
-                        ProductionSemanticKirErrorV1::Unsupported { detail, .. } => {
-                            unsupported(semantic_function.index(), None, None, detail)
-                        }
-                        error => error,
-                    },
-                )?
+                retained_array_slot_plan_with_representation_v29(
+                    types,
+                    declaration.ty(),
+                    max_analysis_work,
+                    representation,
+                )
+                .map_err(|error| match error {
+                    ProductionSemanticKirErrorV1::Unsupported { detail, .. } => {
+                        unsupported(semantic_function.index(), None, None, detail)
+                    }
+                    error => error,
+                })?
             } else if let Some((kernel_type, alignment)) =
-                retained_local_slot_type_v1(types, declaration.ty())
+                retained_local_slot_type_with_representation_v29(
+                    types,
+                    declaration.ty(),
+                    representation,
+                )
             {
                 SemanticRetainedLocalSlotPlanV1 {
                     semantic_type: declaration.ty(),

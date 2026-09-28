@@ -321,7 +321,7 @@ fn source_loop_preheaders_direct_one_short_storage_observes_phase_with_live_sibl
         for mutation in [false, true] {
             let run = |limit, storage| {
                 let (prefix, inherited) = promoted(profile, mutation);
-                transition_work_oracle::assert_policy6_endpoints(
+                let schedule = transition_work_oracle::assert_policy6_endpoints(
                     prefix.prefix().prefix().prefix(),
                     transition_work_oracle::Family::Preheaders,
                     mutation,
@@ -372,22 +372,31 @@ fn source_loop_preheaders_direct_one_short_storage_observes_phase_with_live_sibl
                         budget.failed_storage(),
                     )
                 };
-                (result, accepted, peak, denied_storage, work.failed_work())
+                (
+                    result,
+                    accepted,
+                    peak,
+                    denied_storage,
+                    work.failed_work(),
+                    schedule,
+                )
             };
-            let (result, measured_work, measured_storage, denied_storage, denied_work) =
+            let (result, measured_work, measured_storage, denied_storage, denied_work, schedule) =
                 run(WORK, STORAGE);
             result.unwrap();
             assert_eq!((denied_storage, denied_work), (None, None));
-            let (result, accepted, peak, denied_storage, denied_work) =
+            let (result, accepted, peak, denied_storage, denied_work, exact_schedule) =
                 run(measured_work, measured_storage);
+            assert_eq!(exact_schedule, schedule);
             result.unwrap();
             assert_eq!(
                 (accepted, peak, denied_storage, denied_work),
                 (measured_work, measured_storage, None, None)
             );
             let storage_limit = measured_storage.checked_sub(1).unwrap();
-            let (result, accepted, peak, denied_storage, denied_work) =
+            let (result, accepted, peak, denied_storage, denied_work, short_schedule) =
                 run(measured_work, storage_limit);
+            assert_eq!(short_schedule, schedule);
             let error = result.unwrap_err();
             assert_eq!(denied_storage, Some(measured_storage));
             assert_eq!(denied_work, None);
@@ -427,10 +436,6 @@ fn source_loop_preheaders_direct_one_short_storage_observes_phase_with_live_sibl
             // One complete P6 replay precedes the map-refused replay. The
             // independent endpoint census pins the cache work change while
             // keeping the original storage and nested first-denial phase.
-            let schedule = transition_work_oracle::expected(
-                transition_work_oracle::Family::Preheaders,
-                mutation,
-            );
             let delta = schedule.complete_replay_delta() + schedule.map_refused_replay_delta();
             let nominal_header = std::mem::size_of::<Option<Box<SealedBf16CallRelationV1>>>();
             let expected = if mutation {

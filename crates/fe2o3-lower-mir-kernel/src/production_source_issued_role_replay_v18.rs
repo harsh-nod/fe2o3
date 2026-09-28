@@ -161,6 +161,7 @@ fn check_immutable_issued_roles_v18(
     original.query(budget)?;
     let floor = budget.storage();
     let retained = scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
+        let floor = budget.storage();
         original.source.retain_construction(|| {
             budget.reserve_storage(source_issued_replay_headers_v18()?)?;
             check_immutable_issued_roles_inner_v18(original, root, rows, budget)?;

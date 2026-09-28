@@ -765,7 +765,7 @@
                 "packageManifest": "examples/workgroup_sync_v1/Cargo.toml",
                 "packageManifestSha256": "2f476b82fb77f5bda8b202b354976f27a7a986292fd46515bfea6287e629afa8",
                 "cargoLockPath": "examples/workgroup_sync_v1/Cargo.lock",
-                "cargoLockSha256": "e7f9f93c9517baf10010e09e4c97df11998aa2ed5469f067e70f84cfb7a8fa2a",
+                "cargoLockSha256": "ba902bbf7b126357b30f5d6441ca6da5adccaa55f259ba56157c6f0ec491d1db",
                 "sourcePaths": [
                   "examples/workgroup_sync_v1/src/kernel_row_affine_u32.rs"
                 ],
@@ -803,7 +803,7 @@
                   }
                 }
               ],
-              "contractSha256": "8943dc4bd1ed1a008c2c15745ec0bc203d4c0b034a4ce950518e70ea820c1257"
+              "contractSha256": "d01238dca58ae5838edb9905b8c9aa2e8a145481afbf4026ba88919907641173"
             },
             "sourceItemStatus": "contract-bound"
           }
@@ -8666,8 +8666,8 @@
           "flash_attention_general_v1"
         ],
         "cargoLockPath": "examples/flash_attention_general_v1/Cargo.lock",
-        "cargoLockSha256": "f9cebfbd5e86062c782bb8b775eb985b8da637225a3c2be1d142cf61be7a5dff",
-        "contractSha256": "14de427eba1e30434bf1c8569dd7bc9e4ea4500c08d2b5b8bb2d86614dcac6e9"
+        "cargoLockSha256": "efe3503dac7a0202991c639fcf761d5ccc80192993770da886ee8d9fa7deeeba",
+        "contractSha256": "42cf49e543c748bdcb9a688fd7cdbbca4c9986f2dfd9a9d8f520451a8d07401b"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-flash-attention.request.json",
@@ -8711,8 +8711,8 @@
           "gemm_autoresearch_v1"
         ],
         "cargoLockPath": "examples/gemm_autoresearch_v1/Cargo.lock",
-        "cargoLockSha256": "d3284c7c680bbbb52ae205d84e54f7dd83a04cebff82c87460c7599e4efb2e08",
-        "contractSha256": "26c2479aa8983a9a649993068366630d9dde51f9632721a1bed2cec43fe11d1c"
+        "cargoLockSha256": "a89e7860e49e19ac7335844be6cffb0c839ee50f6fc1897a93d1f288488e3241",
+        "contractSha256": "957c60cea585dcae965582951deed79f8fb996a9e116190726da49397b82c392"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-gemm-autoresearch.request.json",
@@ -8756,8 +8756,8 @@
           "moe_grouped_expert_general_v1"
         ],
         "cargoLockPath": "examples/moe_grouped_expert_general_v1/Cargo.lock",
-        "cargoLockSha256": "e5031694a075eb3632514bdb1804873d3e8247dd0211cfbdb5665a00b0fd2667",
-        "contractSha256": "b8115d7f6d1b5be769b4f76eadab54cbf0b91d78573c9b897bff839b9506fa1d"
+        "cargoLockSha256": "59201e06068a62adf30b7632ed29da4be1046c9cb295888c499640c46e78ec92",
+        "contractSha256": "4969f801a397d094082a727292bb9b586b78cd94193b8508abb357ca75d4a9fe"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-grouped-expert-moe.request.json",
@@ -8801,8 +8801,8 @@
           "moe_top2_route_f32_t8_e4_k2_c4_v1"
         ],
         "cargoLockPath": "examples/moe_top2_v1/Cargo.lock",
-        "cargoLockSha256": "b7a47394aa3cc2eab2b04ea2d29bf79157bdd4d6493aaf377cae6ec733c364d2",
-        "contractSha256": "3f91319d7543a02935f7fe849b150db311ca69b4ed14c559e3414a555a3891f5"
+        "cargoLockSha256": "7deffca55751587d59a4dbcd37e2d5d306b54d83770dfc2e0536bdfe64a12778",
+        "contractSha256": "d40cc63bcc1dcac3189a18f84db82ba5f55951e316d95c75e97afdfaf7ced22e"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-moe-top2.request.json",
@@ -8846,8 +8846,8 @@
           "row_softmax_general_v1"
         ],
         "cargoLockPath": "examples/row_softmax_general_v1/Cargo.lock",
-        "cargoLockSha256": "6b85b40faee093655ef3591342699b41721efcc1fde0325db30aa67a3af97656",
-        "contractSha256": "743590c219c766aabcf0cef1ebabb32b632294e5d536f2a066bf08b43ddcee3d"
+        "cargoLockSha256": "e12c45b95ca6fb0dda7c3b3ae6a8afb5313beebff5aeb8caa5d7514377b4e4df",
+        "contractSha256": "1b752a2708ac339edff0e2b43fe360970fb1ab881508c949d1ba2e8215fc3e4b"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-row-softmax.request.json",
@@ -8936,8 +8936,8 @@
           "tiled_gemm_general_v1"
         ],
         "cargoLockPath": "examples/tiled_gemm_general_v1/Cargo.lock",
-        "cargoLockSha256": "13b2ffafb8e02da2e6179fa5cd0478d2970caac70b5321741de2dd3f2d11ddea",
-        "contractSha256": "50859f4fa7a2af1db33308e23e8c8a4a8ff997eef097123b5291237c1ab725d3"
+        "cargoLockSha256": "b98a6f8eb9e1f3fe3a817cb849f2420f8a180b3ee768333e9b72e68bcc0d9b90",
+        "contractSha256": "ddc322c8c24c060f6a1c70f0212501a102be6635ef6e375e3463cf25dba208b9"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-tiled-gemm.request.json",
@@ -9026,8 +9026,8 @@
           "wave64_collectives_v1"
         ],
         "cargoLockPath": "examples/wave64_collectives_v1/Cargo.lock",
-        "cargoLockSha256": "8763d56f2eebaa01c10eb412c31a1b4f20819533c8648818eb91a3df748fae28",
-        "contractSha256": "679603b7865065ffb0633a49144c6e2bb3d5f506282dabcbe3836fd5b66dac36"
+        "cargoLockSha256": "0a78d88d1701acca066832488b495ab62296b1a9d0f34c54fb995ca122832de6",
+        "contractSha256": "ba5442b5e0e077cc6597da7ad503765a62d567ce81cb585c2a4db0a95779cb1c"
       },
       "simulation": {
         "requestPath": "examples/wave64_collectives_v1/full-mask-request.json",
@@ -9073,8 +9073,8 @@
           "lds_publish_read_reduce_i32_v1"
         ],
         "cargoLockPath": "examples/workgroup_sync_v1/Cargo.lock",
-        "cargoLockSha256": "e7f9f93c9517baf10010e09e4c97df11998aa2ed5469f067e70f84cfb7a8fa2a",
-        "contractSha256": "2acdc1450575f7ec5fa4bc8614bc3e77feea841b8e6c388c9f3dbe9149fe00fc"
+        "cargoLockSha256": "ba902bbf7b126357b30f5d6441ca6da5adccaa55f259ba56157c6f0ec491d1db",
+        "contractSha256": "422ae371ce5646f37cb32cc9f9d8b25b402709b6a8cac937786563e037357b58"
       },
       "simulation": {
         "requestPath": "examples/workgroup_sync_v1/reduce-i32-request.json",
@@ -9120,8 +9120,8 @@
           "gfx950_attnres_aggregate"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "3b685d602440221c772f6e8d181c6ded6e8126cb1c551488a611c2501132cec5"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "ef7661cc75491107691e1d0ad0d640defe53a2499bbb66e497737d2cd736e412"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-attnres-aggregate.request.json",
@@ -9169,8 +9169,8 @@
           "gfx950_attnres_aggregate"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "6cd7d16f8339aaf063f673f315234af3f237eb2d9680092f5b4514bcf6291e25"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "6c052b70c60fe8d0cd06142c1cf210d3ebb9439869bdc9a81a505b26738d7762"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-attnres-aggregate.request.json",
@@ -9216,8 +9216,8 @@
           "gfx950_combine_expert_ranks_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "e4ba1a5744d58799fe71867b6018522af46b5daeae3f83a848bf037f531669f7",
-        "contractSha256": "f11496910d6ffbc929dc1540b6513aef0bf8d79ddb723c2aa03832710b505a7a"
+        "cargoLockSha256": "792f24786eb065cfe2e126b26f4eb0395ab95fdfb36e975c920ad706fa4c1401",
+        "contractSha256": "5ac4f3ea08aec122cb15b6cdf61be28abf41d436a2f820cdc09f6cce24b1c183"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-combine-expert-ranks.request.json",
@@ -9263,8 +9263,8 @@
           "gfx950_compressed_hybrid_attention"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "f0588a3d4c4857ca9348ee9bf5c6c964957dc1058f65bb0d491369f3145d6bbd"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "54a5ad6ea2fdde4f430fe826af66abe10229d864dfd0a31246a1a9eab80f01df"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-compressed-hybrid-attention.request.json",
@@ -9312,8 +9312,8 @@
           "gfx950_compressed_hybrid_attention"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "8ad013513c31f0d226724af35b79e28fee0fa218fd5a05e708afae7905db2f36"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "91609cb82872ad2bbe4462e823a940dff9abb513166cf1aa426a5e56374a6a2a"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-compressed-hybrid-attention.request.json",
@@ -9359,8 +9359,8 @@
           "gfx950_content_sparse_attention"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "0fea920b85fb2d25351d2c96dc9f4b82168d15f09b68b3be8386a768be94de0b"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "bff0adb4f86d9d7fd855c498494b39b61e2d19841467b49960fe360b47cb395c"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-content-sparse-attention.request.json",
@@ -9408,8 +9408,8 @@
           "gfx950_content_sparse_attention"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "57f33c6c4536ada17837a4c86d956cc5bd5df88a5f65db04ba0b2c9cafa4668a"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "27d38b92710a44524b4d5d457fce7dd12c45cf22e0fce0025eee09b9425060f4"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-content-sparse-attention.request.json",
@@ -9455,8 +9455,8 @@
           "gfx950_deepseek_sparse_attention"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "3ed4394b3ba62d5efabb369b8e9758957fed32b87f26cb768d836c450c446f28"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "3c92befc2c76af765c44db86c2af6b3ab1c4d6d563c648dff41b62c3bca3d7fd"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-deepseek-sparse-attention.request.json",
@@ -9502,8 +9502,8 @@
           "gfx950_four_branch_residual"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "1ff077f820e9b5956236cfba1d95daa4f8b7a6f55f147272badabe9c73bf56fe"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "8fd0fe2e2f7b46b3c4485c03ea7071997c3b5581bd08b68155f01489985e204b"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-four-branch-residual.request.json",
@@ -9551,8 +9551,8 @@
           "gfx950_four_branch_residual"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "023a57a4b110b2696b7fe530586aa68327161097db92d49c58cf25be96e8b68a"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "ff84834d9ba18c73c2dbb19ef4b7761fd32f5d0448bc992b4ff04a3f206b2fad"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-four-branch-residual.request.json",
@@ -9598,8 +9598,8 @@
           "gfx950_fp4_attention_rust"
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
-        "cargoLockSha256": "43c8297eaace545c61251590d1bed7bee350a88b4c905a6ce629df63de65ebc7",
-        "contractSha256": "53afd8fda1b1ffed532681cc5e91a11db1a5e821929def1e091f56b197c0c6d6"
+        "cargoLockSha256": "130c61a9ee65731dd2813a776f9787563acd11d9da6dcdb9a2d606920ddb853a",
+        "contractSha256": "5607b2c98b2ea8d77b88930cccb682e5f037be7ff374ac17311b73aba2750240"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp4-attention.request.json",
@@ -9645,8 +9645,8 @@
           "gfx950_fp4_gemm_rust"
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
-        "cargoLockSha256": "43c8297eaace545c61251590d1bed7bee350a88b4c905a6ce629df63de65ebc7",
-        "contractSha256": "d751e4183371086609147c19b9c88df2f118ff06b6ddf52d95d28c887b4ece92"
+        "cargoLockSha256": "130c61a9ee65731dd2813a776f9787563acd11d9da6dcdb9a2d606920ddb853a",
+        "contractSha256": "c28198c5c611435790aec4be73f1dcdaa0f511aeb7c26ec6dd7bf7848dcecfb5"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp4-gemm.request.json",
@@ -9692,8 +9692,8 @@
           "gfx950_fp8_attention_rust"
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
-        "cargoLockSha256": "43c8297eaace545c61251590d1bed7bee350a88b4c905a6ce629df63de65ebc7",
-        "contractSha256": "adb2cf51716c79d6d067cc2abe8a653452338909fc276ea6e2b58024b2cfa0cb"
+        "cargoLockSha256": "130c61a9ee65731dd2813a776f9787563acd11d9da6dcdb9a2d606920ddb853a",
+        "contractSha256": "3fa55d31c3bcf041f6b169b069b508ad751ad67305b6cf9ffc4e5d63c2d14219"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp8-attention.request.json",
@@ -9739,8 +9739,8 @@
           "gfx950_fp8_gemm_rust"
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
-        "cargoLockSha256": "43c8297eaace545c61251590d1bed7bee350a88b4c905a6ce629df63de65ebc7",
-        "contractSha256": "0c3630ca4000e93fa6bd9a6dda26cc5e73e8caa09d47dfb95c3aa4d596b60aa9"
+        "cargoLockSha256": "130c61a9ee65731dd2813a776f9787563acd11d9da6dcdb9a2d606920ddb853a",
+        "contractSha256": "41c88170b2be7e8bd8924501548f4ef14259d296a7b330eee1b4d756288386e9"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp8-gemm.request.json",
@@ -9786,8 +9786,8 @@
           "gfx950_gpt_oss_120b_decode_megakernel_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "6848b666bb203910486b29af705ede9e0624c5ac937368f53b4b6222de8ab030",
-        "contractSha256": "65a1694f4e537d96166388190d4805c7c2d742bc82cc85248a64451c40b97872"
+        "cargoLockSha256": "0d3ee844078d274d61265505ec624b631e0860232d9e3e8ed55d35614e0d22e2",
+        "contractSha256": "7eb318c2898a1f919e1fb3bc51fcfcfcdc7b34e4598f4def4dfa2363d11615d1"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9835,8 +9835,8 @@
           "gfx950_gpt_oss_120b_decode_megakernel_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "6848b666bb203910486b29af705ede9e0624c5ac937368f53b4b6222de8ab030",
-        "contractSha256": "45eb864d9e983a682d7006e696581e1913501020f34d554f22ed42fcbff8f761"
+        "cargoLockSha256": "0d3ee844078d274d61265505ec624b631e0860232d9e3e8ed55d35614e0d22e2",
+        "contractSha256": "00cb2ae7c9b42c6a71da06e69aad7ea20eac7476075a1afd6d6323f91bde8ca5"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9884,8 +9884,8 @@
           "gfx950_gpt_oss_120b_decode_megakernel_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "6848b666bb203910486b29af705ede9e0624c5ac937368f53b4b6222de8ab030",
-        "contractSha256": "c0c6464bf1f372ddc951b9ebf242e71254f9510e3502259fc6f4ed627eb7008b"
+        "cargoLockSha256": "0d3ee844078d274d61265505ec624b631e0860232d9e3e8ed55d35614e0d22e2",
+        "contractSha256": "88ac16664e898f07804cdb0a1cad2fef1d958169525cea88f098f05b0424f363"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9933,8 +9933,8 @@
           "gfx950_gpt_oss_120b_attention_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "6848b666bb203910486b29af705ede9e0624c5ac937368f53b4b6222de8ab030",
-        "contractSha256": "59bf06258a4b50e945af8dc1abaf03839bfe818c1a371cc3476987b52c573fcb"
+        "cargoLockSha256": "0d3ee844078d274d61265505ec624b631e0860232d9e3e8ed55d35614e0d22e2",
+        "contractSha256": "6df8712f58af07de9bf8e51e9510807971b175f9cd0a82e47538a16ee83b3509"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-attention.request.json",
@@ -9982,8 +9982,8 @@
           "gfx950_gpt_oss_120b_expert_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "6848b666bb203910486b29af705ede9e0624c5ac937368f53b4b6222de8ab030",
-        "contractSha256": "bfd31306e81a59c99fc6ac90099cee77d5ca3a8907ff28a326f010704c7a4d14"
+        "cargoLockSha256": "0d3ee844078d274d61265505ec624b631e0860232d9e3e8ed55d35614e0d22e2",
+        "contractSha256": "e5253fb15cb6c3c38b0892dd64606f696c0970bbb4c76e2afbf7ab986c400032"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-expert.request.json",
@@ -10031,8 +10031,8 @@
           "gfx950_gpt_oss_120b_router_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "6848b666bb203910486b29af705ede9e0624c5ac937368f53b4b6222de8ab030",
-        "contractSha256": "b425be9a3552da4a12f0f44c882ed89bd865d431197989e69e8d16f98a72a9ce"
+        "cargoLockSha256": "0d3ee844078d274d61265505ec624b631e0860232d9e3e8ed55d35614e0d22e2",
+        "contractSha256": "7fd0288e845bad9b3e5ac12807d3542761df851b76794a095eb612180e628cea"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-router.request.json",
@@ -10080,8 +10080,8 @@
           "gfx950_gpt_oss_120b_decode_megakernel_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "6848b666bb203910486b29af705ede9e0624c5ac937368f53b4b6222de8ab030",
-        "contractSha256": "26e72a38851a58d37563242adb71c8ecb7560be54a5a4876d5a396adfb02112a"
+        "cargoLockSha256": "0d3ee844078d274d61265505ec624b631e0860232d9e3e8ed55d35614e0d22e2",
+        "contractSha256": "b8796870a490c3bd85b26e3756f338ce2fa1730ee791c2bcf7d6540bfa7cb581"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-pipelined-attention.request.json",
@@ -10129,8 +10129,8 @@
           "gfx950_gpt_oss_120b_decode_megakernel_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "6848b666bb203910486b29af705ede9e0624c5ac937368f53b4b6222de8ab030",
-        "contractSha256": "b6b87742d26decc3c5172ee3e86a16f6d1f176d985d9e54948d57b6e4f30dfef"
+        "cargoLockSha256": "0d3ee844078d274d61265505ec624b631e0860232d9e3e8ed55d35614e0d22e2",
+        "contractSha256": "d3c4f959bc2c50d16d9469bef18da22960e8ee0a4ac0c9c089fb1730f4e96e21"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-scalar-attention.request.json",
@@ -10178,8 +10178,8 @@
           "gfx950_gpt_oss_120b_decode_megakernel_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "6848b666bb203910486b29af705ede9e0624c5ac937368f53b4b6222de8ab030",
-        "contractSha256": "3712dc5c6a7ada259326cd8d081711603debba796f69e25899328eb0fd0e4906"
+        "cargoLockSha256": "0d3ee844078d274d61265505ec624b631e0860232d9e3e8ed55d35614e0d22e2",
+        "contractSha256": "38ddad41a79447930f76512e11dc0fe9f9e826d36f816cdb7b350b8c8d4cb101"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -10225,8 +10225,8 @@
           "gfx950_kda_decode"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "a68cecb02d78315f79b8d2d99fee5f928844a2916b6d35c1bac6e6e7bd808541"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "c3f0a4c6c1af402dd52d16623f91f19209be2fac84d01b283cfbec40197a49d5"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-decode.request.json",
@@ -10274,8 +10274,8 @@
           "gfx950_kda_decode"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "18df694b57bb01b7f419fb28204eac18cd3580d036472551faa3f205da55f267"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "fa08b872acb4df4a6bbb8c34b9a51923920d7678459dd46eab71997d20bcc228"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-decode.request.json",
@@ -10321,8 +10321,8 @@
           "gfx950_kda_chunkwise_prefill"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "bb89d5412101d271320c85eb0b034beb24327f5e11913ffd232cf59580acc7dc"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "c09a4a5c3f0bad26947b999b6c9d1e72d1b3ec5ec0a4da9b00403f3f102b4c2d"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-chunkwise-prefill.request.json",
@@ -10370,8 +10370,8 @@
           "gfx950_kda_chunkwise_prefill"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "83e40615b1953a13f553cd4b39dacfc6f90f0d87945bb5acd4c1478727d79518"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "d5396e6db08d19dcf9fba24ad07ac0da2ec9a26ae7df86e9911e26048a45d50c"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-chunkwise-prefill.request.json",
@@ -10417,8 +10417,8 @@
           "gfx950_mhc_sinkhorn_mix"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "5fa39a3fbb77fbae4a85ea756efa859954c932ac9e7000cb6392641d70f5b960"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "3d84ab11ccaadfea1e0669c6b27eb391c9db818f7c3f19bec0760345699ae001"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-mhc-sinkhorn-mix.request.json",
@@ -10466,8 +10466,8 @@
           "gfx950_mhc_sinkhorn_mix"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "4d5cfb3d64fcb05cd110211c8a0caac268634f772839fdc4ae5646f67371d37f",
-        "contractSha256": "e411517c306d80a5f4d0d095fecc517828732b263f0d28418fa24c448f02487e"
+        "cargoLockSha256": "5e7f9f17484cdbf95c9a79cc98dd73474459d5887d52051bd6f5199d23974f95",
+        "contractSha256": "c3650fb41204c020b3e1574eab24514c1f061a26e0722f592aa5297425629204"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-mhc-sinkhorn-mix.request.json",
@@ -10513,8 +10513,8 @@
           "gfx950_moe_expert_rank_fp4_fp8_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "e4ba1a5744d58799fe71867b6018522af46b5daeae3f83a848bf037f531669f7",
-        "contractSha256": "5781bae47fc59316ddc2b7d696288651ff04c30858a05e6095bf51dafa4e5ba8"
+        "cargoLockSha256": "792f24786eb065cfe2e126b26f4eb0395ab95fdfb36e975c920ad706fa4c1401",
+        "contractSha256": "5596aa7bdf3385908bccb520af63abab1600433ccccf98047e60933f412024cf"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-moe-expert-rank-fp4-fp8.request.json",
@@ -10563,8 +10563,8 @@
           "gfx950_moe_expert_rank_fp4_fp8_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "e4ba1a5744d58799fe71867b6018522af46b5daeae3f83a848bf037f531669f7",
-        "contractSha256": "c66d7ff8b2e917dfb732d068200c61859ef75af47cc93ef5e31d679fb0ef91fb"
+        "cargoLockSha256": "792f24786eb065cfe2e126b26f4eb0395ab95fdfb36e975c920ad706fa4c1401",
+        "contractSha256": "f25b56b012ad3ea3803c35742ac630f0e0ad8ca73403b7f86599bb26090afed3"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-moe-expert-rank-fp4-fp8.request.json",
@@ -10610,8 +10610,8 @@
           "gfx950_moe_route_fp4_t16_e4_k2_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "e4ba1a5744d58799fe71867b6018522af46b5daeae3f83a848bf037f531669f7",
-        "contractSha256": "0c180acafa8abb171c9e4dfff68dce5da0fff49727b67478782aea7876f516a7"
+        "cargoLockSha256": "792f24786eb065cfe2e126b26f4eb0395ab95fdfb36e975c920ad706fa4c1401",
+        "contractSha256": "b86a9164fd61712a9f5716d14381cc8498ea8685d9a8f09e3c483cebdf6a7491"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-moe-route-fp4-t16-e4-k2.request.json",
@@ -10657,8 +10657,8 @@
           "gfx950_muon_update_4x4_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "e4ba1a5744d58799fe71867b6018522af46b5daeae3f83a848bf037f531669f7",
-        "contractSha256": "3b90d56f57612197856ccbf1147cf542ed59af1bed73e6f9524ae81934f40954"
+        "cargoLockSha256": "792f24786eb065cfe2e126b26f4eb0395ab95fdfb36e975c920ad706fa4c1401",
+        "contractSha256": "17614c953dd008c83698ea0be152eb352126fd1f1972ddb9d70b72029069734f"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-muon-update-4x4.request.json",
@@ -10707,8 +10707,8 @@
           "gfx950_muon_update_4x4_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "e4ba1a5744d58799fe71867b6018522af46b5daeae3f83a848bf037f531669f7",
-        "contractSha256": "073bd4ac9aaf4619fa85b0940d32a657b8dfb741715aeb95a11ce6768cb42f48"
+        "cargoLockSha256": "792f24786eb065cfe2e126b26f4eb0395ab95fdfb36e975c920ad706fa4c1401",
+        "contractSha256": "a478eff2b6bc97808b2757633a4c82f005e23d4862d86a608b9bc004260fa6a5"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-muon-update-4x4.request.json",
@@ -10754,8 +10754,8 @@
           "gfx950_qwen_ngram_gather_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "e4ba1a5744d58799fe71867b6018522af46b5daeae3f83a848bf037f531669f7",
-        "contractSha256": "07129fd2907ce8e5fe4ecd0a8c95a8e5569288819e00dd3fcf0f548113dbc982"
+        "cargoLockSha256": "792f24786eb065cfe2e126b26f4eb0395ab95fdfb36e975c920ad706fa4c1401",
+        "contractSha256": "1a1bca3440222f6004a3119d611de0a41e9ee8cd3d822cac09ed582322a0f661"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-qwen-ngram-gather.request.json",
@@ -10804,8 +10804,8 @@
           "gfx950_qwen_ngram_gather_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "e4ba1a5744d58799fe71867b6018522af46b5daeae3f83a848bf037f531669f7",
-        "contractSha256": "4aa69ff7211d4b577ff4842c5fdc8e99de9b6efaa7d175ab162f9054f8b156e5"
+        "cargoLockSha256": "792f24786eb065cfe2e126b26f4eb0395ab95fdfb36e975c920ad706fa4c1401",
+        "contractSha256": "6523a37ca1d2bca960b6b05530c577f74bad5eeb4bb15738efb4f5be47a49151"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-qwen-ngram-gather.request.json",
@@ -10851,8 +10851,8 @@
           "gfx950_speculative_transaction_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "e4ba1a5744d58799fe71867b6018522af46b5daeae3f83a848bf037f531669f7",
-        "contractSha256": "b1d15a20b08428301575aef599a454a5caa85af4358f4caa18bb399179a464e8"
+        "cargoLockSha256": "792f24786eb065cfe2e126b26f4eb0395ab95fdfb36e975c920ad706fa4c1401",
+        "contractSha256": "85c7a0b8216b0cdd623307de767944b8744bb4dc1a563533bc85106aa62058df"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-speculative-transaction.request.json",
@@ -10901,8 +10901,8 @@
           "gfx950_speculative_transaction_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "e4ba1a5744d58799fe71867b6018522af46b5daeae3f83a848bf037f531669f7",
-        "contractSha256": "247d8becf11cd24e1e4cff5eae4d0f432d0cf74a3bc6747f8f809e1137cd46ee"
+        "cargoLockSha256": "792f24786eb065cfe2e126b26f4eb0395ab95fdfb36e975c920ad706fa4c1401",
+        "contractSha256": "897fefc860f7f11c28ad59fcde343c67ffb68819b04a446d7fafaf987f77ee60"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-speculative-transaction.request.json",
@@ -10948,8 +10948,8 @@
           "gfx950_stage_gradient_shard_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "e4ba1a5744d58799fe71867b6018522af46b5daeae3f83a848bf037f531669f7",
-        "contractSha256": "288c9660f8ece14a85cf1795a2a434e8c5bebbc739e0a28450914cc3e0b90dd5"
+        "cargoLockSha256": "792f24786eb065cfe2e126b26f4eb0395ab95fdfb36e975c920ad706fa4c1401",
+        "contractSha256": "d8a3861d0d9e5f5d63473f40715b7f137d3c33a74f7d7a9d76ee47203a6e5356"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-stage-gradient-shard.request.json",
@@ -13401,7 +13401,7 @@
                 "tabOrdinal": 6,
                 "caseOrdinal": 0
               },
-              "selectionSha256": "dc8080ef4dc1ce701d605d83e0e1a0221f5ce1b45389cea29a8b52b448133669",
+              "selectionSha256": "c60fce2642da6927e7981c6b3e5b3ad9b17cab00255245e0ebca7a10c453455c",
               "sourcePath": "examples/workgroup_sync_v1/src/kernel_row_affine_u32.rs",
               "sourceSha256": "07adc0c50f24e51cb3d6c6bcb6cc1c8c6ff2a772c45ee2153435601eca2f39df",
               "functionUtf8Offset": 885
