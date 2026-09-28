@@ -1008,6 +1008,11 @@ impl KfdRuntimeBackendV1 {
                     backend.active = Some(active);
                     Err(backend.terminal_error("materialized cancellation cannot reenter publication"))
                 }
+                execution @ ActiveComputeExecutionV1::MaterializedBinding(_) => {
+                    active.execution = Some(execution);
+                    backend.active = Some(active);
+                    Err(backend.terminal_error("incomplete ordinary binding cannot resume publication"))
+                }
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedMaterialized => {
                     active.performance.publish_to_completion = active.published_at.elapsed();
@@ -2512,6 +2517,11 @@ impl KfdRuntimeBackendV1 {
         ordinary_recipe: Arc<OwnedComputeLaunchV1>,
         prepared: PreparedLaunchV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        use super::materialized_publication::{
+            MaterializedBindingV1, MaterializedFirstSubmissionV1,
+            with_recycled_materialized_metadata_v1,
+        };
+
         self.require_unpinned_native_lane_v1(self.selected_compute_lane)?;
         if matches!(
             &prepared.storage,
@@ -2580,92 +2590,16 @@ impl KfdRuntimeBackendV1 {
         let user_data_count =
             u64::try_from(data.len()).expect("fixed-dispatch data count is bounded below u64");
 
+        let scripted = false;
         #[cfg(test)]
-        if self.scripted_sdma.is_some()
-            && (writebacks.is_empty() || self.scripted_materialized_preparation.is_some())
-        {
-            performance.data_path = KfdRuntimeLaunchDataPathV1::Materialized;
-            performance.user_data_materializations = user_data_count;
-            if let Some((origin, retries)) = self.scripted_materialized_preparation.take() {
-                let mut prepared = MaterializedPreparedV1::new(
-                    PersistentPublicationProfileV1 {
-                        launch: profile_launch,
-                        semantic_contract: profile_semantic_contract,
-                        bindings: profile_bindings,
-                    },
-                    origin,
-                );
-                // Script the publication outcome, not a native receipt or buffer authority.
-                prepared.scripted = Some((data, retries));
-                self.active = Some(ActiveSubmissionV1 {
-                    id,
-                    stream,
-                    ordered_predecessor,
-                    deferred_ordered_predecessor_retain: false,
-                    kernel,
-                    dependency_depth,
-                    allocations,
-                    writebacks,
-                    resident_descriptors,
-                    ordinary_recipe: Some(ordinary_recipe),
-                    dispatch_shape_sha256,
-                    published_at: Instant::now(),
-                    performance,
-                    execution: Some(ActiveComputeExecutionV1::MaterializedPrepared(prepared)),
-                });
-                return Ok(());
-            }
-            self.active = Some(ActiveSubmissionV1 {
-                id,
-                stream,
-                ordered_predecessor,
-                deferred_ordered_predecessor_retain: false,
-                kernel,
-                dependency_depth,
-                allocations,
-                writebacks,
-                resident_descriptors,
-                ordinary_recipe: Some(ordinary_recipe),
-                dispatch_shape_sha256,
-                published_at: Instant::now(),
-                performance,
-                execution: Some(ActiveComputeExecutionV1::ScriptedMaterialized),
-            });
-            let profile_dispatch = self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, id);
-            let profile_queue = self.profile_resource_v1(
-                KfdProfileResourceKindV1::NativeQueue,
-                KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + self.selected_compute_lane as u64,
-            );
-            let profile_stream = self.profile_resource_v1(KfdProfileResourceKindV1::Stream, stream);
-            let profile_kernel = self.profile_resource_v1(KfdProfileResourceKindV1::Kernel, kernel);
-            let profile_shape = self.profile_content_v1(&dispatch_shape_sha256);
-            let profile_event = match profile_bindings {
-                Some(Ok(bindings)) => profile_dispatch
-                    .zip(profile_queue)
-                    .zip(profile_stream)
-                    .zip(profile_kernel)
-                    .zip(profile_shape)
-                    .map(|((((dispatch, queue), stream), kernel), dispatch_shape)| {
-                        KfdRuntimeProfileEventKindV1::DispatchPublished {
-                            dispatch,
-                            queue,
-                            stream,
-                            kernel,
-                            dispatch_shape,
-                            launch: profile_launch,
-                            bindings,
-                        }
-                    }),
-                Some(Err(())) | None => None,
-            };
-            self.observe_profile_dispatch_v1(profile_event, profile_semantic_contract);
-            return Ok(());
-        }
-
+        let scripted = scripted
+            || self.scripted_sdma.is_some()
+                && (writebacks.is_empty()
+                    || self.scripted_materialized_preparation.is_some()
+                    || self.scripted_materialized_publication_fault.is_some());
         let native_binding_started = Instant::now();
         let creates_native_queue = self.native_compute_lanes[self.selected_compute_lane].is_none();
         let mut reused_attached = false;
-        let mut preparation_origin = MaterializedPreparationOriginV1::NewBinding;
         let reuse_attached = self.recycled_dispatch.as_ref().is_some_and(|recycled| {
             recycled_dispatch_reuse_is_admitted_v1(
                 recycled,
@@ -2674,69 +2608,110 @@ impl KfdRuntimeBackendV1 {
                 &data,
             )
         });
-        let preallocation = self.preallocate_native_binding_v1(reuse_attached)?;
-        if self.recycled_dispatch.is_some() && !reuse_attached {
-            self.detach_recycled_dispatch()?;
-        }
-        if reuse_attached {
-            let recycled = self
-                .recycled_dispatch
-                .take()
-                .expect("admitted attached dispatch remains retained");
-            let overwrite = {
-                let native_lane = self.selected_native_compute_lane_v1()?;
-                let queue = self
-                    .queue
-                    .as_mut()
-                    .expect("recycled dispatch retains queue");
-                queue
-                    .with_compute_lane_v1(native_lane, |queue| {
-                        queue
-                            .recycled_fixed_dispatch_generation()
-                            .map_err(|error| format!("KFD recycled generation: {error}"))
-                            .and_then(|generation| {
-                                recycled
-                                    .descriptors
-                                    .iter()
-                                    .zip(&data)
-                                    .enumerate()
-                                    .try_for_each(|(index, (prior, spec))| {
-                                        if !resident_data_needs_host_overwrite_v1(
-                                            prior,
-                                            spec.content_sha256,
-                                        ) {
-                                            return Ok(());
-                                        }
-                                        queue
-                                            .overwrite_recycled_fixed_dispatch_host_data(
-                                                Gfx942RecycledDispatchWriteRequestV1::new(
-                                                    generation, index, 0,
-                                                ),
-                                                spec.bytes(),
-                                            )
-                                            .map_err(|error| {
-                                                format!("KFD recycled-data overwrite: {error}")
-                                            })
-                                    })
-                                    .map(|()| generation)
-                            })
-                    })
-                    .map_err(|error| format!("KFD compute-lane selection: {error}"))
-                    .and_then(core::convert::identity)
-            };
-            let generation = overwrite.map_err(|detail| self.terminal_error(detail))?;
-            preparation_origin = MaterializedPreparationOriginV1::RecycledAttachment { generation };
-            reused_attached = true;
-            performance.data_path = KfdRuntimeLaunchDataPathV1::ResidentReused;
-        }
-
-        if !reused_attached {
+        let preallocation = if scripted {
+            None
+        } else {
+            self.preallocate_native_binding_v1(reuse_attached)?
+        };
+        // Pure host preparation can still reject without taking native custody.
+        let programs = if reuse_attached || scripted {
+            None
+        } else {
             let validated_program = build_program_v1(&program, signature, &abi_rows)?;
             let mut programs = Vec::new();
             programs
                 .try_reserve_exact(1)
                 .map_err(|_| Self::capacity("KFD program roster allocation failed"))?;
             programs.push(validated_program);
+            Some(programs)
+        };
+        if self.active.is_some() || !self.compute_pipeline.is_empty() {
+            return Err(self.terminal_error("ordinary binding requires an idle logical lane"));
+        }
+        self.active = Some(ActiveSubmissionV1 {
+            id,
+            stream,
+            ordered_predecessor,
+            deferred_ordered_predecessor_retain: false,
+            kernel,
+            dependency_depth,
+            allocations,
+            writebacks,
+            resident_descriptors,
+            ordinary_recipe: Some(ordinary_recipe),
+            dispatch_shape_sha256,
+            published_at: Instant::now(),
+            performance,
+            execution: Some(ActiveComputeExecutionV1::MaterializedBinding(
+                MaterializedBindingV1::new(PersistentPublicationProfileV1 {
+                    launch: profile_launch,
+                    semantic_contract: profile_semantic_contract,
+                    bindings: profile_bindings,
+                }),
+            )),
+        });
+        #[cfg(test)]
+        if scripted {
+            return self.publish_scripted_materialized_binding_v1(data);
+        }
+        if self.recycled_dispatch.is_some() && !reuse_attached {
+            self.detach_recycled_dispatch()?;
+        }
+        if reuse_attached {
+            let overwrite = {
+                let native_lane = self.selected_native_compute_lane_v1()?;
+                let root = MaterializedBindingV1::indexed(self.active.as_mut().unwrap());
+                let queue = self
+                    .queue
+                    .as_mut()
+                    .expect("recycled dispatch retains queue");
+                with_recycled_materialized_metadata_v1(&mut self.recycled_dispatch, |recycled| {
+                    queue
+                        .with_compute_lane_v1(native_lane, |queue| {
+                            queue
+                                .recycled_fixed_dispatch_generation()
+                                .map_err(|error| format!("KFD recycled generation: {error}"))
+                                .and_then(|generation| {
+                                    root.origin =
+                                        MaterializedPreparationOriginV1::RecycledAttachment {
+                                            generation,
+                                        };
+                                    recycled
+                                        .descriptors
+                                        .iter()
+                                        .zip(&data)
+                                        .enumerate()
+                                        .try_for_each(|(index, (prior, spec))| {
+                                            if !resident_data_needs_host_overwrite_v1(
+                                                prior,
+                                                spec.content_sha256,
+                                            ) {
+                                                return Ok(());
+                                            }
+                                            queue
+                                                .overwrite_recycled_fixed_dispatch_host_data(
+                                                    Gfx942RecycledDispatchWriteRequestV1::new(
+                                                        generation, index, 0,
+                                                    ),
+                                                    spec.bytes(),
+                                                )
+                                                .map_err(|error| {
+                                                    format!("KFD recycled-data overwrite: {error}")
+                                                })
+                                        })
+                                })
+                        })
+                        .map_err(|error| format!("KFD compute-lane selection: {error}"))
+                        .and_then(core::convert::identity)
+                })
+            };
+            overwrite.map_err(|detail| self.terminal_error(detail))?;
+            reused_attached = true;
+            performance.data_path = KfdRuntimeLaunchDataPathV1::ResidentReused;
+        }
+
+        if !reused_attached {
+            let programs = programs.expect("new binding preflighted programs");
             let packet = Gfx942FixedDispatchPacketV1::new(
                 0,
                 geometry,
@@ -2871,7 +2846,7 @@ impl KfdRuntimeBackendV1 {
                                 Some(resident)
                                     if same_resident_storage_shape_v1(
                                         &resident.descriptors,
-                                        &resident_descriptors,
+                                        &self.active.as_ref().unwrap().resident_descriptors,
                                     ) && data.iter().all(|spec| {
                                         spec.kind == RuntimeMemoryKindV1::HostVisible
                                     }) =>
@@ -2934,6 +2909,7 @@ impl KfdRuntimeBackendV1 {
             }
         }
         performance.native_binding = native_binding_started.elapsed();
+        self.active.as_mut().unwrap().performance = performance;
         if creates_native_queue {
             let queue = self.profile_resource_v1(
                 KfdProfileResourceKindV1::NativeQueue,
@@ -2944,44 +2920,27 @@ impl KfdRuntimeBackendV1 {
             );
         }
 
-        let publication_profile = PersistentPublicationProfileV1 {
-            launch: profile_launch,
-            semantic_contract: profile_semantic_contract,
-            bindings: profile_bindings,
-        };
         let publication_started = Instant::now();
         let native_lane = self.selected_native_compute_lane_v1()?;
-        let batch = self
+        let root = MaterializedBindingV1::indexed(self.active.as_mut().unwrap());
+        let publication = self
             .queue
             .as_mut()
             .expect("queue was created or rebound")
             .with_compute_lane_v1(native_lane, |queue| {
-                queue.submit_fixed_dispatch_classified_v1::<1>()
+                root.submit(|| match queue.submit_fixed_dispatch_classified_v1::<1>() {
+                    Ok(batch) => Ok(MaterializedFirstSubmissionV1::Published(batch)),
+                    Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)) => {
+                        Ok(MaterializedFirstSubmissionV1::Retryable)
+                    }
+                    Err(error) => Err(error),
+                })
             })
             .map_err(|error| self.terminal_error(format!("KFD compute-lane selection: {error}")))?;
-        let batch = match batch {
-            Ok(batch) => batch,
+        match publication {
+            Ok(()) => {}
             Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)) => {
-                performance.publication += publication_started.elapsed();
-                self.active = Some(ActiveSubmissionV1 {
-                    id,
-                    stream,
-                    ordered_predecessor,
-                    deferred_ordered_predecessor_retain: false,
-                    kernel,
-                    dependency_depth,
-                    allocations,
-                    writebacks,
-                    resident_descriptors,
-                    ordinary_recipe: Some(ordinary_recipe),
-                    dispatch_shape_sha256,
-                    published_at: Instant::now(),
-                    performance,
-                    execution: Some(ActiveComputeExecutionV1::MaterializedPrepared(
-                        MaterializedPreparedV1::new(publication_profile, preparation_origin),
-                    )),
-                });
-                return Ok(());
+                unreachable!("retry classification stored inside the native callback")
             }
             Err(Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error)) => {
                 return Err(self.terminal_error(format!(
@@ -2993,33 +2952,9 @@ impl KfdRuntimeBackendV1 {
                     "KFD dispatch publication became indeterminate: {error}"
                 )));
             }
-        };
-        performance.publication = publication_started.elapsed();
-        let published_at = Instant::now();
-        self.active = Some(ActiveSubmissionV1 {
-            id,
-            stream,
-            ordered_predecessor,
-            deferred_ordered_predecessor_retain: false,
-            kernel,
-            dependency_depth,
-            allocations,
-            writebacks,
-            resident_descriptors,
-            ordinary_recipe: Some(ordinary_recipe),
-            dispatch_shape_sha256,
-            published_at,
-            performance,
-            execution: Some(ActiveComputeExecutionV1::Materialized(batch)),
-        });
-        self.observe_materialized_dispatch_published_v1(
-            id,
-            stream,
-            kernel,
-            dispatch_shape_sha256,
-            publication_profile,
-        );
-        Ok(())
+        }
+        self.active.as_mut().unwrap().performance.publication += publication_started.elapsed();
+        self.finish_materialized_binding_v1()
     }
 
     pub(super) fn observe_materialized_dispatch_published_v1(
@@ -3030,6 +2965,13 @@ impl KfdRuntimeBackendV1 {
         dispatch_shape_sha256: [u8; 32],
         profile: PersistentPublicationProfileV1,
     ) {
+        #[cfg(test)]
+        if self.scripted_materialized_publication_fault == Some(
+            super::materialized_publication::ScriptedMaterializedPublicationFaultV1::ProfileUnwind,
+        ) {
+            self.scripted_materialized_publication_fault = None;
+            panic!("scripted ordinary publication profile unwind");
+        }
         let profile_dispatch = self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, id);
         let profile_queue = self.profile_resource_v1(
             KfdProfileResourceKindV1::NativeQueue,
@@ -4137,10 +4079,17 @@ impl KfdRuntimeBackendV1 {
         &mut self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.synchronize_recycled_dispatch_data_v1()?;
-        let Some(recycled) = self.recycled_dispatch.take() else {
+        if self.recycled_dispatch.is_none() {
             return Ok(());
-        };
+        }
+        if self.resident_data.is_some() {
+            return Err(
+                self.terminal_error("recycled detach conflicts with retained resident DATA")
+            );
+        }
         let native_lane = self.selected_native_compute_lane_v1()?;
+        let recycled = &mut self.recycled_dispatch;
+        let resident = &mut self.resident_data;
         let result = self
             .queue
             .as_mut()
@@ -4148,19 +4097,23 @@ impl KfdRuntimeBackendV1 {
             .and_then(|queue| {
                 queue
                     .with_compute_lane_v1(native_lane, |queue| {
-                        queue.detach_recycled_fixed_dispatch()
+                        let detached = queue
+                            .detach_recycled_fixed_dispatch()
+                            .map_err(|error| format!("KFD recycled dispatch detach: {error}"))?;
+                        // Returned DATA must be rooted before the lane loan closes.
+                        *resident = Some(ResidentDataRosterV1 {
+                            descriptors: recycled
+                                .take()
+                                .expect("indexed recycled descriptors")
+                                .descriptors,
+                            data: detached.into_data(),
+                        });
+                        Ok(())
                     })
                     .map_err(|error| format!("KFD compute-lane selection: {error}"))?
-                    .map_err(|error| format!("KFD recycled dispatch detach: {error}"))
             });
         match result {
-            Ok(detached) => {
-                self.resident_data = Some(ResidentDataRosterV1 {
-                    descriptors: recycled.descriptors,
-                    data: detached.into_data(),
-                });
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err(detail) => Err(self.terminal_error(detail)),
         }
     }

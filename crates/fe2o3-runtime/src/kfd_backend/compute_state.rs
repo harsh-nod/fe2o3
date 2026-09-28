@@ -136,6 +136,7 @@ impl<T> PreparedReceiptV1<T> {
 // tests exercise the same allocation-free terminal-recovery invariant.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum ActiveComputeExecutionV1 {
+    MaterializedBinding(super::materialized_publication::MaterializedBindingV1),
     MaterializedPrepared(MaterializedPreparedV1),
     MaterializedCancelling(Box<super::materialized_cancellation::MaterializedCancellationV1>),
     Materialized(Gfx942DispatchBatchV1<1>),

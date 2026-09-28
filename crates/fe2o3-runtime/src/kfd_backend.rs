@@ -93,6 +93,7 @@ mod compute_peer_gate;
 mod compute_quiescence_control;
 mod compute_settlement;
 mod materialized_cancellation;
+mod materialized_publication;
 mod peer_ancestry;
 mod peer_compute_access;
 mod persistent_completion;
@@ -1402,6 +1403,9 @@ pub struct KfdRuntimeBackendV1 {
     #[cfg(test)]
     scripted_materialized_preparation: Option<(MaterializedPreparationOriginV1, usize)>,
     #[cfg(test)]
+    scripted_materialized_publication_fault:
+        Option<materialized_publication::ScriptedMaterializedPublicationFaultV1>,
+    #[cfg(test)]
     scripted_materialized_cancel_fault:
         Option<materialized_cancellation::ScriptedMaterializedCancelFaultV1>,
     #[cfg(test)]
@@ -1903,6 +1907,8 @@ impl KfdRuntimeBackendV1 {
             scripted_prepared_cancel_fault: None,
             #[cfg(test)]
             scripted_materialized_preparation: None,
+            #[cfg(test)]
+            scripted_materialized_publication_fault: None,
             #[cfg(test)]
             scripted_materialized_cancel_fault: None,
             #[cfg(test)]
@@ -2811,7 +2817,8 @@ impl KfdRuntimeBackendV1 {
                 ActiveComputeExecutionV1::PersistentCancelling(_)
                 | ActiveComputeExecutionV1::PersistentCompleting(_)
                 | ActiveComputeExecutionV1::ThreeBindingPersistentCompleting(_) => true,
-                ActiveComputeExecutionV1::MaterializedPrepared(_)
+                ActiveComputeExecutionV1::MaterializedBinding(_)
+                | ActiveComputeExecutionV1::MaterializedPrepared(_)
                 | ActiveComputeExecutionV1::MaterializedCancelling(_)
                 | ActiveComputeExecutionV1::Materialized(_)
                 | ActiveComputeExecutionV1::MaterializedCompleted(_) => false,
@@ -13361,6 +13368,7 @@ mod tests {
     #[path = "initialized_storage_tests.rs"]
     mod initialized_storage_tests;
     mod materialized_cancellation_tests;
+    mod materialized_publication_tests;
     mod native_xgmi_creation_tests;
     mod native_xgmi_retirement_tests;
     mod prepared_cancellation_tests;
