@@ -561,35 +561,25 @@ fn sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_throug
                 .unwrap()
                 .recorded_events_for_test_v1();
             assert_eq!(&after[..events.len()], events);
-            if matches!(
-                lanes,
-                Lanes::PersistentPrepared | Lanes::PersistentPublished
-            ) {
-                // The Scripted H2D setup lacks native profile facts and closes the retained prefix.
-                assert!(prior_drops > 0);
-                assert_eq!(after.len(), events.len());
-                assert_eq!(dropped_events(&fixture.backend), prior_drops + 1);
-            } else {
-                assert_eq!(prior_drops, 0);
-                assert_eq!(dropped_events(&fixture.backend), 0);
-                assert_eq!(after.len(), events.len() + 1);
-                assert_eq!(
-                    after.last().unwrap().event,
-                    KfdRuntimeProfileEventKindV1::AllocationCreated {
-                        allocation: fixture
-                            .backend
-                            .profile_resource_v1(KfdProfileResourceKindV1::Allocation, allocated)
-                            .unwrap(),
-                        memory_kind: match kind {
-                            RuntimeMemoryKindV1::HostVisible => KfdProfileMemoryKindV1::HostVisible,
-                            RuntimeMemoryKindV1::DeviceLocal =>
-                                KfdProfileMemoryKindV1::DeviceLocalHostStaged,
-                        },
-                        byte_len: 8,
-                        alignment: 8,
-                    }
-                );
-            }
+            assert_eq!(prior_drops, 0);
+            assert_eq!(dropped_events(&fixture.backend), 0);
+            assert_eq!(after.len(), events.len() + 1);
+            assert_eq!(
+                after.last().unwrap().event,
+                KfdRuntimeProfileEventKindV1::AllocationCreated {
+                    allocation: fixture
+                        .backend
+                        .profile_resource_v1(KfdProfileResourceKindV1::Allocation, allocated)
+                        .unwrap(),
+                    memory_kind: match kind {
+                        RuntimeMemoryKindV1::HostVisible => KfdProfileMemoryKindV1::HostVisible,
+                        RuntimeMemoryKindV1::DeviceLocal =>
+                            KfdProfileMemoryKindV1::DeviceLocalHostStaged,
+                    },
+                    byte_len: 8,
+                    alignment: 8,
+                }
+            );
             fixture.finish(Some(allocated), kind);
         }
     }
