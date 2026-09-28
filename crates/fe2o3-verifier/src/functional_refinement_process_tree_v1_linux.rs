@@ -2254,13 +2254,16 @@ mod tests {
                 .to_vec(),
         )
         .unwrap();
+        let mut attempt = AttemptV1::begin().unwrap();
         let output = execute(
-            &runtime,
+            &mut attempt,
+            std::sync::Arc::new(runtime),
             &source,
             Instant::now() + Duration::from_secs(120),
             4096,
         )
         .unwrap();
+        attempt.complete().unwrap();
         assert_eq!((output.exit_code, output.signal), (Some(0), None));
         assert!(
             std::str::from_utf8(&output.stdout)
