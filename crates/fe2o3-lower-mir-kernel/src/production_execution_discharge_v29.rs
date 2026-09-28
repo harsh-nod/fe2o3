@@ -324,13 +324,18 @@ fn replay_erasure(
         functions,
         kernels,
         required_capabilities,
+        storage_layouts,
     } = input.module();
     let Module {
         id: out_id,
         functions: out_functions,
         kernels: out_kernels,
         required_capabilities: out_capabilities,
+        storage_layouts: out_storage_layouts,
     } = output.module();
+    if !execution_discharge_legacy_storage_tables_v29(storage_layouts, out_storage_layouts) {
+        return Err(DischargeError::ReplayMismatch);
+    }
     if (id, kernels, required_capabilities) != (out_id, out_kernels, out_capabilities)
         || functions.len() != out_functions.len()
     {
@@ -433,3 +438,43 @@ fn replay_erasure(
 #[cfg(test)]
 #[path = "production_execution_discharge_v29_tests.rs"]
 mod tests;
+
+// Only fixed table headers are inspected. No row equality or graph walk occurs.
+fn execution_discharge_legacy_storage_tables_v29(
+    input: &[fe2o3_kernel_ir::StorageLayoutV1],
+    output: &[fe2o3_kernel_ir::StorageLayoutV1],
+) -> bool {
+    input.is_empty() && output.is_empty()
+}
+
+#[cfg(test)]
+mod legacy_storage_schema_tests {
+    use fe2o3_kernel_ir::{Module, ScalarType, StorageLayoutKindV1, StorageLayoutV1};
+
+    fn eligible(input: &Module, output: &Module) -> bool {
+        super::execution_discharge_legacy_storage_tables_v29(
+            &input.storage_layouts,
+            &output.storage_layouts,
+        )
+    }
+
+    #[test]
+    fn production_execution_discharge_v29_refuses_nonempty_storage_tables() {
+        let empty = Module::new("ordinary");
+        assert!(eligible(&empty, &empty));
+        let mut occupied = empty.clone();
+        occupied.storage_layouts.push(StorageLayoutV1 {
+            size: 1,
+            alignment: 1,
+            kind: StorageLayoutKindV1::Scalar(ScalarType::U8),
+        });
+        assert!(!eligible(&occupied, &empty));
+        assert!(!eligible(&empty, &occupied));
+        // Equal, structurally valid tables are still outside the old profile.
+        assert!(!eligible(&occupied, &occupied));
+        let mut other = occupied.clone();
+        other.storage_layouts[0].kind = StorageLayoutKindV1::Scalar(ScalarType::I8);
+        assert!(!eligible(&occupied, &other));
+        // This predicate proves schema eligibility only, not payload equality.
+    }
+}

@@ -49,7 +49,8 @@ fn private_array_output_closed_operation_v1(kind: &OperationKind) -> bool {
             fe2o3_kernel_ir::MatrixOperationKind::LdsLoad { .. }
             | fe2o3_kernel_ir::MatrixOperationKind::LdsStore { .. } => false,
         },
-        Op::Execution(_)
+        Op::Storage(_)
+        | Op::Execution(_)
         | Op::VerificationContract(_)
         | Op::VectorLoad(_)
         | Op::VectorStore(_)
@@ -540,4 +541,17 @@ fn private_array_output_reverse_v1(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn storage_private_array_output_requires_storage_correspondence_v1() {
+    let operation = OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::ReadValue {
+        address: ValueId(0),
+        access: MemoryAccess::new(AddressSpace::Private, 4),
+    });
+    assert!(!private_array_output_closed_operation_v1(&operation));
+    assert!(private_array_output_closed_operation_v1(
+        &OperationKind::Constant(Constant::U32(9))
+    ));
 }

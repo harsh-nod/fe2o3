@@ -731,6 +731,18 @@ the exact consumer boundaries, resource-budget exclusions, and String-backed
 borrowed-location/owned-diagnostic architecture. This is not formal compiler
 verification or completed production V12 migration.
 
+The separate [canonical V18 storage owner](../crates/fe2o3-kernel-ir/src/canonical_kir_v18.rs)
+couples a module-owned physical layout table, typed storage operations and
+explicit function roles to their lossless canonical bytes. Its storage-aware
+verifier reuses the shared CFG/type engine while retaining the exact checked
+module/table association. It provides structural representation and bounded
+transport, not source-layout authentication, initialized-byte/provenance/
+lifetime proofs, optimizing rewrite permission or native execution. Legacy
+Pliron, target and simulator entry points continue to reject this storage
+profile; production source lowering and the default pipeline are not switched
+to V18. See [typed storage boundaries](pliron-optimizing-middle-end-v1.md#typed-storage-prerequisites)
+for the exact owner, codec and remaining integration scope.
+
 The nondefault checked continuation composes induction refinement and private
 forwarding on the same evolving canonical V12 graph. Its final descriptor
 predicate borrows the actual final source owner: original typed roots, ABI,

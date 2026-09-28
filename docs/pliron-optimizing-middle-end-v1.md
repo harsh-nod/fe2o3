@@ -1466,11 +1466,38 @@ using iterative traversal and prepaid sorting. Packed-field placement and
 overlapping union storage remain explicit; pointer recursion is not mistaken
 for containment recursion.
 
-These are inert records and a borrowed structural check, not storage admission
-to executable KIR. They do not establish source validity, initialization,
-active-variant state, target ABI agreement or runtime pointer provenance. The
-V18 owner, executable operation/wire integration and production source/native
-joins remain separate porting steps; existing V19-V22 behavior is unchanged.
+The module owns these records through `Module.storage_layouts`.
+`Type::StorageObject` names a row below a pointer or slice; it is not a bare SSA
+value. Typed storage operations represent projection, value reads and writes,
+object copies and discriminant access. A separate
+[storage-aware verifier](../crates/fe2o3-kernel-ir/src/verification_storage_module_v1.rs)
+checks structure, CFG and types against the exact module/table borrow. It does
+not establish source validity, initialized bytes, active variants, pointer
+provenance, actual bounds/alignment, lifetime, aliasing or copy-overlap safety.
+
+The move-only [canonical V18 owner](../crates/fe2o3-kernel-ir/src/canonical_kir_v18.rs)
+retains the actual decoded, verified module and its exact canonical bytes.
+The V18 grammar includes the complete storage table, explicit function roles
+and the existing V15 execution, V16 ordered-region and V17 ordered-program
+payloads. Bounded comparison and independent candidate copying reuse the
+shared codec; mutated candidates need fresh admission. Table and row identities
+are inert content keys, not source or execution authority. Returned storage
+receipts require caller reservations while their owners remain live.
+
+Concrete-to-Generic pointer and slice casts require the exact V18 profile and
+preserve pointee/element and access rights. Execution ownership may cross V18
+backedges only when every incoming state agrees exactly; this is not a
+termination proof. Old wire profiles, canonical owners, Pliron bridges,
+optimizer recipes, target lowering and simulator execution do not acquire
+storage support from these representation APIs. V18 Storage and V19 complete
+bodies retain distinct interpretations of their profile-specific wire tag;
+existing V19-V22 behavior remains unchanged.
+
+Production Rust storage lowering, initialized-byte/provenance/lifetime checks,
+optimization correspondence and native completion remain separate integration
+work. This representation and codec support does not claim that tutorial
+kernels compile through V18, that an optimizing storage rewrite is admitted,
+or that any milestone is complete.
 
 The legacy default backend route is unchanged by these additions. Passing a
 checked-output component does not select it as the default compiler, publish

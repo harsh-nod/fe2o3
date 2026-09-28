@@ -1057,7 +1057,8 @@ fn derive_kernel_memory_obligations_with_composition_context(
                 | OperationKind::Gfx942CompleteBodyStep(_)
                     if complete_body_v19 => {}
                 OperationKind::Gfx942OrderedProgram(_) if ordered_composition => {}
-                OperationKind::Execution(_)
+                OperationKind::Storage(_)
+                | OperationKind::Execution(_)
                 | OperationKind::Gfx942OrderedRegion(_)
                 | OperationKind::Gfx942OrderedProgram(_)
                 | OperationKind::Gfx942CompleteBodyDeclaration(_)

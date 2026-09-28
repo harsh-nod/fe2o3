@@ -4,10 +4,10 @@ use std::fmt;
 use crate::{
     CanonicalKernelIrVerificationResourceBudgetV1, CanonicalKernelIrVerificationResourceErrorV1,
     DiagnosticCode, Function, FunctionId, FunctionRole, Kernel, LaunchExtent, Module,
-    OperationKind, TargetCapability, Type, VerificationDiagnosticCollectorV1,
-    VerificationDiagnosticLocationV1, VerificationErrors, VerificationModuleStateV1,
-    VerifiedKernelIrModuleV1, target_capability_is_supported_owned_with_budget_v1,
-    verification_type_facts_v15,
+    OperationKind, StructurallyCheckedModuleStorageV1, TargetCapability, Type,
+    VerificationDiagnosticCollectorV1, VerificationDiagnosticLocationV1, VerificationErrors,
+    VerificationModuleStateV1, VerificationStorageContextV1, VerifiedKernelIrModuleV1,
+    target_capability_is_supported_owned_with_budget_v1, verification_type_facts_v15,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -40,19 +40,32 @@ pub(crate) fn verify_depth_bounded_module_with_budget_v1<'module>(
     supported_capabilities: Option<&BTreeSet<TargetCapability>>,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<VerifiedKernelIrModuleV1<'module>, MeteredKernelIrVerificationErrorV1> {
+    verify_depth_bounded_context_with_budget_v1(
+        VerificationStorageContextV1::Legacy(module),
+        supported_capabilities,
+        budget,
+    )?;
+    Ok(VerifiedKernelIrModuleV1::new_verified_v1(module))
+}
+
+pub(crate) fn verify_depth_bounded_context_with_budget_v1(
+    context: VerificationStorageContextV1<'_, '_>,
+    supported_capabilities: Option<&BTreeSet<TargetCapability>>,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<(), MeteredKernelIrVerificationErrorV1> {
     let mut count = VerificationDiagnosticCollectorV1::count();
-    run_verification_pass_v1(module, supported_capabilities, &mut count, budget)?;
+    run_verification_pass_v1(context, supported_capabilities, &mut count, budget)?;
     let diagnostic_count = count
         .counted()
         .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Accounting)?;
     if diagnostic_count == 0 {
         count.abandon(budget)?;
-        return Ok(VerifiedKernelIrModuleV1::new_verified_v1(module));
+        return Ok(());
     }
 
     let mut diagnostics = VerificationDiagnosticCollectorV1::materialize(diagnostic_count, budget)?;
     if let Err(error) =
-        run_verification_pass_v1(module, supported_capabilities, &mut diagnostics, budget)
+        run_verification_pass_v1(context, supported_capabilities, &mut diagnostics, budget)
     {
         let _ = diagnostics.abandon(budget);
         return Err(error.into());
@@ -64,14 +77,26 @@ pub(crate) fn verify_depth_bounded_module_with_budget_v1<'module>(
 }
 
 fn run_verification_pass_v1(
-    module: &Module,
+    context: VerificationStorageContextV1<'_, '_>,
     supported_capabilities: Option<&BTreeSet<TargetCapability>>,
     diagnostics: &mut VerificationDiagnosticCollectorV1,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+    let module = context.module();
+    // Legacy verified views must not silently ignore an owned layout table.
+    if context.storage().is_none() && !module.storage_layouts.is_empty() {
+        emit_fixed_v1(
+            diagnostics,
+            module_diagnostic_location_v1(module, budget)?,
+            DiagnosticCode::InvalidSemanticOperation,
+            "module storage layouts require a storage-aware verification profile",
+            budget,
+        )?;
+        return Ok(());
+    }
     let module_state = VerificationModuleStateV1::build(module, budget)?;
     let result = run_verification_pass_inner_v1(
-        module,
+        context,
         &module_state,
         supported_capabilities,
         diagnostics,
@@ -82,12 +107,13 @@ fn run_verification_pass_v1(
 }
 
 fn run_verification_pass_inner_v1<'module>(
-    module: &'module Module,
+    context: VerificationStorageContextV1<'_, 'module>,
     module_state: &VerificationModuleStateV1<'module>,
     supported_capabilities: Option<&BTreeSet<TargetCapability>>,
     diagnostics: &mut VerificationDiagnosticCollectorV1,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+    let module = context.module();
     if module.id.as_str().is_empty() {
         emit_fixed_v1(
             diagnostics,
@@ -158,20 +184,34 @@ fn run_verification_pass_inner_v1<'module>(
     budget.charge_work(module.functions.len())?;
     for function in &module.functions {
         verify_function_header_v1(
-            module,
+            context,
             function,
             supported_capabilities,
             diagnostics,
             budget,
         )?;
-        crate::run_verification_function_pass_v1(
-            module,
-            function,
-            module_state,
-            supported_capabilities,
-            diagnostics,
-            budget,
-        )?;
+        match context {
+            VerificationStorageContextV1::Legacy(module) => {
+                crate::run_verification_function_pass_v1(
+                    module,
+                    function,
+                    module_state,
+                    supported_capabilities,
+                    diagnostics,
+                    budget,
+                )?
+            }
+            VerificationStorageContextV1::Storage(_) => {
+                crate::run_verification_function_pass_in_context_v1(
+                    context,
+                    function,
+                    module_state,
+                    supported_capabilities,
+                    diagnostics,
+                    budget,
+                )?
+            }
+        }
     }
 
     budget.charge_work(module_state.kernel_rows().len())?;
@@ -227,12 +267,13 @@ fn run_verification_pass_inner_v1<'module>(
 }
 
 fn verify_function_header_v1(
-    module: &Module,
+    context: VerificationStorageContextV1<'_, '_>,
     function: &Function,
     supported_capabilities: Option<&BTreeSet<TargetCapability>>,
     diagnostics: &mut VerificationDiagnosticCollectorV1,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+    let module = context.module();
     let location = function_diagnostic_location_v1(module, function, budget)?;
     if function.id.as_str().is_empty() {
         emit_fixed_v1(
@@ -265,7 +306,12 @@ fn verify_function_header_v1(
         .iter()
         .chain(&function.signature.results)
     {
-        if verify_type_v12_with_budget_v1(ty, &location, diagnostics, budget)? {
+        let has_execution = if let Some(storage) = context.storage() {
+            verify_type_with_storage_context_v1(ty, &location, diagnostics, budget, Some(storage))?
+        } else {
+            verify_type_v12_with_budget_v1(ty, &location, diagnostics, budget)?
+        };
+        if has_execution {
             emit_fixed_v1(
                 diagnostics,
                 clone_diagnostic_location_v1(&location, budget)?,
@@ -750,7 +796,36 @@ pub(crate) fn verify_type_v12_with_budget_v1(
     diagnostics: &mut VerificationDiagnosticCollectorV1,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
+    verify_type_with_storage_context_v1(ty, location, diagnostics, budget, None)
+}
+
+pub(crate) fn verify_type_with_storage_context_v1(
+    ty: &Type,
+    location: &VerificationDiagnosticLocationV1<'_>,
+    diagnostics: &mut VerificationDiagnosticCollectorV1,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    storage: Option<&StructurallyCheckedModuleStorageV1<'_>>,
+) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
     let facts = verification_type_facts_v15(ty, budget)?;
+    if let Some(id) = facts.storage_object {
+        let valid = if facts.bare_storage_object {
+            false
+        } else if let Some(storage) = storage {
+            budget.charge_work(1)?;
+            storage.layouts().row(id).is_some()
+        } else {
+            false
+        };
+        if !valid {
+            emit_fixed_v1(
+                diagnostics,
+                clone_diagnostic_location_v1(location, budget)?,
+                DiagnosticCode::InvalidOperandType,
+                "storage object types require a local layout below a pointer or slice in the storage verifier",
+                budget,
+            )?;
+        }
+    }
     if facts.invalid_execution_role {
         emit_fixed_v1(
             diagnostics,

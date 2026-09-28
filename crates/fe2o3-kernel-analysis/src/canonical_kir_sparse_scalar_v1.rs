@@ -277,6 +277,8 @@ pub(super) fn transfer(
                 CastKind::SignExtend => scalar::Cast::IntExtend { signed: true },
                 CastKind::Bitcast => scalar::Cast::Bitcast,
                 CastKind::RestrictPointerAccess
+                | CastKind::PointerToGeneric
+                | CastKind::SliceToGeneric
                 | CastKind::FloatExtend
                 | CastKind::FloatTruncate
                 | CastKind::IntegerToFloat
@@ -290,7 +292,8 @@ pub(super) fn transfer(
                     .map_or(Value::Dynamic, |bits| constant(to, bits)),
             )
         }
-        OperationKind::Execution(_)
+        OperationKind::Storage(_)
+        | OperationKind::Execution(_)
         | OperationKind::VerificationContract(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)

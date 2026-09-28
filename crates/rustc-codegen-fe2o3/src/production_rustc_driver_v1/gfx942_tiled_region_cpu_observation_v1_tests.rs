@@ -19,7 +19,7 @@ pub(super) struct Census {
     // Diagnostic tags only, never an admission table.
     pub counts: [u32; 24],
     pub first_other: Option<[u32; 2]>,
-    pub type_counts: [u32; 6],
+    pub type_counts: [u32; 7],
     pub root_parameter_kinds: [&'static str; 4],
 }
 fn operation_tag(kind: &OperationKind) -> usize {
@@ -71,6 +71,7 @@ fn type_tag(ty: &Type) -> usize {
         Type::Slice(_) => 3,
         Type::Vector(_) => 4,
         Type::Execution(_) => 5,
+        Type::StorageObject(_) => 6,
     }
 }
 fn parameter_kind(ty: &Type) -> &'static str {
@@ -96,6 +97,7 @@ fn parameter_kind(ty: &Type) -> &'static str {
         Type::Unit => "unit",
         Type::Vector(_) => "vector",
         Type::Execution(_) => "execution",
+        Type::StorageObject(_) => "storage-object",
     }
 }
 fn census(
@@ -108,7 +110,7 @@ fn census(
     let mut row = Census {
         counts: [0; 24],
         first_other: None,
-        type_counts: [0; 6],
+        type_counts: [0; 7],
         root_parameter_kinds: ["absent"; 4],
     };
     if let Some(root) = module.functions.first() {
@@ -144,6 +146,43 @@ fn census(
     }
     Ok(row)
 }
+#[test]
+fn storage_type_census_preserves_existing_slot_identity() {
+    use fe2o3_kernel_ir::{
+        ExecutionRoleV15, FixedVectorTypeV12, StorageLayoutIdV1, VectorLayoutV12,
+    };
+
+    let types = [
+        (Type::Unit, "unit"),
+        (Type::F32, "other-scalar"),
+        (
+            Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadOnly),
+            "pointer",
+        ),
+        (
+            Type::slice(Type::F32, AddressSpace::Global, AccessMode::ReadOnly),
+            "other-slice",
+        ),
+        (
+            Type::vector(FixedVectorTypeV12::new(
+                ScalarType::F32,
+                4,
+                VectorLayoutV12::Contiguous,
+            )),
+            "vector",
+        ),
+        (Type::Execution(ExecutionRoleV15::Context), "execution"),
+        (Type::StorageObject(StorageLayoutIdV1(0)), "storage-object"),
+    ];
+    let mut counts = [0; 7];
+    for (slot, (ty, expected)) in types.iter().enumerate() {
+        assert_eq!(type_tag(ty), slot);
+        assert_eq!(parameter_kind(ty), *expected);
+        counts[type_tag(ty)] += 1;
+    }
+    assert_eq!(counts, [1; 7]);
+}
+
 fn checked_arguments(
     view: &SourceOwnedBf16MfmaRegionV1<'_, '_>,
     budget: &mut Budget<'_>,

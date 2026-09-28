@@ -24,7 +24,9 @@ impl KirBridgeTypeProfileV12 {
         match self {
             Self::Legacy => preflight_type(ty),
             Self::V12 => match ty {
-                Type::Execution(_) => Err(KirBridgeErrorV1::UnsupportedType),
+                Type::Execution(_) | Type::StorageObject(_) => {
+                    Err(KirBridgeErrorV1::UnsupportedType)
+                }
                 Type::Vector(vector) => vector
                     .validate()
                     .map_err(|_| KirBridgeErrorV1::UnsupportedType),
@@ -70,7 +72,9 @@ impl KirBridgeTypeProfileV12 {
             return type_to_pliron(context, ty);
         }
         Ok(match ty {
-            Type::Execution(_) => return Err(KirBridgeErrorV1::UnsupportedType),
+            Type::Execution(_) | Type::StorageObject(_) => {
+                return Err(KirBridgeErrorV1::UnsupportedType);
+            }
             Type::Vector(vector) => {
                 vector
                     .validate()
@@ -653,8 +657,12 @@ fn census_live_graph_v12(
 
 // Definition signatures and bodies are rebuilt from live SSA. Only declarations
 // need their full signature copied from the immutable source metadata.
-fn module_metadata_v12(source: &Module) -> Module {
-    Module {
+fn module_metadata_v12(source: &Module) -> Result<Module, KirBridgeErrorV1> {
+    if !source.storage_layouts.is_empty() {
+        return Err(KirBridgeErrorV1::UnsupportedType);
+    }
+    Ok(Module {
+        storage_layouts: Vec::new(),
         id: source.id.clone(),
         kernels: source.kernels.clone(),
         required_capabilities: source.required_capabilities.clone(),
@@ -673,7 +681,7 @@ fn module_metadata_v12(source: &Module) -> Module {
                 body: None,
             })
             .collect(),
-    }
+    })
 }
 
 // Exact extraction admits no lost/reassigned source value origin or changed

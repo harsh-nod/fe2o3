@@ -1989,46 +1989,48 @@ fn module_requires_kernel_ir_v11_v1(module: &Module) -> bool {
 }
 
 fn module_requires_kernel_ir_v9_v1(module: &Module) -> bool {
-    module.functions.iter().any(|function| {
-        function
-            .signature
-            .parameters
-            .iter()
-            .chain(&function.signature.results)
-            .any(type_requires_kernel_ir_v9_v1)
-            || function.body.as_ref().is_some_and(|body| {
-                body.blocks
-                    .iter()
-                    .flat_map(|block| &block.parameters)
-                    .chain(
-                        body.blocks
-                            .iter()
-                            .flat_map(|block| &block.operations)
-                            .flat_map(|operation| &operation.results),
-                    )
-                    .any(|value| type_requires_kernel_ir_v9_v1(&value.ty))
-                    || body.blocks.iter().any(|block| {
-                        block.operations.iter().any(|operation| {
-                            matches!(
-                                operation.kind,
-                                OperationKind::Gfx950LdsTranspose(_)
-                                    | OperationKind::GuardedStore { .. }
-                                    | OperationKind::Wave(WaveOperation {
-                                        kind: WaveOperationKind::ReduceF32 { .. }
-                                            | WaveOperationKind::BroadcastF32 { .. },
-                                        ..
-                                    })
-                            )
+    !module.storage_layouts.is_empty()
+        || module.functions.iter().any(|function| {
+            function
+                .signature
+                .parameters
+                .iter()
+                .chain(&function.signature.results)
+                .any(type_requires_kernel_ir_v9_v1)
+                || function.body.as_ref().is_some_and(|body| {
+                    body.blocks
+                        .iter()
+                        .flat_map(|block| &block.parameters)
+                        .chain(
+                            body.blocks
+                                .iter()
+                                .flat_map(|block| &block.operations)
+                                .flat_map(|operation| &operation.results),
+                        )
+                        .any(|value| type_requires_kernel_ir_v9_v1(&value.ty))
+                        || body.blocks.iter().any(|block| {
+                            block.operations.iter().any(|operation| {
+                                matches!(
+                                    operation.kind,
+                                    OperationKind::Gfx950LdsTranspose(_)
+                                        | OperationKind::Storage(_)
+                                        | OperationKind::GuardedStore { .. }
+                                        | OperationKind::Wave(WaveOperation {
+                                            kind: WaveOperationKind::ReduceF32 { .. }
+                                                | WaveOperationKind::BroadcastF32 { .. },
+                                            ..
+                                        })
+                                )
+                            })
                         })
-                    })
-            })
-    })
+                })
+        })
 }
 
 fn type_requires_kernel_ir_v9_v1(ty: &Type) -> bool {
     match ty {
-        // Both require a newer wire; neither frozen V8 nor V9 admits them.
-        Type::Vector(_) | Type::Execution(_) => true,
+        // These require a newer wire; neither frozen V8 nor V9 admits them.
+        Type::Vector(_) | Type::Execution(_) | Type::StorageObject(_) => true,
         Type::Pointer(pointer) => {
             pointer.access == AccessMode::WriteOnly
                 || type_requires_kernel_ir_v9_v1(&pointer.pointee)
@@ -33904,4 +33906,56 @@ mod resource_tests {
     }
 
     include!("production_semantic_kir_v1/correspondence_ordering_v1_tests.rs");
+}
+
+#[cfg(test)]
+mod storage_old_profile_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{
+        StorageLayoutIdV1, StorageLayoutKindV1, StorageLayoutV1, StorageOperationV1,
+        StorageProjectionV1,
+    };
+    #[test]
+    fn old_profile_selection_never_makes_storage_a_v8_or_v9_value() {
+        let storage = Type::StorageObject(StorageLayoutIdV1(0));
+        for ty in [
+            storage.clone(),
+            Type::pointer(
+                storage.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+            Type::slice(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert!(type_requires_kernel_ir_v9_v1(&ty));
+        }
+        let mut module = Module::new("storage_old_profile");
+        assert!(!module_requires_kernel_ir_v9_v1(&module));
+        module.storage_layouts.push(StorageLayoutV1 {
+            size: 4,
+            alignment: 4,
+            kind: StorageLayoutKindV1::Scalar(ScalarType::U32),
+        });
+        assert!(module_requires_kernel_ir_v9_v1(&module));
+        assert!(ProductionCanonicalKernelIrV1::from_module(module).is_err());
+        let mut module = Module::new("raw_storage_old_profile");
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(Operation::new(
+            vec![],
+            OperationKind::Storage(StorageOperationV1::Project {
+                base: ValueId(0),
+                step: StorageProjectionV1::Field(0),
+            }),
+        ));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        module.functions.push(Function::internal_helper(
+            "dead",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        ));
+        assert!(module_requires_kernel_ir_v9_v1(&module));
+        assert!(ProductionCanonicalKernelIrV1::from_module(module).is_err());
+    }
 }

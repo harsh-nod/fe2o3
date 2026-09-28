@@ -135,6 +135,7 @@ pub(crate) enum ErrorKind {
     PreflightMissingBacking,
     PreflightBufferViewBounds,
     PreflightAllocationFailure,
+    PreflightStorageProfileNotAdmitted,
     PreflightPhysicalEntrySymbolicDebugUnavailableV20,
     PreflightPhysicalGlobalCopyPendingDebugUnavailableV21,
     PreflightPhysicalLdsExchangeDebugUnavailableV22,

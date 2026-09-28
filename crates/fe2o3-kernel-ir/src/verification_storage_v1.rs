@@ -76,6 +76,14 @@ pub struct StructurallyCheckedStorageLayoutsV1<'a> {
 }
 
 impl<'a> StructurallyCheckedStorageLayoutsV1<'a> {
+    pub(crate) fn from_canonical_storage_owner_v18(
+        owner: &'a crate::VerifiedCanonicalKernelIrModuleV18,
+    ) -> Self {
+        Self {
+            rows: &owner.module().storage_layouts,
+        }
+    }
+
     /// Inert layout data only. Initialization, value validity, variant state,
     /// target ABI agreement and source provenance are deliberately unproved.
     pub fn rows(&self) -> &[StorageLayoutV1] {

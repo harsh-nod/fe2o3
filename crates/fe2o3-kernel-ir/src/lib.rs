@@ -25,11 +25,16 @@
 //! not authenticate contract keys or grant execution or proof authority.
 //! Target lowering, optimization and simulation require their own support.
 //! Decoding establishes wire well-formedness only.
+//! Exact KIR18 adds module-owned typed storage and explicit function roles.
+//! [`VerifiedCanonicalKernelIrModuleV18`] retains the complete decoded graph
+//! and its checked storage table; it is not a legacy verified-module view.
+//! Its structural validity supplies no source, initializedness, provenance,
+//! optimization, target lowering, simulation, or launch authority.
 //! Exact KIR19 adds complete-body declarations and typed steps in the ordinary
 //! SSA/CFG. It excludes the V15 execution, V16 pair and V17 program payloads.
 //! Its immutable owner checks the complete decoded graph; retained source
 //! digests alone never authenticate source or grant lowering/launch authority.
-//! Consumers must call [`verify_module`] before relying on semantic invariants. V1-V12
+//! Legacy consumers must call [`verify_module`] before relying on semantic invariants. V1-V12
 //! reconstruct kernel-entry and import roles from their legacy records; they
 //! reject device-FFI exports because the frozen function records cannot
 //! distinguish those definitions from internal helpers.
@@ -69,6 +74,7 @@ mod canonical_kir_v12;
 mod canonical_kir_v15;
 mod canonical_kir_v16;
 mod canonical_kir_v17;
+mod canonical_kir_v18;
 mod canonical_kir_v19;
 mod canonical_kir_v20;
 mod canonical_kir_v21;
@@ -139,6 +145,7 @@ mod simulation_bundle_v6;
 mod simulation_variable_storage;
 mod standard_atomics;
 mod storage_layout_v1;
+mod storage_module_v1;
 mod storage_operation_v1;
 mod terminator_operands_v1;
 mod types;
@@ -165,6 +172,9 @@ mod verification_public_preflight_v1;
 mod verification_registered_operation_v1;
 mod verification_reserved_call_v1;
 mod verification_resource_v1;
+mod verification_storage_context_v1;
+mod verification_storage_module_v1;
+mod verification_storage_operation_v1;
 mod verification_storage_v1;
 mod verification_terminator_v1;
 mod verification_type_comparison_v1;
@@ -188,6 +198,7 @@ pub use canonical_kir_v12::*;
 pub use canonical_kir_v15::*;
 pub use canonical_kir_v16::*;
 pub use canonical_kir_v17::*;
+pub use canonical_kir_v18::*;
 pub use canonical_kir_v19::*;
 pub use canonical_kir_v20::*;
 pub use canonical_kir_v21::*;
@@ -253,6 +264,7 @@ pub use simulation_bundle_v5::*;
 pub use simulation_bundle_v6::*;
 pub use standard_atomics::*;
 pub use storage_layout_v1::*;
+pub use storage_module_v1::{StructurallyCheckedModuleStorageV1, check_module_storage_v1};
 pub use storage_operation_v1::*;
 pub use types::*;
 pub use vector_v12::*;
@@ -268,6 +280,10 @@ pub(crate) use verification_public_preflight_v1::*;
 pub(crate) use verification_registered_operation_v1::*;
 pub(crate) use verification_reserved_call_v1::*;
 pub use verification_resource_v1::*;
+pub(crate) use verification_storage_context_v1::VerificationStorageContextV1;
+pub use verification_storage_module_v1::{
+    VerifiedStorageKernelIrModuleV1, verify_storage_module_ref_with_budget_v1,
+};
 pub use verification_storage_v1::*;
 pub(crate) use verification_type_comparison_v1::*;
 pub use verify::*;

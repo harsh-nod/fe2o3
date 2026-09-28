@@ -115,7 +115,7 @@ fn every_truncated_prefix_and_trailing_payload_is_rejected_by_exact_boundary() {
 
 #[test]
 fn leaf_cannot_encode_or_decode_this_payload_under_another_version() {
-    for version in [0, 1, 11, 12, 13, 14, 15, 16, 18, u16::MAX] {
+    for version in [0, 1, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, u16::MAX] {
         let mut writer = Writer::new(version, None);
         assert!(
             matches!(encode(&mut writer, &fixture()), Err(KernelIrEncodeError::UnsupportedInVersion { version: actual, .. }) if actual == version)
@@ -130,6 +130,20 @@ fn leaf_cannot_encode_or_decode_this_payload_under_another_version() {
         );
         assert_eq!(reader.offset, 0);
     }
+}
+
+#[test]
+fn storage_profile_preserves_the_exact_ordered_program_payload() {
+    let bytes = encoded();
+    let mut writer = Writer::new(KERNEL_IR_VERSION_V18, None);
+    encode(&mut writer, &fixture()).unwrap();
+    assert_eq!(writer.bytes, bytes);
+    assert_eq!(writer.length(), 179);
+
+    let mut reader = Reader::new(&bytes, None);
+    reader.version = KERNEL_IR_VERSION_V18;
+    assert_eq!(decode(&mut reader), Ok(fixture()));
+    assert!(reader.is_finished());
 }
 
 #[test]

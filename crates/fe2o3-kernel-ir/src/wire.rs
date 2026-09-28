@@ -64,6 +64,8 @@ pub const KERNEL_IR_VERSION_V15: u16 = 15;
 pub const KERNEL_IR_VERSION_V16: u16 = 16;
 /// V12 grammar plus bounded ordered programs; excludes V15 Execution and V16 pairs.
 pub const KERNEL_IR_VERSION_V17: u16 = 17;
+/// Lossless whole-module grammar with module-owned physical storage layouts.
+pub const KERNEL_IR_VERSION_V18: u16 = 18;
 /// V12 carriers plus exact typed complete bodies; this profile assigns no meaning to V18.
 pub const KERNEL_IR_VERSION_V19: u16 = 19;
 /// Physical-entry declaration and steps, separate from all older profiles.
@@ -75,6 +77,64 @@ pub const KERNEL_IR_VERSION_V22: u16 = 22;
 
 #[path = "wire/physical_global_copy_v21.rs"]
 mod physical_global_copy_v21;
+#[path = "wire/storage_layout_v18.rs"]
+mod storage_layout_v18;
+#[path = "wire/storage_operation_v18.rs"]
+mod storage_operation_v18;
+#[path = "wire/storage_profile_v18.rs"]
+mod storage_profile_v18;
+pub(crate) use storage_profile_v18::{
+    decode_module_v18_with_allocation_budget_v1, encode_counted_module_v18,
+    storage_codec_headers_v18,
+};
+
+pub(crate) fn count_storage_table_v18(
+    module: &Module,
+    work: &mut CanonicalKernelIrWorkBudgetV1,
+) -> Result<usize, KernelIrEncodeError> {
+    let mut writer = Writer::counter(KERNEL_IR_VERSION_V18, work);
+    storage_layout_v18::encode(&mut writer, &module.storage_layouts)?;
+    Ok(writer.length())
+}
+
+pub(crate) fn encode_counted_storage_table_v18(
+    module: &Module,
+    length: usize,
+    work: &mut CanonicalKernelIrWorkBudgetV1,
+) -> Result<Vec<u8>, KernelIrEncodeError> {
+    let mut writer = Writer::with_exact_capacity(KERNEL_IR_VERSION_V18, length, work)?;
+    if writer.bytes.capacity() != length {
+        return Err(KernelIrEncodeError::Allocation);
+    }
+    storage_layout_v18::encode(&mut writer, &module.storage_layouts)?;
+    if writer.bytes.len() != length {
+        return Err(KernelIrEncodeError::NonCanonical {
+            field: "V18 table counted length",
+        });
+    }
+    Ok(writer.bytes)
+}
+
+pub(crate) fn storage_table_codec_headers_v18()
+-> Result<usize, crate::CanonicalKernelIrVerificationResourceErrorV1> {
+    let slots = [
+        std::mem::size_of::<Writer<'_>>(),
+        std::mem::size_of::<Result<Writer<'_>, KernelIrEncodeError>>(),
+        std::mem::size_of::<Result<usize, KernelIrEncodeError>>(),
+        std::mem::size_of::<Result<Vec<u8>, KernelIrEncodeError>>(),
+        std::mem::size_of::<Vec<u8>>(),
+    ];
+    slots.into_iter().try_fold(0_usize, |sum, size| {
+        size.checked_mul(2)
+            .and_then(|n| sum.checked_add(n))
+            .ok_or(crate::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)
+    })
+}
+
+#[cfg(test)]
+#[path = "wire/storage_v18_tests.rs"]
+pub(crate) mod storage_v18_tests;
+
 #[path = "wire/physical_lds_exchange_v22.rs"]
 mod physical_lds_exchange_v22;
 
@@ -496,6 +556,12 @@ fn write_module_v1(
     validate_roles: bool,
 ) -> Result<(), KernelIrEncodeError> {
     let version = writer.version;
+    if version != KERNEL_IR_VERSION_V18 && !module.storage_layouts.is_empty() {
+        return Err(KernelIrEncodeError::UnsupportedInVersion {
+            version,
+            feature: "module storage layouts",
+        });
+    }
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
     writer.u16(version)?;
     writer.u16(0)?;
@@ -505,7 +571,7 @@ fn write_module_v1(
     writer.text("module ID", module.id.as_str())?;
     writer.count("module functions", module.functions.len(), MAX_FUNCTIONS_V1)?;
     writer.count("module kernels", module.kernels.len(), MAX_KERNELS_V1)?;
-    if validate_roles {
+    if validate_roles && version != KERNEL_IR_VERSION_V18 {
         if let Some(budget) = writer.budget.as_deref_mut() {
             charge_legacy_function_role_work_v1(module, budget)
                 .map_err(KernelIrEncodeError::WorkLimit)?;
@@ -513,6 +579,9 @@ fn write_module_v1(
         validate_legacy_function_roles(module, version)?;
     }
     encode_capabilities(writer, &module.required_capabilities)?;
+    if version == KERNEL_IR_VERSION_V18 {
+        storage_layout_v18::encode(writer, &module.storage_layouts)?;
+    }
     for function in &module.functions {
         encode_function(writer, function)?;
     }
@@ -759,6 +828,7 @@ fn decode_module_impl_v1(
                 | KERNEL_IR_VERSION_V15
                 | KERNEL_IR_VERSION_V16
                 | KERNEL_IR_VERSION_V17
+                | KERNEL_IR_VERSION_V18
                 | KERNEL_IR_VERSION_V19
                 | KERNEL_IR_VERSION_V20
                 | KERNEL_IR_VERSION_V21
@@ -790,6 +860,11 @@ fn decode_module_impl_v1(
     let function_count = reader.count("module functions", MAX_FUNCTIONS_V1)?;
     let kernel_count = reader.count("module kernels", MAX_KERNELS_V1)?;
     let required_capabilities = decode_capabilities(&mut reader)?;
+    let storage_layouts = if version == KERNEL_IR_VERSION_V18 {
+        storage_layout_v18::decode(&mut reader)?
+    } else {
+        Vec::new()
+    };
     let mut functions = reader.vector(function_count)?;
     for _ in 0..function_count {
         functions.push(decode_function(&mut reader)?);
@@ -803,18 +878,26 @@ fn decode_module_impl_v1(
     }
     let mut budget = reader.into_work_budget();
     let mut module = Module {
+        storage_layouts,
         id,
         functions,
         kernels,
         required_capabilities,
     };
-    if let Some(budget) = budget.as_mut() {
-        charge_legacy_function_role_work_v1(&module, budget.work_budget())
-            .map_err(KernelIrDecodeError::WorkLimit)?;
+    if version != KERNEL_IR_VERSION_V18 {
+        if let Some(budget) = budget.as_mut() {
+            charge_legacy_function_role_work_v1(&module, budget.work_budget())
+                .map_err(KernelIrDecodeError::WorkLimit)?;
+        }
     }
     let allocation_scratch = if let Some(budget @ DecodeBudgetV12::Resources(_)) = budget.as_mut() {
         let extent = count_module_with_work_v1(&module, version, budget.work_budget(), false)?;
-        let scratch = decoded_tree_payload_bound_v12::<&FunctionId>(module.kernels.len())?
+        let role_scratch = if version == KERNEL_IR_VERSION_V18 {
+            0
+        } else {
+            decoded_tree_payload_bound_v12::<&FunctionId>(module.kernels.len())?
+        };
+        let scratch = role_scratch
             .checked_add(extent.peak_auxiliary_bytes())
             .ok_or(KernelIrDecodeError::Resource(
                 crate::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
@@ -824,7 +907,9 @@ fn decode_module_impl_v1(
     } else {
         0
     };
-    restore_legacy_function_roles(&mut module);
+    if version != KERNEL_IR_VERSION_V18 {
+        restore_legacy_function_roles(&mut module);
+    }
     let compared = compare_module_encoding_v1(
         &module,
         version,
@@ -856,6 +941,9 @@ fn encode_function(
     function: &Function,
 ) -> Result<(), KernelIrEncodeError> {
     writer.text("function ID", function.id.as_str())?;
+    if writer.version == KERNEL_IR_VERSION_V18 {
+        storage_profile_v18::encode_role(writer, function.role)?;
+    }
     encode_signature(writer, &function.signature)?;
     match &function.body {
         None => writer.u8(0)?,
@@ -869,6 +957,11 @@ fn encode_function(
 
 fn decode_function(reader: &mut Reader<'_, '_>) -> Result<Function, KernelIrDecodeError> {
     let id = FunctionId::new(reader.text("function ID")?);
+    let explicit_role = if reader.version == KERNEL_IR_VERSION_V18 {
+        Some(storage_profile_v18::decode_role(reader)?)
+    } else {
+        None
+    };
     let signature = decode_signature(reader)?;
     let body = if reader.option("function body")? {
         Some(decode_function_body(reader)?)
@@ -879,11 +972,13 @@ fn decode_function(reader: &mut Reader<'_, '_>) -> Result<Function, KernelIrDeco
     Ok(Function {
         id,
         signature,
-        role: if body.is_some() {
-            FunctionRole::InternalHelper
-        } else {
-            FunctionRole::ExternalImport
-        },
+        role: explicit_role.unwrap_or_else(|| {
+            if body.is_some() {
+                FunctionRole::InternalHelper
+            } else {
+                FunctionRole::ExternalImport
+            }
+        }),
         body,
         required_capabilities,
     })
@@ -1173,6 +1268,7 @@ fn encode_operation_kind(
     operation: &OperationKind,
 ) -> Result<(), KernelIrEncodeError> {
     match operation {
+        OperationKind::Storage(operation) => storage_operation_v18::encode(writer, operation)?,
         OperationKind::Execution(operation) => execution_v15::encode_operation(writer, operation)?,
         OperationKind::VerificationContract(
             VerificationContractOperationV12::WorkgroupPipelineEvent {
@@ -1253,6 +1349,18 @@ fn encode_operation_kind(
         OperationKind::Cast { kind, value, to } => {
             if *kind == CastKind::RestrictPointerAccess {
                 require_v11(writer, "pointer access restriction cast")?;
+            }
+            if *kind == CastKind::PointerToGeneric && writer.version != KERNEL_IR_VERSION_V18 {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version: writer.version,
+                    feature: "pointer to generic cast",
+                });
+            }
+            if *kind == CastKind::SliceToGeneric && writer.version != KERNEL_IR_VERSION_V18 {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version: writer.version,
+                    feature: "slice to generic cast",
+                });
             }
             writer.u8(6)?;
             writer.u8(cast_kind_tag(*kind))?;
@@ -1459,7 +1567,10 @@ fn encode_operation_kind(
             physical_lds_exchange_v22::encode_step(writer, step)?;
         }
         OperationKind::Gfx942OrderedProgram(program) => {
-            if writer.version != KERNEL_IR_VERSION_V17 {
+            if !matches!(
+                writer.version,
+                KERNEL_IR_VERSION_V17 | KERNEL_IR_VERSION_V18
+            ) {
                 return Err(KernelIrEncodeError::UnsupportedInVersion {
                     version: writer.version,
                     feature: "gfx942 ordered program",
@@ -1469,7 +1580,10 @@ fn encode_operation_kind(
             ordered_program_v17::encode(writer, program)?;
         }
         OperationKind::Gfx942OrderedRegion(region) => {
-            if writer.version != KERNEL_IR_VERSION_V16 {
+            if !matches!(
+                writer.version,
+                KERNEL_IR_VERSION_V16 | KERNEL_IR_VERSION_V18
+            ) {
                 return Err(KernelIrEncodeError::UnsupportedInVersion {
                     version: writer.version,
                     feature: "gfx942 ordered region",
@@ -1491,6 +1605,9 @@ fn decode_operation_kind(
     reader: &mut Reader<'_, '_>,
 ) -> Result<OperationKind, KernelIrDecodeError> {
     Ok(match reader.u8()? {
+        40 if reader.version == KERNEL_IR_VERSION_V18 => {
+            OperationKind::Storage(storage_operation_v18::decode(reader)?)
+        }
         40 if reader.version == KERNEL_IR_VERSION_V19 => {
             OperationKind::Gfx942CompleteBodyDeclaration(complete_body_v19::decode_declaration(
                 reader,
@@ -1527,13 +1644,26 @@ fn decode_operation_kind(
                 reader,
             )?)
         }
-        39 if reader.version == KERNEL_IR_VERSION_V17 => {
+        39 if matches!(
+            reader.version,
+            KERNEL_IR_VERSION_V17 | KERNEL_IR_VERSION_V18
+        ) =>
+        {
             OperationKind::Gfx942OrderedProgram(ordered_program_v17::decode(reader)?)
         }
-        38 if reader.version == KERNEL_IR_VERSION_V16 => {
+        38 if matches!(
+            reader.version,
+            KERNEL_IR_VERSION_V16 | KERNEL_IR_VERSION_V18
+        ) =>
+        {
             OperationKind::Gfx942OrderedRegion(ordered_region_v16::decode(reader)?)
         }
-        tag @ 32..=37 if reader.version == KERNEL_IR_VERSION_V15 => {
+        tag @ 32..=37
+            if matches!(
+                reader.version,
+                KERNEL_IR_VERSION_V15 | KERNEL_IR_VERSION_V18
+            ) =>
+        {
             OperationKind::Execution(execution_v15::decode_operation(reader, tag)?)
         }
         30 if reader.version >= KERNEL_IR_VERSION_V12 => {
@@ -1608,8 +1738,12 @@ fn decode_operation_kind(
         },
         6 => {
             let kind_tag = reader.u8()?;
-            if kind_tag == cast_kind_tag(CastKind::RestrictPointerAccess)
-                && reader.version < KERNEL_IR_VERSION_V11
+            if (kind_tag == cast_kind_tag(CastKind::RestrictPointerAccess)
+                && reader.version < KERNEL_IR_VERSION_V11)
+                || (kind_tag == cast_kind_tag(CastKind::PointerToGeneric)
+                    && reader.version != KERNEL_IR_VERSION_V18)
+                || (kind_tag == cast_kind_tag(CastKind::SliceToGeneric)
+                    && reader.version != KERNEL_IR_VERSION_V18)
             {
                 return Err(KernelIrDecodeError::UnknownTag {
                     kind: "cast kind",
@@ -2021,6 +2155,11 @@ fn encode_type(
         });
     }
     match ty {
+        Type::StorageObject(id) => {
+            storage_profile_v18::require(writer, "module-owned storage type")?;
+            writer.u8(13)?;
+            writer.u32(id.0)?;
+        }
         Type::Execution(role) => execution_v15::encode_role(writer, *role)?,
         Type::Unit => writer.u8(1)?,
         Type::Scalar(scalar) => {
@@ -2063,7 +2202,15 @@ fn decode_type(reader: &mut Reader<'_, '_>, depth: usize) -> Result<Type, Kernel
         });
     }
     Ok(match reader.u8()? {
-        tag @ 9..=12 if reader.version == KERNEL_IR_VERSION_V15 => {
+        13 if reader.version == KERNEL_IR_VERSION_V18 => {
+            Type::StorageObject(crate::StorageLayoutIdV1(reader.u32()?))
+        }
+        tag @ 9..=12
+            if matches!(
+                reader.version,
+                KERNEL_IR_VERSION_V15 | KERNEL_IR_VERSION_V18
+            ) =>
+        {
             Type::Execution(execution_v15::decode_role(reader, tag)?)
         }
         1 => Type::Unit,
@@ -3851,6 +3998,8 @@ enum_codec!(compare_predicate_tag, decode_compare_predicate, ComparePredicate, "
 });
 enum_codec!(cast_kind_tag, decode_cast_kind, CastKind, "cast kind", {
     CastKind::RestrictPointerAccess => 9,
+    CastKind::PointerToGeneric => 10,
+    CastKind::SliceToGeneric => 11,
     CastKind::Truncate => 1,
     CastKind::ZeroExtend => 2,
     CastKind::SignExtend => 3,
@@ -4066,3 +4215,7 @@ mod wire_count_tokens_v12_tests;
 #[cfg(test)]
 #[path = "wire_marker_v12_tests.rs"]
 mod wire_marker_v12_tests;
+
+#[cfg(test)]
+#[path = "wire_storage_v1_tests.rs"]
+mod wire_storage_v1_tests;

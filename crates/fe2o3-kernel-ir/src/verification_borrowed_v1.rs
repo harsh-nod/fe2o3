@@ -79,6 +79,15 @@ fn verify_borrowed_inner_v1<'module>(
     supported_capabilities: Option<&BTreeSet<TargetCapability>>,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<VerifiedKernelIrModuleV1<'module>, BorrowedKernelIrVerificationErrorV1> {
+    verify_borrowed_type_depth_v1(module, budget)?;
+    verify_depth_bounded_module_with_budget_v1(module, supported_capabilities, budget)
+        .map_err(Into::into)
+}
+
+pub(crate) fn verify_borrowed_type_depth_v1(
+    module: &Module,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<(), BorrowedKernelIrVerificationErrorV1> {
     if let Some(location) =
         first_excessive_type_depth_location_with_visits_v1(module, &mut |amount| {
             budget.charge_work(amount)
@@ -101,8 +110,7 @@ fn verify_borrowed_inner_v1<'module>(
             VerificationErrors::from_sorted_diagnostics_v1(diagnostics),
         ));
     }
-    verify_depth_bounded_module_with_budget_v1(module, supported_capabilities, budget)
-        .map_err(Into::into)
+    Ok(())
 }
 
 #[cfg(test)]

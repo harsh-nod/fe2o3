@@ -196,7 +196,7 @@ fn v12_inherits_every_v11_disposition_without_activating_inert_carriers() {
         .iter()
         .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V12)
         .collect::<Vec<_>>();
-    assert_eq!(inherited.len(), 4 * 48); // Every surface, including distinct V20/V21 refusals.
+    assert_eq!(inherited.len(), 4 * 49); // Every surface, including distinct V20/V21 refusals.
     for row in inherited {
         let previous = matrix
             .top_level_rows
@@ -223,7 +223,7 @@ fn v17_extends_only_the_v12_baseline_and_never_owns_the_v16_pair() {
         .iter()
         .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V17)
         .collect();
-    assert_eq!(rows.len(), 4 * 48); // Every surface, including distinct V20/V21 refusals.
+    assert_eq!(rows.len(), 4 * 49); // Every surface, including distinct V20/V21 refusals.
     for row in rows {
         if row.operation == SimulationOperationSurfaceV1::OrderedProgram {
             continue; // Its exact single owned profile is tested by canonical_v17.
@@ -477,4 +477,33 @@ fn json_command_emits_the_same_stable_matrix() {
         value["pointer_rows"].as_array().unwrap().len(),
         POINTER_CAPABILITY_ROWS_V1
     );
+}
+#[test]
+fn storage_rows_are_additive_and_do_not_change_old_profile_bytes() {
+    let mut matrix = semantic_capability_matrix_v1();
+    let rows: Vec<_> = matrix
+        .top_level_rows
+        .iter()
+        .filter(|row| row.operation == SimulationOperationSurfaceV1::Storage)
+        .collect();
+    assert_eq!(rows.len(), 44);
+    let delta: usize = rows
+        .iter()
+        .map(|row| serde_json::to_vec(row).unwrap().len() + 1)
+        .sum();
+    assert_eq!(delta, 5932);
+    assert!(rows.iter().all(|row| matches!(
+        row.capability,
+        SimulationCapabilityDispositionV1::Unsupported {
+            reason: SimulationUnsupportedReasonCodeV1::InertStorage
+        }
+    )));
+    assert_eq!(
+        serde_json::to_vec(&matrix).unwrap().len() + 1,
+        SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1
+    );
+    matrix
+        .top_level_rows
+        .retain(|row| row.operation != SimulationOperationSurfaceV1::Storage);
+    assert_eq!(serde_json::to_vec(&matrix).unwrap().len() + 1, 5_055_195);
 }

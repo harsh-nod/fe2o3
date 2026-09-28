@@ -119,6 +119,7 @@ macro_rules! native_census_kinds {
     };
 }
 native_census_kinds!(
+    Storage,
     Execution,
     VerificationContract,
     VectorLoad,
@@ -156,6 +157,7 @@ impl ProductionCheckedOutputNativeCensusKindV1 {
     pub(super) fn of(operation: &fe2o3_kernel_ir::OperationKind) -> Self {
         use fe2o3_kernel_ir::OperationKind as O;
         match operation {
+            O::Storage(_) => Self::Storage,
             O::Execution(_) => Self::Execution,
             O::VerificationContract(_) => Self::VerificationContract,
             O::VectorLoad(_) => Self::VectorLoad,
@@ -214,6 +216,8 @@ pub enum ProductionCheckedOutputCensusTypeV1 {
     Execution,
     /// Fixed-vector type; its element/lane payload is not retained here.
     Vector,
+    /// Module-local storage object; no schema or layout authority.
+    StorageObject,
     /// Pointer address space and access mode, not a recursive pointee claim.
     Pointer(fe2o3_kernel_ir::AddressSpace, fe2o3_kernel_ir::AccessMode),
     /// Slice address space and access mode, not a recursive element claim.
@@ -226,6 +230,7 @@ impl ProductionCheckedOutputCensusTypeV1 {
             Type::Unit => Self::Unit,
             Type::Scalar(scalar) => Self::Scalar(*scalar),
             Type::Execution(_) => Self::Execution,
+            Type::StorageObject(_) => Self::StorageObject,
             Type::Vector(_) => Self::Vector,
             Type::Pointer(pointer) => Self::Pointer(pointer.address_space, pointer.access),
             Type::Slice(slice) => Self::Slice(slice.address_space, slice.access),

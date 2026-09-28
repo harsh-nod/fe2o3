@@ -185,6 +185,7 @@ fn emission_binding_clone_type_v1(
             leaf => {
                 *destination = match leaf {
                     Type::Unit => Type::Unit,
+                    Type::StorageObject(id) => Type::StorageObject(*id),
                     Type::Scalar(scalar) => Type::Scalar(*scalar),
                     Type::Vector(vector) => Type::Vector(*vector),
                     Type::Execution(role) => Type::Execution(*role),
@@ -464,5 +465,39 @@ mod emission_budget_tests {
         assert_eq!(rows.capacity(), old_capacity);
         assert!(budget.storage() >= old_capacity + 2 * old_capacity.max(2));
         assert!(budget.work() >= 8);
+    }
+}
+
+#[cfg(test)]
+mod storage_emission_copy_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, StorageLayoutIdV1};
+    #[test]
+    fn storage_terminal_copy_preserves_id_without_copying_a_layout_table() {
+        let input = Type::pointer(
+            Type::slice(
+                Type::StorageObject(StorageLayoutIdV1(31)),
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ),
+            AddressSpace::Private,
+            AccessMode::ReadWrite,
+        );
+        let mut work = Work::new(3);
+
+        {
+            let mut budget = ArgumentBudgetV1::new(&mut work, 11 + 2 * std::mem::size_of::<Type>());
+            budget.reserve_storage(11).unwrap();
+            let copied = emission_binding_clone_type_v1(&input, &mut budget).unwrap();
+            assert_eq!(copied, input);
+            assert_eq!(budget.storage(), 11 + 2 * std::mem::size_of::<Type>());
+            drop(copied);
+            budget
+                .release_storage(2 * std::mem::size_of::<Type>())
+                .unwrap();
+            assert_eq!(budget.storage(), 11);
+        }
+        assert_eq!(work.work(), 3);
     }
 }

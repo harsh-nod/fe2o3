@@ -1,6 +1,9 @@
-//! Fixed payload codec. The parent owns the operation tag and exact V16 owner.
+//! Fixed payload codec. The parent owns the operation tag and exact V16/V18 grammar.
 
-use super::{KERNEL_IR_VERSION_V16, KernelIrDecodeError, KernelIrEncodeError, Reader, Writer};
+use super::{
+    KERNEL_IR_VERSION_V16, KERNEL_IR_VERSION_V18, KernelIrDecodeError, KernelIrEncodeError, Reader,
+    Writer,
+};
 use crate::{
     AssemblySourceIdentity, Gfx942OrderedRegionRegistersV1, Gfx942OrderedRegionV1, ValueId,
 };
@@ -17,7 +20,10 @@ pub(super) fn encode(
     writer: &mut Writer<'_>,
     region: &Gfx942OrderedRegionV1,
 ) -> Result<(), KernelIrEncodeError> {
-    if writer.version != KERNEL_IR_VERSION_V16 {
+    if !matches!(
+        writer.version,
+        KERNEL_IR_VERSION_V16 | KERNEL_IR_VERSION_V18
+    ) {
         return Err(KernelIrEncodeError::UnsupportedInVersion {
             version: writer.version,
             feature: "gfx942 ordered region",
@@ -50,7 +56,10 @@ pub(super) fn encode(
 pub(super) fn decode(
     reader: &mut Reader<'_, '_>,
 ) -> Result<Gfx942OrderedRegionV1, KernelIrDecodeError> {
-    if reader.version != KERNEL_IR_VERSION_V16 {
+    if !matches!(
+        reader.version,
+        KERNEL_IR_VERSION_V16 | KERNEL_IR_VERSION_V18
+    ) {
         return Err(KernelIrDecodeError::UnknownVersion(reader.version));
     }
     let profile = reader.u8()?;

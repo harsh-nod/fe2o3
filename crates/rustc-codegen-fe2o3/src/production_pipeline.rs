@@ -2619,6 +2619,71 @@ fn compiler_semantic_storage_map_v1(
     .map_err(ProductionPipelineError::SimulationBundleV3)
 }
 
+fn compiler_legacy_slot_shape_v2(
+    ty: &fe2o3_kernel_ir::Type,
+) -> Result<(u32, u32, Option<u32>), ProductionPipelineError> {
+    let mut leaf = ty;
+    loop {
+        leaf = match leaf {
+            fe2o3_kernel_ir::Type::Pointer(pointer) => &pointer.pointee,
+            fe2o3_kernel_ir::Type::Slice(slice) => &slice.element,
+            fe2o3_kernel_ir::Type::StorageObject(_) => {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "storage-object types require a storage-aware simulator descriptor",
+                ));
+            }
+            fe2o3_kernel_ir::Type::Unit
+            | fe2o3_kernel_ir::Type::Scalar(_)
+            | fe2o3_kernel_ir::Type::Vector(_)
+            | fe2o3_kernel_ir::Type::Execution(_) => break,
+        };
+    }
+    Ok(match ty {
+        fe2o3_kernel_ir::Type::Scalar(scalar) => {
+            let width = match scalar {
+                fe2o3_kernel_ir::ScalarType::Bool
+                | fe2o3_kernel_ir::ScalarType::I8
+                | fe2o3_kernel_ir::ScalarType::U8 => 1,
+                fe2o3_kernel_ir::ScalarType::I16
+                | fe2o3_kernel_ir::ScalarType::U16
+                | fe2o3_kernel_ir::ScalarType::F16
+                | fe2o3_kernel_ir::ScalarType::Bf16 => 2,
+                fe2o3_kernel_ir::ScalarType::I32
+                | fe2o3_kernel_ir::ScalarType::U32
+                | fe2o3_kernel_ir::ScalarType::F32 => 4,
+                fe2o3_kernel_ir::ScalarType::I64
+                | fe2o3_kernel_ir::ScalarType::U64
+                | fe2o3_kernel_ir::ScalarType::F64
+                | fe2o3_kernel_ir::ScalarType::Index => 8,
+                fe2o3_kernel_ir::ScalarType::I128 | fe2o3_kernel_ir::ScalarType::U128 => 16,
+            };
+            (width, width, None)
+        }
+        fe2o3_kernel_ir::Type::Pointer(_) => (8, 8, None),
+        fe2o3_kernel_ir::Type::Slice(_) => (8, 8, Some(8)),
+        fe2o3_kernel_ir::Type::StorageObject(_) => {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "storage-object KIR parameters have no admitted legacy simulator slot",
+            ));
+        }
+        fe2o3_kernel_ir::Type::Execution(_) => {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "execution KIR parameters have no admitted physical simulator slot",
+            ));
+        }
+        fe2o3_kernel_ir::Type::Vector(_) => {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "vector KIR parameters have no admitted physical simulator slot",
+            ));
+        }
+        fe2o3_kernel_ir::Type::Unit => {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "unit KIR parameters have no physical simulator slot",
+            ));
+        }
+    })
+}
+
 fn compiler_semantic_storage_map_v2(
     lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
     container_identity: [u8; 32],
@@ -2654,45 +2719,7 @@ fn compiler_semantic_storage_map_v2(
     let mut next = 0_u32;
     let mut kernarg_alignment = 1_u32;
     for ty in &kir_function.signature.parameters {
-        let (width, alignment, metadata_relative) = match ty {
-            fe2o3_kernel_ir::Type::Scalar(scalar) => {
-                let width = match scalar {
-                    fe2o3_kernel_ir::ScalarType::Bool
-                    | fe2o3_kernel_ir::ScalarType::I8
-                    | fe2o3_kernel_ir::ScalarType::U8 => 1,
-                    fe2o3_kernel_ir::ScalarType::I16
-                    | fe2o3_kernel_ir::ScalarType::U16
-                    | fe2o3_kernel_ir::ScalarType::F16
-                    | fe2o3_kernel_ir::ScalarType::Bf16 => 2,
-                    fe2o3_kernel_ir::ScalarType::I32
-                    | fe2o3_kernel_ir::ScalarType::U32
-                    | fe2o3_kernel_ir::ScalarType::F32 => 4,
-                    fe2o3_kernel_ir::ScalarType::I64
-                    | fe2o3_kernel_ir::ScalarType::U64
-                    | fe2o3_kernel_ir::ScalarType::F64
-                    | fe2o3_kernel_ir::ScalarType::Index => 8,
-                    fe2o3_kernel_ir::ScalarType::I128 | fe2o3_kernel_ir::ScalarType::U128 => 16,
-                };
-                (width, width, None)
-            }
-            fe2o3_kernel_ir::Type::Pointer(_) => (8, 8, None),
-            fe2o3_kernel_ir::Type::Slice(_) => (8, 8, Some(8)),
-            fe2o3_kernel_ir::Type::Execution(_) => {
-                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                    "execution KIR parameters have no admitted physical simulator slot",
-                ));
-            }
-            fe2o3_kernel_ir::Type::Vector(_) => {
-                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                    "vector KIR parameters have no admitted physical simulator slot",
-                ));
-            }
-            fe2o3_kernel_ir::Type::Unit => {
-                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                    "unit KIR parameters have no physical simulator slot",
-                ));
-            }
-        };
+        let (width, alignment, metadata_relative) = compiler_legacy_slot_shape_v2(ty)?;
         next = align_up_u32_v1(next, alignment).ok_or(
             ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
         )?;
@@ -2895,6 +2922,11 @@ fn compiler_component_storage_v2(
         .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
             MAP_ERROR,
         ))?;
+    if let Some(ty @ (fe2o3_kernel_ir::Type::Pointer(_) | fe2o3_kernel_ir::Type::Slice(_))) =
+        parameter_types.get(ordinal)
+    {
+        compiler_legacy_slot_shape_v2(ty)?;
+    }
     let (representation, expected_metadata) = match parameter_types.get(ordinal) {
         Some(fe2o3_kernel_ir::Type::Scalar(_)) => (
             fe2o3_kernel_ir::SemanticKirComponentRepresentationV2::ScalarValue,
@@ -2911,7 +2943,8 @@ fn compiler_component_storage_v2(
         Some(
             fe2o3_kernel_ir::Type::Unit
             | fe2o3_kernel_ir::Type::Vector(_)
-            | fe2o3_kernel_ir::Type::Execution(_),
+            | fe2o3_kernel_ir::Type::Execution(_)
+            | fe2o3_kernel_ir::Type::StorageObject(_),
         )
         | None => {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
@@ -4746,4 +4779,85 @@ where
         },
         budget,
     )
+}
+
+#[cfg(test)]
+mod storage_descriptor_profile_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{AccessMode, AddressSpace, ScalarType, StorageLayoutIdV1, Type};
+    #[test]
+    fn legacy_descriptor_slots_refuse_storage_even_behind_a_pointer_or_slice() {
+        let storage = Type::StorageObject(StorageLayoutIdV1(31));
+        for ty in [
+            storage.clone(),
+            Type::pointer(
+                storage.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+            Type::slice(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert!(compiler_legacy_slot_shape_v2(&ty).is_err());
+        }
+        assert_eq!(
+            compiler_legacy_slot_shape_v2(&Type::Scalar(ScalarType::U32)).unwrap(),
+            (4, 4, None)
+        );
+        assert_eq!(
+            compiler_legacy_slot_shape_v2(&Type::pointer(
+                Type::Scalar(ScalarType::U32),
+                AddressSpace::Global,
+                AccessMode::ReadWrite
+            ))
+            .unwrap(),
+            (8, 8, None)
+        );
+        assert_eq!(
+            compiler_legacy_slot_shape_v2(&Type::slice(
+                Type::Scalar(ScalarType::U32),
+                AddressSpace::Global,
+                AccessMode::ReadOnly
+            ))
+            .unwrap(),
+            (8, 8, Some(8))
+        );
+    }
+}
+
+#[cfg(test)]
+mod storage_component_profile_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{
+        AccessMode, AddressSpace, FunctionBody, ScalarType, SemanticKernargSlotV2,
+        StorageLayoutIdV1, Type, ValueId,
+    };
+    #[test]
+    fn component_map_cannot_relabel_storage_pointers_as_old_scalar_regions() {
+        let body = FunctionBody {
+            parameters: vec![ValueId(7)],
+            blocks: vec![],
+        };
+        let slot = [(SemanticKernargSlotV2::new(0, 8, 8), None)];
+        let storage = Type::StorageObject(StorageLayoutIdV1(0));
+        for ty in [
+            storage.clone(),
+            Type::pointer(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert!(
+                compiler_component_storage_v2(vec![], ValueId(7), &body, &[ty], &slot).is_err()
+            );
+        }
+        assert!(
+            compiler_component_storage_v2(
+                vec![],
+                ValueId(7),
+                &body,
+                &[Type::Scalar(ScalarType::U64)],
+                &slot
+            )
+            .is_ok()
+        );
+    }
 }

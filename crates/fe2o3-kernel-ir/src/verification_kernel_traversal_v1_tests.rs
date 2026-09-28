@@ -219,7 +219,12 @@ fn complete_shared_pass_reuses_one_kernel_traversal_owner() {
             CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, EXACT_STORAGE);
         budget.reserve_storage(FLOOR).unwrap();
         let mut diagnostics = VerificationDiagnosticCollectorV1::count();
-        let result = run_verification_pass_v1(&module, None, &mut diagnostics, &mut budget);
+        let result = run_verification_pass_v1(
+            VerificationStorageContextV1::Legacy(&module),
+            None,
+            &mut diagnostics,
+            &mut budget,
+        );
         if work_limit < EXACT_WORK {
             assert!(matches!(
                 result,
