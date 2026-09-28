@@ -24,6 +24,17 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+An opaque, nondefault [CPU receipt fixture](evidence/dev-cpu-receipt-fixture-2026-09-28/README.md)
+now makes genuine KFD receipt owners available to normal-dependency composition
+tests without exposing native authority. Seven external groups cover both lanes,
+actual signal-capacity retry, pinned recycle refusal, live neighbors, foreign
+custody and terminal/unwind behavior. The all-feature KFD library suite passes
+1713 tests, doctests pass 42, and strict Clippy, default KFD/runtime compilation,
+formatting and source continuity pass. No new GPU, solver or performance run is
+claimed; the full runtime suite was not rerun in this packet.
+Actual runtime Active/Pending integration and shared-source caller refinement
+remain next; this does not promote A1/A2 or any accepted checkpoint.
+
 Shared pipeline lifecycle/chain development (2026-09-28 UTC): promotion and
 quarantine now share complete executable bodies with Verus. The
 [chain packet](evidence/dev-pipeline-chain-2026-09-28/README.md) proves the full

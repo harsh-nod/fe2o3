@@ -169,6 +169,13 @@ cleanup checks. Native outcome/receipt/Pending association and full caller
 refinement remain open. Ordered single-stream smoke and metadata proofs do not
 establish concurrent-kernel performance or HIP/HSA parity.
 
+The [CPU receipt fixture](evidence/dev-cpu-receipt-fixture-2026-09-28/README.md)
+adds normal-dependency test access to genuine lower owners and move-only receipts,
+including real CPU signal observation, capacity retry and event-pin refusal.
+It is nondefault and supplies no native execution authority. Runtime Active/
+Pending integration, native signal/currentness evidence and full correspondence
+remain open; this fixture is not additional GPU or parity qualification.
+
 Poll and `wait` never perform deferred compute preparation, but can retry
 publication of an already bound Prepared recipe. Submit may publish immediately
 ready work. The additive in-process `flush_stream`

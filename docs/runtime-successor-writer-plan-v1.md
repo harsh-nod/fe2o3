@@ -302,6 +302,17 @@ the indexed adapters. Production-body mutations must detect receipt redirection,
 early outer-close settlement and staged-frontier advancement. Native coupling,
 Context composition, protected Worker and matched performance remain open.
 
+An opaque [CPU receipt fixture](evidence/dev-cpu-receipt-fixture-2026-09-28/README.md)
+now supplies the genuine lower owners for that next runtime integration. Keep
+native and CPU I/O providers mutually exclusive and use fixture-issued lane
+handles. Enter through public Pending admission and the normal indexed binding
+installation, replacing only unavailable native materialization/I/O. Preserve
+all logical custody and settlement checks. The first CPU integration must account
+for clean recycled-cache teardown explicitly; native detachment, prepared
+cancellation, dirty writeback/readback and populated-arena ordered retry are not
+provided by the fixture. Terminal cases remain isolated processes with unrepaired
+custody retained, not artificial recovery.
+
 [Single bind rejection](evidence/dev-single-bind-recovery-2026-09-28/README.md)
 now carries the exact original target/source/submission and empty input box
 through binding, restoring retryable inputs without allocating a replacement.

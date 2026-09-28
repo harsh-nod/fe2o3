@@ -210,6 +210,13 @@ qualification and a fresh 64-launch MI300X ordered-pipeline smoke pass; native
 receipt authentication, Pending/retain settlement and complete caller refinement
 remain open. Linear scans and zero-allocation controls are not measured speedups.
 
+The nondefault [CPU receipt fixture](evidence/dev-cpu-receipt-fixture-2026-09-28/README.md)
+provides opaque callback-scoped primary/AUX I/O with genuine lower receipt owners
+and CPU atomic signals. Default builds expose no fixture API. This enables the
+next runtime composition tests without exposing raw sessions or fabricating
+receipt constructors; it does not yet connect runtime Active/Pending or replace
+native materialization/currentness qualification.
+
 The direct adapter's same-device copies are native SDMA submissions. Direct
 dependency chains are capped at 256 before ledger mutation, cancellation can
 withdraw only work still waiting before publication, and a published copy is
