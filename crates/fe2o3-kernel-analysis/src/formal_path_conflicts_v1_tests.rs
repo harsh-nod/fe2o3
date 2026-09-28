@@ -162,6 +162,58 @@ fn singleton_path_proof_retains_the_exact_fresh_full_witness_report() {
 }
 
 #[test]
+fn unknown_index_width_has_no_range_proof_and_retains_incomplete_formal_report() {
+    let module = fixture(1);
+    let function = &module.functions[0];
+    for (width, expected) in [
+        (FormalIndexWidth::Unknown, None),
+        (FormalIndexWidth::Bits32, Some(u64::from(u32::MAX))),
+        (FormalIndexWidth::Bits64, Some(u64::MAX)),
+    ] {
+        let engine = Engine::new(
+            function,
+            analyze_control_flow(function).unwrap(),
+            64,
+            width,
+            Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(engine.maximum(&Type::INDEX), expected);
+        assert_eq!(
+            engine.maximum(&Type::Scalar(ScalarType::U32)),
+            Some(u64::from(u32::MAX))
+        );
+    }
+    let owner = verify_module_ref(&module).unwrap();
+    let kernel = KernelId::new("kernel");
+    let launch = ExplicitLaunchExtent1d::Exact(64);
+    let fresh = derive_kernel_memory_obligations_from_verified(
+        owner,
+        &kernel,
+        launch,
+        FormalIndexWidth::Unknown,
+    )
+    .unwrap();
+    let report = FormalPathConflictsV1::derive(
+        owner,
+        &kernel,
+        launch,
+        FormalIndexWidth::Unknown,
+        Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(report.formal(), &fresh);
+    assert!(!report.formal().is_complete());
+    assert_eq!(report.queries(), 0);
+    assert!(
+        report
+            .decisions()
+            .iter()
+            .all(|decision| *decision == Decision::IncompleteFormalReport)
+    );
+}
+
+#[test]
 fn two_writers_and_unknown_runtime_guards_retain_the_conflict() {
     assert_possible(&analyze(&fixture(2), 64));
     let mut module = fixture(1);

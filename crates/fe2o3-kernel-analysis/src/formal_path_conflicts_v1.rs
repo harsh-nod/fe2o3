@@ -494,10 +494,11 @@ impl<'g> Engine<'g> {
     }
     fn maximum(&self, ty: &Type) -> Option<u64> {
         match ty {
-            Type::Scalar(ScalarType::Index) => Some(match self.index_width {
-                FormalIndexWidth::Bits32 => u64::from(u32::MAX),
-                FormalIndexWidth::Bits64 => u64::MAX,
-            }),
+            Type::Scalar(ScalarType::Index) => match self.index_width {
+                FormalIndexWidth::Unknown => None,
+                FormalIndexWidth::Bits32 => Some(u64::from(u32::MAX)),
+                FormalIndexWidth::Bits64 => Some(u64::MAX),
+            },
             Type::Scalar(ScalarType::U8) => Some(u64::from(u8::MAX)),
             Type::Scalar(ScalarType::U16) => Some(u64::from(u16::MAX)),
             Type::Scalar(ScalarType::U32) => Some(u64::from(u32::MAX)),
