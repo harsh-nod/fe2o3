@@ -25,6 +25,7 @@ pub(crate) enum Error {
     Output(NativeConditionalOutputErrorV1<Resource>),
     Carrier(NativeConditionalCarrierErrorV1<Resource>),
     Metadata(NativeConditionalMetadataErrorV1<Resource>),
+    MetadataV2(NativeConditionalMetadataErrorV2<Resource>),
     Capsule(InertProductionSemanticCapsuleErrorV5<Resource>),
     Handoff(HandoffError),
     Seal(HandoffError<Resource>),

@@ -124,7 +124,10 @@ The production compiler client profiles and installed service remain absent.
 
 ## Next Coherent Admission
 
-This is an implementation design, not an implemented or qualified API.
+This was the design at this checkpoint. The subsequent
+[source-bound roster checkpoint](native-policy-roster-20260928.md) records its
+partial implementation and the independently approved compiler/runtime policy
+still required. The design alone is not a qualified API.
 
 1. Capture an owned, bounded conditional policy roster inside the existing
    retained-owner callback in `production_native_conditional_source_packet_v2`.

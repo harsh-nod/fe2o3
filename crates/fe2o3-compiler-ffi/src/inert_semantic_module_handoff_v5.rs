@@ -3,7 +3,7 @@ use super::*;
 use fe2o3_compiler_lineage::{
     INERT_PRODUCTION_SEMANTIC_CAPSULE_WORKING_STORAGE_V5, InertProductionSemanticCapsuleErrorV5,
     InertProductionSemanticCapsuleIdentityV5, InertProductionSemanticCapsuleV5,
-    MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V5,
+    MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V5, MAX_NATIVE_CONDITIONAL_POLICY_ROSTER_ROOTS_V1,
 };
 use std::{convert::Infallible, mem::size_of, ops::Range};
 
@@ -59,17 +59,27 @@ pub const INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V5: usi
         + size_of::<InertSemanticCompilerModuleHandoffV5>()
         + size_of::<native::Finished>();
 
+const POLICY_ROSTER_DECODE_FIXED_WORK_V5: usize = 4096
+    + 2 * MAX_NATIVE_CONDITIONAL_POLICY_ROSTER_ROOTS_V1
+        * (MAX_NATIVE_CONDITIONAL_POLICY_ROSTER_ROOTS_V1 - 1);
+
 /// Prepay before content-decoder entry; never refund accepted work on failure.
-/// The inherited V4 schedule is unchanged. Six additional full-image traversals
-/// cover conditional output/auxiliary hashing, metadata/layout receipt visits,
-/// and final lineage receipt identity derivation plus shared decode validation.
-/// Total14 visits plus inherited invocation128/envelope128/manifest320/row4096
-/// terms and fixed allowance. Pinned parser/toolchain changes require a new audit;
+/// Preserve V4's eight full-image visits and its bounded parser allowances. Six
+/// conditional visits cover output/carrier hashes, V1 metadata/layout receipts,
+/// final lineage identity derivation and shared validation. Required V2 metadata
+/// adds six more: wrapper hash, roster hash, row identity scan, both operands of
+/// adjacent signer comparisons, and the exact source-packet hash.
+/// Total 20 visits plus inherited invocation128/envelope128/manifest320/row4096
+/// terms. Roster root uniqueness separately prepays four bytes per pair across
+/// all 128 roots; another 4096 covers framing, hash domains and seen-array setup.
+/// No bytes from expanded metadata escape the unchanged shared capsule cap.
+/// Pinned parser/toolchain/nesting/limit changes require a new audit;
 /// this is a logical visit bound, not proof of runtime or semantic correctness.
 pub fn inert_semantic_compiler_module_handoff_decode_work_v5(n: usize) -> Result<usize, Failure> {
     let base = native::decode_work(n)?;
-    Ok(n.checked_mul(6)
+    Ok(n.checked_mul(12)
         .and_then(|extra| base.checked_add(extra))
+        .and_then(|work| work.checked_add(POLICY_ROSTER_DECODE_FIXED_WORK_V5))
         .ok_or(InertSemanticCompilerModuleHandoffErrorV3::LengthOverflow)?)
 }
 

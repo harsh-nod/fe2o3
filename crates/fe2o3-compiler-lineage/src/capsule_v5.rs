@@ -5,14 +5,16 @@ use crate::{
     NativeLoweringAssociationErrorV1, bounded_pair as pair,
     native_conditional_carrier_v1::*,
     native_conditional_metadata_v1::*,
+    native_conditional_metadata_v2::*,
     native_conditional_output_v1::MAX_NATIVE_CONDITIONAL_STORAGE_V1,
+    native_conditional_policy_roster_v1::NativeConditionalPolicyRosterRefV1,
     receipt::{ImmutableBytesV3, SharedBackingV3, conditional_metadata_receipts},
 };
 use fe2o3_kernel_descriptor::DeviceTargetV1;
 use fe2o3_rustc_invocation::{
     InvocationDigestV3, RustcInvocationDescriptorV3, decode_descriptor_v3,
 };
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::{convert::Infallible, mem::size_of, ops::Range, sync::Arc};
 
 /// Conditional capsule discriminator.
@@ -27,7 +29,7 @@ const POLICY: pair::Policy = pair::Policy {
     magic: INERT_PRODUCTION_SEMANTIC_CAPSULE_MAGIC_V5,
     version: 5,
     domain: b"FE2O3/INERT-PRODUCTION-SEMANTIC-CAPSULE/V5\0",
-    first_max: MAX_NATIVE_CONDITIONAL_METADATA_BYTES_V1,
+    first_max: MAX_NATIVE_CONDITIONAL_METADATA_BYTES_V2,
     second_max: MAX_NATIVE_CONDITIONAL_CARRIER_BYTES_V1,
     total_max: MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V5,
     storage_max: MAX_NATIVE_CONDITIONAL_STORAGE_V1,
@@ -57,7 +59,9 @@ pub enum InertProductionSemanticCapsuleErrorV5<E = Infallible> {
     /// Nested conditional carrier failed.
     Carrier(NativeConditionalCarrierErrorV1<E>),
     /// Nested conditional metadata failed.
-    Metadata(NativeConditionalMetadataErrorV1<E>),
+    Metadata(NativeConditionalMetadataErrorV2<E>),
+    /// Roster does not bind the exact source carried by this capsule.
+    SourceIdentity,
     /// Existing invocation/receipt content failed.
     Content(LineageDecodeErrorV3),
     /// Fixed native lowering association failed.
@@ -122,7 +126,7 @@ impl InertProductionSemanticCapsuleIdentityV5 {
 pub struct InertProductionSemanticCapsuleRefV5<'a> {
     bytes: &'a [u8],
     layout: InertProductionSemanticCapsuleLayoutV5,
-    metadata: NativeConditionalMetadataRefV1<'a>,
+    metadata: NativeConditionalMetadataRefV2<'a>,
     carrier: NativeConditionalCarrierRefV1<'a>,
     identity: InertProductionSemanticCapsuleIdentityV5,
 }
@@ -133,7 +137,15 @@ impl<'a> InertProductionSemanticCapsuleRefV5<'a> {
     }
     /// Inert metadata fields.
     pub const fn metadata(&self) -> &NativeConditionalMetadataRefV1<'a> {
+        self.metadata.metadata()
+    }
+    /// Complete V2 envelope containing unchanged six-field metadata and roster.
+    pub const fn metadata_v2(&self) -> &NativeConditionalMetadataRefV2<'a> {
         &self.metadata
+    }
+    /// Inert policy material bound to this capsule's exact source bytes.
+    pub const fn policy_roster(&self) -> &NativeConditionalPolicyRosterRefV1<'a> {
+        self.metadata.policy_roster()
     }
     /// Conditional pair, never the ordinary carrier type.
     pub const fn carrier(&self) -> &NativeConditionalCarrierRefV1<'a> {
@@ -159,7 +171,7 @@ pub const INERT_PRODUCTION_SEMANTIC_CAPSULE_WORKING_STORAGE_V5: usize =
         + size_of::<InertProductionSemanticCapsuleV5>()
         + size_of::<Sha256>()
         + NATIVE_CONDITIONAL_CARRIER_WORKING_STORAGE_V1
-        + NATIVE_CONDITIONAL_METADATA_WORKING_STORAGE_V1
+        + NATIVE_CONDITIONAL_METADATA_WORKING_STORAGE_V2
         + pair::OVERHEAD
         + 256;
 
@@ -187,15 +199,34 @@ pub fn read_inert_production_semantic_capsule_v5<'a, E>(
     mut charge: impl FnMut(usize) -> Result<(), E>,
 ) -> Result<InertProductionSemanticCapsuleRefV5<'a>, Error<E>> {
     let (layout, identity) = pair::read(&POLICY, bytes, storage_limit, &mut charge)?;
-    let metadata = read_native_conditional_metadata_v1(
+    let metadata = read_native_conditional_metadata_v2(
         &bytes[layout.first_range()],
         storage_limit,
         &mut charge,
     )
     .map_err(Error::Metadata)?;
-    let carrier =
-        read_native_conditional_carrier_v1(&bytes[layout.second_range()], storage_limit, charge)
-            .map_err(Error::Carrier)?;
+    let carrier = read_native_conditional_carrier_v1(
+        &bytes[layout.second_range()],
+        storage_limit,
+        &mut charge,
+    )
+    .map_err(Error::Carrier)?;
+    let roster = metadata.policy_roster();
+    let source = carrier.source_packet();
+    if roster.source_packet_len() != source.len() as u64 {
+        return Err(Error::SourceIdentity);
+    }
+    charge(
+        source
+            .len()
+            .checked_add(128 + 32)
+            .ok_or(Error::Arithmetic)?,
+    )
+    .map_err(Error::Charge)?;
+    let source_sha256: [u8; 32] = Sha256::digest(source).into();
+    if roster.source_packet_sha256() != &source_sha256 {
+        return Err(Error::SourceIdentity);
+    }
     Ok(InertProductionSemanticCapsuleRefV5 {
         bytes,
         layout: InertProductionSemanticCapsuleLayoutV5(layout),
@@ -222,6 +253,7 @@ pub struct InertProductionSemanticCapsuleV5 {
     final_commitment: InertFinalCompilerModuleCommitmentReceiptV3,
     lowering: InertNativeLoweringAssociationV1,
     layout_range: Range<usize>,
+    policy_roster_range: Range<usize>,
     carrier_range: Range<usize>,
     history_range: Range<usize>,
     catalog_range: Range<usize>,
@@ -244,19 +276,21 @@ impl InertProductionSemanticCapsuleV5 {
         let frame = read_inert_production_semantic_capsule_v5(bytes, POLICY.storage_max, |_| {
             Ok::<_, Infallible>(())
         })?;
-        let invocation = decode_descriptor_v3(frame.metadata.invocation())
+        let invocation = decode_descriptor_v3(frame.metadata().invocation())
             .map_err(|e| Error::Content(LineageDecodeErrorV3::Invocation(e)))?;
         let invocation_digest = InvocationDigestV3::calculate(&invocation)
             .map_err(|_| Error::Content(LineageDecodeErrorV3::NonCanonical))?;
         let target = DeviceTargetV1::parse(invocation.amd_target()).map_err(|_| Error::Target)?;
-        let lowering = InertNativeLoweringAssociationV1::decode(frame.metadata.native_lowering())
+        let lowering = InertNativeLoweringAssociationV1::decode(frame.metadata().native_lowering())
             .map_err(Error::Lowering)?;
         if invocation.amd_target() != lowering.inputs().profile.device_target() {
             return Err(Error::Target);
         }
         let shift = |base: usize, r: Range<usize>| base + r.start..base + r.end;
-        let metadata_base = frame.layout.metadata_range().start;
-        let metadata = frame.metadata.layout;
+        let envelope_base = frame.layout.metadata_range().start;
+        let metadata_base = envelope_base + frame.metadata.layout.metadata_range().start;
+        let policy_roster_range = shift(envelope_base, frame.metadata.layout.policy_roster_range());
+        let metadata = frame.metadata().layout;
         let (inventory, preflight, final_commitment) = conditional_metadata_receipts(
             shared.clone(),
             shift(
@@ -293,6 +327,7 @@ impl InertProductionSemanticCapsuleV5 {
             final_commitment,
             lowering,
             layout_range,
+            policy_roster_range,
             carrier_range,
             history_range,
             catalog_range,
@@ -325,6 +360,11 @@ impl InertProductionSemanticCapsuleV5 {
     /// Unchanged semantic-target-layout transcript.
     pub fn semantic_target_layout_bytes(&self) -> &[u8] {
         &self.canonical_bytes()[self.layout_range.clone()]
+    }
+    /// Complete validated inert roster in the original shared backing.
+    /// Re-reading policy rows uses the separately charged roster reader.
+    pub fn policy_roster_bytes(&self) -> &[u8] {
+        &self.canonical_bytes()[self.policy_roster_range.clone()]
     }
     /// Borrow inert layout fields from the preimage validated during decode.
     /// This allocation-free getter has no ledger: callers prepay preimage length
