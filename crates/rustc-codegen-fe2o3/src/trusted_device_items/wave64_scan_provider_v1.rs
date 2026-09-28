@@ -36,9 +36,12 @@ pub(super) fn validate_definition(
         || tcx.get_diagnostic_item(Symbol::intern(MARKER)) != Some(def_id)
         || generics.parent.is_some()
         || generics.parent_count != 0
-        || generics.params.len() != 1
-        || generics.params[0].index != 0
-        || !matches!(generics.params[0].kind, GenericParamDefKind::Type { .. })
+        || generics.own_params.len() != 1
+        || generics.own_params[0].index != 0
+        || !matches!(
+            generics.own_params[0].kind,
+            GenericParamDefKind::Type { .. }
+        )
     {
         return Err("Wave64 scan helper is not its exact generic diagnostic definition".into());
     }

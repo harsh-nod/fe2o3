@@ -3136,7 +3136,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                         self.tcx,
                         function.instance,
                     )
-                    && !trusted_device_items::is_authenticated_gfx942_wave64_scan_instance_v1(
+                    && !crate::trusted_device_items::is_authenticated_gfx942_wave64_scan_instance_v1(
                         self.tcx,
                         function.instance,
                         &self.expected_target,
