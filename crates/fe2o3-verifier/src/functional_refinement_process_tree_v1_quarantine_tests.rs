@@ -349,7 +349,12 @@ fn pending_creation_state_cannot_be_removed_or_overwritten_after_terminal() {
     assert!(tree.remove_terminal(&101).is_err());
     assert!(tree[&101].pending_creation);
     assert!(tree[&101].terminal_consumed);
-    assert!(stable::next_status(&mut tree, 101).is_err());
+    assert!(
+        stable::next_status(&mut tree, 101)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot wait twice for a terminal proof task")
+    );
     assert!(
         tree.insert(101, Tracee::pending(TraceeRole::Solver, 101, true))
             .is_err()
