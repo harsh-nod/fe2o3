@@ -6,6 +6,8 @@ use fe2o3_pliron::{
 };
 use production_call_instances_v1::ProductionCallInstancePlanV1 as ExecutionInstancesV29;
 
+include!("production_execution_control_v29.rs");
+
 // This cursor consumes the existing owner's SSA resolutions. It neither issues
 // execution roles nor proves that a borrow stays within its provider's scope.
 struct ExecutionAvailabilityV29<'a> {
@@ -16,6 +18,7 @@ struct ExecutionAvailabilityV29<'a> {
     function: &'a SemanticFunctionDeclV1,
     ssa: &'a ProductionSemanticSsaFunctionPlanV1,
     occurrences: ProductionSemanticSsaFunctionOccurrencesV1<'a>,
+    control: ExecutionSourceControlV29<'a>,
     index: Vec<UnitLocalSourceIndexV1>,
     claimed: Vec<bool>,
     current: Vec<Option<SsaValueV1>>,
@@ -25,10 +28,24 @@ struct ExecutionAvailabilityV29<'a> {
     cfg: ExecutionCfgV29<'a>,
     events: ExecutionEventsV29,
     parameters: Option<PreparedExecutionParametersV29<'a>>,
+    invocation_inputs: Option<Vec<InvocationInputRowV1>>,
+    retained_seeds: Vec<Option<SemanticExecutionBindingV29>>,
+    references: Option<&'a SourceReferenceEmissionV29<'a, 'a>>,
+    identities: Option<(
+        &'a ExecutionIdentityPlanV1<'a, 'a>,
+        ProductionCallInstanceIdV1,
+    )>,
     #[cfg(test)]
     entry_seeds: Vec<(u32, SemanticValueBindingV1)>,
     #[cfg(test)]
     skipped_event: Option<usize>,
+}
+
+// This cursor owns prepaid buffers. Requiring whole-value destruction prevents
+// an ordinary partial move from exporting a buffer before the owner refunds it.
+// Explicit transfers still require their own metering; Drop never refunds.
+impl Drop for ExecutionAvailabilityV29<'_> {
+    fn drop(&mut self) {}
 }
 
 fn execution_availability_error_v29() -> ProductionSemanticKirErrorV1 {
@@ -83,12 +100,205 @@ fn with_execution_availability_v29<R>(
     }
 }
 
+fn source_reference_availability_headers_v29<R>() -> Result<usize, ArgumentResourceV1> {
+    use std::mem::size_of;
+    type Payload = Box<dyn std::any::Any + Send>;
+    argument_sum_v1(&[
+        source_reference_emission_headers_v29::<ExecutionAvailabilityV29<'_>>()?,
+        argument_product_v1(2, size_of::<Result<R, ProductionSemanticKirErrorV1>>())?,
+        size_of::<Result<Result<R, ProductionSemanticKirErrorV1>, Payload>>(),
+        size_of::<[Option<Payload>; 2]>(),
+        size_of::<Result<(), Payload>>(),
+        size_of::<Option<usize>>(),
+        size_of::<Option<ArgumentResourceV1>>(),
+        size_of::<Option<CompletedExecutionAvailabilityV1<'static>>>(),
+        size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>(),
+        argument_product_v1(4, size_of::<usize>())?,
+    ])
+}
+
+// This private owner scope turns panics into refusals and destroys rejected
+// outputs before recovery, including destructor panics and their payloads.
+fn with_source_reference_availability_v29<'a, R>(
+    instances: &ExecutionInstancesV29<'a>,
+    instance: ProductionCallInstanceIdV1,
+    references: Option<&'a SourceReferenceEmissionV29<'a, 'a>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+    consume: impl for<'cursor> FnOnce(
+        ExecutionAvailabilityV29<'cursor>,
+        &mut ArgumentBudgetV1<'_>,
+    ) -> Result<R, ProductionSemanticKirErrorV1>,
+) -> Result<R, ProductionSemanticKirErrorV1> {
+    with_source_reference_availability_and_identity_v1(
+        instances, instance, references, None, budget, consume,
+    )
+}
+
+fn with_source_reference_availability_and_identity_v1<'a, R>(
+    instances: &ExecutionInstancesV29<'a>,
+    instance: ProductionCallInstanceIdV1,
+    references: Option<&'a SourceReferenceEmissionV29<'a, 'a>>,
+    identities: Option<&'a ExecutionIdentityPlanV1<'a, 'a>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+    consume: impl for<'cursor> FnOnce(
+        ExecutionAvailabilityV29<'cursor>,
+        &mut ArgumentBudgetV1<'_>,
+    ) -> Result<R, ProductionSemanticKirErrorV1>,
+) -> Result<R, ProductionSemanticKirErrorV1> {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    if let Some(references) = references {
+        references.check(budget)?;
+    }
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    let slot = budget as *const ArgumentBudgetV1<'_> as usize;
+    let headers = source_reference_availability_headers_v29::<R>()
+        .map_err(ProductionSemanticKirErrorV1::from)
+        .inspect_err(|error| {
+            if let Some(references) = references {
+                source_reference_record_failure_v29(references.plan, error);
+            }
+        })?;
+    budget
+        .reserve_storage(headers)
+        .map_err(ProductionSemanticKirErrorV1::from)
+        .inspect_err(|error| {
+            if let Some(references) = references {
+                source_reference_record_failure_v29(references.plan, error);
+            }
+        })?;
+    let mut retained = None;
+    let mut lease = None;
+    let mut payloads = [None, None];
+    let mut result = match catch_unwind(AssertUnwindSafe(|| {
+        // Prepay the extra wrapper result and outer-header cleanup checks.
+        budget.charge_work(
+            if references.is_some_and(|references| references.plan.storage_root.is_some()) {
+                4 + 4 + 4 + 4
+            } else {
+                4 + 4
+            },
+        )?;
+        let owned =
+            OwnedExecutionAvailabilityV1::new(instances, instance, references, identities, budget)
+                .inspect_err(|error| {
+                    if let Some(references) = references {
+                        source_reference_record_failure_v29(references.plan, error);
+                    }
+                })?;
+        retained = Some(budget.storage());
+        let (completed, outcome) = owned.consume(budget, consume);
+        lease = Some(completed);
+        match outcome {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })) {
+        Ok(result) => result,
+        Err(payload) => {
+            payloads[0] = Some(payload);
+            Err(source_reference_error_v29(
+                "source reference availability construction or callback panicked",
+            ))
+        }
+    };
+    let required = retained.unwrap_or(budget.storage());
+    let same = budget.work_ledger_identity_v1() == ledger
+        && budget as *const ArgumentBudgetV1<'_> as usize == slot;
+    let lost = !same
+        || budget.storage() < required
+        || lease
+            .as_ref()
+            .is_some_and(|lease| !lease.permits_release(budget));
+    if lost {
+        if let Some(root) = references.and_then(|references| references.plan.storage_root.as_ref())
+        {
+            root.deny_active_root_refund();
+        }
+    }
+    let first_failure = references.and_then(|references| references.plan.failure.get());
+    if first_failure.is_some() || lost {
+        if first_failure.is_some() || result.is_ok() {
+            let rejected = std::mem::replace(
+                &mut result,
+                Err(first_failure
+                    .unwrap_or(ArgumentResourceV1::Accounting)
+                    .into()),
+            );
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(rejected))) {
+                payloads[1] = Some(payload);
+            }
+        }
+    }
+    let destructor_panicked = source_reference_discard_v29(payloads);
+    if destructor_panicked && result.is_ok() {
+        result = Err(source_reference_error_v29(
+            "source reference availability destructor panicked",
+        ));
+    }
+    let released = match lease {
+        Some(lease) => lease.release(budget),
+        None if same && !lost => Ok(()),
+        None => Err(ArgumentResourceV1::Accounting.into()),
+    };
+    if let Err(error) = released {
+        if result.is_ok() {
+            result = Err(error);
+        }
+    } else if same && !lost {
+        let allowed = budget.permits_prepared_input_refund_v1(
+            references.map(|references| references.plan),
+            slot,
+            ledger,
+            argument_sum_v1(&[floor, headers])?,
+            headers,
+        );
+        if !allowed {
+            if let Some(root) =
+                references.and_then(|references| references.plan.storage_root.as_ref())
+            {
+                root.deny_active_root_refund();
+            }
+            if result.is_ok() {
+                result = Err(ArgumentResourceV1::Accounting.into());
+            }
+        } else if let Err(error) = budget.release_storage(headers) {
+            if result.is_ok() {
+                result = Err(error.into());
+            }
+        }
+    }
+    result
+}
+
 impl<'a> ExecutionAvailabilityV29<'a> {
     fn new(
         instances: &ExecutionInstancesV29<'a>,
         instance: ProductionCallInstanceIdV1,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        Self::new_with_references(instances, instance, None, budget)
+    }
+
+    fn new_with_references(
+        instances: &ExecutionInstancesV29<'a>,
+        instance: ProductionCallInstanceIdV1,
+        references: Option<&'a SourceReferenceEmissionV29<'a, 'a>>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        Self::new_with_identity(instances, instance, references, None, budget)
+    }
+
+    fn new_with_identity(
+        instances: &ExecutionInstancesV29<'a>,
+        instance: ProductionCallInstanceIdV1,
+        references: Option<&'a SourceReferenceEmissionV29<'a, 'a>>,
+        identities: Option<&'a ExecutionIdentityPlanV1<'a, 'a>>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        if let Some(references) = references {
+            references.plan.check_owner(instances, budget)?;
+        }
         budget.charge_work(4)?;
         let row = instances
             .instance(instance)
@@ -96,6 +306,9 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         let occurrences = instances
             .occurrences(instance)
             .ok_or_else(execution_availability_error_v29)?;
+        let control = ExecutionSourceControlV29::new(instances, instance, budget)?;
+        let source = ExecutionCallSourceV29::from_instances(instances, budget)?;
+        control.check_source(source, row.declaration(), row.ssa(), instance, budget)?;
         let mut index = unit_local_vec_v1(occurrences.events().len(), budget)?;
         budget.charge_work(occurrences.events().len())?;
         for (ordinal, event) in occurrences.events().iter().enumerate() {
@@ -116,23 +329,51 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         current.resize(row.declaration().locals().len(), None);
         seen.resize(current.len(), false);
         visited.resize(row.declaration().blocks().len(), false);
-        let cfg = ExecutionCfgV29::new(
+        let cfg = ExecutionCfgV29::new_with_references(
             instances.owner().source_semantic().types(),
             row.declaration(),
             row.ssa(),
             &occurrences,
+            references.map(|references| (references, instance)),
+            Some(&control),
             budget,
         )?;
-        let events =
-            ExecutionEventsV29::new(&occurrences, row.declaration(), &cfg.nominal_locals, budget)?;
-        Ok(Self {
+        let events = ExecutionEventsV29::new_with_identity(
+            &occurrences,
+            row.declaration(),
+            &cfg.nominal_locals,
+            &cfg.reference_locals,
+            references.map(|references| (references, instance)),
+            identities.map(|identities| (identities, instance)),
+            Some(&control),
+            budget,
+        )?;
+        let retained_count = if let Some(identities) = identities {
+            charge_execution_cfg_lookup_v29(identities.index.retained.len(), budget)?;
+            if identities
+                .index
+                .retained
+                .range((instance.index(), 0)..=(instance.index(), u32::MAX))
+                .next()
+                .is_some()
+            {
+                row.declaration().locals().len()
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let retained_seeds = execution_identity_retained_seed_slots_v1(retained_count, budget)?;
+        let cursor = Self {
             ledger: budget.work_ledger_identity_v1(),
             instance,
-            source: ExecutionCallSourceV29::from_instances(instances, budget)?,
+            source,
             function_id: row.function(),
             function: row.declaration(),
             ssa: row.ssa(),
             occurrences,
+            control,
             index,
             claimed,
             current,
@@ -142,11 +383,22 @@ impl<'a> ExecutionAvailabilityV29<'a> {
             cfg,
             events,
             parameters: None,
+            invocation_inputs: None,
+            retained_seeds,
+            references,
+            identities: identities.map(|plan| (plan, instance)),
             #[cfg(test)]
             entry_seeds: Vec::new(),
             #[cfg(test)]
             skipped_event: None,
-        })
+        };
+        if let Some(identities) = identities {
+            if !std::ptr::eq(identities.index.instances, instances) {
+                return Err(execution_identity_error_v1());
+            }
+            identities.check_cursor(&cursor, budget)?;
+        }
+        Ok(cursor)
     }
 
     fn check_source(
@@ -182,7 +434,8 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         self.events.complete(budget)?;
         budget.charge_work(argument_product_v1(self.current.len(), 2)?)?;
         if self.block.is_some()
-            || !self.ssa.plan().is_reachable(block)
+            || !self
+                .source_block_reachable_v29(SemanticBlockIdV1::from_index(block.get()), budget)?
             || *self
                 .visited
                 .get(block.get() as usize)
@@ -242,6 +495,25 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         role: ExecutionEventV29,
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<Option<usize>, ProductionSemanticKirErrorV1> {
+        let index = self.find_occurrence(site, operand, role, budget)?;
+        if let Some(index) = index {
+            let event = &self.occurrences.events()[index];
+            if !event.is_promoted() || event.resolved().is_none() {
+                return Err(execution_availability_error_v29());
+            }
+        }
+        Ok(index)
+    }
+
+    // A retained source occurrence is not an SSA resolution. Its consumer
+    // must separately validate the source storage or use find_event instead.
+    fn find_occurrence(
+        &self,
+        site: ExecutionSiteV29,
+        operand: ExecutionOperandV29,
+        role: ExecutionEventV29,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<Option<usize>, ProductionSemanticKirErrorV1> {
         self.check_ledger(budget)?;
         let block = match site {
             ExecutionSiteV29::Statement { block, .. } | ExecutionSiteV29::Terminator { block } => {
@@ -262,11 +534,7 @@ impl<'a> ExecutionAvailabilityV29<'a> {
                 std::cmp::Ordering::Equal => {
                     let index = self.index[middle].index;
                     let event = &self.occurrences.events()[index];
-                    if self.claimed[index]
-                        || !event.is_reachable()
-                        || !event.is_promoted()
-                        || event.resolved().is_none()
-                    {
+                    if self.claimed[index] || !event.is_reachable() {
                         return Err(execution_availability_error_v29());
                     }
                     return Ok(Some(index));
@@ -318,6 +586,58 @@ impl<'a> ExecutionAvailabilityV29<'a> {
             self.claim_events(&[index], budget)?;
         }
         Ok(value)
+    }
+
+    fn check_claimed_original_use_v29(
+        &self,
+        site: ExecutionSiteV29,
+        operand: ExecutionOperandV29,
+        place: &SemanticPlaceV1,
+        definition: SsaValueV1,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.check_ledger(budget)?;
+        budget.charge_work(5)?;
+        let block = match site {
+            ExecutionSiteV29::Statement { block, .. } | ExecutionSiteV29::Terminator { block } => {
+                block
+            }
+        };
+        if self.block != Some(block)
+            || !scoped_object_original_place_v29(self.function, site, operand)
+                .is_some_and(|original| std::ptr::eq(original, place))
+        {
+            return Err(execution_availability_error_v29());
+        }
+        let key = unit_local_source_key_v1(site, operand, Some(ExecutionEventV29::BaseUse));
+        let (mut left, mut right) = (0, self.index.len());
+        while left < right {
+            budget.charge_work(8)?;
+            let middle = left + (right - left) / 2;
+            match self.index[middle].key.cmp(&key) {
+                std::cmp::Ordering::Less => left = middle + 1,
+                std::cmp::Ordering::Greater => right = middle,
+                std::cmp::Ordering::Equal => {
+                    let index = self.index[middle].index;
+                    let event = &self.occurrences.events()[index];
+                    if self.claimed[index]
+                        && event.is_promoted()
+                        && event.is_reachable()
+                        && event.resolved()
+                            == Some(SsaResolvedEventV1::Use {
+                                variable: fe2o3_mir_model::SsaVariableIdV1::new(
+                                    place.local().index(),
+                                ),
+                                value: definition,
+                            })
+                    {
+                        return Ok(());
+                    }
+                    return Err(execution_availability_error_v29());
+                }
+            }
+        }
+        Err(execution_availability_error_v29())
     }
 
     fn define(
@@ -382,6 +702,140 @@ impl<'a> ExecutionAvailabilityV29<'a> {
     ) -> Option<&SemanticOperandV1> {
         scoped_source_operand_v29(self.function, site, role)
     }
+
+    fn consume_failure_tail(
+        &mut self,
+        block: SemanticBlockIdV1,
+        message: &SemanticAssertMessageV1,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.check_ledger(budget)?;
+        budget.charge_work(6)?;
+        let id = SsaBlockIdV1::new(block.index());
+        let Some(SemanticTerminatorKindV1::Assert {
+            message: original,
+            unwind,
+            ..
+        }) = self
+            .function
+            .blocks()
+            .get(block.index() as usize)
+            .map(|block| block.terminator().kind())
+        else {
+            return Err(execution_availability_error_v29());
+        };
+        if self.block != Some(id)
+            || !std::ptr::eq(original, message)
+            || matches!(unwind, SemanticUnwindActionV1::Cleanup(_))
+        {
+            return Err(execution_availability_error_v29());
+        }
+        let boundary = self
+            .occurrences
+            .terminal_failure_start(id)
+            .ok_or_else(execution_availability_error_v29)?;
+        for index in 0..2 {
+            budget.charge_work(3)?;
+            if let Some(operand) = execution_assert_operand_v29(message, index) {
+                let ty = match operand {
+                    SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place.ty(),
+                    SemanticOperandV1::Constant(constant) => constant.ty(),
+                };
+                if !matches!(
+                    self.cfg
+                        .types
+                        .get(ty.index() as usize)
+                        .map(SemanticTypeDeclV1::shape),
+                    Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+                ) {
+                    return Err(execution_availability_error_v29());
+                }
+            }
+        }
+        let events = self.occurrences.events();
+        budget.charge_work(argument_product_v1(
+            16,
+            events.len().checked_ilog2().unwrap_or(0) as usize + 2,
+        )?)?;
+        let first = events.partition_point(|event| {
+            let event_block = execution_event_block_v29(event.site());
+            event_block < id || (event_block == id && (event.ordinal() as usize) < boundary)
+        });
+        let end = events.partition_point(|event| execution_event_block_v29(event.site()) <= id);
+        let floor = budget.storage();
+        let construction = (|| {
+            budget.reserve_storage(argument_sum_v1(&[
+                std::mem::size_of::<Vec<(usize, Option<SsaValueV1>)>>(),
+                argument_product_v1(
+                    2,
+                    std::mem::size_of::<Result<(), ProductionSemanticKirErrorV1>>(),
+                )?,
+                argument_product_v1(10, std::mem::size_of::<usize>())?,
+                std::mem::size_of::<Option<Option<SsaValueV1>>>(),
+                std::mem::size_of::<bool>(),
+            ])?)?;
+            emission_vec_v1::<(usize, Option<SsaValueV1>)>(end - first, budget)
+        })();
+        let storage = budget
+            .storage()
+            .checked_sub(floor)
+            .ok_or(ArgumentResourceV1::Accounting)?;
+        let mut changes = match construction {
+            Ok(changes) => changes,
+            Err(error) => {
+                let _ = budget.release_storage(storage);
+                return Err(error);
+            }
+        };
+        let result = (|| {
+            for index in first..end {
+                budget.charge_work(8)?;
+                let event = &self.occurrences.events()[index];
+                if event.site() != (ExecutionSiteV29::Terminator { block: id })
+                    || !matches!(event.operand(), ExecutionOperandV29::AssertMessage(_))
+                    || !event.is_reachable()
+                {
+                    return Err(execution_availability_error_v29());
+                }
+                let local = event.event().variable().get() as usize;
+                let managed =
+                    self.cfg.nominal_locals[local] != 0 || self.cfg.reference_locals[local];
+                let changed = if managed {
+                    match event.resolved() {
+                        Some(SsaResolvedEventV1::Use { value, .. })
+                            if self.current[local] == Some(value) =>
+                        {
+                            None
+                        }
+                        Some(SsaResolvedEventV1::Kill { previous, .. })
+                            if self.current[local] == previous =>
+                        {
+                            Some(previous)
+                        }
+                        _ => return Err(execution_availability_error_v29()),
+                    }
+                } else {
+                    None
+                };
+                // Debit the rollback before changing the failure-only state.
+                if changed.is_some() {
+                    budget.charge_work(1)?;
+                }
+                self.claim_events(&[index], budget)?;
+                if let Some(previous) = changed {
+                    changes.push((local, previous));
+                    self.current[local] = None;
+                }
+            }
+            Ok(())
+        })();
+        for (local, previous) in changes.drain(..).rev() {
+            self.current[local] = previous;
+        }
+        drop(changes);
+        let release = budget.release_storage(storage);
+        result.and(release)
+    }
 }
 
 fn execution_site_v29(block: SemanticBlockIdV1, statement: Option<u32>) -> ExecutionSiteV29 {
@@ -392,7 +846,60 @@ fn execution_site_v29(block: SemanticBlockIdV1, statement: Option<u32>) -> Execu
     }
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
+    fn use_source_place_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        place: &SemanticPlaceV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.use_source_place_with_role_v29(
+            block,
+            statement,
+            ExecutionOperandV29::RvaluePlace,
+            place,
+        )
+    }
+
+    fn use_source_place_with_role_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        role: ExecutionOperandV29,
+        place: &SemanticPlaceV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if !self.execution_cfg_local_v29(place.local().index() as usize)
+            && !self.execution_local_v29(place.local())?
+        {
+            return Ok(());
+        }
+        self.with_emission_budget_v1(|this, budget| {
+            let cursor = this
+                .execution
+                .as_mut()
+                .ok_or_else(execution_availability_error_v29)?;
+            let site = execution_site_v29(block, statement);
+            budget.charge_work(1)?;
+            if !scoped_object_original_place_v29(cursor.function, site, role)
+                .is_some_and(|original| std::ptr::eq(original, place))
+            {
+                return Err(execution_availability_error_v29());
+            }
+            let definition = cursor.use_place(site, role, place, false, budget)?;
+            check_source_use_archive_v29(
+                cursor,
+                &this.control_flow_ssa.cfg_carriers,
+                &this.locals,
+                &this.semantic_ssa_bindings,
+                site,
+                role,
+                place,
+                definition,
+                budget,
+            )
+        })
+    }
+
     fn execution_local_v29(
         &mut self,
         local: SemanticLocalIdV1,
@@ -449,47 +956,53 @@ impl SemanticFunctionLoweringV1<'_> {
         } else {
             role
         };
-        if let SemanticOperandV1::Move(place) | SemanticOperandV1::Copy(place) = operand
-            && (self.execution_cfg_local_v29(place.local().index() as usize)
-                || self.execution_local_v29(place.local())?)
-        {
-            let role = role.ok_or_else(execution_availability_error_v29)?;
-            self.with_emission_budget_v1(|this, budget| {
-                let cursor = this
-                    .execution
-                    .as_mut()
-                    .ok_or_else(execution_availability_error_v29)?;
-                let site = execution_site_v29(block, statement);
-                if !cursor
-                    .retained_operand(site, role)
-                    .is_some_and(|source| std::ptr::eq(source, operand))
-                {
-                    return Err(execution_availability_error_v29());
-                }
-                let definition = cursor.use_place(
-                    site,
-                    role,
-                    place,
-                    matches!(operand, SemanticOperandV1::Move(_)),
-                    budget,
-                )?;
-                check_execution_archive_v29(
-                    &this.locals,
-                    &this.semantic_ssa_bindings,
-                    place,
-                    definition,
-                    budget,
-                )
-            })?;
-        }
         let site = execution_site_v29(block, statement);
         let role = role.filter(|&role| {
             scoped_source_operand_v29(self.function, site, role)
                 .is_some_and(|source| std::ptr::eq(source, operand))
         });
-        self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29::operand(site, role), |this| {
-            this.lower_operand_inner_v1(block, statement, operand, operations)
-        })
+        self.with_scoped_source_memory_frame_v29(
+            ScopedMemoryFrameV29::operand(site, role),
+            |this| {
+                if let SemanticOperandV1::Move(place) | SemanticOperandV1::Copy(place) = operand
+                    && (this.execution_cfg_local_v29(place.local().index() as usize)
+                        || this.execution_local_v29(place.local())?)
+                {
+                    let role = role.ok_or_else(execution_availability_error_v29)?;
+                    this.with_emission_budget_v1(|this, budget| {
+                        let cursor = this
+                            .execution
+                            .as_mut()
+                            .ok_or_else(execution_availability_error_v29)?;
+                        if !cursor
+                            .retained_operand(site, role)
+                            .is_some_and(|source| std::ptr::eq(source, operand))
+                        {
+                            return Err(execution_availability_error_v29());
+                        }
+                        let definition = cursor.use_place(
+                            site,
+                            role,
+                            place,
+                            matches!(operand, SemanticOperandV1::Move(_)),
+                            budget,
+                        )?;
+                        check_source_use_archive_v29(
+                            cursor,
+                            &this.control_flow_ssa.cfg_carriers,
+                            &this.locals,
+                            &this.semantic_ssa_bindings,
+                            site,
+                            role,
+                            place,
+                            definition,
+                            budget,
+                        )
+                    })?;
+                }
+                this.lower_operand_inner_v1(block, statement, operand, operations)
+            },
+        )
     }
 }
 
@@ -501,6 +1014,9 @@ fn execution_binding_contains_paid_v29(
     budget.charge_work(4)?;
     let mut found = false;
     match binding {
+        SemanticValueBindingV1::SourceReference(_) | SemanticValueBindingV1::SourceInactive(_) => {
+            found = true;
+        }
         SemanticValueBindingV1::Aggregate(fields) => {
             for field in fields {
                 found |= execution_binding_contains_paid_v29(field, budget)?;
@@ -519,9 +1035,35 @@ fn execution_binding_contains_paid_v29(
     Ok(found)
 }
 
+fn execution_archive_object_pointer_same_v29(
+    left_id: ValueId,
+    left: &Type,
+    right_id: ValueId,
+    right: &Type,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    budget.charge_work(6)?;
+    let (Type::Pointer(left_pointer), Type::Pointer(right_pointer)) = (left, right) else {
+        return Ok(false);
+    };
+    if left_id != right_id
+        || left_pointer.address_space != AddressSpace::Private
+        || right_pointer.address_space != AddressSpace::Private
+        || !matches!(
+            left_pointer.access,
+            AccessMode::ReadOnly | AccessMode::ReadWrite
+        )
+        || !matches!(*left_pointer.pointee, Type::StorageObject(_))
+        || !matches!(*right_pointer.pointee, Type::StorageObject(_))
+    {
+        return Ok(false);
+    }
+    invocation_equal_types_v1(left, right, budget)
+}
+
 fn check_execution_archive_v29(
     locals: &[Option<SemanticValueBindingV1>],
-    archive: &BTreeMap<SsaValueV1, SemanticValueBindingV1>,
+    archive: &SemanticSsaBindingsV1,
     place: &SemanticPlaceV1,
     definition: SsaValueV1,
     budget: &mut dyn SemanticEmissionBudgetV1,
@@ -539,6 +1081,36 @@ fn check_execution_archive_v29(
     budget.charge_work(place.projections().len())?;
     for projection in place.projections() {
         match (projection.kind(), held, original) {
+            (
+                SemanticProjectionKindV1::Dereference,
+                SemanticValueBindingV1::Value {
+                    id: left_id,
+                    ty: left,
+                },
+                SemanticValueBindingV1::Value {
+                    id: right_id,
+                    ty: right,
+                },
+            ) => {
+                if !execution_archive_object_pointer_same_v29(
+                    *left_id, left, *right_id, right, budget,
+                )? {
+                    return Err(execution_availability_error_v29());
+                }
+                // Only the archived holder is established here. Original
+                // source access/schema/currentness checks still own the suffix.
+                return Ok(());
+            }
+            (
+                SemanticProjectionKindV1::Dereference,
+                SemanticValueBindingV1::SourceReference(left),
+                SemanticValueBindingV1::SourceReference(right),
+            ) if left == right => {
+                budget.charge_work(argument_product_v1(left.values.len(), 4)?)?;
+                // The exact holder is archived. The checked place resolver
+                // validates the pointee and every remaining projection.
+                return Ok(());
+            }
             (
                 SemanticProjectionKindV1::Field(index),
                 SemanticValueBindingV1::Aggregate(left),
@@ -566,6 +1138,61 @@ fn check_execution_archive_v29(
     ) -> Result<bool, ProductionSemanticKirErrorV1> {
         budget.charge_work(1)?;
         Ok(match (left, right) {
+            (
+                SemanticValueBindingV1::Value {
+                    id: left_id,
+                    ty: left,
+                },
+                SemanticValueBindingV1::Value {
+                    id: right_id,
+                    ty: right,
+                },
+            ) if matches!(left, Type::Pointer(pointer) if matches!(*pointer.pointee, Type::StorageObject(_)))
+                || matches!(right, Type::Pointer(pointer) if matches!(*pointer.pointee, Type::StorageObject(_))) =>
+            {
+                execution_archive_object_pointer_same_v29(*left_id, left, *right_id, right, budget)?
+            }
+            (
+                SemanticValueBindingV1::Value {
+                    ty: Type::Pointer(pointer),
+                    ..
+                },
+                _,
+            )
+            | (
+                _,
+                SemanticValueBindingV1::Value {
+                    ty: Type::Pointer(pointer),
+                    ..
+                },
+            ) if matches!(*pointer.pointee, Type::StorageObject(_)) => false,
+            (
+                SemanticValueBindingV1::SourceInactive(left),
+                SemanticValueBindingV1::SourceInactive(right),
+            ) => {
+                budget.charge_work(argument_sum_v1(&[
+                    argument_product_v1(left.values.len(), 4)?,
+                    8,
+                ])?)?;
+                left.owner == right.owner
+                    && left.source == right.source
+                    && left.ssa == right.ssa
+                    && left.root == right.root
+                    && left.node == right.node
+                    && left.source_type == right.source_type
+                    && source_reference_inactive_values_same_v29(
+                        &left.values,
+                        &right.values,
+                        budget,
+                    )?
+            }
+            (
+                SemanticValueBindingV1::SourceReference(left),
+                SemanticValueBindingV1::SourceReference(right),
+            ) => {
+                budget.charge_work(argument_product_v1(left.values.len(), 4)?)?;
+                left == right
+            }
             (SemanticValueBindingV1::Execution(left), SemanticValueBindingV1::Execution(right)) => {
                 left == right
             }

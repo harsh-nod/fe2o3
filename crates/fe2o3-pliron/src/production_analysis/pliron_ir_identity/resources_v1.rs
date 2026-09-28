@@ -278,10 +278,28 @@ fn preflight_identity_structure_with_observation_v1(
     IdentityPreflightCensusV1,
     crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
 > {
+    preflight_private_identity_structure_v1(context, function, limits, None, observer)
+}
+
+fn preflight_private_identity_structure_v1(
+    context: &Context,
+    function: &FuncOp,
+    limits: ProductionAnalysisResourceLimitsV1,
+    private: PrivateIdentityV1<'_>,
+    observer: RenderObserverV1<'_, '_, '_>,
+) -> Result<
+    IdentityPreflightCensusV1,
+    crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
+> {
     use crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1;
 
     let phase = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
-    let mut work = 1_usize;
+    let mut work = private_identity_work_v1(private)?.checked_add(1).ok_or(
+        ProductionAnalysisResourceLimitV1 {
+            phase,
+            resource: "private identity work",
+        },
+    )?;
     let mut storage = 1_usize;
     let mut native_switch_verification_work = 0_usize;
     let require = |work, storage, callbacks| {
@@ -515,4 +533,37 @@ fn preflight_identity_structure_with_observation_v1(
         native_switch_verification_work,
         native_switch_verification_scratch,
     })
+}
+
+fn private_identity_work_v1(
+    private: PrivateIdentityV1<'_>,
+) -> Result<
+    usize,
+    crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
+> {
+    private.map_or(Some(0), IdentityAdmissionV1::identity_lookup_work)
+        .ok_or(crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1 {
+            phase: ProductionAnalysisResourcePhaseV1::StructuralIdentity,
+            resource: "private identity lookup work",
+        })
+}
+
+fn private_identity_capture_bound_v1(
+    bound: ProductionAnalysisResourceUpperBoundV1,
+    private: PrivateIdentityV1<'_>,
+) -> Result<
+    ProductionAnalysisResourceUpperBoundV1,
+    crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
+> {
+    let phase = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
+    let work = bound.work_upper_bound().checked_add(private_identity_work_v1(private)?)
+        .ok_or(crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1 {
+            phase, resource: "private identity capture work",
+        })?;
+    ProductionAnalysisResourceUpperBoundV1::checked_phase(
+        phase,
+        work,
+        bound.retained_storage_upper_bound(),
+        bound.peak_storage_upper_bound() - bound.retained_storage_upper_bound(),
+    )
 }

@@ -380,7 +380,7 @@ fn selected_field_archive_checks_reject_moved_and_stale_nominal_values() {
             assert!(
                 check_execution_archive_v29(
                     &observation.locals,
-                    &BTreeMap::new(),
+                    &SemanticSsaBindingsV1::default(),
                     &selected(1, U32),
                     definition,
                     &mut budget

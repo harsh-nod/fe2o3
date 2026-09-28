@@ -393,11 +393,6 @@ impl Policy3ExecutionWitnessV1 {
         execution: ExecutionProfileV1,
         budget: &mut Budget<'_>,
     ) -> Result<Self, Resource> {
-        let ExecutionProfileV1 {
-            resources: profile,
-            registered_nodes,
-            cse_work,
-        } = execution;
         // Count/terminal/endpoint checks plus both eight-row roster traversals.
         budget.charge_work(4 + 2 * POLICY3_PASSES.len())?;
         if report.passes().len() != POLICY3_PASSES.len()
@@ -428,42 +423,7 @@ impl Policy3ExecutionWitnessV1 {
             writer.raw(owner.canonical().identity().digest());
             writer.u64(owner.canonical().identity().canonical_length());
         }
-        for value in [
-            registered_nodes,
-            profile.work(),
-            profile.persistent_storage(),
-            profile.temporary_storage(),
-            POLICY3_PASSES.len(),
-            cse_work,
-            POLICY3_CANONICAL_CAP,
-            POLICY3_CANONICAL_CAP,
-            POLICY3_MAX_PASSES,
-            POLICY3_GRAPH_CAP,
-            POLICY3_SESSION_WORK_CAP,
-            report.initial_graph_work(),
-            report.final_graph_work(),
-            report.invalidated_handle_count(),
-            report.work_units(),
-        ] {
-            writer.usize(value)?;
-        }
-        let final_graph = report.final_graph_identity();
-        writer.raw(&final_graph.canonical_digest());
-        writer.u64(final_graph.epoch().sequence());
-        writer.usize(final_graph.tree_work())?;
-        writer.usize(final_graph.operation_count())?;
-        writer.raw(map.digest());
-        for pass in report.passes() {
-            writer.raw(&[pass_tag(pass.pass()), u8::from(pass.changed())]);
-            writer.u16(0);
-            writer.usize(pass.input_graph_work())?;
-            writer.usize(pass.output_graph_work())?;
-            writer.usize(pass.work_units())?;
-            writer.u64(pass.input_epoch().sequence());
-            writer.u64(pass.output_epoch().sequence());
-            writer.usize(pass.invalidated_analysis_count())?;
-            writer.usize(pass.preserved_analysis_count())?;
-        }
+        write_execution_tail(&mut writer, report, map.digest(), execution)?;
         assert_eq!(writer.cursor, POLICY3_EXECUTION_RECORD_BYTES_V1);
         Ok(Self { canonical })
     }
@@ -481,8 +441,8 @@ pub(crate) fn pass_tag(pass: PassKind) -> u8 {
     }
 }
 
-struct RecordWriter<'a> {
-    bytes: &'a mut [u8; POLICY3_EXECUTION_RECORD_BYTES_V1],
+struct RecordWriter<'a, const N: usize> {
+    bytes: &'a mut [u8; N],
     cursor: usize,
 }
 
@@ -490,7 +450,7 @@ struct RecordWriter<'a> {
 #[path = "fixed_policy_v3_tests.rs"]
 mod tests;
 
-impl RecordWriter<'_> {
+impl<const N: usize> RecordWriter<'_, N> {
     fn raw(&mut self, value: &[u8]) {
         self.bytes[self.cursor..self.cursor + value.len()].copy_from_slice(value);
         self.cursor += value.len();
@@ -506,3 +466,57 @@ impl RecordWriter<'_> {
         Ok(())
     }
 }
+
+fn write_execution_tail<const N: usize>(
+    writer: &mut RecordWriter<'_, N>,
+    report: &PlironOptimizationReportV1,
+    map_digest: &[u8; 32],
+    execution: ExecutionProfileV1,
+) -> Result<(), Resource> {
+    let ExecutionProfileV1 {
+        resources: profile,
+        registered_nodes,
+        cse_work,
+    } = execution;
+    for value in [
+        registered_nodes,
+        profile.work(),
+        profile.persistent_storage(),
+        profile.temporary_storage(),
+        POLICY3_PASSES.len(),
+        cse_work,
+        POLICY3_CANONICAL_CAP,
+        POLICY3_CANONICAL_CAP,
+        POLICY3_MAX_PASSES,
+        POLICY3_GRAPH_CAP,
+        POLICY3_SESSION_WORK_CAP,
+        report.initial_graph_work(),
+        report.final_graph_work(),
+        report.invalidated_handle_count(),
+        report.work_units(),
+    ] {
+        writer.usize(value)?;
+    }
+    let final_graph = report.final_graph_identity();
+    writer.raw(&final_graph.canonical_digest());
+    writer.u64(final_graph.epoch().sequence());
+    writer.usize(final_graph.tree_work())?;
+    writer.usize(final_graph.operation_count())?;
+    writer.raw(map_digest);
+    for pass in report.passes() {
+        writer.raw(&[pass_tag(pass.pass()), u8::from(pass.changed())]);
+        writer.u16(0);
+        writer.usize(pass.input_graph_work())?;
+        writer.usize(pass.output_graph_work())?;
+        writer.usize(pass.work_units())?;
+        writer.u64(pass.input_epoch().sequence());
+        writer.u64(pass.output_epoch().sequence());
+        writer.usize(pass.invalidated_analysis_count())?;
+        writer.usize(pass.preserved_analysis_count())?;
+    }
+    Ok(())
+}
+
+#[path = "fixed_policy_v18.rs"]
+mod storage_v18;
+pub use storage_v18::{POLICY3_EXECUTION_RECORD_BYTES_V18, Policy3ExecutionWitnessV18};

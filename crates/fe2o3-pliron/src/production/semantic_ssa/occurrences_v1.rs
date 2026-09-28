@@ -414,6 +414,14 @@ impl ProductionSemanticSsaFunctionOccurrencesV1<'_> {
     pub fn events(&self) -> &[ProductionSemanticSsaEventOccurrenceV1] {
         &self.rows.events
     }
+    /// Boundary rederived from this owner's exact source and joined planner input.
+    pub fn terminal_failure_start(&self, block: SsaBlockIdV1) -> Option<usize> {
+        self.rows
+            .blocks
+            .get(block.get() as usize)
+            .filter(|row| row.block == block)?
+            .terminal_failure_start
+    }
     /// Constant operand occurrences in original visitation order.
     pub fn constants(&self) -> &[ProductionSemanticSsaConstantOccurrenceV1] {
         &self.rows.constants
@@ -440,6 +448,7 @@ struct BlockRows {
     block: SsaBlockIdV1,
     events: std::ops::Range<usize>,
     successors: std::ops::Range<usize>,
+    terminal_failure_start: Option<usize>,
 }
 
 struct FunctionRows {

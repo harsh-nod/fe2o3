@@ -14,6 +14,7 @@ dialect-gpu.workspace = true
 dialect-kernel.workspace = true
 dialect-mir = { workspace = true, features = ["pliron"] }
 fe2o3-kernel-analysis = { workspace = true, default-features = false }
+fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
 # Final output admission consumes the sealed fixed-policy owner, not pass algorithms.
 fe2o3-kernel-opt.workspace = true
@@ -27,7 +28,6 @@ dialect-amdgcn.workspace = true
 fe2o3-amd-target.workspace = true
 # Differential execution of lowered test programs; never a production dependency.
 fe2o3-kir-sim.workspace = true
-fe2o3-kernel-descriptor.workspace = true
 # Construct inert reference subject data for conditional continuation tests.
 fe2o3-functional-proof.workspace = true
 fe2o3-proof-contracts.workspace = true

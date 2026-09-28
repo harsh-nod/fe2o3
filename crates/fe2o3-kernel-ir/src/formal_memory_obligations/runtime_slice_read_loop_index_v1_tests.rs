@@ -1,6 +1,21 @@
 use super::*;
 use crate::{FormalMemoryReceiptEncodingV4, InertFormalMemoryReceiptFormatV4};
 
+fn read_query_work_cuts(exact: usize) -> [(usize, Option<(usize, usize)>); 5] {
+    // Independent tail equation: selecting/building the domain debits 24,
+    // then retaining its authenticated origins debits 4. A rejected debit
+    // leaves the accepted prefix unchanged: (limit, (attempted, accepted)).
+    let before_origins = exact.checked_sub(4).unwrap();
+    let before_domain = before_origins.checked_sub(24).unwrap();
+    [
+        (before_domain, Some((before_origins, before_domain))),
+        (before_origins - 1, Some((before_origins, before_domain))),
+        (before_origins, Some((exact, before_origins))),
+        (exact - 1, Some((exact, before_origins))),
+        (exact, None),
+    ]
+}
+
 fn changing_loop(scalar: ScalarType, mode: AccessMode, increment: bool) -> Module {
     let mut module = fixture(scalar, mode);
     let body = module.functions[0].body.as_mut().unwrap();
@@ -410,22 +425,22 @@ fn exact_phi_query_work_and_initial_storage_refusals_use_the_real_guard_ledger()
     let records = guarded.ledger.records;
     assert!(query(&mut guarded).unwrap().is_some());
     let exact = guarded.ledger.work.work();
-    for limit in [exact - 1, exact] {
+    for (limit, refusal) in read_query_work_cuts(exact) {
         guarded.ledger.work = CanonicalKernelIrWorkBudgetV1::new(limit);
         guarded.ledger.charge(7).unwrap();
         let result = query(&mut guarded);
-        if limit == exact {
-            assert!(result.unwrap().is_some());
-            assert_eq!(guarded.ledger.work.work(), exact);
-            assert_eq!(guarded.ledger.work.failed_work(), None);
-        } else {
+        if let Some((attempted, accepted)) = refusal {
             let Err(ResourceError::Work(error)) = result else {
                 panic!("exact query work refusal")
             };
             assert_eq!(error.limit(), limit);
-            assert_eq!(error.actual(), exact);
-            assert_eq!(guarded.ledger.work.failed_work(), Some(exact));
-            assert_eq!(guarded.ledger.work.work(), exact - 24);
+            assert_eq!(error.actual(), attempted);
+            assert_eq!(guarded.ledger.work.failed_work(), Some(attempted));
+            assert_eq!(guarded.ledger.work.work(), accepted);
+        } else {
+            assert!(result.unwrap().is_some());
+            assert_eq!(guarded.ledger.work.work(), exact);
+            assert_eq!(guarded.ledger.work.failed_work(), None);
         }
         assert_eq!(guarded.ledger.bytes, bytes);
         assert_eq!(guarded.ledger.records, records);
@@ -802,20 +817,20 @@ fn bridged_read_query_work_is_exact_and_the_no_read_path_still_allocates_nothing
         let (bytes, records) = (guarded.ledger.bytes, guarded.ledger.records);
         assert!(query(&mut guarded).unwrap().is_some());
         let exact = guarded.ledger.work.work();
-        for limit in [exact - 1, exact] {
+        for (limit, refusal) in read_query_work_cuts(exact) {
             guarded.ledger.work = CanonicalKernelIrWorkBudgetV1::new(limit);
             guarded.ledger.charge(7).unwrap();
             let result = query(&mut guarded);
-            if limit == exact {
+            if let Some((attempted, accepted)) = refusal {
+                assert!(
+                    matches!(result, Err(ResourceError::Work(e)) if e.actual() == attempted && e.limit() == limit)
+                );
+                assert_eq!(guarded.ledger.work.work(), accepted);
+                assert_eq!(guarded.ledger.work.failed_work(), Some(attempted));
+            } else {
                 assert!(result.unwrap().is_some());
                 assert_eq!(guarded.ledger.work.work(), exact);
                 assert_eq!(guarded.ledger.work.failed_work(), None);
-            } else {
-                assert!(
-                    matches!(result, Err(ResourceError::Work(e)) if e.actual() == exact && e.limit() == limit)
-                );
-                assert_eq!(guarded.ledger.work.work(), exact - 24);
-                assert_eq!(guarded.ledger.work.failed_work(), Some(exact));
             }
             assert_eq!(
                 (guarded.ledger.bytes, guarded.ledger.records),
@@ -1090,18 +1105,20 @@ fn repeated_predicate_rows_keep_prepaid_capacity_and_exact_query_work() {
     guarded.ledger.charge(7).unwrap();
     assert!(query(&mut guarded).unwrap().is_some());
     let exact = guarded.ledger.work.work();
-    for limit in [exact - 1, exact] {
+    for (limit, refusal) in read_query_work_cuts(exact) {
         guarded.ledger.work = CanonicalKernelIrWorkBudgetV1::new(limit);
         guarded.ledger.charge(7).unwrap();
         let result = query(&mut guarded);
-        if limit == exact {
-            assert!(result.unwrap().is_some());
-        } else {
+        if let Some((attempted, accepted)) = refusal {
             assert!(
-                matches!(result, Err(ResourceError::Work(e)) if e.actual() == exact && e.limit() == limit)
+                matches!(result, Err(ResourceError::Work(e)) if e.actual() == attempted && e.limit() == limit)
             );
-            assert_eq!(guarded.ledger.work.work(), exact - 24);
-            assert_eq!(guarded.ledger.work.failed_work(), Some(exact));
+            assert_eq!(guarded.ledger.work.work(), accepted);
+            assert_eq!(guarded.ledger.work.failed_work(), Some(attempted));
+        } else {
+            assert!(result.unwrap().is_some());
+            assert_eq!(guarded.ledger.work.work(), exact);
+            assert_eq!(guarded.ledger.work.failed_work(), None);
         }
         assert_eq!(
             (guarded.ledger.bytes, guarded.ledger.records),

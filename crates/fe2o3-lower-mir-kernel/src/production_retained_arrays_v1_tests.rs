@@ -52,10 +52,11 @@ fn exact_array_layout_and_element_limit_are_independent_of_ssa_component_limits(
     let ty = SemanticTypeIdV1::from_index(1);
     let types = [scalar(), array(0, 512, 2048, 4, 4, 512)];
     let slot = retained_array_slot_plan_v1(&types, ty, 512).unwrap();
-    assert_eq!(slot.kernel_type, Type::Scalar(ScalarType::U32));
-    assert_eq!(slot.alignment, 4);
+    let (kernel_type, alignment, array) = slot.storage.scalar_array().unwrap();
+    assert_eq!(*kernel_type, Type::Scalar(ScalarType::U32));
+    assert_eq!(alignment, 4);
     assert_eq!(
-        slot.array,
+        array,
         Some(SemanticRetainedArrayLayoutV1 {
             element: SemanticTypeIdV1::from_index(0),
             length: 512,
@@ -126,7 +127,7 @@ fn arrays_admit_thin_pointer_elements_without_erasing_address_space_or_access() 
     ];
     let slot = retained_array_slot_plan_v1(&types, ty, 8).unwrap();
     assert_eq!(
-        slot.kernel_type,
+        *slot.storage.scalar_array().unwrap().0,
         Type::pointer(
             Type::Scalar(ScalarType::U32),
             AddressSpace::Global,
@@ -190,4 +191,154 @@ fn aggregate_expansion_checks_exact_prefixed_operation_limits_before_capacity() 
     ));
     assert!(retained_array_expansion_v1(u64::MAX, 0, 0, usize::MAX).is_err());
     assert!(retained_array_expansion_v1(8, usize::MAX, 0, usize::MAX).is_err());
+}
+
+fn optional_array_probe_slots_v29(
+    mode: u8,
+) -> BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotV1> {
+    let scalar = |array| SemanticRetainedLocalSlotV1 {
+        pointer: ValueId(41),
+        semantic_type: SemanticTypeIdV1::from_index(1),
+        storage: SemanticRetainedStorageV29::ScalarArray {
+            kernel_type: Type::Scalar(ScalarType::U32),
+            alignment: 4,
+            array,
+        },
+    };
+    let object = || SemanticRetainedLocalSlotV1 {
+        pointer: ValueId(42),
+        semantic_type: SemanticTypeIdV1::from_index(2),
+        storage: SemanticRetainedStorageV29::Object {
+            cell: 3,
+            schema: fe2o3_kernel_ir::StorageLayoutIdV1(9),
+            bytes: 16,
+            alignment: 4,
+        },
+    };
+    let mut slots = BTreeMap::new();
+    if matches!(mode, 0 | 3 | 6) {
+        slots.insert(
+            ScopedAllocationIdentityV29::OriginalObject {
+                local: if mode == 6 { 8 } else { 7 },
+                generation: 3,
+            },
+            object(),
+        );
+    }
+    if matches!(mode, 1 | 3 | 6) {
+        slots.insert(
+            ScopedAllocationIdentityV29::LegacyLocal(7),
+            scalar(Some(SemanticRetainedArrayLayoutV1 {
+                element: SemanticTypeIdV1::from_index(0),
+                length: 4,
+            })),
+        );
+    }
+    if mode == 2 {
+        slots.insert(ScopedAllocationIdentityV29::LegacyLocal(7), scalar(None));
+    }
+    if mode == 4 {
+        slots.insert(ScopedAllocationIdentityV29::LegacyLocal(7), object());
+    }
+    assert!(mode <= 6);
+    slots
+}
+
+fn assert_optional_array_probe_v29(
+    mode: u8,
+    slots: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotV1>,
+    result: Result<Option<&SemanticRetainedLocalSlotV1>, ProductionSemanticKirErrorV1>,
+) {
+    match mode {
+        0 | 2 | 5 => assert!(matches!(result, Ok(None))),
+        1 | 6 => {
+            let actual = result
+                .unwrap()
+                .expect("the exact legacy array must be selected");
+            assert!(std::ptr::eq(
+                actual,
+                slots
+                    .get(&ScopedAllocationIdentityV29::LegacyLocal(7))
+                    .unwrap()
+            ));
+            assert_eq!(actual.pointer, ValueId(41));
+        }
+        3 | 4 => assert!(matches!(
+            result,
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                function: 0,
+                block: None,
+                statement: None,
+                detail: "typed allocation identity or representation requires its exact source contract",
+            })
+        )),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn optional_array_classification_preserves_strict_legacy_consumption() {
+    for mode in 0..7 {
+        // Inert map fixtures exercise classification only, not source admission.
+        let slots = optional_array_probe_slots_v29(mode);
+        assert_optional_array_probe_v29(
+            mode,
+            &slots,
+            lookup_optional_retained_array_v29(&slots, 7, None),
+        );
+        assert!(matches!(
+            lookup_optional_retained_array_v29(&slots, 9, None),
+            Ok(None)
+        ));
+        if mode == 0 {
+            assert!(matches!(
+                lookup_legacy_retained_slot_v29(&slots, 7, None),
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    function: 0,
+                    block: None,
+                    statement: None,
+                    detail: "typed allocation identity or representation requires its exact source contract",
+                })
+            ));
+        }
+    }
+}
+
+#[test]
+fn optional_array_classification_prepays_exact_lookup_work_without_storage() {
+    for mode in 0..7 {
+        let slots = optional_array_probe_slots_v29(mode);
+        // The existing tree lookup contract charges 16 units per search level.
+        // Optional presence adds one search and one branch; selecting a legacy
+        // key then pays both original strict searches and their two checks.
+        let lookup = (slots.len().checked_ilog2().unwrap_or(0) as usize + 2) * 16;
+        let selected = matches!(mode, 1 | 2 | 3 | 4 | 6);
+        let exact = if selected { 3 * lookup + 3 } else { lookup + 1 };
+        for limit in [0, exact - 1, exact] {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(limit);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+            let result = lookup_optional_retained_array_v29(&slots, 7, Some(&mut budget));
+            if limit == exact {
+                assert_optional_array_probe_v29(mode, &slots, result);
+                assert_eq!(budget.work(), exact);
+                assert_eq!(budget.failed_work(), None);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(
+                        ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                            ArgumentResourceV1::Work(_),
+                        )
+                    )
+                ));
+                assert!(budget.work() <= limit);
+                assert_eq!(
+                    budget.failed_work(),
+                    Some(if limit == 0 { lookup } else { exact })
+                );
+            }
+            assert_eq!(budget.storage(), 0);
+            assert_eq!(budget.failed_storage(), None);
+        }
+    }
 }

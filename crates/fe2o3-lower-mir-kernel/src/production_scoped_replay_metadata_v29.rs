@@ -88,6 +88,7 @@ fn coordinates(
         returns,
         components,
         values,
+        inline,
         storage: _,
     } = a;
     Ok(fixed(
@@ -101,18 +102,19 @@ fn coordinates(
                 container,
                 function_name,
                 parameters,
+                inline,
             } = a;
             budget.charge_work(size_of::<InstanceSeedV1>())?;
-            Ok(
-                (instance, container, parameters) == (&b.instance, &b.container, &b.parameters)
-                    && private_array_equal_bytes_v1(
-                        function_name.as_bytes(),
-                        b.function_name.as_bytes(),
-                        budget,
-                    )?,
-            )
+            Ok((instance, container, parameters, inline)
+                == (&b.instance, &b.container, &b.parameters, &b.inline)
+                && private_array_equal_bytes_v1(
+                    function_name.as_bytes(),
+                    b.function_name.as_bytes(),
+                    budget,
+                )?)
         })?
         && fixed_rows(&spans.rows, &b.spans.rows, budget)?
+        && fixed_rows(&inline.rows, &b.inline.rows, budget)?
         && rows(&controls.rows, &b.controls.rows, budget, |a, b, budget| {
             let InstanceControlV1 {
                 instance,
@@ -185,6 +187,7 @@ fn source_slots(
         ledger: owner,
         instances,
         slots,
+        pending_memory,
         retained_storage: _,
     } = a;
     ledger(*owner, b.ledger, budget)?;
@@ -207,7 +210,12 @@ fn source_slots(
                     &b.slots,
                 ))
         })?
-        && fixed_rows(slots, &b.slots, budget)?)
+        && fixed_rows(slots, &b.slots, budget)?
+        && scoped_raw_admission_v29::pending_memory_matches_v29(
+            pending_memory.as_ref(),
+            b.pending_memory.as_ref(),
+            budget,
+        )?)
 }
 
 fn initialization(
@@ -240,12 +248,50 @@ fn memory(
         subject,
         placement,
         rows,
+        objects,
+        object_components,
     } = a;
     ledger(subject.ledger, b.subject.ledger, budget)?;
     Ok(
         fixed((*subject, *placement), (b.subject, b.placement), budget)?
-            && fixed_rows(rows, &b.rows, budget)?,
+            && fixed_rows(rows, &b.rows, budget)?
+            && fixed_rows(objects, &b.objects, budget)?
+            && fixed_rows(object_components, &b.object_components, budget)?,
     )
+}
+
+fn invocation(
+    a: &InvocationEntryRelationV1,
+    b: &InvocationEntryRelationV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    let InvocationEntryRelationV1 {
+        subject,
+        layout,
+        span,
+        arguments,
+        components,
+        inputs,
+    } = a;
+    if let (Some(a), Some(b)) = (subject, b.subject.as_ref()) {
+        ledger(a.ledger, b.ledger, budget)?;
+    }
+    Ok(fixed(
+        (*subject, *layout, *span),
+        (b.subject, b.layout, b.span),
+        budget,
+    )? && fixed_rows(arguments, &b.arguments, budget)?
+        && fixed_rows(components, &b.components, budget)?
+        && fixed_rows(inputs, &b.inputs, budget)?)
+}
+
+#[cfg(test)]
+pub(super) fn matches_invocation_for_test_v1(
+    original: &InvocationEntryRelationV1,
+    replay: &InvocationEntryRelationV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    invocation(original, replay, budget)
 }
 
 fn assertion(
@@ -443,12 +489,12 @@ fn sidecar(
 ) -> Result<bool, ProductionSemanticKirErrorV1> {
     let PendingInstanceSidecarsV29 {
         next_value,
-        #[cfg(test)]
-            execution_observation: _,
+        execution_observation: _,
         source_call_instance,
         scoped_slot_origins,
         scoped_initialization,
         scoped_memory_anchors,
+        invocation_entry,
         instance_assert_origins,
         lifecycle_events,
         private_arrays: arrays,
@@ -513,6 +559,11 @@ fn sidecar(
         budget,
         memory,
     )? && optional(
+        invocation_entry.as_ref(),
+        b.invocation_entry.as_ref(),
+        budget,
+        invocation,
+    )? && optional(
         instance_assert_origins.as_ref(),
         b.instance_assert_origins.as_ref(),
         budget,
@@ -570,10 +621,12 @@ pub(super) fn matches_roots(
         let ScopedModuleRootV29 {
             function_ordinal,
             sidecars,
+            active_instances,
             coordinates: coords,
             slot_relocation,
             source_slots: slots,
             insertions,
+            terminal_failures,
             declarations,
             private_payload,
             requires_context_issue,
@@ -592,7 +645,8 @@ pub(super) fn matches_roots(
                 b.private_payload.occupied,
             ),
             budget,
-        )? && coordinates(coords, &b.coordinates, budget)?
+        )? && fixed_rows(&active_instances.rows, &b.active_instances.rows, budget)?
+            && coordinates(coords, &b.coordinates, budget)?
             && source_slots(slots, &b.source_slots, budget)?
             && optional(
                 slot_relocation.as_ref(),
@@ -601,6 +655,19 @@ pub(super) fn matches_roots(
                 |a, b, budget| a.matches_replay(b, budget),
             )?
             && fixed_rows(insertions, &b.insertions, budget)?
+            && optional(
+                terminal_failures.as_ref(),
+                b.terminal_failures.as_ref(),
+                budget,
+                |a, b, budget| {
+                    Ok(fixed(
+                        (a.origins.source, a.origins.ledger),
+                        (b.origins.source, b.origins.ledger),
+                        budget,
+                    )? && fixed_rows(&a.origins.rows, &b.origins.rows, budget)?
+                        && fixed_rows(&a.closures, &b.closures, budget)?)
+                },
+            )?
             && rows(declarations, &b.declarations, budget, |a, b, budget| {
                 let ScopedDeclarationUseV29 {
                     instance,

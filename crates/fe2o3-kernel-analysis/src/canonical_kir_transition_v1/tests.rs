@@ -27,6 +27,7 @@ mod integer_identities;
 mod receipt_wire;
 mod resources;
 mod scalar;
+mod storage_discriminant;
 
 const LIMIT: usize = 10_000_000;
 const F: FunctionCoordinate = FunctionCoordinate(0);
@@ -167,7 +168,7 @@ impl Rows {
             + self.edges.capacity() * size_of::<EdgeRow>()
             + self.edge_arguments.capacity() * size_of::<EdgeArgumentRow>()
     }
-    fn identity(input: &Inventory<'_>) -> Self {
+    fn identity<O>(input: &Inventory<'_, O>) -> Self {
         let mut rows = Self::default();
         for function in input.functions() {
             rows.functions.push(FunctionRow {
@@ -236,7 +237,7 @@ struct Plan {
     edge_arguments: Vec<EdgeArgument>,
 }
 impl Plan {
-    fn rows(self, input: &Inventory<'_>, output: &Inventory<'_>) -> Rows {
+    fn rows<O>(self, input: &Inventory<'_, O>, output: &Inventory<'_, O>) -> Rows {
         assert_eq!(input.functions().len(), 1);
         assert_eq!(output.functions().len(), 1);
         let mut rows = Rows {

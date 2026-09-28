@@ -32,7 +32,7 @@ impl Bf16CallEmissionCaptureV1 {
         &mut self,
         source: &CheckedBf16CallInstanceV1<'_>,
         plan: &LoweredFunctionPlanV1,
-        lowering: &SemanticFunctionLoweringV1<'_>,
+        lowering: &SemanticFunctionLoweringV1<'_, '_>,
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         budget.charge_work(32)?;

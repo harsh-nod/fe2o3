@@ -1,21 +1,24 @@
 //! Complete coordinate framing, exact signatures, and observed retained anchors.
 use super::{Budget, DescendantKind, Error, NONE, Origin, Result, State, index, payload};
-use fe2o3_kernel_ir::{CanonicalKirDefinitionCoordinateV1 as Definition, OperationKind};
+use fe2o3_kernel_ir::{CanonicalKirDefinitionCoordinateV1 as Definition, Module, OperationKind};
 
-impl State<'_, '_, '_, '_> {
-    pub(super) fn check_structure(&mut self, budget: &mut Budget<'_>) -> Result<()> {
-        self.check_module(budget)?;
+impl<O> State<'_, '_, '_, '_, O> {
+    pub(super) fn check_structure(
+        &mut self,
+        input: &Module,
+        output: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.check_module(input, output, budget)?;
         self.install_blocks(budget)?;
         self.install_operations(budget)?;
         self.install_definitions(budget)
     }
 
-    fn check_module(&mut self, budget: &mut Budget<'_>) -> Result<()> {
+    fn check_module(&mut self, a: &Module, b: &Module, budget: &mut Budget<'_>) -> Result<()> {
         let input = self.input;
         let output = self.output;
         let rows = self.rows;
-        let a = input.owner().module();
-        let b = output.owner().module();
         budget.charge_work(1)?;
         if !payload::bytes(a.id.as_str().as_bytes(), b.id.as_str().as_bytes(), budget)?
             || !payload::capabilities(&a.required_capabilities, &b.required_capabilities, budget)?

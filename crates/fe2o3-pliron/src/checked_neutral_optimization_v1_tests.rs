@@ -342,11 +342,11 @@ fn empty_owner_boundaries_follow_independent_header_and_work_equations() {
     let inventory_header = size_of::<CanonicalKirInventoryV1<'_>>();
     let checked_header = size_of::<CheckedCanonicalKirTransitionV1<'_, '_, '_, '_>>();
     // Independently enumerate State's two inventory references, candidate
-    // slice header and eighteen Vec headers. Every row vector is empty, so
+    // slice header and nineteen Vec headers. Every row vector is empty, so
     // there are no element allocations and no hidden target-dependent IDs.
     let state_header = 2 * size_of::<&CanonicalKirInventoryV1<'_>>()
         + size_of::<CanonicalKirTransitionCandidateV1<'_>>()
-        + 18 * size_of::<Vec<usize>>();
+        + 19 * size_of::<Vec<usize>>();
     let scratch_peak = 2 * inventory_header + checked_header + state_header;
     let final_extra = checked_wrapper_storage_v1().unwrap()
         + size_of::<KirNeutralOwnedOriginStorageV1>()

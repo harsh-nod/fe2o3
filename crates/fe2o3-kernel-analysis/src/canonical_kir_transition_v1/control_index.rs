@@ -1,13 +1,13 @@
 //! Queryable control and occurrence facts from the fixed checked transition.
 
 use super::{
-    Budget, CheckedCanonicalKirTransitionV1, Error, INTERNAL, Inventory, Literal, NONE, Resource,
-    Result, State, allocate, index,
+    Budget, CheckedCanonicalKirTransitionV1, Error, INTERNAL, Inventory, NONE, Resource, Result,
+    State, allocate, index,
 };
 use fe2o3_kernel_ir::{
     CanonicalKirBlockCoordinateV1 as Block, CanonicalKirDefinitionCoordinateV1 as Definition,
     CanonicalKirEdgeArgumentCoordinateV1 as EdgeArgument, CanonicalKirEdgeCoordinateV1 as Edge,
-    CanonicalKirUseCoordinateV1 as Use, ScalarType, Terminator,
+    CanonicalKirUseCoordinateV1 as Use, Module, VerifiedCanonicalKernelIrModuleV12,
 };
 use std::mem::size_of;
 
@@ -31,7 +31,7 @@ pub enum CanonicalKirEdgePlacementV1 {
 pub struct CanonicalKirBlockControlV1 {
     pub reachable: bool,
     pub placement: Option<CanonicalKirBlockPlacementV1>,
-    /// Independently derived Boolean selection, not inferred from missing rows.
+    /// Independently derived exact selection, not inferred from missing rows.
     pub selected_successor: Option<Edge>,
 }
 
@@ -52,9 +52,14 @@ pub struct CanonicalKirOutputUseV1 {
 /// Owner-bound index, not semantic equivalence or assertion-discharge authority.
 /// No constructor accepts unchecked candidate rows or a claimed graph hash.
 #[derive(Debug)]
-pub struct CheckedCanonicalKirControlIndexV1<'a, 'input, 'output> {
-    input: &'a Inventory<'input>,
-    output: &'a Inventory<'output>,
+pub struct CheckedCanonicalKirControlIndexV1<
+    'a,
+    'input,
+    'output,
+    O = VerifiedCanonicalKernelIrModuleV12,
+> {
+    input: &'a Inventory<'input, O>,
+    output: &'a Inventory<'output, O>,
     blocks: Vec<CanonicalKirBlockControlV1>,
     edges: Vec<CanonicalKirEdgeControlV1>,
     uses: Vec<Option<CanonicalKirOutputUseV1>>,
@@ -82,8 +87,24 @@ impl<'a, 'input, 'output> CheckedCanonicalKirControlIndexV1<'a, 'input, 'output>
         checked: &CheckedCanonicalKirTransitionV1<'a, 'input, 'output, '_>,
         budget: &mut Budget<'_>,
     ) -> Result<(Self, CanonicalKirControlIndexStorageV1)> {
+        Self::derive_modules(
+            checked,
+            checked.input().owner().module(),
+            checked.output().owner().module(),
+            budget,
+        )
+    }
+}
+
+impl<'a, 'input, 'output, O> CheckedCanonicalKirControlIndexV1<'a, 'input, 'output, O> {
+    pub(super) fn derive_modules(
+        checked: &CheckedCanonicalKirTransitionV1<'a, 'input, 'output, '_, O>,
+        input_module: &Module,
+        output_module: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, CanonicalKirControlIndexStorageV1)> {
         let floor = budget.storage();
-        let result = Self::build(checked, budget);
+        let result = Self::build(checked, input_module, output_module, budget);
         let retained = budget
             .storage()
             .checked_sub(floor)
@@ -93,7 +114,9 @@ impl<'a, 'input, 'output> CheckedCanonicalKirControlIndexV1<'a, 'input, 'output>
     }
 
     fn build(
-        checked: &CheckedCanonicalKirTransitionV1<'a, 'input, 'output, '_>,
+        checked: &CheckedCanonicalKirTransitionV1<'a, 'input, 'output, '_, O>,
+        input_module: &Module,
+        output_module: &Module,
         budget: &mut Budget<'_>,
     ) -> Result<Self> {
         budget.charge_work(1)?;
@@ -125,7 +148,7 @@ impl<'a, 'input, 'output> CheckedCanonicalKirControlIndexV1<'a, 'input, 'output>
         };
         let state_floor = budget.storage();
         let mut state = State::new(input, output, checked.rows(), budget)?;
-        state.check_structure(budget)?;
+        state.check_structure(input_module, output_module, budget)?;
         state.solve_values(budget)?;
         state.check_control(budget)?;
         let state_storage = budget
@@ -143,29 +166,7 @@ impl<'a, 'input, 'output> CheckedCanonicalKirControlIndexV1<'a, 'input, 'output>
                         .map_err(|_| Error::Arithmetic)?,
                 })
             };
-            let selected_successor =
-                if matches!(block.terminator, Terminator::ConditionalBranch { .. }) {
-                    let definition = input.uses()[block.terminator_uses.start].definition;
-                    match state.literal(definition, budget)? {
-                        Some(Literal {
-                            ty: ScalarType::Bool,
-                            bits: 0,
-                        }) => Some(Edge {
-                            source: block.coordinate,
-                            successor: 1,
-                        }),
-                        Some(Literal {
-                            ty: ScalarType::Bool,
-                            bits: 1,
-                        }) => Some(Edge {
-                            source: block.coordinate,
-                            successor: 0,
-                        }),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
+            let selected_successor = state.selected_successor(ordinal, budget)?;
             result.blocks[ordinal] = CanonicalKirBlockControlV1 {
                 reachable: state.reachable[ordinal] != 0,
                 placement,
@@ -218,10 +219,10 @@ impl<'a, 'input, 'output> CheckedCanonicalKirControlIndexV1<'a, 'input, 'output>
         Ok(result)
     }
 
-    pub const fn input(&self) -> &'a Inventory<'input> {
+    pub const fn input(&self) -> &'a Inventory<'input, O> {
         self.input
     }
-    pub const fn output(&self) -> &'a Inventory<'output> {
+    pub const fn output(&self) -> &'a Inventory<'output, O> {
         self.output
     }
     pub const fn grants_authority(&self) -> bool {

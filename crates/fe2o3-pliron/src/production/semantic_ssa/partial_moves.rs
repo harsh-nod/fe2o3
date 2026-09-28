@@ -29,10 +29,25 @@ struct SemanticPartialMoveBudgetV1 {
 }
 
 impl SemanticPartialMoveBudgetV1 {
+    fn charge_failure_storage<T>(
+        &mut self,
+        count: usize,
+    ) -> Result<(), ProductionSemanticSsaErrorV1> {
+        let bytes = std::mem::size_of::<T>()
+            .checked_mul(count)
+            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+        let words = bytes.div_ceil(std::mem::size_of::<usize>());
+        self.charge_state_entries(words)
+    }
+
     fn charge_state_entry(&mut self) -> Result<(), ProductionSemanticSsaErrorV1> {
+        self.charge_state_entries(1)
+    }
+
+    fn charge_state_entries(&mut self, count: usize) -> Result<(), ProductionSemanticSsaErrorV1> {
         self.state_entries = self
             .state_entries
-            .checked_add(1)
+            .checked_add(count)
             .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
         let required = self
             .base_storage_words
@@ -508,11 +523,41 @@ fn validate_partial_move_terminator_v1(
             validate_partial_move_place_read_v1(function, types, place, location, state, budget)
         }
         SemanticTerminatorKindV1::Assert {
-            condition, message, ..
+            condition,
+            message,
+            unwind,
+            ..
         } => {
             operand(condition)?;
+            if matches!(unwind, SemanticUnwindActionV1::Cleanup(_)) {
+                return validate_partial_move_assert_message_v1(
+                    function, types, message, location, state, budget,
+                );
+            }
+            // Diagnostic operands remain ordered, but cannot change success state.
+            // Precharge the copied logical map/path storage before cloning it.
+            budget.charge_failure_storage::<SemanticPartialMoveStateV1>(1)?;
+            for paths in state.values() {
+                budget.charge_work()?;
+                budget.charge_failure_storage::<(u32, BTreeSet<SemanticMovePathV1>)>(1)?;
+                for path in paths {
+                    budget.charge_work()?;
+                    budget.charge_failure_storage::<usize>(8)?;
+                    budget.charge_failure_storage::<SemanticMovePathV1>(1)?;
+                    budget.charge_failure_storage::<SemanticMovePathElementV1>(path.len())?;
+                    for _ in path {
+                        budget.charge_work()?;
+                    }
+                }
+            }
+            let mut failure = state.clone();
             validate_partial_move_assert_message_v1(
-                function, types, message, location, state, budget,
+                function,
+                types,
+                message,
+                location,
+                &mut failure,
+                budget,
             )
         }
         SemanticTerminatorKindV1::Return => {

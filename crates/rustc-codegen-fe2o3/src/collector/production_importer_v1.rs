@@ -313,6 +313,29 @@ pub(crate) fn construct_production_semantic_mir_nominal_v35<'tcx>(
     construct_production_semantic_mir_with_nominal_v35(tcx, closure, debug_source_capture, true)
 }
 
+/// The source-owned pipeline selects its exact grammar before admission.
+/// This reuses the live rustc producers and all original custody checks; it
+/// does not reencode an admitted legacy owner or infer a policy from a kernel.
+pub(crate) fn construct_production_semantic_mir_source_owned_v29<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    debug_source_capture: DebugSourceCaptureRequestV2,
+) -> Result<ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1> {
+    let (constructed, completion) = construct_production_semantic_mir_with_policy_v1(
+        tcx,
+        closure,
+        debug_source_capture,
+        false,
+        SourceImportPolicyV1::SourceOwnedV29,
+    )?;
+    match completion {
+        SourceImportCompletionV1::SourceOwnedV29 => Ok(constructed),
+        _ => Err(body_owner_table_mismatch_v1(
+            "source-owned import returned a foreign completion profile",
+        )),
+    }
+}
+
 fn construct_production_semantic_mir_with_nominal_v35<'tcx>(
     tcx: TyCtxt<'tcx>,
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
@@ -353,6 +376,7 @@ impl<'tcx> AuthenticatedOrderedCompositionMirV1<'tcx> {
 #[derive(Clone, Copy)]
 enum SourceImportPolicyV1 {
     Singleton,
+    SourceOwnedV29,
     Composition,
     Bf16Inspection,
     Bf16TileValues,
@@ -360,6 +384,7 @@ enum SourceImportPolicyV1 {
 // Exact private completion modes: no inferred or fallback source custody.
 enum SourceImportCompletionV1<'tcx> {
     Singleton,
+    SourceOwnedV29,
     Composition(crate::production_ordered_composition_source_v1::AuthenticatedOrderedCompositionSourceSeedV1<'tcx>),
     Bf16Inspection(crate::production_tiled_region_source_v1::AuthenticatedBf16MfmaSourceSeedV1<'tcx>),
     Bf16TileValues(crate::production_bf16_tile_values_source_v1::AuthenticatedBf16TileValuesSourceSeedV1<'tcx>),
@@ -621,6 +646,12 @@ fn construct_production_semantic_mir_with_policy_v1<'tcx>(
             TileValues::Disabled,
         ) => SourceImportCompletionV1::Singleton,
         (
+            SourceImportPolicyV1::SourceOwnedV29,
+            Ordered::Singleton,
+            Bf16::Disabled,
+            TileValues::Disabled,
+        ) => SourceImportCompletionV1::SourceOwnedV29,
+        (
             SourceImportPolicyV1::Composition,
             Ordered::Composition(seed),
             Bf16::Disabled,
@@ -786,6 +817,7 @@ fn construct_complete_request_v1<'tcx>(
     .with_ordered_sources_v31(ordered_sources);
     match ordered_policy {
         SourceImportPolicyV1::Singleton
+        | SourceImportPolicyV1::SourceOwnedV29
         | SourceImportPolicyV1::Bf16Inspection
         | SourceImportPolicyV1::Bf16TileValues => {
             let sources = if contains_ordered_program {
@@ -1059,7 +1091,11 @@ fn construct_complete_request_v1<'tcx>(
         plan.roots().to_vec(),
     )
     .and_then(|request| {
-        if contains_physical_lds_exchange {
+        if matches!(ordered_policy, SourceImportPolicyV1::SourceOwnedV29) {
+            // Fixed pipeline context, including ordinary scalar roots. Newer
+            // sibling syntax must fail exact membership, never fall back.
+            request.admit_exact_v29(SemanticMirLimitsV1::default())
+        } else if contains_physical_lds_exchange {
             // Only actual authenticated V39 providers select this exact sibling grammar.
             request.admit_exact_v39(SemanticMirLimitsV1::default())
         } else if contains_physical_global_copy {

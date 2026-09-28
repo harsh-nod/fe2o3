@@ -11,6 +11,21 @@ mod progress_scoped_resource_v67_tests {
         .div_ceil(size_of::<usize>())
     }
 
+    fn native_normalization(census: ProductionAnalysisInputCensusV1) -> (usize, usize) {
+        let q = census.successors * (2 + census.blocks * census.successors);
+        let sites = 8 * (census.blocks + census.successors)
+            + census.successors
+            + 8 * q
+            + census.successors * q;
+        let work = sites * (552 + 32 * (census.results + census.block_arguments));
+        let storage = if census.blocks + census.successors == 0 {
+            0
+        } else {
+            32 + 8 * 8 + 2 * 6 + 12 * 4 + 16 * 2 + 4 + 128_usize.div_ceil(usize::BITS as usize)
+        };
+        (work, storage)
+    }
+
     #[test]
     fn scoped_progress_has_literal_work_and_peak_boundaries() {
         let cases = [
@@ -47,6 +62,13 @@ mod progress_scoped_resource_v67_tests {
             ),
         ];
         for (census, work, retained, peak, old_work, old_peak) in cases {
+            let (scalar_work, scalar_storage) = native_normalization(census);
+            let (work, peak, old_work, old_peak) = (
+                work + scalar_work,
+                peak + scalar_storage,
+                old_work + scalar_work,
+                old_peak + scalar_storage,
+            );
             let exact = preflight_scoped_progress_resource_upper_bound_v1(
                 census,
                 ProductionAnalysisResourceLimitsV1::new(work, peak),
@@ -107,6 +129,8 @@ mod progress_scoped_resource_v67_tests {
                 successors: 3,
                 ..ProductionAnalysisInputCensusV1::default()
             };
+            let (scalar_work, scalar_storage) = native_normalization(census);
+            let (work, peak) = (work + scalar_work, peak + scalar_storage);
             // E*(2+B*E)=24 queries, each 8+24E+11A extra visits.
             // A=0 still pays controls for more than two nullary successors.
             // One extra payload owner costs three header + four*A cells.
@@ -120,10 +144,11 @@ mod progress_scoped_resource_v67_tests {
                 base_work
                     + 24 * (8 + 24 * 3 + 11 * operands)
                     + 12 * (48 + (16 + 4 * block_arguments) * operands)
+                    + scalar_work
             );
             assert_eq!(
                 bound.peak_storage_upper_bound(),
-                base_peak + 3 + 4 * operands + entry_headers()
+                base_peak + 3 + 4 * operands + entry_headers() + scalar_storage
             );
             for (limits, resource) in [
                 (

@@ -81,6 +81,13 @@ pub(in crate::production::semantic_ssa) trait SemanticSsaEmissionObserverV1 {
     fn entry_pass_begin(&mut self, _: usize, _: usize) -> Result<(), Self::Error> {
         Ok(())
     }
+    fn terminal_failure_begin(
+        &mut self,
+        _: SemanticSsaEmissionSiteV1,
+        _: usize,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
     fn visit(
         &mut self,
         kind: SemanticSsaVisitV1,
@@ -263,6 +270,7 @@ struct EmitterV1<'a, B, O> {
     events: &'a mut B,
     observer: &'a mut O,
     site: SemanticSsaEmissionSiteV1,
+    failure_start: Option<usize>,
 }
 
 pub(in crate::production::semantic_ssa) fn emit_statement_events_v1<
@@ -307,6 +315,7 @@ pub(in crate::production::semantic_ssa) fn emit_statement_events_with_buffer_v1<
         events,
         observer,
         site,
+        failure_start: None,
     };
     emitter.visit(SemanticSsaVisitV1::Statement)?;
     if elided_borrow {
@@ -336,13 +345,29 @@ pub(in crate::production::semantic_ssa) fn emit_terminator_events_with_buffer_v1
     events: &mut B,
     observer: &mut O,
 ) -> EmissionResultV1<O::Error, B::Error> {
+    emit_terminator_events_with_failure_tail_v1(terminator, return_local, site, events, observer)
+        .map(|_| ())
+}
+
+pub(in crate::production::semantic_ssa) fn emit_terminator_events_with_failure_tail_v1<
+    B: SemanticSsaEventBufferV1,
+    O: SemanticSsaEmissionObserverV1,
+>(
+    terminator: &SemanticTerminatorKindV1,
+    return_local: Option<usize>,
+    site: SemanticSsaEmissionSiteV1,
+    events: &mut B,
+    observer: &mut O,
+) -> Result<Option<usize>, SemanticSsaEmissionErrorV1<O::Error, B::Error>> {
     let mut emitter = EmitterV1 {
         events,
         observer,
         site,
+        failure_start: None,
     };
     emitter.visit(SemanticSsaVisitV1::Terminator)?;
-    emitter.terminator(terminator, return_local)
+    emitter.terminator(terminator, return_local)?;
+    Ok(emitter.failure_start)
 }
 
 impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_, B, O> {
@@ -570,9 +595,19 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
             }
             SemanticTerminatorKindV1::Drop { place, .. } => self.place(place, R::DropPlace),
             SemanticTerminatorKindV1::Assert {
-                condition, message, ..
+                condition,
+                message,
+                unwind,
+                ..
             } => {
                 self.operand(condition, R::AssertCondition)?;
+                if !matches!(unwind, SemanticUnwindActionV1::Cleanup(_)) {
+                    let start = self.events.event_count();
+                    self.observer
+                        .terminal_failure_begin(self.site, start)
+                        .map_err(SemanticSsaEmissionErrorV1::Observer)?;
+                    self.failure_start = Some(start);
+                }
                 self.assert_message(message)
             }
             SemanticTerminatorKindV1::Return => {

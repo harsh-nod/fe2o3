@@ -1,5 +1,6 @@
 // Retained arrays remain private memory. The element type is a modeled KIR
 // scalar or thin pointer, never a synthetic aggregate KIR type.
+include!("production_source_partial_array_read_v29.rs");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SemanticRetainedArrayLayoutV1 {
     element: SemanticTypeIdV1,
@@ -72,12 +73,14 @@ fn retained_array_slot_plan_v1(
     )?;
     Ok(SemanticRetainedLocalSlotPlanV1 {
         semantic_type: ty,
-        kernel_type,
-        alignment,
-        array: Some(SemanticRetainedArrayLayoutV1 {
-            element: *element,
-            length: *length,
-        }),
+        storage: SemanticRetainedStorageV29::ScalarArray {
+            kernel_type,
+            alignment,
+            array: Some(SemanticRetainedArrayLayoutV1 {
+                element: *element,
+                length: *length,
+            }),
+        },
     })
 }
 
@@ -128,14 +131,56 @@ fn retained_array_expansion_v1(
     Ok(length)
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+fn lookup_optional_retained_array_v29<'a>(
+    slots: &'a BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotV1>,
+    local: u32,
+    mut budget: Option<&mut dyn SemanticEmissionBudgetV1>,
+) -> Result<Option<&'a SemanticRetainedLocalSlotV1>, ProductionSemanticKirErrorV1> {
+    if let Some(budget) = budget.as_mut() {
+        charge_execution_cfg_lookup_v29(slots.len(), &mut **budget)?;
+        budget.charge_work(1)?;
+    }
+    // This classifies an optional legacy array before source-object lowering.
+    // A selected legacy slot still requires the strict identity/representation check.
+    if !slots.contains_key(&ScopedAllocationIdentityV29::LegacyLocal(local)) {
+        return Ok(None);
+    }
+    Ok(
+        lookup_legacy_retained_slot_v29(slots, local, budget)?.filter(|slot| {
+            matches!(
+                slot.storage,
+                SemanticRetainedStorageV29::ScalarArray { array: Some(_), .. }
+            )
+        }),
+    )
+}
+
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn retained_array_slot_v1(
-        &self,
+        &mut self,
         local: SemanticLocalIdV1,
-    ) -> Option<&SemanticRetainedLocalSlotV1> {
-        self.retained_local_slots
-            .get(&local.index())
-            .filter(|slot| slot.array.is_some())
+    ) -> Result<Option<&SemanticRetainedLocalSlotV1>, ProductionSemanticKirErrorV1> {
+        let plan = self
+            .execution
+            .as_ref()
+            .and_then(|cursor| cursor.references)
+            .map(|references| references.plan);
+        if let Some(plan) = plan {
+            self.emission_work
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?
+                .source_reference_owner_v29(plan)?;
+        }
+        match self.emission_work.as_mut() {
+            Some(budget) => lookup_optional_retained_array_v29(
+                &self.retained_local_slots,
+                local.index(),
+                Some(&mut **budget),
+            ),
+            None => {
+                lookup_optional_retained_array_v29(&self.retained_local_slots, local.index(), None)
+            }
+        }
     }
 
     fn require_retained_array_initialized_v1(
@@ -177,7 +222,7 @@ impl SemanticFunctionLoweringV1<'_> {
         self.emit_id(
             operations,
             Type::pointer(
-                slot.kernel_type.clone(),
+                slot.storage.scalar_array()?.0.clone(),
                 AddressSpace::Private,
                 AccessMode::ReadWrite,
             ),
@@ -196,11 +241,13 @@ impl SemanticFunctionLoweringV1<'_> {
         operations: &mut Vec<Operation>,
     ) -> Result<(ValueId, SemanticRetainedLocalSlotV1), ProductionSemanticKirErrorV1> {
         let slot = self
-            .retained_array_slot_v1(place.local())
+            .retained_array_slot_v1(place.local())?
             .cloned()
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         let array = slot
-            .array
+            .storage
+            .scalar_array()?
+            .2
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         let [projection] = place.projections() else {
             return Err(unsupported(
@@ -214,6 +261,7 @@ impl SemanticFunctionLoweringV1<'_> {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
         let mut private_original_index = None;
+        let mut source_selector = None;
         let offset = match projection.kind() {
             SemanticProjectionKindV1::ConstantIndex {
                 offset,
@@ -254,7 +302,10 @@ impl SemanticFunctionLoweringV1<'_> {
                     .ty();
                 let index_place = SemanticPlaceV1::new(local, Vec::new(), index_type)
                     .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-                let binding = self.resolve_place(block, statement, &index_place, operations)?;
+                let binding =
+                    self.with_retained_index_payload_v29(block, statement, place, 0, |this| {
+                        this.resolve_place(block, statement, &index_place, operations)
+                    })?;
                 let (mut index, ty) = binding.value().map_err(|detail| {
                     unsupported(
                         self.semantic_function.index(),
@@ -283,6 +334,16 @@ impl SemanticFunctionLoweringV1<'_> {
                             "retained array index is not a modeled unsigned integer",
                         )
                     })?;
+                source_selector = self.begin_source_selector_v29(
+                    block,
+                    statement,
+                    place,
+                    0,
+                    slot.semantic_type,
+                    array.length,
+                    index,
+                    scalar,
+                )?;
                 if self.private_arrays.frame.is_some() {
                     let direct_definition = self
                         .private_arrays
@@ -338,6 +399,16 @@ impl SemanticFunctionLoweringV1<'_> {
         };
         let gep_operation = operations.len();
         let pointer = self.emit_retained_array_pointer_v1(&slot, offset, operations)?;
+        self.finish_source_selector_v29(
+            source_selector,
+            SourceReferenceSelectorProducerV29::Address {
+                base: slot.pointer,
+                offset,
+                pointer,
+                block: self.kernel_block_id_v1(block)?,
+                operation: gep_operation,
+            },
+        )?;
         if let Some(original_index) = private_original_index {
             let offset_location = self
                 .private_arrays
@@ -366,20 +437,29 @@ impl SemanticFunctionLoweringV1<'_> {
         volatility: SemanticVolatilityV1,
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
-        self.require_retained_array_initialized_v1(block, statement, place.local())?;
+        if !self
+            .retained_local_initialized
+            .contains(&place.local().index())
+        {
+            self.require_source_partial_array_read_v29(block, statement, place)?;
+        }
         if !place.projections().is_empty() {
             let (pointer, slot) =
                 self.retained_array_element_pointer_v1(block, statement, place, operations)?;
-            let mut access = MemoryAccess::new(AddressSpace::Private, slot.alignment);
+            let (kernel_type, alignment, _) = slot.storage.scalar_array()?;
+            let mut access = MemoryAccess::new(AddressSpace::Private, alignment);
             access.volatile = volatility == SemanticVolatilityV1::Volatile;
             self.private_arrays
                 .prepare_effect(self.emitted_operations)?;
             let operation = operations.len();
-            let value = self.emit(
-                operations,
-                slot.kernel_type,
-                OperationKind::Load { pointer, access },
-            )?;
+            let value =
+                self.with_scoped_read_payload_v29(place, place.projections().len(), |this| {
+                    this.emit(
+                        operations,
+                        kernel_type.clone(),
+                        OperationKind::Load { pointer, access },
+                    )
+                })?;
             self.private_arrays.commit_effect(
                 self.correspondence_owner,
                 self.semantic_function,
@@ -399,15 +479,14 @@ impl SemanticFunctionLoweringV1<'_> {
             ));
         }
         let slot = self
-            .retained_array_slot_v1(place.local())
+            .retained_array_slot_v1(place.local())?
             .cloned()
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         if place.ty() != slot.semantic_type {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
-        let array = slot
-            .array
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let (kernel_type, alignment, array) = slot.storage.scalar_array()?;
+        let array = array.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         let length = self.require_retained_array_expansion_v1(array.length, operations)?;
         let mut fields = Vec::new();
         fields.try_reserve_exact(length).map_err(|_| {
@@ -418,11 +497,11 @@ impl SemanticFunctionLoweringV1<'_> {
         for index in 0..array.length {
             let offset = self.emit_index_constant(operations, index)?;
             let pointer = self.emit_retained_array_pointer_v1(&slot, offset, operations)?;
-            let mut access = MemoryAccess::new(AddressSpace::Private, slot.alignment);
+            let mut access = MemoryAccess::new(AddressSpace::Private, alignment);
             access.volatile = volatility == SemanticVolatilityV1::Volatile;
             fields.push(self.emit(
                 operations,
-                slot.kernel_type.clone(),
+                kernel_type.clone(),
                 OperationKind::Load { pointer, access },
             )?);
         }
@@ -449,7 +528,8 @@ impl SemanticFunctionLoweringV1<'_> {
             })?;
             let (pointer, slot) =
                 self.retained_array_element_pointer_v1(block, statement, place, operations)?;
-            if ty != slot.kernel_type {
+            let (kernel_type, alignment, _) = slot.storage.scalar_array()?;
+            if ty != *kernel_type {
                 return Err(unsupported(
                     self.semantic_function.index(),
                     Some(block.index()),
@@ -457,7 +537,7 @@ impl SemanticFunctionLoweringV1<'_> {
                     "retained array element value differs from its exact storage type",
                 ));
             }
-            let mut access = MemoryAccess::new(AddressSpace::Private, slot.alignment);
+            let mut access = MemoryAccess::new(AddressSpace::Private, alignment);
             access.volatile = volatility == SemanticVolatilityV1::Volatile;
             self.private_arrays
                 .prepare_effect(self.emitted_operations)?;
@@ -483,12 +563,11 @@ impl SemanticFunctionLoweringV1<'_> {
             ));
         }
         let slot = self
-            .retained_array_slot_v1(place.local())
+            .retained_array_slot_v1(place.local())?
             .cloned()
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let array = slot
-            .array
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let (kernel_type, alignment, array) = slot.storage.scalar_array()?;
+        let array = array.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         let length = self.require_retained_array_expansion_v1(array.length, operations)?;
         let SemanticValueBindingV1::Aggregate(fields) = value else {
             return Err(unsupported(
@@ -502,7 +581,7 @@ impl SemanticFunctionLoweringV1<'_> {
             || fields.len() != length
             || fields
                 .iter()
-                .any(|field| field.value().map_or(true, |(_, ty)| ty != slot.kernel_type))
+                .any(|field| field.value().map_or(true, |(_, ty)| ty != *kernel_type))
         {
             return Err(unsupported(
                 self.semantic_function.index(),
@@ -531,23 +610,40 @@ impl SemanticFunctionLoweringV1<'_> {
                 pointer,
                 gep_operation,
             )?;
-            let mut access = MemoryAccess::new(AddressSpace::Private, slot.alignment);
+            let mut access = MemoryAccess::new(AddressSpace::Private, alignment);
             access.volatile = volatility == SemanticVolatilityV1::Volatile;
             if initializer {
                 self.private_arrays
                     .prepare_effect(self.emitted_operations)?;
             }
             let operation = operations.len();
-            self.push_operation(operations, || {
-                Operation::new(
-                    Vec::new(),
-                    OperationKind::Store {
-                        pointer,
-                        value,
-                        access,
+            if initializer && self.scoped_memory.is_some() {
+                self.with_scoped_payload_header_v29(
+                    std::mem::size_of::<Option<ScopedMemoryStoreSourceV29>>(),
+                    |this| {
+                        let payload = this.prepare_scoped_array_initializer_payload_v29(
+                            execution_site_v29(block, statement),
+                            place,
+                            index,
+                        )?;
+                        let Type::Scalar(scalar) = kernel_type else {
+                            return Err(scoped_memory_error_v29());
+                        };
+                        this.with_scoped_store_payload_v29(
+                            payload,
+                            SemanticValueBindingV1::Value {
+                                id: value,
+                                ty: Type::Scalar(*scalar),
+                            },
+                            |this, _| {
+                                this.push_memory_store_v1(operations, pointer, value, access, None)
+                            },
+                        )
                     },
-                )
-            })?;
+                )?;
+            } else {
+                self.push_memory_store_v1(operations, pointer, value, access, None)?;
+            }
             if initializer {
                 self.private_arrays.commit_effect(
                     self.correspondence_owner,

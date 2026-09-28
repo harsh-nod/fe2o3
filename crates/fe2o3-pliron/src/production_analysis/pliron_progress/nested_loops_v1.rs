@@ -154,14 +154,33 @@ fn run_pliron_progress_after_verification_with_observation_v1(
                         &dominators,
                         &graph.predecessors,
                         &graph.edges,
+                        &graph.incoming,
                         &component,
                         &component_members,
                     ) {
                         Ok(mut nested) => certificates.append(&mut nested),
-                        Err(()) => findings.push(PlironProgressFindingV1::ProgressIncomplete {
-                            blocks: component,
+                        Err(NestedLoopFailureV1::Incomplete) => {
+                            findings.push(PlironProgressFindingV1::ProgressIncomplete {
+                                blocks: component,
+                                reason,
+                            })
+                        }
+                        Err(NestedLoopFailureV1::NativeIncomplete(reason)) => {
+                            findings.push(PlironProgressFindingV1::ProgressIncomplete {
+                                blocks: component,
+                                reason,
+                            })
+                        }
+                        Err(NestedLoopFailureV1::Rejected {
                             reason,
-                        }),
+                            counterexample,
+                        }) => {
+                            findings.push(PlironProgressFindingV1::NonTerminatingCycle {
+                                blocks: component,
+                                reason,
+                                counterexample,
+                            });
+                        }
                     }
                 }
             }
@@ -177,6 +196,20 @@ fn run_pliron_progress_after_verification_with_observation_v1(
     }
 }
 
+enum NestedLoopFailureV1 {
+    Incomplete,
+    NativeIncomplete(&'static str),
+    Rejected {
+        reason: &'static str,
+        counterexample: String,
+    },
+}
+impl From<()> for NestedLoopFailureV1 {
+    fn from(_: ()) -> Self {
+        Self::Incomplete
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prove_nested_positive_induction_loops_v1(
     context: &Context,
@@ -186,9 +219,10 @@ fn prove_nested_positive_induction_loops_v1(
     dominators: &[HashSet<usize>],
     predecessors: &[Vec<usize>],
     edges: &[Vec<usize>],
+    incoming: &[Vec<IncomingEdgeV1>],
     component: &[usize],
     component_members: &HashSet<usize>,
-) -> Result<Vec<PlironProgressCertificateV1>, ()> {
+) -> Result<Vec<PlironProgressCertificateV1>, NestedLoopFailureV1> {
     let mut backedges = Vec::new();
     for source in component.iter().copied() {
         for target in edges[source].iter().copied() {
@@ -198,7 +232,7 @@ fn prove_nested_positive_induction_loops_v1(
         }
     }
     if backedges.is_empty() {
-        return Err(());
+        return Err(().into());
     }
 
     let mut certificates = Vec::with_capacity(backedges.len());
@@ -208,10 +242,8 @@ fn prove_nested_positive_induction_loops_v1(
         let header_ref = header.deref(context);
         let terminator = header_ref.get_terminator(context).ok_or(())?;
         let operation = Operation::get_op_dyn(terminator, context);
-        let branch = operation
-            .downcast_ref::<IndexLessThanBranchArgsOp>()
-            .ok_or(())?;
-        let induction = branch.lhs(context);
+        let guard = progress_header_view_v1(context, &operation, operation_blocks).ok_or(())?;
+        let induction = guard.induction;
         let induction_argument = (0..header_ref.get_num_arguments())
             .find(|argument| header_ref.get_argument(*argument) == induction)
             .ok_or(())?;
@@ -220,9 +252,11 @@ fn prove_nested_positive_induction_loops_v1(
             .deref(context)
             .successors()
             .collect::<Vec<_>>();
-        let [body, exit] = successors.as_slice() else {
-            return Err(());
-        };
+        if successors.len() != 2 {
+            return Err(().into());
+        }
+        let body = &successors[guard.body_ordinal];
+        let exit = &successors[guard.exit_ordinal];
         let body_index = *block_indices.get(body).ok_or(())?;
         let exit_index = *block_indices.get(exit).ok_or(())?;
 
@@ -239,7 +273,7 @@ fn prove_nested_positive_induction_loops_v1(
             }
         }
         if !natural_loop.contains(&body_index) || natural_loop.contains(&exit_index) {
-            return Err(());
+            return Err(().into());
         }
         for block in natural_loop.iter().copied() {
             if block != header_index
@@ -247,7 +281,7 @@ fn prove_nested_positive_induction_loops_v1(
                     .iter()
                     .any(|predecessor| !natural_loop.contains(predecessor))
             {
-                return Err(());
+                return Err(().into());
             }
         }
         let entries = predecessors[header_index]
@@ -255,17 +289,26 @@ fn prove_nested_positive_induction_loops_v1(
             .copied()
             .filter(|predecessor| !natural_loop.contains(predecessor))
             .collect::<Vec<_>>();
-        if let [entry] = entries.as_slice() {
-            let entry_arguments = progress_edge_arguments_v1(context, blocks[*entry], header)?;
-            if entry_arguments
-                .get(induction_argument)
-                .and_then(|value| index_constant(context, *value))
-                != Some(0)
+        let initial = if let [entry] = entries.as_slice() {
+            let arguments = progress_edge_arguments_v1(context, blocks[*entry], header)?;
+            let value = *arguments.get(induction_argument).ok_or(())?;
+            if guard.domain != NativeProgressDomainV1::LegacyIndex
+                && (!progress_external_bound_v1(
+                    context,
+                    value,
+                    guard.domain,
+                    block_indices,
+                    operation_blocks,
+                    dominators,
+                    &natural_loop,
+                    header_index,
+                ) || value.get_type(context) != induction.get_type(context))
             {
-                return Err(());
+                return Err(().into());
             }
+            value
         } else {
-            let initial = progress_multi_entry_initial_v1(
+            progress_multi_entry_initial_v1(
                 context,
                 blocks,
                 block_indices,
@@ -275,18 +318,37 @@ fn prove_nested_positive_induction_loops_v1(
                 header_index,
                 &entries,
                 induction_argument,
-            )?;
-            if index_constant(context, initial) != Some(0) {
-                return Err(());
-            }
-        }
-        if branch
-            .rhs(context)
-            .defining_op()
-            .and_then(|definition| operation_blocks.get(&definition).copied())
-            .is_some_and(|block| natural_loop.contains(&block))
+            )?
+        };
+        if guard.domain == NativeProgressDomainV1::LegacyIndex
+            && index_constant(context, initial) != Some(0)
         {
-            return Err(());
+            return Err(().into());
+        }
+        if !progress_external_bound_v1(
+            context,
+            guard.bound,
+            guard.domain,
+            block_indices,
+            operation_blocks,
+            dominators,
+            &natural_loop,
+            header_index,
+        ) || (guard.domain != NativeProgressDomainV1::LegacyIndex
+            && entries.iter().any(|entry| {
+                !progress_external_bound_v1(
+                    context,
+                    guard.bound,
+                    guard.domain,
+                    block_indices,
+                    operation_blocks,
+                    dominators,
+                    &natural_loop,
+                    *entry,
+                )
+            }))
+        {
+            return Err(().into());
         }
 
         let inductions = propagate_loop_induction_v1(
@@ -300,17 +362,62 @@ fn prove_nested_positive_induction_loops_v1(
         let latch_induction = *inductions.get(&latch).ok_or(())?;
         let latch_arguments = progress_edge_arguments_v1(context, blocks[latch], header)?;
         let next = *latch_arguments.get(induction_argument).ok_or(())?;
-        let step = progress_index_offset_v1(context, next, latch_induction).ok_or(())?;
+        let step = progress_induction_offset_v1(context, next, latch_induction, guard.domain)
+            .ok_or_else(|| if guard.domain == NativeProgressDomainV1::LegacyIndex {
+                NestedLoopFailureV1::Incomplete
+            } else {
+                NestedLoopFailureV1::NativeIncomplete(
+                    "the native recurrence needs an exact nonnegative constant Add value fitting the current u64 certificate step",
+                )
+            })?;
         if step == 0 {
-            return Err(());
-        }
-        if step > 1 {
-            let upper_bound = index_constant(context, branch.rhs(context))
-                .or_else(|| unsigned_cast_upper_bound(context, branch.rhs(context)))
-                .ok_or(())?;
-            if upper_bound != 0 && (upper_bound - 1).checked_add(step).is_none() {
-                return Err(());
+            if guard.domain == NativeProgressDomainV1::LegacyIndex {
+                return Err(().into());
             }
+            match native_zero_step_result_v1(
+                context,
+                blocks,
+                block_indices,
+                &natural_loop,
+                &incoming[header_index],
+                header_index,
+                latch,
+                induction_argument,
+                guard,
+                "the native induction step is zero",
+            ) {
+                CanonicalLoopResultV1::Inactive => {
+                    proved_backedges.insert((latch, header_index));
+                    continue;
+                }
+                CanonicalLoopResultV1::Rejected {
+                    reason,
+                    counterexample,
+                } => {
+                    return Err(NestedLoopFailureV1::Rejected {
+                        reason,
+                        counterexample,
+                    });
+                }
+                CanonicalLoopResultV1::Incomplete(reason) => {
+                    return Err(NestedLoopFailureV1::NativeIncomplete(reason));
+                }
+                _ => return Err(().into()),
+            }
+        }
+        if guard.domain == NativeProgressDomainV1::IndexUnknown && step > 1 {
+            return Err(NestedLoopFailureV1::NativeIncomplete(
+                "a native Index non-unit step needs retained source/target width custody",
+            ));
+        }
+        if !progress_step_has_no_wrap_v1(context, guard, step) {
+            return Err(if guard.domain == NativeProgressDomainV1::LegacyIndex {
+                NestedLoopFailureV1::Incomplete
+            } else {
+                NestedLoopFailureV1::NativeIncomplete(
+                    "the native induction update lacks an exact finite-width no-wrap bound",
+                )
+            });
         }
         proved_backedges.insert((latch, header_index));
         certificates.push(PlironProgressCertificateV1 {
@@ -318,12 +425,12 @@ fn prove_nested_positive_induction_loops_v1(
             body: body_index,
             exit: exit_index,
             induction: induction.id(context).into(),
-            bound: branch.rhs(context).id(context).into(),
+            bound: guard.bound.id(context).into(),
             step,
         });
     }
     if !is_acyclic_without_edges_v1(component_members, edges, &proved_backedges) {
-        return Err(());
+        return Err(().into());
     }
     certificates.sort_by_key(|certificate| certificate.header);
     Ok(certificates)
@@ -398,10 +505,15 @@ fn propagate_loop_induction_v1(
                     .filter(|(_, argument)| **argument == source_induction)
                     .map(|(argument, _)| argument)
                     .collect::<Vec<_>>();
-                let [argument] = matching.as_slice() else {
-                    return Err(());
+                // Natural-loop construction already proves header dominance
+                // for every member. No forwarded alias is needed when the
+                // recurrence reads that exact immutable header SSA value.
+                // The complete parallel payloads were compared above.
+                let target_induction = match matching.as_slice() {
+                    [] => induction,
+                    [argument] => blocks[target].deref(context).get_argument(*argument),
+                    _ => return Err(()),
                 };
-                let target_induction = blocks[target].deref(context).get_argument(*argument);
                 if let Some(existing) = inductions.get(&target) {
                     if *existing != target_induction {
                         return Err(());
@@ -427,20 +539,20 @@ fn progress_edge_arguments_v1(
     #[cfg(test)]
     multi_entry_query_tests::record();
     let terminator = source.deref(context).get_terminator(context).ok_or(())?;
-    let operation = Operation::get_op_dyn(terminator, context);
+    let control = ControlViewV1::observe(context, terminator).map_err(|_| ())?;
     let mut arguments = None;
-    for (ordinal, successor) in operation
-        .get_operation()
-        .deref(context)
-        .successors()
-        .enumerate()
-    {
-        if successor != target {
+    for ordinal in 0..control.successor_count() {
+        let edge = control.edge(ordinal).map_err(|_| ())?;
+        if edge.target() != target {
             continue;
         }
-        let candidate = successor_arguments(context, &operation, ordinal)
-            .or_else(|| (target.deref(context).get_num_arguments() == 0).then(Vec::new))
-            .ok_or(())?;
+        let candidate = (0..edge.argument_count())
+            .map(|index| {
+                edge.argument_at(index)
+                    .expect("authenticated in-range edge argument")
+                    .0
+            })
+            .collect::<Vec<_>>();
         // A block pair is a usable summary only when all parallel edges agree.
         if arguments.as_ref().is_some_and(|first| first != &candidate) {
             return Err(());

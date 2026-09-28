@@ -6,6 +6,16 @@
 //! owner, stage, registered root, and exact graph snapshot before entering
 //! this module.
 
+pub use canonical_ranked_checks_v1::private::{
+    CanonicalPrivateRequirementV1, CheckedCanonicalPrivateMemoryPoliciesV1,
+    CheckedCanonicalPrivatePoliciesV1, with_canonical_private_memory_policy_checks_v1,
+    with_canonical_private_policy_checks_v1,
+};
+pub use canonical_ranked_checks_v1::traps::{
+    CanonicalTrapIncomingEdgeV1, CanonicalTrapPairV1, CheckedCanonicalTrapPoliciesV1,
+    CheckedCanonicalTrapShapeV1, with_canonical_trap_policy_checks_v1,
+    with_canonical_trap_shape_v1,
+};
 mod pliron_analysis_manager;
 mod pliron_analysis_witness;
 mod pliron_atomic_legality;
@@ -150,8 +160,27 @@ mod tests {
             .any(|token| is_raw_name(token, aliases))
     }
 
+    fn is_canonical_operation_path(path: &syn::Path, aliases: &BTreeSet<String>) -> bool {
+        // Cargo binds this absolute external namespace to the immutable KIR crate.
+        // This syntax audit is not name resolution; compiler checks remain required.
+        path.leading_colon.is_some()
+            && !aliases.contains("fe2o3_kernel_ir")
+            && path.segments.len() == 2
+            && path.segments[0].ident == "fe2o3_kernel_ir"
+            && path.segments[1].ident == "Operation"
+            && path
+                .segments
+                .iter()
+                .all(|segment| matches!(segment.arguments, PathArguments::None))
+    }
+
     fn type_contains_raw(ty: &Type, aliases: &BTreeSet<String>) -> bool {
         match ty {
+            Type::Path(path)
+                if path.qself.is_none() && is_canonical_operation_path(&path.path, aliases) =>
+            {
+                false
+            }
             Type::Path(path) => {
                 path.qself
                     .as_ref()
@@ -318,6 +347,7 @@ mod tests {
     }
 
     fn collect_raw_aliases(items: &[Item], aliases: &mut BTreeSet<String>) {
+        collect_canonical_namespace_rebindings(items, aliases);
         for item in items {
             match item {
                 Item::Use(use_item) => collect_raw_use_aliases(&use_item.tree, false, aliases),
@@ -346,6 +376,29 @@ mod tests {
             }
             if aliases.len() == before {
                 break;
+            }
+        }
+    }
+
+    fn collect_canonical_namespace_rebindings(items: &[Item], aliases: &mut BTreeSet<String>) {
+        for item in items {
+            match item {
+                Item::ExternCrate(external) => {
+                    let binding = external
+                        .rename
+                        .as_ref()
+                        .map_or(&external.ident, |(_, renamed)| renamed);
+                    if binding == "fe2o3_kernel_ir" {
+                        // Conservatively reject even an explicit same-crate binding.
+                        aliases.insert(binding.to_string());
+                    }
+                }
+                Item::Mod(module) => {
+                    if let Some((_, items)) = &module.content {
+                        collect_canonical_namespace_rebindings(items, aliases);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -511,14 +564,19 @@ mod tests {
 
     #[test]
     fn raw_context_analysis_entry_points_remain_private() {
-        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/production_analysis");
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let root_source = fs::read_to_string(source_root.join("lib.rs")).expect("crate root");
+        let root_syntax = syn::parse_file(&root_source).expect("valid crate root Rust source");
+        let mut root_aliases = BTreeSet::new();
+        collect_canonical_namespace_rebindings(&root_syntax.items, &mut root_aliases);
+        let directory = source_root.join("production_analysis");
         let mut sources = Vec::new();
         collect_rust_sources(&directory, &mut sources);
         sources.sort();
         for path in sources {
             let source = fs::read_to_string(&path).expect("production analysis source");
             let syntax = syn::parse_file(&source).expect("valid production analysis Rust source");
-            let mut aliases = BTreeSet::new();
+            let mut aliases = root_aliases.clone();
             collect_raw_aliases(&syntax.items, &mut aliases);
             assert_items_have_no_public_raw_api(&path, &syntax.items, &aliases);
         }
@@ -567,6 +625,108 @@ mod tests {
                 "raw Pliron API bypass was not rejected: {source}"
             );
         }
+    }
+
+    #[test]
+    fn raw_context_api_audit_accepts_absolute_canonical_nodes() {
+        let source = r#"
+            pub enum Subject<'a> {
+                Operation(&'a ::fe2o3_kernel_ir::Operation),
+            }
+            pub struct Nodes<'a> {
+                pub nodes: Option<&'a [::fe2o3_kernel_ir::Operation]>,
+            }
+            pub type Node = ::fe2o3_kernel_ir::Operation;
+            pub fn inspect(node: &Node) -> Option<&::fe2o3_kernel_ir::Operation> { None }
+        "#;
+        let syntax = syn::parse_file(source).expect("valid canonical-node Rust source");
+        let mut aliases = BTreeSet::new();
+        collect_raw_aliases(&syntax.items, &mut aliases);
+        assert_items_have_no_public_raw_api(
+            Path::new("canonical-production-analysis-api.rs"),
+            &syntax.items,
+            &aliases,
+        );
+    }
+
+    #[test]
+    fn raw_context_api_audit_rejects_canonical_lookalikes_and_nested_raw_types() {
+        let hostile_types = [
+            "::pliron::context::Context",
+            "::pliron::builtin::ops::FuncOp",
+            "::pliron::operation::OpRef",
+            "::pliron::operation::Operation",
+            "::pliron::context::Ptr<u8>",
+            "fe2o3_kernel_ir::Operation",
+            "crate::fe2o3_kernel_ir::Operation",
+            "::lookalike::Operation",
+            "::fe2o3_kernel_ir::nested::Operation",
+            "::fe2o3_kernel_ir::Operation<u8>",
+            "::fe2o3_kernel_ir<u8>::Operation",
+            "<::pliron::context::Context as ::fe2o3_kernel_ir>::Operation",
+            "<u8 as ::fe2o3_kernel_ir>::Operation",
+            "Option<(::fe2o3_kernel_ir::Operation, ::pliron::context::Context)>",
+            "fn(&::fe2o3_kernel_ir::Operation) -> ::pliron::operation::OpRef",
+            "Box<dyn Iterator<Item = ::pliron::context::Context>>",
+            "raw_type!(::fe2o3_kernel_ir::Operation, ::pliron::context::Context)",
+        ];
+        for source in hostile_types {
+            let ty: Type = syn::parse_str(source).expect("parseable hostile type syntax");
+            assert!(
+                type_contains_raw(&ty, &BTreeSet::new()),
+                "accepted: {source}"
+            );
+        }
+        let hostile_sources = [
+            r#"extern crate pliron as fe2o3_kernel_ir;
+                pub type Leak = ::fe2o3_kernel_ir::Operation;"#,
+            r#"extern crate fe2o3_kernel_ir;
+                pub type Leak = ::fe2o3_kernel_ir::Operation;"#,
+            r#"extern crate fe2o3_kernel_ir as canonical;
+                pub type Leak = ::canonical::Operation;"#,
+            r#"use pliron::context::Context as Hidden;
+                pub type Leak = Option<(::fe2o3_kernel_ir::Operation, Hidden)>;"#,
+            r#"macro_rules! leak {
+                () => { pub type Leak = (::fe2o3_kernel_ir::Operation, pliron::Context); };
+            }"#,
+        ];
+        for source in hostile_sources {
+            let syntax = syn::parse_file(source).expect("parseable hostile source syntax");
+            let mut aliases = BTreeSet::new();
+            collect_raw_aliases(&syntax.items, &mut aliases);
+            assert!(
+                std::panic::catch_unwind(|| {
+                    assert_items_have_no_public_raw_api(
+                        Path::new("hostile-canonical-api.rs"),
+                        &syntax.items,
+                        &aliases,
+                    );
+                })
+                .is_err(),
+                "canonical-path bypass was not rejected: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_context_api_audit_rejects_crate_root_namespace_rebinding() {
+        let root = syn::parse_file("extern crate pliron as fe2o3_kernel_ir;")
+            .expect("parseable crate root syntax");
+        let mut aliases = BTreeSet::new();
+        collect_canonical_namespace_rebindings(&root.items, &mut aliases);
+        let syntax = syn::parse_file("pub type Leak = ::fe2o3_kernel_ir::Operation;")
+            .expect("parseable child syntax");
+        collect_raw_aliases(&syntax.items, &mut aliases);
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_items_have_no_public_raw_api(
+                    Path::new("child-of-rebound-root.rs"),
+                    &syntax.items,
+                    &aliases,
+                );
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -669,3 +829,32 @@ mod tests {
     #[path = "pliron_workgroup_memory_tests.rs"]
     mod pliron_workgroup_memory;
 }
+#[path = "canonical_ranked_checks_v1.rs"]
+pub(crate) mod canonical_ranked_checks_v1;
+pub use canonical_ranked_checks_v1::{
+    CanonicalRankedPolicyChecksErrorV1, CanonicalRankedPolicyFailureV1,
+    CanonicalRankedPolicyHistoryV1, CanonicalRankedPolicyResourceObservationV1,
+    CanonicalRankedSourceObligationV18, CanonicalRankedSourceRequirementV18,
+    CheckedCanonicalRankedPoliciesV1, CheckedCanonicalRankedPoliciesV18,
+    PendingCanonicalGlobalAccessesV18, PendingCanonicalPrivateMemoryPoliciesV18,
+    PendingCanonicalRankedPoliciesV18, PendingCanonicalRankedSourceRolesV18,
+    with_canonical_ranked_policy_checks_v1, with_canonical_ranked_policy_checks_v18,
+    with_pending_canonical_ranked_source_roles_v18,
+};
+
+mod native_invocation_trace_v1;
+pub use native_invocation_trace_v1::{
+    CanonicalInvocationTraceAttemptV1, CanonicalInvocationTraceErrorV1,
+    CanonicalInvocationTraceFailureV1, CanonicalNativeEventV1, CanonicalNativeFunctionCensusV1,
+    CanonicalNativeSubjectV1, CheckedCanonicalInvocationTracesV1,
+    with_canonical_invocation_traces_v1,
+};
+pub(crate) use pliron_control_edges_v1::ControlViewV1;
+pub use pliron_invocation_trace::native_events_v1::{NativeAddressV1, NativeEventKindV1};
+pub use pliron_invocation_trace::native_input_v1::{
+    NativeTraceGeometryV1, NativeTraceObligationsV1, NativeTraceRefusalV1,
+};
+pub(crate) use pliron_invocation_trace::native_resources_v1::{
+    reserve_map as reserve_native_trace_map_v1, reserve_rows as reserve_native_trace_rows_v1,
+};
+pub use pliron_invocation_trace::native_values_v1::NativeScalarV1;

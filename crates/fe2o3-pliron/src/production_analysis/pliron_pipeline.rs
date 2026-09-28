@@ -11,6 +11,10 @@
 //! };
 //! ```
 
+#[path = "pliron_pipeline/canonical_private_v1.rs"]
+pub(crate) mod canonical_private_v1;
+pub use canonical_private_v1::CanonicalPrivatePipelineReportV1;
+
 use std::{error::Error, fmt};
 
 #[cfg(test)]
@@ -132,6 +136,17 @@ pub(crate) fn structurally_mutate_next_production_analysis_for_test_v1() {
 }
 
 #[cfg(test)]
+pub(crate) fn panic_after_first_production_stage_for_test_v1() -> impl Drop {
+    struct Restore(u8);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            MUTATE_NEXT_PRODUCTION_ANALYSIS_V1.with(|mode| mode.set(self.0));
+        }
+    }
+    Restore(MUTATE_NEXT_PRODUCTION_ANALYSIS_V1.with(|mode| mode.replace(3)))
+}
+
+#[cfg(test)]
 fn maybe_panic_for_test_v1() {
     PANIC_NEXT_PRODUCTION_ANALYSIS_V1
         .with(|flag| assert!(!flag.replace(false), "injected production analysis panic"));
@@ -160,6 +175,7 @@ fn maybe_mutate_for_test_v1(context: &Context, function: &FuncOp) {
                 .0
                 .clear();
         }
+        3 => panic!("injected panic after real TensorLayout execution"),
         _ => unreachable!("test mutation mode is closed"),
     });
 }
@@ -690,6 +706,48 @@ fn require_production_pliron_checks_v2(
 }
 
 include!("pliron_pipeline/execution_v1.rs");
+
+// The same ordinary executor, with failure-prefix accounting retained by its
+// caller. This does not introduce a selectable or abbreviated pass schedule.
+#[allow(clippy::result_large_err)]
+pub(crate) fn require_production_pliron_checks_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    limits: ProductionAnalysisResourceLimitsV1,
+    receipt: &mut invocation_receipt_v1::InvocationReceiptV1,
+) -> Result<ProductionPlironPreloweringOutcomeV1, ProductionPlironPreloweringErrorV2> {
+    require_production_pliron_checks_with_identity_observation_v18(
+        context, function, limits, receipt, None,
+    )
+}
+
+pub(crate) fn require_production_pliron_checks_with_identity_observation_v18<'a>(
+    context: &'a Context,
+    function: &'a FuncOp,
+    limits: ProductionAnalysisResourceLimitsV1,
+    receipt: &mut invocation_receipt_v1::InvocationReceiptV1,
+    identity: Option<&'a crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'a>>,
+) -> Result<ProductionPlironPreloweringOutcomeV1, ProductionPlironPreloweringErrorV2> {
+    match run_shared_production_checks_v1(
+        context,
+        function,
+        None,
+        None,
+        limits,
+        (
+            identity.map_or(PipelineFamilyV1::Ordinary, PipelineFamilyV1::LifecycleV18),
+            Some(receipt),
+        ),
+        #[cfg(test)]
+        None,
+    ) {
+        Ok(PipelineOutcomeV1::Ordinary(outcome)) => Ok(outcome),
+        Err(PipelineErrorV1::Ordinary(error)) => Err(error),
+        _ => Err(ProductionPlironPreloweringErrorV2::ReportValidation(
+            ProductionAnalysisReportValidationErrorV1::PreservationManifestInconsistent,
+        )),
+    }
+}
 
 include!("pliron_pipeline/resource_tests.rs");
 include!("pliron_pipeline/progress_scoped_pipeline_v67_tests.rs");

@@ -9,6 +9,9 @@ impl SourceStorageLayoutsV29<'_> {
     ) -> Result<usize, Error> {
         let checked = (|| {
             self.lease.check(budget)?;
+            if self.lease.root.get().is_some() {
+                return Err(error("source storage rows still have an active root scope"));
+            }
             self.check_owner(owner, budget)?;
             self.lease.reserve(
                 argument_sum_v1(&[
@@ -91,7 +94,7 @@ impl SourceStorageLayoutsV29<'_> {
             }
             Err(first) => {
                 self.lease.failure.record(first);
-                let custody = self.lease.custody(budget).is_ok();
+                let custody = self.lease.custody(budget).is_ok() && self.lease.root.get().is_none();
                 let owned = self.lease.owned.get();
                 let Self {
                     owner: _,

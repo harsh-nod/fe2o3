@@ -22,7 +22,7 @@ fn execution_assert_operand_v29(
     }
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn lower_rvalue_operand_v29(
         &mut self,
         block: SemanticBlockIdV1,

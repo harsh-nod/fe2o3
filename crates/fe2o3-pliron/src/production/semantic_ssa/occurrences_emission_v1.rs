@@ -155,6 +155,13 @@ impl ReplayDriver for CaptureDriver<'_, '_> {
             return Err(Resource::Accounting.into());
         }
         let id = SemanticFunctionIdV1::from_index(checked_u32(self.functions.len())?);
+        // Four observer headers plus four adapter temporary boundary slots
+        // remain charged until capture exit; prior slack supplies no credit.
+        self.meter.reserve(
+            8_usize
+                .checked_mul(std::mem::size_of::<Option<usize>>())
+                .ok_or(Resource::Arithmetic)?,
+        )?;
         let mut count = Observer::new(&mut self.meter, id, None);
         let prepared = prepared::prepare_semantic_ssa_adapter_with_observer_v1(
             function,
@@ -296,6 +303,7 @@ struct Observer<'m, 'b, 'w, 'r> {
     counts: Counts,
     block_events: usize,
     block_successors: usize,
+    block_failure_start: Option<usize>,
     expected_elisions: Option<usize>,
 }
 
@@ -312,6 +320,7 @@ impl<'m, 'b, 'w, 'r> Observer<'m, 'b, 'w, 'r> {
             counts: Counts::default(),
             block_events: 0,
             block_successors: 0,
+            block_failure_start: None,
             expected_elisions: None,
         }
     }
@@ -327,6 +336,21 @@ impl<'m, 'b, 'w, 'r> Observer<'m, 'b, 'w, 'r> {
 
 impl grammar::SemanticSsaEmissionObserverV1 for Observer<'_, '_, '_, '_> {
     type Error = CaptureError;
+
+    fn terminal_failure_begin(
+        &mut self,
+        site: grammar::SemanticSsaEmissionSiteV1,
+        ordinal: usize,
+    ) -> CaptureResult<()> {
+        self.meter.require(3, self.function, None, || {
+            matches!(site, grammar::SemanticSsaEmissionSiteV1::Terminator { block }
+                if block == self.counts.blocks)
+                && self.block_failure_start.is_none()
+                && self.counts.events.checked_sub(self.block_events) == Some(ordinal)
+        })?;
+        self.block_failure_start = Some(ordinal);
+        Ok(())
+    }
 
     fn block_pass_begin(&mut self, elisions: usize) -> CaptureResult<()> {
         let work = elisions
@@ -554,11 +578,13 @@ impl grammar::SemanticSsaEmissionObserverV1 for Observer<'_, '_, '_, '_> {
                     block: SsaBlockIdV1::new(checked_u32(block)?),
                     events: self.block_events..self.counts.events,
                     successors: self.block_successors..self.counts.successors,
+                    terminal_failure_start: self.block_failure_start,
                 },
             )?;
         }
         self.block_events = self.counts.events;
         self.block_successors = self.counts.successors;
+        self.block_failure_start = None;
         Ok(())
     }
 

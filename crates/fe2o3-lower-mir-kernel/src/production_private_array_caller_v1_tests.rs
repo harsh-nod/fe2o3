@@ -308,7 +308,7 @@ fn private_array_multiroot_root_storage_preserves_axes_and_pure_helper_dedup() {
 fn actual_lowering<'a>(
     owner: &'a ProductionPreRankedKirOwnerV1,
     limit: usize,
-) -> SemanticFunctionLoweringV1<'a> {
+) -> SemanticFunctionLoweringV1<'a, 'a> {
     let source = owner.semantic_ssa().source_semantic();
     SemanticFunctionLoweringV1::new(
         source.types(),
@@ -330,7 +330,7 @@ fn actual_lowering<'a>(
     .unwrap()
 }
 
-fn recorder_work(lowering: &SemanticFunctionLoweringV1<'_>) -> usize {
+fn recorder_work(lowering: &SemanticFunctionLoweringV1<'_, '_>) -> usize {
     let PrivateArrayRecorderWorkV1::Owned(lazy) = &lowering.private_arrays.work else {
         panic!("test constructor owns one meter");
     };

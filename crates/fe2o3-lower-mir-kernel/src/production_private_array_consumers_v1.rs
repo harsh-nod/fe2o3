@@ -135,7 +135,7 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
         actual: &'a Function,
         recipe: &'a fe2o3_pliron::ProductionRankedKernelV1,
         max_operations: usize,
-        budget: &mut UnsupportedIndexCorrelationBudgetV1,
+        budget: &mut dyn CorrelationChargeV18,
     ) -> Result<Option<Self>, ProductionMirPlironTranslationErrorV1> {
         if !correspondence.private_arrays.active {
             return Ok(None);
@@ -185,8 +185,7 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
             .effects
             .get(instance.effect_start..instance.effect_end)
             .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
-        let ranked_definitions =
-            private_array_ranked_index_v1(recipe, max_operations, &mut work)?;
+        let ranked_definitions = private_array_ranked_index_v1(recipe, max_operations, &mut work)?;
         Ok(Some(Self {
             owner,
             function_id,
@@ -259,7 +258,7 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
         source: &IndexedRankedAccessSourceV1,
         consumer: KirMemoryConsumerV1,
         site: SemanticAccessSiteV1,
-        budget: &mut UnsupportedIndexCorrelationBudgetV1,
+        budget: &mut dyn CorrelationChargeV18,
     ) -> Result<(), ProductionMirPlironTranslationErrorV1> {
         let mismatch = || ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
             location: consumer.location,
@@ -359,7 +358,7 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
         &self,
         site: SemanticAccessSiteV1,
         source: &IndexedRankedAccessSourceV1,
-        budget: &mut UnsupportedIndexCorrelationBudgetV1,
+        budget: &mut dyn CorrelationChargeV18,
     ) -> Result<bool, ProductionMirPlironTranslationErrorV1> {
         let mut work = PrivateArrayCorrelationWorkV1 { budget };
         if !self.statement_range(site, &mut work)?.is_empty() {

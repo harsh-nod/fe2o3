@@ -21,7 +21,10 @@ fn run_memory_bounds_stage_v1(
                    observer: PipelineObservationV1<'_, '_, '_>| {
         let limits = observed_remaining_resource_limits_v1(analyses, phase, observer)?;
         let bound = match family {
-            PipelineFamilyV1::Ordinary => {
+            PipelineFamilyV1::Ordinary
+            | PipelineFamilyV1::LifecycleV18(_)
+            | PipelineFamilyV1::CanonicalPrivate(_)
+            | PipelineFamilyV1::CanonicalPrivateV18(_) => {
                 preflight_ranked_bounds_resource_upper_bound_v1(census, limits)
             }
             PipelineFamilyV1::Conditional(input) => conditional_bounds::preflight_v1(
@@ -31,6 +34,22 @@ fn run_memory_bounds_stage_v1(
             ),
         }
         .map_err(|error| observed_pipeline_resource_error_v1(observer, error))?;
+        let bound = if let PipelineFamilyV1::LifecycleV18(input) = family {
+            let work = input
+                .identity_lookup_work()
+                .ok_or(ProductionAnalysisResourceLimitV1 {
+                    phase,
+                    resource: "V18 lifecycle bounds occurrence work",
+                })
+                .map_err(|error| observed_pipeline_resource_error_v1(observer, error))?;
+            let extra = ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, 0, 0)
+                .map_err(|error| observed_pipeline_resource_error_v1(observer, error))?;
+            bound
+                .checked_then_retain(extra, phase)
+                .map_err(|error| observed_pipeline_resource_error_v1(observer, error))?
+        } else {
+            bound
+        };
         Ok(PreparedProductionStageV1 {
             stage: ProductionAnalysisStageV1 {
                 pass: KernelCheckPassKindV1::MemoryBounds,
@@ -42,7 +61,10 @@ fn run_memory_bounds_stage_v1(
         })
     };
     match family {
-        PipelineFamilyV1::Ordinary => {
+        PipelineFamilyV1::Ordinary
+        | PipelineFamilyV1::LifecycleV18(_)
+        | PipelineFamilyV1::CanonicalPrivate(_)
+        | PipelineFamilyV1::CanonicalPrivateV18(_) => {
             let (report, bound) = run_preflight_production_stage_v1(
                 endpoint,
                 analyses,
@@ -50,7 +72,21 @@ fn run_memory_bounds_stage_v1(
                 (validation, receipt),
                 (phase, prepare),
                 |analyses, observer| {
-                    require_observed_bounds_v1(context, function, analyses, observer)
+                    match family {
+            PipelineFamilyV1::CanonicalPrivate(input) =>
+                crate::production_analysis::pliron_ranked_bounds::require_canonical_private_bounds_v1(
+                    input, analyses, observer,
+                ),
+            PipelineFamilyV1::CanonicalPrivateV18(input) =>
+                crate::production_analysis::pliron_ranked_bounds::require_canonical_private_bounds_v1(
+                    input, analyses, observer,
+                ),
+            PipelineFamilyV1::LifecycleV18(input) =>
+                crate::production_analysis::pliron_ranked_bounds::require_canonical_lifecycle_bounds_v18(
+                    input, analyses, observer,
+                ),
+            _ => require_observed_bounds_v1(context, function, analyses, observer),
+        }
                 },
             )?;
             Ok((

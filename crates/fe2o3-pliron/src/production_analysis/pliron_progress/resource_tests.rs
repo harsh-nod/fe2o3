@@ -177,10 +177,11 @@ mod resource_upper_bound_tests {
         // Preflight conservatively admits one possible region per operation
         // plus the function region: structural=268, verifier scan=132,
         // charged=412, dominators=2, and loop analysis=69.
-        const EXACT_WORK: usize = 1_555;
+        // Native normalization: 8 sites * (552 + 32*65 UID work).
+        const EXACT_WORK: usize = 1_555 + 8 * (552 + 32 * 65);
         // One 1,040-item possible diagnostic, one retained block, and the
         // explicitly separated inventory/verifier/CFG temporary owners.
-        const EXACT_PEAK_STORAGE: usize = 1_862;
+        const EXACT_PEAK_STORAGE: usize = 1_862 + 192 + 128_usize.div_ceil(usize::BITS as usize);
         let exact = preflight_progress_resource_upper_bound_v1(
             census,
             ProductionAnalysisResourceLimitsV1::new(EXACT_WORK, EXACT_PEAK_STORAGE),

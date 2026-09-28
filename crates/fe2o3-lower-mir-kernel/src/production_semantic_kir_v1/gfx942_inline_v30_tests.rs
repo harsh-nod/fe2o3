@@ -176,7 +176,7 @@ impl IsaFixture {
         }
     }
 
-    fn lowering(&self, maximum_operations: usize) -> SemanticFunctionLoweringV1<'_> {
+    fn lowering(&self, maximum_operations: usize) -> SemanticFunctionLoweringV1<'_, '_> {
         let mut lowering = SemanticFunctionLoweringV1::new(
             &self.types,
             &self.callables,

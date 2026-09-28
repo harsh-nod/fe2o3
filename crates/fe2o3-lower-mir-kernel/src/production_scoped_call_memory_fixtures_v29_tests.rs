@@ -73,11 +73,51 @@ pub(in super::super) fn call_destinations_owner(
         let pointer = reference(&mut types, U32, SemanticMutabilityV1::Mutable, true);
         assert_eq!(locals.len(), 4);
         locals.push(local(145, pointer, SemanticLocalRoleV1::Temporary));
+        let referent = if CALL_DESTINATIONS_NO_NORMAL_V29.get() {
+            // The field address requires typed subobject storage even though
+            // the subsequent call has no normal result write.
+            let pair = declaration(
+                &mut types,
+                SemanticTypeLayoutV1::aggregate(
+                    Some(8),
+                    4,
+                    SemanticAggregateLayoutV1::new(vec![0, 4], vec![]).unwrap(),
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![U32, U32]).unwrap()),
+                None,
+            );
+            locals.push(local(149, pair, SemanticLocalRoleV1::Temporary));
+            let first = match CALL_DESTINATIONS_AGGREGATE_OPERAND_V29.get() {
+                0 => literal(0),
+                1 => SemanticOperandV1::Copy(place(3, U32)),
+                2 => SemanticOperandV1::Move(place(3, U32)),
+                _ => panic!("aggregate operand fixture mode"),
+            };
+            setup.push(assign(
+                place(5, pair),
+                SemanticRvalueKindV1::Aggregate(
+                    SemanticAggregateRvalueV1::new(
+                        SemanticAggregateKindV1::Tuple,
+                        vec![first, literal(11)],
+                    )
+                    .unwrap(),
+                ),
+            ));
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(5),
+                vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U32).unwrap()],
+                U32,
+            )
+            .unwrap()
+        } else {
+            place(3, U32)
+        };
         setup.push(assign(
             place(4, pointer),
             SemanticRvalueKindV1::AddressOf {
                 mutability: SemanticMutabilityV1::Mutable,
-                place: place(3, U32),
+                place: referent,
             },
         ));
         if retained_address {
@@ -96,6 +136,21 @@ pub(in super::super) fn call_destinations_owner(
     } else {
         place(3, U32)
     };
+    if CALL_DESTINATIONS_NO_NORMAL_V29.get() {
+        assert!(projected && !indexed);
+        // A nonreturning call has no destination write. Give this variant an
+        // actual raw access before the call so its typed backing is required
+        // independently of the unreachable result effect.
+        setup.push(SemanticStatementV1::new(
+            source(),
+            SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                destination.clone(),
+                literal(9),
+                SemanticVolatilityV1::NonVolatile,
+                None,
+            )),
+        ));
+    }
     let mut blocks = callback.blocks().to_vec();
     let SemanticTerminatorKindV1::Call(first) = blocks[0].terminator().kind() else {
         unreachable!();
@@ -159,5 +214,27 @@ pub(in super::super) fn call_destinations_owner(
     blocks.push(block(147, vec![], SemanticTerminatorKindV1::Return));
     functions[CALLBACK.index() as usize] =
         function(110, callback.role(), callback.abi().clone(), locals, blocks);
+    if CALL_DESTINATIONS_NO_NORMAL_V29.get() {
+        // The original callee, not the emitted graph, establishes no-normal-return.
+        let scalar = &functions[3];
+        functions[3] = function(
+            130,
+            scalar.role(),
+            scalar.abi().clone(),
+            scalar.locals().to_vec(),
+            vec![block(
+                134,
+                vec![],
+                SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::Goto,
+                    SemanticBlockIdV1::from_index(0),
+                )),
+            )],
+        );
+    }
     build(types, functions, callables)
+}
+thread_local! {
+    pub(in super::super) static CALL_DESTINATIONS_NO_NORMAL_V29: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(in super::super) static CALL_DESTINATIONS_AGGREGATE_OPERAND_V29: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }

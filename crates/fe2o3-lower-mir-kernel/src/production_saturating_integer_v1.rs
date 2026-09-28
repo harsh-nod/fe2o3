@@ -17,7 +17,7 @@ fn saturating_integer_shape_v1(ty: &Type) -> Option<(bool, u16)> {
     }
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn lower_saturating_integer_v1(
         &mut self,
         block: SemanticBlockIdV1,

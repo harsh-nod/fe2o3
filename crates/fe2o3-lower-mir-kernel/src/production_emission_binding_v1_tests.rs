@@ -198,6 +198,252 @@ fn heap_cases() -> Vec<SemanticValueBindingV1> {
     ]
 }
 
+fn cfg_inline_capabilities() -> Vec<SemanticValueBindingV1> {
+    use SemanticValueBindingV1 as B;
+    let option = option_availability();
+    let availability = SemanticCapabilityAvailabilityV1::EnumPayload {
+        local: SemanticLocalIdV1::from_index(9),
+        variant: 3,
+    };
+    let index_space = SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 7 };
+    vec![
+        B::MathContext,
+        B::CollectiveContext,
+        B::WorkgroupLdsScope,
+        B::MatrixContext,
+        B::WaveLane {
+            value: ValueId(59),
+            wave: SemanticCurrentWaveV1::new(64),
+        },
+        B::Gfx950LdsTransposeTile {
+            storage: ValueId(61),
+            format: SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+            state: SemanticGfx950LdsTransposeStateV1::Published,
+        },
+        B::IndexWitness {
+            id: ValueId(63),
+            index_space,
+            disjoint: true,
+            availability: None,
+        },
+        B::IndexWitness {
+            id: ValueId(65),
+            index_space,
+            disjoint: false,
+            availability: Some(availability),
+        },
+        B::IndexWitness {
+            id: ValueId(67),
+            index_space,
+            disjoint: true,
+            availability: Some(SemanticCapabilityAvailabilityV1::Option(option)),
+        },
+        B::OptionIndexWitness {
+            present: ValueId(69),
+            id: ValueId(71),
+            index_space,
+            disjoint: false,
+            availability: option,
+        },
+        B::GridLeader { availability },
+        B::ComponentWitness {
+            raw: ValueId(73),
+            index_space,
+            availability,
+        },
+        B::OptionComponentWitness {
+            present: ValueId(75),
+            raw: ValueId(77),
+            index_space,
+            availability: option,
+        },
+        B::OptionGridLeader {
+            present: ValueId(79),
+            availability: option,
+        },
+    ]
+}
+
+// This checks copying only. Producer, dominance and lifecycle admission remain
+// obligations of the existing source/consumer boundaries, including real Rust tests.
+fn cfg_copy_observation(
+    source: &SemanticValueBindingV1,
+    work_limit: usize,
+    storage_limit: usize,
+) -> Result<(usize, usize, usize), ProductionSemanticKirErrorV1> {
+    const FLOOR: usize = 37;
+    let before = format!("{source:?}");
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+    let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+    budget.reserve_storage(FLOOR).unwrap();
+    let ledger = budget.work_ledger_identity_v1();
+    let result = with_canonical_call_scratch_v1(&mut budget, |budget| {
+        let mut nodes = 0;
+        let copied = clone_execution_cfg_binding_v29(source, &mut nodes, budget)?;
+        assert_eq!(format!("{copied:?}"), before);
+        drop(copied);
+        Ok(nodes)
+    });
+    assert_eq!(format!("{source:?}"), before);
+    assert_eq!(budget.storage(), FLOOR);
+    assert!(budget.work_ledger_identity_v1() == ledger);
+    result.map(|nodes| (budget.work(), budget.peak_storage(), nodes))
+}
+
+#[test]
+fn cfg_copy_preserves_compiler_issued_capabilities_and_heap_payloads() {
+    for source in cfg_inline_capabilities() {
+        assert_eq!(cfg_copy_observation(&source, 3, 37).unwrap(), (3, 37, 1));
+        assert!(matches!(
+            cfg_copy_observation(&source, 2, 37),
+            Err(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Work(_)
+                )
+            )
+        ));
+    }
+    for source in heap_cases() {
+        let (work, peak, nodes) = cfg_copy_observation(&source, 1_000_000, 1_000_000).unwrap();
+        assert_eq!(
+            cfg_copy_observation(&source, work, peak).unwrap(),
+            (work, peak, nodes)
+        );
+        assert!(matches!(
+            cfg_copy_observation(&source, work - 1, peak),
+            Err(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Work(_)
+                )
+            )
+        ));
+        assert!(matches!(
+            cfg_copy_observation(&source, work, peak - 1),
+            Err(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Storage(_)
+                )
+            )
+        ));
+    }
+    let nested = SemanticValueBindingV1::Aggregate(vec![
+        SemanticValueBindingV1::Aggregate(cfg_inline_capabilities()),
+        SemanticValueBindingV1::Aggregate(heap_cases()),
+    ]);
+    cfg_copy_observation(&nested, 1_000_000, 1_000_000).unwrap();
+}
+
+#[test]
+fn cfg_optional_pointer_copy_has_exact_independent_resource_bounds() {
+    let source = SemanticValueBindingV1::OptionPointer {
+        present: ValueId(81),
+        pointer: ValueId(83),
+        pointer_ty: pointer(),
+        availability: option_availability(),
+    };
+    // Two scratch operations, one CFG node, one binding, three type nodes.
+    const WORK: usize = 2 + 1 + 1 + 3;
+    let storage = 37 + 2 * std::mem::size_of::<Type>();
+    assert_eq!(
+        cfg_copy_observation(&source, WORK, storage).unwrap(),
+        (WORK, storage, 1)
+    );
+    assert!(matches!(
+        cfg_copy_observation(&source, WORK - 1, storage),
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Work(
+                _
+            ))
+        )
+    ));
+    assert!(matches!(
+        cfg_copy_observation(&source, WORK, storage - 1),
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Storage(_)
+            )
+        )
+    ));
+}
+
+#[test]
+fn cfg_capability_aggregate_copy_is_linear_and_keeps_component_bound() {
+    for count in [16, 64, MAX_SSA_VALUE_COMPONENTS_V1 - 1] {
+        let source = SemanticValueBindingV1::Aggregate(
+            (0..count)
+                .map(|index| SemanticValueBindingV1::IndexWitness {
+                    id: ValueId(index as u32),
+                    index_space: SemanticDisjointIndexSpaceV1::Index1d,
+                    disjoint: true,
+                    availability: None,
+                })
+                .collect(),
+        );
+        // Two scratch operations, aggregate node, Vec construction, each leaf.
+        let work = 2 + 1 + 3 + count;
+        let (used, peak, nodes) = cfg_copy_observation(&source, work, 1_000_000).unwrap();
+        assert_eq!((used, nodes), (work, count + 1));
+        assert!(peak >= 37 + count * std::mem::size_of::<SemanticValueBindingV1>());
+        assert_eq!(
+            cfg_copy_observation(&source, work, peak).unwrap(),
+            (work, peak, nodes)
+        );
+    }
+    let oversized = SemanticValueBindingV1::Aggregate(
+        (0..MAX_SSA_VALUE_COMPONENTS_V1)
+            .map(|_| SemanticValueBindingV1::MathContext)
+            .collect(),
+    );
+    assert!(
+        matches!(
+            cfg_copy_observation(&oversized, 1_000_000, 1_000_000),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "execution CFG transport differs from its captured SSA state",
+                ..
+            })
+        ),
+        "the aggregate itself also consumes one structural node"
+    );
+    let source = &cfg_inline_capabilities()[0];
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(10);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 37);
+    budget.reserve_storage(37).unwrap();
+    let mut nodes = MAX_SSA_VALUE_COMPONENTS_V1;
+    let error = clone_execution_cfg_binding_v29(source, &mut nodes, &mut budget).unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionSemanticKirErrorV1::Unsupported {
+            function: 0,
+            block: None,
+            statement: None,
+            detail: "execution CFG transport differs from its captured SSA state",
+        }
+    ));
+    assert_eq!(budget.storage(), 37);
+}
+
+#[test]
+fn cfg_copy_keeps_unmaterialized_and_ordinary_execution_refusals() {
+    for source in [
+        SemanticValueBindingV1::Unmaterialized,
+        SemanticValueBindingV1::Value {
+            id: ValueId(85),
+            ty: Type::Execution(fe2o3_kernel_ir::ExecutionRoleV15::Workgroup),
+        },
+        SemanticValueBindingV1::Aggregate(vec![SemanticValueBindingV1::Unmaterialized]),
+    ] {
+        assert!(matches!(
+            cfg_copy_observation(&source, 1000, 10000),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                function: 0,
+                block: None,
+                statement: None,
+                detail: "execution CFG transport differs from its captured SSA state",
+            })
+        ));
+    }
+}
+
 fn assert_copy_budget(source: &SemanticValueBindingV1) {
     const FLOOR: usize = 37;
     const WORK_FLOOR: usize = 11;
@@ -521,7 +767,7 @@ fn deep_types_copy_without_execution_cfg_node_limits() {
 }
 
 #[test]
-fn ordinary_place_resolution_uses_its_ledger_and_preserves_missing_local_error() {
+fn ordinary_place_resolution_accounts_slot_lookups_and_preserves_missing_local_error() {
     let owner = resource_tests::helper_closure_semantic_owner();
     let semantic = owner.semantic();
     let function = &semantic.functions()[1];
@@ -531,7 +777,15 @@ fn ordinary_place_resolution_uses_its_ledger_and_preserves_missing_local_error()
         function.locals()[0].ty(),
     )
     .unwrap();
-    for limit in [0, 1] {
+    // Two empty-map searches at 32 work each, two identity checks, one copy.
+    const SLOT_LOOKUP_WORK: usize = 2 * (2 * 16) + 2;
+    const READ_WORK: usize = SLOT_LOOKUP_WORK + 1;
+    for (limit, has_binding) in [
+        (0, true),
+        (READ_WORK - 1, true),
+        (READ_WORK, true),
+        (SLOT_LOOKUP_WORK, false),
+    ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
         let mut budget = ArgumentBudgetV1::new(&mut work, 37);
         budget.reserve_storage(37).unwrap();
@@ -554,7 +808,7 @@ fn ordinary_place_resolution_uses_its_ledger_and_preserves_missing_local_error()
         )
         .unwrap();
         lowering.emission_work = Some(&mut budget);
-        lowering.locals[0] = Some(SemanticValueBindingV1::Unit);
+        lowering.locals[0] = has_binding.then_some(SemanticValueBindingV1::Unit);
         let mut operations = Vec::new();
         let result = lowering.resolve_place(
             SemanticBlockIdV1::from_index(0),
@@ -562,7 +816,7 @@ fn ordinary_place_resolution_uses_its_ledger_and_preserves_missing_local_error()
             &place,
             &mut operations,
         );
-        if limit == 0 {
+        if has_binding && limit < READ_WORK {
             assert!(matches!(
                 result,
                 Err(
@@ -571,27 +825,23 @@ fn ordinary_place_resolution_uses_its_ledger_and_preserves_missing_local_error()
                     )
                 )
             ));
-        } else {
+        } else if has_binding {
             assert!(matches!(result, Ok(SemanticValueBindingV1::Unit)));
+        } else {
+            assert!(matches!(
+                result,
+                Err(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                    function: 0,
+                    block: 0,
+                    statement: Some(7),
+                    local: 0,
+                })
+            ));
         }
-        lowering.locals[0] = None;
-        assert!(matches!(
-            lowering.resolve_place(
-                SemanticBlockIdV1::from_index(0),
-                Some(7),
-                &place,
-                &mut operations,
-            ),
-            Err(ProductionSemanticKirErrorV1::MissingLocalDefinition {
-                function: 0,
-                block: 0,
-                statement: Some(7),
-                local: 0,
-            })
-        ));
         assert!(operations.is_empty());
         drop(lowering);
         assert_eq!(budget.storage(), 37);
+        assert_eq!(budget.work(), limit);
     }
 }
 

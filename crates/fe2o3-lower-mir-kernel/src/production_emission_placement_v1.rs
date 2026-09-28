@@ -28,7 +28,7 @@ impl SemanticEmissionPlacementV1 {
     }
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn kernel_block_id_v1(
         &self,
         source: SemanticBlockIdV1,

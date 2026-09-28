@@ -12,8 +12,8 @@ mod constant_shift_value_v1_tests {
             operation: ProductionSemanticBinaryOpV2::BitAnd,
             scalar,
             overflow: ProductionOverflowContractV2::Wrapping,
-            lhs: Box::new(constant(scalar, count)),
-            rhs: Box::new(constant(scalar, mask)),
+            lhs: NormalizedScalarNodeV18::legacy(constant(scalar, count)),
+            rhs: NormalizedScalarNodeV18::legacy(constant(scalar, mask)),
         }
     }
     fn agrees(expected: &E, actual: &E, scalar: S) -> bool {
@@ -31,8 +31,8 @@ mod constant_shift_value_v1_tests {
             operation,
             scalar,
             overflow: ProductionOverflowContractV2::Wrapping,
-            lhs: Box::new(E::Symbol { symbol: 41, scalar }),
-            rhs: Box::new(rhs),
+            lhs: NormalizedScalarNodeV18::legacy(E::Symbol { symbol: 41, scalar }),
+            rhs: NormalizedScalarNodeV18::legacy(rhs),
         }
     }
 
@@ -170,8 +170,8 @@ mod constant_shift_value_v1_tests {
                     operation,
                     scalar,
                     overflow: ProductionOverflowContractV2::Checked,
-                    lhs: Box::new(E::Symbol { symbol: 41, scalar }),
-                    rhs: Box::new(masked(scalar, 3, mask)),
+                    lhs: NormalizedScalarNodeV18::legacy(E::Symbol { symbol: 41, scalar }),
+                    rhs: NormalizedScalarNodeV18::legacy(masked(scalar, 3, mask)),
                 };
                 assert_eq!(
                     expressions_agree(&expected, &changed_overflow, 11),
@@ -181,8 +181,8 @@ mod constant_shift_value_v1_tests {
                     operation,
                     scalar,
                     overflow: ProductionOverflowContractV2::Wrapping,
-                    lhs: Box::new(E::Symbol { symbol: 42, scalar }),
-                    rhs: Box::new(masked(scalar, 3, mask)),
+                    lhs: NormalizedScalarNodeV18::legacy(E::Symbol { symbol: 42, scalar }),
+                    rhs: NormalizedScalarNodeV18::legacy(masked(scalar, 3, mask)),
                 };
                 assert_eq!(expressions_agree(&expected, &changed_lhs, 11), Some(false));
             }

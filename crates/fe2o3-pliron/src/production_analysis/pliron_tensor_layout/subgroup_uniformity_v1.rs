@@ -465,6 +465,7 @@ fn sparse_fact_is_subgroup_uniform(
                     })
         }
         SparseIndexFactV1::Unknown
+        | SparseIndexFactV1::UnsignedUpperBound { .. }
         | SparseIndexFactV1::MachineOverflow(_)
         | SparseIndexFactV1::CheckedTiled2D(_)
         | SparseIndexFactV1::CheckedRowStriped2D(_) => false,
@@ -485,6 +486,22 @@ fn invocation_axis_is_subgroup_uniform(dimension: usize, layout: PlironExecution
         return false;
     };
     stride >= layout.subgroup_size && stride.is_multiple_of(layout.subgroup_size)
+}
+
+#[test]
+fn unsigned_index_range_alone_does_not_prove_subgroup_uniformity() {
+    let layout = PlironExecutionLayoutV1 {
+        grid: 1,
+        global_extents: [512, 1, 1],
+        workgroup_extents: [64, 1, 1],
+        subgroup_size: 64,
+        execution_domain: dialect_gpu::ExecutionDomainAttr::FullPhysicalWorkgroups,
+    };
+    for inclusive in [255, 65_535, 4_294_967_295, u64::MAX] {
+        let fact = SparseIndexFactV1::UnsignedUpperBound { inclusive };
+        assert!(!sparse_fact_is_subgroup_uniform(&fact, layout));
+        assert_eq!(classify_coordinate_cutoff(&fact, &fact, layout, true), None);
+    }
 }
 
 fn classify_coordinate_cutoff(

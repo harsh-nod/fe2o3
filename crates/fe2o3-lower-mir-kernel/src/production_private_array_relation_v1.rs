@@ -424,6 +424,44 @@ fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
     max_elements: usize,
     work: &mut W,
 ) -> Result<u64, PrivateArrayRelationErrorV1<W::Error>> {
+    private_array_exact_physical_relation_v1(
+        types,
+        function,
+        body,
+        owner,
+        semantic_function,
+        slot,
+        effect,
+        PrivateArrayPhysicalBlocksV1 {
+            allocation: BlockId(function.entry().index()),
+            access: BlockId(effect.semantic_block),
+        },
+        max_elements,
+        work,
+    )
+}
+
+// Source coordinates stay unchanged when the checked instance expansion moves
+// an allocation or access. The caller supplies its independently mapped blocks.
+#[derive(Clone, Copy)]
+struct PrivateArrayPhysicalBlocksV1 {
+    allocation: BlockId,
+    access: BlockId,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn private_array_exact_physical_relation_v1<W: PrivateArrayChargeV1>(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    body: &FunctionBody,
+    owner: SemanticFunctionIdV1,
+    semantic_function: SemanticFunctionIdV1,
+    slot: &PrivateArraySlotV1,
+    effect: &PrivateArrayEffectV1,
+    physical: PrivateArrayPhysicalBlocksV1,
+    max_elements: usize,
+    work: &mut W,
+) -> Result<u64, PrivateArrayRelationErrorV1<W::Error>> {
     use PrivateArrayRelationErrorV1::{Incomplete, InvalidSource, Mismatch};
     work.charge_private_array_work(5)?;
     if slot.owner != owner
@@ -509,7 +547,7 @@ fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
     if slot.count_location.block_ordinal != 0
         || slot.alloca_location.block_ordinal != 0
         || slot.count_location.block != slot.alloca_location.block
-        || slot.alloca_location.block != BlockId(function.entry().index())
+        || slot.alloca_location.block != physical.allocation
         || slot.count_location.operation.checked_add(1) != Some(slot.alloca_location.operation)
     {
         return Err(Mismatch("private counted allocation prologue changed"));
@@ -639,7 +677,7 @@ fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
         ));
     }
     work.charge_private_array_work(12)?;
-    if effect.memory_location.block != BlockId(effect.semantic_block)
+    if effect.memory_location.block != physical.access
         || effect.gep_location.block != effect.memory_location.block
         || effect.gep_location.block_ordinal != effect.memory_location.block_ordinal
         || offset_location.block != effect.memory_location.block

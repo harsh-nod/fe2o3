@@ -16,6 +16,8 @@ use planner::Planner;
 use support::WorkBudget;
 
 const SSA_PLAN_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.ssa-construction-plan.v1\0";
+const SSA_FAILURE_TAIL_IDENTITY_DOMAIN_V1: &[u8] =
+    b"fe2o3.ssa-construction-plan.terminal-failure.v1\0";
 
 pub const HARD_MAX_SSA_VARIABLES_V1: usize = 262_144;
 pub const HARD_MAX_SSA_BLOCKS_V1: usize = 262_144;
@@ -132,11 +134,32 @@ impl SsaEdgeInputV1 {
 pub struct SsaBlockInputV1 {
     events: Vec<SsaEventV1>,
     edges: Vec<SsaEdgeInputV1>,
+    terminal_failure_start: Option<usize>,
 }
 
 impl SsaBlockInputV1 {
     pub fn new(events: Vec<SsaEventV1>, edges: Vec<SsaEdgeInputV1>) -> Self {
-        Self { events, edges }
+        Self {
+            events,
+            edges,
+            terminal_failure_start: None,
+        }
+    }
+
+    /// Inert nonreturning Use/Kill tail, checked independently of outgoing edges.
+    /// A source consumer must rederive this boundary from its actual source.
+    pub fn with_terminal_failure_start(mut self, start: usize) -> Self {
+        self.terminal_failure_start = Some(start);
+        self
+    }
+
+    pub const fn terminal_failure_start(&self) -> Option<usize> {
+        self.terminal_failure_start
+    }
+
+    fn is_failure_event(&self, event: usize) -> bool {
+        self.terminal_failure_start
+            .is_some_and(|start| event >= start)
     }
 
     pub fn events(&self) -> &[SsaEventV1] {
@@ -338,6 +361,10 @@ pub enum SsaInputSiteV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SsaPlannerErrorV1 {
     InvalidLimits,
+    InvalidTerminalFailureTail {
+        block: SsaBlockIdV1,
+        start: usize,
+    },
     EmptyControlFlow,
     InvalidEntry {
         entry: SsaBlockIdV1,
@@ -392,6 +419,11 @@ impl fmt::Display for SsaPlannerErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidLimits => formatter.write_str("SSA planner limits are invalid"),
+            Self::InvalidTerminalFailureTail { block, start } => write!(
+                formatter,
+                "SSA block {} has an invalid nonreturning failure tail at {start}",
+                block.get()
+            ),
             Self::EmptyControlFlow => formatter.write_str("SSA input has no control-flow blocks"),
             Self::InvalidEntry { entry, block_count } => write!(
                 formatter,
@@ -761,8 +793,24 @@ fn compute_identity(
     work.charge(input.promotable.len())?;
     work.charge(input.entry_definitions.len())?;
     work.charge(reachable.len())?;
+    work.charge(
+        input
+            .blocks
+            .len()
+            .checked_mul(2)
+            .ok_or(SsaPlannerErrorV1::IdentityOverflow)?,
+    )?;
+    let failure_tails = input
+        .blocks
+        .iter()
+        .zip(reachable)
+        .any(|(block, reachable)| *reachable && block.terminal_failure_start.is_some());
     let mut digest = Sha256::new();
-    digest.update(SSA_PLAN_IDENTITY_DOMAIN_V1);
+    digest.update(if failure_tails {
+        SSA_FAILURE_TAIL_IDENTITY_DOMAIN_V1
+    } else {
+        SSA_PLAN_IDENTITY_DOMAIN_V1
+    });
     hash_u32(&mut digest, input.entry.get());
     hash_u32(&mut digest, input.variable_count);
     hash_usize(&mut digest, input.promotable.len());
@@ -780,6 +828,16 @@ fn compute_identity(
         }
         work.charge(1 + block.events.len() + block.edges.len())?;
         hash_u32(&mut digest, block_index as u32);
+        if failure_tails {
+            work.charge(1)?;
+            match block.terminal_failure_start {
+                Some(start) => {
+                    digest.update([1]);
+                    hash_usize(&mut digest, start);
+                }
+                None => digest.update([0]),
+            }
+        }
         hash_usize(&mut digest, block.events.len());
         for event in &block.events {
             match event {
@@ -892,3 +950,7 @@ fn hash_u32(digest: &mut Sha256, value: u32) {
 fn hash_usize(digest: &mut Sha256, value: usize) {
     digest.update((value as u64).to_le_bytes());
 }
+
+#[cfg(test)]
+#[path = "ssa/terminal_failure_v1_tests.rs"]
+mod terminal_failure_v1_tests;

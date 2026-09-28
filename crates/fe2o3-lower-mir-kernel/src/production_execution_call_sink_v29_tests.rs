@@ -48,13 +48,13 @@ fn run_sink(
                     let mut sink = ExecutionDefinedCallSinkV29::new(scope, instances, budget)?;
                     if matches!(fault, SinkFault::FinishProbes) {
                         let storage = budget.storage();
-                        assert!(sink.finish(budget).is_err());
+                        assert!(sink.finish(std::iter::empty(), instances, budget).is_err());
                         assert_eq!(budget.storage(), storage);
                         assert_eq!(sink.routes.len(), 2);
                         assert!(sink.routes.iter().all(|row| row.target.is_some()));
                         let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(10_000_000);
                         let mut foreign = ArgumentBudgetV1::new(&mut foreign_work, 10_000_000);
-                        assert!(sink.finish(&mut foreign).is_err());
+                        assert!(sink.finish(std::iter::empty(), instances, &mut foreign).is_err());
                         assert_eq!(foreign.storage(), 0);
                         assert_eq!(foreign_work.work(), 0);
                     }
@@ -141,7 +141,7 @@ fn run_sink(
                     assert_eq!(sink.pending.len(), 2);
                     if matches!(fault, SinkFault::FinishProbes) {
                         let storage = budget.storage();
-                        assert!(sink.finish(budget).is_err());
+                        assert!(sink.finish(std::iter::empty(), instances, budget).is_err());
                         assert_eq!(budget.storage(), storage);
                         assert_eq!(sink.pending.len(), 2);
                     }
@@ -253,7 +253,7 @@ fn run_sink(
                         * std::mem::size_of::<ExecutionDefinedCallRouteV29>()
                         + sink.pending.capacity()
                             * std::mem::size_of::<PendingExecutionDefinedCallV29<'_>>();
-                    sink.finish(budget)?;
+                    sink.finish(emitted.iter(), instances, budget)?;
                     assert_eq!(budget.storage(), before - backings);
                     Ok(emitted)
                 }),

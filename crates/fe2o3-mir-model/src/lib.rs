@@ -2,6 +2,8 @@ mod control_flow;
 mod executable;
 mod executable_wire;
 mod mem2reg;
+mod semantic_assertion_meter_v1;
+pub use semantic_assertion_meter_v1::SemanticAssertionMeterV1;
 mod semantic_constant;
 mod semantic_logical_arguments;
 mod semantic_masked_shift_v1;
@@ -76,9 +78,10 @@ pub use semantic_option_dominance::{
     MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1, SemanticEnumPayloadAvailabilityV1,
     SemanticEnumPayloadDominancePreparationV1, SemanticEnumPayloadDominanceV1,
     SemanticEnumPayloadMeterV1, SemanticEnumPayloadMeteredErrorV1, SemanticOptionAvailabilityV1,
-    SemanticOptionDominanceErrorV1, SemanticOptionDominancePreparationV1,
-    SemanticOptionDominanceV1, SemanticOptionProducerPreparationV1, SemanticOptionProducerV1,
-    semantic_option_producers_v1, semantic_option_producers_with_meter_v1,
+    SemanticOptionDominanceErrorV1, SemanticOptionDominanceMeteredErrorV18,
+    SemanticOptionDominancePreparationV1, SemanticOptionDominanceV1,
+    SemanticOptionProducerPreparationV1, SemanticOptionProducerV1, semantic_option_producers_v1,
+    semantic_option_producers_with_meter_v1, semantic_option_producers_with_meter_v18,
 };
 pub use semantic_type::{
     MirAddressSpace, MirAggregateLayout, MirEnumEncoding, MirEnumType, MirField, MirLayout,

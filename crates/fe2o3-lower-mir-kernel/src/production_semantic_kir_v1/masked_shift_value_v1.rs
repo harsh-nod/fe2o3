@@ -33,7 +33,7 @@ fn masked_shift_counts_correspond_v1(
     actual: &NormalizedScalarExpressionV1,
     scalar: ProductionSemanticScalarTypeV2,
     depth: usize,
-    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+    budget: &mut dyn CorrelationChargeV18,
 ) -> Option<bool> {
     // Fixed shape checks are prepaid; recursive comparison spends this same
     // caller budget and inherits its depth. Only a shift RHS uses this rule.

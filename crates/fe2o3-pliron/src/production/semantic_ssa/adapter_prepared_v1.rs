@@ -4,7 +4,7 @@ use super::emission_v1::{
     SemanticSsaEmissionErrorV1 as EmissionError, SemanticSsaEmissionObserverV1,
     SemanticSsaEmissionSiteV1 as Site, SemanticSsaEntryOriginV1 as EntryOrigin,
     SemanticSsaEventBufferV1, SemanticSsaVisitV1 as Visit, emit_statement_events_with_buffer_v1,
-    emit_terminator_events_with_buffer_v1, observer_error_v1,
+    emit_terminator_events_with_failure_tail_v1, observer_error_v1,
 };
 use super::*;
 use std::convert::Infallible;
@@ -23,6 +23,13 @@ pub(in crate::production::semantic_ssa) trait SemanticSsaBlockOutputV1 {
         definition: Option<SsaVariableIdV1>,
     ) -> Result<(), Self::Error>;
     fn finish_block(&mut self, events: Self::Events) -> Result<(), Self::Error>;
+    fn finish_block_with_failure(
+        &mut self,
+        events: Self::Events,
+        _: Option<usize>,
+    ) -> Result<(), Self::Error> {
+        self.finish_block(events)
+    }
 }
 
 pub(in crate::production::semantic_ssa) trait SemanticSsaEntryOutputV1 {
@@ -145,7 +152,7 @@ impl<'a> PreparedSemanticSsaAdapterV1<'a> {
                     observer,
                 )?;
             }
-            emit_terminator_events_with_buffer_v1(
+            let failure_start = emit_terminator_events_with_failure_tail_v1(
                 block.terminator().kind(),
                 self.return_local,
                 Site::Terminator { block: block_index },
@@ -183,7 +190,9 @@ impl<'a> PreparedSemanticSsaAdapterV1<'a> {
                     .peek()
                     .is_none_or(|site| site.block as usize > block_index)
             );
-            output.finish_block(events).map_err(EmissionError::Output)?;
+            output
+                .finish_block_with_failure(events, failure_start)
+                .map_err(EmissionError::Output)?;
         }
         assert!(
             elided.next().is_none(),
@@ -332,10 +341,18 @@ impl SemanticSsaBlockOutputV1 for RealBlocksV1 {
         Ok(())
     }
     fn finish_block(&mut self, events: Self::Events) -> Result<(), Infallible> {
-        self.blocks.push(SsaBlockInputV1::new(
-            events,
-            std::mem::take(&mut self.successors),
-        ));
+        self.finish_block_with_failure(events, None)
+    }
+    fn finish_block_with_failure(
+        &mut self,
+        events: Self::Events,
+        failure_start: Option<usize>,
+    ) -> Result<(), Infallible> {
+        let mut block = SsaBlockInputV1::new(events, std::mem::take(&mut self.successors));
+        if let Some(start) = failure_start {
+            block = block.with_terminal_failure_start(start);
+        }
+        self.blocks.push(block);
         Ok(())
     }
 }

@@ -1,5 +1,5 @@
 // Owned copies of a checked projection, not authentication of its Rust producer.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ScopedRootRecipeV29 {
     root: SemanticFunctionIdV1,
     root_identity: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdentityV1,
@@ -93,6 +93,7 @@ struct OwnedExecutionInputV29 {
     classes: Vec<ProductionScopeCallableCandidateV29>,
     events: Vec<crate::ProductionScopeEventCandidateV29>,
     launch: Vec<crate::ProductionSourceLaunchRootV1>,
+    kernel_argument_abi: Option<kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     retained_storage: usize,
 }
@@ -102,6 +103,70 @@ struct OwnedExecutionInputV29 {
     allow(dead_code, reason = "Scoped source replay remains gated")
 )]
 impl OwnedExecutionInputV29 {
+    // Relative equality only: the backend must retain its authentic receipt.
+    // This allocation-free query is safe inside the temporary projection scope;
+    // recipe/native consumers run only after that scope's vectors have settled.
+    fn check_candidate_v18(
+        &self,
+        owner: &ProductionSemanticSsaOwnerV1,
+        input: ProductionExecutionSourceInputV29<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), crate::ProductionContextRootErrorV29> {
+        use crate::ProductionContextRootErrorV29 as Error;
+        if self.ledger != budget.work_ledger_identity_v1()
+            || budget.storage() < self.retained_storage
+        {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        budget.charge_work(100)?;
+        if self.semantic_sha256 != *owner.source_semantic_sha256()
+            || self.ssa != owner.identity()
+            || self.semantic_sha256 != *input.semantic_sha256
+        {
+            return Err(Error::Source);
+        }
+        if self.roots.len() != input.roots.len() {
+            return Err(Error::RootCensus);
+        }
+        if self.classes.len() != input.classes.len() {
+            return Err(Error::CallableCensus);
+        }
+        if self.events.len() != input.events.len() {
+            return Err(Error::ScopeEventCensus);
+        }
+        budget.charge_work(argument_product_v1(
+            self.classes.len(),
+            size_of::<ProductionScopeCallableCandidateV29>(),
+        )?)?;
+        if self.classes != input.classes {
+            return Err(Error::CallableCensus);
+        }
+        budget.charge_work(argument_product_v1(
+            self.events.len(),
+            size_of::<crate::ProductionScopeEventCandidateV29>(),
+        )?)?;
+        if self.events != input.events {
+            return Err(Error::ScopeEventCensus);
+        }
+        for (retained, candidate) in self.roots.iter().zip(input.roots) {
+            budget.charge_work(argument_sum_v1(&[size_of::<ScopedRootRecipeV29>(), 38])?)?;
+            if *candidate.semantic_sha256 != self.semantic_sha256
+                || *retained != ScopedRootRecipeV29::capture(candidate)
+            {
+                return Err(Error::RootCensus);
+            }
+            let original = retained
+                .borrow(&self.semantic_sha256, owner)
+                .map_err(|_| Error::CallBoundary)?;
+            crate::production_context_roots_v1::check_arguments(
+                candidate.helper_arguments,
+                original.helper_arguments,
+                budget,
+            )?;
+        }
+        Ok(())
+    }
+
     // Reservation remains live; consuming source custody adopts it once.
     fn capture(
         source: &ExecutionLifecycleSourceV29<'_>,
@@ -129,6 +194,7 @@ impl OwnedExecutionInputV29 {
                 classes,
                 events,
                 launch,
+                kernel_argument_abi: None,
                 ledger: source.ledger,
                 retained_storage: budget
                     .storage()
@@ -136,6 +202,36 @@ impl OwnedExecutionInputV29 {
                     .ok_or(ArgumentResourceV1::Accounting)?,
             })
         })
+    }
+
+    fn capture_kernel_argument_abi_v18(
+        &mut self,
+        owner: &ProductionSemanticSsaOwnerV1,
+        input: ProductionKernelArgumentAbiInputV18<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        budget.charge_work(4)?;
+        if self.kernel_argument_abi.is_some()
+            || self.semantic_sha256 != *owner.source_semantic_sha256()
+            || self.ssa != owner.identity()
+        {
+            return Err(source_reference_error_v29(
+                "kernel argument ABI capture differs from its original source owner",
+            ));
+        }
+        if self.ledger != budget.work_ledger_identity_v1()
+            || budget.storage() < self.retained_storage
+        {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        // The containing source capture owns rollback. No independent attempt
+        // can refund credits if its enclosing concrete custody is later lost.
+        let profile =
+            kernel_argument_abi_v18::CapturedKernelArgumentAbiV18::capture(owner, input, budget)?;
+        self.retained_storage =
+            argument_sum_v1(&[self.retained_storage, profile.retained_storage()])?;
+        self.kernel_argument_abi = Some(profile);
+        Ok(())
     }
 
     fn with_source<'work, R>(
@@ -198,6 +294,9 @@ impl OwnedExecutionInputV29 {
         {
             return Err(execution_lifecycle_error_v29().into());
         }
+        if let Some(profile) = &self.kernel_argument_abi {
+            profile.check(owner, budget)?;
+        }
         Ok(())
     }
 
@@ -230,7 +329,7 @@ impl OwnedExecutionInputV29 {
             size_of::<crate::ProductionContextRootInputV29<'_>>(),
         )?;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let source = ExecutionLifecycleSourceV29::new(
+            let source = ExecutionLifecycleSourceV29::with_kernel_arguments(
                 owner,
                 launch,
                 ProductionExecutionSourceInputV29 {
@@ -239,6 +338,7 @@ impl OwnedExecutionInputV29 {
                     classes: &self.classes,
                     events: &self.events,
                 },
+                self.kernel_argument_abi.as_ref(),
                 budget,
             )?;
             visit(&source, budget)

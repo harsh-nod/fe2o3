@@ -3388,6 +3388,18 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         nominal: bool,
     ) -> Result<ProductionCompilation<'tcx, AdmittedSemanticMirStage>, ProductionPipelineError>
     {
+        self.import_semantic_mir_with_profile_v29(if nominal {
+            source_owned_v29::ImportProfile::NominalV35
+        } else {
+            source_owned_v29::ImportProfile::Current
+        })
+    }
+
+    fn import_semantic_mir_with_profile_v29(
+        self,
+        profile: source_owned_v29::ImportProfile,
+    ) -> Result<ProductionCompilation<'tcx, AdmittedSemanticMirStage>, ProductionPipelineError>
+    {
         let CollectedRustStage {
             tcx,
             closure,
@@ -3395,18 +3407,28 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             debug_source_capture,
             transaction,
         } = self.stage;
-        let constructed = if nominal {
-            crate::collector::construct_production_semantic_mir_nominal_v35(
-                tcx,
-                closure,
-                debug_source_capture,
-            )
-        } else {
-            crate::collector::construct_production_semantic_mir_v1(
-                tcx,
-                closure,
-                debug_source_capture,
-            )
+        let constructed = match profile {
+            source_owned_v29::ImportProfile::NominalV35 => {
+                crate::collector::construct_production_semantic_mir_nominal_v35(
+                    tcx,
+                    closure,
+                    debug_source_capture,
+                )
+            }
+            source_owned_v29::ImportProfile::Current => {
+                crate::collector::construct_production_semantic_mir_v1(
+                    tcx,
+                    closure,
+                    debug_source_capture,
+                )
+            }
+            source_owned_v29::ImportProfile::SourceOwnedV29 => {
+                crate::collector::construct_production_semantic_mir_source_owned_v29(
+                    tcx,
+                    closure,
+                    debug_source_capture,
+                )
+            }
         }
         .map_err(ProductionPipelineError::SemanticImport)?;
         let crate::collector::ConstructedProductionSemanticMirV1 {
@@ -4100,6 +4122,8 @@ pub(crate) mod physical_entry_diagnostic_v20;
 pub(crate) mod physical_entry_target_v20;
 pub(crate) mod physical_global_copy_diagnostic_v21;
 pub(crate) mod physical_lds_exchange_diagnostic_v22;
+#[path = "production_pipeline_source_owned_v29.rs"]
+pub(crate) mod source_owned_v29;
 pub(crate) use complete_body_vnext::AuthenticatedCompleteBodyTargetModuleV19;
 pub(crate) use physical_entry_target_v20::AuthenticatedPhysicalEntryTargetModuleV20;
 pub(crate) mod ordered_composition_target_v1;

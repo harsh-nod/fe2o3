@@ -1,4 +1,5 @@
 use super::*;
+
 mod owner_parameter_tests {
     include!("production_execution_owner_parameter_v29_tests.rs");
 }
@@ -339,6 +340,10 @@ enum ScopedFixture {
     Plain,
     Assertion,
     Repeated,
+    RepeatedReferences,
+    TilePartsRepeated,
+    TilePartsRepeatedSlots,
+    TilePartsEntrySlots,
     RepeatedSlots,
     RootAssertionSlot,
     Initialization(InitializationFixtureV29),
@@ -389,9 +394,19 @@ fn run_lifecycle(
         _ => ScopedFixture::Plain,
     };
     let assertion = matches!(fixture, ScopedFixture::Assertion);
+    let tile_parts = matches!(
+        fixture,
+        ScopedFixture::TilePartsRepeated
+            | ScopedFixture::TilePartsRepeatedSlots
+            | ScopedFixture::TilePartsEntrySlots
+    );
     let repeated = matches!(
         fixture,
         ScopedFixture::Repeated
+            | ScopedFixture::RepeatedReferences
+            | ScopedFixture::TilePartsRepeated
+            | ScopedFixture::TilePartsRepeatedSlots
+            | ScopedFixture::TilePartsEntrySlots
             | ScopedFixture::RepeatedSlots
             | ScopedFixture::RootAssertionSlot
             | ScopedFixture::Initialization(_)
@@ -417,6 +432,22 @@ fn run_lifecycle(
             ScopedFixture::Repeated => {
                 assert!(!branches);
                 scoped_root_tests::fixtures::repeated_owner()
+            }
+            ScopedFixture::RepeatedReferences => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::repeated_reference_owner()
+            }
+            ScopedFixture::TilePartsRepeated => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::tile_parts_repeated_owner()
+            }
+            ScopedFixture::TilePartsRepeatedSlots => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::tile_parts_repeated_slot_owner()
+            }
+            ScopedFixture::TilePartsEntrySlots => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::tile_parts_entry_slot_owner()
             }
             ScopedFixture::RepeatedSlots => {
                 assert!(!branches);
@@ -469,6 +500,9 @@ fn run_lifecycle(
             }
         }
     };
+    if tile_parts {
+        owner = kernel_argument_abi_v18::tests::fixture_descriptor_ownership_v18(owner);
+    }
     let mut owner_fault_reached = false;
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
@@ -526,6 +560,14 @@ fn run_lifecycle(
         }
         if matches!(fixture, ScopedFixture::CallDestinations { .. }) {
             classes.push(ProductionScopeCallableCandidateV29::Ordinary);
+        }
+        if matches!(
+            fixture,
+            ScopedFixture::TilePartsRepeated
+                | ScopedFixture::TilePartsRepeatedSlots
+                | ScopedFixture::TilePartsEntrySlots
+        ) {
+            classes.extend([ProductionScopeCallableCandidateV29::Ordinary; 3]);
         }
         let SemanticTerminatorKindV1::Call(derive) =
             semantic.functions()[1].blocks()[0].terminator().kind()
@@ -587,6 +629,41 @@ fn run_lifecycle(
                 }
             })
             .collect();
+        if tile_parts {
+            use kernel_argument_abi_v18::{
+                CapturedKernelArgumentAbiV18, tests::FixtureKernelAbiV18,
+            };
+            let Fault::Orchestrated { groups, limits, .. } = fault else {
+                unreachable!("tile-parts fixtures are full scoped emissions");
+            };
+            return with_canonical_call_scratch_v1(&mut budget, |budget| {
+                budget.reserve_storage(std::mem::size_of::<CapturedKernelArgumentAbiV18>())?;
+                let profile = FixtureKernelAbiV18::new(&owner);
+                let profile_roots = profile.roots();
+                let captured = CapturedKernelArgumentAbiV18::capture(
+                    &owner,
+                    ProductionKernelArgumentAbiInputV18 {
+                        roots: &profile_roots,
+                    },
+                    budget,
+                )?;
+                let source = ExecutionLifecycleSourceV29::with_kernel_arguments(
+                    &owner,
+                    &launch,
+                    ProductionExecutionSourceInputV29 {
+                        semantic_sha256: owner.source_semantic_sha256(),
+                        roots: &roots,
+                        classes: &classes,
+                        events: &events,
+                    },
+                    Some(&captured),
+                    budget,
+                )?;
+                scoped_root_tests::emit_checked(
+                    &source, &launch, roots[0], groups, limits, fixture, budget,
+                )
+            });
+        }
         let source = ExecutionLifecycleSourceV29::new(
             &owner,
             &launch,
@@ -776,7 +853,7 @@ fn run_lifecycle(
                             next_value = result.next_value;
                             emitted[child.index()] = Some(result);
                         }
-                        sink.finish(budget)?;
+                        sink.finish(emitted.iter().filter_map(Option::as_ref), instances, budget)?;
                         if matches!(fault, Fault::SwappedEvents) {
                             let first = emitted[0].as_mut().unwrap().lifecycle_events.take();
                             let second = emitted[1].as_mut().unwrap().lifecycle_events.take();

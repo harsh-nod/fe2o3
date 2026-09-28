@@ -301,6 +301,18 @@ fn with_module_fixture_view<'work, R>(
                     SemanticTerminatorKindV1::Assert { .. } if function_index == 2 => {
                         ProductionScopeEventKindV29::Assert
                     }
+                    SemanticTerminatorKindV1::Unreachable if function_index == 2 => {
+                        ProductionScopeEventKindV29::Unreachable
+                    }
+                    SemanticTerminatorKindV1::UnwindResume if function_index == 2 => {
+                        ProductionScopeEventKindV29::UnwindResume
+                    }
+                    SemanticTerminatorKindV1::UnwindTerminate if function_index == 2 => {
+                        ProductionScopeEventKindV29::UnwindTerminate
+                    }
+                    SemanticTerminatorKindV1::Abort if function_index == 2 => {
+                        ProductionScopeEventKindV29::Abort
+                    }
                     _ => continue,
                 };
                 events.push(crate::ProductionScopeEventCandidateV29 {

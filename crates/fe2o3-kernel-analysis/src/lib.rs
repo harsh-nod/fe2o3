@@ -257,3 +257,6 @@ mod tests {
         assert!(!Variation::WorkgroupUniform.is_uniform_for(SynchronizationScope::Device));
     }
 }
+
+mod canonical_ranked_view_v1;
+pub use canonical_ranked_view_v1::*;

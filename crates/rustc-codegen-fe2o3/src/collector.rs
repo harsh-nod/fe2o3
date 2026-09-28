@@ -62,7 +62,8 @@ pub(crate) use production_importer_v1::{
     ProductionSemanticImportErrorV1, construct_production_semantic_mir_bf16_inspection_v1,
     construct_production_semantic_mir_bf16_tile_values_v1,
     construct_production_semantic_mir_nominal_v35,
-    construct_production_semantic_mir_ordered_composition_v1, construct_production_semantic_mir_v1,
+    construct_production_semantic_mir_ordered_composition_v1,
+    construct_production_semantic_mir_source_owned_v29, construct_production_semantic_mir_v1,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

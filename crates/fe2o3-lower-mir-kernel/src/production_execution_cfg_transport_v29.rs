@@ -1,11 +1,5 @@
 use fe2o3_mir_model::SsaEdgeIdV1;
 
-#[cfg(test)]
-struct ExecutionTestObservationV29 {
-    locals: Vec<Option<SemanticValueBindingV1>>,
-    bindings: BTreeMap<SsaValueV1, SemanticValueBindingV1>,
-}
-
 struct ExecutionCfgEdgeV29 {
     id: SsaEdgeIdV1,
     target: usize,
@@ -18,6 +12,7 @@ struct ExecutionCfgEntryV29 {
     phi: bool,
     value: Option<SsaValueV1>,
     leaves: std::ops::Range<usize>,
+    reference: Option<usize>,
 }
 
 // Fixed-capacity projections of this instance's captured source plan. They
@@ -26,6 +21,7 @@ struct ExecutionCfgV29<'a> {
     types: &'a [SemanticTypeDeclV1],
     has_nominal: bool,
     nominal_locals: Vec<usize>,
+    reference_locals: Vec<bool>,
     edges: Vec<ExecutionCfgEdgeV29>,
     incoming: Vec<usize>,
     arrived: Vec<usize>,
@@ -42,12 +38,49 @@ impl<'a> ExecutionCfgV29<'a> {
         occurrences: &ProductionSemanticSsaFunctionOccurrencesV1<'_>,
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        Self::new_with_references(types, function, ssa, occurrences, None, None, budget)
+    }
+
+    fn new_with_references(
+        types: &'a [SemanticTypeDeclV1],
+        function: &SemanticFunctionDeclV1,
+        ssa: &ProductionSemanticSsaFunctionPlanV1,
+        occurrences: &ProductionSemanticSsaFunctionOccurrencesV1<'_>,
+        references: Option<(
+            &SourceReferenceEmissionV29<'_, '_>,
+            ProductionCallInstanceIdV1,
+        )>,
+        control: Option<&ExecutionSourceControlV29<'_>>,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let blocks = function.blocks().len();
         let mut nominal_locals = emission_vec_v1(function.locals().len(), budget)?;
-        for local in function.locals() {
+        let mut reference_locals = emission_vec_v1(function.locals().len(), budget)?;
+        let promoted = ssa.plan().promoted_variables();
+        for (index, local) in function.locals().iter().enumerate() {
             nominal_locals.push(execution_cfg_nominal_count_v29(types, local.ty(), budget)?);
+            reference_locals.push(if let Some((references, _)) = references {
+                // Retained references belong to the physical storage census,
+                // not to the cursor's SSA definition and archive obligations.
+                charge_execution_cfg_lookup_v29(promoted.len(), budget)?;
+                let local_index =
+                    u32::try_from(index).map_err(|_| ArgumentResourceV1::Arithmetic)?;
+                promoted
+                    .binary_search_by_key(&local_index, |variable| variable.get())
+                    .is_ok()
+                    && source_reference_type_present_v29(
+                        types,
+                        local.ty(),
+                        references.plan.descriptor_root.is_some(),
+                        budget,
+                    )?
+            } else {
+                false
+            });
         }
-        budget.charge_work(nominal_locals.len())?;
+        budget.charge_work(argument_product_v1(nominal_locals.len(), 2)?)?;
+        // Reference origins already have the source owner's checked CFG fixed
+        // point. Execution-capability leaves still require all incoming edges.
         let has_nominal = nominal_locals.iter().any(|count| *count != 0);
         let mut edges = emission_vec_v1(occurrences.successors().len(), budget)?;
         let mut incoming = emission_vec_v1(blocks, budget)?;
@@ -58,6 +91,15 @@ impl<'a> ExecutionCfgV29<'a> {
         for edge in occurrences.successors() {
             budget.charge_work(2)?;
             if !ssa.plan().is_reachable(edge.id().source()) {
+                continue;
+            }
+            if let Some(control) = control
+                && !control.successor_reachable(
+                    SemanticBlockIdV1::from_index(edge.id().source().get()),
+                    edge.edge().role(),
+                    budget,
+                )?
+            {
                 continue;
             }
             let target = edge.edge().target().index() as usize;
@@ -78,7 +120,12 @@ impl<'a> ExecutionCfgV29<'a> {
         let mut entry_count = 0;
         let mut leaf_count = 0;
         for block in ssa.plan().reverse_postorder() {
-            if block.get() == function.entry().index() {
+            if let Some(control) = control
+                && !control.block_reachable(SemanticBlockIdV1::from_index(block.get()), budget)?
+            {
+                continue;
+            }
+            if block.get() == function.entry().index() && incoming[block.get() as usize] == 0 {
                 continue;
             }
             for variable in ssa
@@ -88,7 +135,7 @@ impl<'a> ExecutionCfgV29<'a> {
             {
                 budget.charge_work(1)?;
                 let count = nominal_locals[variable.get() as usize];
-                if count != 0 {
+                if count != 0 || reference_locals[variable.get() as usize] {
                     entry_count = argument_sum_v1(&[entry_count, 1])?;
                     leaf_count = argument_sum_v1(&[leaf_count, count])?;
                 }
@@ -104,7 +151,13 @@ impl<'a> ExecutionCfgV29<'a> {
             budget.charge_work(1)?;
             let first = entries.len();
             let id = SsaBlockIdV1::new(block as u32);
-            if block != function.entry().index() as usize && ssa.plan().is_reachable(id) {
+            let reachable = match control {
+                Some(control) => {
+                    control.block_reachable(SemanticBlockIdV1::from_index(id.get()), budget)?
+                }
+                None => ssa.plan().is_reachable(id),
+            };
+            if (block != function.entry().index() as usize || incoming[block] != 0) && reachable {
                 let phis = ssa
                     .plan()
                     .transport_variables(id)
@@ -113,16 +166,35 @@ impl<'a> ExecutionCfgV29<'a> {
                     budget.charge_work(argument_sum_v1(&[phis.len(), 1])?)?;
                     let local = variable.get() as usize;
                     let count = nominal_locals[local];
-                    if count == 0 {
+                    if count == 0 && !reference_locals[local] {
                         continue;
                     }
                     let end = argument_sum_v1(&[next_leaf, count])?;
+                    let reference = if reference_locals[local] {
+                        let (references, instance) =
+                            references.ok_or_else(execution_cfg_error_v29)?;
+                        let node = references
+                            .block_node(
+                                instance,
+                                SemanticBlockIdV1::from_index(block as u32),
+                                SemanticLocalIdV1::from_index(variable.get()),
+                                budget,
+                            )?
+                            .ok_or_else(execution_cfg_error_v29)?;
+                        if references.plan.nodes[node].ty != function.locals()[local].ty() {
+                            return Err(execution_cfg_error_v29());
+                        }
+                        Some(node)
+                    } else {
+                        None
+                    };
                     entries.push(ExecutionCfgEntryV29 {
                         local: variable.get(),
                         ty: function.locals()[local].ty(),
                         phi: phis.contains(variable),
                         value: None,
                         leaves: next_leaf..end,
+                        reference,
                     });
                     next_leaf = end;
                 }
@@ -132,10 +204,17 @@ impl<'a> ExecutionCfgV29<'a> {
         if entries.len() != entry_count || next_leaf != leaf_count {
             return Err(execution_cfg_error_v29());
         }
+        let entry = function.entry().index() as usize;
+        if incoming[entry] != 0 {
+            // The invocation edge is not a source successor and has no
+            // SsaEdgeId. It is claimed separately before the source entry.
+            incoming[entry] = argument_sum_v1(&[incoming[entry], 1])?;
+        }
         Ok(Self {
             types,
             has_nominal,
             nominal_locals,
+            reference_locals,
             edges,
             incoming,
             arrived,
@@ -170,11 +249,31 @@ impl<'a> ExecutionCfgV29<'a> {
         seen: &[bool],
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.enter_with_identity_v1(block, current, seen, None, budget)
+    }
+
+    fn enter_with_identity_v1(
+        &self,
+        block: SemanticBlockIdV1,
+        current: &mut [Option<SsaValueV1>],
+        seen: &[bool],
+        identity: Option<ExecutionIdentityDestinationV1<'_>>,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
         let block = block.index() as usize;
+        if let Some(identity) = &identity {
+            budget.charge_work(1)?;
+            if !std::ptr::eq(identity.cfg, self) || identity.block != block {
+                return Err(execution_identity_error_v1());
+            }
+        }
         let range = self.ranges.get(block).ok_or_else(execution_cfg_error_v29)?;
         budget.charge_work(argument_sum_v1(&[range.len(), 1])?)?;
+        let has_nominal = self.destination_has_nominal(block, budget)?;
         if !range.is_empty()
-            && (self.incoming[block] == 0 || self.arrived[block] != self.incoming[block])
+            && (self.arrived[block] == 0
+                || self.arrived[block] > self.incoming[block]
+                || has_nominal && identity.is_none() && self.arrived[block] != self.incoming[block])
         {
             return Err(execution_cfg_error_v29());
         }
@@ -188,9 +287,130 @@ impl<'a> ExecutionCfgV29<'a> {
         }
         Ok(())
     }
+
+    fn destination_has_nominal(
+        &self,
+        block: usize,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<bool, ProductionSemanticKirErrorV1> {
+        let range = self.ranges.get(block).ok_or_else(execution_cfg_error_v29)?;
+        budget.charge_work(argument_sum_v1(&[range.len(), 1])?)?;
+        let entries = self
+            .entries
+            .get(range.clone())
+            .ok_or_else(execution_cfg_error_v29)?;
+        Ok(entries.iter().any(|entry| !entry.leaves.is_empty()))
+    }
 }
 
 impl ExecutionAvailabilityV29<'_> {
+    fn transport_invocation_v1(
+        &mut self,
+        plan: &InvocationEntryPlanV1<'_>,
+        locals: &[Option<SemanticValueBindingV1>],
+        archive: &SemanticSsaBindingsV1,
+        carriers: &ExecutionCfgCarriersV29,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.check_ledger(budget)?;
+        plan.check_source(self.function, self.ssa, budget)?;
+        self.events.complete(budget)?;
+        budget.charge_work(argument_sum_v1(&[self.visited.len(), 5])?)?;
+        let target = self.function.entry().index() as usize;
+        if plan.layout.preheader.is_none()
+            || self.block.is_some()
+            || self.events.finished
+            || self.visited.iter().any(|visited| *visited)
+            || self.cfg.arrived[target] != 0
+            || self.cfg.incoming[target] != argument_sum_v1(&[plan.layout.entry_predecessors, 1])?
+        {
+            return Err(execution_cfg_error_v29());
+        }
+        if let Some((identities, _)) = self.identities {
+            identities.check_cursor(self, budget)?;
+        }
+        let definitions = self.ssa.plan().entry_definitions();
+        let arguments = plan.entry_arguments();
+        for entry_index in self.cfg.ranges[target].clone() {
+            let entry = &self.cfg.entries[entry_index];
+            let carrier = match entry.reference {
+                Some(node) => carriers.at(self, entry.local, node, budget)?,
+                None => None,
+            };
+            let entry = &mut self.cfg.entries[entry_index];
+            budget.charge_work(argument_sum_v1(&[definitions.len(), arguments.len(), 3])?)?;
+            let value = definitions
+                .iter()
+                .find(|definition| definition.variable().get() == entry.local)
+                .ok_or_else(execution_cfg_error_v29)?
+                .value();
+            let argument = arguments
+                .iter()
+                .find(|argument| argument.variable().get() == entry.local);
+            if entry.phi != argument.is_some()
+                || argument.is_some_and(|argument| argument.value() != value)
+                || entry.value.is_some()
+            {
+                return Err(execution_cfg_error_v29());
+            }
+            if !entry.leaves.is_empty()
+                && let Some((identities, _)) = self.identities
+            {
+                identities.incoming(
+                    self.instance,
+                    self.function.entry(),
+                    entry.local,
+                    entry.ty,
+                    value,
+                    budget,
+                )?;
+            }
+            let held = locals
+                .get(entry.local as usize)
+                .and_then(Option::as_ref)
+                .ok_or_else(execution_cfg_error_v29)?;
+            charge_execution_cfg_lookup_v29(archive.len(), budget)?;
+            let original = archive.get(&value).ok_or_else(execution_cfg_error_v29)?;
+            let mut leaves = self.cfg.leaves[entry.leaves.clone()].iter_mut();
+            if let Some(carrier) = carrier {
+                merge_execution_cfg_carrier_v29(carrier, held, original, budget)?;
+            } else if let Some(node) = entry.reference {
+                source_reference_merge_node_v29(
+                    self.references.ok_or_else(execution_cfg_error_v29)?,
+                    node,
+                    held,
+                    original,
+                    &mut leaves,
+                    &mut 0,
+                    budget,
+                )?;
+            } else {
+                merge_execution_cfg_binding_v29(
+                    self.cfg.types,
+                    entry.ty,
+                    held,
+                    original,
+                    &mut leaves,
+                    &mut 0,
+                    budget,
+                )?;
+            }
+            if leaves.next().is_some() {
+                return Err(execution_cfg_error_v29());
+            }
+            entry.value = Some(if entry.phi {
+                SsaValueV1::BlockArgument {
+                    block: SsaBlockIdV1::new(target as u32),
+                    variable: fe2o3_mir_model::SsaVariableIdV1::new(entry.local),
+                }
+            } else {
+                value
+            });
+        }
+        self.cfg.arrived[target] = 1;
+        Ok(())
+    }
+
     fn check_cfg_edge_plan(
         &self,
         block: SemanticBlockIdV1,
@@ -222,22 +442,56 @@ impl ExecutionAvailabilityV29<'_> {
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         self.check_ledger(budget)?;
-        if self.cfg.has_nominal
-            && block == self.function.entry()
-            && self.cfg.incoming[block.index() as usize] != 0
-        {
-            return Err(execution_cfg_error_v29());
+        if block == self.function.entry() && self.cfg.incoming[block.index() as usize] != 0 {
+            budget.charge_work(1)?;
+            if self.cfg.arrived[block.index() as usize] != 1 {
+                return Err(execution_cfg_error_v29());
+            }
         }
-        self.cfg.enter(block, &mut self.current, &self.seen, budget)
+        if let Some((identities, _)) = self.identities {
+            identities.check_cursor(self, budget)?;
+            let destination = identities.destination(self.instance, &self.cfg, block, budget)?;
+            self.cfg.enter_with_identity_v1(
+                block,
+                &mut self.current,
+                &self.seen,
+                destination,
+                budget,
+            )
+        } else {
+            self.cfg.enter(block, &mut self.current, &self.seen, budget)
+        }
     }
 
+    #[cfg(test)]
     fn transport_edge(
         &mut self,
         block: SemanticBlockIdV1,
         ordinal: u32,
         target: SemanticBlockIdV1,
         locals: &[Option<SemanticValueBindingV1>],
-        archive: &BTreeMap<SsaValueV1, SemanticValueBindingV1>,
+        archive: &SemanticSsaBindingsV1,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.transport_edge_with_carriers_v29(
+            block,
+            ordinal,
+            target,
+            locals,
+            archive,
+            &ExecutionCfgCarriersV29::default(),
+            budget,
+        )
+    }
+
+    fn transport_edge_with_carriers_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        ordinal: u32,
+        target: SemanticBlockIdV1,
+        locals: &[Option<SemanticValueBindingV1>],
+        archive: &SemanticSsaBindingsV1,
+        carriers: &ExecutionCfgCarriersV29,
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         self.check_ledger(budget)?;
@@ -247,8 +501,21 @@ impl ExecutionAvailabilityV29<'_> {
         }
         let id = SsaEdgeIdV1::new(SsaBlockIdV1::new(block.index()), ordinal);
         let index = self.cfg.edge_index(id, target, budget)?;
-        if self.cfg.has_nominal && self.visited[target.index() as usize] {
-            return Err(execution_cfg_error_v29());
+        if let Some((identities, _)) = self.identities {
+            identities.check_cursor(self, budget)?;
+        }
+        if self.visited[target.index() as usize]
+            && self
+                .cfg
+                .destination_has_nominal(target.index() as usize, budget)?
+        {
+            let (identities, _) = self.identities.ok_or_else(execution_cfg_error_v29)?;
+            if identities
+                .destination(self.instance, &self.cfg, target, budget)?
+                .is_none()
+            {
+                return Err(execution_cfg_error_v29());
+            }
         }
         let definitions = self
             .ssa
@@ -261,7 +528,13 @@ impl ExecutionAvailabilityV29<'_> {
             .edge_arguments(id)
             .ok_or_else(execution_cfg_error_v29)?;
         let range = self.cfg.ranges[target.index() as usize].clone();
-        for entry in &mut self.cfg.entries[range] {
+        for entry_index in range {
+            let entry = &self.cfg.entries[entry_index];
+            let carrier = match entry.reference {
+                Some(node) => carriers.at(self, entry.local, node, budget)?,
+                None => None,
+            };
+            let entry = &mut self.cfg.entries[entry_index];
             budget.charge_work(argument_sum_v1(&[definitions.len(), arguments.len(), 3])?)?;
             let edge_definition = definitions
                 .iter()
@@ -278,6 +551,11 @@ impl ExecutionAvailabilityV29<'_> {
             {
                 return Err(execution_cfg_error_v29());
             }
+            if !entry.leaves.is_empty()
+                && let Some((identities, _)) = self.identities
+            {
+                identities.incoming(self.instance, target, entry.local, entry.ty, value, budget)?;
+            }
             // This is the borrowed owner's exact edge definition, not a
             // source-block-wide definition shared with another successor.
             let held = locals
@@ -287,15 +565,29 @@ impl ExecutionAvailabilityV29<'_> {
             charge_execution_cfg_lookup_v29(archive.len(), budget)?;
             let original = archive.get(&value).ok_or_else(execution_cfg_error_v29)?;
             let mut leaves = self.cfg.leaves[entry.leaves.clone()].iter_mut();
-            merge_execution_cfg_binding_v29(
-                self.cfg.types,
-                entry.ty,
-                held,
-                original,
-                &mut leaves,
-                &mut 0,
-                budget,
-            )?;
+            if let Some(carrier) = carrier {
+                merge_execution_cfg_carrier_v29(carrier, held, original, budget)?;
+            } else if let Some(node) = entry.reference {
+                source_reference_merge_node_v29(
+                    self.references.ok_or_else(execution_cfg_error_v29)?,
+                    node,
+                    held,
+                    original,
+                    &mut leaves,
+                    &mut 0,
+                    budget,
+                )?;
+            } else {
+                merge_execution_cfg_binding_v29(
+                    self.cfg.types,
+                    entry.ty,
+                    held,
+                    original,
+                    &mut leaves,
+                    &mut 0,
+                    budget,
+                )?;
+            }
             if leaves.next().is_some() {
                 return Err(execution_cfg_error_v29());
             }
@@ -327,11 +619,27 @@ fn with_execution_cfg_values_v29<R>(
         &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
+    with_execution_cfg_values_and_references_v29(binding, None, budget, consume)
+}
+
+fn with_execution_cfg_values_and_references_v29<R>(
+    binding: &SemanticValueBindingV1,
+    references: Option<&SourceReferenceEmissionV29<'_, '_>>,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+    consume: impl FnOnce(
+        &[ValueDef],
+        &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<R, ProductionSemanticKirErrorV1>,
+) -> Result<R, ProductionSemanticKirErrorV1> {
     use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
     let floor = budget.storage();
     let mut values = Vec::new();
     let built = catch_unwind(AssertUnwindSafe(|| {
-        execution_cfg_values_v29(binding, &mut values, &mut 0, budget)
+        if let Some(references) = references {
+            source_reference_values_v29(references, binding, &mut values, &mut 0, budget)
+        } else {
+            execution_cfg_values_v29(binding, &mut values, &mut 0, budget)
+        }
     }));
     let storage = budget
         .storage()
@@ -356,11 +664,11 @@ fn with_execution_cfg_values_v29<R>(
     }
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn execution_cfg_local_v29(&self, local: usize) -> bool {
-        self.execution
-            .as_ref()
-            .is_some_and(|cursor| cursor.cfg.nominal_locals[local] != 0)
+        self.execution.as_ref().is_some_and(|cursor| {
+            cursor.cfg.nominal_locals[local] != 0 || cursor.cfg.reference_locals[local]
+        })
     }
 
     fn restore_execution_cfg_v29(
@@ -378,18 +686,49 @@ impl SemanticFunctionLoweringV1<'_> {
             cursor.check_ledger(budget)?;
             for entry in &cursor.cfg.entries[cursor.cfg.ranges[block.index() as usize].clone()] {
                 let source_value = entry.value.ok_or_else(execution_cfg_error_v29)?;
+                let carrier = match entry.reference {
+                    Some(node) => {
+                        this.control_flow_ssa
+                            .cfg_carriers
+                            .at(cursor, entry.local, node, budget)?
+                    }
+                    None => None,
+                };
                 let rebuild = |values: &[ValueDef], budget: &mut dyn SemanticEmissionBudgetV1| {
+                    if let Some(carrier) = carrier {
+                        if !entry.leaves.is_empty() {
+                            return Err(execution_cfg_error_v29());
+                        }
+                        return carrier.rebuild(this.types, values, budget);
+                    }
                     let mut leaves = cursor.cfg.leaves[entry.leaves.clone()].iter();
                     let mut values = values.iter();
-                    let binding = rebuild_execution_cfg_binding_v29(
-                        this.types,
-                        entry.ty,
-                        entry.phi,
-                        &mut leaves,
-                        &mut values,
-                        &mut 0,
-                        budget,
-                    )?;
+                    let binding = if let Some(node) = entry.reference {
+                        source_reference_rebuild_node_v29(
+                            cursor.references.ok_or_else(execution_cfg_error_v29)?,
+                            node,
+                            entry.phi,
+                            &mut leaves,
+                            &mut values,
+                            &mut 0,
+                            budget,
+                        )?
+                    } else {
+                        rebuild_execution_cfg_binding_with_representation_v29(
+                            this.types,
+                            entry.ty,
+                            if cursor.references.is_some() {
+                                ExecutionCfgRepresentationV29::OriginalSource
+                            } else {
+                                ExecutionCfgRepresentationV29::LegacyAbi
+                            },
+                            entry.phi,
+                            &mut leaves,
+                            &mut values,
+                            &mut 0,
+                            budget,
+                        )?
+                    };
                     if leaves.next().is_some() || values.next().is_some() {
                         return Err(execution_cfg_error_v29());
                     }
@@ -403,24 +742,36 @@ impl SemanticFunctionLoweringV1<'_> {
                         .get(&block.index())
                         .and_then(|locals| locals.get(&entry.local))
                         .ok_or_else(execution_cfg_error_v29)?;
-                    let archived = rebuild(values, budget)?;
-                    reserve_execution_cfg_archive_v29(this.semantic_ssa_bindings.len(), budget)?;
-                    insert_semantic_ssa_binding_v1(
+                    let binding = rebuild(values, budget)?;
+                    archive_scoped_binding_v29(
+                        cursor,
                         &mut this.semantic_ssa_bindings,
-                        this.semantic_function.index(),
-                        Some(block.index()),
-                        None,
+                        &mut this.semantic_ssa_archive_credit,
                         source_value,
-                        archived,
+                        &binding,
+                        ExecutionArchiveDefinitionSiteV29::BlockArgument {
+                            block: SsaBlockIdV1::new(block.index()),
+                            local: entry.local,
+                        },
+                        budget,
                     )?;
-                    rebuild(values, budget)?
+                    binding
                 } else {
                     charge_execution_cfg_lookup_v29(this.semantic_ssa_bindings.len(), budget)?;
                     let original = this
                         .semantic_ssa_bindings
                         .get(&source_value)
                         .ok_or_else(execution_cfg_error_v29)?;
-                    with_execution_cfg_values_v29(original, budget, rebuild)?
+                    if let Some(carrier) = carrier {
+                        with_execution_cfg_carrier_values_v29(carrier, original, budget, rebuild)?
+                    } else {
+                        with_execution_cfg_values_and_references_v29(
+                            original,
+                            cursor.references,
+                            budget,
+                            rebuild,
+                        )?
+                    }
                 };
                 this.locals[entry.local as usize] = Some(binding);
             }
@@ -443,7 +794,15 @@ fn reserve_execution_cfg_archive_v29(
     count: usize,
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    reserve_execution_cfg_map_entry_v29::<SsaValueV1, SemanticValueBindingV1>(count, budget)
+    charge_execution_cfg_lookup_v29(count, budget)?;
+    budget.reserve_storage(execution_cfg_archive_entry_storage_v29(count)?)
+}
+
+fn execution_cfg_archive_entry_storage_v29(count: usize) -> Result<usize, ArgumentResourceV1> {
+    argument_sum_v1(&[
+        execution_cfg_map_entry_storage_v29::<SsaValueV1, Box<SemanticValueBindingV1>>(count)?,
+        std::mem::size_of::<SemanticValueBindingV1>(),
+    ])
 }
 
 fn reserve_execution_cfg_map_entry_v29<K, V>(
@@ -451,11 +810,15 @@ fn reserve_execution_cfg_map_entry_v29<K, V>(
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     charge_execution_cfg_lookup_v29(count, budget)?;
+    budget.reserve_storage(execution_cfg_map_entry_storage_v29::<K, V>(count)?)
+}
+
+fn execution_cfg_map_entry_storage_v29<K, V>(count: usize) -> Result<usize, ArgumentResourceV1> {
     // Conservative split-path allowance for the pinned toolchain's BTreeMap:
     // at most one new node per level plus a root. Keep it charged for the request.
     let levels = count.checked_ilog2().unwrap_or(0) as usize + 2;
     let node = argument_product_v1(32, std::mem::size_of::<(K, V, usize)>())?;
-    budget.reserve_storage(argument_product_v1(levels, node)?)
+    argument_product_v1(levels, node)
 }
 
 fn clone_execution_cfg_parameters_v29(

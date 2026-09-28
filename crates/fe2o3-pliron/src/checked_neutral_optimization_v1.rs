@@ -47,7 +47,17 @@ impl<E: fmt::Display> fmt::Display for KirCheckedNeutralOptimizationErrorV1<E> {
         }
     }
 }
-impl<E: Error + 'static> Error for KirCheckedNeutralOptimizationErrorV1<E> {}
+impl<E: Error + 'static> Error for KirCheckedNeutralOptimizationErrorV1<E> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Inventory(error) => Some(error),
+            Self::Transition(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            Self::Origin(error) => Some(error),
+            Self::OriginAccounting | Self::Panicked => None,
+        }
+    }
+}
 impl<E> From<Resource> for KirCheckedNeutralOptimizationErrorV1<E> {
     fn from(error: Resource) -> Self {
         Self::Resource(error)
@@ -291,20 +301,20 @@ impl KirNeutralOptimizationOutputV1<'_> {
 
 // Private owned fields shared by two distinct public owner types. The unit
 // historical extra never carries a policy-3 execution record through V1 custody.
-pub(super) struct ObservedParts<'input, M, X> {
-    pub(super) input: &'input Owner,
-    pub(super) owner: Owner,
+pub(super) struct ObservedParts<'input, M, X, O = Owner, B = KirBridgeOptimizedReceiptV1> {
+    pub(super) input: &'input O,
+    pub(super) owner: O,
     pub(super) report: PlironOptimizationReportV1,
-    pub(super) bridge: KirBridgeOptimizedReceiptV1,
+    pub(super) bridge: B,
     pub(super) map: M,
     pub(super) occurrences: KirNeutralOccurrenceRowsV1,
     pub(super) storage: super::KirNeutralOptimizationStorageV1,
     pub(super) extra: X,
 }
-pub(super) struct CheckedParts<M, X> {
-    pub(super) owner: Owner,
+pub(super) struct CheckedParts<M, X, O = Owner, B = KirBridgeOptimizedReceiptV1> {
+    pub(super) owner: O,
     pub(super) report: PlironOptimizationReportV1,
-    pub(super) bridge: KirBridgeOptimizedReceiptV1,
+    pub(super) bridge: B,
     pub(super) map: M,
     pub(super) occurrences: KirNeutralOccurrenceRowsV1,
     pub(super) input_history: Vec<u8>,
@@ -328,40 +338,112 @@ where
         &mut Budget<'work>,
     ) -> Result<(T, usize), E>,
 {
+    check_and_finish_parts_typed(
+        parts,
+        budget,
+        origins,
+        observed_wrapper,
+        checked_wrapper,
+        policy,
+        AdoptionProfile {
+            bytes: |owner| owner.canonical().canonical_bytes(),
+            inventory: |owner, budget| CanonicalKirInventoryV1::derive(owner, budget),
+            transition: check_canonical_kir_transition_v1,
+            bounded_cleanup: false,
+        },
+    )
+}
+
+// Closed nominal facades select these adapters; callers cannot provide one.
+pub(super) struct AdoptionProfile<O> {
+    pub(super) bytes: for<'a> fn(&'a O) -> &'a [u8],
+    pub(super) inventory: for<'g, 'b, 'w> fn(
+        &'g O,
+        &'b mut Budget<'w>,
+    ) -> Result<
+        (
+            CanonicalKirInventoryV1<'g, O>,
+            fe2o3_kernel_analysis::CanonicalKirInventoryStorageV1,
+        ),
+        CanonicalKirInventoryErrorV1,
+    >,
+    pub(super) transition: for<'a, 'i, 'o, 'r, 'b, 'w> fn(
+        &'a CanonicalKirInventoryV1<'i, O>,
+        &'a CanonicalKirInventoryV1<'o, O>,
+        fe2o3_kernel_ir::CanonicalKirTransitionCandidateV1<'r>,
+        &'b mut Budget<'w>,
+    ) -> Result<
+        (
+            CheckedCanonicalKirTransitionV1<'a, 'i, 'o, 'r, O>,
+            fe2o3_kernel_analysis::CanonicalKirTransitionStorageV1,
+        ),
+        CanonicalKirTransitionErrorV1,
+    >,
+    pub(super) bounded_cleanup: bool,
+}
+
+pub(super) fn check_and_finish_parts_typed<O, B, M, X, T: 'static, E: 'static, F>(
+    parts: ObservedParts<'_, M, X, O, B>,
+    budget: &mut Budget<'_>,
+    origins: F,
+    observed_wrapper: fn() -> Option<usize>,
+    checked_wrapper: fn() -> Option<usize>,
+    policy: crate::fixed_policy_v3::FixedPolicy,
+    admission: AdoptionProfile<O>,
+) -> Result<
+    (CheckedParts<M, X, O, B>, T, KirNeutralOwnedOriginStorageV1),
+    KirCheckedNeutralOptimizationErrorV1<E>,
+>
+where
+    F: for<'view, 'inventory, 'input, 'output, 'rows, 'work> FnOnce(
+        &'view CheckedCanonicalKirTransitionV1<'inventory, 'input, 'output, 'rows, O>,
+        &mut Budget<'work>,
+    ) -> Result<(T, usize), E>,
+{
     let ledger = budget.work_ledger_identity_v1();
     let observed_storage = parts.storage.retained_storage();
     let Some(floor) = budget.storage().checked_sub(observed_storage) else {
         drop(parts);
         return Err(Resource::Accounting.into());
     };
+    let mut active_callback_floor = None;
     let result = catch_unwind(AssertUnwindSafe(|| {
+        if admission.bounded_cleanup {
+            budget.charge_work(1 + crate::kir_bridge_v1::BOUNDED_PAYLOAD_CLEANUP_ATTEMPTS_V1)?;
+            budget.reserve_storage(bounded_adoption_headers::<O, B, M, X, T, E, F>()?)?;
+        }
         budget.charge_work(1)?;
         let scratch_floor = budget.storage();
         let (origin_owner, origin_storage) = {
-            let (input, input_storage) = CanonicalKirInventoryV1::derive(parts.input, budget)
+            let (input, input_storage) = (admission.inventory)(parts.input, budget)
                 .map_err(KirCheckedNeutralOptimizationErrorV1::Inventory)?;
             budget.reserve_storage(input_storage.retained_storage())?;
-            let (output, output_storage) = CanonicalKirInventoryV1::derive(&parts.owner, budget)
+            let (output, output_storage) = (admission.inventory)(&parts.owner, budget)
                 .map_err(KirCheckedNeutralOptimizationErrorV1::Inventory)?;
             budget.reserve_storage(output_storage.retained_storage())?;
-            let (checked, checked_storage) = check_canonical_kir_transition_v1(
-                &input,
-                &output,
-                parts.occurrences.candidate(),
-                budget,
-            )
-            .map_err(KirCheckedNeutralOptimizationErrorV1::Transition)?;
+            let (checked, checked_storage) =
+                (admission.transition)(&input, &output, parts.occurrences.candidate(), budget)
+                    .map_err(KirCheckedNeutralOptimizationErrorV1::Transition)?;
             budget.reserve_storage(checked_storage.retained_storage())?;
             let callback_floor = budget.storage();
+            active_callback_floor = Some(callback_floor);
             let callback = origins(&checked, budget);
             if budget.work_ledger_identity_v1() != ledger {
                 drop(callback);
                 return Err(Resource::Accounting.into());
             }
             if budget.storage() != callback_floor {
-                drop(callback);
-                return Err(KirCheckedNeutralOptimizationErrorV1::OriginAccounting);
+                return match callback {
+                    Err(error) if admission.bounded_cleanup => {
+                        Err(KirCheckedNeutralOptimizationErrorV1::Origin(error))
+                    }
+                    callback => {
+                        drop(callback);
+                        Err(KirCheckedNeutralOptimizationErrorV1::OriginAccounting)
+                    }
+                };
             }
+            active_callback_floor = None;
             let (owner, retained) =
                 callback.map_err(KirCheckedNeutralOptimizationErrorV1::Origin)?;
             if retained < size_of::<T>() {
@@ -386,7 +468,7 @@ where
         let wrapper = checked_wrapper().ok_or(Resource::Arithmetic)?;
         // The old observed wrapper still coexists until its fields move.
         budget.reserve_storage(wrapper)?;
-        let bytes = parts.input.canonical().canonical_bytes();
+        let bytes = (admission.bytes)(parts.input);
         budget.charge_work(bytes.len())?;
         budget.reserve_storage(bytes.len())?;
         let mut input_history = Vec::new();
@@ -442,23 +524,86 @@ where
     let result = match result {
         Ok(result) => result,
         Err(payload) => {
-            drop(payload);
+            if admission.bounded_cleanup {
+                crate::kir_bridge_v1::discard_bounded_payload_v1(payload);
+            } else {
+                drop(payload);
+            }
             Err(KirCheckedNeutralOptimizationErrorV1::Panicked)
         }
     };
     // A hostile callback may replace the borrowed ledger before returning or
     // panicking. Refuse custody without charging or releasing that foreign meter.
     if budget.work_ledger_identity_v1() != ledger {
-        drop(result);
+        drop_adoption_result(result, admission.bounded_cleanup);
         return Err(Resource::Accounting.into());
+    }
+    // A mismatched callback floor may represent a nested sticky refusal. Its
+    // residual reservations cannot be refunded by this enclosing transaction.
+    // A balanced callback panic still permits normal cleanup after unwind.
+    if admission.bounded_cleanup
+        && active_callback_floor.is_some_and(|expected| budget.storage() != expected)
+    {
+        return result;
     }
     // No allocation or callback may intervene after this explicit output
     // transfer. Rejected owners were dropped by the unwound/returned scope.
     if let Err(error) = restore_floor(budget, floor) {
-        drop(result);
+        drop_adoption_result(result, admission.bounded_cleanup);
         return Err(error.into());
     }
     result
+}
+
+fn drop_adoption_result<T>(value: T, bounded: bool) {
+    if bounded {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
+            crate::kir_bridge_v1::discard_bounded_payload_v1(payload);
+        }
+    } else {
+        drop(value);
+    }
+}
+
+fn bounded_adoption_headers<O, B, M, X, T, E, F>() -> Result<usize, Resource> {
+    type Payload = Box<dyn std::any::Any + Send>;
+    let slots = [
+        (2, size_of::<ObservedParts<'_, M, X, O, B>>()),
+        (2, size_of::<CheckedParts<M, X, O, B>>()),
+        (
+            8,
+            size_of::<
+                Result<
+                    (CheckedParts<M, X, O, B>, T, KirNeutralOwnedOriginStorageV1),
+                    KirCheckedNeutralOptimizationErrorV1<E>,
+                >,
+            >(),
+        ),
+        (
+            2,
+            size_of::<
+                std::thread::Result<
+                    Result<
+                        (CheckedParts<M, X, O, B>, T, KirNeutralOwnedOriginStorageV1),
+                        KirCheckedNeutralOptimizationErrorV1<E>,
+                    >,
+                >,
+            >(),
+        ),
+        (4, size_of::<Payload>()),
+        (1, size_of::<AssertUnwindSafe<Payload>>()),
+        (2, size_of::<std::thread::Result<()>>()),
+        (1, size_of::<AdoptionProfile<O>>()),
+        (1, size_of::<F>()),
+        (2, size_of::<Result<(T, usize), E>>()),
+        (4, size_of::<usize>()),
+        (1, size_of::<Option<usize>>()),
+    ];
+    slots.into_iter().try_fold(0usize, |total, (count, size)| {
+        size.checked_mul(count)
+            .and_then(|bytes| total.checked_add(bytes))
+            .ok_or(Resource::Arithmetic)
+    })
 }
 
 #[cfg(test)]

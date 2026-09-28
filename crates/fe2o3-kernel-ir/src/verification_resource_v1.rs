@@ -33,7 +33,9 @@ pub struct CanonicalKernelIrVerificationStorageLimitV1 {
 }
 
 impl CanonicalKernelIrVerificationStorageLimitV1 {
-    const fn new(actual: usize, limit: usize) -> Self {
+    /// Constructs an inert storage-refusal diagnostic with exact caller counts.
+    /// This does not operate on a budget or establish a verification receipt.
+    pub const fn new(actual: usize, limit: usize) -> Self {
         Self { actual, limit }
     }
 

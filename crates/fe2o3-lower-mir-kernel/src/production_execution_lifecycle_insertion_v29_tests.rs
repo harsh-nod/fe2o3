@@ -2,6 +2,7 @@ fn check_inserted_lifecycle(
     root: OwnedPendingScopedRootV29,
     limits: ProductionSemanticKirLimitsV1,
     fixture: ScopedFixture,
+    storage_layouts: &[fe2o3_kernel_ir::StorageLayoutV1],
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let before = root.pending.function.clone();
@@ -35,6 +36,78 @@ fn check_inserted_lifecycle(
         assert_eq!(budget.storage(), floor);
         assert_eq!(donor.as_ref().unwrap().pending.function, before);
     };
+    let pending = &donor.as_ref().unwrap().pending;
+    let roster_work =
+        8 + 11 * pending.coordinates.sources.rows.len() + 5 * pending.sidecars.rows.len();
+    for short in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(roster_work - usize::from(short));
+        let mut isolated = ArgumentBudgetV1::new(&mut work, 29);
+        isolated.reserve_storage(29)?;
+        let checked = check_lifecycle_instance_roster_v29(pending, &mut isolated);
+        assert_eq!(checked.is_ok(), !short, "{checked:?}");
+        assert_eq!(isolated.storage(), 29);
+        drop(isolated);
+        assert_eq!(work.work(), roster_work - usize::from(short));
+        assert_eq!(work.failed_work(), short.then_some(roster_work));
+    }
+    for fault in 0..8 {
+        let pending = &mut donor.as_mut().unwrap().pending;
+        let old_index = pending.active_instances.rows[1];
+        let old_id = pending.sidecars.rows[1].source_call_instance;
+        let old_container = pending.coordinates.seeds.rows[1].container;
+        let mut last = None;
+        match fault {
+            0 => last = pending.active_instances.rows.pop(),
+            1 => pending.active_instances.rows[1] = None,
+            2 => pending.active_instances.rows[1] = Some(0),
+            3 => pending.active_instances.rows.swap(0, 1),
+            4 => pending.coordinates.sources.rows.swap(0, 1),
+            5 => pending.coordinates.seeds.rows.swap(0, 1),
+            6 => {
+                pending.sidecars.rows[1].source_call_instance =
+                    pending.sidecars.rows[0].source_call_instance
+            }
+            7 => {
+                pending.coordinates.seeds.rows[1].container =
+                    pending.coordinates.seeds.rows[1].instance
+            }
+            _ => unreachable!(),
+        }
+        reject(&mut donor, budget);
+        let pending = &mut donor.as_mut().unwrap().pending;
+        match fault {
+            0 => pending.active_instances.rows.push(last.unwrap()),
+            1 | 2 => pending.active_instances.rows[1] = old_index,
+            3 => pending.active_instances.rows.swap(0, 1),
+            4 => pending.coordinates.sources.rows.swap(0, 1),
+            5 => pending.coordinates.seeds.rows.swap(0, 1),
+            6 => pending.sidecars.rows[1].source_call_instance = old_id,
+            7 => pending.coordinates.seeds.rows[1].container = old_container,
+            _ => unreachable!(),
+        }
+        check_lifecycle_instance_roster_v29(pending, budget)?;
+        assert_eq!(budget.storage(), floor);
+    }
+    // A coherently compacted child roster still cannot omit the original root.
+    let pending = &mut donor.as_mut().unwrap().pending;
+    let root_sidecar = pending.sidecars.rows.remove(0);
+    let root_seed = pending.coordinates.seeds.rows.remove(0);
+    assert_eq!(pending.active_instances.rows[0].take(), Some(0));
+    for ordinal in pending.active_instances.rows[1..].iter_mut().flatten() {
+        *ordinal = ordinal.checked_sub(1).unwrap();
+    }
+    assert!(check_lifecycle_instance_roster_v29(pending, budget).is_err());
+    assert_eq!(budget.storage(), floor);
+    reject(&mut donor, budget);
+    let pending = &mut donor.as_mut().unwrap().pending;
+    for ordinal in pending.active_instances.rows[1..].iter_mut().flatten() {
+        *ordinal += 1;
+    }
+    pending.active_instances.rows[0] = Some(0);
+    pending.sidecars.rows.insert(0, root_sidecar);
+    pending.coordinates.seeds.rows.insert(0, root_seed);
+    check_lifecycle_instance_roster_v29(pending, budget)?;
+    assert_eq!(budget.storage(), floor);
     // An End census must be independent of the producer's stored row count.
     let events = donor.as_mut().unwrap().pending.sidecars.rows[1]
         .lifecycle_events
@@ -172,6 +245,7 @@ fn check_inserted_lifecycle(
         let sidecar = &inserted.root.pending.sidecars.rows[witness.instance.index()];
         let event = sidecar.lifecycle_events.as_ref().unwrap().rows[witness.event];
         let kind = match event.kind {
+            DeferredLifecycleKindV29::Tile(_) => panic!("lifecycle-only fixture produced a tile"),
             DeferredLifecycleKindV29::Issue { result } => {
                 assert_eq!(
                     operation.results,
@@ -214,6 +288,7 @@ fn check_inserted_lifecycle(
     );
 
     let mut module = Module::new("inserted_lifecycle");
+    module.storage_layouts = storage_layouts.to_vec();
     module
         .functions
         .push(inserted.root.pending.function.clone());
@@ -233,13 +308,44 @@ fn check_inserted_lifecycle(
     module.functions.extend(declarations.into_values());
     let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000_000);
     let mut validation = ArgumentBudgetV1::new(&mut work, 10_000_000);
-    let admission = fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV15::from_module_ref_with_verification_budget_v15(&module, &mut validation);
+    // This independent structural replay retains the original module table;
+    // it does not substitute for consuming source-memory admission above.
+    let admission = if storage_layouts.is_empty() {
+        match fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV15::from_module_ref_with_verification_budget_v15(
+            &module, &mut validation,
+        ) {
+            Ok((owner, receipt)) => {
+                let retained = receipt.retained_storage();
+                validation.reserve_storage(retained).unwrap();
+                assert_eq!(owner.module(), &module);
+                drop(owner);
+                validation.release_storage(retained).unwrap();
+                Ok(())
+            }
+            Err(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Verification(errors)) => Err(errors),
+            Err(error) => panic!("lifecycle replay must reach semantic verification: {error:?}"),
+        }
+    } else {
+        match fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18::from_module_ref_with_verification_budget_v18(
+            &module, limits.storage_layout_limits(), &mut validation,
+        ) {
+            Ok((owner, receipt)) => {
+                let retained = receipt.retained_storage();
+                validation.reserve_storage(retained).unwrap();
+                assert_eq!(owner.module(), &module);
+                drop(owner);
+                validation.release_storage(retained).unwrap();
+                Ok(())
+            }
+            Err(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Verification(
+                fe2o3_kernel_ir::BorrowedKernelIrVerificationErrorV1::Verification(errors),
+            )) => Err(errors),
+            Err(error) => panic!("typed lifecycle replay must reach semantic verification: {error:?}"),
+        }
+    };
+    assert_eq!(validation.storage(), 0);
     if matches!(fixture, ScopedFixture::Assertion) {
-        let fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Verification(errors) =
-            admission.unwrap_err()
-        else {
-            panic!("live-scope trap must reach semantic verification");
-        };
+        let errors = admission.expect_err("live-scope trap must reach semantic verification");
         let function = &module.functions[0];
         let trap = AmdGpuDiagnosticOperation::Trap.operation(None);
         let mut traps = Vec::new();

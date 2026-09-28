@@ -67,7 +67,7 @@ fn constant_shift_counts_correspond_v1(
     expected: &NormalizedScalarExpressionV1,
     actual: &NormalizedScalarExpressionV1,
     scalar: ProductionSemanticScalarTypeV2,
-    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+    budget: &mut dyn CorrelationChargeV18,
 ) -> Option<bool> {
     // At most one source literal and three native expression nodes. Charge
     // before reading any of them; retain the caller's shared correlation cap.

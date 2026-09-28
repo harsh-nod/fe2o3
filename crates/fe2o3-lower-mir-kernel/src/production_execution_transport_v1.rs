@@ -14,7 +14,7 @@ fn require_execution_free_types_v29(
 
 // These hooks preserve already-bound nominal values. They cannot issue a role
 // or establish source custody, reaching definitions, or scope lifetime proofs.
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn execution_transport_error_v29(
         &self,
         block: SemanticBlockIdV1,

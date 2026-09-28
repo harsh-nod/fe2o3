@@ -2,14 +2,14 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-struct Origin<'module> {
-    value: ValueId,
-    origin: Option<ValueId>,
-    ty: &'module Type,
+pub(super) struct Origin<'module> {
+    pub(super) value: ValueId,
+    pub(super) origin: Option<ValueId>,
+    pub(super) ty: &'module Type,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
-enum ReadIndex {
+pub(super) enum ReadIndex {
     ProvenOrigin(ValueId),
     ExactBlockParameter(ValueId),
 }
@@ -52,15 +52,56 @@ struct ReadGuard {
     allocation: FormalAllocationIdentity,
     guard_index: ValueId,
     length: ValueId,
+    length_origin: ValueId,
     predicate: ValueId,
     edge: Edge,
     interval: (u32, u32),
     covering: usize,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct RuntimeSliceReadConditionsV1 {
+    pub(super) domain: FormalRuntimeSliceReadDomainV1,
+    pub(super) index_origin: ReadIndex,
+    pub(super) length_origin: ValueId,
+}
+
+fn read_conditions_frame_bytes<M: GuardMeter>() -> Result<usize, ResourceError> {
+    4_usize
+        .checked_mul(size_of::<ReadGuard>())
+        .and_then(|n| n.checked_add(size_of::<FormalRuntimeSliceReadDomainV1>()))
+        .and_then(|n| n.checked_add(2 * size_of::<RuntimeSliceReadConditionsV1>()))
+        .and_then(|n| {
+            n.checked_add(
+                2 * size_of::<Result<Option<RuntimeSliceReadConditionsV1>, ResourceError>>(),
+            )
+        })
+        .and_then(|n| {
+            n.checked_add(size_of::<
+                Result<Option<FormalRuntimeSliceReadDomainV1>, ResourceError>,
+            >())
+        })
+        .and_then(|n| n.checked_add(size_of::<Option<RuntimeSliceReadConditionsV1>>()))
+        .and_then(|n| {
+            n.checked_add(size_of::<(
+                &mut GuardedAnalysisV1<'_, M>,
+                FunctionOperationLocation,
+                ValueId,
+                FormalMemoryAccessKind,
+                MemoryAccess,
+                Option<ValueId>,
+            )>())
+        })
+        .ok_or(ResourceError::Arithmetic)
+}
+
+fn reserve_read_conditions_frame<M: GuardMeter>(meter: &mut M) -> Result<(), ResourceError> {
+    meter.storage(read_conditions_frame_bytes::<M>()?)
+}
+
 #[derive(Default)]
 pub(super) struct RuntimeReadState<'module> {
-    origins: Vec<Origin<'module>>,
+    pub(super) origins: Vec<Origin<'module>>,
     guards: Vec<ReadGuard>,
     representations: Vec<ReadRepresentation>,
 }
@@ -76,7 +117,7 @@ fn origin_lookup_work_v1(count: usize) -> Result<usize, ResourceError> {
         .ok_or(ResourceError::Arithmetic)
 }
 
-impl<'module> GuardedAnalysisV1<'module> {
+impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
     pub(super) fn collect_runtime_reads(
         &mut self,
         definitions: &Definitions<'module>,
@@ -108,11 +149,20 @@ impl<'module> GuardedAnalysisV1<'module> {
             .sort(&mut self.runtime_reads.origins, 1, |a, b| {
                 a.value.cmp(&b.value)
             })?;
+        self.collect_runtime_read_guards(function)
+    }
+
+    pub(super) fn collect_runtime_read_guards(
+        &mut self,
+        function: &'module Function,
+    ) -> Result<(), ResourceError> {
         self.collect_read_representations(function)?;
+        // Prepay reused constructor/query carriers once, not on every read.
+        reserve_read_conditions_frame(&mut self.ledger)?;
         self.ledger
             .reserve(&mut self.runtime_reads.guards, self.truths.len())?;
         for ordinal in 0..self.truths.len() {
-            self.ledger.charge(24)?;
+            self.ledger.charge(25)?;
             let truth = self.truths[ordinal];
             // Repeated predicates still have independently checked true edges.
             // This index retains every edge; the single-truth recipe does not.
@@ -157,6 +207,7 @@ impl<'module> GuardedAnalysisV1<'module> {
                 },
                 guard_index: lhs,
                 length: rhs,
+                length_origin: length,
                 predicate: truth.predicate,
                 edge: truth.edge,
                 interval: truth.interval,
@@ -372,7 +423,10 @@ impl<'module> GuardedAnalysisV1<'module> {
         Ok(())
     }
 
-    fn runtime_type(&mut self, value: ValueId) -> Result<Option<&'module Type>, ResourceError> {
+    pub(super) fn runtime_type(
+        &mut self,
+        value: ValueId,
+    ) -> Result<Option<&'module Type>, ResourceError> {
         if let Some(ordinal) = self
             .ledger
             .find(&self.runtime_reads.origins, |row| row.value.cmp(&value))?
@@ -396,7 +450,10 @@ impl<'module> GuardedAnalysisV1<'module> {
             .map(|result| &result.ty))
     }
 
-    fn runtime_origin(&mut self, value: ValueId) -> Result<Option<ValueId>, ResourceError> {
+    pub(super) fn runtime_origin(
+        &mut self,
+        value: ValueId,
+    ) -> Result<Option<ValueId>, ResourceError> {
         Ok(self
             .ledger
             .find(&self.runtime_reads.origins, |row| row.value.cmp(&value))?
@@ -455,8 +512,10 @@ impl<'module> GuardedAnalysisV1<'module> {
         let Some(Type::Slice(actual)) = self.runtime_type(value)? else {
             return Ok(None);
         };
-        if actual.address_space != AddressSpace::Global
-            || !matches!(actual.access, AccessMode::ReadOnly | AccessMode::ReadWrite)
+        if !matches!(
+            actual.address_space,
+            AddressSpace::Global | AddressSpace::Generic
+        ) || !matches!(actual.access, AccessMode::ReadOnly | AccessMode::ReadWrite)
             || actual
                 .element
                 .as_scalar()
@@ -465,7 +524,12 @@ impl<'module> GuardedAnalysisV1<'module> {
         {
             return Ok(None);
         }
-        let Some(origin) = self.runtime_origin(value)? else {
+        let origin = if actual.address_space == AddressSpace::Generic {
+            self.peel_slice_casts(value)?
+        } else {
+            self.runtime_origin(value)?
+        };
+        let Some(origin) = origin else {
             return Ok(None);
         };
         let Some(ordinal) = self
@@ -479,7 +543,11 @@ impl<'module> GuardedAnalysisV1<'module> {
             return Ok(None);
         };
         self.ledger.charge(8)?;
-        if formal.element.as_scalar().is_none() || actual != formal {
+        if formal.address_space != AddressSpace::Global
+            || formal.element.as_scalar().is_none()
+            || actual.element != formal.element
+            || actual.access != formal.access
+        {
             return Ok(None);
         }
         Ok(Some((parameter, formal)))
@@ -494,17 +562,76 @@ impl<'module> GuardedAnalysisV1<'module> {
         invocations: InvocationRange1d,
         predicate: Option<ValueId>,
     ) -> Result<Option<FormalMemoryAccess>, ResourceError> {
+        let Some(domain) =
+            self.runtime_slice_read_domain(location, pointer, kind, access, predicate)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(FormalMemoryAccess {
+            location,
+            allocation: domain.allocation,
+            kind: FormalMemoryAccessKind::Read,
+            address_space: AddressSpace::Global,
+            byte_offset: ByteExpression::Unbounded,
+            byte_width: domain.element_bytes,
+            alignment: u64::from(access.alignment),
+            invocations,
+            domain: FormalAccessDomainV1::RuntimeSliceReadBounded(domain),
+        }))
+    }
+
+    pub(super) fn runtime_slice_read_domain(
+        &mut self,
+        location: FunctionOperationLocation,
+        pointer: ValueId,
+        kind: FormalMemoryAccessKind,
+        access: MemoryAccess,
+        predicate: Option<ValueId>,
+    ) -> Result<Option<FormalRuntimeSliceReadDomainV1>, ResourceError> {
+        Ok(self
+            .runtime_slice_read_conditions(location, pointer, kind, access, predicate)?
+            .map(|conditions| conditions.domain))
+    }
+
+    pub(super) fn runtime_slice_read_conditions(
+        &mut self,
+        location: FunctionOperationLocation,
+        pointer: ValueId,
+        kind: FormalMemoryAccessKind,
+        access: MemoryAccess,
+        predicate: Option<ValueId>,
+    ) -> Result<Option<RuntimeSliceReadConditionsV1>, ResourceError> {
         self.ledger.charge(24)?;
         if kind != FormalMemoryAccessKind::Read
-            || access.address_space != AddressSpace::Global
+            || !matches!(
+                access.address_space,
+                AddressSpace::Global | AddressSpace::Generic
+            )
             || access.volatile
             || predicate.is_some()
             || self.runtime_reads.guards.is_empty()
         {
             return Ok(None);
         }
-        let Some(gep) = self.definition(pointer)? else {
+        let Some(pointer_operation) = self.definition(pointer)? else {
             return Ok(None);
+        };
+        let (gep_pointer, gep) = if matches!(
+            pointer_operation.kind,
+            OperationKind::Cast {
+                kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
+                ..
+            }
+        ) {
+            let Some(source) = self.peel_pointer_casts(pointer)? else {
+                return Ok(None);
+            };
+            let Some(operation) = self.definition(source)? else {
+                return Ok(None);
+            };
+            (source, operation)
+        } else {
+            (pointer, pointer_operation)
         };
         let OperationKind::GetElementPointer { base, offset } = gep.kind else {
             return Ok(None);
@@ -518,8 +645,11 @@ impl<'module> GuardedAnalysisV1<'module> {
         let Some(element_bytes) = pointer_byte_width(&result.ty) else {
             return Ok(None);
         };
-        if result.id != pointer
-            || pointer_type.address_space != AddressSpace::Global
+        if result.id != gep_pointer
+            || !matches!(
+                pointer_type.address_space,
+                AddressSpace::Global | AddressSpace::Generic
+            )
             || !matches!(
                 pointer_type.access,
                 AccessMode::ReadOnly | AccessMode::ReadWrite
@@ -530,20 +660,61 @@ impl<'module> GuardedAnalysisV1<'module> {
         {
             return Ok(None);
         }
-        let Some(data) = self.definition(base)? else {
+        let actual_type = if gep_pointer == pointer {
+            &result.ty
+        } else {
+            let Some(actual) = self.runtime_type(pointer)? else {
+                return Ok(None);
+            };
+            actual
+        };
+        if !matches!(actual_type, Type::Pointer(p) if p.address_space == access.address_space) {
+            return Ok(None);
+        }
+        let Some(base_operation) = self.definition(base)? else {
+            return Ok(None);
+        };
+        if !single_type(base_operation, &result.ty) {
+            return Ok(None);
+        }
+        let data = if matches!(
+            base_operation.kind,
+            OperationKind::Cast {
+                kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
+                ..
+            }
+        ) {
+            let Some(source) = self.peel_pointer_casts(base)? else {
+                return Ok(None);
+            };
+            let Some(operation) = self.definition(source)? else {
+                return Ok(None);
+            };
+            operation
+        } else {
+            base_operation
+        };
+        let [data_result] = data.results.as_slice() else {
             return Ok(None);
         };
         let OperationKind::SliceData { slice } = data.kind else {
             return Ok(None);
         };
-        if !single_type(data, &result.ty) {
+        let Type::Pointer(data_type) = &data_result.ty else {
             return Ok(None);
-        }
+        };
         let Some((parameter, slice_type)) = self.runtime_slice_parameter(slice)? else {
             return Ok(None);
         };
         self.ledger.charge(8)?;
-        if slice_type.element != pointer_type.pointee || slice_type.access != pointer_type.access {
+        if slice_type.element != pointer_type.pointee
+            || slice_type.element != data_type.pointee
+            || slice_type.access != data_type.access
+            || (slice_type.address_space != data_type.address_space
+                && !matches!(self.runtime_type(slice)?, Some(Type::Slice(actual))
+                    if actual.element == data_type.pointee && actual.access == data_type.access
+                        && actual.address_space == data_type.address_space))
+        {
             return Ok(None);
         }
         let Some(index) = self.runtime_read_index(offset)? else {
@@ -555,16 +726,17 @@ impl<'module> GuardedAnalysisV1<'module> {
         let Some((start, end)) = control.interval else {
             return Ok(None);
         };
-        let selected = verification_find_last_by_v1(
-            &self.runtime_reads.guards,
-            4,
-            &mut Budget::new(&mut self.ledger.work, 0),
-            |row| match (row.index, row.slice).cmp(&(index, parameter.value)) {
-                std::cmp::Ordering::Equal if row.interval.0 <= start => std::cmp::Ordering::Equal,
-                std::cmp::Ordering::Equal => std::cmp::Ordering::Greater,
-                ordering => ordering,
-            },
-        )?;
+        let selected = self
+            .ledger
+            .find_width(&self.runtime_reads.guards, 4, |row| {
+                match (row.index, row.slice).cmp(&(index, parameter.value)) {
+                    std::cmp::Ordering::Equal if row.interval.0 <= start => {
+                        std::cmp::Ordering::Equal
+                    }
+                    std::cmp::Ordering::Equal => std::cmp::Ordering::Greater,
+                    ordering => ordering,
+                }
+            })?;
         let Some(selected) = selected else {
             return Ok(None);
         };
@@ -588,16 +760,11 @@ impl<'module> GuardedAnalysisV1<'module> {
                 target: guard.edge.target,
             },
         };
-        Ok(Some(FormalMemoryAccess {
-            location,
-            allocation: domain.allocation,
-            kind: FormalMemoryAccessKind::Read,
-            address_space: AddressSpace::Global,
-            byte_offset: ByteExpression::Unbounded,
-            byte_width: element_bytes,
-            alignment: u64::from(access.alignment),
-            invocations,
-            domain: FormalAccessDomainV1::RuntimeSliceReadBounded(domain),
+        self.ledger.charge(4)?;
+        Ok(Some(RuntimeSliceReadConditionsV1 {
+            domain,
+            index_origin: guard.index,
+            length_origin: guard.length_origin,
         }))
     }
 }
@@ -605,3 +772,7 @@ impl<'module> GuardedAnalysisV1<'module> {
 #[cfg(test)]
 #[path = "runtime_slice_read_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_slice_read_origin_frames_v1_tests.rs"]
+mod origin_frames;

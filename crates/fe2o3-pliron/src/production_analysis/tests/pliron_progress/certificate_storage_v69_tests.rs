@@ -170,9 +170,20 @@ mod certificate_storage_v69_tests {
                 + std::mem::size_of::<pliron::value::Value>()
                 + 2 * std::mem::size_of::<pliron::r#type::TypeHandle>())
             .div_ceil(std::mem::size_of::<usize>());
+            // B=2,E=3,D=2: Q=24, scalar sites=307, per-site cost=616.
+            let native_work = (8 * (2 + 3) + 3 + 8 * 24 + 3 * 24) * (552 + 32 * 2);
+            let native_temporary = 192 + 128_usize.div_ceil(usize::BITS as usize);
             for (scoped, work, peak) in [
-                (true, 5_017, 5_725 + entry_headers),
-                (false, 5_029, 5_722 + entry_headers),
+                (
+                    true,
+                    5_017 + native_work,
+                    5_725 + entry_headers + native_temporary,
+                ),
+                (
+                    false,
+                    5_029 + native_work,
+                    5_722 + entry_headers + native_temporary,
+                ),
             ] {
                 let preflight = if scoped {
                     preflight_scoped_progress_resource_upper_bound_v1

@@ -24,7 +24,7 @@ use fe2o3_mir_model::{
         SemanticLocalIdV1, SemanticLocalRoleV1, SemanticOperandV1, SemanticPlaceV1,
         SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticStatementKindV1,
         SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1,
-        SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
+        SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnwindActionV1,
     },
     semantic_option_producers_v1,
 };
@@ -897,8 +897,17 @@ fn semantic_ssa_auxiliary_resources_v1(
         .and_then(|value| value.checked_mul(projected_moves))
         .and_then(|value| value.checked_mul(path_words))
         .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+    // Owned block fields plus the emitter, driver binding, finish argument,
+    // and working output block's boundary slots; none relies on prior slack.
+    let failure_boundary_words = blocks
+        .checked_add(4)
+        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?
+        .checked_mul(std::mem::size_of::<Option<usize>>())
+        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?
+        .div_ceil(std::mem::size_of::<usize>());
     let storage_words = adapter_items
-        .checked_add(partial_state_copies)
+        .checked_add(failure_boundary_words)
+        .and_then(|value| value.checked_add(partial_state_copies))
         .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
 
     // A block can be revisited once for each newly merged path. On each visit,

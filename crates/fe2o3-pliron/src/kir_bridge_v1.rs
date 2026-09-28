@@ -57,6 +57,10 @@ use pliron::{
 
 use crate::{HARD_MAX_OPERATION_TREE_ITEMS, OperationHandle, OperationHandleError, PlironSession};
 
+#[path = "kir_bridge_native_switch_v1.rs"]
+mod native_switch_v1;
+pub(crate) use native_switch_v1::source_legacy_representable;
+
 // `ModuleOp::new` creates one operation containing one region and one block.
 const BUILTIN_MODULE_ROOT_TREE_WORK_V1: usize = 3;
 
@@ -717,9 +721,7 @@ fn preflight_with_profile_v12(
     module: &Module,
     profile: KirBridgeTypeProfileV12,
 ) -> Result<(usize, Vec<KirBridgeCorrespondenceV1>), KirBridgeErrorV1> {
-    if !module.storage_layouts.is_empty() {
-        return Err(KirBridgeErrorV1::UnsupportedType);
-    }
+    profile.validate_module(module)?;
     let mut tree_work = BUILTIN_MODULE_ROOT_TREE_WORK_V1;
     let mut ordinal = 0_u64;
     let mut correspondence = Vec::new();
@@ -913,6 +915,17 @@ fn build_module_graph(
     module: &Module,
     profile: KirBridgeTypeProfileV12,
 ) -> Result<KirBridgeOriginsV1, KirBridgeErrorV1> {
+    build_module_graph_with_coordinates(context, root, module, profile, None)
+}
+
+fn build_module_graph_with_coordinates(
+    context: &mut Context,
+    root: Ptr<Operation>,
+    module: &Module,
+    profile: KirBridgeTypeProfileV12,
+    mut coordinates: Option<&mut HashMap<Ptr<Operation>, KirBridgeCoordinateV1>>,
+) -> Result<KirBridgeOriginsV1, KirBridgeErrorV1> {
+    profile.validate_module(module)?;
     if !Operation::is_op::<ModuleOp>(root, context) {
         return Err(KirBridgeErrorV1::MalformedGraph);
     }
@@ -1002,7 +1015,23 @@ fn build_module_graph(
             let live_block = block_for(&blocks, function_index, block.id)?;
             let live = build_operation(context, function_index, operation, &values, profile)?;
             live.insert_at_back(live_block, context);
-            if Operation::is_op::<PreservedOperationOp>(live, context)
+            if let Some(coordinates) = coordinates.as_deref_mut()
+                && coordinates
+                    .insert(
+                        live,
+                        KirBridgeCoordinateV1::Operation {
+                            function: to_u32(function_index)?,
+                            block: to_u32(block_index)?,
+                            operation: to_u32(operation_index)?,
+                        },
+                    )
+                    .is_some()
+            {
+                return Err(KirBridgeErrorV1::GraphIdentityMismatch);
+            }
+            if (Operation::is_op::<PreservedOperationOp>(live, context)
+                || (matches!(profile, KirBridgeTypeProfileV12::V18(_))
+                    && storage_v18::is_storage(context, live)))
                 && origins
                     .preserved_operations
                     .insert(live, operation.kind.clone())
@@ -1027,7 +1056,7 @@ fn build_module_graph(
                 }
             }
         }
-        for block in &body.blocks {
+        for (block_index, block) in body.blocks.iter().enumerate() {
             let live_block = block_for(&blocks, function_index, block.id)?;
             let terminator = build_terminator(
                 context,
@@ -1037,6 +1066,19 @@ fn build_module_graph(
                 &blocks,
             )?;
             terminator.insert_at_back(live_block, context);
+            if let Some(coordinates) = coordinates.as_deref_mut()
+                && coordinates
+                    .insert(
+                        terminator,
+                        KirBridgeCoordinateV1::Terminator {
+                            function: to_u32(function_index)?,
+                            block: to_u32(block_index)?,
+                        },
+                    )
+                    .is_some()
+            {
+                return Err(KirBridgeErrorV1::GraphIdentityMismatch);
+            }
             if Operation::is_op::<PreservedTerminatorOp>(terminator, context)
                 && origins
                     .preserved_terminators
@@ -1175,6 +1217,11 @@ fn build_operation(
     values: &BTreeMap<ValueId, Value>,
     profile: KirBridgeTypeProfileV12,
 ) -> Result<Ptr<Operation>, KirBridgeErrorV1> {
+    if let (KirBridgeTypeProfileV12::V18(storage), OperationKind::Storage(_)) =
+        (profile, &operation.kind)
+    {
+        return storage_v18::build(context, function, operation, values, storage);
+    }
     let live = match &operation.kind {
         OperationKind::Constant(value) => {
             PlironConstantOp::new(context, constant_to_pliron(context, value)?).get_operation()
@@ -1207,7 +1254,12 @@ fn build_operation(
             let to = profile.to_pliron(context, to)?;
             CastOp::new(
                 context,
-                cast_to_pliron(*kind)?,
+                match profile {
+                    KirBridgeTypeProfileV12::V18(_) => cast_to_pliron_v18(*kind),
+                    KirBridgeTypeProfileV12::Legacy | KirBridgeTypeProfileV12::V12 => {
+                        cast_to_pliron(*kind)?
+                    }
+                },
                 value_for(values, function, *value)?,
                 to,
             )
@@ -1281,7 +1333,7 @@ fn build_operation(
                 .collect::<Result<Vec<_>, _>>()?;
             PreservedOperationOp::new(
                 context,
-                preserved_operation_kind(kind)?,
+                profile.preserved_kind(kind)?,
                 values_for(values, function, &operation.operands())?,
                 result_types,
             )
@@ -1326,6 +1378,12 @@ fn build_terminator(
     values: &BTreeMap<ValueId, Value>,
     blocks: &BTreeMap<BlockId, Ptr<BasicBlock>>,
 ) -> Result<Ptr<Operation>, KirBridgeErrorV1> {
+    if let Some(terminator) = terminator
+        && let Some(native) =
+            native_switch_v1::build(context, function, terminator, values, blocks)?
+    {
+        return Ok(native);
+    }
     match terminator {
         Some(Terminator::Branch { target, arguments }) => Ok(BranchOp::new(
             context,
@@ -1604,6 +1662,22 @@ fn cast_to_pliron(kind: CastKind) -> Result<CastKindAttr, KirBridgeErrorV1> {
     })
 }
 
+const fn cast_to_pliron_v18(kind: CastKind) -> CastKindAttr {
+    match kind {
+        CastKind::RestrictPointerAccess => CastKindAttr::RestrictPointerAccess,
+        CastKind::PointerToGeneric => CastKindAttr::PointerToGeneric,
+        CastKind::SliceToGeneric => CastKindAttr::SliceToGeneric,
+        CastKind::Truncate => CastKindAttr::Truncate,
+        CastKind::ZeroExtend => CastKindAttr::ZeroExtend,
+        CastKind::SignExtend => CastKindAttr::SignExtend,
+        CastKind::FloatExtend => CastKindAttr::FloatExtend,
+        CastKind::FloatTruncate => CastKindAttr::FloatTruncate,
+        CastKind::IntegerToFloat => CastKindAttr::IntegerToFloat,
+        CastKind::FloatToInteger => CastKindAttr::FloatToInteger,
+        CastKind::Bitcast => CastKindAttr::Bitcast,
+    }
+}
+
 fn index_live_functions(
     live_functions: impl IntoIterator<Item = Ptr<Operation>>,
     metadata: &Module,
@@ -1646,6 +1720,18 @@ fn extract_optimized_module_graph(
     origins: &KirBridgeOriginsV1,
     profile: KirBridgeTypeProfileV12,
 ) -> Result<(Module, Vec<KirBridgeCorrespondenceV1>), KirBridgeErrorV1> {
+    extract_optimized_module_graph_prepared(context, root, metadata, origins, profile, None)
+}
+
+fn extract_optimized_module_graph_prepared(
+    context: &Context,
+    root: Ptr<Operation>,
+    metadata: &Module,
+    origins: &KirBridgeOriginsV1,
+    profile: KirBridgeTypeProfileV12,
+    prepared: Option<Module>,
+) -> Result<(Module, Vec<KirBridgeCorrespondenceV1>), KirBridgeErrorV1> {
+    profile.validate_module(metadata)?;
     if !Operation::is_op::<ModuleOp>(root, context) || root.deref(context).num_regions() != 1 {
         return Err(KirBridgeErrorV1::MalformedGraph);
     }
@@ -1657,9 +1743,11 @@ fn extract_optimized_module_graph(
     let live_functions =
         index_live_functions(root_block.deref(context).iter(context), metadata, origins)?;
 
-    let mut output = match profile {
-        KirBridgeTypeProfileV12::Legacy => metadata.clone(),
-        KirBridgeTypeProfileV12::V12 => module_metadata_v12(metadata)?,
+    let mut output = match (profile, prepared) {
+        (KirBridgeTypeProfileV12::Legacy, None) => metadata.clone(),
+        (KirBridgeTypeProfileV12::V12, None) => module_metadata_v12(metadata)?,
+        (KirBridgeTypeProfileV12::V18(_), Some(candidate)) => candidate,
+        _ => return Err(KirBridgeErrorV1::GraphIdentityMismatch),
     };
     let mut ordinal = 0_u64;
     let mut correspondence = Vec::new();
@@ -1948,6 +2036,10 @@ fn extract_any_operation(
     origins: &KirBridgeOriginsV1,
     profile: KirBridgeTypeProfileV12,
 ) -> Result<OperationKind, KirBridgeErrorV1> {
+    if matches!(profile, KirBridgeTypeProfileV12::V18(_)) && storage_v18::is_storage(context, live)
+    {
+        return storage_v18::extract(context, live, reverse, origins);
+    }
     let raw = live.deref(context);
     if let Some(operation) = Operation::get_op::<PlironConstantOp>(live, context) {
         return Ok(OperationKind::Constant(constant_from_pliron_untyped(
@@ -2055,10 +2147,10 @@ fn extract_any_operation(
             .preserved_operations
             .get(&live)
             .ok_or(KirBridgeErrorV1::MalformedGraph)?;
-        if operation.kind(context) != Some(preserved_operation_kind(template)?) {
+        if operation.kind(context) != Some(profile.preserved_kind(template)?) {
             return Err(KirBridgeErrorV1::MalformedGraph);
         }
-        return remap_preserved_operation(template, ids_for(reverse, operation.operands(context))?);
+        return profile.remap_preserved(template, ids_for(reverse, operation.operands(context))?);
     }
     Err(KirBridgeErrorV1::UnsupportedOperation { coordinate })
 }
@@ -2393,6 +2485,14 @@ fn extract_operation(
     origins: &KirBridgeOriginsV1,
     profile: KirBridgeTypeProfileV12,
 ) -> Result<OperationKind, KirBridgeErrorV1> {
+    if matches!(profile, KirBridgeTypeProfileV12::V18(_))
+        && matches!(expected, OperationKind::Storage(_))
+    {
+        if origins.preserved_operations.get(&live) != Some(expected) {
+            return Err(KirBridgeErrorV1::GraphIdentityMismatch);
+        }
+        return storage_v18::extract(context, live, reverse, origins);
+    }
     let raw = live.deref(context);
     match expected {
         OperationKind::Constant(expected) => {
@@ -2556,11 +2656,11 @@ fn extract_operation(
                 return Err(KirBridgeErrorV1::MalformedGraph);
             };
             if origins.preserved_operations.get(&live) != Some(template)
-                || operation.kind(context) != Some(preserved_operation_kind(template)?)
+                || operation.kind(context) != Some(profile.preserved_kind(template)?)
             {
                 return Err(KirBridgeErrorV1::MalformedGraph);
             }
-            remap_preserved_operation(template, ids_for(reverse, operation.operands(context))?)
+            profile.remap_preserved(template, ids_for(reverse, operation.operands(context))?)
         }
     }
 }
@@ -2801,6 +2901,9 @@ fn extract_terminator(
     reverse_blocks: &HashMap<Ptr<BasicBlock>, BlockId>,
     origins: &KirBridgeOriginsV1,
 ) -> Result<Terminator, KirBridgeErrorV1> {
+    if let Some(switch) = Operation::get_op::<dialect_gpu::switch_v3::SwitchOpV3>(live, context) {
+        return native_switch_v1::extract(context, switch, reverse_values, reverse_blocks);
+    }
     let raw = live.deref(context);
     if let Some(operation) = Operation::get_op::<BranchOp>(live, context) {
         return Ok(Terminator::Branch {
@@ -3089,6 +3192,8 @@ const fn compare_from_pliron(predicate: ComparePredicateAttr) -> fe2o3_kernel_ir
 const fn cast_from_pliron(kind: CastKindAttr) -> CastKind {
     match kind {
         CastKindAttr::RestrictPointerAccess => CastKind::RestrictPointerAccess,
+        CastKindAttr::PointerToGeneric => CastKind::PointerToGeneric,
+        CastKindAttr::SliceToGeneric => CastKind::SliceToGeneric,
         CastKindAttr::Truncate => CastKind::Truncate,
         CastKindAttr::ZeroExtend => CastKind::ZeroExtend,
         CastKindAttr::SignExtend => CastKind::SignExtend,

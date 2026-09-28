@@ -1,12 +1,12 @@
 use super::*;
 
 fn scratch(a: &Inventory<'_>, b: &Inventory<'_>) -> usize {
-    // Independent roster equation: two function maps; four input block maps
-    // (owner/position/incoming-head/pending); output heads/tails; bidirectional
+    // Independent roster equation: two function maps; five input block maps
+    // (owner/position/incoming-head/pending/selected-edge); output heads/tails; bidirectional
     // operation maps; output anchors; input parents; three input edge maps.
     let words = a.functions().len()
         + b.functions().len()
-        + 4 * a.blocks().len()
+        + 5 * a.blocks().len()
         + 2 * b.blocks().len()
         + a.operations().len()
         + b.operations().len()
@@ -23,10 +23,10 @@ fn scratch(a: &Inventory<'_>, b: &Inventory<'_>) -> usize {
 #[test]
 fn literal_empty_and_single_block_work_boundaries_preserve_prefix_history() {
     // Empty "x": entry/state 2, metadata 1+2+1, one fixed-point visit 1 = 7.
-    // Unit helper "f": additionally 9 initialized cells, signature 7,
+    // Unit helper "f": additionally 10 initialized cells, signature 7,
     // block install 8, output parameter-roster visit 1, reachability 3,
     // phi block visit 1, connector framing 2, block coverage 1,
-    // terminator 1, ordered roster 1 = 41 total (7+9+7+8+1+3+1+2+1+1+1).
+    // terminator 1, ordered roster 1, selected-edge refresh 1 = 43 total.
     for (original, required) in [
         (Module::new("x"), 7),
         (
@@ -36,7 +36,7 @@ fn literal_empty_and_single_block_work_boundaries_preserve_prefix_history() {
                 vec![],
                 vec![returning(4_000_000_000, vec![], &[])],
             ),
-            41,
+            43,
         ),
     ] {
         inspect(
@@ -144,7 +144,9 @@ fn failure_does_not_release_borrowed_owners_and_success_transfers_only_view() {
                     size_of::<CheckedCanonicalKirTransitionV1<'_, '_, '_, '_>>()
                 );
             }
-            assert_eq!(budget.work(), 58);
+            // Same single-block census as the independent 43-work oracle above.
+            let accepted = 17 + 43;
+            assert_eq!(budget.work(), accepted);
             let old_peak = budget.peak_storage();
             rows.segments[0].connector = Some(edge(0, 0));
             assert!(matches!(
@@ -152,8 +154,30 @@ fn failure_does_not_release_borrowed_owners_and_success_transfers_only_view() {
                 Err(Error::Rule("block chain connector framing"))
             ));
             assert_eq!(budget.storage(), floor);
-            assert!(budget.work() > 58);
+            assert!(budget.work() > accepted);
             assert_eq!(budget.peak_storage(), old_peak);
         },
     );
+}
+
+#[test]
+fn private_call_whole_entry_pinned_transition_layout_equivalence_premises() {
+    // Pinned 64-bit nightly only; not a portable repr(Rust) layout guarantee.
+    fn same<A, B>() {
+        assert_eq!(size_of::<A>(), size_of::<B>());
+        assert_eq!(std::mem::align_of::<A>(), std::mem::align_of::<B>());
+    }
+    assert_eq!((size_of::<usize>(), std::mem::align_of::<usize>()), (8, 8));
+    type LiteralShape = (fe2o3_kernel_ir::ScalarType, u128);
+    type StateShape = (
+        &'static Inventory<'static>,
+        &'static Inventory<'static>,
+        fe2o3_kernel_ir::CanonicalKirTransitionCandidateV1<'static>,
+        [Vec<usize>; 16],
+        [Vec<u8>; 2],
+        Vec<Option<LiteralShape>>,
+    );
+    same::<Literal, LiteralShape>();
+    same::<Option<Literal>, Option<LiteralShape>>();
+    same::<State<'_, '_, '_, '_>, StateShape>();
 }

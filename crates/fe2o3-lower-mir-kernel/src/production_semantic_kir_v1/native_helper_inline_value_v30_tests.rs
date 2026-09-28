@@ -135,8 +135,8 @@ fn all_six_native_inline_values_keep_exact_u32_operands_and_modular_contract() {
                 operation,
                 scalar: U32,
                 overflow: ProductionOverflowContractV2::Wrapping,
-                lhs: Box::new(constant(u32::MAX.into())),
-                rhs: Box::new(constant(2)),
+                lhs: NormalizedScalarNodeV18::legacy(constant(u32::MAX.into())),
+                rhs: NormalizedScalarNodeV18::legacy(constant(2)),
             },
         );
         let (result, storage, _, _) = run(1_000_000, 1 << 24, |meter| {
