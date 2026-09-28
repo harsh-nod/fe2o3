@@ -24,6 +24,16 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Single persistent-bind recovery development (2026-09-28 UTC): rejection now
+consumes an origin-bound restoration ticket and reuses the original H2D/replay
+box, eliminating the measured one-allocation restore tail. Initialized storage
+continues to use its preallocated record-owned shells. The
+[development packet](evidence/dev-single-bind-recovery-2026-09-28/README.md)
+separates counted CPU recovery, public scripted rejection/successor controls and
+18 malformed-recovery cases from native bind execution, completion restoration,
+allocation-exhaustion injection and formal correspondence. Accepted checkpoints,
+A1/A2 and HIP/HSA parity status are unchanged.
+
 Initial persistent-publication custody development (2026-09-28 UTC): successful
 single/three binding now installs Armed Active before queue profiling and first
 submit, reusing the indexed retry transition. Post-index failure retires only

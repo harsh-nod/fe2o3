@@ -224,6 +224,13 @@ exact shared dependency retains. Native bind failure recovery, coupled GPU
 qualification and executable refinement remain open; this does not close the
 Context composition.
 
+[Single bind rejection](evidence/dev-single-bind-recovery-2026-09-28/README.md)
+now carries the exact original target/source/submission and empty input box
+through binding, restoring retryable inputs without allocating a replacement.
+Counted CPU round trips and public scripted refusal with queued successors cover
+that adapter. Native bind execution, initialized-storage allocation-failure
+injection and allocation-free completion restoration remain separate open gates.
+
 ### Unknown Group Disposal
 
 Rejecting disposal while a co-owner exists is safe but cannot finish cleanup:
