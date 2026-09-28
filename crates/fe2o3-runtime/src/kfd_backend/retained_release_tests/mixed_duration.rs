@@ -342,62 +342,69 @@ fn native_owned_later_short_completes_while_earlier_long_signal_is_pending() {
 
 #[test]
 #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
-fn native_mixed_duration_profiles_preserve_full_output_and_refund_backing() {
-    for variant in [Variant::Short, Variant::Long] {
-        let mut backend =
-            KfdRuntimeBackendV1::open_gfx942_mixed_duration_qualification_v1(native_device())
-                .unwrap();
-        backend
-            .configure_host_visible_backing_budget_v1(
-                Gfx942HostVisibleBackingBudgetV1::new(64 * 1024 * 1024, 128).unwrap(),
-            )
-            .unwrap();
-        let mut context = RuntimeContextV1::open(backend).unwrap();
-        assert_eq!(context.devices().len(), 1);
-        assert_eq!(context.devices()[0].target(), "gfx942:xnack-");
-        let device = context.devices()[0].id();
-        let module = context.load_module(device, variant.hsaco()).unwrap();
-        let kernel = context
-            .resolve_kernel::<Arguments>(module, variant.kernel_name())
-            .unwrap();
-        let stream = context.create_stream(device).unwrap();
-        let allocation = context
-            .allocate(device, RuntimeMemoryKindV1::HostVisible, BYTES as u64, 4)
-            .unwrap();
-        context.write_allocation(allocation, 0, &initial()).unwrap();
-        let arguments = Arguments::new(allocation);
-        let mut submission = context
-            .launch(stream, &kernel, &arguments, GEOMETRY, &[])
-            .unwrap();
-        context.flush_stream(stream).unwrap();
-        assert_eq!(
-            context
-                .wait(&mut submission, Duration::from_secs(10))
-                .unwrap(),
-            RuntimePollV1::Succeeded
-        );
-        let mut observed = [0; BYTES];
+fn native_mixed_short_profile_preserves_full_output_and_refunds_backing() {
+    run_native_profile(Variant::Short);
+}
+
+#[test]
+#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+fn native_mixed_long_profile_preserves_full_output_and_refunds_backing() {
+    run_native_profile(Variant::Long);
+}
+
+fn run_native_profile(variant: Variant) {
+    // ACQUIRE_VM admission survives queue teardown. Select each ignored test
+    // in a separate process; refunding backing does not authorize re-admission.
+    let mut backend =
+        KfdRuntimeBackendV1::open_gfx942_mixed_duration_qualification_v1(native_device()).unwrap();
+    backend
+        .configure_host_visible_backing_budget_v1(
+            Gfx942HostVisibleBackingBudgetV1::new(64 * 1024 * 1024, 128).unwrap(),
+        )
+        .unwrap();
+    let mut context = RuntimeContextV1::open(backend).unwrap();
+    assert_eq!(context.devices().len(), 1);
+    assert_eq!(context.devices()[0].target(), "gfx942:xnack-");
+    let device = context.devices()[0].id();
+    let module = context.load_module(device, variant.hsaco()).unwrap();
+    let kernel = context
+        .resolve_kernel::<Arguments>(module, variant.kernel_name())
+        .unwrap();
+    let stream = context.create_stream(device).unwrap();
+    let allocation = context
+        .allocate(device, RuntimeMemoryKindV1::HostVisible, BYTES as u64, 4)
+        .unwrap();
+    context.write_allocation(allocation, 0, &initial()).unwrap();
+    let arguments = Arguments::new(allocation);
+    let mut submission = context
+        .launch(stream, &kernel, &arguments, GEOMETRY, &[])
+        .unwrap();
+    context.flush_stream(stream).unwrap();
+    assert_eq!(
         context
-            .read_allocation(allocation, 0, &mut observed)
-            .unwrap();
-        assert!(
-            variant.validate_output(&observed),
-            "full output including guards"
-        );
-        let hex = observed
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        println!("mixed_duration variant={variant:?} observed_hex={hex}");
-        context.release_submission(submission).unwrap();
-        context.release_allocation(allocation).unwrap();
-        context.destroy_stream(stream).unwrap();
-        context.unload_module(module).unwrap();
-        let mut backend = context.shutdown().unwrap();
-        let usage = observe_shutdown(&mut backend);
-        assert_retired_shutdown_is_inert(&mut backend);
-        println!(
-            "mixed_duration variant={variant:?} shutdown={usage:?} physical_overlap=not_measured"
-        );
-    }
+            .wait(&mut submission, Duration::from_secs(10))
+            .unwrap(),
+        RuntimePollV1::Succeeded
+    );
+    let mut observed = [0; BYTES];
+    context
+        .read_allocation(allocation, 0, &mut observed)
+        .unwrap();
+    assert!(
+        variant.validate_output(&observed),
+        "full output including guards"
+    );
+    let hex = observed
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    println!("mixed_duration variant={variant:?} observed_hex={hex}");
+    context.release_submission(submission).unwrap();
+    context.release_allocation(allocation).unwrap();
+    context.destroy_stream(stream).unwrap();
+    context.unload_module(module).unwrap();
+    let mut backend = context.shutdown().unwrap();
+    let usage = observe_shutdown(&mut backend);
+    assert_retired_shutdown_is_inert(&mut backend);
+    println!("mixed_duration variant={variant:?} shutdown={usage:?} physical_overlap=not_measured");
 }

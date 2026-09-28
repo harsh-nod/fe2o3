@@ -431,9 +431,25 @@ fn stale_device_tokens_and_generations_cannot_cross_retirement() {
     let (state, first) = state
         .register_device_model_only(correlation, DeviceGenerationV1(1))
         .unwrap();
+    let before = state.clone();
+    assert_eq!(
+        state.register_device_model_only(correlation, DeviceGenerationV1(2)),
+        Err(DeviceAdmissionErrorV1::ActiveDeviceExists(
+            first.model_key()
+        ))
+    );
+    assert_eq!(state, before);
     let (state, vm) = state
         .register_vm_model_only(first, vm_observation(first, 1))
         .unwrap();
+    let before = state.clone();
+    assert_eq!(
+        state.register_device_model_only(correlation, DeviceGenerationV1(2)),
+        Err(DeviceAdmissionErrorV1::ActiveDeviceExists(
+            first.model_key()
+        ))
+    );
+    assert_eq!(state, before);
     assert_eq!(
         state.retire_device_model_only(first),
         Err(DeviceAdmissionErrorV1::LiveVmPreventsDeviceRetirement(
@@ -441,6 +457,12 @@ fn stale_device_tokens_and_generations_cannot_cross_retirement() {
         ))
     );
     let state = state.retire_vm_model_only(vm).unwrap();
+    assert_eq!(
+        state.register_device_model_only(correlation, DeviceGenerationV1(2)),
+        Err(DeviceAdmissionErrorV1::ActiveDeviceExists(
+            first.model_key()
+        ))
+    );
     let state = state.retire_device_model_only(first).unwrap();
     assert_eq!(
         state.register_vm_model_only(first, vm_observation(first, 2)),
