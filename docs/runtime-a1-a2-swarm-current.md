@@ -24,6 +24,16 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [ordered outer-close join](evidence/dev-ordered-outer-join-2026-09-28/README.md)
+now binds settlement to an exclusive loan of the exact staged pipeline, returned
+only after complete lane success. Exact reentry checks precede native submit;
+receipt deposition precedes profiling. Two compiler-negative controls and one
+compiled premature-confirmation mutation detect the intended violations. Fifteen
+focused groups, 1816 runtime tests (zero failures, 28 existing ignores), 52 doctests
+and all static checks pass. This is Rust ownership and CPU qualification, not
+shared-body Verus composition, native currentness or HIP/HSA parity. A1/A2 and
+accepted checkpoints remain unchanged.
+
 Real pinned completion and outer-close [CPU custody qualification](evidence/dev-runtime-cpu-completion-2026-09-28/README.md)
 adds four clean pin/recycle scenarios, 48 terminal completion cases and eight
 terminal Retryable cases through the actual backend SPI. Operation-targeted

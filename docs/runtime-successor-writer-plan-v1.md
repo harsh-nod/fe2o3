@@ -321,6 +321,15 @@ Ready-to-Recycle and previously Completed entry are covered. This is CPU evidenc
 for indexed handoff and quarantine, not native currentness or formal caller
 correspondence; the latter remains required before promoting production proof.
 
+The [ordered outer-close join](evidence/dev-ordered-outer-join-2026-09-28/README.md)
+now returns an exclusive loan of the exact staged arena only after the complete
+lane operation succeeds. Consuming settlement installs the indexed batch before
+observer emission and cannot accept another arena or identity. Publishing and
+Unattempted preflight prevents destructive private reentry. Real CPU receipt
+association and exact outer-failure metadata heads strengthen the caller controls.
+The complete settlement body still needs shared-source proof composition; the
+borrow checker and prior metadata proof do not establish native semantic parity.
+
 [Single bind rejection](evidence/dev-single-bind-recovery-2026-09-28/README.md)
 now carries the exact original target/source/submission and empty input box
 through binding, restoring retryable inputs without allocating a replacement.
