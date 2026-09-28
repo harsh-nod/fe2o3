@@ -1,5 +1,211 @@
 use super::*;
 
+thread_local! {
+    static POINTER_STORAGE_TRANSPORT_COMPLETED_V29: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn observe_original_pointer_storage_transport_v29(
+    transport: &ScopedStorageTransportV29,
+    map: &ProductionInstanceCorrespondenceV1<'_, '_>,
+    emitted: &[Option<LoweredFunctionResultV1>],
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), CallInstanceEmissionErrorV1> {
+    let first = transport.rows.iter().find(|row| {
+        row.inputs
+            .iter()
+            .flatten()
+            .any(|(_, ty)| matches!(ty, ScopedStorageTypeV29::OriginalPointer(..)))
+    });
+    let Some(first) = first else {
+        return Ok(());
+    };
+    let instance = first.instance;
+    let function = &emitted[instance.index()].as_ref().unwrap().function;
+    let input = transport
+        .rows
+        .iter()
+        .filter(|row| row.instance == instance)
+        .flat_map(|row| row.inputs.iter().flatten())
+        .find_map(|(value, ty)| {
+            matches!(ty, ScopedStorageTypeV29::OriginalPointer(..)).then_some((*value, *ty))
+        })
+        .unwrap();
+    let result = transport
+        .rows
+        .iter()
+        .filter(|row| row.instance == instance)
+        .find_map(|row| {
+            let ty = row.result?;
+            if !matches!(ty, ScopedStorageTypeV29::OriginalPointer(..)) {
+                return None;
+            }
+            let ScopedObjectOperationV29::ReadValue { .. } = row.payload.operation else {
+                panic!("original pointer result must be a value read");
+            };
+            let (block, operation) = scoped_storage_mapped_point_v29(
+                &map.spans.rows[row.span],
+                row.offset,
+                row.call_offset,
+            )
+            .unwrap();
+            let operation = &function
+                .body
+                .as_ref()
+                .unwrap()
+                .blocks
+                .iter()
+                .find(|row| row.id == block)
+                .unwrap()
+                .operations[operation as usize];
+            let [value] = operation.results.as_slice() else {
+                panic!("exact original pointer read result");
+            };
+            Some((value.id, ty))
+        })
+        .unwrap();
+    for (selected, original) in [input, result] {
+        assert_eq!(
+            original,
+            ScopedStorageTypeV29::OriginalPointer(
+                ScalarType::U64,
+                AddressSpace::Generic,
+                AccessMode::ReadOnly,
+            )
+        );
+        for fault in 0..6 {
+            let mut changed = function.clone();
+            let replacement = match fault {
+                0 => Type::pointer(
+                    Type::Scalar(ScalarType::U64),
+                    AddressSpace::Generic,
+                    AccessMode::ReadOnly,
+                ),
+                1 => Type::pointer(
+                    Type::Scalar(ScalarType::U32),
+                    AddressSpace::Generic,
+                    AccessMode::ReadOnly,
+                ),
+                2 => Type::pointer(
+                    Type::Scalar(ScalarType::U64),
+                    AddressSpace::Global,
+                    AccessMode::ReadOnly,
+                ),
+                3 => Type::pointer(
+                    Type::Scalar(ScalarType::U64),
+                    AddressSpace::Generic,
+                    AccessMode::ReadWrite,
+                ),
+                4 => Type::pointer(
+                    Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(0)),
+                    AddressSpace::Generic,
+                    AccessMode::ReadOnly,
+                ),
+                _ => Type::Scalar(ScalarType::U64),
+            };
+            let mut definitions = 0;
+            let body = changed.body.as_mut().unwrap();
+            for (id, ty) in body
+                .parameters
+                .iter()
+                .zip(&mut changed.signature.parameters)
+            {
+                if *id == selected {
+                    *ty = replacement.clone();
+                    definitions += 1;
+                }
+            }
+            for block in &mut body.blocks {
+                for value in block.parameters.iter_mut().chain(
+                    block
+                        .operations
+                        .iter_mut()
+                        .flat_map(|operation| &mut operation.results),
+                ) {
+                    if value.id == selected {
+                        value.ty = replacement.clone();
+                        definitions += 1;
+                    }
+                }
+            }
+            assert_eq!(definitions, 1);
+            let floor = budget.storage();
+            with_canonical_call_scratch_v1(budget, |budget| {
+                let mut scratch = 0;
+                let index = call_splice_index_v1(&changed, budget, &mut scratch)
+                    .map_err(source_address_call_error_v29)?;
+                let source = ScopedStorageCalleeSourceV29 {
+                    transport,
+                    map,
+                    child: instance,
+                };
+                let checked = source.permit(&changed, &index, budget, &mut scratch);
+                if fault == 0 {
+                    checked
+                        .map_err(source_address_call_error_v29)?
+                        .check(&changed, budget)
+                        .map_err(source_address_call_error_v29)?;
+                } else {
+                    assert!(matches!(
+                        checked,
+                        Err(CallInstanceEmissionErrorV1::StorageTransport)
+                    ));
+                }
+                Ok(())
+            })
+            .map_err(scoped_storage_error_v29)?;
+            assert_eq!(budget.storage(), floor);
+        }
+    }
+    POINTER_STORAGE_TRANSPORT_COMPLETED_V29.set(POINTER_STORAGE_TRANSPORT_COMPLETED_V29.get() + 1);
+    Ok(())
+}
+
+#[test]
+fn original_pointer_storage_transport_authenticates_input_and_result_types_across_extents() {
+    struct Restore(Option<ScopedStorageObserverV29>, usize);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCOPED_STORAGE_OBSERVER_V29.set(self.0);
+            POINTER_STORAGE_TRANSPORT_COMPLETED_V29.set(self.1);
+        }
+    }
+    let _restore = Restore(
+        SCOPED_STORAGE_OBSERVER_V29.replace(Some(observe_original_pointer_storage_transport_v29)),
+        POINTER_STORAGE_TRANSPORT_COMPLETED_V29.replace(0),
+    );
+    for length in [1, 3, 5] {
+        let before = POINTER_STORAGE_TRANSPORT_COMPLETED_V29.get();
+        check_actual_argument_pointer_array_v29(length);
+        assert!(POINTER_STORAGE_TRANSPORT_COMPLETED_V29.get() > before);
+    }
+}
+
+#[test]
+fn original_pointer_storage_values_are_distinct_from_selected_storage_addresses() {
+    let schema = fe2o3_kernel_ir::StorageLayoutIdV1(7);
+    let value = ScopedStorageTypeV29::OriginalPointer(
+        ScalarType::U64,
+        AddressSpace::Generic,
+        AccessMode::ReadOnly,
+    );
+    let address =
+        ScopedStorageTypeV29::Pointer(schema, AddressSpace::Generic, AccessMode::ReadOnly);
+    let scalar_pointer = Type::pointer(
+        Type::Scalar(ScalarType::U64),
+        AddressSpace::Generic,
+        AccessMode::ReadOnly,
+    );
+    let storage_pointer = Type::pointer(
+        Type::StorageObject(schema),
+        AddressSpace::Generic,
+        AccessMode::ReadOnly,
+    );
+    assert!(value.matches(&scalar_pointer));
+    assert!(!value.matches(&storage_pointer));
+    assert!(address.matches(&storage_pointer));
+    assert!(!address.matches(&scalar_pointer));
+}
+
 fn original_argument_pointer_array_owner_v29() -> ProductionSemanticSsaOwnerV1 {
     let template = original_scalar_array_owner_v29();
     let semantic = template.source_semantic();
@@ -619,6 +825,19 @@ fn original_pointer_leaf_query_does_not_admit_selected_private_address_represent
             (pointer.encoded_space, pointer.value_space),
             (AddressSpace::Generic, AddressSpace::Private)
         );
+        assert_ne!(layouts.original_schema(owner, *ty, budget)?, Some(element));
+        let selected_type =
+            ScopedStorageTypeV29::Pointer(pointer.pointee, pointer.value_space, pointer.access);
+        assert!(selected_type.matches(&Type::pointer(
+            Type::StorageObject(pointer.pointee),
+            pointer.value_space,
+            pointer.access,
+        )));
+        assert!(!selected_type.matches(&Type::pointer(
+            Type::Scalar(ScalarType::U64),
+            pointer.value_space,
+            pointer.access,
+        )));
         drop(rows);
         let first = source_object_original_leaf_type_v29(plan, *ty, element, budget).unwrap_err();
         assert!(matches!(

@@ -12,6 +12,7 @@ enum ScopedStorageTypeV29 {
     Scalar(ScalarType),
     Vector(fe2o3_kernel_ir::FixedVectorTypeV12),
     Pointer(fe2o3_kernel_ir::StorageLayoutIdV1, AddressSpace, AccessMode),
+    OriginalPointer(ScalarType, AddressSpace, AccessMode),
 }
 
 impl ScopedStorageTypeV29 {
@@ -21,6 +22,11 @@ impl ScopedStorageTypeV29 {
             (Self::Vector(expected), Type::Vector(actual)) => expected == *actual,
             (Self::Pointer(schema, space, access), Type::Pointer(pointer)) => {
                 pointer.pointee.as_ref() == &Type::StorageObject(schema)
+                    && pointer.address_space == space
+                    && pointer.access == access
+            }
+            (Self::OriginalPointer(element, space, access), Type::Pointer(pointer)) => {
+                pointer.pointee.as_ref() == &Type::Scalar(element)
                     && pointer.address_space == space
                     && pointer.access == access
             }
@@ -227,7 +233,7 @@ fn scoped_storage_operand_types_v29(
     let physical = layouts
         .rows(plan.instances.owner(), budget)
         .map_err(scoped_storage_error_v29)?;
-    let value_type = |endpoint: ScopedObjectEndpointV29| {
+    let value_type = |endpoint: ScopedObjectEndpointV29, budget: &mut ArgumentBudgetV1<'_>| {
         Ok(
             match &physical
                 .get(endpoint.projected_schema.0 as usize)
@@ -241,11 +247,52 @@ fn scoped_storage_operand_types_v29(
                     ScopedStorageTypeV29::Vector(*vector)
                 }
                 fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(pointer) => {
-                    ScopedStorageTypeV29::Pointer(
-                        pointer.pointee,
-                        pointer.value_space,
-                        pointer.access,
-                    )
+                    budget.charge_work(4)?;
+                    let original = plan
+                        .instances
+                        .owner()
+                        .source_semantic()
+                        .types()
+                        .get(endpoint.projected_type.index() as usize)
+                        .ok_or(Refused)?;
+                    if matches!(original.shape(), SemanticTypeShapeV1::Pointer(original)
+                        if original.kind() == SemanticPointerKindV1::Raw)
+                        && layouts
+                            .original_schema(
+                                plan.instances.owner(),
+                                endpoint.projected_type,
+                                budget,
+                            )
+                            .map_err(scoped_storage_error_v29)?
+                            == Some(endpoint.projected_schema)
+                    {
+                        // Original pointer values retain scalar pointees. A
+                        // selected storage address is a different representation.
+                        let Type::Pointer(value) = source_object_original_leaf_type_v29(
+                            plan,
+                            endpoint.projected_type,
+                            endpoint.projected_schema,
+                            budget,
+                        )
+                        .map_err(scoped_storage_error_v29)?
+                        else {
+                            return Err(Refused);
+                        };
+                        let Type::Scalar(element) = value.pointee.as_ref() else {
+                            return Err(Refused);
+                        };
+                        ScopedStorageTypeV29::OriginalPointer(
+                            *element,
+                            value.address_space,
+                            value.access,
+                        )
+                    } else {
+                        ScopedStorageTypeV29::Pointer(
+                            pointer.pointee,
+                            pointer.value_space,
+                            pointer.access,
+                        )
+                    }
                 }
                 _ => return Err(Refused),
             },
@@ -298,7 +345,7 @@ fn scoped_storage_operand_types_v29(
                 Some((address, pointer_type(source, address, budget)?)),
                 None,
             ],
-            Some(value_type(source)?),
+            Some(value_type(source, budget)?),
         ),
         (
             ScopedObjectRoleV29::WriteValue { destination, .. },
@@ -306,7 +353,7 @@ fn scoped_storage_operand_types_v29(
         ) => (
             [
                 Some((address, pointer_type(destination, address, budget)?)),
-                Some((value, value_type(destination)?)),
+                Some((value, value_type(destination, budget)?)),
             ],
             None,
         ),
