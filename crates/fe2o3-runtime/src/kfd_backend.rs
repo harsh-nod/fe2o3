@@ -22454,13 +22454,25 @@ mod tests {
         let detach = dispatch
             .split("pub(super) fn detach_recycled_dispatch(")
             .nth(1)
+            .unwrap()
+            .split("pub(super) fn release_resident_data(")
+            .next()
             .unwrap();
-        assert!(
-            detach
-                .find("self.synchronize_recycled_dispatch_data_v1()?;")
-                .unwrap()
-                < detach.find("self.recycled_dispatch.take()").unwrap()
-        );
+        let normalized: String = detach.chars().filter(|ch| !ch.is_whitespace()).collect();
+        let mut remaining = normalized.as_str();
+        for fragment in [
+            "self.synchronize_recycled_dispatch_data_v1()?;",
+            "ifself.resident_data.is_some()",
+            "letrecycled=&mutself.recycled_dispatch;",
+            ".with_compute_lane_v1(native_lane,|queue|{",
+            "queue.detach_recycled_fixed_dispatch()",
+            "*resident=Some(ResidentDataRosterV1{",
+            "recycled.take()",
+            "data:detached.into_data()",
+            "Ok(())",
+        ] {
+            remaining = remaining.split_once(fragment).unwrap().1;
+        }
     }
 
     #[test]

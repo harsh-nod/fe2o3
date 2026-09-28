@@ -409,6 +409,21 @@ fn host_image_failed_recycled_detach_keeps_module_kernel_and_credit() {
     assert!(!backend.terminal);
     assert!(backend.modules.contains_key(&module) && backend.kernels.contains_key(&launch.kernel));
     assert_eq!(usage(&backend), before);
+    assert_eq!(
+        backend.recycled_dispatch.as_ref().unwrap().kernel,
+        launch.kernel
+    );
+    rejected(
+        backend.unload_module_v1(module),
+        KfdRuntimeBackendErrorKindV1::Unsupported,
+    );
+    assert_eq!(
+        backend.recycled_dispatch.as_ref().unwrap().kernel,
+        launch.kernel
+    );
+    assert_eq!(usage(&backend), before);
+    // Remove only the malformed metadata fixture, not a native owner or receipt.
+    backend.recycled_dispatch = None;
     backend.unload_module_v1(module).unwrap();
     assert_eq!(usage(&backend).used, ResourceVectorV1::ZERO);
 }
