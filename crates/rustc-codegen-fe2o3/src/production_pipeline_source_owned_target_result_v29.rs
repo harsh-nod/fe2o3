@@ -1,5 +1,6 @@
 //! Backend-private checked source/adopted-owner continuation to inert target LLVM.
 use super::{Budget, Handoff, Resource, Source, TargetProfile};
+use fe2o3_lower_mir_kernel::ProductionScalarCfgOutputHandoffV18 as CfgHandoff;
 use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
 use std::mem::{align_of, size_of};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -8,6 +9,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 pub(crate) enum ClosedScalarTargetLlvmErrorV29 {
     Source(SourceError),
     Formal(fe2o3_kernel_ir::CanonicalClosedScalarFormalErrorV18),
+    ScalarCfgFormal(fe2o3_kernel_ir::CanonicalScalarCfgFormalErrorV18),
     Incomplete(Vec<fe2o3_kernel_ir::FormalMemoryIncompleteReason>),
     Unsupported(&'static str),
     Target(fe2o3_amdgcn_model::LoweringErrors),
@@ -32,6 +34,7 @@ impl std::error::Error for ClosedScalarTargetLlvmErrorV29 {
         match self {
             Self::Source(error) => Some(error),
             Self::Formal(error) => Some(error),
+            Self::ScalarCfgFormal(error) => Some(error),
             Self::Target(error) => Some(error),
             Self::Incomplete(_) | Self::Unsupported(_) => None,
         }
@@ -39,30 +42,36 @@ impl std::error::Error for ClosedScalarTargetLlvmErrorV29 {
 }
 type Error = ClosedScalarTargetLlvmErrorV29;
 
+include!("production_pipeline_source_owned_target_policy_v29.rs");
+
+pub(crate) type ClosedScalarTargetLlvmV29<'handoff, 'view, 'source> =
+    TargetLlvmV29<'handoff, 'view, 'source, Handoff<'view, 'source>>;
+pub(crate) type ScalarCfgTargetLlvmV29<'handoff, 'view, 'source> =
+    TargetLlvmV29<'handoff, 'view, 'source, CfgHandoff<'view, 'source>>;
+
 /// Inert LLVM IR, not final ISA, worker/default compilation or launch authority.
 /// The result cannot outlive either real source or adopted V18 handoff.
 /// Formal and target engines keep their separate bounded allocation/work
 /// policy; only this wrapper, conservatively retained entry frames and actual
 /// String capacity are retained credit.
 #[must_use = "discard the target text before its borrowed handoff"]
-pub(crate) struct ClosedScalarTargetLlvmV29<'handoff, 'view, 'source> {
+pub(crate) struct TargetLlvmV29<'handoff, 'view, 'source, H: TargetOutputHandoffV29> {
     source: &'view Source<'source>,
-    handoff: &'handoff Handoff<'view, 'source>,
+    handoff: &'handoff H,
     llvm_ir: String,
     target: TargetProfile,
     retained: usize,
     required: usize,
 }
-impl ClosedScalarTargetLlvmV29<'_, '_, '_> {
+impl<H: TargetOutputHandoffV29> TargetLlvmV29<'_, '_, '_, H> {
     fn custody(&self, budget: &Budget<'_>) -> Result<(), SourceError> {
-        self.handoff
-            .observe_retained_storage_v18(self.required, budget)
+        self.handoff.observe_retained_storage(self.required, budget)
     }
     fn check(&self, budget: &Budget<'_>) -> Result<(), SourceError> {
         let custody = self.custody(budget);
         self.source
             .check_query_v18(budget)
-            .and_then(|()| self.handoff.output(budget).map(|_| ()))
+            .and_then(|()| self.handoff.owner(budget).map(|_| ()))
             .and(custody)
     }
     pub(crate) fn llvm_ir(&self, budget: &Budget<'_>) -> Result<&str, SourceError> {
@@ -104,9 +113,13 @@ fn sum(parts: &[usize]) -> Result<usize, Resource> {
 }
 
 fn headers() -> Result<(usize, usize), Resource> {
-    type Capture<'a, 'view, 'source, 'work> = (
+    headers_for::<Handoff<'_, '_>>()
+}
+
+fn headers_for<H: TargetOutputHandoffV29>() -> Result<(usize, usize), Resource> {
+    type Capture<'a, 'view, 'source, 'work, H> = (
         &'view Source<'source>,
-        &'a Handoff<'view, 'source>,
+        &'a H,
         TargetProfile,
         &'a mut Budget<'work>,
         &'a std::cell::Cell<usize>,
@@ -115,22 +128,17 @@ fn headers() -> Result<(usize, usize), Resource> {
     );
     type Outcome = Result<(String, usize), Error>;
     let retained = sum(&[
-        size_of::<ClosedScalarTargetLlvmV29<'_, '_, '_>>(),
-        align_of::<ClosedScalarTargetLlvmV29<'_, '_, '_>>(),
+        size_of::<TargetLlvmV29<'_, '_, '_, H>>(),
+        align_of::<TargetLlvmV29<'_, '_, '_, H>>(),
     ])?;
     let scratch = sum(&[
-        size_of::<Capture<'_, '_, '_, '_>>(),
-        align_of::<Capture<'_, '_, '_, '_>>(),
-        size_of::<AssertUnwindSafe<Capture<'_, '_, '_, '_>>>(),
+        size_of::<Capture<'_, '_, '_, '_, H>>(),
+        align_of::<Capture<'_, '_, '_, '_, H>>(),
+        size_of::<AssertUnwindSafe<Capture<'_, '_, '_, '_, H>>>(),
         size_of::<Outcome>(),
         align_of::<Outcome>(),
         size_of::<std::thread::Result<Outcome>>(),
-        size_of::<
-            Result<
-                fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
-                fe2o3_kernel_ir::CanonicalClosedScalarFormalErrorV18,
-            >,
-        >(),
+        H::formal_headers()?,
         size_of::<Result<String, fe2o3_amdgcn_model::LoweringErrors>>(),
         size_of::<Result<(), Error>>(),
         size_of::<fe2o3_kernel_ir::FormalMemoryObligations>(),
@@ -138,18 +146,12 @@ fn headers() -> Result<(usize, usize), Resource> {
         size_of::<std::cell::Cell<usize>>(),
         size_of::<Result<(), SourceError>>(),
         align_of::<Result<(), SourceError>>(),
-        size_of::<fe2o3_kernel_ir::CanonicalClosedScalarFormalScopeV18<'_>>(),
-        size_of::<
-            Result<
-                fe2o3_kernel_ir::CanonicalClosedScalarFormalScopeV18<'_>,
-                fe2o3_kernel_ir::CanonicalClosedScalarFormalErrorV18,
-            >,
-        >(),
     ])?;
     Ok((retained, scratch))
 }
 
-fn formal(
+fn formal<S: TargetFormalScopeV29>(
+    mut scope: S,
     owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
     budget: &mut Budget<'_>,
 ) -> Result<(), Error> {
@@ -159,8 +161,6 @@ fn formal(
     if owner.module().kernels.is_empty() {
         return Err(Error::Unsupported("empty formal root roster"));
     }
-    let mut scope =
-        fe2o3_kernel_ir::CanonicalClosedScalarFormalScopeV18::new(owner).map_err(Error::Formal)?;
     for kernel in &owner.module().kernels {
         budget.charge_work(sum(&[
             kernel.id.as_str().len(),
@@ -174,16 +174,14 @@ fn formal(
             };
             extents[axis] = u64::from(extent);
         }
-        let report = scope
-            .derive(
-                &kernel.id,
-                ExplicitLaunchExtent::Exact {
-                    rank: kernel.domain.rank(),
-                    extents,
-                },
-                FormalIndexWidth::Bits64,
-            )
-            .map_err(Error::Formal)?;
+        let report = scope.derive(
+            &kernel.id,
+            ExplicitLaunchExtent::Exact {
+                rank: kernel.domain.rank(),
+                extents,
+            },
+            FormalIndexWidth::Bits64,
+        )?;
         let facts = match report {
             FormalMemoryObligationAnalysis::Complete(facts) => facts,
             FormalMemoryObligationAnalysis::Incomplete { reasons, .. } => {
@@ -198,9 +196,7 @@ fn formal(
             || !facts.runtime_alias_requirements().is_empty()
             || !facts.inter_invocation_conflicts().is_empty()
         {
-            return Err(Error::Unsupported(
-                "closed scalar formal obligations remain",
-            ));
+            return Err(Error::Unsupported(S::RESIDUAL));
         }
         drop(facts);
     }
@@ -215,12 +211,30 @@ pub(crate) fn check_and_lower_target_llvm_v18<'handoff, 'view, 'source>(
     target: TargetProfile,
     budget: &mut Budget<'_>,
 ) -> Result<ClosedScalarTargetLlvmV29<'handoff, 'view, 'source>, Error> {
+    check_and_lower_target_llvm(source, handoff, target, budget)
+}
+
+pub(crate) fn check_and_lower_scalar_cfg_target_llvm_v18<'handoff, 'view, 'source>(
+    source: &'view Source<'source>,
+    handoff: &'handoff CfgHandoff<'view, 'source>,
+    target: TargetProfile,
+    budget: &mut Budget<'_>,
+) -> Result<ScalarCfgTargetLlvmV29<'handoff, 'view, 'source>, Error> {
+    check_and_lower_target_llvm(source, handoff, target, budget)
+}
+
+fn check_and_lower_target_llvm<'handoff, 'view, 'source, H: TargetOutputHandoffV29>(
+    source: &'view Source<'source>,
+    handoff: &'handoff H,
+    target: TargetProfile,
+    budget: &mut Budget<'_>,
+) -> Result<TargetLlvmV29<'handoff, 'view, 'source, H>, Error> {
     // This actual source/SSA join precedes header charging on a foreign budget.
-    handoff.check_original_source(source.source_ssa(budget)?, budget)?;
+    handoff.check_original(source.source_ssa(budget)?, budget)?;
     let floor = budget.storage();
     let accepted = std::cell::Cell::new(0usize);
     let (header, scratch) =
-        headers().map_err(|error| source.retain_query_resource_error_v18(error))?;
+        headers_for::<H>().map_err(|error| source.retain_query_resource_error_v18(error))?;
     let caught = {
         let budget = &mut *budget;
         let accepted = &accepted;
@@ -229,7 +243,7 @@ pub(crate) fn check_and_lower_target_llvm_v18<'handoff, 'view, 'source>(
             budget.reserve_storage(initial)?;
             accepted.set(initial);
             let original = source.canonical(budget)?;
-            let output = handoff.output(budget)?.owner();
+            let output = handoff.owner(budget)?;
             let before = &original.module().kernels;
             let after = &output.module().kernels;
             budget.charge_work(sum(&[before.len(), after.len(), 1])?)?;
@@ -252,8 +266,8 @@ pub(crate) fn check_and_lower_target_llvm_v18<'handoff, 'view, 'source>(
                     return Err(Error::Unsupported("changed target root or geometry"));
                 }
             }
-            formal(original, budget)?;
-            formal(output, budget)?;
+            H::formal(original, budget)?;
+            H::formal(output, budget)?;
             let text = match target {
                 TargetProfile::Gfx942 => fe2o3_amdgcn_model::lower_canonical_v18_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(output),
                 TargetProfile::Gfx950 => fe2o3_amdgcn_model::lower_canonical_v18_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(output),
@@ -262,7 +276,7 @@ pub(crate) fn check_and_lower_target_llvm_v18<'handoff, 'view, 'source>(
             budget.reserve_storage(text.capacity())?;
             accepted.set(total);
             source.check_query_v18(budget)?;
-            handoff.output(budget)?;
+            handoff.owner(budget)?;
             Ok((text, header))
         }))
     };
@@ -271,13 +285,13 @@ pub(crate) fn check_and_lower_target_llvm_v18<'handoff, 'view, 'source>(
     let required = floor
         .checked_add(accepted.get())
         .expect("accepted storage is representable");
-    let custody = handoff.observe_retained_storage_v18(required, budget);
+    let custody = handoff.observe_retained_storage(required, budget);
     match caught {
         Ok(Ok((text, _))) if custody.is_ok() => {
             // The result/catch/entry envelopes stay conservatively paid until
             // explicit text disposal; no refund while their frames are live.
             let retained = accepted.get();
-            Ok(ClosedScalarTargetLlvmV29 {
+            Ok(TargetLlvmV29 {
                 source,
                 handoff,
                 llvm_ir: text,

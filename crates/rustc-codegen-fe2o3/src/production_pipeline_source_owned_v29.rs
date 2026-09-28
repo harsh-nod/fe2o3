@@ -11,9 +11,10 @@ use fe2o3_lower_mir_kernel::{
     ProductionClosedScalarHandoffErrorV18, ProductionClosedScalarOutputHandoffV18 as Handoff,
     ProductionExecutionSourceInputV29, ProductionKernelArgumentAbiInputV18,
     ProductionKernelArgumentAbiRootV18 as AbiRoot,
-    ProductionPendingScopedSourceOwnerV29 as Pending, ProductionScopeCallableCandidateV29 as Class,
-    ProductionSourceOwnedViewErrorV18, ProductionSourceOwnedViewV18 as Source,
-    ProductionUnqualifiedIntegerHandoffErrorV18,
+    ProductionPendingScopedSourceOwnerV29 as Pending, ProductionScalarCfgHandoffErrorV18,
+    ProductionScalarCfgOutputHandoffV18 as CfgHandoff,
+    ProductionScopeCallableCandidateV29 as Class, ProductionSourceOwnedViewErrorV18,
+    ProductionSourceOwnedViewV18 as Source, ProductionUnqualifiedIntegerHandoffErrorV18,
     ProductionUnqualifiedIntegerOutputHandoffV18 as IntegerHandoff,
 };
 use std::mem::{align_of, size_of};
@@ -35,6 +36,7 @@ pub(crate) enum Error {
     Source(ProductionSourceOwnedViewErrorV18),
     Handoff(ProductionClosedScalarHandoffErrorV18),
     IntegerHandoff(ProductionUnqualifiedIntegerHandoffErrorV18),
+    ScalarCfgHandoff(ProductionScalarCfgHandoffErrorV18),
     TargetLlvm(target_result::ClosedScalarTargetLlvmErrorV29),
     Resource(Resource),
     Unsupported(&'static str),
@@ -52,6 +54,7 @@ impl std::error::Error for Error {
             Self::Source(error) => Some(error),
             Self::Handoff(error) => Some(error),
             Self::IntegerHandoff(error) => Some(error),
+            Self::ScalarCfgHandoff(error) => Some(error),
             Self::TargetLlvm(error) => Some(error),
             Self::Resource(error) => Some(error),
             Self::Unsupported(_) => None,
@@ -86,6 +89,11 @@ impl From<Resource> for Error {
 impl From<ProductionUnqualifiedIntegerHandoffErrorV18> for Error {
     fn from(error: ProductionUnqualifiedIntegerHandoffErrorV18) -> Self {
         Self::IntegerHandoff(error)
+    }
+}
+impl From<ProductionScalarCfgHandoffErrorV18> for Error {
+    fn from(error: ProductionScalarCfgHandoffErrorV18) -> Self {
+        Self::ScalarCfgHandoff(error)
     }
 }
 impl From<target_result::ClosedScalarTargetLlvmErrorV29> for Error {
@@ -194,53 +202,67 @@ fn entry_headers_for_handoff<R, F, H>() -> Result<usize, Resource> {
     })
 }
 
-trait SourceHandoffPolicyV29 {
-    type Handoff<'view, 'source: 'view>;
-    fn prepare<'view, 'source>(
+trait SourceHandoffPolicyV29<R, F> {
+    fn entry_headers() -> Result<usize, Resource>;
+    fn consume<'view, 'source, 'abi, 'work>(
         source: &'view Source<'source>,
-        abi: ProductionKernelArgumentAbiInputV18<'_>,
-        budget: &mut Budget<'_>,
-    ) -> Result<Self::Handoff<'view, 'source>, Error>;
-    fn check_original(
-        handoff: &Self::Handoff<'_, '_>,
-        original: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
-        budget: &mut Budget<'_>,
-    ) -> Result<(), Error>;
-    fn discard(handoff: Self::Handoff<'_, '_>, budget: &mut Budget<'_>) -> Result<(), Error>;
+        roots: &[AbiRoot<'abi>],
+        target: TargetProfile,
+        budget: &mut Budget<'work>,
+        consume: F,
+    ) -> Result<R, Error>;
 }
 
 macro_rules! source_handoff_policy_v29 {
     ($policy:ident, $handoff:ident, $prepare:ident) => {
         struct $policy;
-        impl SourceHandoffPolicyV29 for $policy {
-            type Handoff<'view, 'source: 'view> = $handoff<'view, 'source>;
-            fn prepare<'view, 'source>(
+        impl<R, F> SourceHandoffPolicyV29<R, F> for $policy
+        where
+            F: for<'view, 'source, 'abi, 'work> FnOnce(
+                &'view Source<'source>,
+                &$handoff<'view, 'source>,
+                &[AbiRoot<'abi>],
+                TargetProfile,
+                &mut Budget<'work>,
+            ) -> Result<R, Error>,
+        {
+            fn entry_headers() -> Result<usize, Resource> {
+                entry_headers_for_handoff::<R, F, $handoff<'static, 'static>>()
+            }
+
+            fn consume<'view, 'source, 'abi, 'work>(
                 source: &'view Source<'source>,
-                abi: ProductionKernelArgumentAbiInputV18<'_>,
-                budget: &mut Budget<'_>,
-            ) -> Result<Self::Handoff<'view, 'source>, Error> {
-                source.$prepare(abi, budget).map_err(Into::into)
-            }
-            fn check_original(
-                handoff: &Self::Handoff<'_, '_>,
-                original: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
-                budget: &mut Budget<'_>,
-            ) -> Result<(), Error> {
-                handoff
-                    .check_original_source(original, budget)
-                    .map_err(Into::into)
-            }
-            fn discard(
-                handoff: Self::Handoff<'_, '_>,
-                budget: &mut Budget<'_>,
-            ) -> Result<(), Error> {
-                handoff.discard(budget).map_err(Into::into)
+                roots: &[AbiRoot<'abi>],
+                target: TargetProfile,
+                budget: &mut Budget<'work>,
+                consume: F,
+            ) -> Result<R, Error> {
+                let handoff =
+                    source.$prepare(ProductionKernelArgumentAbiInputV18 { roots }, budget)?;
+                handoff.check_original_source(source.source_ssa(budget)?, budget)?;
+                let borrowed = &handoff;
+                let callback_budget = &mut *budget;
+                // Concrete nominal handoffs carry the source/view outlives
+                // relationship into the callback without a quantified GAT.
+                let result = catch_unwind(AssertUnwindSafe(move || {
+                    consume(source, borrowed, roots, target, callback_budget)
+                }));
+                let settled = handoff.discard(budget);
+                match result {
+                    Ok(Ok(value)) => {
+                        settled?;
+                        Ok(value)
+                    }
+                    Ok(Err(error)) => Err(error),
+                    Err(payload) => resume_unwind(payload),
+                }
             }
         }
     };
 }
 
 source_handoff_policy_v29!(ClosedScalar, Handoff, checked_closed_scalar_output_v18);
+source_handoff_policy_v29!(ScalarCfg, CfgHandoff, checked_scalar_cfg_output_v18);
 source_handoff_policy_v29!(
     UnqualifiedInteger,
     IntegerHandoff,
@@ -363,22 +385,13 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         }
     }
 
-    fn with_source_owned_custody_policy_v29<P: SourceHandoffPolicyV29, R, F>(
+    fn with_source_owned_custody_policy_v29<P: SourceHandoffPolicyV29<R, F>, R, F>(
         self,
         import_profile: ImportProfile,
         work_limit: usize,
         storage_limit: usize,
         consume: F,
-    ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error>
-    where
-        F: for<'view, 'source, 'abi, 'work> FnOnce(
-            &'view Source<'source>,
-            &P::Handoff<'view, 'source>,
-            &[AbiRoot<'abi>],
-            TargetProfile,
-            &mut Budget<'work>,
-        ) -> Result<R, Error>,
-    {
+    ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error> {
         let ssa = self
             .import_semantic_mir_with_profile_v29(import_profile)?
             .construct_semantic_middle_end()?
@@ -414,7 +427,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         })?;
         let mut work = Work::new(work_limit);
         let mut budget = Budget::new(&mut work, storage_limit);
-        let headers = entry_headers_for_handoff::<R, F, P::Handoff<'static, 'static>>()?;
+        let headers = P::entry_headers()?;
         budget.charge_work(headers)?;
         budget.reserve_storage(headers)?;
         // Root-phase storage is not refunded across a callback. All actual
@@ -474,28 +487,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             }
             #[cfg(test)]
             tests::observe_materialized_source_v29();
-            let handoff = P::prepare(
-                source,
-                ProductionKernelArgumentAbiInputV18 { roots: &roots },
-                budget,
-            )?;
-            P::check_original(&handoff, source.source_ssa(budget)?, budget)?;
-            let borrowed = &handoff;
-            let callback_budget = &mut *budget;
-            // The actual F is owned by this catch, including its destructor.
-            let original_roots = &roots;
-            let result = catch_unwind(AssertUnwindSafe(move || {
-                consume(source, borrowed, original_roots, target, callback_budget)
-            }));
-            let settled = P::discard(handoff, budget);
-            match result {
-                Ok(Ok(value)) => {
-                    settled?;
-                    Ok(value)
-                }
-                Ok(Err(error)) => Err(error),
-                Err(payload) => resume_unwind(payload),
-            }
+            P::consume(source, &roots, target, budget, consume)
         });
         drop((contexts, abi, ranked_roots));
         let observation = result?;

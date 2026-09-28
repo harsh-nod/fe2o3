@@ -124,6 +124,18 @@ trait SemanticEmissionBudgetV1 {
             .inspect_err(|error| source_reference_record_failure_v29(plan, error))
     }
 
+    fn source_object_original_leaf_type_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        ty: SemanticTypeIdV1,
+        schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+    ) -> Result<Type, ProductionSemanticKirErrorV1> {
+        let _ = (ty, schema);
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+            .inspect_err(|error| source_reference_record_failure_v29(plan, error))
+    }
+
     fn source_object_projection_v29<'path>(
         &mut self,
         plan: &SourceReferencePlanV29<'_, '_>,
@@ -182,6 +194,15 @@ trait SemanticEmissionBudgetV1 {
 }
 
 impl SemanticEmissionBudgetV1 for ArgumentBudgetV1<'_> {
+    fn source_object_original_leaf_type_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        ty: SemanticTypeIdV1,
+        schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+    ) -> Result<Type, ProductionSemanticKirErrorV1> {
+        source_object_original_leaf_type_v29(plan, ty, schema, self)
+    }
+
     fn source_object_storage_matches_v29(
         &mut self,
         plan: &SourceReferencePlanV29<'_, '_>,

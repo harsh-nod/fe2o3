@@ -33659,6 +33659,7 @@ pub use optimized_source_v18::{
 include!("production_source_ranked_relation_v18.rs");
 include!("production_source_optimizer_entry_v18.rs");
 include!("production_source_checked_output_handoff_v18.rs");
+include!("production_source_scalar_cfg_handoff_v18.rs");
 include!("production_optimized_source_analysis_v18.rs");
 include!("production_optimized_source_arguments_v18.rs");
 include!("production_optimized_source_scalar_v18.rs");

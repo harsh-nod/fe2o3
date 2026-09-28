@@ -1400,7 +1400,13 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                             budget,
                         )?
                     };
-                    let (ty, selected) = selected.ok_or(ArgumentResourceV1::Accounting)?;
+                    let Some((ty, selected)) = selected else {
+                        return budget.source_object_original_leaf_type_v29(
+                            plan,
+                            place.ty(),
+                            schema,
+                        );
+                    };
                     if selected != schema {
                         return Err(ArgumentResourceV1::Accounting.into());
                     }

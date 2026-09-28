@@ -26,8 +26,10 @@ mod physical_lds_exchange_v22;
 mod pointer_derivation;
 mod private_slots;
 mod receipt_v1;
+mod scalar_cfg_v18;
 mod storage_discriminant_v18;
 pub use closed_scalar_v18::*;
+pub use scalar_cfg_v18::*;
 
 pub use complete_body_v19::derive_complete_body_memory_obligations_v19;
 pub use guarded_access_v1::FormalGuardedMemoryResourceErrorV1;

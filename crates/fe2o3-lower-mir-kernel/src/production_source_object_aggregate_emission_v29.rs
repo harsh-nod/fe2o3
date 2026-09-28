@@ -3,7 +3,7 @@
 #[derive(Clone, Copy)]
 struct SourceObjectAggregateFieldV29 {
     operand: u32,
-    physical: u32,
+    projection: ScopedObjectViewProjectionV29,
     ty: SemanticTypeIdV1,
     schema: fe2o3_kernel_ir::StorageLayoutIdV1,
     value: ValueId,
@@ -62,7 +62,8 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         volatility: SemanticVolatilityV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        // This first producer is closed over direct scalar-field construction.
+        // Direct scalar fields and original scalar/thin-pointer array elements
+        // share the same operand occurrence and selected-layout checks.
         // Transfers, nested aggregates, tags, and indirect roots keep their
         // existing refusal until their complete component obligations exist.
         let prepared = self.with_emission_budget_v1(|this, budget| {
@@ -90,25 +91,65 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                     if instance == cursor.instance && local == place.local())
                 || volatility != SemanticVolatilityV1::NonVolatile
             { return Err(scoped_object_allocation_error_v29()); }
-            let field_types = source_object_aggregate_field_types_v29(
-                this.types, place.ty(), aggregate.kind(), fields.len(), budget)?;
+            budget.source_reference_charge_v29(plan, 6)?;
+            let array_element = match (this.types.get(place.ty().index() as usize).map(SemanticTypeDeclV1::shape), aggregate.kind()) {
+                (Some(SemanticTypeShapeV1::Array { element, length }), SemanticAggregateKindV1::Array)
+                    if *length != 0 && *length <= MAX_SSA_VALUE_COMPONENTS_V1 as u64
+                        && usize::try_from(*length).ok() == Some(fields.len()) => Some(*element),
+                _ => None,
+            };
+            if array_element.is_some() {
+                require_ordinary_execution_representation_v29(&this.types[place.ty().index() as usize])?;
+            }
+            let field_types = if array_element.is_some() { None } else {
+                Some(source_object_aggregate_field_types_v29(
+                    this.types, place.ty(), aggregate.kind(), fields.len(), budget)?)
+            };
             if fields.len() != aggregate.operands().len()
             { return Err(scoped_object_allocation_error_v29()); }
             let mut reads = None;
             let mut prepared = source_reference_owned_vec_v29(plan, fields.len(), budget)?;
-            for (index, ((binding, &ty), operand)) in fields.iter().zip(field_types).zip(aggregate.operands()).enumerate() {
+            for (index, (binding, operand)) in fields.iter().zip(aggregate.operands()).enumerate() {
                 budget.source_reference_charge_v29(plan, 12)?;
+                let ty = array_element.or_else(|| field_types.and_then(|types| types.get(index).copied()))
+                    .ok_or_else(scoped_object_allocation_error_v29)?;
                 if operand.ty() != ty
                 { return Err(scoped_object_allocation_error_v29()); }
                 let SemanticValueBindingV1::Value { id: value, ty: actual } = binding else {
                     return Err(scoped_object_allocation_error_v29());
                 };
-                source_reference_owned_prepay_v29::<Type>(plan, budget)?;
-                let expected = lower_scalar_type(this.types, ty)?;
+                let ordinal = u32::try_from(index).map_err(|_| ArgumentResourceV1::Arithmetic)?;
+                let projection = SemanticProjectionV1::new(if array_element.is_some() {
+                    SemanticProjectionKindV1::ConstantIndex {
+                        offset: u64::from(ordinal), minimum_length: fields.len() as u64, from_end: false,
+                    }
+                } else { SemanticProjectionKindV1::Field(ordinal) }, ty)
+                    .map_err(|_| ArgumentResourceV1::Accounting)?;
+                let path = [projection];
+                let components = budget.source_object_projection_v29(plan, place.ty(), destination.root_schema, &path)?;
+                let [component] = components.as_slice() else { return Err(ArgumentResourceV1::Accounting.into()); };
+                if component.source_type != place.ty() || component.source_schema != destination.root_schema
+                    || component.result_type != ty {
+                    return Err(ArgumentResourceV1::Accounting.into());
+                }
+                let schema = component.result_schema.ok_or(ArgumentResourceV1::Accounting)?;
+                let selected_projection = match component.kind {
+                    source_storage_v29::SourceSelectedComponentKindV29::Field { original, physical, .. }
+                        if array_element.is_none() && original == ordinal =>
+                        ScopedObjectViewProjectionV29::Field(u32::try_from(physical).map_err(|_| ArgumentResourceV1::Arithmetic)?),
+                    source_storage_v29::SourceSelectedComponentKindV29::Index { length, .. }
+                        if array_element.is_some() && length == fields.len() as u64 => ScopedObjectViewProjectionV29::ArrayElement,
+                    _ => return Err(scoped_object_allocation_error_v29()),
+                };
+                let expected = if array_element.is_some() {
+                    budget.source_object_original_leaf_type_v29(plan, ty, schema)?
+                } else {
+                    source_reference_owned_prepay_v29::<Type>(plan, budget)?;
+                    lower_scalar_type(this.types, ty)?
+                };
                 if !invocation_equal_types_v1(actual, &expected, budget)? {
                     return Err(ArgumentResourceV1::Accounting.into());
                 }
-                let ordinal = u32::try_from(index).map_err(|_| ArgumentResourceV1::Arithmetic)?;
                 let role = ExecutionOperandV29::RvalueOperand(ordinal);
                 let source = match operand {
                     SemanticOperandV1::Constant(_) => ScopedMemoryOperandSourceV29::Constant,
@@ -134,20 +175,9 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                         ScopedMemoryOperandSourceV29::Place(occurrence)
                     }
                 };
-                let projection = SemanticProjectionV1::new(SemanticProjectionKindV1::Field(ordinal), ty)
-                    .map_err(|_| ArgumentResourceV1::Accounting)?;
-                let path = [projection];
-                let components = budget.source_object_projection_v29(plan, place.ty(), destination.root_schema, &path)?;
-                let [component] = components.as_slice() else { return Err(ArgumentResourceV1::Accounting.into()); };
-                let source_storage_v29::SourceSelectedComponentKindV29::Field { original, physical, .. } = component.kind else {
-                    return Err(scoped_object_allocation_error_v29());
-                };
-                if original != ordinal || component.source_type != place.ty()
-                    || component.source_schema != destination.root_schema || component.result_type != ty
-                { return Err(ArgumentResourceV1::Accounting.into()); }
                 prepared.push(SourceObjectAggregateFieldV29 {
-                    operand: ordinal, physical: u32::try_from(physical).map_err(|_| ArgumentResourceV1::Arithmetic)?,
-                    ty, schema: component.result_schema.ok_or(ArgumentResourceV1::Accounting)?, value: *value,
+                    operand: ordinal, projection: selected_projection,
+                    ty, schema, value: *value,
                     source: ScopedMemoryStoreSourceV29::Operand { site, role, ty, source },
                 });
             }
@@ -171,7 +201,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                     .anchors
                     .append_object_path(
                         &[ScopedObjectComponentV29::View {
-                            projection: ScopedObjectViewProjectionV29::Field(field.physical),
+                            projection: field.projection,
                             ty: field.ty,
                         }],
                         budget,
@@ -196,6 +226,23 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                     ),
                 ))
             })?;
+            self.with_emission_budget_v1(|_, budget| {
+                source_reference_emission_prepay_v29::<ScopedObjectProjectionV29>(budget)?;
+                budget.charge_work(3)
+            })?;
+            let step = match field.projection {
+                ScopedObjectViewProjectionV29::Field(physical) => {
+                    ScopedObjectProjectionV29::Field(physical)
+                }
+                ScopedObjectViewProjectionV29::ArrayElement => {
+                    ScopedObjectProjectionV29::ArrayIndex(
+                        self.emit_index_constant(operations, u64::from(field.operand))?,
+                    )
+                }
+                ScopedObjectViewProjectionV29::Variant(_) => {
+                    return Err(ArgumentResourceV1::Accounting.into());
+                }
+            };
             let projected_address = self
                 .with_scoped_object_role_v29(
                     ScopedObjectRoleV29::Project {
@@ -208,7 +255,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                             pointer_type,
                             OperationKind::Storage(ScopedObjectOperationV29::Project {
                                 base: address,
-                                step: ScopedObjectProjectionV29::Field(field.physical),
+                                step,
                             }),
                         )
                     },

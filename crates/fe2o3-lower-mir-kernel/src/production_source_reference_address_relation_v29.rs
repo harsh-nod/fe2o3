@@ -2401,271 +2401,314 @@ fn check_source_address_payloads_v29(
     source_reference_emission_prepay_v29::<Option<ScopedMemoryFrameV29>>(budget)?;
     source_reference_emission_prepay_v29::<Option<&SemanticPlaceV1>>(budget)?;
     for source in rows {
-        budget.charge_work(5)?;
-        let sidecar = source_index.sidecar(source.instance, budget)?;
-        let original = instances
-            .instance(source.instance)
-            .ok_or_else(source_raw_physical_error_v29)?
-            .declaration();
-        let occurrences = instances
-            .occurrences(source.instance)
-            .ok_or_else(source_raw_physical_error_v29)?;
-        let archive = sidecar
-            .execution_observation
-            .as_ref()
-            .ok_or_else(execution_archive_error_v29)?;
-        archive.check_original_v29(instances, source.instance, budget)?;
-        let recorded = sidecar
-            .scoped_memory_anchors
-            .as_ref()
-            .ok_or_else(source_raw_physical_error_v29)?;
-        let anchors = &recorded.rows;
-        let row = anchors
-            .get(source.anchor)
-            .ok_or_else(source_raw_physical_error_v29)?;
-        let object = source_address_object_payload_v29(recorded, row, budget)?;
-        let (pointer, payload) = match (row.kind, object) {
-            (
-                ScopedMemoryAnchorKindV29::Access {
-                    pointer,
-                    payload: Some(payload),
-                },
-                None,
-            ) => (pointer, payload),
-            (ScopedMemoryAnchorKindV29::Object(_), Some((_, payload))) => {
-                let object = recorded.object_payload(row, budget)?;
-                let pointer = object.operands()[0].ok_or_else(scoped_object_error_v29)?;
-                recorded.check_object_source(
-                    original,
-                    &occurrences,
-                    source.anchor,
-                    row,
-                    object,
-                    budget,
-                )?;
-                (pointer, payload)
-            }
-            _ => return Err(source_raw_physical_error_v29()),
-        };
-        let operation = graph.blocks[graph.block(source.physical.block, budget)?]
-            .1
-            .operations
-            .get(source.physical.operation)
-            .ok_or_else(source_raw_physical_error_v29)?;
-        if source_address_value_access_v29(operation)?.map(|access| access.pointer) != Some(pointer)
-            || graph.exact(pointer, budget)? != Some(source.physical.slot)
-        {
-            return Err(source_raw_physical_error_v29());
-        }
-        if object.is_some() {
-            recorded
-                .object_payload(row, budget)?
-                .check_operation(operation, budget)?;
-            if let Some(expected) = source_static_object_expected_location_v29(
-                instances,
-                references.plan,
-                source_index,
-                slots,
-                object.unwrap().0,
-                budget,
-            )? && graph.object_location(pointer, budget)? != expected
-            {
-                return Err(scoped_object_error_v29());
-            }
-            check_source_object_holder_value_v29(
-                instances,
-                references.plan,
-                source_index,
-                source,
-                graph,
-                recorded,
-                payload_index,
-                object.unwrap().0,
-                pointer,
-                budget,
-            )?;
-        } else {
-            check_scoped_payload_v29(original, &occurrences, row, operation, budget)?;
-            check_scoped_array_initializer_recipe_v29(
-                original,
-                row,
-                &sidecar.private_arrays.effects,
-                budget,
-            )?;
-            budget.charge_work(4)?;
-            if matches!(payload, ScopedMemoryPayloadV29::Load { read, .. } if read.prefix > 1)
-                || matches!(payload, ScopedMemoryPayloadV29::Store { .. })
-                    && row
-                        .source
-                        .and_then(|frame| match frame.role {
-                            Some(ScopedMemoryRoleV29::Operand(role)) => {
-                                scoped_source_place_v29(original, frame.site, role)
-                            }
-                            _ => None,
-                        })
-                        .is_some_and(|place| place.projections().len() > 1)
-            {
-                check_source_scalar_loan_holder_v29(
-                    instances,
-                    references.plan,
-                    source_index,
-                    source,
-                    row,
-                    payload,
-                    payload_index,
-                    pointer,
-                    budget,
-                )?;
-            }
-        }
-        match payload {
-            ScopedMemoryPayloadV29::IndexLoad { .. } => {
-                // The retained occurrence is authenticated above. Its actual
-                // incoming memory version is still a final-census obligation.
-            }
-            ScopedMemoryPayloadV29::Load { read, .. } => {
-                // A promoted holder's actual dereference must use that exact
-                // original definition, not another same-typed physical value.
-                budget.charge_work(4)?;
-                // Typed endpoints were independently rejoined for both reads
-                // and writes by the exact original holder query above.
-                if object.is_none()
-                    && read.prefix == 1
-                    && scoped_payload_place_v29(original, read.site, read.role)
-                        .and_then(|place| place.projections().first())
-                        .is_some_and(|projection| {
-                            matches!(projection.kind(), SemanticProjectionKindV1::Dereference)
-                        })
-                    && let ScopedMemoryOccurrenceV29::Promoted { definition, .. } = read.occurrence
-                {
-                    let binding = archive.lookup_original_v29(
-                        instances,
-                        source.instance,
-                        definition,
-                        budget,
-                    )?;
-                    match binding {
-                        SemanticValueBindingV1::Value { id, ty }
-                            if *id == pointer && matches!(ty, Type::Pointer(_)) => {}
-                        SemanticValueBindingV1::SourceReference(binding) => {
-                            let place = scoped_payload_place_v29(original, read.site, read.role)
-                                .ok_or_else(source_raw_physical_error_v29)?;
-                            let (block, statement) = scoped_memory_site_key_v29(read.site);
-                            check_source_cell_dereference_payload_v29(
-                                references,
-                                SourceReferenceSiteV29 {
-                                    instance: source.instance,
-                                    block: SemanticBlockIdV1::from_index(block),
-                                    statement: statement.map(|value| value as usize),
-                                },
-                                place,
-                                binding,
-                                pointer,
-                                budget,
-                            )?;
-                        }
-                        _ => return Err(source_raw_physical_error_v29()),
-                    }
-                }
-            }
-            ScopedMemoryPayloadV29::Store {
-                value,
-                source:
-                    ScopedMemoryStoreSourceV29::Operand {
-                        site,
-                        role,
-                        ty,
-                        source: operand,
-                    },
-            } => {
-                match operand {
-                    ScopedMemoryOperandSourceV29::Place(occurrence) => {
-                        let place = scoped_payload_place_v29(original, site, role)
-                            .ok_or_else(source_raw_physical_error_v29)?;
-                        if object.is_some()
-                            && matches!(occurrence, ScopedMemoryOccurrenceV29::Retained { .. })
-                        {
-                            check_source_object_stored_read_v29(
-                                source_index,
-                                source,
-                                graph,
-                                recorded,
-                                payload_index,
-                                place,
-                                site,
-                                role,
-                                occurrence,
-                                value,
-                                budget,
-                            )?;
-                        } else {
-                            check_scoped_payload_archive_v29(
-                                &archive.bindings,
-                                place,
-                                occurrence,
-                                value,
-                                budget,
-                            )?;
-                        }
-                    }
-                    ScopedMemoryOperandSourceV29::Memory { occurrence, access } => {
-                        check_scoped_payload_memory_v29(
+        // Each row is a closed validation query. Its temporary paid envelopes
+        // must die here, not accumulate until the complete access census ends.
+        #[cfg(test)]
+        let row_floor = budget.storage();
+        scoped_raw_admission_v29::source_object_activation_scratch_v29(
+            instances,
+            references.plan,
+            budget,
+            |budget| {
+                #[cfg(test)]
+                let query_floor = budget.storage();
+                budget.charge_work(5)?;
+                let sidecar = source_index.sidecar(source.instance, budget)?;
+                let original = instances
+                    .instance(source.instance)
+                    .ok_or_else(source_raw_physical_error_v29)?
+                    .declaration();
+                let occurrences = instances
+                    .occurrences(source.instance)
+                    .ok_or_else(source_raw_physical_error_v29)?;
+                let archive = sidecar
+                    .execution_observation
+                    .as_ref()
+                    .ok_or_else(execution_archive_error_v29)?;
+                archive.check_original_v29(instances, source.instance, budget)?;
+                let recorded = sidecar
+                    .scoped_memory_anchors
+                    .as_ref()
+                    .ok_or_else(source_raw_physical_error_v29)?;
+                let anchors = &recorded.rows;
+                let row = anchors
+                    .get(source.anchor)
+                    .ok_or_else(source_raw_physical_error_v29)?;
+                let object = source_address_object_payload_v29(recorded, row, budget)?;
+                let (pointer, payload) = match (row.kind, object) {
+                    (
+                        ScopedMemoryAnchorKindV29::Access {
+                            pointer,
+                            payload: Some(payload),
+                        },
+                        None,
+                    ) => (pointer, payload),
+                    (ScopedMemoryAnchorKindV29::Object(_), Some((_, payload))) => {
+                        let object = recorded.object_payload(row, budget)?;
+                        let pointer = object.operands()[0].ok_or_else(scoped_object_error_v29)?;
+                        recorded.check_object_source(
                             original,
-                            anchors,
+                            &occurrences,
                             source.anchor,
                             row,
-                            value,
-                            site,
-                            role,
-                            ty,
-                            occurrence,
-                            access,
+                            object,
                             budget,
                         )?;
-                        let prior = anchors
-                            .get(access)
-                            .ok_or_else(source_raw_physical_error_v29)?;
-                        let previous = source_address_original_operation_v29(
-                            source_index.pending,
-                            graph,
-                            source.instance,
-                            prior.block,
-                            prior.position,
-                            budget,
-                        )?;
-                        if !matches!(
-                            previous.kind,
-                            OperationKind::Load { .. }
-                                | OperationKind::Storage(
-                                    ScopedObjectOperationV29::ReadValue { .. }
-                                )
-                        ) || !matches!(previous.results.as_slice(), [result] if result.id == value)
-                        {
-                            return Err(source_raw_physical_error_v29());
-                        }
+                        (pointer, payload)
                     }
-                    ScopedMemoryOperandSourceV29::Constant => {
-                        // Exact constant/expression equivalence is retained as
-                        // a source consumer obligation, not pointer provenance.
-                        if matches!(graph.ty(value, budget)?, Type::Pointer(_)) {
-                            return Err(source_reference_error_v29(
-                                "raw pointer constants require admitted source provenance",
-                            ));
-                        }
+                    _ => return Err(source_raw_physical_error_v29()),
+                };
+                let operation = graph.blocks[graph.block(source.physical.block, budget)?]
+                    .1
+                    .operations
+                    .get(source.physical.operation)
+                    .ok_or_else(source_raw_physical_error_v29)?;
+                if source_address_value_access_v29(operation)?.map(|access| access.pointer)
+                    != Some(pointer)
+                    || graph.exact(pointer, budget)? != Some(source.physical.slot)
+                {
+                    return Err(source_raw_physical_error_v29());
+                }
+                if object.is_some() {
+                    recorded
+                        .object_payload(row, budget)?
+                        .check_operation(operation, budget)?;
+                    if let Some(expected) = source_static_object_expected_location_v29(
+                        instances,
+                        references.plan,
+                        source_index,
+                        slots,
+                        object.unwrap().0,
+                        budget,
+                    )? && graph.object_location(pointer, budget)? != expected
+                    {
+                        return Err(scoped_object_error_v29());
+                    }
+                    check_source_object_holder_value_v29(
+                        instances,
+                        references.plan,
+                        source_index,
+                        source,
+                        graph,
+                        recorded,
+                        payload_index,
+                        object.unwrap().0,
+                        pointer,
+                        budget,
+                    )?;
+                } else {
+                    check_scoped_payload_v29(original, &occurrences, row, operation, budget)?;
+                    check_scoped_array_initializer_recipe_v29(
+                        original,
+                        row,
+                        &sidecar.private_arrays.effects,
+                        budget,
+                    )?;
+                    budget.charge_work(4)?;
+                    if matches!(payload, ScopedMemoryPayloadV29::Load { read, .. } if read.prefix > 1)
+                        || matches!(payload, ScopedMemoryPayloadV29::Store { .. })
+                            && row
+                                .source
+                                .and_then(|frame| match frame.role {
+                                    Some(ScopedMemoryRoleV29::Operand(role)) => {
+                                        scoped_source_place_v29(original, frame.site, role)
+                                    }
+                                    _ => None,
+                                })
+                                .is_some_and(|place| place.projections().len() > 1)
+                    {
+                        check_source_scalar_loan_holder_v29(
+                            instances,
+                            references.plan,
+                            source_index,
+                            source,
+                            row,
+                            payload,
+                            payload_index,
+                            pointer,
+                            budget,
+                        )?;
                     }
                 }
-            }
-            ScopedMemoryPayloadV29::Store {
-                source:
-                    ScopedMemoryStoreSourceV29::Assignment { .. }
-                    | ScopedMemoryStoreSourceV29::CallResult { .. }
-                    | ScopedMemoryStoreSourceV29::EntryArgument { .. },
-                ..
-            } => {
-                // Original formation/call and parameter censuses provide the
-                // producer relation; this row alone grants no source equation.
-            }
-        }
+                match payload {
+                    ScopedMemoryPayloadV29::IndexLoad { .. } => {
+                        // The retained occurrence is authenticated above. Its actual
+                        // incoming memory version is still a final-census obligation.
+                    }
+                    ScopedMemoryPayloadV29::Load { read, .. } => {
+                        // A promoted holder's actual dereference must use that exact
+                        // original definition, not another same-typed physical value.
+                        budget.charge_work(4)?;
+                        // Typed endpoints were independently rejoined for both reads
+                        // and writes by the exact original holder query above.
+                        if object.is_none()
+                            && read.prefix == 1
+                            && scoped_payload_place_v29(original, read.site, read.role)
+                                .and_then(|place| place.projections().first())
+                                .is_some_and(|projection| {
+                                    matches!(
+                                        projection.kind(),
+                                        SemanticProjectionKindV1::Dereference
+                                    )
+                                })
+                            && let ScopedMemoryOccurrenceV29::Promoted { definition, .. } =
+                                read.occurrence
+                        {
+                            let binding = archive.lookup_original_v29(
+                                instances,
+                                source.instance,
+                                definition,
+                                budget,
+                            )?;
+                            match binding {
+                                SemanticValueBindingV1::Value { id, ty }
+                                    if *id == pointer && matches!(ty, Type::Pointer(_)) => {}
+                                SemanticValueBindingV1::SourceReference(binding) => {
+                                    let place =
+                                        scoped_payload_place_v29(original, read.site, read.role)
+                                            .ok_or_else(source_raw_physical_error_v29)?;
+                                    let (block, statement) = scoped_memory_site_key_v29(read.site);
+                                    check_source_cell_dereference_payload_v29(
+                                        references,
+                                        SourceReferenceSiteV29 {
+                                            instance: source.instance,
+                                            block: SemanticBlockIdV1::from_index(block),
+                                            statement: statement.map(|value| value as usize),
+                                        },
+                                        place,
+                                        binding,
+                                        pointer,
+                                        budget,
+                                    )?;
+                                }
+                                _ => return Err(source_raw_physical_error_v29()),
+                            }
+                        }
+                    }
+                    ScopedMemoryPayloadV29::Store {
+                        value,
+                        source:
+                            ScopedMemoryStoreSourceV29::Operand {
+                                site,
+                                role,
+                                ty,
+                                source: operand,
+                            },
+                    } => {
+                        match operand {
+                            ScopedMemoryOperandSourceV29::Place(occurrence) => {
+                                let place = scoped_payload_place_v29(original, site, role)
+                                    .ok_or_else(source_raw_physical_error_v29)?;
+                                if object.is_some()
+                                    && matches!(
+                                        occurrence,
+                                        ScopedMemoryOccurrenceV29::Retained { .. }
+                                    )
+                                {
+                                    check_source_object_stored_read_v29(
+                                        source_index,
+                                        source,
+                                        graph,
+                                        recorded,
+                                        payload_index,
+                                        place,
+                                        site,
+                                        role,
+                                        occurrence,
+                                        value,
+                                        budget,
+                                    )?;
+                                } else {
+                                    check_scoped_payload_archive_v29(
+                                        &archive.bindings,
+                                        place,
+                                        occurrence,
+                                        value,
+                                        budget,
+                                    )?;
+                                }
+                            }
+                            ScopedMemoryOperandSourceV29::Memory { occurrence, access } => {
+                                check_scoped_payload_memory_v29(
+                                    original,
+                                    anchors,
+                                    source.anchor,
+                                    row,
+                                    value,
+                                    site,
+                                    role,
+                                    ty,
+                                    occurrence,
+                                    access,
+                                    budget,
+                                )?;
+                                let prior = anchors
+                                    .get(access)
+                                    .ok_or_else(source_raw_physical_error_v29)?;
+                                let previous = source_address_original_operation_v29(
+                                    source_index.pending,
+                                    graph,
+                                    source.instance,
+                                    prior.block,
+                                    prior.position,
+                                    budget,
+                                )?;
+                                if !matches!(
+                                    previous.kind,
+                                    OperationKind::Load { .. }
+                                        | OperationKind::Storage(
+                                            ScopedObjectOperationV29::ReadValue { .. }
+                                        )
+                                ) || !matches!(previous.results.as_slice(), [result] if result.id == value)
+                                {
+                                    return Err(source_raw_physical_error_v29());
+                                }
+                            }
+                            ScopedMemoryOperandSourceV29::Constant => {
+                                // Exact constant/expression equivalence is retained as
+                                // a source consumer obligation, not pointer provenance.
+                                if matches!(graph.ty(value, budget)?, Type::Pointer(_)) {
+                                    return Err(source_reference_error_v29(
+                                        "raw pointer constants require admitted source provenance",
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    ScopedMemoryPayloadV29::Store {
+                        source:
+                            ScopedMemoryStoreSourceV29::Assignment { .. }
+                            | ScopedMemoryStoreSourceV29::CallResult { .. }
+                            | ScopedMemoryStoreSourceV29::EntryArgument { .. },
+                        ..
+                    } => {
+                        // Original formation/call and parameter censuses provide the
+                        // producer relation; this row alone grants no source equation.
+                    }
+                }
+                #[cfg(test)]
+                {
+                    let reclaimed = budget
+                        .storage()
+                        .checked_sub(query_floor)
+                        .expect("payload row undercut its query frame");
+                    let (calls, bytes, largest) =
+                        scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29.get();
+                    scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29.set((
+                        calls.checked_add(1).unwrap(),
+                        bytes.checked_add(reclaimed).unwrap(),
+                        largest.max(reclaimed),
+                    ));
+                }
+                Ok(())
+            },
+        )?;
+        #[cfg(test)]
+        assert_eq!(
+            budget.storage(),
+            row_floor,
+            "payload row retained query scratch"
+        );
     }
     Ok(())
 }

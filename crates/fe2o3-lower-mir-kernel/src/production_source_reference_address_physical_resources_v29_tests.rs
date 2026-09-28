@@ -469,6 +469,7 @@ fn run_indexed_object_payloads_v29(
     SOURCE_ADDRESS_ACCESS_FIRST_CENSUS_V29.set(None);
     SOURCE_ADDRESS_ACCESS_ALLOCATIONS_V29.set(0);
     scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29.set((0, 0));
+    scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29.set((0, 0, 0));
     scoped_raw_admission_v29::PENDING_ALTERNATIVE_CAPACITY_V29.set((0, 0, 0));
     OBJECT_PAYLOAD_INDEX_MUTATED_V29.set(false);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
@@ -554,6 +555,36 @@ fn original_object_payload_unit_query_scratch_ends_before_pending_retention() {
             "growing query frames must be released"
         );
         previous = reclaimed;
+    }
+}
+
+#[test]
+fn original_object_payload_rows_reclaim_scratch_before_the_next_source_row() {
+    let mut previous = (0, 0);
+    let mut largest_row = None;
+    for count in [1, 4, 16] {
+        let (result, _, _, _, payloads, completed) =
+            run_indexed_object_payloads_v29(count, 0, MODULE_LIMIT, MODULE_LIMIT);
+        result.unwrap();
+        assert!(completed);
+        assert_eq!(payloads.0, 3);
+        let (rows, reclaimed, largest) =
+            scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29.get();
+        let (queries, query_reclaimed) =
+            scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29.get();
+        assert_eq!(queries, 3);
+        assert!(rows > previous.0 && reclaimed > previous.1);
+        assert!(largest > 0 && reclaimed > largest);
+        assert!(
+            query_reclaimed > reclaimed,
+            "whole-query envelopes are also paid"
+        );
+        assert_eq!(
+            *largest_row.get_or_insert(largest),
+            largest,
+            "repeated identical source rows must not accumulate temporary envelopes"
+        );
+        previous = (rows, reclaimed);
     }
 }
 

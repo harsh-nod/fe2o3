@@ -712,12 +712,13 @@ impl ScopedMemoryAnchorsV29 {
                     { return Err(scoped_object_error_v29()); }
                     if variant.is_none() {
                         if !assignment.destination().projections().is_empty()
-                            || !matches!(aggregate.kind(), SemanticAggregateKindV1::Tuple | SemanticAggregateKindV1::Aggregate)
+                            || !matches!((aggregate.kind(), view_path),
+                                (SemanticAggregateKindV1::Tuple | SemanticAggregateKindV1::Aggregate,
+                                    [ScopedObjectComponentV29::View { projection: ScopedObjectViewProjectionV29::Field(_), .. }])
+                                | (SemanticAggregateKindV1::Array,
+                                    [ScopedObjectComponentV29::View { projection: ScopedObjectViewProjectionV29::ArrayElement, .. }]))
                             || anchor.source != Some(ScopedMemoryFrameV29::operand(site, Some(ExecutionOperandV29::Destination)))
                             || aggregate.operands()[operand as usize].ty() != endpoint.projected_type
-                            || !matches!(view_path, [ScopedObjectComponentV29::View {
-                                projection: ScopedObjectViewProjectionV29::Field(_), ..
-                            }])
                         { return Err(scoped_object_error_v29()); }
                     }
                     Some((site, ExecutionOperandV29::Destination, assignment.destination().projections()))

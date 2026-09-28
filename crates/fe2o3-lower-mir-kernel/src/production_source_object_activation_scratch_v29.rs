@@ -131,7 +131,7 @@ fn activation_query_scratch_fixed_header_equation_is_explicit() {
     }
 }
 
-fn source_object_activation_scratch_v29<'work, F>(
+pub(super) fn source_object_activation_scratch_v29<'work, F>(
     instances: &ExecutionInstancesV29<'_>,
     plan: &SourceReferencePlanV29<'_, '_>,
     budget: &mut ArgumentBudgetV1<'work>,

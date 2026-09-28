@@ -562,3 +562,5 @@ include!("production_source_retained_custody_v1764_tests.rs");
 include!("production_source_closed_unit_constants_v1765_tests.rs");
 
 include!("production_source_helper_credit_v1766_tests.rs");
+
+include!("production_source_scalar_cfg_handoff_v18_tests.rs");

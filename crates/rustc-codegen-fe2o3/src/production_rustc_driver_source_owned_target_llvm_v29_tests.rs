@@ -498,3 +498,6 @@ fn actual_dynamic_source_refuses_target_llvm_without_substituting_launch_extent(
         |_, _, _, result, _| assert_eq!(result, Outcome::DynamicRefused),
     );
 }
+
+#[path = "production_rustc_driver_scalar_cfg_target_v18_tests.rs"]
+mod scalar_cfg_tests;

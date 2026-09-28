@@ -285,12 +285,113 @@ fn observe_original_pointer_array_emission_v29(
     );
     for helper in &helpers {
         assert!(generations.contains(&(*helper, 0)));
-        let anchors = emitted[*helper]
-            .as_ref()
-            .unwrap()
-            .scoped_memory_anchors
-            .as_ref()
-            .unwrap();
+        let lowered = emitted[*helper].as_ref().unwrap();
+        let anchors = lowered.scoped_memory_anchors.as_ref().unwrap();
+        let instance = ProductionCallInstanceIdV1(*helper);
+        let original = instances.instance(instance).unwrap().declaration();
+        let occurrences = instances.occurrences(instance).unwrap();
+        let mut components = BTreeSet::new();
+        let mut projects = BTreeSet::new();
+        for (ordinal, row) in anchors.rows.iter().enumerate() {
+            let ScopedMemoryAnchorKindV29::Object(_) = row.kind else {
+                continue;
+            };
+            let payload = anchors.object_payload(row, budget)?;
+            let endpoint = match payload.role {
+                ScopedObjectRoleV29::Project { projected, .. } => projected,
+                ScopedObjectRoleV29::WriteValue { destination, .. } => destination,
+                _ => continue,
+            };
+            let ScopedObjectSourceV29::AggregateComponent {
+                site,
+                operand,
+                destination,
+                variant: None,
+            } = endpoint.source
+            else {
+                continue;
+            };
+            assert_eq!(destination.index(), 2);
+            assert!(u64::from(operand) < length);
+            anchors.check_object_source(original, &occurrences, ordinal, row, payload, budget)?;
+            assert!(matches!(
+                anchors.object_path(endpoint.path, budget)?,
+                [ScopedObjectComponentV29::View {
+                    projection: ScopedObjectViewProjectionV29::ArrayElement,
+                    ..
+                }]
+            ));
+            match payload.operation {
+                ScopedObjectOperationV29::Project {
+                    step: ScopedObjectProjectionV29::ArrayIndex(index),
+                    ..
+                } => {
+                    assert!(projects.insert((scoped_memory_site_key_v29(site), operand)));
+                    let constants: Vec<_> = lowered
+                        .function
+                        .body
+                        .as_ref()
+                        .unwrap()
+                        .blocks
+                        .iter()
+                        .flat_map(|block| &block.operations)
+                        .filter(|operation| {
+                            operation.results.iter().any(|result| result.id == index)
+                        })
+                        .collect();
+                    assert_eq!(constants.len(), 1);
+                    assert_eq!(
+                        constants[0].kind,
+                        OperationKind::Constant(Constant::Index(u64::from(operand)))
+                    );
+                }
+                ScopedObjectOperationV29::WriteValue { .. } => {
+                    assert!(components.insert((scoped_memory_site_key_v29(site), operand)));
+                    for mutation in 0..3 {
+                        let mut forged = *payload;
+                        let ScopedObjectRoleV29::WriteValue { destination, .. } = &mut forged.role
+                        else {
+                            unreachable!();
+                        };
+                        match mutation {
+                            0 => {
+                                destination.source = ScopedObjectSourceV29::AggregateComponent {
+                                    site,
+                                    operand: u32::MAX,
+                                    destination: SemanticLocalIdV1::from_index(2),
+                                    variant: None,
+                                }
+                            }
+                            1 => {
+                                destination.source = ScopedObjectSourceV29::AggregateComponent {
+                                    site,
+                                    operand,
+                                    destination: SemanticLocalIdV1::from_index(3),
+                                    variant: None,
+                                }
+                            }
+                            2 => destination.projected_type = UNIT,
+                            _ => unreachable!(),
+                        }
+                        assert!(
+                            anchors
+                                .check_object_source(
+                                    original,
+                                    &occurrences,
+                                    ordinal,
+                                    row,
+                                    &forged,
+                                    budget
+                                )
+                                .is_err()
+                        );
+                    }
+                }
+                _ => panic!("array component changed its emitted operation family"),
+            }
+        }
+        assert_eq!(components.len(), 2 * length as usize);
+        assert_eq!(projects, components);
         assert!(
             anchors
                 .objects
@@ -306,6 +407,232 @@ fn observe_original_pointer_array_emission_v29(
     }
     SOURCE_ARRAY_OBSERVED_V29.set(SOURCE_ARRAY_OBSERVED_V29.get() + helpers.len());
     Ok(())
+}
+
+#[test]
+fn original_pointer_array_leaf_types_authenticate_full_layout_and_sticky_refusal() {
+    struct Restore((u16, u64, bool), SourceArrayModeV29);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SOURCE_ARRAY_CASE_V29.set(self.0);
+            SOURCE_ARRAY_MODE_V29.set(self.1);
+        }
+    }
+    let _restore = Restore(
+        SOURCE_ARRAY_CASE_V29.replace((64, 3, false)),
+        SOURCE_ARRAY_MODE_V29.replace(SourceArrayModeV29::ThinPointer),
+    );
+    for mutation in 0..9 {
+        let mut entered = false;
+        let result = with_original_array_plan_from_v29(
+            original_argument_pointer_array_owner_v29,
+            |plan, budget| {
+                let cell = plan
+                    .cells
+                    .rows
+                    .iter()
+                    .find(|row| row.local.index() == 2)
+                    .unwrap();
+                let SourceBackingKindV29::Object(array_schema) = cell.kind else {
+                    panic!("array object");
+                };
+                let owner = plan.instances.owner();
+                let SemanticTypeShapeV1::Array { element: ty, .. } =
+                    owner.source_semantic().types()[cell.ty.index() as usize].shape()
+                else {
+                    panic!("array type");
+                };
+                let layouts = plan
+                    .storage_root
+                    .as_ref()
+                    .unwrap()
+                    .source_layouts(plan.instances, budget)?;
+                let schema = {
+                    let rows = layouts.rows(owner, budget)?;
+                    let fe2o3_kernel_ir::StorageLayoutKindV1::Array { element, .. } =
+                        rows[array_schema.0 as usize].kind
+                    else {
+                        panic!("array schema");
+                    };
+                    element
+                };
+                assert_eq!(
+                    source_object_original_leaf_type_v29(plan, *ty, schema, budget)?,
+                    Type::pointer(
+                        Type::Scalar(ScalarType::U64),
+                        AddressSpace::Generic,
+                        AccessMode::ReadOnly
+                    )
+                );
+                entered = true;
+                if mutation == 0 {
+                    return Ok(());
+                }
+                if mutation < 8 {
+                    let mut physical = layouts.physical.borrow_mut();
+                    let row = &mut physical.rows[schema.0 as usize];
+                    let fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(pointer) = &mut row.kind
+                    else {
+                        panic!("pointer row");
+                    };
+                    match mutation {
+                        1 => pointer.encoded_space = AddressSpace::Private,
+                        2 => pointer.value_space = AddressSpace::Private,
+                        3 => pointer.stored_bits = 32,
+                        4 => pointer.access = AccessMode::ReadWrite,
+                        5 => pointer.pointee = schema,
+                        6 => row.size = 4,
+                        7 => row.alignment = 4,
+                        _ => unreachable!(),
+                    }
+                }
+                let bad_schema = if mutation == 8 { array_schema } else { schema };
+                let first = source_object_original_leaf_type_v29(plan, *ty, bad_schema, budget)
+                    .unwrap_err();
+                let before = (budget.work(), budget.storage());
+                let retry =
+                    source_object_original_leaf_type_v29(plan, *ty, schema, budget).unwrap_err();
+                assert_eq!(format!("{first:?}"), format!("{retry:?}"));
+                assert_eq!((budget.work(), budget.storage()), before);
+                Ok(())
+            },
+        );
+        assert!(entered);
+        assert_eq!(
+            result.is_ok(),
+            mutation == 0,
+            "mutation {mutation}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn original_pointer_leaf_query_does_not_admit_selected_private_address_representations() {
+    struct Restore((u16, u64, bool), SourceArrayModeV29);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SOURCE_ARRAY_CASE_V29.set(self.0);
+            SOURCE_ARRAY_MODE_V29.set(self.1);
+        }
+    }
+    let _restore = Restore(
+        SOURCE_ARRAY_CASE_V29.replace((64, 3, false)),
+        SOURCE_ARRAY_MODE_V29.replace(SourceArrayModeV29::PointerAddresses),
+    );
+    let mut entered = false;
+    let result = with_original_scalar_array_plan_v29(|plan, budget| {
+        let cell = plan
+            .cells
+            .rows
+            .iter()
+            .find(|row| row.local.index() == 2 && row.generation != 0)
+            .unwrap();
+        let SourceBackingKindV29::Object(array_schema) = cell.kind else {
+            panic!("array object");
+        };
+        let owner = plan.instances.owner();
+        let SemanticTypeShapeV1::Array { element: ty, .. } =
+            owner.source_semantic().types()[cell.ty.index() as usize].shape()
+        else {
+            panic!("array type");
+        };
+        let layouts = plan
+            .storage_root
+            .as_ref()
+            .unwrap()
+            .source_layouts(plan.instances, budget)?;
+        let rows = layouts.rows(owner, budget)?;
+        let fe2o3_kernel_ir::StorageLayoutKindV1::Array { element, .. } =
+            rows[array_schema.0 as usize].kind
+        else {
+            panic!("array schema");
+        };
+        let fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(pointer) = rows[element.0 as usize].kind
+        else {
+            panic!("pointer schema");
+        };
+        assert_eq!(
+            (pointer.encoded_space, pointer.value_space),
+            (AddressSpace::Generic, AddressSpace::Private)
+        );
+        drop(rows);
+        entered = true;
+        assert!(source_object_original_leaf_type_v29(plan, *ty, element, budget).is_err());
+        let before = (budget.work(), budget.storage());
+        assert!(source_object_original_leaf_type_v29(plan, *ty, element, budget).is_err());
+        assert_eq!((budget.work(), budget.storage()), before);
+        Ok(())
+    });
+    assert!(entered && result.is_err());
+}
+
+#[test]
+fn original_pointer_leaf_query_refuses_foreign_and_alternate_custody_before_scratch() {
+    struct Alternate<'a, 'work>(&'a mut ArgumentBudgetV1<'work>);
+    impl SemanticEmissionBudgetV1 for Alternate<'_, '_> {
+        fn work_ledger_identity_v1(
+            &self,
+        ) -> fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1 {
+            self.0.work_ledger_identity_v1()
+        }
+        fn charge_work(&mut self, amount: usize) -> Result<(), ProductionSemanticKirErrorV1> {
+            self.0.charge_work(amount).map_err(Into::into)
+        }
+        fn reserve_storage(&mut self, amount: usize) -> Result<(), ProductionSemanticKirErrorV1> {
+            self.0.reserve_storage(amount).map_err(Into::into)
+        }
+        fn release_storage(&mut self, amount: usize) -> Result<(), ProductionSemanticKirErrorV1> {
+            self.0.release_storage(amount).map_err(Into::into)
+        }
+        fn storage(&self) -> usize {
+            self.0.storage()
+        }
+    }
+    for alternate in [false, true] {
+        let mut entered = false;
+        let result = with_original_object_access_builder(|builder, budget| {
+            let before = (budget.work(), budget.storage());
+            let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+            let mut foreign = ArgumentBudgetV1::new(&mut foreign_work, MODULE_LIMIT);
+            let query = if alternate {
+                Alternate(budget).source_object_original_leaf_type_v29(
+                    &builder.plan,
+                    UNIT,
+                    fe2o3_kernel_ir::StorageLayoutIdV1(0),
+                )
+            } else {
+                source_object_original_leaf_type_v29(
+                    &builder.plan,
+                    UNIT,
+                    fe2o3_kernel_ir::StorageLayoutIdV1(0),
+                    &mut foreign,
+                )
+            };
+            assert!(matches!(
+                query,
+                Err(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Accounting
+                    )
+                )
+            ));
+            assert_eq!((budget.work(), budget.storage()), before);
+            assert_eq!((foreign.work(), foreign.storage()), (0, 0));
+            assert!(
+                source_object_original_leaf_type_v29(
+                    &builder.plan,
+                    UNIT,
+                    fe2o3_kernel_ir::StorageLayoutIdV1(0),
+                    budget
+                )
+                .is_err()
+            );
+            assert_eq!((budget.work(), budget.storage()), before);
+            entered = true;
+            Ok(())
+        });
+        assert!(entered && result.is_err());
+    }
 }
 
 #[test]

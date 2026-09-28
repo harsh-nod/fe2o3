@@ -408,6 +408,7 @@ pub(super) struct CheckedSourceMemoryAccessV29<'scope> {
 thread_local! {
     pub(super) static PHYSICAL_REFUND_OBSERVER_V29: std::cell::Cell<Option<fn(&mut ArgumentBudgetV1<'_>)>> = const { std::cell::Cell::new(None) };
     pub(super) static SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    pub(super) static SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0)) };
 }
 
 fn physical_discard_headers_v29<T, E>() -> Result<usize, ArgumentResourceV1> {
@@ -2157,6 +2158,8 @@ fn check_expanded_source_memory_inner_v29(
     source_object_activation_scratch_v29(instances, references.plan, budget, |budget| {
         #[cfg(test)]
         let query_floor = budget.storage();
+        #[cfg(test)]
+        let row_reclaimed_before = SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29.get().1;
         check_source_address_payloads_v29(
             instances,
             references,
@@ -2174,6 +2177,14 @@ fn check_expanded_source_memory_inner_v29(
                 calls.checked_add(1).unwrap(),
                 bytes
                     .checked_add(budget.storage().checked_sub(query_floor).unwrap())
+                    .unwrap()
+                    .checked_add(
+                        SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29
+                            .get()
+                            .1
+                            .checked_sub(row_reclaimed_before)
+                            .unwrap(),
+                    )
                     .unwrap(),
             ));
         }

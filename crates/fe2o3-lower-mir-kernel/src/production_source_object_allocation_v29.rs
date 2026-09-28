@@ -261,6 +261,100 @@ fn scoped_object_allocation_error_v29() -> ProductionSemanticKirErrorV1 {
     )
 }
 
+// An ordinary pointer value keeps its original encoding. Selected private
+// addresses use the separate address-node query and must not enter this path.
+fn source_object_original_leaf_type_v29(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    ty: SemanticTypeIdV1,
+    schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<Type, ProductionSemanticKirErrorV1> {
+    let result = (|| {
+        plan.check_owner(plan.instances, budget)?;
+        source_reference_owned_prepay_v29::<Type>(plan, budget)?;
+        source_reference_owned_prepay_v29::<PrivateRetainedSlotFactsV1>(plan, budget)?;
+        plan.charge(8, budget)?;
+        let owner = plan.instances.owner();
+        let types = owner.source_semantic().types();
+        let declaration = types
+            .get(ty.index() as usize)
+            .ok_or_else(scoped_object_allocation_error_v29)?;
+        require_ordinary_execution_representation_v29(declaration)?;
+        if matches!(declaration.shape(), SemanticTypeShapeV1::Pointer(pointer)
+            if pointer.kind() != SemanticPointerKindV1::Raw)
+        {
+            return Err(scoped_object_allocation_error_v29());
+        }
+        let facts = private_retained_slot_facts_with_representation_v29(
+            types,
+            ty,
+            ExecutionCfgRepresentationV29::OriginalSource,
+            budget,
+        )?
+        .ok_or_else(scoped_object_allocation_error_v29)?;
+        let layouts = plan
+            .storage_root
+            .as_ref()
+            .ok_or_else(scoped_object_allocation_error_v29)?
+            .source_layouts(plan.instances, budget)?;
+        layouts.check_selected_schema(owner, ty, schema, budget)?;
+        if layouts.original_schema(owner, ty, budget)? != Some(schema) {
+            return Err(scoped_object_allocation_error_v29());
+        }
+        let rows = layouts.rows(owner, budget)?;
+        let row = rows
+            .get(schema.0 as usize)
+            .ok_or_else(scoped_object_allocation_error_v29)?;
+        if row.size != facts.size || row.alignment != facts.alignment {
+            return Err(scoped_object_allocation_error_v29());
+        }
+        let exact = match (facts.element, &row.kind) {
+            (
+                PrivateRetainedElementFactsV1::Scalar(expected),
+                fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(actual),
+            ) => expected == *actual,
+            (
+                PrivateRetainedElementFactsV1::ThinPointer {
+                    element,
+                    space,
+                    access,
+                },
+                fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(pointer),
+            ) => {
+                plan.charge(7, budget)?;
+                let SemanticTypeShapeV1::Pointer(original) = declaration.shape() else {
+                    return Err(scoped_object_allocation_error_v29());
+                };
+                pointer.encoded_space == space
+                    && pointer.value_space == space
+                    && pointer.access == access
+                    && u64::from(pointer.stored_bits) == facts.size * 8
+                    && source_array_scalar_row_v29(
+                        layouts,
+                        owner,
+                        original.pointee(),
+                        pointer.pointee,
+                        element,
+                        &rows,
+                        budget,
+                    )?
+            }
+            _ => false,
+        };
+        if !exact {
+            return Err(scoped_object_allocation_error_v29());
+        }
+        if matches!(
+            facts.element,
+            PrivateRetainedElementFactsV1::ThinPointer { .. }
+        ) {
+            source_reference_owned_prepay_v29::<Type>(plan, budget)?;
+        }
+        Ok(facts.element.into_owned_type())
+    })();
+    result.inspect_err(|error| source_reference_record_failure_v29(plan, error))
+}
+
 fn clone_retained_storage_v29(
     storage: &SemanticRetainedStorageV29,
     budget: &mut dyn SemanticEmissionBudgetV1,

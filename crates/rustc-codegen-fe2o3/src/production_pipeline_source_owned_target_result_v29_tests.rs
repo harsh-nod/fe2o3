@@ -9,9 +9,25 @@ pub(crate) enum Mode {
 }
 
 fn independent_headers() -> (usize, usize) {
-    type Capture<'a, 'view, 'source, 'work> = (
+    independent_headers_for::<
+        Handoff<'_, '_>,
+        fe2o3_kernel_ir::CanonicalClosedScalarFormalScopeV18<'_>,
+        fe2o3_kernel_ir::CanonicalClosedScalarFormalErrorV18,
+    >()
+}
+
+fn cfg_independent_headers() -> (usize, usize) {
+    independent_headers_for::<
+        CfgHandoff<'_, '_>,
+        fe2o3_kernel_ir::CanonicalScalarCfgFormalScopeV18<'_>,
+        fe2o3_kernel_ir::CanonicalScalarCfgFormalErrorV18,
+    >()
+}
+
+fn independent_headers_for<H: TargetOutputHandoffV29, S, E>() -> (usize, usize) {
+    type Capture<'a, 'view, 'source, 'work, H> = (
         &'view Source<'source>,
-        &'a Handoff<'view, 'source>,
+        &'a H,
         TargetProfile,
         &'a mut Budget<'work>,
         &'a std::cell::Cell<usize>,
@@ -20,20 +36,14 @@ fn independent_headers() -> (usize, usize) {
     );
     type Outcome = Result<(String, usize), ClosedScalarTargetLlvmErrorV29>;
     (
-        size_of::<ClosedScalarTargetLlvmV29<'_, '_, '_>>()
-            + align_of::<ClosedScalarTargetLlvmV29<'_, '_, '_>>(),
-        size_of::<Capture<'_, '_, '_, '_>>()
-            + align_of::<Capture<'_, '_, '_, '_>>()
-            + size_of::<AssertUnwindSafe<Capture<'_, '_, '_, '_>>>()
+        size_of::<TargetLlvmV29<'_, '_, '_, H>>() + align_of::<TargetLlvmV29<'_, '_, '_, H>>(),
+        size_of::<Capture<'_, '_, '_, '_, H>>()
+            + align_of::<Capture<'_, '_, '_, '_, H>>()
+            + size_of::<AssertUnwindSafe<Capture<'_, '_, '_, '_, H>>>()
             + size_of::<Outcome>()
             + align_of::<Outcome>()
             + size_of::<std::thread::Result<Outcome>>()
-            + size_of::<
-                Result<
-                    fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
-                    fe2o3_kernel_ir::CanonicalClosedScalarFormalErrorV18,
-                >,
-            >()
+            + size_of::<Result<fe2o3_kernel_ir::FormalMemoryObligationAnalysis, E>>()
             + size_of::<Result<String, fe2o3_amdgcn_model::LoweringErrors>>()
             + size_of::<Result<(), ClosedScalarTargetLlvmErrorV29>>()
             + size_of::<fe2o3_kernel_ir::FormalMemoryObligations>()
@@ -41,19 +51,22 @@ fn independent_headers() -> (usize, usize) {
             + size_of::<std::cell::Cell<usize>>()
             + size_of::<Result<(), SourceError>>()
             + align_of::<Result<(), SourceError>>()
-            + size_of::<fe2o3_kernel_ir::CanonicalClosedScalarFormalScopeV18<'_>>()
-            + size_of::<
-                Result<
-                    fe2o3_kernel_ir::CanonicalClosedScalarFormalScopeV18<'_>,
-                    fe2o3_kernel_ir::CanonicalClosedScalarFormalErrorV18,
-                >,
-            >(),
+            + size_of::<S>()
+            + size_of::<Result<S, E>>(),
     )
 }
 
 #[test]
 fn target_result_full_owned_frames_have_an_independent_header_oracle() {
     assert_eq!(headers().unwrap(), independent_headers());
+}
+
+#[test]
+fn scalar_cfg_target_result_frames_pay_actual_nominal_formal_scope_and_errors() {
+    assert_eq!(
+        headers_for::<CfgHandoff<'_, '_>>().unwrap(),
+        cfg_independent_headers()
+    );
 }
 
 /// Called only by the actual-rustc parent, once per fresh authentic transaction.
@@ -65,13 +78,41 @@ pub(crate) fn genuine_case(
     budget: &mut Budget<'_>,
     mode: Mode,
 ) -> Result<(), ClosedScalarTargetLlvmErrorV29> {
+    genuine_case_for(source, handoff, target, budget, mode, independent_headers())
+}
+
+pub(crate) fn genuine_cfg_case(
+    source: &Source<'_>,
+    handoff: &CfgHandoff<'_, '_>,
+    target: TargetProfile,
+    budget: &mut Budget<'_>,
+    mode: Mode,
+) -> Result<(), ClosedScalarTargetLlvmErrorV29> {
+    genuine_case_for(
+        source,
+        handoff,
+        target,
+        budget,
+        mode,
+        cfg_independent_headers(),
+    )
+}
+
+fn genuine_case_for<H: TargetOutputHandoffV29>(
+    source: &Source<'_>,
+    handoff: &H,
+    target: TargetProfile,
+    budget: &mut Budget<'_>,
+    mode: Mode,
+    expected_headers: (usize, usize),
+) -> Result<(), ClosedScalarTargetLlvmErrorV29> {
     let floor = budget.storage();
     if matches!(mode, Mode::ForeignEntry) {
         let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(500_000_000);
         let mut foreign = Budget::new(&mut work, budget.storage_limit());
         foreign.reserve_storage(floor)?;
         let before = (foreign.work(), foreign.storage(), foreign.peak_storage());
-        let error = check_and_lower_target_llvm_v18(source, handoff, target, &mut foreign)
+        let error = check_and_lower_target_llvm(source, handoff, target, &mut foreign)
             .err()
             .unwrap();
         assert!(matches!(
@@ -90,7 +131,7 @@ pub(crate) fn genuine_case(
         // Exactly the genuine source_ssa + check_original_source query prefix
         // fits. The next source.canonical debit fails after accepted headers.
         budget.charge_work(limit - budget.work() - 2)?;
-        let error = check_and_lower_target_llvm_v18(source, handoff, target, budget)
+        let error = check_and_lower_target_llvm(source, handoff, target, budget)
             .err()
             .unwrap();
         assert!(
@@ -100,8 +141,8 @@ pub(crate) fn genuine_case(
         assert_eq!(budget.storage(), floor);
         return Err(error);
     }
-    let native = check_and_lower_target_llvm_v18(source, handoff, target, budget)?;
-    let (wrapper, frames) = independent_headers();
+    let native = check_and_lower_target_llvm(source, handoff, target, budget)?;
+    let (wrapper, frames) = expected_headers;
     let retained = wrapper + frames + native.llvm_ir.capacity();
     assert_eq!(native.retained_storage(budget)?, retained);
     assert_eq!(budget.storage(), floor + retained);
@@ -129,7 +170,7 @@ pub(crate) fn genuine_case(
     native.discard(budget)?;
     assert_eq!(budget.storage(), floor);
     if matches!(mode, Mode::Success) {
-        let native = check_and_lower_target_llvm_v18(source, handoff, target, budget)?;
+        let native = check_and_lower_target_llvm(source, handoff, target, budget)?;
         let paid = budget.storage();
         let retained = native.retained_storage(budget)?;
         drop(native);
@@ -147,7 +188,7 @@ pub(crate) fn genuine_case(
     let limit = budget.storage_limit();
     let filler = limit - retained + short - floor;
     budget.reserve_storage(filler)?;
-    let result = check_and_lower_target_llvm_v18(source, handoff, target, budget);
+    let result = check_and_lower_target_llvm(source, handoff, target, budget);
     if short == 0 {
         let native = result?;
         assert_eq!(budget.storage(), limit);
