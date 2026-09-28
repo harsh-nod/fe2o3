@@ -99,6 +99,7 @@ mod materialized_completion;
 mod materialized_completion_receipt;
 use materialized_completion_receipt::MaterializedCompletionReceiptV1;
 mod materialized_publication;
+mod materialized_source_event;
 mod materialized_submission_attempt;
 mod ordered_publication;
 mod ordinary_queue_io;
@@ -22238,6 +22239,7 @@ mod tests {
 
     pub(super) fn pipelined_active_for_test_v1(id: u64) -> ActiveSubmissionV1 {
         ActiveSubmissionV1 {
+            source_event: Default::default(),
             id,
             stream: 7,
             ordered_predecessor: id.checked_sub(1),
@@ -26397,6 +26399,7 @@ mod tests {
         let mut active_allocations = HashSet::new();
         active_allocations.insert(source_route.local);
         backend.children[source_route.child].active = Some(ActiveSubmissionV1 {
+            source_event: Default::default(),
             id: 99,
             stream: 1,
             ordered_predecessor: None,
@@ -26852,6 +26855,7 @@ mod tests {
     fn direct_kfd_blocked_target_progress_roster_includes_both_lanes() {
         fn active(id: u64, stream: u64) -> ActiveSubmissionV1 {
             ActiveSubmissionV1 {
+                source_event: Default::default(),
                 id,
                 stream,
                 ordered_predecessor: None,
@@ -27240,6 +27244,7 @@ mod tests {
             .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
             .unwrap();
         backend.active = Some(ActiveSubmissionV1 {
+            source_event: Default::default(),
             id: 50,
             stream: 2,
             ordered_predecessor: None,
@@ -27578,6 +27583,7 @@ mod tests {
     fn direct_kfd_active_compute_custody_is_exact_per_lane() {
         fn active(id: u64, stream: u64, allocation: u64) -> ActiveSubmissionV1 {
             ActiveSubmissionV1 {
+                source_event: Default::default(),
                 id,
                 stream,
                 ordered_predecessor: None,

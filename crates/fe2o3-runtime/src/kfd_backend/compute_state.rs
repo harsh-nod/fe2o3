@@ -71,6 +71,7 @@ pub(super) struct WritebackV1 {
 }
 
 pub(super) struct ActiveSubmissionV1 {
+    pub(super) source_event: super::materialized_source_event::MaterializedSourceEventV1,
     pub(super) id: u64,
     pub(super) stream: u64,
     pub(super) ordered_predecessor: Option<u64>,
@@ -606,6 +607,7 @@ impl fmt::Debug for ActiveSubmissionV1 {
             .field("kernel", &self.kernel)
             .field("allocations", &self.allocations)
             .field("writebacks", &self.writebacks)
+            .field("source_event", &self.source_event)
             .finish_non_exhaustive()
     }
 }

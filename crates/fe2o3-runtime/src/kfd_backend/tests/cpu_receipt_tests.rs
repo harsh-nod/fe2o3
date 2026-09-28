@@ -7,6 +7,9 @@ use fe2o3_kfd::{CpuDispatchIdentityV1, CpuFixedDispatchFixtureV1};
 #[path = "cpu_completion_receipt_tests.rs"]
 mod completion;
 
+#[path = "cpu_source_event_tests.rs"]
+mod source_events;
+
 struct Fixture {
     backend: KfdRuntimeBackendV1,
     streams: [u64; 2],

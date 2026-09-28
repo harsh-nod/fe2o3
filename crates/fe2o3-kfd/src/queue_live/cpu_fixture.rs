@@ -49,6 +49,7 @@ impl CpuDispatchIdentityV1 {
 pub struct CpuLaneSnapshotV1 {
     dispatch: CpuDispatchOwnerSnapshotV1,
     completion: CompletionCustodySnapshotV1,
+    event_ledger: (u64, usize, usize),
     signals: Vec<i64>,
     observations: usize,
     resets: usize,
@@ -66,11 +67,20 @@ impl fmt::Debug for CpuLaneSnapshotV1 {
 }
 
 impl CpuLaneSnapshotV1 {
+    pub fn event_ledger_counts(&self) -> (u64, usize, usize) {
+        self.event_ledger
+    }
+
+    pub fn reset_signals(&self) -> usize {
+        self.resets
+    }
+
     /// Compares custody and I/O, allowing only the dispatch poison bit to differ.
     /// Completion snapshots preserve slot records and ledger storage, not the owner phase.
     pub fn same_custody(&self, other: &Self) -> bool {
         self.dispatch.same_custody(&other.dispatch)
             && self.completion == other.completion
+            && self.event_ledger == other.event_ledger
             && self.signals == other.signals
             && self.observations == other.observations
             && self.resets == other.resets
@@ -223,6 +233,7 @@ impl CpuFixedDispatchFixtureV1 {
             self.session.with_compute_lane_v1(lane, |selected| {
                 operation(&mut CpuFixedDispatchLaneV1 {
                     session: selected.session,
+                    lane: selected.lane,
                     state,
                 })
             })
@@ -248,6 +259,38 @@ impl CpuFixedDispatchFixtureV1 {
 
     pub fn is_terminal(&self) -> bool {
         self.session.terminal_poisoned
+    }
+
+    /// Hostile CPU-owner state for testing accepted release failure, not a receipt.
+    pub fn poison_source_event_owner(
+        &mut self,
+        event: &Gfx942ComputeDependencyEventV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.session.with_compute_lane_v1(event.lane, |lane| {
+            lane.session.completion_owner.poison_owner();
+        })
+    }
+
+    /// Uses the public release path, including owning-lane selection and restoration.
+    pub fn release_dependency_event(
+        &mut self,
+        event: Gfx942ComputeDependencyEventV1,
+    ) -> Result<
+        super::super::completion::Gfx942ComputeEventReleaseObservationV1,
+        Gfx942ComputeDependencyEventReleaseFailureV1,
+    > {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.session.release_compute_dependency_event_v1(event)
+        }));
+        if self.session.terminal_poisoned {
+            for lane in &mut self.lanes {
+                lane.dispatch.poison();
+            }
+        }
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Valid even after poisoning; does not select a lane or grant execution access.
@@ -304,10 +347,112 @@ impl CpuFixedDispatchFixtureV1 {
 /// Callback-scoped CPU I/O, preserving the exact move-only native receipt types.
 pub struct CpuFixedDispatchLaneV1<'a> {
     session: &'a mut ComputeAqlQueueSessionV1,
+    lane: ComputeAqlQueueLaneV1,
     state: &'a mut CpuLane,
 }
 
+struct CpuSourceRecipe<'a>(&'a mut DispatchOwner);
+
+impl fixed_dispatch::DependencySourceRecipeV1<1> for CpuSourceRecipe<'_> {
+    fn bind(
+        &mut self,
+        session: &mut ComputeAqlQueueSessionV1,
+    ) -> Result<
+        ([CompletionPacketTemplateV1; 1], DispatchEpochIdentityV1),
+        Gfx942DispatchBindingErrorV1,
+    > {
+        let packet = template(session.key, self.0.next_generation());
+        self.0
+            .reserve_one(session.key, packet)
+            .map(|identity| ([packet], identity))
+    }
+
+    fn mark_published(
+        &mut self,
+        _session: &mut ComputeAqlQueueSessionV1,
+        identity: DispatchEpochIdentityV1,
+        completion: &Gfx942CompletionBatchV1<1>,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.0.mark_published(identity, completion)
+    }
+
+    fn cancel(
+        &mut self,
+        _session: &mut ComputeAqlQueueSessionV1,
+        identity: DispatchEpochIdentityV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.0.cancel(identity)
+    }
+}
+
 impl CpuFixedDispatchLaneV1<'_> {
+    pub fn source_identity(
+        &self,
+        source: &Gfx942ComputeDependencySourceBatchV1<1>,
+    ) -> Result<CpuDispatchIdentityV1, ComputeAqlQueueSessionErrorV1> {
+        self.identity(&source.batch)
+    }
+
+    /// Burned event identity frontier, live event count, and live reader count.
+    pub fn event_ledger_counts(&self) -> (u64, usize, usize) {
+        self.session
+            .completion_owner
+            .dependency_ledger_counts_for_test()
+    }
+
+    /// Genuine source-event custody; only native packet publication is replaced.
+    pub fn submit_dependency_source(
+        &mut self,
+    ) -> Result<Gfx942ComputeDependencySourceBatchV1<1>, Gfx942FixedDispatchSubmissionFailureV1>
+    {
+        self.submit_source_using_cpu_publication(false)
+    }
+
+    /// Injects no-effect native ring refusal through the actual rollback body.
+    pub fn submit_dependency_source_backpressured(
+        &mut self,
+    ) -> Result<Gfx942ComputeDependencySourceBatchV1<1>, Gfx942FixedDispatchSubmissionFailureV1>
+    {
+        self.submit_source_using_cpu_publication(true)
+    }
+
+    fn submit_source_using_cpu_publication(
+        &mut self,
+        ring_full: bool,
+    ) -> Result<Gfx942ComputeDependencySourceBatchV1<1>, Gfx942FixedDispatchSubmissionFailureV1>
+    {
+        let packet = self.state.next_packet;
+        let next = packet.checked_add(1).ok_or(
+            Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
+                ComputeAqlQueueSessionErrorV1::Contract("CPU packet identity exhausted"),
+            ),
+        )?;
+        let result = self.session.submit_dependency_source_using_v1(
+            self.lane,
+            &mut CpuSourceRecipe(&mut self.state.dispatch),
+            |_, packets| {
+                assert_eq!(packets.packet_count(), 1);
+                if ring_full {
+                    return Err(NativeAqlSubmissionFailureV1::RetryableBeforeSideEffect(
+                        NativeAqlSubmissionErrorV1::Ring(
+                            fe2o3_aql::AqlRingReservationError::InsufficientSpace {
+                                requested: 1,
+                                available: 0,
+                            },
+                        ),
+                    ));
+                }
+                Ok(packet)
+            },
+        );
+        if result.is_ok() {
+            self.state.next_packet = next;
+        } else if self.session.terminal_poisoned {
+            self.state.dispatch.poison();
+        }
+        result
+    }
+
     pub fn snapshot(&self) -> CpuLaneSnapshotV1 {
         snapshot(self.state, &self.session.completion_owner)
     }
@@ -624,6 +769,7 @@ fn snapshot(state: &CpuLane, completion: &CompletionSignalArenaOwnerV1) -> CpuLa
     CpuLaneSnapshotV1 {
         dispatch: state.dispatch.cpu_snapshot(),
         completion: completion.custody_snapshot_for_test(),
+        event_ledger: completion.dependency_ledger_counts_for_test(),
         signals: state
             .signals
             .values

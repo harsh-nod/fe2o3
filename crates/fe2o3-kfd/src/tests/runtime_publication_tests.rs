@@ -441,9 +441,13 @@ fn runtime_publication_cell_adapters_use_shared_classifier() {
         include_str!("../../../fe2o3-runtime/src/kfd_backend/materialized_publication.rs"),
         include_str!("../../../fe2o3-runtime/src/kfd_backend/ordered_publication.rs"),
     ] {
-        assert!(source.contains(".submit_classified(|| queue.submit_classified())"));
+        assert!(source.contains("source_event.submit(requested,"));
         assert!(!source.contains("match queue.submit_classified()"));
     }
+    let source =
+        include_str!("../../../fe2o3-runtime/src/kfd_backend/materialized_source_event.rs");
+    assert!(source.contains("attempt.submit_classified(|| queue.submit_classified())"));
+    assert!(source.contains("attempt.submit(|| match queue.submit_source_classified()"));
     let io = include_str!("../../../fe2o3-runtime/src/kfd_backend/ordinary_queue_io.rs");
     let submit = io
         .split_once("pub(super) fn submit_classified(")

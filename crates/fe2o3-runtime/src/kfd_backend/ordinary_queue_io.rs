@@ -1,6 +1,10 @@
 //! Concrete I/O providers; receipt settlement remains in the indexed callers.
 
 use super::*;
+use fe2o3_kfd::{
+    Gfx942ComputeDependencyEventReleaseFailureV1, Gfx942ComputeDependencyEventV1,
+    Gfx942ComputeDependencySourceBatchV1,
+};
 
 pub(super) enum OrdinaryQueueIoV1<'a> {
     Native(&'a mut ComputeAqlQueueSessionV1),
@@ -18,6 +22,41 @@ pub(super) enum OrdinaryLaneIoV1<'a, 'b> {
 }
 
 impl<'a> OrdinaryQueueIoV1<'a> {
+    pub(super) fn release_source_event(
+        self,
+        event: Gfx942ComputeDependencyEventV1,
+    ) -> Result<(), Gfx942ComputeDependencyEventReleaseFailureV1> {
+        match self {
+            Self::Native(queue) => queue.release_compute_dependency_event_v1(event).map(|_| ()),
+            #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+            Self::Cpu(queue) => {
+                let fault = queue.lane_control.source_release_fault.take();
+                queue.lane_control.source_release_calls += 1;
+                match fault {
+                    Some(CpuSourceReleaseFaultV1::Refuse) => {
+                        return fe2o3_kfd::CpuFixedDispatchFixtureV1::new()
+                            .unwrap()
+                            .release_dependency_event(event)
+                            .map(|_| ());
+                    }
+                    Some(CpuSourceReleaseFaultV1::Terminal) => {
+                        queue.fixture.poison_source_event_owner(&event).unwrap();
+                    }
+                    Some(CpuSourceReleaseFaultV1::UnwindBefore) => {
+                        std::panic::panic_any(CpuSourceReleaseFaultV1::UnwindBefore)
+                    }
+                    _ => {}
+                }
+                let result = queue.fixture.release_dependency_event(event).map(|_| ());
+                if fault == Some(CpuSourceReleaseFaultV1::UnwindAfter) {
+                    assert!(result.is_ok());
+                    std::panic::panic_any(CpuSourceReleaseFaultV1::UnwindAfter);
+                }
+                result
+            }
+        }
+    }
+
     pub(super) fn new(
         native: Option<&'a mut ComputeAqlQueueSessionV1>,
         #[cfg(all(test, feature = "cpu-runtime-fixtures"))] cpu: Option<&'a mut CpuOrdinaryQueueV1>,
@@ -83,6 +122,30 @@ impl<'a> OrdinaryQueueIoV1<'a> {
 }
 
 impl OrdinaryLaneIoV1<'_, '_> {
+    pub(super) fn submit_source_classified(
+        &mut self,
+    ) -> Result<Gfx942ComputeDependencySourceBatchV1<1>, Gfx942FixedDispatchSubmissionFailureV1>
+    {
+        match self {
+            Self::Native(lane) => {
+                lane.submit_fixed_dispatch_with_dependency_events_classified_v1::<1>()
+            }
+            #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+            Self::Cpu(lane, control) => {
+                let result = if std::mem::take(&mut control.source_ring_full) {
+                    lane.submit_dependency_source_backpressured()
+                } else {
+                    lane.submit_dependency_source()
+                };
+                control.returned_operation = Some(CpuIoOperationV1::Submit);
+                if let Ok(source) = &result {
+                    control.last_submitted_identity = Some(lane.source_identity(source));
+                }
+                result
+            }
+        }
+    }
+
     pub(super) fn submit_classified(
         &mut self,
     ) -> Result<Gfx942DispatchBatchV1<1>, Gfx942FixedDispatchSubmissionFailureV1> {
@@ -174,11 +237,23 @@ pub(super) struct CpuOrdinaryQueueV1 {
 #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
 #[derive(Default)]
 pub(super) struct CpuLaneControlV1 {
+    pub source_ring_full: bool,
+    pub source_release_fault: Option<CpuSourceReleaseFaultV1>,
+    pub source_release_calls: usize,
     pub(super) pin_next_submission: bool,
     pub(super) pinned_recycles: usize,
     returned_operation: Option<CpuIoOperationV1>,
     pub(super) last_submitted_identity:
         Option<Result<fe2o3_kfd::CpuDispatchIdentityV1, ComputeAqlQueueSessionErrorV1>>,
+}
+
+#[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CpuSourceReleaseFaultV1 {
+    Refuse,
+    Terminal,
+    UnwindBefore,
+    UnwindAfter,
 }
 
 #[cfg(all(test, feature = "cpu-runtime-fixtures"))]

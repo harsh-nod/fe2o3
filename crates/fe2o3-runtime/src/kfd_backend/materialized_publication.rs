@@ -187,7 +187,16 @@ impl KfdRuntimeBackendV1 {
         let native_lane = self
             .selected_native_compute_lane_v1()
             .map_err(|_| self.terminal_error("ordinary publication lost its exact native lane"))?;
-        let root = MaterializedBindingV1::indexed(self.active.as_mut().unwrap());
+        let active = self.active.as_mut().unwrap();
+        let requested = self.event_submission_retain_counts.contains_key(&active.id);
+        let ActiveSubmissionV1 {
+            source_event,
+            execution,
+            ..
+        } = active;
+        let Some(ActiveComputeExecutionV1::MaterializedBinding(root)) = execution else {
+            unreachable!("indexed materialized binding")
+        };
         let publication = OrdinaryQueueIoV1::new(
             self.queue.as_mut(),
             #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
@@ -195,8 +204,7 @@ impl KfdRuntimeBackendV1 {
         )
         .and_then(|queue| {
             queue.with_lane(native_lane, |queue| {
-                root.submission
-                    .submit_classified(|| queue.submit_classified())
+                source_event.submit(requested, &mut root.submission, queue)
             })
         })
         .map_err(|error| self.terminal_error(format!("KFD compute-lane selection: {error}")))?;
@@ -221,6 +229,16 @@ impl KfdRuntimeBackendV1 {
         &mut self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let active = self.active.as_mut().expect("indexed ordinary binding");
+        let retryable = matches!(
+            MaterializedBindingV1::indexed(active).submission,
+            MaterializedSubmissionAttemptV1::Retryable
+        );
+        if retryable && !active.source_event.may_retry() {
+            return Err(self.terminal_error("ordinary retry retained native source custody"));
+        }
+        if !retryable && !active.source_event.may_publish() {
+            return Err(self.terminal_error("ordinary publication lost source custody"));
+        }
         if matches!(
             MaterializedBindingV1::indexed(active).submission,
             MaterializedSubmissionAttemptV1::Unattempted

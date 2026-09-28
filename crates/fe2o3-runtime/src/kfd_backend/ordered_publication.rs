@@ -325,8 +325,17 @@ impl KfdRuntimeBackendV1 {
         let lane = self
             .selected_native_compute_lane_v1()
             .map_err(|_| self.terminal_error("staged successor lost its native lane"))?;
-        let root =
-            OrderedPublicationV1::indexed(self.compute_pipeline.entry_mut_v1(identity).unwrap());
+        let active = &mut self.compute_pipeline.entry_mut_v1(identity).unwrap().active;
+        let requested = self.event_submission_retain_counts.contains_key(&active.id);
+        let ActiveSubmissionV1 {
+            source_event,
+            execution,
+            ..
+        } = active;
+        let Some(ActiveComputeExecutionV1::MaterializedSuccessorPublication(root)) = execution
+        else {
+            unreachable!("indexed ordered publication")
+        };
         let result = OrdinaryQueueIoV1::new(
             self.queue.as_mut(),
             #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
@@ -334,14 +343,22 @@ impl KfdRuntimeBackendV1 {
         )
         .and_then(|queue| {
             queue.with_lane(lane, |queue| {
-                root.attempt.submit_classified(|| queue.submit_classified())
+                source_event.submit(requested, &mut root.attempt, queue)
             })
         });
         match result {
-            Ok(Ok(())) => Ok(ReturnedOrderedPublicationV1 {
-                pipeline: &mut self.compute_pipeline,
-                identity,
-            }),
+            Ok(Ok(())) => {
+                if matches!(root.attempt, Attempt::Retryable) && !source_event.may_retry() {
+                    return Err(self.terminal_error("ordered retry retained native source custody"));
+                }
+                if matches!(root.attempt, Attempt::Published(_)) && !source_event.may_publish() {
+                    return Err(self.terminal_error("ordered publication lost source custody"));
+                }
+                Ok(ReturnedOrderedPublicationV1 {
+                    pipeline: &mut self.compute_pipeline,
+                    identity,
+                })
+            }
             Ok(Err(error)) => {
                 Err(self.terminal_error(format!("ordered successor submission: {}", error.error())))
             }

@@ -191,6 +191,7 @@ fn pipeline(f: &mut Fixture) -> [u64; 2] {
                     .reserve(prepared.writebacks.len());
             }
             let active = ActiveSubmissionV1 {
+                source_event: Default::default(),
                 id: pending.id,
                 stream: pending.launch.stream,
                 ordered_predecessor: pending.ordered_predecessor,

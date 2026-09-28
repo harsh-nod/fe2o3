@@ -95,7 +95,7 @@ impl CompletionDependencyLedgerV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "cpu-runtime-fixtures"))]
 impl CompletionSignalArenaOwnerV1 {
     pub(crate) fn dependency_ledger_counts_for_test(&self) -> (u64, usize, usize) {
         (

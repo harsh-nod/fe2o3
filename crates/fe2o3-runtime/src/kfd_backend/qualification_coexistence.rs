@@ -513,6 +513,7 @@ mod tests {
                 .unwrap();
             // These are runtime-only scripted records, never fabricated native receipts.
             backend.active = Some(ActiveSubmissionV1 {
+                source_event: Default::default(),
                 id: Self::COMPUTE,
                 stream: compute_stream,
                 ordered_predecessor: None,

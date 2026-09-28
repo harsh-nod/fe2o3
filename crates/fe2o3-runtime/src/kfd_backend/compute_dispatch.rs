@@ -1634,6 +1634,7 @@ impl KfdRuntimeBackendV1 {
         performance.data_path = KfdRuntimeLaunchDataPathV1::ResidentReused;
         performance.user_data_materializations = 0;
         let active = ActiveSubmissionV1 {
+            source_event: Default::default(),
             id: pending.id,
             stream,
             ordered_predecessor: Some(predecessor),
@@ -2245,6 +2246,7 @@ impl KfdRuntimeBackendV1 {
             return Err(self.terminal_error("ordinary binding requires an idle logical lane"));
         }
         self.active = Some(ActiveSubmissionV1 {
+            source_event: Default::default(),
             id,
             stream,
             ordered_predecessor,
@@ -2716,6 +2718,7 @@ impl KfdRuntimeBackendV1 {
             performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
             performance.user_data_materializations = 0;
             self.active = Some(ActiveSubmissionV1 {
+                source_event: Default::default(),
                 id,
                 stream,
                 ordered_predecessor,
@@ -2826,6 +2829,7 @@ impl KfdRuntimeBackendV1 {
         performance.user_data_materializations = 0;
         // Index the receipt before the first consuming call or queue observer.
         self.active = Some(ActiveSubmissionV1 {
+            source_event: Default::default(),
             id,
             stream,
             ordered_predecessor,
@@ -2948,6 +2952,7 @@ impl KfdRuntimeBackendV1 {
             performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
             performance.user_data_materializations = 0;
             self.active = Some(ActiveSubmissionV1 {
+                source_event: Default::default(),
                 id,
                 stream,
                 ordered_predecessor,
@@ -3039,6 +3044,7 @@ impl KfdRuntimeBackendV1 {
         performance.user_data_materializations = 0;
         // Index the receipt before the first consuming call or queue observer.
         self.active = Some(ActiveSubmissionV1 {
+            source_event: Default::default(),
             id,
             stream,
             ordered_predecessor,

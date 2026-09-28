@@ -110,7 +110,7 @@ fn assert_completed(f: &Fixture, id: u64, identity: CpuDispatchIdentityV1) {
     assert!(identity.matches_completed(batch));
 }
 
-fn isolated_cases(test: &str, variable: &str, count: usize, body: impl Fn(usize)) {
+pub(super) fn isolated_cases(test: &str, variable: &str, count: usize, body: impl Fn(usize)) {
     if let Ok(case) = std::env::var(variable) {
         let case: usize = case.parse().unwrap();
         assert!(case < count);

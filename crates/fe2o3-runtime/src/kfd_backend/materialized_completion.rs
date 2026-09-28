@@ -121,6 +121,15 @@ impl KfdRuntimeBackendV1 {
         let Some(phase) = execution_phase(active.execution.as_ref()) else {
             return false;
         };
+        let source_intact = match phase {
+            RuntimeComputePipelinePhaseV1::Published => active.source_event.may_publish(),
+            RuntimeComputePipelinePhaseV1::Completed => active.source_event.may_complete(),
+            RuntimeComputePipelinePhaseV1::PhysicallyRetired => active.source_event.may_retire(),
+            _ => false,
+        };
+        if !source_intact {
+            return false;
+        }
         let lane = self.selected_compute_lane;
         if active.id == 0
             || lane >= self.native_compute_lanes.len()
@@ -288,6 +297,26 @@ impl KfdRuntimeBackendV1 {
                 continue;
             }
             let recycle_started = (operation == MaterializedConsumeV1::Recycle).then(Instant::now);
+            if operation == MaterializedConsumeV1::Recycle
+                && execution_phase(target.owner(self).unwrap().execution.as_ref())
+                    == Some(RuntimeComputePipelinePhaseV1::Completed)
+            {
+                let (active, _) = target.parts_mut(&mut self.active, &mut self.compute_pipeline);
+                let released = OrdinaryQueueIoV1::new(
+                    self.queue.as_mut(),
+                    #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+                    self.cpu_queue.as_deref_mut(),
+                )
+                .and_then(|queue| active.source_event.release_unused(queue));
+                match released {
+                    Ok(()) => {}
+                    Err(error) => {
+                        return Err(
+                            self.terminal_error(format!("ordinary source event release: {error}"))
+                        );
+                    }
+                }
+            }
             let (active, phase) = target.parts_mut(&mut self.active, &mut self.compute_pipeline);
             let result = OrdinaryQueueIoV1::new(
                 self.queue.as_mut(),

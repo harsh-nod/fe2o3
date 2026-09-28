@@ -128,6 +128,7 @@ impl KfdRuntimeBackendV1 {
         };
         let lane = self.selected_compute_lane;
         if submission == 0
+            || !active.source_event.may_retry()
             || active.id != submission
             || recipe.stream != active.stream
             || recipe.kernel != active.kernel
