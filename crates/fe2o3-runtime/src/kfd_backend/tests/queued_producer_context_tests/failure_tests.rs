@@ -302,21 +302,13 @@ fn inspect_failure_and_drop(
                 active_owners
             );
         } else {
-            assert!(backend.active.is_none());
-            let Some(KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentInputs(owners)) =
-                backend.terminal_sdma_custody.as_ref()
-            else {
-                panic!("terminal restoration must retain the exact device roster");
-            };
             assert_eq!(
-                std::array::from_fn::<_, 3, _>(|binding| {
-                    let KfdRuntimePersistentComputeInputV1::ScriptedReplay(owner) =
-                        &owners[binding]
-                    else {
-                        panic!("terminal restoration changed owner kind");
-                    };
-                    owner.scripted_owner_id().unwrap()
-                }),
+                backend.active.as_ref().map(|active| active.id),
+                Some(active_id)
+            );
+            assert!(backend.terminal_sdma_custody.is_none());
+            assert_eq!(
+                [0, 1, 2].map(|binding| f.active_owner_id(active_id, binding)),
                 active_owners
             );
         }

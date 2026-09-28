@@ -697,6 +697,7 @@ impl KfdRuntimeBackendV1 {
                     ActiveComputeExecutionV1::ThreeBindingPersistentPrepared { admissions, .. }
                     | ActiveComputeExecutionV1::ThreeBindingPersistent { admissions, .. },
                 ) => admissions,
+                Some(ActiveComputeExecutionV1::ThreeBindingPersistentCompleting(root)) => &root.admissions,
                 #[cfg(test)]
                 Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
                     admissions,
@@ -724,199 +725,6 @@ impl KfdRuntimeBackendV1 {
                         .any(|admission| admission.allocation == *allocation)
                 })
         })
-    }
-
-    pub(super) fn finish_three_binding_persistent_poll_and_recycle_v1(
-        &mut self,
-        mut active: ActiveSubmissionV1,
-        admissions: [PersistentFullRangeComputeAdmissionV1; 3],
-        restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
-        poll: Result<
-            Gfx942ThreeBindingPersistentComputePollAndRecycleV1,
-            Gfx942ThreeBindingPersistentComputePollAndRecycleFailureV1,
-        >,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let poll = match poll {
-            Ok(poll) => poll,
-            Err(failure) => {
-                let (error, recovered) = failure.into_parts();
-                if let Some(dispatch) = recovered {
-                    self.retain_terminal_sdma_custody_v1(
-                        KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentComputePublished(
-                            dispatch,
-                        ),
-                    );
-                }
-                let detail = error.to_string();
-                return Err(self.terminal_error(format!(
-                    "KFD three-binding persistent completion/recycle: {detail}"
-                )));
-            }
-        };
-        match poll {
-            Gfx942ThreeBindingPersistentComputePollAndRecycleV1::Pending(dispatch) => {
-                active.execution = Some(ActiveComputeExecutionV1::ThreeBindingPersistent {
-                    admissions,
-                    restore_shells,
-                    dispatch,
-                });
-                self.active = Some(active);
-                Ok(BackendPollV1::Pending)
-            }
-            Gfx942ThreeBindingPersistentComputePollAndRecycleV1::Recycled {
-                recycled,
-                completion_observed_at,
-            } => {
-                active.performance.publish_to_completion =
-                    completion_observed_at.saturating_duration_since(active.published_at);
-                let completion_signal_recycle = completion_observed_at.elapsed();
-                active.performance.completion_signal_recycle += completion_signal_recycle;
-                let recycle_started = completion_observed_at;
-                let detach = self
-                    .queue
-                    .as_mut()
-                    .expect("three-binding recycled completion retains its queue")
-                    .detach_recycled_three_binding_directional_persistent_fixed_dispatch_v1(
-                        recycled,
-                    );
-                let completed = match detach {
-                    Ok(completed) => completed,
-                    Err(failure) => {
-                        let (error, recovered) = failure.into_parts();
-                        if let Some(recycled) = recovered {
-                            self.retain_terminal_sdma_custody_v1(
-                                KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentComputeRecycled(
-                                    recycled,
-                                ),
-                            );
-                        }
-                        let detail = error.to_string();
-                        active.performance.completion_detach_restore +=
-                            completion_detach_restore_duration_v1(
-                                recycle_started.elapsed(),
-                                completion_signal_recycle,
-                            );
-                        return Err(self.terminal_error(format!(
-                            "KFD three-binding persistent completion detach: {detail}"
-                        )));
-                    }
-                };
-                let completed = match completed.retire_settled_frontiers_for_replay_v1() {
-                    Ok(completed) => completed,
-                    Err(completed) => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentComputeCompleted(
-                                completed,
-                            ),
-                        );
-                        return Err(self.terminal_error(
-                            "KFD three-binding persistent frontier retirement failed",
-                        ));
-                    }
-                };
-                let effects = std::array::from_fn(|index| completed[index].1);
-                let inputs =
-                    completed.map(|(input, _)| KfdRuntimePersistentComputeInputV1::Native(input));
-                let expected =
-                    admissions.map(|admission| persistent_compute_effect_v1(admission.access));
-                if effects != expected {
-                    self.retain_terminal_sdma_custody_v1(
-                        KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentInputs(inputs),
-                    );
-                    return Err(self.terminal_error(
-                        "KFD three-binding persistent effects changed after admission",
-                    ));
-                }
-                self.restore_three_binding_persistent_inputs_v1(
-                    admissions,
-                    active.id,
-                    inputs,
-                    [None; 3],
-                    restore_shells,
-                )?;
-                for (admission, effect) in admissions.into_iter().zip(effects) {
-                    let record = self
-                        .allocations
-                        .get_mut(&admission.allocation)
-                        .expect("restored three-binding allocation remains indexed");
-                    apply_persistent_compute_effect_v1(record, effect);
-                    debug_assert!(record.native_dirty.is_empty());
-                }
-                let detach_restore = completion_detach_restore_duration_v1(
-                    recycle_started.elapsed(),
-                    completion_signal_recycle,
-                );
-                self.finish_restored_three_binding_persistent_compute_v1(active, detach_restore)
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn finish_scripted_three_binding_persistent_compute_v1(
-        &mut self,
-        active: ActiveSubmissionV1,
-        admissions: [PersistentFullRangeComputeAdmissionV1; 3],
-        restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
-        devices: [DirectionalSdmaDeviceOwnerV1; 3],
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let slots_current = admissions.iter().all(|admission| {
-            self.allocations.get(&admission.allocation).is_some_and(|record| {
-                matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::ComputeInFlight(actual) if actual == active.id)
-            })
-        });
-        if !slots_current {
-            self.retain_terminal_sdma_custody_v1(
-                KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentInputs(
-                    devices.map(KfdRuntimePersistentComputeInputV1::ScriptedReplay),
-                ),
-            );
-            return Err(self.terminal_error(
-                "scripted three-binding persistent restoration slots changed unexpectedly",
-            ));
-        }
-        let restore = |admission: PersistentFullRangeComputeAdmissionV1, device| {
-            if admission.source == PersistentFullRangeComputeSourceV1::AuthenticatedH2d
-                && admission.access == RuntimeAccessV1::Read
-            {
-                let authenticated_sha256 = self.allocations[&admission.allocation]
-                    .content_sha256
-                    .expect("scripted authenticated read retains its digest");
-                let DirectionalSdmaDeviceOwnerV1::Scripted(device) = device else {
-                    unreachable!("scripted completion retains scripted device custody")
-                };
-                KfdRuntimePersistentComputeInputV1::ScriptedReady(PersistentComputeReadyStorageV1 {
-                    owner: PersistentComputeReadyOwnerV1::Scripted {
-                        device,
-                        authenticated_sha256,
-                    },
-                    promotion: None,
-                })
-            } else {
-                KfdRuntimePersistentComputeInputV1::ScriptedReplay(device)
-            }
-        };
-        let [device_a, device_b, device_c] = devices;
-        let restored_inputs = [
-            restore(admissions[0], device_a),
-            restore(admissions[1], device_b),
-            restore(admissions[2], device_c),
-        ];
-        self.restore_three_binding_persistent_inputs_v1(
-            admissions,
-            active.id,
-            restored_inputs,
-            [None; 3],
-            restore_shells,
-        )?;
-        for admission in admissions {
-            apply_persistent_compute_effect_v1(
-                self.allocations
-                    .get_mut(&admission.allocation)
-                    .expect("restored scripted three-binding allocation"),
-                persistent_compute_effect_v1(admission.access),
-            );
-        }
-        self.finish_restored_three_binding_persistent_compute_v1(active, Duration::ZERO)
     }
 
     pub(super) fn poll_compute_lane_v1(
@@ -974,6 +782,9 @@ impl KfdRuntimeBackendV1 {
             {
                 backend.scripted_persistent_transition_failure = None;
                 panic!("scripted three-binding unwind before active take");
+            }
+            if backend.three_completion_selected_v1() {
+                return backend.advance_three_completion_v1(None);
             }
             let Some(mut active) = backend.active.take() else {
                 return Err(backend
@@ -1158,24 +969,11 @@ impl KfdRuntimeBackendV1 {
                     backend.active = Some(active);
                     Err(backend.terminal_error("prepared publication bypassed its indexed path"))
                 }
-                ActiveComputeExecutionV1::ThreeBindingPersistent {
-                    admissions,
-                    restore_shells,
-                    dispatch,
-                } => {
-                    let poll = backend
-                        .queue
-                        .as_mut()
-                        .expect("three-binding persistent submission retains its queue")
-                        .poll_and_recycle_three_binding_directional_persistent_fixed_dispatch_v1(
-                            dispatch,
-                        );
-                    backend.finish_three_binding_persistent_poll_and_recycle_v1(
-                        active,
-                        admissions,
-                        restore_shells,
-                        poll,
-                    )
+                execution @ (ActiveComputeExecutionV1::ThreeBindingPersistent { .. }
+                    | ActiveComputeExecutionV1::ThreeBindingPersistentCompleting(_)) => {
+                    active.execution = Some(execution);
+                    backend.active = Some(active);
+                    Err(backend.terminal_error("three-binding completion bypassed its indexed path"))
                 }
                 #[cfg(test)]
                 execution @ ActiveComputeExecutionV1::ScriptedPersistent { .. } => {
@@ -1184,16 +982,11 @@ impl KfdRuntimeBackendV1 {
                     Err(backend.terminal_error("scripted scalar completion bypassed its indexed path"))
                 }
                 #[cfg(test)]
-                ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
-                    admissions,
-                    restore_shells,
-                    devices,
-                } => backend.finish_scripted_three_binding_persistent_compute_v1(
-                    active,
-                    admissions,
-                    restore_shells,
-                    devices,
-                ),
+                execution @ ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { .. } => {
+                    active.execution = Some(execution);
+                    backend.active = Some(active);
+                    Err(backend.terminal_error("scripted three-binding completion bypassed its indexed path"))
+                }
                 #[cfg(test)]
                 execution @ (ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. }
                     | ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared { .. }) => {
@@ -1491,93 +1284,16 @@ impl KfdRuntimeBackendV1 {
     ) -> Result<Option<BackendPollV1>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.with_compute_lane_state_v1(lane, |backend| {
             if backend.scalar_completion_selected_v1() {
-                return backend.advance_scalar_completion_v1(Some(deadline)).map(Some);
+                return backend
+                    .advance_scalar_completion_v1(Some(deadline))
+                    .map(Some);
             }
-            let waitable = backend
-                .active
-                .as_ref()
-                .and_then(|active| active.execution.as_ref())
-                .is_some_and(|execution| match execution {
-                    ActiveComputeExecutionV1::Persistent { .. }
-                    | ActiveComputeExecutionV1::ThreeBindingPersistent { .. } => true,
-                    #[cfg(test)]
-                    ActiveComputeExecutionV1::ScriptedPersistent { .. }
-                    | ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { .. } => true,
-                    _ => false,
-                });
-            if !waitable {
-                return Ok(None);
+            if backend.three_completion_selected_v1() {
+                return backend
+                    .advance_three_completion_v1(Some(deadline))
+                    .map(Some);
             }
-            let Some(mut active) = backend.active.take() else {
-                return Ok(None);
-            };
-            let Some(execution) = active.execution.take() else {
-                backend.active = Some(active);
-                return Ok(None);
-            };
-            match execution {
-                ActiveComputeExecutionV1::ThreeBindingPersistent {
-                    admissions,
-                    restore_shells,
-                    dispatch,
-                } => {
-                    let Some(queue) = backend.queue.as_mut() else {
-                        backend.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentComputePublished(
-                                dispatch,
-                            ),
-                        );
-                        return Err(backend.terminal_error(
-                            "published three-binding persistent submission lost its KFD queue",
-                        ));
-                    };
-                    let wait = queue
-                        .wait_and_recycle_three_binding_directional_persistent_fixed_dispatch_until_v1(
-                            dispatch, deadline,
-                        )
-                        .map(|wait| match wait {
-                            Gfx942ThreeBindingPersistentComputeWaitAndRecycleV1::Timeout {
-                                dispatch, ..
-                            } => Gfx942ThreeBindingPersistentComputePollAndRecycleV1::Pending(
-                                dispatch,
-                            ),
-                            Gfx942ThreeBindingPersistentComputeWaitAndRecycleV1::Recycled {
-                                recycled,
-                                completion_observed_at,
-                                ..
-                            } => Gfx942ThreeBindingPersistentComputePollAndRecycleV1::Recycled {
-                                recycled,
-                                completion_observed_at,
-                            },
-                        });
-                    backend
-                        .finish_three_binding_persistent_poll_and_recycle_v1(
-                            active,
-                            admissions,
-                            restore_shells,
-                            wait,
-                        )
-                        .map(Some)
-                }
-                #[cfg(test)]
-                ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
-                    admissions,
-                    restore_shells,
-                    devices,
-                } => backend
-                    .finish_scripted_three_binding_persistent_compute_v1(
-                        active,
-                        admissions,
-                        restore_shells,
-                        devices,
-                    )
-                    .map(Some),
-                other => {
-                    active.execution = Some(other);
-                    backend.active = Some(active);
-                    Ok(None)
-                }
-            }
+            Ok(None)
         })
     }
 
@@ -3418,6 +3134,7 @@ impl KfdRuntimeBackendV1 {
                 .expect("three fixed binding ordinals fit the content-role contract")
         });
         let restore_shells = self.prepare_three_binding_restore_shells_v1(persistent.admissions)?;
+        let completion = self.reserve_three_binding_completion_v1(persistent.admissions)?;
         let (persistent_inputs, promotions) =
             self.take_three_binding_persistent_inputs_v1(persistent.admissions, id)?;
         let publication_profile = PersistentPublicationProfileV1 {
@@ -3449,6 +3166,7 @@ impl KfdRuntimeBackendV1 {
                         promotions,
                         restore_shells,
                         inputs: PreparedReceiptV1::Armed(persistent_inputs),
+                        completion,
                         profile: publication_profile,
                     },
                 ),
@@ -3557,6 +3275,7 @@ impl KfdRuntimeBackendV1 {
                 promotions,
                 restore_shells,
                 prepared: PreparedReceiptV1::Armed(binding),
+                completion,
                 profile: publication_profile,
             }),
         });
@@ -3985,59 +3704,6 @@ impl KfdRuntimeBackendV1 {
         active.performance.completed_readback = Duration::ZERO;
         active.performance.completion_signal_recycle = Duration::ZERO;
         active.performance.completion_detach_restore = Duration::ZERO;
-        let compute_lane = self.selected_compute_lane;
-        let module = self
-            .kernels
-            .get(&active.kernel)
-            .expect("active compute retains its kernel")
-            .module;
-        self.release_compute_custody_v1(active.id, module, active.allocations.iter().copied());
-        let status = BackendPollV1::Succeeded;
-        self.submissions.insert(
-            active.id,
-            SubmissionRecordV1 {
-                stream: active.stream,
-                status,
-                dependency_depth: active.dependency_depth,
-                profile_dispatch_published: true,
-            },
-        );
-        self.compute_completion_reservations = self
-            .compute_completion_reservations
-            .checked_sub(1)
-            .expect("published compute reserves one completion slot");
-        self.release_compute_lane_lease_v1(active.stream, compute_lane);
-        self.last_launch_performance = Some(active.performance);
-        let profile_dispatch =
-            self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, active.id);
-        self.observe_profile_v1(profile_dispatch.map(|dispatch| {
-            KfdRuntimeProfileEventKindV1::DispatchCompleted {
-                dispatch,
-                host_timing: profile_host_timing_v1(active.performance),
-            }
-        }));
-        active.execution = None;
-        Ok(status)
-    }
-
-    pub(super) fn finish_restored_three_binding_persistent_compute_v1(
-        &mut self,
-        mut active: ActiveSubmissionV1,
-        completion_detach_restore: Duration,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        active.performance.completed_readback = Duration::ZERO;
-        active.performance.completion_detach_restore += completion_detach_restore;
-        debug_assert_eq!(active.performance.user_data_materializations, 0);
-        debug_assert_eq!(
-            active.performance.data_path,
-            KfdRuntimeLaunchDataPathV1::PersistentDeviceReused
-        );
-        // Data persists, but this exact-three tranche rebuilds control for the
-        // next launch rather than claiming retained-control replay.
-        self.release_primary_detached_persistent_control_v1(
-            "three-binding completion lost its detached queue control",
-        )?;
-        self.retained_persistent_dispatch = None;
         let compute_lane = self.selected_compute_lane;
         let module = self
             .kernels

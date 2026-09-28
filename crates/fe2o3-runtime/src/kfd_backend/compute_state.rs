@@ -133,12 +133,14 @@ pub(super) enum ActiveComputeExecutionV1 {
         promotions: [Option<KfdRuntimeReadyPromotionPerformanceV1>; 3],
         restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
         prepared: PreparedReceiptV1<Gfx942PreparedThreeBindingPersistentComputeDispatchV1>,
+        completion: Box<ThreeBindingPersistentCompletionV1>,
         profile: PersistentPublicationProfileV1,
     },
     ThreeBindingPersistent {
         admissions: [PersistentFullRangeComputeAdmissionV1; 3],
         restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
         dispatch: Gfx942ThreeBindingPersistentComputeDispatchV1,
+        completion: Box<ThreeBindingPersistentCompletionV1>,
     },
     #[cfg(test)]
     ScriptedPersistent {
@@ -158,12 +160,14 @@ pub(super) enum ActiveComputeExecutionV1 {
     },
     PersistentCancelling(Box<super::prepared_cancellation::PreparedComputeCancellationV1>),
     PersistentCompleting(Box<PersistentComputeCompletionV1>),
+    ThreeBindingPersistentCompleting(Box<ThreeBindingPersistentCompletionV1>),
     #[cfg(test)]
     ScriptedThreeBindingPersistentPrepared {
         admissions: [PersistentFullRangeComputeAdmissionV1; 3],
         promotions: [Option<KfdRuntimeReadyPromotionPerformanceV1>; 3],
         restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
         inputs: PreparedReceiptV1<[KfdRuntimePersistentComputeInputV1; 3]>,
+        completion: Box<ThreeBindingPersistentCompletionV1>,
         profile: PersistentPublicationProfileV1,
     },
     #[cfg(test)]
@@ -171,6 +175,7 @@ pub(super) enum ActiveComputeExecutionV1 {
         admissions: [PersistentFullRangeComputeAdmissionV1; 3],
         restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
         devices: [DirectionalSdmaDeviceOwnerV1; 3],
+        completion: Box<ThreeBindingPersistentCompletionV1>,
     },
     #[cfg(test)]
     ScriptedMaterialized,

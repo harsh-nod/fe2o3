@@ -51,7 +51,6 @@ use fe2o3_kfd::{
     Gfx942ThreeBindingPersistentComputeBindTerminalCustodyV1,
     Gfx942ThreeBindingPersistentComputeCompletedV1, Gfx942ThreeBindingPersistentComputeDispatchV1,
     Gfx942ThreeBindingPersistentComputeInputsV1,
-    Gfx942ThreeBindingPersistentComputePollAndRecycleFailureV1,
     Gfx942ThreeBindingPersistentComputePollAndRecycleV1,
     Gfx942ThreeBindingPersistentComputeWaitAndRecycleV1, Gfx942XgmiBatchSubmissionFailureV1,
     Gfx942XgmiCopyFailureV1, Gfx942XgmiCopyPollV1, Gfx942XgmiMapRecoveryV1,
@@ -98,6 +97,7 @@ mod peer_compute_access;
 mod persistent_completion;
 mod prepared_cancellation;
 mod prepared_publication;
+mod three_binding_completion;
 use peer_ancestry::PeerLaunchAncestryV1;
 use peer_compute_access::{
     PeerAccessPurposeV1, PeerComputePermitsV1, PeerCopyAccessV1, PeerCopyLegV1, PeerCopyOriginV1,
@@ -195,6 +195,7 @@ use kfd_backend_sdma_seam::{
     SameDeviceSdmaWaitV1, SdmaBufferOwnerV1, SdmaRecycleFailureV1, SdmaTransitionFailureV1,
 };
 use persistent_completion::*;
+use three_binding_completion::*;
 
 const KFD_RUNTIME_RING_BYTES_V1: u32 = 64 * 1024;
 /// Reviewed V1 bound for independently in-flight native compute queues.
@@ -1394,6 +1395,8 @@ pub struct KfdRuntimeBackendV1 {
     #[cfg(test)]
     scripted_persistent_transition_failure: Option<ScriptedPersistentTransitionFailureV1>,
     #[cfg(test)]
+    scripted_three_completion_fault: Option<ScriptedThreeCompletionFaultV1>,
+    #[cfg(test)]
     scripted_prepared_cancel_fault: Option<prepared_cancellation::ScriptedPreparedCancelFaultV1>,
     #[cfg(test)]
     scripted_prepared_publication_fault:
@@ -1888,6 +1891,8 @@ impl KfdRuntimeBackendV1 {
             scripted_persistent_bind_rejections: 0,
             #[cfg(test)]
             scripted_persistent_transition_failure: None,
+            #[cfg(test)]
+            scripted_three_completion_fault: None,
             #[cfg(test)]
             scripted_prepared_cancel_fault: None,
             #[cfg(test)]
@@ -2794,7 +2799,8 @@ impl KfdRuntimeBackendV1 {
                 | ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared { .. }
                 | ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { .. } => true,
                 ActiveComputeExecutionV1::PersistentCancelling(_)
-                | ActiveComputeExecutionV1::PersistentCompleting(_) => true,
+                | ActiveComputeExecutionV1::PersistentCompleting(_)
+                | ActiveComputeExecutionV1::ThreeBindingPersistentCompleting(_) => true,
                 ActiveComputeExecutionV1::MaterializedPrepared { .. }
                 | ActiveComputeExecutionV1::Materialized(_)
                 | ActiveComputeExecutionV1::MaterializedCompleted(_) => false,
@@ -3214,6 +3220,21 @@ impl KfdRuntimeBackendV1 {
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         #[cfg(test)]
         if self.scripted_sdma.is_some() {
+            match self.scripted_three_completion_fault {
+                Some(ScriptedThreeCompletionFaultV1::ControlMissing) => {
+                    self.scripted_three_completion_fault = None;
+                    return Err(self.terminal_error(missing_detail));
+                }
+                Some(ScriptedThreeCompletionFaultV1::ControlFailure) => {
+                    self.scripted_three_completion_fault = None;
+                    return Err(self.terminal_error("scripted detached-control release failure"));
+                }
+                Some(ScriptedThreeCompletionFaultV1::ControlUnwind) => {
+                    self.scripted_three_completion_fault = None;
+                    panic!("scripted detached-control release unwind");
+                }
+                _ => {}
+            }
             return Ok(());
         }
         let primary = self
@@ -17941,6 +17962,7 @@ mod tests {
     fn persistent_compute_poll_and_wait_share_one_completion_handler_without_poll_waiting() {
         let compute_dispatch = include_str!("kfd_backend/compute_dispatch.rs");
         let completion = include_str!("kfd_backend/persistent_completion.rs");
+        let three_completion = include_str!("kfd_backend/three_binding_completion.rs");
         let poll = compute_dispatch
             .split("fn poll_compute_lane_v1")
             .nth(1)
@@ -17968,7 +17990,7 @@ mod tests {
             1
         );
         assert_eq!(
-            wait.matches(
+            three_completion.matches(
                 ".wait_and_recycle_three_binding_directional_persistent_fixed_dispatch_until_v1("
             )
             .count(),
@@ -17984,10 +18006,22 @@ mod tests {
             1
         );
         assert_eq!(
-            wait.matches("finish_three_binding_persistent_poll_and_recycle_v1")
+            wait.matches("advance_three_completion_v1(Some(deadline))")
                 .count(),
             1
         );
+        assert_eq!(poll.matches("advance_three_completion_v1(None)").count(), 1);
+        assert_eq!(
+            three_completion
+                .matches(
+                    ".poll_and_recycle_three_binding_directional_persistent_fixed_dispatch_v1("
+                )
+                .count(),
+            1
+        );
+        assert!(!poll.contains(
+            "wait_and_recycle_three_binding_directional_persistent_fixed_dispatch_until_v1"
+        ));
         assert!(!poll.contains("wait_and_recycle_directional_persistent_fixed_dispatch_until_v1"));
 
         let runtime_wait = include_str!("kfd_backend.rs")

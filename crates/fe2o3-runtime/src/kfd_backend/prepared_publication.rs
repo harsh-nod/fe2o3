@@ -273,6 +273,7 @@ impl KfdRuntimeBackendV1 {
                 let Some(ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
                     admissions,
                     restore_shells,
+                    completion,
                     profile,
                     ..
                 }) = active.execution.take()
@@ -283,6 +284,7 @@ impl KfdRuntimeBackendV1 {
                     admissions,
                     restore_shells,
                     dispatch,
+                    completion,
                 });
                 profile
             }
@@ -354,6 +356,7 @@ impl KfdRuntimeBackendV1 {
                 let Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
                     admissions,
                     restore_shells,
+                    completion,
                     profile,
                     ..
                 }) = active.execution.take()
@@ -364,6 +367,7 @@ impl KfdRuntimeBackendV1 {
                     admissions,
                     restore_shells,
                     devices,
+                    completion,
                 });
                 profile
             }

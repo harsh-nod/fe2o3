@@ -2,21 +2,38 @@
 
 use super::*;
 
-pub(super) enum PersistentCompletionReceiptV1 {
+// Keep scripted owners inline in the preallocated root, just like native receipts.
+#[cfg_attr(test, allow(clippy::large_enum_variant))]
+pub(super) enum IndexedPersistentCompletionReceiptV1<P, R, D, I, E> {
     Reserved,
-    Published(Gfx942PersistentComputeDispatchV1),
-    Recycled(Gfx942RecycledPersistentComputeDispatchV1),
-    Detached(fe2o3_kfd::Gfx942PersistentComputeCompletedV1),
-    Retired(
-        KfdRuntimePersistentComputeInputV1,
-        Gfx942PersistentComputeEffectV1,
-    ),
+    Published(P),
+    Recycled(R),
+    Detached(D),
+    Retired(I, E),
     NativeOwned,
+    // Explicit lower failure returned no receipt: the queue quarantined it.
+    LowerTerminalOwned,
     TerminalRooted,
     Restored,
     #[cfg(test)]
-    Scripted(Box<DirectionalSdmaDeviceOwnerV1>),
+    Scripted(ScriptedCompletionOwnersV1),
 }
+
+// Scripted owners stay inline in the already boxed completion root.
+#[cfg(test)]
+#[allow(clippy::large_enum_variant)]
+pub(super) enum ScriptedCompletionOwnersV1 {
+    Single(Box<DirectionalSdmaDeviceOwnerV1>),
+    Three([DirectionalSdmaDeviceOwnerV1; 3]),
+}
+
+pub(super) type PersistentCompletionReceiptV1 = IndexedPersistentCompletionReceiptV1<
+    Gfx942PersistentComputeDispatchV1,
+    Gfx942RecycledPersistentComputeDispatchV1,
+    fe2o3_kfd::Gfx942PersistentComputeCompletedV1,
+    KfdRuntimePersistentComputeInputV1,
+    Gfx942PersistentComputeEffectV1,
+>;
 
 pub(super) struct PersistentComputeCompletionV1 {
     pub(super) admission: PersistentFullRangeComputeAdmissionV1,
@@ -166,7 +183,9 @@ impl KfdRuntimeBackendV1 {
                     mut completion,
                     ..
                 } => {
-                    completion.receipt = PersistentCompletionReceiptV1::Scripted(device);
+                    completion.receipt = PersistentCompletionReceiptV1::Scripted(
+                        ScriptedCompletionOwnersV1::Single(device),
+                    );
                     completion
                 }
                 execution => {
@@ -275,7 +294,7 @@ impl KfdRuntimeBackendV1 {
                 }
             }
             #[cfg(test)]
-            PersistentCompletionReceiptV1::Scripted(device) => {
+            PersistentCompletionReceiptV1::Scripted(ScriptedCompletionOwnersV1::Single(device)) => {
                 ActiveComputeExecutionV1::ScriptedPersistent {
                     allocation: admission.allocation,
                     access: admission.access,
@@ -302,7 +321,7 @@ impl KfdRuntimeBackendV1 {
         #[cfg(test)]
         if matches!(
             self.persistent_completion_root_v1().receipt,
-            PersistentCompletionReceiptV1::Scripted(_)
+            PersistentCompletionReceiptV1::Scripted(ScriptedCompletionOwnersV1::Single(_))
         ) {
             return self.advance_scripted_scalar_completion_v1(deadline);
         }
@@ -625,7 +644,8 @@ impl KfdRuntimeBackendV1 {
             )
         ) {
             self.scripted_persistent_transition_failure = None;
-            let PersistentCompletionReceiptV1::Scripted(device) = self.take_completion_receipt_v1()
+            let PersistentCompletionReceiptV1::Scripted(ScriptedCompletionOwnersV1::Single(device)) =
+                self.take_completion_receipt_v1()
             else {
                 unreachable!()
             };
@@ -634,7 +654,8 @@ impl KfdRuntimeBackendV1 {
                 "scripted persistent-compute completion returned foreign retryable custody",
             ));
         }
-        let PersistentCompletionReceiptV1::Scripted(device) = self.take_completion_receipt_v1()
+        let PersistentCompletionReceiptV1::Scripted(ScriptedCompletionOwnersV1::Single(device)) =
+            self.take_completion_receipt_v1()
         else {
             unreachable!()
         };

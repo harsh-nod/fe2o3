@@ -8,6 +8,9 @@ use std::mem::ManuallyDrop;
 use std::os::unix::process::ExitStatusExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+#[path = "three_completion_tests.rs"]
+mod completion;
+
 struct Fixture<const N: usize> {
     backend: ManuallyDrop<KfdRuntimeBackendV1>,
     stream: u64,
@@ -72,6 +75,11 @@ fn stored_input(backend: &KfdRuntimeBackendV1, allocation: u64) -> InputFacts {
 
 impl<const N: usize> Fixture<N> {
     fn new(initialized: bool) -> Self {
+        Self::new_origin(usize::from(initialized))
+    }
+
+    fn new_origin(origin: usize) -> Self {
+        let initialized = origin != 0;
         let mut steps = vec![
             ScriptedSdmaStepV1::Write {
                 offset: 0,
@@ -132,6 +140,21 @@ impl<const N: usize> Fixture<N> {
         let kernel = backend
             .resolve_kernel_v1(module, "vecadd", [7; 32])
             .unwrap();
+        if origin == 2 {
+            assert_eq!(N, 3);
+            let warmup_stream = backend.create_stream_v1(7).unwrap();
+            let warmup = submit_scripted_three_binding_v1(
+                &mut backend,
+                warmup_stream,
+                kernel,
+                [allocations[0], allocations[1], allocations[2]],
+                4096,
+            );
+            backend.flush_stream_v1(warmup_stream).unwrap();
+            assert_eq!(backend.poll_v1(warmup).unwrap(), BackendPollV1::Succeeded);
+            backend.release_submission_v1(warmup).unwrap();
+            backend.destroy_stream_v1(warmup_stream).unwrap();
+        }
         let submit = |backend: &mut KfdRuntimeBackendV1| {
             if N == 1 {
                 submit_scripted_read_v1(backend, stream, kernel, allocations[0], 4096, &[event])
@@ -257,6 +280,10 @@ impl<const N: usize> Fixture<N> {
                 BackendPollV1::Succeeded
             );
         }
+        self.cleanup();
+    }
+
+    fn cleanup(mut self) {
         assert!(self.backend.compute_dependency_retain_counts.is_empty());
         assert!(self.backend.compute_module_retain_counts.is_empty());
         assert!(self.backend.allocation_custody.is_empty());

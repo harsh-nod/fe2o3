@@ -241,14 +241,20 @@ impl KfdRuntimeBackendV1 {
                 None,
                 None,
             ],
-            Some(ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
-                admissions, ..
-            }) => admissions.map(Some),
+            Some(
+                ActiveComputeExecutionV1::ThreeBindingPersistentPrepared { admissions, .. }
+                | ActiveComputeExecutionV1::ThreeBindingPersistent { admissions, .. },
+            ) => admissions.map(Some),
             #[cfg(test)]
-            Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
-                admissions,
-                ..
-            }) => admissions.map(Some),
+            Some(
+                ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
+                    admissions, ..
+                }
+                | ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { admissions, .. },
+            ) => admissions.map(Some),
+            Some(ActiveComputeExecutionV1::ThreeBindingPersistentCompleting(root)) => {
+                root.admissions.map(Some)
+            }
             Some(ActiveComputeExecutionV1::PersistentCancelling(root)) => {
                 std::array::from_fn(|index| root.slots[index].as_ref().map(|slot| slot.admission))
             }
@@ -397,11 +403,15 @@ impl KfdRuntimeBackendV1 {
             ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
                 admissions,
                 restore_shells,
+                completion,
                 ..
-            } => admissions
-                .iter()
-                .zip(restore_shells)
-                .all(|(admission, shell)| shell.supports_origin_v1(*admission)),
+            } => {
+                self.three_completion_reservation_intact_v1(completion, *admissions)
+                    && admissions
+                        .iter()
+                        .zip(restore_shells)
+                        .all(|(admission, shell)| shell.supports_origin_v1(*admission))
+            }
             #[cfg(test)]
             ActiveComputeExecutionV1::ScriptedPersistentPrepared {
                 allocation,
@@ -433,16 +443,20 @@ impl KfdRuntimeBackendV1 {
                 admissions,
                 restore_shells,
                 inputs,
+                completion,
                 ..
-            } => inputs.armed().is_some_and(|inputs| {
-                admissions.iter().zip(restore_shells).zip(inputs).all(
-                    |((admission, shell), input)| {
-                        !matches!(input, KfdRuntimePersistentComputeInputV1::Native(_))
-                            && shell.supports_origin_v1(*admission)
-                            && shell.accepts_v1(*admission, input)
-                    },
-                )
-            }),
+            } => {
+                self.three_completion_reservation_intact_v1(completion, *admissions)
+                    && inputs.armed().is_some_and(|inputs| {
+                        admissions.iter().zip(restore_shells).zip(inputs).all(
+                            |((admission, shell), input)| {
+                                !matches!(input, KfdRuntimePersistentComputeInputV1::Native(_))
+                                    && shell.supports_origin_v1(*admission)
+                                    && shell.accepts_v1(*admission, input)
+                            },
+                        )
+                    })
+            }
             _ => false,
         }
     }
@@ -565,6 +579,7 @@ impl KfdRuntimeBackendV1 {
                 restore_shells,
                 prepared,
                 profile,
+                ..
             } => {
                 let mut shells = restore_shells.into_iter();
                 PreparedComputeCancellationV1 {
@@ -606,6 +621,7 @@ impl KfdRuntimeBackendV1 {
                 restore_shells,
                 inputs,
                 profile,
+                ..
             } => {
                 let mut shells = restore_shells.into_iter();
                 let mut inputs = inputs
