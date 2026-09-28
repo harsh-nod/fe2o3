@@ -30,7 +30,8 @@ def mutations(body):
     add("scan-wrong-index", "return Some($i);", "return Some(0);", "first_epoch")
     add("scan-skips-last", "if let Some(entry) = $slots[$i].entry.as_ref() {",
         "if $i == $slots.len() - 1 { return None; }\n                if let Some(entry) = $slots[$i].entry.as_ref() {", "first_epoch")
-    add("promotion-ignores-stage", "if $staged.is_some() { return None; }", "if false { return None; }", "take_frontier")
+    add("promotion-ignores-stage", "if $staged.is_some() { return None; }",
+        "if $staged.is_some() && *$live == 0 { return None; }", "take_frontier")
     add("promotion-omits-live", "$live.checked_sub(1)", "$live.checked_sub(0)", "take_frontier")
     add("promotion-reuses-frontier", "$epoch.checked_add(1)", "Some($epoch)", "take_frontier")
     add("promotion-substitutes-phase", "Some(($entry.phase, $entry.active))",
