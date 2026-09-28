@@ -3,8 +3,8 @@
 pub enum ProductionPendingScopedSourceErrorV29 {
     /// Source, lowering, correspondence or resource validation failed.
     Source(ProductionSemanticKirErrorV1),
-    /// The complete canonical V15 graph failed admission or replay.
-    Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15),
+    /// The complete canonical V18 graph and layout table failed admission or replay.
+    Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18),
     /// Capture of genuine source SSA occurrences failed.
     Occurrences(fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1),
 }
@@ -87,8 +87,9 @@ impl ProductionPendingScopedSourceOwnerV29 {
     /// accounting domain. Any preexisting occurrence capture must already be
     /// reserved and remains separately caller-accounted, including on failure.
     ///
-    /// On error or panic all newly adopted data drops before restoring the entry
-    /// storage floor. Work is never refunded.
+    /// On error or panic newly adopted data drops before cleanup. The entry
+    /// storage floor is restored only while exact ledger/floor custody remains
+    /// intact; custody loss denies all enclosing refunds. Work is never refunded.
     pub fn try_materialize_with_budget(
         owner: ProductionSemanticSsaOwnerV1,
         launch: crate::ProductionSourceLaunchRosterV1,
@@ -103,18 +104,35 @@ impl ProductionPendingScopedSourceOwnerV29 {
         {
             return Err(ScopedModuleErrorV29::from(ArgumentResourceV1::Accounting).into());
         }
-        scoped_module_attempt_v29(budget, floor, move |budget| {
-            let input = {
-                let source = ExecutionLifecycleSourceV29::new(&owner, &launch, input, budget)?;
-                OwnedExecutionInputV29::capture(&source, budget)?
-            };
-            let mut donor = Some(ScopedSourceInputsV29 {
-                owner,
-                launch,
-                input,
-            });
-            SourceOwnedScopedModuleV29::try_new(&mut donor, limits, budget)
+        // Preserve the old checked entrance before introducing wrapper headers.
+        // Only its copied ledger survives; owner, launch and input are unchanged.
+        let source_ledger = scoped_module_attempt_v29(budget, floor, |budget| {
+            ExecutionLifecycleSourceV29::new(&owner, &launch, input, budget)
+                .map(|source| source.ledger)
+                .map_err(ScopedModuleErrorV29::from)
+        })?;
+        with_scoped_source_cleanup_v29(budget, floor, move |cleanup, budget| {
+            let attempt_floor = budget.storage();
+            scoped_source_attempt_v29(cleanup, budget, attempt_floor, move |budget| {
+                let input = {
+                    let source = ExecutionLifecycleSourceV29 {
+                        owner: &owner,
+                        launch: &launch,
+                        input,
+                        ledger: source_ledger,
+                    };
+                    OwnedExecutionInputV29::capture(&source, budget)?
+                };
+                let mut donor = Some(ScopedSourceInputsV29 {
+                    owner,
+                    launch,
+                    input,
+                });
+                SourceOwnedScopedModuleV29::try_new_with_cleanup(
+                    &mut donor, limits, cleanup, budget,
+                )
                 .map(|inner| Self { inner })
+            })
         })
         .map_err(Into::into)
     }
@@ -135,8 +153,8 @@ impl ProductionPendingScopedSourceOwnerV29 {
         self.inner.pending.graph.module()
     }
 
-    /// Returns the identity of the complete pending canonical V15 graph.
-    pub fn pending_identity(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV15 {
+    /// Returns the identity of the complete pending canonical V18 graph and table.
+    pub fn pending_identity(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV18 {
         self.inner.pending.graph.identity()
     }
 

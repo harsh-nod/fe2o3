@@ -4,8 +4,8 @@
     allow(dead_code, reason = "Scoped source admission remains gated")
 )]
 struct PendingScopedModuleV29 {
-    graph: fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV15,
-    graph_storage: fe2o3_kernel_ir::CanonicalKernelIrReplayStorageV15,
+    graph: fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
+    graph_storage: fe2o3_kernel_ir::CanonicalKernelIrReplayStorageV18,
     roots: Vec<ScopedModuleRootV29>,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     retained_storage: usize,
@@ -55,7 +55,7 @@ struct ScopedDeclarationUseV29 {
 )]
 enum ScopedModuleErrorV29 {
     Source(ProductionSemanticKirErrorV1),
-    Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15),
+    Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18),
     Occurrences(fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1),
 }
 
@@ -534,10 +534,11 @@ fn scoped_module_candidate_v29(
 }
 
 /// Success keeps its complete reservation live, like the pending root owner.
-/// Original emission envelopes conservatively coexist with the genuine V15
-/// receipt: dropping the raw candidate does not refund still-owned source rows.
+/// Original emission envelopes conservatively coexist with the genuine V18
+/// receipt: only transferred raw-table credit is refunded with the candidate;
+/// source sidecars retain their emission envelopes.
 /// Failure/panic drops the attempted graph and source rows before restoring the
-/// caller's floor; returned V15 verifier diagnostics retain their existing
+/// caller's floor; returned V18 verifier diagnostics retain their existing
 /// caller-owned accounting contract.
 #[cfg_attr(
     not(test),
@@ -552,18 +553,35 @@ fn admit_pending_scoped_module_v29(
         return Err(ArgumentResourceV1::Accounting.into());
     }
     let floor = budget.storage();
-    scoped_module_attempt_v29(budget, floor, |budget| {
-        let emitted = scoped_module_roots_v29(source, limits, budget)?;
-        let (candidate, roots) = scoped_module_candidate_v29(source, emitted, limits, budget)?;
+    with_scoped_source_cleanup_v29(budget, floor, |cleanup, budget| {
+        admit_pending_scoped_module_with_cleanup_v29(source, limits, cleanup, budget)
+    })
+}
+
+fn admit_pending_scoped_module_with_cleanup_v29(
+    source: &ExecutionLifecycleSourceV29<'_>,
+    limits: ProductionSemanticKirLimitsV1,
+    cleanup: &ScopedSourceCleanupV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<PendingScopedModuleV29, ScopedModuleErrorV29> {
+    if source.ledger != budget.work_ledger_identity_v1() {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    let floor = budget.storage();
+    scoped_source_attempt_v29(cleanup, budget, floor, |budget| {
+        let retained_floor = budget.storage();
+        let (candidate, roots, row_storage) =
+            scoped_source_candidate_v29(source, limits, cleanup, budget)?;
         let (graph, graph_storage) =
-            fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV15::from_module_ref_with_verification_budget_v15(
-                &candidate, budget,
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18::from_module_ref_with_verification_budget_v18(
+                &candidate, limits.storage_layout_limits(), budget,
             ).map_err(ScopedModuleErrorV29::Canonical)?;
         budget.reserve_storage(graph_storage.retained_storage())?;
         drop(candidate);
+        budget.release_storage(row_storage)?;
         let retained_storage = budget
             .storage()
-            .checked_sub(floor)
+            .checked_sub(retained_floor)
             .ok_or(ArgumentResourceV1::Accounting)?;
         Ok(PendingScopedModuleV29 {
             graph,

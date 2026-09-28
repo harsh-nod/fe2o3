@@ -739,8 +739,11 @@ module/table association. It provides structural representation and bounded
 transport, not source-layout authentication, initialized-byte/provenance/
 lifetime proofs, optimizing rewrite permission or native execution. Legacy
 Pliron, target and simulator entry points continue to reject this storage
-profile; production source lowering and the default pipeline are not switched
-to V18. See [typed storage boundaries](pliron-optimizing-middle-end-v1.md#typed-storage-prerequisites)
+profile. The prepared scoped-source path now constructs bounded original layout
+tables and replays the complete table-backed V18 graph; the default compiler
+pipeline is not switched to V18. This source-layout layer does not establish
+initialized bytes, reference lifetimes or general storage-operation admission.
+See [typed storage boundaries](pliron-optimizing-middle-end-v1.md#typed-storage-prerequisites)
 for the exact owner, codec and remaining integration scope.
 
 The nondefault checked continuation composes induction refinement and private

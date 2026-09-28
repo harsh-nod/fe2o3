@@ -1493,9 +1493,27 @@ storage support from these representation APIs. V18 Storage and V19 complete
 bodies retain distinct interpretations of their profile-specific wire tag;
 existing V19-V22 behavior remains unchanged.
 
-Production Rust storage lowering, initialized-byte/provenance/lifetime checks,
-optimization correspondence and native completion remain separate integration
-work. This representation and codec support does not claim that tutorial
+The prepared scoped-source path now builds a bounded layout-table closure from
+captured source types and actual SSA demands. Its
+[source layout builder](../crates/fe2o3-lower-mir-kernel/src/production_source_storage_layout_v29.rs)
+preserves original geometry, pointer address spaces and pointer recursion while
+rejecting by-value containment cycles. Row ownership moves into the genuine
+V18 module with retained storage credit. The
+[source replay](../crates/fe2o3-lower-mir-kernel/src/production_scoped_source_replay_v29.rs)
+reconstructs and compares the complete graph and table, not an older graph-only
+identity. The public pending-source observer therefore names a V18 owner; its
+successful observation still stops before execution admission.
+
+The [V18 analysis scope](../crates/fe2o3-pliron/src/canonical_analysis_scope_v18.rs)
+binds sparse scalar, MemorySSA and call-effect queries to the exact canonical
+inventory and shared resource ledger. These analyses do not grant rewrite or
+native-execution authority. The shared private-memory checker has distinct V12
+and V18 owner paths; the existing V12 production adapter retains its previous
+work and scratch-credit contract.
+
+General Rust storage-operation lowering, initialized-byte/provenance/lifetime
+checks, optimization correspondence and native completion remain separate
+integration work. These table and analysis foundations do not claim that tutorial
 kernels compile through V18, that an optimizing storage rewrite is admitted,
 or that any milestone is complete.
 

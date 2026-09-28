@@ -1,6 +1,10 @@
 const MODULE_FLOOR: usize = 23;
 const MODULE_LIMIT: usize = 20_000_000;
 
+include!("production_scoped_source_layout_owner_v29_tests.rs");
+include!("production_scoped_source_cleanup_v29_tests.rs");
+include!("production_scoped_source_layout_resources_v29_tests.rs");
+
 fn check_scoped_module(
     owner: &PendingScopedModuleV29,
     source: &ExecutionLifecycleSourceV29<'_>,
@@ -259,10 +263,12 @@ fn complete_module_keeps_live_scope_trap_refusal() {
         .0
         .unwrap_err();
     let ScopedModuleErrorV29::Canonical(
-        fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Verification(errors),
+        fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Verification(
+            fe2o3_kernel_ir::BorrowedKernelIrVerificationErrorV1::Verification(errors),
+        ),
     ) = error
     else {
-        panic!("expected actual V15 verification refusal: {error:?}");
+        panic!("expected actual V18 verification refusal: {error:?}");
     };
     assert!(errors.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == fe2o3_kernel_ir::DiagnosticCode::InvalidSemanticOperation
@@ -300,10 +306,20 @@ fn complete_module_obeys_exact_and_one_short_resources() {
                     SemanticKirAssertOriginErrorV1::Resource(error),
                 ))
                 | ScopedModuleErrorV29::Canonical(
-                    fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Resource(error),
+                    fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Resource(error),
                 )
                 | ScopedModuleErrorV29::Canonical(
-                    fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Decode(
+                    fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Verification(
+                        fe2o3_kernel_ir::BorrowedKernelIrVerificationErrorV1::Resource(error),
+                    ),
+                )
+                | ScopedModuleErrorV29::Canonical(
+                    fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Layout(
+                        fe2o3_kernel_ir::StorageLayoutErrorV1::Resource(error),
+                    ),
+                )
+                | ScopedModuleErrorV29::Canonical(
+                    fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Decode(
                         fe2o3_kernel_ir::KernelIrDecodeError::Resource(error),
                     ),
                 ) => error,

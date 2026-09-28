@@ -40,12 +40,13 @@ fn queries(
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<Vec<Query>> {
     charge(budget, 2)?;
-    if sites.len() != proof.inventory.operations().len() || sites.len() != proof.latest_stores.len()
+    if sites.len() != proof.inventory().operations().len()
+        || sites.len() != proof.latest_stores().len()
     {
         return Err(refused("private source", "complete operation source sites"));
     }
     let mut count = 0usize;
-    for (read, store) in proof.latest_stores.iter().enumerate() {
+    for (read, store) in proof.latest_stores().iter().enumerate() {
         charge(budget, 3)?;
         if let Some(store) = store {
             let first = sites.get(*store).copied().flatten().ok_or_else(|| {
@@ -62,7 +63,7 @@ fn queries(
         }
     }
     let mut rows = scratch::<Query>(count, budget)?;
-    for (read, store) in proof.latest_stores.iter().enumerate() {
+    for (read, store) in proof.latest_stores().iter().enumerate() {
         charge(budget, 4)?;
         let Some(store) = store else {
             continue;

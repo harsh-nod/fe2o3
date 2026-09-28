@@ -7,6 +7,7 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKirFunctionCoordinateV1 as Function, OperationKind,
+    VerifiedCanonicalKernelIrModuleV12, VerifiedCanonicalKernelIrModuleV18,
 };
 
 use crate::CanonicalKirInventoryV1 as Inventory;
@@ -88,10 +89,14 @@ struct Frame {
 /// The nonempty decision deliberately does not grant read, bounds or alias facts:
 /// consumers must inspect the qualified occurrences and establish those facts.
 #[derive(Debug)]
-pub struct CanonicalKirCallEffectsV1<'i, 'g> {
-    inventory: &'i Inventory<'g>,
+pub struct CanonicalKirCallEffectsV1<'i, 'g, O = VerifiedCanonicalKernelIrModuleV12> {
+    inventory: &'i Inventory<'g, O>,
     states: Vec<State>,
 }
+
+/// Complete-effect classification borrowing the exact V18 inventory.
+pub type CanonicalKirCallEffectsV18<'i, 'g> =
+    CanonicalKirCallEffectsV1<'i, 'g, VerifiedCanonicalKernelIrModuleV18>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CanonicalKirCallEffectStorageV1(usize);
@@ -117,6 +122,26 @@ impl<'i, 'g> CanonicalKirCallEffectsV1<'i, 'g> {
         inventory: &'i Inventory<'g>,
         budget: &mut Budget<'_>,
     ) -> Result<(Self, CanonicalKirCallEffectStorageV1)> {
+        Self::derive_for_inventory(inventory, budget)
+    }
+}
+
+impl<'i, 'g> CanonicalKirCallEffectsV18<'i, 'g> {
+    /// Uses the shared effect classifier; Storage and compiler ordering remain
+    /// nonempty, and declarations or recursive dependencies stay incomplete.
+    pub fn derive_v18(
+        inventory: &'i crate::CanonicalKirInventoryV18<'g>,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, CanonicalKirCallEffectStorageV1)> {
+        Self::derive_for_inventory(inventory, budget)
+    }
+}
+
+impl<'i, 'g, O> CanonicalKirCallEffectsV1<'i, 'g, O> {
+    fn derive_for_inventory(
+        inventory: &'i Inventory<'g, O>,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, CanonicalKirCallEffectStorageV1)> {
         let retained = size_of::<Self>()
             .checked_add(payload::<State>(inventory.functions().len())?)
             .ok_or(Resource::Arithmetic)?;
@@ -131,11 +156,11 @@ impl<'i, 'g> CanonicalKirCallEffectsV1<'i, 'g> {
         result.map(|report| (report, CanonicalKirCallEffectStorageV1(retained)))
     }
 
-    pub const fn inventory(&self) -> &'i Inventory<'g> {
+    pub const fn inventory(&self) -> &'i Inventory<'g, O> {
         self.inventory
     }
 
-    pub fn belongs_to(&self, inventory: &Inventory<'_>) -> bool {
+    pub fn belongs_to(&self, inventory: &Inventory<'_, O>) -> bool {
         std::ptr::eq(self.inventory, inventory)
     }
 
@@ -149,7 +174,73 @@ impl<'i, 'g> CanonicalKirCallEffectsV1<'i, 'g> {
         }
     }
 
-    fn build(inventory: &'i Inventory<'g>, budget: &mut Budget<'_>) -> Result<Self> {
+    /// Classifies one exact inventory occurrence with the same local classifier
+    /// and completed callee states used by whole-function analysis. This lets a
+    /// source consumer inspect inlined instance spans without treating absence
+    /// of a separately emitted helper as proof of empty effects.
+    pub fn operation_decision(
+        &self,
+        coordinate: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<Decision> {
+        budget.charge_work(5)?;
+        let function = self
+            .inventory
+            .functions()
+            .get(coordinate.block.function.0 as usize)
+            .ok_or(Error::InvalidFunction(coordinate.block.function))?;
+        let block_ordinal = function
+            .blocks
+            .start
+            .checked_add(coordinate.block.block as usize)
+            .filter(|ordinal| *ordinal < function.blocks.end)
+            .ok_or(Error::InconsistentInventory)?;
+        let block = self
+            .inventory
+            .blocks()
+            .get(block_ordinal)
+            .ok_or(Error::InconsistentInventory)?;
+        let ordinal = block
+            .operations
+            .start
+            .checked_add(coordinate.operation as usize)
+            .filter(|ordinal| *ordinal < block.operations.end)
+            .ok_or(Error::InconsistentInventory)?;
+        let operation = self
+            .inventory
+            .operations()
+            .get(ordinal)
+            .ok_or(Error::InconsistentInventory)?;
+        if block.coordinate != coordinate.block || operation.coordinate != coordinate {
+            return Err(Error::InconsistentInventory);
+        }
+        let local = local_decision(self.inventory, coordinate.block.function, operation, budget)?;
+        if !matches!(operation.operation.kind, OperationKind::Call { .. })
+            || operation
+                .operation
+                .has_complete_effect_summary_with_budget_v1(budget)?
+        {
+            return Ok(local);
+        }
+        let calls = self
+            .inventory
+            .calls()
+            .get(function.calls.clone())
+            .ok_or(Error::InconsistentInventory)?;
+        let comparisons = usize::BITS as usize - calls.len().leading_zeros() as usize;
+        budget.charge_work(comparisons.checked_add(1).ok_or(Resource::Arithmetic)?)?;
+        let call = calls
+            .binary_search_by_key(&coordinate, |call| call.coordinate)
+            .ok()
+            .and_then(|index| calls.get(index))
+            .ok_or(Error::InconsistentInventory)?;
+        match call.target {
+            Some(target) => Ok(local.join(self.decision(target, budget)?)),
+            None => Ok(Decision::Incomplete),
+        }
+    }
+
+    fn build(inventory: &'i Inventory<'g, O>, budget: &mut Budget<'_>) -> Result<Self> {
         let count = inventory.functions().len();
         budget.reserve_storage(size_of::<Self>())?;
         let mut states = vector::<State>(count, budget)?;
@@ -179,19 +270,12 @@ impl<'i, 'g> CanonicalKirCallEffectsV1<'i, 'g> {
                     .get(current.operation)
                     .ok_or(Error::InconsistentInventory)?;
                 current.operation += 1;
-                if !operation.effects.is_empty() || !operation.compiler_ordering().is_empty() {
-                    current.decision = current.decision.join(Decision::CompleteNonempty);
-                }
-                if matches!(operation.operation.kind, OperationKind::InlineAssembly(_))
-                    && !gfx942_inline_v30::has_closed_effects(
-                        inventory,
-                        current.function,
-                        operation.operation,
-                        budget,
-                    )?
-                {
-                    current.decision = Decision::Incomplete;
-                }
+                current.decision = current.decision.join(local_decision(
+                    inventory,
+                    current.function,
+                    operation,
+                    budget,
+                )?);
                 if !matches!(operation.operation.kind, OperationKind::Call { .. }) {
                     continue;
                 }
@@ -233,7 +317,27 @@ impl<'i, 'g> CanonicalKirCallEffectsV1<'i, 'g> {
     }
 }
 
-fn frame(inventory: &Inventory<'_>, function: Function) -> Result<Frame> {
+fn local_decision<O>(
+    inventory: &Inventory<'_, O>,
+    function: Function,
+    operation: &crate::CanonicalKirOperationRefV1<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<Decision> {
+    if matches!(operation.operation.kind, OperationKind::InlineAssembly(_))
+        && !gfx942_inline_v30::has_closed_effects(inventory, function, operation.operation, budget)?
+    {
+        return Ok(Decision::Incomplete);
+    }
+    Ok(
+        if !operation.effects.is_empty() || !operation.compiler_ordering().is_empty() {
+            Decision::CompleteNonempty
+        } else {
+            Decision::CompleteEmpty
+        },
+    )
+}
+
+fn frame<O>(inventory: &Inventory<'_, O>, function: Function) -> Result<Frame> {
     let row = inventory
         .functions()
         .get(function.0 as usize)

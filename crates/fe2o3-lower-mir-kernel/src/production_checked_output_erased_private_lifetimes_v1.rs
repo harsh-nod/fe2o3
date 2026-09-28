@@ -6,9 +6,12 @@ pub(super) fn source_lifetimes_erased(
     proof: &PrivateMemory<'_, '_>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
-    let sites = erased_source_statement_sites_v1(source, map, proof.inventory, budget)?;
+    let sites = erased_source_statement_sites_v1(source, map, proof.inventory(), budget)?;
     source_lifetimes_from_sites(
-        source.original_source().semantic_ssa.source_semantic(), proof, &sites, budget,
+        source.original_source().semantic_ssa.source_semantic(),
+        proof,
+        &sites,
+        budget,
     )
 }
 

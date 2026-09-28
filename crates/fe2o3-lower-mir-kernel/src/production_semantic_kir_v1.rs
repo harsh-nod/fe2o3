@@ -229,6 +229,13 @@ const DEFAULT_MAX_STATEMENTS_V1: usize = 1_048_576;
 const DEFAULT_MAX_OPERATIONS_V1: usize = 1_048_576;
 const DEFAULT_ARGUMENT_CORRESPONDENCE_WORK_V1: usize = 16 * 1024 * 1024;
 const DEFAULT_ARGUMENT_CORRESPONDENCE_STORAGE_V1: usize = 16 * 1024 * 1024;
+const DEFAULT_STORAGE_LAYOUT_LIMITS_V1: fe2o3_kernel_ir::StorageLayoutLimitsV1 =
+    fe2o3_kernel_ir::StorageLayoutLimitsV1 {
+        rows: 1 << 20,
+        edges: 1 << 22,
+        containment_depth: 256,
+        object_bytes: (1_u64 << 61) - 1,
+    };
 
 /// Independent work limits for semantic-MIR-to-Kernel-IR lowering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -239,6 +246,7 @@ pub struct ProductionSemanticKirLimitsV1 {
     max_operations: usize,
     max_argument_correspondence_work: usize,
     max_argument_correspondence_storage: usize,
+    storage_layout_limits: fe2o3_kernel_ir::StorageLayoutLimitsV1,
 }
 
 impl ProductionSemanticKirLimitsV1 {
@@ -266,6 +274,7 @@ impl ProductionSemanticKirLimitsV1 {
             max_operations,
             max_argument_correspondence_work: DEFAULT_ARGUMENT_CORRESPONDENCE_WORK_V1,
             max_argument_correspondence_storage: DEFAULT_ARGUMENT_CORRESPONDENCE_STORAGE_V1,
+            storage_layout_limits: DEFAULT_STORAGE_LAYOUT_LIMITS_V1,
         }
     }
 
@@ -281,6 +290,21 @@ impl ProductionSemanticKirLimitsV1 {
         self.max_argument_correspondence_work = max_work;
         self.max_argument_correspondence_storage = max_storage_bytes;
         self
+    }
+
+    /// Retains the caller's physical-layout resource policy without widening it.
+    /// These limits grant neither source validity nor target allocation authority.
+    pub const fn with_storage_layout_limits(
+        mut self,
+        limits: fe2o3_kernel_ir::StorageLayoutLimitsV1,
+    ) -> Self {
+        self.storage_layout_limits = limits;
+        self
+    }
+
+    /// Returns the retained physical-layout policy for admission and replay.
+    pub const fn storage_layout_limits(self) -> fe2o3_kernel_ir::StorageLayoutLimitsV1 {
+        self.storage_layout_limits
     }
 }
 
@@ -12631,6 +12655,19 @@ include!("production_scoped_memory_anchors_v29.rs");
 #[path = "production_retained_load_fault_v1_tests.rs"]
 mod retained_load_fault_v1_tests;
 include!("production_execution_lifecycle_insertion_v29.rs");
+include!("production_source_storage_layout_v29.rs");
+include!("production_source_storage_demands_v29.rs");
+include!("production_scoped_source_cleanup_v29.rs");
+include!("production_scoped_source_layout_owner_v29.rs");
+#[cfg(test)]
+#[path = "production_source_storage_demand_resources_v29_tests.rs"]
+mod source_storage_demand_resources_v29_tests;
+#[cfg(test)]
+#[path = "production_source_storage_demands_v29_tests.rs"]
+mod source_storage_demands_v29_tests;
+#[cfg(test)]
+#[path = "production_storage_layout_limits_v1_tests.rs"]
+mod storage_layout_limits_v1_tests;
 include!("production_scoped_module_v29.rs");
 include!("production_scoped_owned_input_v29.rs");
 include!("production_scoped_source_replay_v29.rs");

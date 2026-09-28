@@ -29,7 +29,7 @@ fn local_and_physical_fallback_pay_exact_work_and_storage_with_live_sibling() {
                 budget.reserve_storage(floor).unwrap();
                 let proof = super::super::check(inventory, 1024, &mut budget).unwrap();
                 assert_eq!(
-                    proof.latest_stores.iter().filter(|s| s.is_some()).count(),
+                    proof.latest_stores().iter().filter(|s| s.is_some()).count(),
                     1
                 );
                 let measured = (budget.work(), budget.storage());
@@ -146,7 +146,7 @@ fn existing_erased_scope_drops_real_fallback_proof_before_error_and_panic_refund
             let ledger = budget.work_ledger_identity_v1();
             let result: R<()> = erased_general_scratch_v1(&mut budget, |budget| {
                 let proof = super::super::check(inventory, 1024, budget)?;
-                assert_eq!(proof.latest_stores[3], Some(2));
+                assert_eq!(proof.latest_stores()[3], Some(2));
                 assert!(budget.storage() > floor);
                 if panic {
                     std::panic::panic_any(736_u32);
@@ -190,7 +190,7 @@ fn existing_erased_scope_never_credits_a_foreign_ledger_after_fallback() {
             let mut accepted = None;
             let result: R<()> = erased_general_scratch_v1(&mut budget, |budget| {
                 let proof = super::super::check(inventory, 1024, budget)?;
-                assert_eq!(proof.latest_stores[3], Some(2));
+                assert_eq!(proof.latest_stores()[3], Some(2));
                 accepted = Some((budget.storage(), budget.work()));
                 std::mem::swap(budget, &mut foreign);
                 if mode == 1 {

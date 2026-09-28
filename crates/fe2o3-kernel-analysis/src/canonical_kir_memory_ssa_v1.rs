@@ -7,7 +7,8 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKirBlockCoordinateV1 as Block, CanonicalKirEdgeCoordinateV1 as Edge,
     CanonicalKirFunctionCoordinateV1 as Function, CanonicalKirOperationCoordinateV1 as Operation,
-    KirLocalMemoryEffectRefV1, OperationKind,
+    KirLocalMemoryEffectRefV1, OperationKind, VerifiedCanonicalKernelIrModuleV12,
+    VerifiedCanonicalKernelIrModuleV18,
 };
 use std::{error::Error as StdError, fmt, mem::size_of, ops::Range};
 
@@ -179,14 +180,18 @@ struct BlockState {
 /// }
 /// ```
 #[derive(Debug)]
-pub struct CanonicalKirMemorySsaV1<'i, 'g> {
-    inventory: &'i CanonicalKirInventoryV1<'g>,
+pub struct CanonicalKirMemorySsaV1<'i, 'g, O = VerifiedCanonicalKernelIrModuleV12> {
+    inventory: &'i CanonicalKirInventoryV1<'g, O>,
     nodes: Vec<Node>,
     inputs: Vec<Input>,
     blocks: Vec<BlockState>,
     operations: Vec<Option<NodeId>>,
     retained: usize,
 }
+
+/// Conservative memory versions borrowing the original storage-capable graph.
+pub type CanonicalKirMemorySsaV18<'i, 'g> =
+    CanonicalKirMemorySsaV1<'i, 'g, VerifiedCanonicalKernelIrModuleV18>;
 
 impl<'i, 'g> CanonicalKirMemorySsaV1<'i, 'g> {
     /// O(functions + blocks + operations + effects + edges). Dense stored-order
@@ -203,6 +208,28 @@ impl<'i, 'g> CanonicalKirMemorySsaV1<'i, 'g> {
         limits: CanonicalKirMemorySsaLimitsV1,
         budget: &mut Budget<'_>,
     ) -> Result<(Self, CanonicalKirMemorySsaStorageV1)> {
+        Self::derive_for_inventory(inventory, limits, budget)
+    }
+}
+
+impl<'i, 'g> CanonicalKirMemorySsaV18<'i, 'g> {
+    /// Uses the shared memory-effect traversal, including every Storage effect.
+    /// Memory versions establish neither initialization nor alias independence.
+    pub fn derive_v18(
+        inventory: &'i crate::CanonicalKirInventoryV18<'g>,
+        limits: CanonicalKirMemorySsaLimitsV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, CanonicalKirMemorySsaStorageV1)> {
+        Self::derive_for_inventory(inventory, limits, budget)
+    }
+}
+
+impl<'i, 'g, O> CanonicalKirMemorySsaV1<'i, 'g, O> {
+    fn derive_for_inventory(
+        inventory: &'i CanonicalKirInventoryV1<'g, O>,
+        limits: CanonicalKirMemorySsaLimitsV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, CanonicalKirMemorySsaStorageV1)> {
         let floor = budget.storage();
         let result = Self::build(inventory, limits, budget);
         let release = budget
@@ -216,10 +243,10 @@ impl<'i, 'g> CanonicalKirMemorySsaV1<'i, 'g> {
         })
     }
 
-    pub const fn inventory(&self) -> &'i CanonicalKirInventoryV1<'g> {
+    pub const fn inventory(&self) -> &'i CanonicalKirInventoryV1<'g, O> {
         self.inventory
     }
-    pub fn belongs_to(&self, inventory: &CanonicalKirInventoryV1<'_>) -> bool {
+    pub fn belongs_to(&self, inventory: &CanonicalKirInventoryV1<'_, O>) -> bool {
         std::ptr::eq(self.inventory, inventory)
     }
     pub fn node_count(&self) -> usize {
@@ -293,7 +320,7 @@ impl<'i, 'g> CanonicalKirMemorySsaV1<'i, 'g> {
     }
 
     fn build(
-        inventory: &'i CanonicalKirInventoryV1<'g>,
+        inventory: &'i CanonicalKirInventoryV1<'g, O>,
         limits: CanonicalKirMemorySsaLimitsV1,
         budget: &mut Budget<'_>,
     ) -> Result<Self> {
@@ -552,8 +579,8 @@ enum Class {
     Def,
 }
 
-fn classify(
-    inventory: &CanonicalKirInventoryV1<'_>,
+fn classify<O>(
+    inventory: &CanonicalKirInventoryV1<'_, O>,
     index: usize,
     budget: &mut Budget<'_>,
 ) -> Result<Class> {
@@ -602,7 +629,7 @@ fn classify(
     Ok(class)
 }
 
-fn block_index(inventory: &CanonicalKirInventoryV1<'_>, coordinate: Block) -> Option<usize> {
+fn block_index<O>(inventory: &CanonicalKirInventoryV1<'_, O>, coordinate: Block) -> Option<usize> {
     let function = inventory
         .functions()
         .get(usize::try_from(coordinate.function.0).ok()?)?;
@@ -619,7 +646,10 @@ fn block_index(inventory: &CanonicalKirInventoryV1<'_>, coordinate: Block) -> Op
     (inventory.blocks().get(index)?.coordinate == coordinate).then_some(index)
 }
 
-fn edge_indices(inventory: &CanonicalKirInventoryV1<'_>, index: usize) -> Option<(usize, usize)> {
+fn edge_indices<O>(
+    inventory: &CanonicalKirInventoryV1<'_, O>,
+    index: usize,
+) -> Option<(usize, usize)> {
     let edge = inventory.edges().get(index)?;
     let source = block_index(inventory, edge.coordinate.source)?;
     let block = inventory.blocks().get(source)?;

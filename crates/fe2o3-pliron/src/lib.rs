@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod canonical_analysis_scope_v1;
+mod canonical_analysis_scope_v18;
 mod commutative_cse_owner_v1;
 mod fixed_integer_continuation_claim_v1;
 mod fixed_integer_continuation_v1;
@@ -20,6 +21,9 @@ pub use source_argument_v1::{
 };
 
 pub use canonical_analysis_scope_v1::*;
+pub use canonical_analysis_scope_v18::{
+    CanonicalAnalysisCleanupV1, CanonicalAnalysisScopeV18, with_canonical_analysis_scope_v18,
+};
 pub use commutative_cse_owner_v1::{
     CheckedCommutativeBitwiseOptimizationV1, CommutativeBitwiseExecutionV1,
     CommutativeBitwiseOptimizationErrorV1, OwnedCommutativeBitwiseContinuationV1,
