@@ -34,6 +34,7 @@ enum CleanupObservation {
     StopObserved(i32, i32),
     KillRequested(i32),
     TerminalReaped(i32, i32),
+    TerminalValidated(i32, i32, ExitBoundary),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,7 +43,7 @@ enum BirthRefusal {
     AfterResume,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct CleanupProbe {
     refusal: Option<BirthRefusal>,
     abort_group_exit: bool,
@@ -124,7 +125,10 @@ pub(super) fn abort_after_group_leader_exit_resume(
         return Ok(());
     }
     let task = &tree[&leader];
-    if !task.leader || !task.saw_exit_event || task.current_stop.is_some() {
+    if !task.leader
+        || !matches!(task.exit_boundary, Some(ExitBoundary::Task(_)))
+        || task.current_stop.is_some()
+    {
         return Err(process_failure(
             "fixture leader lacks a resumed authenticated EXIT",
         ));
@@ -172,6 +176,10 @@ pub(super) fn record_cleanup_terminal(pid: i32, status: i32) {
 
 pub(super) fn record_cleanup_stop(pid: i32, status: i32) {
     record_cleanup(CleanupObservation::StopObserved(pid, status));
+}
+
+pub(super) fn record_exit_terminal(pid: i32, status: i32, boundary: ExitBoundary) {
+    record_cleanup(CleanupObservation::TerminalValidated(pid, status, boundary));
 }
 
 struct ResetCleanupProbe;
@@ -273,7 +281,11 @@ fn hostile_race(mode: u64, expected_error: &str) {
     PROBE.with(|probe| {
         *probe.borrow_mut() = Some(Box::new(move |pid, r, completed| {
             let control = probe_mapping.get();
-            if matches!(mode, 4 | 5) {
+            if matches!(mode, 4..=7) {
+                let leader = thread_group_id(pid)?;
+                if mode == 7 && pid == leader {
+                    return Ok(());
+                }
                 if !completed
                     && r.orig_rax == u64::from(MMAP_SYSCALL)
                     && control.ready.load(Ordering::SeqCst) == 1
@@ -282,10 +294,11 @@ fn hostile_race(mode: u64, expected_error: &str) {
                         .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
                         .is_ok()
                 {
-                    let leader = thread_group_id(pid)?;
+                    let recipient = if mode == 7 { pid } else { leader };
+                    control.target.store(recipient as u64, Ordering::SeqCst);
                     // SAFETY: the diagnostic fixture installed this handler; target
-                    // the retained leader, not whichever thread could receive kill().
-                    if unsafe { tgkill(leader, leader, 10) } != 0 {
+                    // exactly the retained caller selected by this fixture mode.
+                    if unsafe { tgkill(leader, recipient, 10) } != 0 {
                         return Err(io_process_failure("signal fixture leader exit"));
                     }
                 }
@@ -370,10 +383,10 @@ fn hostile_race(mode: u64, expected_error: &str) {
     let mut child = seized_spawn::spawn(command, bindings.to_vec(), 10, deadline).unwrap();
     let pid = child.id() as i32;
     let _cleanup_reset = ResetCleanupProbe;
-    if mode == 5 {
+    if matches!(mode, 5..=7) {
         CLEANUP_PROBE.with(|probe| {
             *probe.borrow_mut() = Some(CleanupProbe {
-                abort_group_exit: true,
+                abort_group_exit: mode == 5,
                 ..Default::default()
             });
         });
@@ -447,6 +460,43 @@ fn hostile_race(mode: u64, expected_error: &str) {
         }
         return;
     }
+    if matches!(mode, 6 | 7) {
+        let probe = CLEANUP_PROBE.with(|probe| probe.borrow_mut().take().unwrap());
+        let terminals = probe
+            .observations
+            .iter()
+            .filter_map(|o| match o {
+                CleanupObservation::TerminalValidated(pid, status, boundary) => {
+                    Some((*pid, (*status, *boundary)))
+                }
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert!(terminals.len() >= 2, "{probe:?}");
+        assert_eq!(
+            terminals.len(),
+            probe
+                .observations
+                .iter()
+                .filter(|o| matches!(o, CleanupObservation::TerminalValidated(..)))
+                .count()
+        );
+        assert!(terminals.contains_key(&pid));
+        let requester = mapping.get().target.load(Ordering::SeqCst) as i32;
+        assert_eq!(requester == pid, mode == 6);
+        assert_eq!(terminals[&requester], (0, ExitBoundary::Task(0)));
+        assert!(!probe.observations.iter().any(|o| matches!(
+            o,
+            CleanupObservation::KillRequested(_) | CleanupObservation::TerminalReaped(_, _)
+        )));
+        for (tid, (status, boundary)) in terminals {
+            assert_eq!(status, 0);
+            assert!(boundary.matches(status));
+            tests::assert_process_disappears(tid);
+        }
+        assert_eq!(mapping.get().phase.load(Ordering::SeqCst), 1);
+        return;
+    }
     if mode == 4 {
         assert_eq!(mapping.get().phase.load(Ordering::SeqCst), 1);
         tests::assert_process_disappears(pid);
@@ -487,6 +537,28 @@ fn aborted_exit_group_drain_retains_exiting_leader_and_reaps_siblings() {
     );
 }
 
+#[test]
+fn ordinary_group_exit_with_parked_siblings_reaches_terminal_validation() {
+    for _ in 0..8 {
+        // This fixture has no solver. Reaching that final role check requires
+        // actual terminal waits for the entire normally exiting thread group.
+        hostile_race(6, "Z3 descendant was not observed");
+        hostile_race(7, "Z3 descendant was not observed");
+    }
+}
+
+#[test]
+fn terminal_status_must_match_its_exact_task_or_group_exit_boundary() {
+    for exit in [ExitBoundary::Task(0), ExitBoundary::Group(0)] {
+        assert!(exit.matches(0));
+        assert!(!exit.matches(1 << 8));
+        assert!(!exit.matches(SIGKILL));
+        assert!(!exit.matches((SIGTRAP << 8) | 0x7f));
+    }
+    assert!(ExitBoundary::Group(17 << 8).matches(17 << 8));
+    assert!(!ExitBoundary::Group(17 << 8).matches(0));
+}
+
 fn wait_for(value: &AtomicU64, expected: u64, deadline: Instant) {
     while value.load(Ordering::SeqCst) != expected {
         assert!(
@@ -520,7 +592,7 @@ fn seized_race_child() {
     let control = SharedControl::map(190);
     let mode = control.get().mode.load(Ordering::SeqCst);
     let deadline = Instant::now() + Duration::from_secs(8);
-    if matches!(mode, 4 | 5) {
+    if matches!(mode, 4..=7) {
         // SAFETY: only this disposable fixture installs SIGUSR1's raw exit handler.
         let handler = if mode == 4 {
             fixture_leader_exit
@@ -696,7 +768,7 @@ fn queued_terminal_status_is_not_signalled_again() {
             role: TraceeRole::Verifier,
             thread_group: std::process::id() as i32,
             leader: true,
-            saw_exit_event: true,
+            exit_boundary: Some(ExitBoundary::Task(0)),
             current_stop: None,
             queued_status: Some(0),
         },
@@ -884,7 +956,7 @@ fn expired_inspection_deadline_refuses_admission_while_child_remains_stopped() {
             role: TraceeRole::Verifier,
             thread_group: pid,
             leader: true,
-            saw_exit_event: false,
+            exit_boundary: None,
             current_stop: None,
             queued_status: None,
         },

@@ -275,12 +275,27 @@ impl TraceeStop {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExitBoundary {
+    Task(i32),
+    Group(i32),
+}
+
+impl ExitBoundary {
+    fn matches(self, status: i32) -> bool {
+        let expected = match self {
+            Self::Task(expected) | Self::Group(expected) => expected,
+        };
+        !stopped(status) && status == expected
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 struct Tracee {
     role: TraceeRole,
     thread_group: i32,
     leader: bool,
-    saw_exit_event: bool,
+    exit_boundary: Option<ExitBoundary>,
     // Exact current kernel stop, retained independently of deferred dispatch.
     // Cleanup may need GETEVENTMSG even after queued_status was consumed.
     current_stop: Option<TraceeStop>,
@@ -686,7 +701,7 @@ fn supervise(
             role: TraceeRole::Verifier,
             thread_group: verifier,
             leader: true,
-            saw_exit_event: false,
+            exit_boundary: None,
             current_stop: None,
             queued_status: None,
         },
@@ -876,7 +891,10 @@ fn supervise(
                     let tracee = tracees.remove(&process).ok_or_else(|| {
                         process_failure("terminal event came from an unknown process")
                     })?;
-                    if !tracee.saw_exit_event {
+                    if !tracee
+                        .exit_boundary
+                        .is_some_and(|exit| exit.matches(status))
+                    {
                         return Err(process_failure(
                             "tracee skipped its authenticated exit checkpoint",
                         ));
@@ -963,19 +981,7 @@ fn event_child(process: i32) -> Result<i32, RetainedFunctionalRefinementRuntimeE
             "fixture injected birth GETEVENTMSG failure",
         ));
     }
-    let mut child = 0_usize;
-    // SAFETY: GETEVENTMSG writes one machine word at the supplied pointer.
-    if unsafe {
-        linux_ptrace(
-            PTRACE_GETEVENTMSG,
-            process,
-            std::ptr::null_mut(),
-            (&raw mut child).cast(),
-        )
-    } < 0
-    {
-        return Err(io_process_failure("read ptrace descendant identity"));
-    }
+    let child = event_message(process, "read ptrace descendant identity")?;
     let child = i32::try_from(child)
         .ok()
         .filter(|pid| *pid > 0)
@@ -985,6 +991,26 @@ fn event_child(process: i32) -> Result<i32, RetainedFunctionalRefinementRuntimeE
     #[cfg(test)]
     stable_tests::record_birth_identity(child);
     Ok(child)
+}
+
+fn event_message(
+    process: i32,
+    operation: &'static str,
+) -> Result<usize, RetainedFunctionalRefinementRuntimeErrorV1> {
+    let mut message = 0_usize;
+    // SAFETY: GETEVENTMSG writes one machine word at the supplied pointer.
+    if unsafe {
+        linux_ptrace(
+            PTRACE_GETEVENTMSG,
+            process,
+            std::ptr::null_mut(),
+            (&raw mut message).cast(),
+        )
+    } < 0
+    {
+        return Err(io_process_failure(operation));
+    }
+    Ok(message)
 }
 
 fn continue_tracee(
@@ -1597,7 +1623,7 @@ fn terminate_tree(
     #[derive(Debug)]
     struct CleanupTracee {
         current_stop: Option<TraceeStop>,
-        saw_exit_event: bool,
+        exiting: bool,
         interrupt_sent: bool,
         kill_sent: bool,
     }
@@ -1613,7 +1639,7 @@ fn terminate_tree(
                 process,
                 CleanupTracee {
                     current_stop: tracee.current_stop,
-                    saw_exit_event: tracee.saw_exit_event
+                    exiting: tracee.exit_boundary.is_some()
                         || tracee.current_stop.is_some_and(TraceeStop::is_exit),
                     interrupt_sent: false,
                     kill_sent: false,
@@ -1638,7 +1664,7 @@ fn terminate_tree(
                 value if value == process && stopped(status) => {
                     let task = remaining.get_mut(&process).expect("retained cleanup task");
                     task.current_stop = TraceeStop::observed(status);
-                    task.saw_exit_event |= task.current_stop.is_some_and(TraceeStop::is_exit);
+                    task.exiting |= task.current_stop.is_some_and(TraceeStop::is_exit);
                     #[cfg(test)]
                     stable_tests::record_cleanup_stop(process, status);
                 }
@@ -1676,7 +1702,7 @@ fn terminate_tree(
                 Ok(child) => {
                     remaining.entry(child).or_insert(CleanupTracee {
                         current_stop: None,
-                        saw_exit_event: false,
+                        exiting: false,
                         interrupt_sent: false,
                         kill_sent: false,
                     });
@@ -1701,7 +1727,7 @@ fn terminate_tree(
             // could suppress the birth. Newly discovered children join this same
             // fixed point. External fatal signals require trusted isolation.
             for (&process, task) in &mut remaining {
-                if task.current_stop.is_none() && !task.saw_exit_event && !task.interrupt_sent {
+                if task.current_stop.is_none() && !task.exiting && !task.interrupt_sent {
                     // SAFETY: only unreaped, ptrace-owned tasks enter this loop.
                     if unsafe {
                         linux_ptrace(
@@ -1722,13 +1748,13 @@ fn terminate_tree(
                     task.interrupt_sent = true;
                 }
             }
-            // An authenticated EXIT cannot return to userspace or create a child.
+            // A checked task or group exit cannot return to userspace or fork.
             // A resumed group leader may still await its parked siblings before
             // becoming reapable; retain its PID, but do not wait for another stop.
             quiescent = discovery_failure.is_none()
                 && remaining
                     .values()
-                    .all(|task| task.current_stop.is_some() || task.saw_exit_event);
+                    .all(|task| task.current_stop.is_some() || task.exiting);
         }
         if Instant::now() >= deadline {
             break;

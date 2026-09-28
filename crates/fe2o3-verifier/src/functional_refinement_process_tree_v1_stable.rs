@@ -298,7 +298,7 @@ fn register_child(
                     role: TraceeRole::PendingExecutable,
                     thread_group: pid,
                     leader: true,
-                    saw_exit_event: false,
+                    exit_boundary: None,
                     current_stop: None,
                     queued_status: None,
                 },
@@ -319,7 +319,7 @@ fn register_child(
             role: TraceeRole::PendingExecutable,
             thread_group: pid,
             leader: true,
-            saw_exit_event: false,
+            exit_boundary: None,
             current_stop: None,
             queued_status: None,
         },
@@ -414,7 +414,14 @@ pub(super) fn complete_request(
         if validate_maps {
             validate_executable_mappings(pid, allowed)?;
         }
-        return complete_exit(tree, pid, registers.orig_rax == 231, deadline, progress);
+        return complete_exit(
+            tree,
+            pid,
+            registers.orig_rax == 231,
+            ((registers.rdi & 0xff) << 8) as i32,
+            deadline,
+            progress,
+        );
     }
     let birth = birth_request(pid, &registers)?;
     if birth.is_some() {
@@ -553,6 +560,7 @@ fn complete_exit(
     tree: &mut BTreeMap<i32, Tracee>,
     pid: i32,
     group_exit: bool,
+    exit_status: i32,
     deadline: Instant,
     progress: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
@@ -581,11 +589,23 @@ fn complete_exit(
             if let Some(status) = next_status(tree, tid)? {
                 if !stopped(status) {
                     remember(tree, tid, status)?;
-                    if !tree[&tid].saw_exit_event {
-                        return Err(process_failure(
-                            "exiting task skipped its authenticated exit checkpoint",
-                        ));
+                    if status != exit_status
+                        || !tree[&tid]
+                            .exit_boundary
+                            .is_some_and(|exit| exit.matches(status))
+                    {
+                        return Err(process_failure(format!(
+                            "exiting task skipped its authenticated exit checkpoint: requester={pid} member={tid} group={group} group_exit={group_exit} group_dying={group_dying} terminal={:?} task={:?}",
+                            terminal_status(status),
+                            tree[&tid]
+                        )));
                     }
+                    #[cfg(test)]
+                    super::stable_tests::record_exit_terminal(
+                        tid,
+                        status,
+                        tree[&tid].exit_boundary.expect("checked exit boundary"),
+                    );
                     continue;
                 }
                 stops += 1;
@@ -594,11 +614,31 @@ fn complete_exit(
                 }
                 match (status as u32) >> 16 {
                     PTRACE_EVENT_EXIT => {
+                        if event_message(tid, "read proof exit status")? != exit_status as usize {
+                            return Err(process_failure(
+                                "proof EXIT status differs from its admitted exit syscall",
+                            ));
+                        }
                         tree.get_mut(&tid)
                             .expect("retained exiting task")
-                            .saw_exit_event = true;
+                            .exit_boundary = Some(ExitBoundary::Task(exit_status));
                         if tid == pid {
                             group_dying = true;
+                            if group_exit {
+                                // The requester's checked EXIT follows do_group_exit:
+                                // SIGNAL_GROUP_EXIT is set and no sibling can return
+                                // to userspace. SIGKILL can suppress a sibling EXIT
+                                // stop; retain that distinct group boundary instead.
+                                for &member in &members {
+                                    let task =
+                                        tree.get_mut(&member).expect("retained group member");
+                                    if task.exit_boundary.is_none()
+                                        && !task.queued_status.is_some_and(|s| !stopped(s))
+                                    {
+                                        task.exit_boundary = Some(ExitBoundary::Group(exit_status));
+                                    }
+                                }
+                            }
                         }
                     }
                     // Once the group-exit requester reached EXIT, Linux has set

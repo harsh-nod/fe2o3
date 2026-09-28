@@ -196,7 +196,7 @@ pub(super) fn spawn(
                     role: TraceeRole::Verifier,
                     thread_group: child.pid,
                     leader: true,
-                    saw_exit_event: false,
+                    exit_boundary: None,
                     current_stop,
                     queued_status: terminal,
                 },
