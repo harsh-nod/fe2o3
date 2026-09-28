@@ -69,6 +69,8 @@ thread_local! {
     static QUERIES: Cell<usize> = const { Cell::new(0) };
     static KILL_REFUSALS: Cell<usize> = const { Cell::new(0) };
     static CLEANUP_CONTINUES: Cell<usize> = const { Cell::new(0) };
+    static UNREGISTERED_CHILD: Cell<Option<i32>> = const { Cell::new(None) };
+    static CREATOR_TERMINAL: Cell<Option<(i32, i32)>> = const { Cell::new(None) };
 }
 
 pub(super) fn inject_kill_refusal() -> io::Result<()> {
@@ -110,7 +112,7 @@ pub(super) fn before_attach() -> Result<(), RetainedFunctionalRefinementRuntimeE
 
 pub(super) fn refuse_birth_query() -> bool {
     let mode = MODE.get();
-    if !matches!(mode, 2 | 6) {
+    if !matches!(mode, 2 | 6 | 9 | 10) {
         return false;
     }
     let queries = QUERIES.get() + 1;
@@ -122,10 +124,68 @@ pub(super) fn refuse_birth_query() -> bool {
     true
 }
 
-pub(super) fn after_birth_resume(pid: i32) {
+pub(super) fn after_birth_resume(
+    tree: &mut Tracees,
+    pid: i32,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     if MODE.get() == 5 {
         assert_eq!(diagnostic_children(pid).len(), 1);
         panic!("fixture unwind after creation resume before wait");
+    }
+    if !matches!(MODE.get(), 9 | 10) {
+        return Ok(());
+    }
+    assert!(
+        tree[&pid].pending_creation,
+        "custody precedes the syscall step"
+    );
+    assert!(tree[&pid].current_stop.is_none());
+    let children = diagnostic_children(pid);
+    assert_eq!(children.len(), 1);
+    // Diagnostic evidence only, never inserted into library custody. The outer
+    // subreaper must authenticate this child's terminal after domain teardown.
+    UNREGISTERED_CHILD.set(Some(children[0]));
+    if MODE.get() == 10 {
+        return Err(process_failure(
+            "fixture refused birth after creation resume",
+        ));
+    }
+    // Simulate an external fatal signal before consuming the birth event. This
+    // deliberately violates the production isolation prerequisite; it must not
+    // turn the creator's real terminal into proof that no unknown child exists.
+    assert_eq!(unsafe { kill(pid, SIGKILL) }, 0);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "creator fatal drain exceeded bound"
+        );
+        if let Some(status) = stable::next_status(tree, pid)? {
+            assert!(tree[&pid].pending_creation);
+            if !stopped(status) {
+                assert_eq!(terminal_status(status), (None, Some(SIGKILL)));
+                assert!(tree[&pid].terminal_consumed);
+                CREATOR_TERMINAL.set(Some((pid, status)));
+                return Err(process_failure(
+                    "fixture fatal creator retained an unresolved birth",
+                ));
+            }
+            if tree[&pid]
+                .current_stop
+                .is_some_and(TraceeStop::unregistered_birth)
+            {
+                assert!(
+                    event_child(pid).is_err(),
+                    "negative hook withholds birth identity"
+                );
+            }
+            // Only this negative fixture advances stops after its successful
+            // real SIGKILL. No synthetic terminal, forged EXIT or positive proof.
+            continue_killed_tracee(pid)?;
+            tree.get_mut(&pid).unwrap().current_stop = None;
+        } else {
+            thread::sleep(ACTIVE_TREE_POLL_INTERVAL);
+        }
     }
 }
 
@@ -227,6 +287,9 @@ fn run_domain(case: &str) {
         "domain output read failed after confirmed termination: {read_error:?}"
     );
     assert!(String::from_utf8_lossy(&domain.out.bytes).contains("OUTER_TERMINALS_CONFIRMED"));
+    if case == "fatal-creation" {
+        assert!(String::from_utf8_lossy(&domain.out.bytes).contains("CREATOR_TERMINAL_CONFIRMED"));
+    }
 }
 #[test]
 fn cleanup_deadline_retains_owned_tasks_and_resources() {
@@ -264,6 +327,37 @@ fn cleanup_kill_refusal_never_resumes_a_seized_nonsignal_stop() {
     for case in ["kill-eperm", "kill-esrch"] {
         run_domain(case);
     }
+}
+
+#[test]
+fn pending_creation_survives_actual_creator_terminal_and_refused_birth() {
+    for case in ["fatal-creation", "refused-resume"] {
+        run_domain(case);
+    }
+}
+
+#[test]
+fn pending_creation_state_cannot_be_removed_or_overwritten_after_terminal() {
+    // State invariant only: these integers are not OS wait evidence and never
+    // enter an Attempt, cleanup, ptrace or proof-admission path.
+    let mut tree = Tracees::new().unwrap();
+    let mut task = Tracee::pending(TraceeRole::Verifier, 101, true);
+    task.pending_creation = true;
+    task.terminal_consumed = true;
+    tree.insert(101, task).unwrap();
+    assert!(tree.unresolved());
+    assert!(tree.remove_terminal(&101).is_err());
+    assert!(tree[&101].pending_creation);
+    assert!(tree[&101].terminal_consumed);
+    assert!(stable::next_status(&mut tree, 101).is_err());
+    assert!(
+        tree.insert(101, Tracee::pending(TraceeRole::Solver, 101, true))
+            .is_err()
+    );
+    assert!(tree.has_uncertain());
+    assert!(tree[&101].pending_creation);
+    assert!(tree[&101].terminal_consumed);
+    assert!(tree[&101].current_stop.is_none());
 }
 
 #[test]
@@ -373,6 +467,14 @@ fn quarantine_domain_fixture() {
         );
     }
     println!("OUTER_TERMINALS_CONFIRMED {:?}", domain.terminals);
+    if case == "fatal-creation" {
+        let output = String::from_utf8_lossy(&domain.out.bytes);
+        let terminal = output
+            .lines()
+            .find(|line| line.starts_with("CREATOR_TERMINAL_CONFIRMED "))
+            .expect("driver must confirm the creator's real terminal separately");
+        println!("{terminal}");
+    }
 }
 fn refuse_on_all_threads() {
     let forks = FORKS.load(Ordering::SeqCst);
@@ -403,6 +505,8 @@ fn exercise(case: &str) -> Vec<i32> {
         "attach" => 4,
         "unwind-resume" => 5,
         "unwind-birth" => 6,
+        "fatal-creation" => 9,
+        "refused-resume" => 10,
         _ => panic!("unknown private fixture case"),
     };
     MODE.set(mode);
@@ -444,7 +548,23 @@ fn exercise(case: &str) -> Vec<i32> {
     if matches!(mode, 3 | 5 | 6) {
         assert!(result.is_err());
     } else {
-        assert!(result.unwrap().is_err());
+        let error = result
+            .unwrap()
+            .err()
+            .expect("negative fixture must refuse execution");
+        if mode == 9 {
+            assert!(
+                error
+                    .to_string()
+                    .contains("fixture fatal creator retained an unresolved birth")
+            );
+        } else if mode == 10 {
+            assert!(
+                error
+                    .to_string()
+                    .contains("fixture refused birth after creation resume")
+            );
+        }
     }
     assert!(start.elapsed() < Duration::from_secs(7));
     drop(source);
@@ -456,19 +576,44 @@ fn exercise(case: &str) -> Vec<i32> {
         assert!(seals.contains(rustix::fs::SealFlags::SEAL | rustix::fs::SealFlags::WRITE));
         assert!(rustix::fs::fstat(run.child.stdout.as_ref().unwrap()).is_ok());
         assert!(rustix::fs::fstat(run.child.stderr.as_ref().unwrap()).is_ok());
-        if matches!(mode, 2 | 6) {
+        if matches!(mode, 2 | 6 | 10) {
             assert!(run.tracees.values().any(|task| {
-                task.current_stop
-                    .is_some_and(TraceeStop::unregistered_birth)
+                task.pending_creation
+                    && task
+                        .current_stop
+                        .is_some_and(TraceeStop::unregistered_birth)
             }));
             assert!(run.tracees.values().all(|task| !task.cleanup_kill_sent));
         }
-        run.tracees.pids().collect::<Vec<_>>()
+        if mode == 9 {
+            let (pid, status) = CREATOR_TERMINAL.get().expect("actual terminal observation");
+            let task = &run.tracees[&pid];
+            assert!(task.terminal_consumed);
+            assert!(task.current_stop.is_none());
+            assert!(task.pending_creation);
+            assert!(!task.cleanup_kill_sent);
+            assert_eq!(terminal_status(status), (None, Some(SIGKILL)));
+            println!("\nCREATOR_TERMINAL_CONFIRMED {pid} {status}");
+        }
+        run.tracees
+            .iter()
+            .filter_map(|(&pid, task)| (!task.terminal_consumed).then_some(pid))
+            .collect::<Vec<_>>()
     });
     if matches!(mode, 2 | 5 | 6) {
         // Observation only. The library has NOT acquired this child from procfs.
         // The independent outer domain must later confirm its actual terminal.
         pids.extend(diagnostic_children(pids[0]));
+    }
+    if matches!(mode, 9 | 10) {
+        assert!(custody::inspect_retained(|run| !run
+            .tracees
+            .contains_key(&UNREGISTERED_CHILD.get().unwrap())));
+        pids.push(
+            UNREGISTERED_CHILD
+                .get()
+                .expect("diagnostic child, not custody"),
+        );
     }
     refuse_on_all_threads();
     pids.sort_unstable();

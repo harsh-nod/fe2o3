@@ -189,13 +189,20 @@ impl Drop for AttemptV1 {
 }
 
 #[cfg(test)]
-pub(super) fn inspect_retained<T>(inspect: impl FnOnce(&Run) -> T) -> T {
-    let slot = SLOT.try_lock().unwrap_or_else(|error| match error {
-        TryLockError::Poisoned(error) => error.into_inner(),
-        TryLockError::WouldBlock => panic!("attempt guard must be dropped before inspection"),
-    });
-    assert!(POISONED.load(Ordering::Acquire));
-    inspect(slot.as_deref().expect("quarantined owner retained"))
+pub(super) use test_inspection::inspect_retained;
+
+#[cfg(test)]
+mod test_inspection {
+    use super::*;
+
+    pub(in super::super) fn inspect_retained<T>(inspect: impl FnOnce(&Run) -> T) -> T {
+        let slot = SLOT.try_lock().unwrap_or_else(|error| match error {
+            TryLockError::Poisoned(error) => error.into_inner(),
+            TryLockError::WouldBlock => panic!("attempt guard must be dropped before inspection"),
+        });
+        assert!(POISONED.load(Ordering::Acquire));
+        inspect(slot.as_deref().expect("quarantined owner retained"))
+    }
 }
 
 pub(super) struct Run {
@@ -271,7 +278,9 @@ impl Tracees {
     pub(super) fn unresolved(&self) -> bool {
         self.uncertain.get().is_some()
             || self.values().any(|t| {
-                !t.terminal_consumed || t.current_stop.is_some_and(TraceeStop::unregistered_birth)
+                !t.terminal_consumed
+                    || t.pending_creation
+                    || t.current_stop.is_some_and(TraceeStop::unregistered_birth)
             })
     }
 
@@ -286,7 +295,24 @@ impl Tracees {
 
     pub(super) fn insert(&mut self, pid: i32, task: Tracee) -> Result<()> {
         match self.entries.binary_search_by_key(&pid, |(pid, _)| *pid) {
-            Ok(index) => self.entries[index].1 = task,
+            Ok(index) => {
+                let previous = &self.entries[index].1;
+                if !previous.terminal_consumed
+                    || previous.pending_creation
+                    || previous
+                        .current_stop
+                        .is_some_and(TraceeStop::unregistered_birth)
+                {
+                    // Do not overwrite an old lifetime's birth obligation. The
+                    // ambiguous new PID is retained as uncertainty; neither
+                    // lifetime may be recovered later from its numeric PID.
+                    self.uncertain(pid);
+                    return Err(process_failure(
+                        "replacement would discard unresolved task custody",
+                    ));
+                }
+                self.entries[index].1 = task;
+            }
             Err(index) if self.entries.len() < CUSTODY_CAPACITY => {
                 self.entries.insert(index, (pid, task))
             }
@@ -312,11 +338,23 @@ impl Tracees {
             .ok()
             .map(|i| &mut self.entries[i].1)
     }
-    pub(super) fn remove(&mut self, pid: &i32) -> Option<Tracee> {
-        self.entries
+    pub(super) fn remove_terminal(&mut self, pid: &i32) -> Result<Tracee> {
+        let index = self
+            .entries
             .binary_search_by_key(pid, |(pid, _)| *pid)
-            .ok()
-            .map(|i| self.entries.remove(i).1)
+            .map_err(|_| process_failure("terminal event came from an unknown process"))?;
+        let task = &self.entries[index].1;
+        if !task.terminal_consumed
+            || task.pending_creation
+            || task
+                .current_stop
+                .is_some_and(TraceeStop::unregistered_birth)
+        {
+            return Err(process_failure(
+                "terminal removal would discard unresolved task custody",
+            ));
+        }
+        Ok(self.entries.remove(index).1)
     }
     pub(super) fn contains_key(&self, pid: &i32) -> bool {
         self.get(pid).is_some()

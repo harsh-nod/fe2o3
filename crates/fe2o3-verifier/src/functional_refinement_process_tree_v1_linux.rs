@@ -301,6 +301,9 @@ struct Tracee {
     current_stop: Option<TraceeStop>,
     queued_status: Option<i32>,
     terminal_consumed: bool,
+    // Published before a creation can run. A terminal wait releases this PID,
+    // not an unknown child whose birth event may have been lost to a fatal signal.
+    pending_creation: bool,
     cleanup_interrupt_sent: bool,
     cleanup_kill_sent: bool,
 }
@@ -316,6 +319,7 @@ impl Tracee {
             current_stop: None,
             queued_status: None,
             terminal_consumed: false,
+            pending_creation: false,
             cleanup_interrupt_sent: false,
             cleanup_kill_sent: false,
         }
@@ -911,9 +915,7 @@ fn supervise(
                         stable::release_interrupts(tracees, inspection_deadline)?;
                     }
                 } else {
-                    let tracee = tracees.remove(&process).ok_or_else(|| {
-                        process_failure("terminal event came from an unknown process")
-                    })?;
+                    let tracee = tracees.remove_terminal(&process)?;
                     if !tracee
                         .exit_boundary
                         .is_some_and(|exit| exit.matches(status))
@@ -1715,13 +1717,13 @@ fn terminate_tree(tracees: &mut Tracees) -> Result<(), RetainedFunctionalRefinem
                     tracees.uncertain(child);
                     return Err(process_failure("duplicate cleanup birth identity"));
                 }
-                tracees
-                    .get_mut(&process)
-                    .expect("birth parent")
+                let parent = tracees.get_mut(&process).expect("birth parent");
+                parent
                     .current_stop
                     .as_mut()
                     .expect("birth stop")
                     .birth_registered = true;
+                parent.pending_creation = false;
                 Ok::<_, RetainedFunctionalRefinementRuntimeErrorV1>(())
             })();
             if let Err(error) = discover {
@@ -1762,7 +1764,10 @@ fn terminate_tree(tracees: &mut Tracees) -> Result<(), RetainedFunctionalRefinem
             quiescent = discovery_failure.is_none()
                 && !tracees.has_uncertain()
                 && tracees.values().all(|task| {
-                    task.terminal_consumed || task.current_stop.is_some() || task.cleanup_exiting
+                    !task.pending_creation
+                        && (task.terminal_consumed
+                            || task.current_stop.is_some()
+                            || task.cleanup_exiting)
                 });
         }
         if Instant::now() >= deadline {

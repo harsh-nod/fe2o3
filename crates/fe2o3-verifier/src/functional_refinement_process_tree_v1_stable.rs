@@ -23,6 +23,11 @@ pub(super) fn next_status(tree: &mut Tracees, pid: i32) -> Result<Option<i32>> {
     if let Some(status) = task.queued_status.take() {
         return Ok(Some(status));
     }
+    if task.terminal_consumed {
+        return Err(process_failure(
+            "cannot wait twice for a terminal proof task",
+        ));
+    }
     let status = wait_for_specific_nonblocking(pid)?;
     if let Some(status) = status {
         task.current_stop = TraceeStop::observed(status);
@@ -297,13 +302,16 @@ fn register_child(
                 pid,
                 Tracee::pending(TraceeRole::PendingExecutable, pid, true),
             )?;
+            let parent_task = tree.get_mut(&parent).expect("retained parent");
+            parent_task
+                .current_stop
+                .as_mut()
+                .expect("consumed birth stop")
+                .birth_registered = true;
+            parent_task.pending_creation = false;
+        } else {
+            tree.uncertain(pid);
         }
-        tree.get_mut(&parent)
-            .expect("retained parent")
-            .current_stop
-            .as_mut()
-            .expect("consumed birth stop")
-            .birth_registered = true;
         return Err(process_failure("duplicate proof descendant identity"));
     }
     // Register before any fallible inspection, including admission failures.
@@ -311,12 +319,13 @@ fn register_child(
         pid,
         Tracee::pending(TraceeRole::PendingExecutable, pid, true),
     )?;
-    tree.get_mut(&parent)
-        .expect("retained parent")
+    let registered_parent = tree.get_mut(&parent).expect("retained parent");
+    registered_parent
         .current_stop
         .as_mut()
         .expect("consumed birth stop")
         .birth_registered = true;
+    registered_parent.pending_creation = false;
     let group = thread_group_id(pid)?;
     let thread = group == parent_task.thread_group;
     if thread != (birth == Birth::Thread)
@@ -423,10 +432,21 @@ pub(super) fn complete_request(
     #[cfg(test)]
     super::stable_tests::probe(pid, &registers, false)?;
     checkpoint(deadline, progress)?;
+    if birth.is_some() {
+        let task = tree.get_mut(&pid).expect("retained creator");
+        if task.pending_creation {
+            return Err(process_failure(
+                "previous proof creation remains unresolved",
+            ));
+        }
+        // Publish BEFORE ptrace: failure or unwind cannot prove that no child
+        // exists. Only registered birth or authenticated failure discharges it.
+        task.pending_creation = true;
+    }
     step(tree, pid)?;
     #[cfg(test)]
     if birth.is_some() {
-        super::quarantine_tests::after_birth_resume(pid);
+        super::quarantine_tests::after_birth_resume(tree, pid)?;
         super::stable_tests::abort_after_birth_resume(pid)?;
     }
     let mut child = None;
@@ -479,6 +499,13 @@ pub(super) fn complete_request(
                     }
                 {
                     return Err(process_failure("clone result and observed child disagree"));
+                }
+                if birth.is_some() && child.is_none() {
+                    // completed_result authenticated EXIT, syscall identity and
+                    // the negative result above; a signal/terminal is not enough.
+                    tree.get_mut(&pid)
+                        .expect("retained creator")
+                        .pending_creation = false;
                 }
                 if validate_maps {
                     validate_executable_mappings(pid, allowed)?;
