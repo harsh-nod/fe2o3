@@ -3,6 +3,16 @@
 use super::*;
 use fe2o3_profiler_protocol::ProfileTruthOriginV1;
 
+#[test]
+fn native_depth_backing_configuration_fits_session_envelope() {
+    assert_eq!(NATIVE_BACKING_BUDGET.max_backing_bytes(), 128 * 1024 * 1024);
+    assert_eq!(NATIVE_BACKING_BUDGET.max_allocations(), 256);
+    assert!(
+        Gfx942HostVisibleBackingBudgetV1::new(NATIVE_BACKING_BUDGET.max_backing_bytes(), 512)
+            .is_none()
+    );
+}
+
 fn digest(id: u64) -> [u8; 32] {
     Sha256::digest(id.to_le_bytes()).into()
 }

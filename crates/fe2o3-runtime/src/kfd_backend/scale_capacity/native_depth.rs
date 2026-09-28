@@ -11,6 +11,12 @@ mod tests;
 
 const DEPTH: usize = 1024;
 const LANES: usize = 2;
+// Dispatch receipts share six data allocations; they are not backing records.
+const NATIVE_BACKING_BUDGET: Gfx942HostVisibleBackingBudgetV1 =
+    match Gfx942HostVisibleBackingBudgetV1::new(128 * 1024 * 1024, 256) {
+        Some(budget) => budget,
+        None => panic!("native depth backing budget exceeds the session envelope"),
+    };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ReceiptRow {
@@ -257,9 +263,7 @@ fn native_scaled_two_lane_2048_retained_receipts_and_cleanup() {
     let runtime_only = account.usage();
     assert_eq!(runtime_only.retained_records, LANES);
     backend
-        .configure_host_visible_backing_budget_v1(
-            Gfx942HostVisibleBackingBudgetV1::new(128 * 1024 * 1024, 512).unwrap(),
-        )
+        .configure_host_visible_backing_budget_v1(NATIVE_BACKING_BUDGET)
         .unwrap();
     let mut scope = [0; 32];
     std::fs::File::open("/dev/urandom")
