@@ -173,6 +173,9 @@ fn fault_case(lane: usize, pipelined: bool, fault: Submit, drop_unrepaired: bool
     );
     let explicit_before = f.backend.compute_dependency_retain_counts[&f.predecessor];
     let ordered_before = f.backend.compute_dependency_retain_counts[&predecessor];
+    let heads_before = f.backend.with_compute_lane_state_v1(lane, |backend| {
+        backend.compute_pipeline.publication_heads_v1()
+    });
     let script = if fault == Submit::ProfileUnwind {
         vec![(target, Submit::Publish), (target, fault)]
     } else {
@@ -200,6 +203,25 @@ fn fault_case(lane: usize, pipelined: bool, fault: Submit, drop_unrepaired: bool
     assert!(f.backend.terminal);
     assert_eq!(untouched(&f, target), untouched_before);
     f.backend.with_compute_lane_state_v1(lane, |backend| {
+        let identity = backend
+            .compute_pipeline
+            .identity_for_submission_v1(target)
+            .unwrap();
+        let heads = backend.compute_pipeline.publication_heads_v1();
+        if fault == Submit::ProfileUnwind {
+            assert_eq!(
+                heads,
+                (
+                    heads_before.0.and_then(|epoch| epoch.checked_add(1)),
+                    heads_before.1.or(heads_before.0),
+                    None,
+                )
+            );
+            assert!(backend.compute_pipeline.checked_frontier_v1().is_ok());
+        } else {
+            assert_eq!(heads, (heads_before.0, heads_before.1, Some(identity)));
+            assert!(backend.compute_pipeline.checked_frontier_v1().is_err());
+        }
         for active in backend.compute_pipeline.iter() {
             assert_eq!(
                 backend.compute_pipeline.phase(active.id),

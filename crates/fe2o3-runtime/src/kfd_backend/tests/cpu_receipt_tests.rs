@@ -256,6 +256,19 @@ impl Fixture {
             .unwrap()
     }
 
+    fn returned_identity(&self) -> CpuDispatchIdentityV1 {
+        *self.backend
+            .cpu_queue
+            .as_ref()
+            .unwrap()
+            .lane_control
+            .last_submitted_identity
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+    }
+
     fn complete(&mut self, id: u64) {
         complete(&mut self.backend, self.lane, id);
     }
@@ -437,6 +450,8 @@ fn cpu_receipts_ordered_physical_retirement_preserves_logical_frontier() {
             let mut f = Fixture::new(lane);
             let a = f.submit();
             f.flush();
+            let a_receipt = f.returned_identity();
+            assert_eq!(f.identity(a), a_receipt);
             let b = f.submit();
             let c = f.submit();
             assert_eq!(f.backend.pending_compute_streams[&f.streams[lane]], [b, c]);
@@ -445,12 +460,19 @@ fn cpu_receipts_ordered_physical_retirement_preserves_logical_frontier() {
                 2
             );
             f.flush();
+            let b_receipt = f.returned_identity();
+            assert_eq!(f.identity(b), b_receipt);
+            assert_eq!(f.identity(a), a_receipt);
             assert_eq!(f.backend.pending_compute_streams[&f.streams[lane]], [c]);
             assert_eq!(
                 f.backend.compute_dependency_retain_counts[&f.predecessor],
                 1
             );
             f.flush();
+            let c_receipt = f.returned_identity();
+            assert_eq!(f.identity(c), c_receipt);
+            assert_eq!(f.identity(a), a_receipt);
+            assert_eq!(f.identity(b), b_receipt);
             assert!(
                 !f.backend
                     .compute_dependency_retain_counts
@@ -556,6 +578,13 @@ fn cpu_receipts_outer_fault_retains_exact_indexed_publication() {
         let reservations = f.backend.compute_completion_reservations;
         let retained = f.backend.compute_module_retain_counts[&f.module];
         let allocations = format!("{:?}", f.backend.allocation_custody);
+        let heads_before = if lane == 0 {
+            f.backend.compute_pipeline.publication_heads_v1()
+        } else {
+            f.backend.auxiliary_compute_lanes[lane - 1]
+                .pipeline
+                .publication_heads_v1()
+        };
         let before = f.backend.cpu_queue.as_ref().unwrap().fixture.snapshots();
         f.backend.cpu_queue.as_mut().unwrap().next_outer_fault = Some((
             super::super::ordinary_queue_io::CpuIoOperationV1::Submit,
@@ -635,6 +664,12 @@ fn cpu_receipts_outer_fault_retains_exact_indexed_publication() {
             } else {
                 &f.backend.auxiliary_compute_lanes[lane - 1].pipeline
             };
+            let identity = pipeline.identity_for_submission_v1(target).unwrap();
+            assert_eq!(
+                pipeline.publication_heads_v1(),
+                (heads_before.0, heads_before.1, Some(identity))
+            );
+            assert!(pipeline.checked_frontier_v1().is_err());
             assert_eq!(
                 pipeline
                     .entry_v1(pipeline.identity_for_submission_v1(target).unwrap())

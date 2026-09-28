@@ -538,6 +538,17 @@ impl RuntimeComputePipelineV1 {
     }
 
     #[cfg(test)]
+    pub(super) fn publication_heads_v1(
+        &self,
+    ) -> (
+        Option<u64>,
+        Option<u64>,
+        Option<RuntimeComputePipelineIdentityV1>,
+    ) {
+        (self.next_logical_epoch, self.commit_frontier, self.staged)
+    }
+
+    #[cfg(test)]
     pub(super) fn exhaust_vacant_identities_for_test_v1(&mut self) {
         assert!(self.is_empty());
         for slot in self.slots.iter_mut() {

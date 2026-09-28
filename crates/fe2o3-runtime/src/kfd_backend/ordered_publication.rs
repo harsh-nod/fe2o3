@@ -24,6 +24,79 @@ impl OrderedPublicationV1 {
         };
         root
     }
+
+    fn unattempted(entry: &RuntimeComputePipelineEntryV1) -> bool {
+        entry.phase == RuntimeComputePipelinePhaseV1::Publishing
+            && matches!(
+                entry.active.execution.as_ref(),
+                Some(ActiveComputeExecutionV1::MaterializedSuccessorPublication(root))
+                    if matches!(root.attempt, Attempt::Unattempted)
+            )
+    }
+}
+
+// Created only after the entire lane operation returns successfully. The loan
+// binds settlement to this arena, even when another lane has identical slot IDs.
+#[must_use = "the returned publication must be settled while its arena remains borrowed"]
+struct ReturnedOrderedPublicationV1<'a> {
+    pipeline: &'a mut RuntimeComputePipelineV1,
+    identity: RuntimeComputePipelineIdentityV1,
+}
+
+struct OrderedPublicationObservationV1 {
+    id: u64,
+    stream: u64,
+    kernel: u64,
+    shape: [u8; 32],
+    profile: PersistentPublicationProfileV1,
+}
+
+impl ReturnedOrderedPublicationV1<'_> {
+    fn settle(
+        self,
+        started: Instant,
+    ) -> Result<Option<OrderedPublicationObservationV1>, &'static str> {
+        let Self { pipeline, identity } = self;
+        let entry = pipeline
+            .entry_mut_v1(identity)
+            .ok_or("ordered publication lost its returned identity")?;
+        entry.active.performance.publication = started.elapsed();
+        let root = OrderedPublicationV1::indexed(entry);
+        if matches!(root.attempt, Attempt::Retryable) {
+            return pipeline
+                .withdraw_publication_v1(identity)
+                .map(|_| None)
+                .ok_or("ordered retry lost its staged identity");
+        }
+        if matches!(root.attempt, Attempt::Unattempted | Attempt::NativeOwned) {
+            return Err("ordered publication has no confirmed outcome");
+        }
+        pipeline.entry_mut_v1(identity).unwrap().active.published_at = Instant::now();
+        pipeline
+            .confirm_publication_v1(identity)
+            .map_err(|()| "ordered publication lost its staged identity")?;
+        let active = &mut pipeline.entry_mut_v1(identity).unwrap().active;
+        let Some(ActiveComputeExecutionV1::MaterializedSuccessorPublication(root)) =
+            active.execution.take()
+        else {
+            unreachable!()
+        };
+        active.execution = Some(match root.attempt {
+            Attempt::Published(batch) => ActiveComputeExecutionV1::Materialized(
+                MaterializedCompletionReceiptV1::Published(batch),
+            ),
+            #[cfg(test)]
+            Attempt::ScriptedPublished => ActiveComputeExecutionV1::ScriptedMaterialized,
+            _ => unreachable!("confirmed publication outcome"),
+        });
+        Ok(Some(OrderedPublicationObservationV1 {
+            id: active.id,
+            stream: active.stream,
+            kernel: active.kernel,
+            shape: active.dispatch_shape_sha256,
+            profile: root.profile,
+        }))
+    }
 }
 
 impl KfdRuntimeBackendV1 {
@@ -216,20 +289,22 @@ impl KfdRuntimeBackendV1 {
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let started = Instant::now();
-            if !scripted {
-                self.submit_native_ordered_v1(identity)?;
-            }
+            #[cfg(not(test))]
+            let returned = self.submit_native_ordered_v1(identity)?;
             #[cfg(test)]
-            if scripted {
-                self.submit_scripted_ordered_v1(identity)?;
-            }
-            self.compute_pipeline
-                .entry_mut_v1(identity)
-                .unwrap()
-                .active
-                .performance
-                .publication = started.elapsed();
-            self.finish_ordered_publication_v1(identity)
+            let returned = if scripted {
+                self.submit_scripted_ordered_v1(identity)?
+            } else {
+                self.submit_native_ordered_v1(identity)?
+            };
+            let observation = returned
+                .settle(started)
+                .map_err(|error| self.terminal_error(error))?;
+            let Some(observation) = observation else {
+                return Ok(false);
+            };
+            self.observe_returned_ordered_publication_v1(observation);
+            Ok(true)
         }));
         match result {
             Ok(result) => result,
@@ -242,7 +317,15 @@ impl KfdRuntimeBackendV1 {
     fn submit_native_ordered_v1(
         &mut self,
         identity: RuntimeComputePipelineIdentityV1,
-    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+    ) -> Result<ReturnedOrderedPublicationV1<'_>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    {
+        if !self
+            .compute_pipeline
+            .entry_v1(identity)
+            .is_some_and(OrderedPublicationV1::unattempted)
+        {
+            return Err(self.terminal_error("ordered publication cannot repeat a consumed attempt"));
+        }
         let lane = self
             .selected_native_compute_lane_v1()
             .map_err(|_| self.terminal_error("staged successor lost its native lane"))?;
@@ -259,7 +342,10 @@ impl KfdRuntimeBackendV1 {
             })
         });
         match result {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(())) => Ok(ReturnedOrderedPublicationV1 {
+                pipeline: &mut self.compute_pipeline,
+                identity,
+            }),
             Ok(Err(error)) => {
                 Err(self.terminal_error(format!("ordered successor submission: {}", error.error())))
             }
@@ -269,50 +355,17 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
-    fn finish_ordered_publication_v1(
+    fn observe_returned_ordered_publication_v1(
         &mut self,
-        identity: RuntimeComputePipelineIdentityV1,
-    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let root =
-            OrderedPublicationV1::indexed(self.compute_pipeline.entry_mut_v1(identity).unwrap());
-        if matches!(root.attempt, Attempt::Retryable) {
-            return self
-                .compute_pipeline
-                .withdraw_publication_v1(identity)
-                .map(|_| false)
-                .ok_or_else(|| self.terminal_error("ordered retry lost its staged identity"));
-        }
-        if matches!(root.attempt, Attempt::Unattempted | Attempt::NativeOwned) {
-            return Err(self.terminal_error("ordered publication has no confirmed outcome"));
-        }
-        self.compute_pipeline
-            .entry_mut_v1(identity)
-            .unwrap()
-            .active
-            .published_at = Instant::now();
-        self.compute_pipeline
-            .confirm_publication_v1(identity)
-            .map_err(|()| self.terminal_error("ordered publication lost its staged identity"))?;
-        let active = &mut self.compute_pipeline.entry_mut_v1(identity).unwrap().active;
-        let Some(ActiveComputeExecutionV1::MaterializedSuccessorPublication(root)) =
-            active.execution.take()
-        else {
-            unreachable!()
-        };
-        active.execution = Some(match root.attempt {
-            Attempt::Published(batch) => ActiveComputeExecutionV1::Materialized(
-                MaterializedCompletionReceiptV1::Published(batch),
-            ),
-            #[cfg(test)]
-            Attempt::ScriptedPublished => ActiveComputeExecutionV1::ScriptedMaterialized,
-            _ => unreachable!("confirmed publication outcome"),
-        });
-        let (id, stream, kernel, shape) = (
-            active.id,
-            active.stream,
-            active.kernel,
-            active.dispatch_shape_sha256,
-        );
+        observation: OrderedPublicationObservationV1,
+    ) {
+        let OrderedPublicationObservationV1 {
+            id,
+            stream,
+            kernel,
+            shape,
+            profile,
+        } = observation;
         #[cfg(test)]
         if self
             .scripted_ordered_publication
@@ -328,8 +381,7 @@ impl KfdRuntimeBackendV1 {
         {
             panic!("scripted ordered profile unwind");
         }
-        self.observe_materialized_dispatch_published_v1(id, stream, kernel, shape, root.profile);
-        Ok(true)
+        self.observe_materialized_dispatch_published_v1(id, stream, kernel, shape, profile);
     }
 }
 
@@ -355,7 +407,15 @@ impl KfdRuntimeBackendV1 {
     fn submit_scripted_ordered_v1(
         &mut self,
         identity: RuntimeComputePipelineIdentityV1,
-    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+    ) -> Result<ReturnedOrderedPublicationV1<'_>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    {
+        if !self
+            .compute_pipeline
+            .entry_v1(identity)
+            .is_some_and(OrderedPublicationV1::unattempted)
+        {
+            return Err(self.terminal_error("ordered publication cannot repeat a consumed attempt"));
+        }
         use ScriptedOrderedPublicationV1 as Step;
         let id = self.compute_pipeline.entry_v1(identity).unwrap().active.id;
         let Some((observed, step)) = self
@@ -395,7 +455,10 @@ impl KfdRuntimeBackendV1 {
             Step::OuterUnwindRetry | Step::OuterUnwindPublish => {
                 panic!("scripted ordered outer unwind")
             }
-            _ => Ok(()),
+            _ => Ok(ReturnedOrderedPublicationV1 {
+                pipeline: &mut self.compute_pipeline,
+                identity,
+            }),
         }
     }
 }
