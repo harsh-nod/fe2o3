@@ -194,3 +194,74 @@ fn original_cache_content_header_is_explicit_checked_and_state_independent() {
     assert_eq!(cache_content_frame().unwrap(), actual.iter().sum::<usize>());
     assert!(frame::<CacheContent>(usize::MAX).is_err());
 }
+
+// B3 same-module private-layout accounting; no production getter or API change.
+// One invocation pays one whole raw live/retired snapshot call conservatively.
+pub(in crate::production_ranked_projection_v1) fn genuine_cache_raw_frame_v1() -> Result<usize> {
+    type Raw = (u8, usize, usize, usize);
+    const N: usize = 6;
+    let rows: [usize; N] = [
+        frame::<Raw>(size_of::<(
+            &AssertionCacheV1<'static>,
+            &CacheStorage,
+            &HashMap<(usize, usize), bool>,
+            &Vec<Entry>,
+            *const Entry,
+            usize,
+            usize,
+            usize,
+            Raw,
+        )>())?,
+        frame::<Raw>(size_of::<(
+            &RetiredAssertionCacheV1,
+            &CacheStorage,
+            &HashMap<(usize, usize), bool>,
+            &Vec<Entry>,
+            *const Entry,
+            usize,
+            usize,
+            usize,
+            Raw,
+        )>())?,
+        frame::<[usize; N]>(size_of::<([usize; N], Result<[usize; N]>, &[usize])>())?,
+        frame::<usize>(size_of::<(
+            &[usize],
+            std::slice::Iter<'static, usize>,
+            Option<&usize>,
+            usize,
+            &usize,
+            Option<usize>,
+            Result<usize>,
+            Error,
+        )>())?,
+        frame::<usize>(size_of::<(
+            usize,
+            usize,
+            Option<usize>,
+            Result<usize>,
+            Error,
+            Resource,
+        )>())?,
+        // caller's repeated checked subtotal/error/return, no recursion.
+        frame::<usize>(size_of::<(
+            usize,
+            usize,
+            usize,
+            Option<usize>,
+            Result<usize>,
+            Error,
+        )>())?,
+    ];
+    rows.iter().try_fold(0usize, |total, row| {
+        total
+            .checked_add(*row)
+            .ok_or_else(|| resource(Resource::Arithmetic))
+    })
+}
+#[test]
+fn genuine_nonempty_cache_raw_getter_policy_is_fixed_and_nonzero() {
+    let amount = genuine_cache_raw_frame_v1().unwrap();
+    assert!(amount > size_of::<(u8, usize, usize, usize)>());
+    // No cache or active-state argument can change this source-level policy.
+    assert_eq!(genuine_cache_raw_frame_v1().unwrap(), amount);
+}

@@ -496,3 +496,8 @@ fn charge(
     }
     resources.work(amount)
 }
+
+#[path = "retained_exclusive_owner_carrier_v1.rs"]
+mod retained_carrier;
+#[allow(unused_imports)]
+pub(super) use retained_carrier::{RetainedExclusiveCarrierV1, retained_carrier_frame_v1};

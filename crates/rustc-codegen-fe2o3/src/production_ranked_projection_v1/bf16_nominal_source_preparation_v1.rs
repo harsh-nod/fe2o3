@@ -273,3 +273,16 @@ pub(super) fn with_nominal_source_preparation_v1<'w, R: Copy + 'static>(
         },
     )
 }
+
+// Additive Option-first checkpoint; existing dense/rich entries retain their order.
+#[path = "bf16_nominal_option_first_prelude_v1.rs"]
+mod option_first_prelude;
+#[cfg(test)]
+pub(crate) use option_first_prelude::observe_option_first_before_enum_for_test_v1;
+#[allow(unused_imports)]
+pub(super) use option_first_prelude::{BeforeEnumV1, with_nominal_option_first_before_enum_v1};
+
+#[cfg(test)]
+pub(crate) use option_first_prelude::observe_option_enum_before_scalar_for_test_v1;
+#[allow(unused_imports)]
+pub(super) use option_first_prelude::{BeforeScalarV1, with_nominal_option_enum_before_scalar_v1};

@@ -1027,3 +1027,8 @@ fn common_recorder_actual_factory_source_hook_follows_both_admissions() {
     assert!(f1[debit..hook].contains("pending.frame_credits=bytes;"));
     assert!(f1[debit..hook].contains("pending.started=true;"));
 }
+
+// Separate B3 entry; the original five modes remain byte-exact.
+#[path = "bf16_nominal_root_fixed_prefix_comparison_v1_tests.rs"]
+mod fixed_prefix_comparison;
+pub(crate) use fixed_prefix_comparison::observe_actual_root_fixed_prefix_comparison_for_test_v1;

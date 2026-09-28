@@ -374,3 +374,6 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use genuine::observe_actual_root_retired_fixed_proof_for_test_v1;
+
+#[cfg(test)]
+pub(crate) use genuine::observe_actual_root_fixed_prefix_comparison_for_test_v1;

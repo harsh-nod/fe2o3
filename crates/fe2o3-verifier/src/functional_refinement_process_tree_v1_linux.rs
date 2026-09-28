@@ -90,8 +90,14 @@ const MPROTECT_SYSCALL: u32 = 10;
 const MREMAP_SYSCALL: u32 = 25;
 const REMAP_FILE_PAGES_SYSCALL: u32 = 216;
 const PKEY_MPROTECT_SYSCALL: u32 = 329;
+const OPEN_SYSCALL: u32 = 2;
+const OPENAT_SYSCALL: u32 = 257;
+const PROT_WRITE: u64 = 2;
 const PROT_EXEC: u64 = 4;
 const MAP_ANONYMOUS: u64 = 0x20;
+const READ_IMPLIES_EXEC: u32 = 0x0040_0000;
+// x86-64 O_ACCMODE, O_CREAT, O_TRUNC and __O_TMPFILE; O_DIRECTORY stays allowed.
+const WRITABLE_OPEN_FLAGS: u64 = 3 | 0x40 | 0x200 | 0x0040_0000;
 const CLONE3_SYSCALL: u32 = 435;
 const CLONE3_ARGUMENT_BYTES: u64 = 88;
 const RUST_THREAD_CLONE3_FLAGS: u64 = 0x003d_0f00;
@@ -107,7 +113,7 @@ const ELF_EXECUTABLE_FLAG: u32 = 1;
 const SYSTEM_PAGE_BYTES: u64 = 4096;
 const PRCTL_SYSCALL: u32 = 157;
 const PR_SET_NAME: u64 = 15;
-const SENSITIVE_SYSCALLS: [u32; 7] = [
+const SENSITIVE_SYSCALLS: [u32; 9] = [
     MMAP_SYSCALL,
     MPROTECT_SYSCALL,
     MREMAP_SYSCALL,
@@ -115,12 +121,16 @@ const SENSITIVE_SYSCALLS: [u32; 7] = [
     PKEY_MPROTECT_SYSCALL,
     CLONE3_SYSCALL,
     PRCTL_SYSCALL,
+    OPEN_SYSCALL,
+    OPENAT_SYSCALL,
 ];
 
 // Process creation remains available only so rust_verify can create one observed Z3 child.
 // Ptrace enforces cardinality. The filter kills every process-tree escape primitive.
-const DENIED_SYSCALLS: [u32; 40] = [
+const DENIED_SYSCALLS: [u32; 44] = [
     101, // ptrace
+    85, 437, // creat and pointer-based openat2 cannot acquire writable procfs memory
+    135, 323, // personality changes and userfaultfd page substitution
     105, 106, 113, 114, 117, 119, 116, 122, 123, // credentials and groups
     109, 112, // setpgid, setsid
     126, // capset; prctl is admitted only for exact Rust thread naming below
@@ -1160,14 +1170,31 @@ fn validate_sensitive_syscall_request(
     validate_mappings: bool,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let registers = read_registers(process)?;
+    validate_sensitive_registers(process, &registers, allowed, validate_mappings)
+}
+
+fn validate_sensitive_registers(
+    process: i32,
+    registers: &UserRegistersX86_64,
+    allowed: &[AllowedRuntimeExecutableV1],
+    validate_mappings: bool,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     match u32::try_from(registers.orig_rax) {
-        Ok(CLONE3_SYSCALL) => validate_clone3_request(process, &registers),
+        Ok(CLONE3_SYSCALL) => validate_clone3_request(process, registers),
+        Ok(OPEN_SYSCALL) => validate_read_only_open(registers.rsi),
+        Ok(OPENAT_SYSCALL) => validate_read_only_open(registers.rdx),
         Ok(PRCTL_SYSCALL) if registers.rdi == PR_SET_NAME && registers.rsi != 0 => Ok(()),
         Ok(PRCTL_SYSCALL) => Err(process_failure(
             "prctl request is outside exact Rust thread naming",
         )),
-        Ok(MMAP_SYSCALL) if validate_mappings => {
+        Ok(MMAP_SYSCALL) => {
             if registers.rdx & PROT_EXEC == 0 {
+                return Ok(());
+            }
+            if registers.rdx & PROT_WRITE != 0 {
+                return Err(process_failure("writable executable mmap is not admitted"));
+            }
+            if !validate_mappings {
                 return Ok(());
             }
             if registers.r10 & MAP_ANONYMOUS != 0 || registers.r8 as i64 == -1 {
@@ -1189,11 +1216,13 @@ fn validate_sensitive_syscall_request(
             }
             Ok(())
         }
-        Ok(MPROTECT_SYSCALL) | Ok(PKEY_MPROTECT_SYSCALL) if validate_mappings => {
+        Ok(MPROTECT_SYSCALL) | Ok(PKEY_MPROTECT_SYSCALL) => {
             if registers.rdx & PROT_EXEC == 0 {
                 return Ok(());
             }
-            validate_existing_mapping_range(process, registers.rdi, registers.rsi, allowed)
+            // File identity cannot authenticate privately dirtied pages. The supported
+            // loader must map text RX initially, never add or restore EXEC with mprotect.
+            Err(process_failure("executable mprotect is not admitted"))
         }
         Ok(MREMAP_SYSCALL) if validate_mappings => {
             validate_nonexecutable_mapping_range(process, registers.rdi, registers.rsi)
@@ -1206,12 +1235,20 @@ fn validate_sensitive_syscall_request(
             }
             validate_nonexecutable_mapping_range(process, registers.rdi, registers.rsi)
         }
-        Ok(MMAP_SYSCALL) | Ok(MPROTECT_SYSCALL) | Ok(PKEY_MPROTECT_SYSCALL) => Ok(()),
         Ok(MREMAP_SYSCALL) | Ok(REMAP_FILE_PAGES_SYSCALL) => Ok(()),
         _ => Err(process_failure(
             "unexpected syscall reached the sensitive-syscall admission checkpoint",
         )),
     }
+}
+
+fn validate_read_only_open(flags: u64) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    // Scalar flags avoid a pathname race and cover /proc/self/mem, thread-self,
+    // numeric PIDs and procfd aliases alike. Existing inherited output pipes remain usable.
+    if flags & WRITABLE_OPEN_FLAGS != 0 {
+        return Err(process_failure("write-capable file open is not admitted"));
+    }
+    Ok(())
 }
 
 fn validate_clone3_request(
@@ -1295,84 +1332,6 @@ fn read_registers(
         ));
     }
     Ok(registers)
-}
-
-fn validate_existing_mapping_range(
-    process: i32,
-    start: u64,
-    length: u64,
-    allowed: &[AllowedRuntimeExecutableV1],
-) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
-    if length == 0 {
-        return Err(process_failure(
-            "zero-length executable mprotect request is not admitted",
-        ));
-    }
-    let end = start
-        .checked_add(length)
-        .ok_or_else(|| process_failure("executable mprotect range overflow"))?;
-    let maps = std::fs::read_to_string(format!("/proc/{process}/maps"))
-        .map_err(|_| io_process_failure("read executable mprotect mappings"))?;
-    if maps.len() > 1024 * 1024 {
-        return Err(process_failure(
-            "executable mprotect map inventory is oversized",
-        ));
-    }
-    let mut cursor = start;
-    for line in maps.lines() {
-        let mut fields = line.split_whitespace();
-        let range = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed executable mprotect map"))?;
-        let _permissions = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed executable mprotect map"))?;
-        let (mapping_start, mapping_end) = parse_mapping_range(range)?;
-        if mapping_end <= cursor {
-            continue;
-        }
-        if mapping_start > cursor {
-            break;
-        }
-        let mapping_file_offset = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed executable mprotect map"))?;
-        let mapping_file_offset = parse_mapping_file_offset(mapping_file_offset)?;
-        let device = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed executable mprotect map"))?;
-        let inode = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed executable mprotect map"))?;
-        let path = fields.next().unwrap_or("");
-        if path.is_empty() || path.starts_with('[') {
-            return Err(process_failure(
-                "executable mprotect covers an anonymous mapping",
-            ));
-        }
-        let covered_end = mapping_end.min(end);
-        let covered_offset = mapping_file_offset
-            .checked_add(cursor - mapping_start)
-            .ok_or_else(|| process_failure("executable mprotect file offset overflow"))?;
-        if !mapping_file_range_is_allowed(
-            device,
-            inode,
-            covered_offset,
-            covered_end - cursor,
-            allowed,
-        )? {
-            return Err(process_failure(
-                "executable mprotect object or file range is outside the retained runtime closure",
-            ));
-        }
-        cursor = covered_end;
-        if cursor == end {
-            return Ok(());
-        }
-    }
-    Err(process_failure(
-        "executable mprotect range is not fully backed by admitted mappings",
-    ))
 }
 
 fn validate_nonexecutable_mapping_range(
@@ -1515,6 +1474,9 @@ fn validate_executable_mappings(
     process: i32,
     allowed: &[AllowedRuntimeExecutableV1],
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    let personality = std::fs::read_to_string(format!("/proc/{process}/personality"))
+        .map_err(|_| io_process_failure("read traced process personality"))?;
+    validate_personality(&personality)?;
     let maps = std::fs::read_to_string(format!("/proc/{process}/maps"))
         .map_err(|_| io_process_failure("read traced executable mappings"))?;
     if maps.len() > 1024 * 1024 {
@@ -1522,6 +1484,24 @@ fn validate_executable_mappings(
             "traced executable map inventory is oversized",
         ));
     }
+    validate_executable_mapping_rows(&maps, allowed)
+}
+
+fn validate_personality(
+    personality: &str,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    let value = u32::from_str_radix(personality.trim(), 16)
+        .map_err(|_| process_failure("malformed traced process personality"))?;
+    if value & READ_IMPLIES_EXEC != 0 {
+        return Err(process_failure("READ_IMPLIES_EXEC is not admitted"));
+    }
+    Ok(())
+}
+
+fn validate_executable_mapping_rows(
+    maps: &str,
+    allowed: &[AllowedRuntimeExecutableV1],
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut executable_count = 0_usize;
     for line in maps.lines() {
         let mut fields = line.split_whitespace();
@@ -1538,6 +1518,11 @@ fn validate_executable_mappings(
             .is_none_or(|value| *value != b'x')
         {
             continue;
+        }
+        if permissions.as_bytes().get(1) == Some(&b'w') {
+            return Err(process_failure(
+                "writable executable mapping is not admitted",
+            ));
         }
         executable_count += 1;
         if executable_count > 256 {
@@ -1863,6 +1848,10 @@ fn controller_error(
         ),
     )
 }
+
+#[cfg(test)]
+#[path = "functional_refinement_process_tree_v1_memory_tests.rs"]
+mod memory_tests;
 
 #[cfg(test)]
 mod tests {

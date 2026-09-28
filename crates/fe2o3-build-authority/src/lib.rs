@@ -12,6 +12,7 @@ authority requires a broker-owned durable replay registry and session capability
 
 mod broker_v4;
 mod cargo_environment_v1;
+mod compiler_approval_policy_v1;
 mod compiler_closure;
 
 /// Canonical `argv[0]` for the protected authority release executable.
@@ -43,6 +44,13 @@ pub use cargo_environment_v1::{
     AuthorityCargoEnvironmentV1, AuthorityCargoEnvironmentVariableV1,
     ForbiddenCargoEnvironmentChannelV1, authority_cargo_environment_identity_sha256_v1,
     decode_authority_cargo_environment_v1, encode_authority_cargo_environment_v1,
+};
+pub use compiler_approval_policy_v1::{
+    COMPILER_APPROVAL_POLICY_BYTES_V1, COMPILER_APPROVAL_POLICY_HEADER_LEN_V1,
+    COMPILER_APPROVAL_POLICY_IDENTITY_DOMAIN_V1, COMPILER_APPROVAL_POLICY_MAGIC_V1,
+    COMPILER_APPROVAL_POLICY_RUNTIME_ENFORCEMENT_VERSION_V1, COMPILER_APPROVAL_POLICY_STORAGE_V1,
+    COMPILER_APPROVAL_POLICY_VERSION_V1, COMPILER_APPROVAL_POLICY_WORK_V1,
+    CompilerApprovalPolicyErrorV1, CompilerApprovalPolicyV1,
 };
 pub use compiler_closure::{
     CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1, COMPILER_CLOSURE_IDENTITY_DOMAIN_V2,

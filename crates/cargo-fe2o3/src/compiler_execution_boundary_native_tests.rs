@@ -22,7 +22,8 @@ const LIMIT: usize = 2_000_000;
 const CHILD: u32 = 101;
 
 use super::super::tests::run_in_isolated_boundary_test_process as isolated;
-use super::preparation::PreparedCompilerExecutionBoundaryV3 as Prepared;
+// These fixtures exercise inert transport, not fixed-root policy approval.
+use super::preparation::PreparedCompilerExecutionTransportV3 as Prepared;
 use crate::build_config::tests::native_recipe_for_test as recipe;
 use fe2o3_compiler_closure_capability::COMPILER_EXECUTION_POLICY_CHILD_FD_V1 as POLICY_FD;
 use fe2o3_compiler_execution_client::{
@@ -31,6 +32,43 @@ use fe2o3_compiler_execution_client::{
     PendingCompilerExecutionChildChannelV1 as Pending,
 };
 use std::{fs::File, os::fd::AsRawFd, process::Command};
+
+#[test]
+fn native_runtime_enforcement_is_unavailable_even_with_valid_configuration() {
+    let mut work = Work::new(WORK);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    let profile = profile(7, &mut budget);
+    profile.revalidate(&mut budget).unwrap();
+    let storage = budget.storage();
+    let work = budget.work();
+    let error = require_runtime_enforcement(&mut budget).unwrap_err();
+    assert!(matches!(error, Failure::RuntimeEnforcementUnavailable));
+    assert_eq!(
+        error.to_string(),
+        "native compiler runtime enforcement is not yet available"
+    );
+    assert!(error.source().is_none());
+    assert_eq!(budget.storage(), storage);
+    assert_eq!(budget.work(), work + 8);
+    profile.revalidate(&mut budget).unwrap();
+}
+
+#[test]
+fn runtime_enforcement_refusal_prepays_work_without_retiring_storage() {
+    for limit in [7, 8] {
+        let mut work = Work::new(limit);
+        let mut budget = Budget::new(&mut work, 19);
+        budget.reserve_storage(19).unwrap();
+        let error = require_runtime_enforcement(&mut budget).unwrap_err();
+        match limit {
+            7 => assert!(matches!(error, Failure::Resource(Resource::Work(_)))),
+            8 => assert!(matches!(error, Failure::RuntimeEnforcementUnavailable)),
+            _ => unreachable!(),
+        }
+        assert_eq!(budget.work(), if limit == 7 { 0 } else { 8 });
+        assert_eq!(budget.storage(), 19);
+    }
+}
 
 #[test]
 fn native_preparation_retains_exact_policy_and_terminal_storage() {

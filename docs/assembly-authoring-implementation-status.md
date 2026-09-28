@@ -1519,3 +1519,92 @@ adding runtime calls or owner fields. All 45 source controls, strict CPU builds,
 See [the qualification record](debugger-disabled-type-anchor-qualification-20260927.md).
 Actual nine-type layout, current startup and native capture remain unqualified.
 All public gates remain disabled; accepted broad exits remain 6/18.
+
+## Actual observable debugger nine-type layout — 2026-09-27
+
+All nine required actual-object types now pass static inspection, together with
+152 controls. Scratch measures 624 bytes; the logical adapter reservation is
+15,144 bytes under its unchanged 65,536-byte cap. The complete four-phase build
+custody handoff and strict decoder are qualified separately. See
+[the layout qualification](debugger-observable-layout-qualification-20260927.md).
+This supersedes the earlier layout limitation, not the remaining current-startup
+or native-capture requirements. No debugger or GPU target was executed.
+Public gates remain disabled; accepted broad exits remain 6/18.
+
+## Authentic original/candidate fixed-query connection — 2026-09-28
+
+The [fixed-query connection checkpoint](original-fixed-query-genuine-qualification-20260928.md)
+passed 15 new controls, 356 model / 3,174 backend tests and five actual Rust
+sessions with 36 positive helper CPU runs. The original oracle and candidate
+share authenticated source and the original Budget, retaining payloads through
+postflight and destruction-before-refund.
+
+Those genuine prefixes contain zero Fixed queries. A separate array-bounds
+fixture was rejected before nominal-owner materialization; genuine nonempty
+Fixed coverage is still open. The Option-first prelude, later writers, joint
+bounds driver and production route also remain open. Broad exits remain 6/18;
+no native capture, public activation or global compiler pin change.
+
+## Source-ordered Option preparation — 2026-09-28
+
+The private BeforeEnum checkpoint now preserves original Option preparation
+order and partial/completed allocation ownership through postflight. All 12 new
+controls passed; full regression passed 356 model and 3,196 backend tests
+(197 ignored), builds and five actual Rust-source sessions. Each eligible
+session compared nonempty Option data against the original APIs under the same
+budget in success/error/panic modes.
+See [qualification and limits](option-first-preparation-qualification-20260928.md).
+
+This is an internal intrinsic suffix, not the complete root chronology or
+production route. Enum/scalar continuation, later writers, joint bounds and
+genuine nonempty Fixed coverage remain open. Broad accepted exits remain 6/18.
+
+## Retained Option/enum continuation — 2026-09-28
+
+The private BeforeScalar checkpoint now retains both Option and enum owners
+through checked postflight, preserving original source order and destruction
+before refund. All 13 new controls, 356 model / 3,209 backend tests
+(197 ignored), builds and five actual Rust-source sessions passed.
+The genuine three-mode observer executed the enum analyzer and compared complete
+DATA against unchanged original APIs under the same source and budget.
+See [qualification and limits](option-enum-preparation-qualification-20260928.md).
+
+This does not establish genuine nonempty enum availability, remaining scalar and
+provenance preparation, argument writers, joint bounds, or production routing.
+Broad accepted exits remain 6/18; no public activation or global compiler pin
+change is implied.
+
+## Retained scalar inventory component — 2026-09-28
+
+The scalar inventory now has an attached owning frame that preserves original
+data, resource debit order and partial allocations across error/unwind.
+All 13 new controls and full 356-model / 3,222-backend regressions passed
+(197 ignored), with backend and extractor builds.
+See [qualification and limits](retained-scalar-inventory-qualification-20260928.md).
+
+This component is not yet wired into the genuine continuation. FIFO, carrier,
+provenance, capability preparation, argument writers and production admission
+remain open. Broad accepted exits remain 6/18; no public activation is implied.
+
+## Retained exact-origin FIFO component — 2026-09-28
+
+The origin-propagation scratch queue now remains attached across errors and
+unwinding while preserving original FIFO and successor order. All 11 new
+controls and full 356-model / 3,233-backend regressions passed (197 ignored),
+with backend and extractor builds.
+See [qualification and limits](retained-origin-worklist-qualification-20260928.md).
+
+Origins and edges are still caller-owned. This component is not an authenticated
+provenance checkpoint or production route; carrier/provenance and genuine
+continuation work remain open. Broad accepted exits remain 6/18.
+
+## Retained ExclusiveOwner carrier component — 2026-09-28
+
+Carrier origins, three scan arrays, copy edges, borrowed receivers and FIFO
+storage now remain attached through partial failures. All 12 new controls and
+full 356-model / 3,245-backend regressions passed (197 ignored), plus builds.
+See [qualification and limits](retained-exclusive-carrier-qualification-20260928.md).
+
+This is an isolated analysis component, not a genuine source checkpoint.
+Provenance/allocation/capability integration, authenticated continuation,
+argument writers and production admission remain open. Broad exits remain 6/18.
