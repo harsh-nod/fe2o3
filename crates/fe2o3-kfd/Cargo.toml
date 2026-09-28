@@ -19,6 +19,8 @@ hardware-diagnostic = []
 live-validation = ["rustix/process", "rustix/runtime"]
 # Development-only accounted epoch capacity; not native qualification or authority.
 scale-qualification = []
+# CPU-only receipt composition tests. No native resources or execution authority.
+cpu-runtime-fixtures = []
 
 [[example]]
 name = "kfd-host-visible-memory"

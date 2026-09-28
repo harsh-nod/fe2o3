@@ -3,6 +3,9 @@
 use core::fmt;
 #[path = "queue_live/auxiliary_release.rs"]
 mod auxiliary_release;
+#[cfg(feature = "cpu-runtime-fixtures")]
+#[path = "queue_live/cpu_fixture.rs"]
+pub(super) mod cpu_fixture;
 #[path = "queue_live/epoch_preflight.rs"]
 mod epoch_preflight;
 #[path = "queue_live/primary_release.rs"]

@@ -2018,13 +2018,50 @@ pub(super) struct TestOnlyDispatchGenerationOwnerV1 {
     last_cancelled_generation: Option<u64>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "cpu-runtime-fixtures"))]
 pub(super) struct TestOnlyMultiInflightDispatchOwnerV1 {
     owner: DispatchGenerationOwnerV1,
 }
 
-#[cfg(test)]
+#[cfg(feature = "cpu-runtime-fixtures")]
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct CpuDispatchOwnerSnapshotV1 {
+    next_generation: u64,
+    recipe_occurrence: u64,
+    recipe_queue: Option<QueueKeyV1>,
+    slots: Vec<DispatchEpochSlotV1>,
+    recycled_generation: Option<u64>,
+    predecessor_detached_generation: Option<u64>,
+    poisoned: bool,
+}
+
+#[cfg(feature = "cpu-runtime-fixtures")]
+impl CpuDispatchOwnerSnapshotV1 {
+    pub(super) fn same_custody(&self, other: &Self) -> bool {
+        self.next_generation == other.next_generation
+            && self.recipe_occurrence == other.recipe_occurrence
+            && self.recipe_queue == other.recipe_queue
+            && self.slots == other.slots
+            && self.recycled_generation == other.recycled_generation
+            && self.predecessor_detached_generation == other.predecessor_detached_generation
+    }
+}
+
+#[cfg(any(test, feature = "cpu-runtime-fixtures"))]
 impl TestOnlyMultiInflightDispatchOwnerV1 {
+    #[cfg(feature = "cpu-runtime-fixtures")]
+    pub(super) fn cpu_snapshot(&self) -> CpuDispatchOwnerSnapshotV1 {
+        CpuDispatchOwnerSnapshotV1 {
+            next_generation: self.owner.next_generation,
+            recipe_occurrence: self.owner.recipe_occurrence,
+            recipe_queue: self.owner.recipe_queue,
+            slots: self.owner.slots.iter().copied().collect(),
+            recycled_generation: self.owner.recycled_generation,
+            predecessor_detached_generation: self.owner.predecessor_detached_generation,
+            poisoned: self.owner.poisoned,
+        }
+    }
+
     pub(super) fn new() -> Self {
         Self {
             owner: DispatchGenerationOwnerV1::new().unwrap(),
@@ -3351,6 +3388,15 @@ pub struct Gfx942DispatchBatchV1<const N: usize> {
     identity: DispatchEpochIdentityV1,
 }
 
+#[cfg(feature = "cpu-runtime-fixtures")]
+impl Gfx942DispatchBatchV1<1> {
+    pub(super) fn cpu_fixture_parts(
+        &self,
+    ) -> (&Gfx942CompletionBatchV1<1>, DispatchEpochIdentityV1) {
+        (&self.completion, self.identity)
+    }
+}
+
 impl<const N: usize> fmt::Debug for Gfx942DispatchBatchV1<N> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3375,6 +3421,15 @@ impl<const N: usize> fmt::Debug for Gfx942DispatchBatchV1<N> {
 pub struct Gfx942CompletedDispatchBatchV1<const N: usize> {
     completion: Gfx942CompletedBatchV1<N>,
     identity: DispatchEpochIdentityV1,
+}
+
+#[cfg(feature = "cpu-runtime-fixtures")]
+impl Gfx942CompletedDispatchBatchV1<1> {
+    pub(super) fn cpu_fixture_parts(
+        &self,
+    ) -> (&Gfx942CompletedBatchV1<1>, DispatchEpochIdentityV1) {
+        (&self.completion, self.identity)
+    }
 }
 
 impl<const N: usize> fmt::Debug for Gfx942CompletedDispatchBatchV1<N> {

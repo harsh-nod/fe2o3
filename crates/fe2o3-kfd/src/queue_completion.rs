@@ -273,7 +273,7 @@ impl<const N: usize> CompletionPacketTemplatesV1<N> {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "cpu-runtime-fixtures"))]
     fn try_from_vec(values: Vec<CompletionPacketTemplateV1>) -> Result<Self, ()> {
         Ok(Self {
             values: values.into_boxed_slice().try_into().map_err(|_| ())?,
@@ -1019,7 +1019,7 @@ pub(super) struct CompletionSignalArenaOwnerV1 {
     phase: CompletionOwnerPhaseV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "cpu-runtime-fixtures"))]
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct CompletionCustodySnapshotV1 {
     queue: QueueKeyV1,
@@ -1032,12 +1032,30 @@ pub(super) struct CompletionCustodySnapshotV1 {
 }
 
 impl CompletionSignalArenaOwnerV1 {
+    #[cfg(feature = "cpu-runtime-fixtures")]
+    pub(super) fn saturate_cpu_fixture(
+        &mut self,
+        template: CompletionPacketTemplateV1,
+        last_packet: u64,
+    ) -> Result<Gfx942CompletionBatchV1<COMPLETION_SIGNAL_CAPACITY_V1>, Gfx942CompletionErrorV1>
+    {
+        self.ensure_releasable()?;
+        let templates = CompletionPacketTemplatesV1::try_from_vec(vec![
+                template;
+                COMPLETION_SIGNAL_CAPACITY_V1
+            ])
+        .expect("fixed CPU fixture cardinality");
+        let bound = self.bind_fixed_batch(templates)?;
+        let (_, retention) = bound.into_parts();
+        self.mark_published(retention, last_packet)
+    }
+
     #[cfg(test)]
     pub(super) fn is_poisoned_for_test(&self) -> bool {
         self.phase == CompletionOwnerPhaseV1::Poisoned
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "cpu-runtime-fixtures"))]
     pub(super) fn custody_snapshot_for_test(&self) -> CompletionCustodySnapshotV1 {
         // Poisoning changes the owner's phase, not its exact slots or ledger storage.
         CompletionCustodySnapshotV1 {
@@ -1152,7 +1170,7 @@ impl CompletionSignalArenaOwnerV1 {
         Gfx942CompletionRecycleObservationV1 { packet_count: 1 }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "cpu-runtime-fixtures"))]
     pub(super) fn state_snapshot_for_test(&self) -> (u64, usize) {
         (
             self.next_batch_id,
@@ -1219,12 +1237,12 @@ impl CompletionSignalArenaOwnerV1 {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "cpu-runtime-fixtures"))]
     pub(super) fn for_persistent_compute_cancellation_test(queue: QueueKeyV1) -> Self {
         Self::for_dependency_test(queue, 1, AMD_SIGNAL_ALIGNMENT_V1 as u64)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "cpu-runtime-fixtures"))]
     pub(super) fn for_dependency_test(queue: QueueKeyV1, arena_id: u64, gpu_base: u64) -> Self {
         assert!(gpu_base != 0 && gpu_base.is_multiple_of(AMD_SIGNAL_ALIGNMENT_V1 as u64));
         Self {

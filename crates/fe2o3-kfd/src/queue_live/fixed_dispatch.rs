@@ -4555,7 +4555,7 @@ impl ComputeAqlQueueSessionV1 {
         self.terminalize_fixed_dispatch_submission_result_v1(result)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "cpu-runtime-fixtures"))]
     pub(super) fn submit_fixed_dispatch_inner_classified_with_multi_inflight_test_owner(
         &mut self,
         owner: &mut super::dispatch_binding::TestOnlyMultiInflightDispatchOwnerV1,

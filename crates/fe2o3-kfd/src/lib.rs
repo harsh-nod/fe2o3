@@ -121,6 +121,16 @@ pub use persistent_sdma::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use queue::Gfx942SdmaHostReadIntoErrorV1;
+
+#[cfg(all(
+    feature = "cpu-runtime-fixtures",
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[doc(hidden)]
+pub use queue::{
+    CpuDispatchIdentityV1, CpuFixedDispatchFixtureV1, CpuFixedDispatchLaneV1, CpuLaneSnapshotV1,
+};
 #[cfg(target_os = "linux")]
 pub use queue_resources::*;
 
