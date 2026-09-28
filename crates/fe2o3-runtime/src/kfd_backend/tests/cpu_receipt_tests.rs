@@ -257,7 +257,8 @@ impl Fixture {
     }
 
     fn returned_identity(&self) -> CpuDispatchIdentityV1 {
-        *self.backend
+        *self
+            .backend
             .cpu_queue
             .as_ref()
             .unwrap()
