@@ -8,6 +8,13 @@ use fe2o3_resource_accounting::{
 #[path = "compute_state/capacity_tests.rs"]
 mod capacity_tests;
 
+#[path = "compute_state/publication.rs"]
+mod publication;
+
+#[cfg(test)]
+#[path = "compute_state/publication_tests.rs"]
+mod publication_tests;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct NativeDirtyExtentV1 {
     pub(super) compute_lane: usize,
@@ -346,16 +353,7 @@ impl RuntimeComputePipelineV1 {
 
     pub(super) fn has_successor_capacity(&self) -> bool {
         // The logical frontier is retained separately in the lane's `active` slot.
-        self.staged.is_none()
-            && self.live < self.slots.len() - 1
-            && self.next_logical_epoch.is_some()
-            && self.slots.iter().any(|slot| {
-                slot.entry.is_none()
-                    && slot
-                        .generation
-                        .checked_add(1)
-                        .is_some_and(|generation| generation != 0)
-            })
+        publication::has_capacity(&self.slots, self.live, self.next_logical_epoch, self.staged)
     }
 
     // The rejected linear owner stays inline so roster insertion cannot add a
@@ -365,93 +363,14 @@ impl RuntimeComputePipelineV1 {
         &mut self,
         active: ActiveSubmissionV1,
     ) -> Result<RuntimeComputePipelineIdentityV1, ActiveSubmissionV1> {
-        if active.id == 0
-            || !self.has_successor_capacity()
-            || self.contains(active.id)
-            || self.checked_frontier_v1().is_err()
-            || self.next_logical_epoch.is_none_or(|next| {
-                next == 0
-                    || self
-                        .slots
-                        .iter()
-                        .filter_map(|slot| slot.entry.as_ref())
-                        .any(|entry| entry.identity.logical_epoch >= next)
-            })
-        {
-            return Err(active);
-        }
-        let logical_epoch = self
-            .next_logical_epoch
-            .expect("successor capacity checked the logical epoch");
-        let Some((slot_index, slot_generation)) =
-            self.slots.iter().enumerate().find_map(|(index, slot)| {
-                if slot.entry.is_some() {
-                    return None;
-                }
-                slot.generation
-                    .checked_add(1)
-                    .filter(|generation| *generation != 0)
-                    .map(|generation| (index, generation))
-            })
-        else {
-            return Err(active);
-        };
-        let identity = RuntimeComputePipelineIdentityV1 {
-            slot: u16::try_from(slot_index).expect("closed runtime compute pipeline capacity"),
-            slot_generation,
-            logical_epoch,
-            submission: active.id,
-        };
-        let slot = &mut self.slots[slot_index];
-        slot.generation = slot_generation;
-        slot.entry = Some(RuntimeComputePipelineEntryV1 {
-            identity,
-            phase: RuntimeComputePipelinePhaseV1::Publishing,
+        publication::stage(
+            &mut self.slots,
+            &mut self.live,
+            self.next_logical_epoch,
+            self.commit_frontier,
+            &mut self.staged,
             active,
-        });
-        self.live += 1;
-        self.staged = Some(identity);
-        Ok(identity)
-    }
-
-    fn staged_metadata_intact_v1(&self, identity: RuntimeComputePipelineIdentityV1) -> bool {
-        self.staged == Some(identity)
-            && identity.slot_generation != 0
-            && identity.logical_epoch != 0
-            && identity.submission != 0
-            && self.next_logical_epoch == Some(identity.logical_epoch)
-            && self
-                .entry_v1(identity)
-                .is_some_and(|entry| entry.phase == RuntimeComputePipelinePhaseV1::Publishing)
-            && self.live != 0
-            && self
-                .slots
-                .iter()
-                .filter(|slot| slot.entry.is_some())
-                .count()
-                == self.live
-            && self
-                .slots
-                .iter()
-                .filter_map(|slot| slot.entry.as_ref())
-                .all(|entry| {
-                    entry.identity == identity
-                        || entry.identity.logical_epoch < identity.logical_epoch
-                })
-            && (if self.live == 1 {
-                self.commit_frontier.is_none()
-            } else {
-                self.commit_frontier.is_some_and(|frontier| {
-                    frontier < identity.logical_epoch
-                        && self
-                            .slots
-                            .iter()
-                            .filter_map(|slot| slot.entry.as_ref())
-                            .filter(|entry| entry.identity.logical_epoch == frontier)
-                            .count()
-                            == 1
-                })
-            })
+        )
     }
 
     // The publication adapter authenticates the native outcome before either
@@ -460,29 +379,28 @@ impl RuntimeComputePipelineV1 {
         &mut self,
         identity: RuntimeComputePipelineIdentityV1,
     ) -> Result<(), ()> {
-        if !self.staged_metadata_intact_v1(identity) {
-            return Err(());
-        }
-        self.entry_mut_v1(identity).unwrap().phase = RuntimeComputePipelinePhaseV1::Published;
-        self.staged = None;
-        self.next_logical_epoch = identity.logical_epoch.checked_add(1);
-        if self.commit_frontier.is_none() {
-            self.commit_frontier = Some(identity.logical_epoch);
-        }
-        Ok(())
+        publication::confirm(
+            &mut self.slots,
+            self.live,
+            &mut self.next_logical_epoch,
+            &mut self.commit_frontier,
+            &mut self.staged,
+            identity,
+        )
     }
 
     pub(super) fn withdraw_publication_v1(
         &mut self,
         identity: RuntimeComputePipelineIdentityV1,
     ) -> Option<ActiveSubmissionV1> {
-        if !self.staged_metadata_intact_v1(identity) {
-            return None;
-        }
-        let entry = self.slots[identity.slot as usize].entry.take().unwrap();
-        self.live -= 1;
-        self.staged = None;
-        Some(entry.active)
+        publication::withdraw(
+            &mut self.slots,
+            &mut self.live,
+            self.next_logical_epoch,
+            self.commit_frontier,
+            &mut self.staged,
+            identity,
+        )
     }
 
     #[cfg(test)]
@@ -614,63 +532,19 @@ impl RuntimeComputePipelineV1 {
         &self,
         identity: RuntimeComputePipelineIdentityV1,
     ) -> Option<&RuntimeComputePipelineEntryV1> {
-        let slot = self.slots.get(identity.slot as usize)?;
-        let entry = slot.entry.as_ref()?;
-        (slot.generation == identity.slot_generation
-            && entry.identity == identity
-            && entry.active.id == identity.submission)
-            .then_some(entry)
+        publication::exact_entry(&self.slots, identity)
     }
 
     pub(super) fn entry_mut_v1(
         &mut self,
         identity: RuntimeComputePipelineIdentityV1,
     ) -> Option<&mut RuntimeComputePipelineEntryV1> {
-        self.entry_v1(identity)?;
-        self.slots[identity.slot as usize].entry.as_mut()
+        publication::exact_entry_mut(&mut self.slots, identity)
     }
 
     pub(super) fn checked_frontier_v1(&self) -> Result<Option<&RuntimeComputePipelineEntryV1>, ()> {
-        if self.staged.is_some() {
-            return Err(());
-        }
-        let mut occupied = 0;
-        let mut found = None;
-        let mut next_count = 0;
-        for (index, slot) in self.slots.iter().enumerate() {
-            let Some(entry) = slot.entry.as_ref() else {
-                continue;
-            };
-            occupied += 1;
-            if entry.identity.slot as usize != index
-                || entry.identity.slot_generation != slot.generation
-                || entry.identity.submission != entry.active.id
-                || entry.identity.submission == 0
-            {
-                return Err(());
-            }
-            if Some(entry.identity.logical_epoch) == self.commit_frontier {
-                if found.is_some() {
-                    return Err(());
-                }
-                found = Some(entry);
-            }
-            if self.commit_frontier.and_then(|epoch| epoch.checked_add(1))
-                == Some(entry.identity.logical_epoch)
-            {
-                next_count += 1;
-            }
-        }
-        if occupied != self.live {
-            return Err(());
-        }
-        if self.live == 0 {
-            return self.commit_frontier.is_none().then_some(None).ok_or(());
-        }
-        if self.live > 1 && next_count != 1 {
-            return Err(());
-        }
-        found.map(Some).ok_or(())
+        publication::checked_frontier(&self.slots, self.live, self.commit_frontier, self.staged)
+            .map(|index| index.and_then(|index| self.slots[index].entry.as_ref()))
     }
 
     #[cfg(test)]
