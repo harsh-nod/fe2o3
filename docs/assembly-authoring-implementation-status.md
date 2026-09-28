@@ -1597,3 +1597,14 @@ See [qualification and limits](retained-origin-worklist-qualification-20260928.m
 Origins and edges are still caller-owned. This component is not an authenticated
 provenance checkpoint or production route; carrier/provenance and genuine
 continuation work remain open. Broad accepted exits remain 6/18.
+
+## Retained ExclusiveOwner carrier component — 2026-09-28
+
+Carrier origins, three scan arrays, copy edges, borrowed receivers and FIFO
+storage now remain attached through partial failures. All 12 new controls and
+full 356-model / 3,245-backend regressions passed (197 ignored), plus builds.
+See [qualification and limits](retained-exclusive-carrier-qualification-20260928.md).
+
+This is an isolated analysis component, not a genuine source checkpoint.
+Provenance/allocation/capability integration, authenticated continuation,
+argument writers and production admission remain open. Broad exits remain 6/18.
