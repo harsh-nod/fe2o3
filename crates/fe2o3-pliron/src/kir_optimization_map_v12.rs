@@ -266,7 +266,7 @@ use replay_work::ReplayCensusV12;
 
 #[path = "kir_optimization_map_v18.rs"]
 mod storage_v18;
-pub use storage_v18::KirOptimizationMapPolicy3V18;
+pub use storage_v18::{KirOptimizationMapIntegerContinuationV18, KirOptimizationMapPolicy3V18};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct MapData<I = Identity> {

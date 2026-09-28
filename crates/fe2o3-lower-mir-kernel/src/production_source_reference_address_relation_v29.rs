@@ -1308,6 +1308,17 @@ fn source_address_external_descriptor_v29(
 
 // Source targets are hypotheses only. The physical solver must independently
 // derive the same object from actual Allocas, pointer Stores/Loads and edges.
+#[cfg(test)]
+type SourceAddressAccessCapacityObserverV29 =
+    fn(&SourceAddressSourceIndexV29<'_>, &[SourceAddressAccessSourceV29], usize, usize, usize);
+
+#[cfg(test)]
+thread_local! {
+    static SOURCE_ADDRESS_ACCESS_CAPACITY_OBSERVER_V29: std::cell::Cell<Option<SourceAddressAccessCapacityObserverV29>> = const { std::cell::Cell::new(None) };
+    static SOURCE_ADDRESS_ACCESS_FIRST_CENSUS_V29: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static SOURCE_ADDRESS_ACCESS_ALLOCATIONS_V29: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn source_address_accesses_v29(
     instances: &ExecutionInstancesV29<'_>,
     references: &SourceReferenceEmissionV29<'_, '_>,
@@ -1343,17 +1354,46 @@ fn source_address_accesses_v29(
     let mut count = 0;
     for sidecar in &source_index.pending.sidecars.rows {
         budget.charge_work(1)?;
-        count = argument_sum_v1(&[
-            count,
-            sidecar
-                .scoped_memory_anchors
-                .as_ref()
-                .ok_or_else(source_raw_physical_error_v29)?
-                .rows
-                .len(),
-        ])?;
+        let anchors = sidecar
+            .scoped_memory_anchors
+            .as_ref()
+            .ok_or_else(source_raw_physical_error_v29)?;
+        for row in &anchors.rows {
+            #[cfg(test)]
+            if SOURCE_ADDRESS_ACCESS_FIRST_CENSUS_V29.get().is_none() {
+                SOURCE_ADDRESS_ACCESS_FIRST_CENSUS_V29.set(Some(budget.work()));
+            }
+            budget.charge_work(1)?;
+            // Only value-access anchors can enter this vector. The full fill
+            // below still authenticates every payload and may exclude issued
+            // or descriptor accesses, so this remains a conservative bound.
+            let candidate = match row.kind {
+                ScopedMemoryAnchorKindV29::Access {
+                    payload: Some(_), ..
+                } => true,
+                ScopedMemoryAnchorKindV29::Object(_) => {
+                    let payload = anchors.object_payload(row, budget)?;
+                    budget.charge_work(2)?;
+                    matches!(
+                        payload.operation,
+                        ScopedObjectOperationV29::ReadValue { .. }
+                            | ScopedObjectOperationV29::WriteValue { .. }
+                    )
+                }
+                _ => false,
+            };
+            if candidate {
+                count = argument_sum_v1(&[count, 1])?;
+            }
+        }
     }
+    #[cfg(test)]
+    let capacity_floor = budget.storage();
     let mut rows = emission_vec_v1(count, budget)?;
+    #[cfg(test)]
+    let capacity_bytes = budget.storage() - capacity_floor;
+    #[cfg(test)]
+    SOURCE_ADDRESS_ACCESS_ALLOCATIONS_V29.set(SOURCE_ADDRESS_ACCESS_ALLOCATIONS_V29.get() + 1);
     let mut raw_seen = emission_vec_v1(references.plan.raw_accesses.len(), budget)?;
     budget.charge_work(references.plan.raw_accesses.len())?;
     raw_seen.resize(references.plan.raw_accesses.len(), false);
@@ -1896,6 +1936,10 @@ fn source_address_accesses_v29(
                 },
                 _ => None,
             };
+            budget.charge_work(2)?;
+            if rows.len() == count {
+                return Err(ArgumentResourceV1::Accounting.into());
+            }
             rows.push(SourceAddressAccessSourceV29 {
                 instance,
                 anchor,
@@ -1909,6 +1953,10 @@ fn source_address_accesses_v29(
                 safe_object,
             });
         }
+    }
+    #[cfg(test)]
+    if let Some(observe) = SOURCE_ADDRESS_ACCESS_CAPACITY_OBSERVER_V29.get() {
+        observe(source_index, &rows, count, rows.capacity(), capacity_bytes);
     }
     let issuer_count = source_issued_source_count_v29(instances, budget)?;
     if issuer_count != 0 {

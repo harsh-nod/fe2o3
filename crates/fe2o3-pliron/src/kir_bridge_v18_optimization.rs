@@ -10,24 +10,25 @@ use crate::{
 };
 use std::mem::size_of;
 
-pub(crate) struct ExecutedV18Parts {
+pub(crate) struct ExecutedV18Parts<M = KirOptimizationMapPolicy3V18, X = Policy3ExecutionWitnessV18>
+{
     pub(crate) owner: VerifiedCanonicalKernelIrModuleV18,
     pub(crate) report: PlironOptimizationReportV1,
     pub(crate) bridge: KirBridgeReportV18,
-    pub(crate) map: KirOptimizationMapPolicy3V18,
+    pub(crate) map: M,
     pub(crate) occurrences: KirNeutralOccurrenceRowsV1,
-    pub(crate) execution: Policy3ExecutionWitnessV18,
+    pub(crate) execution: X,
     pub(crate) retained: usize,
 }
 
-fn headers() -> Result<usize, ResourceError> {
+fn headers<M, X>() -> Result<usize, ResourceError> {
     type Payload = Box<dyn std::any::Any + Send>;
     let slots = [
-        (2, size_of::<ExecutedV18Parts>()),
-        (8, size_of::<Result<ExecutedV18Parts, Failure>>()),
+        (2, size_of::<ExecutedV18Parts<M, X>>()),
+        (8, size_of::<Result<ExecutedV18Parts<M, X>, Failure>>()),
         (
             2,
-            size_of::<std::thread::Result<Result<ExecutedV18Parts, Failure>>>(),
+            size_of::<std::thread::Result<Result<ExecutedV18Parts<M, X>, Failure>>>(),
         ),
         (4, size_of::<Payload>()),
         (1, size_of::<AssertUnwindSafe<Payload>>()),
@@ -57,11 +58,35 @@ pub(crate) fn optimize_v18_graph(
     wrapper: usize,
     budget: &mut Budget<'_>,
 ) -> Result<ExecutedV18Parts, Failure> {
+    optimize_graph::<ScalarPolicyV18>(input, layouts, wrapper, budget)
+}
+
+pub(crate) fn optimize_integer_v18_graph(
+    input: &VerifiedCanonicalKernelIrModuleV18,
+    layouts: StorageLayoutLimitsV1,
+    wrapper: usize,
+    budget: &mut Budget<'_>,
+) -> Result<
+    ExecutedV18Parts<
+        crate::KirOptimizationMapIntegerContinuationV18,
+        crate::IntegerContinuationExecutionWitnessV18,
+    >,
+    Failure,
+> {
+    optimize_graph::<IntegerPolicyV18>(input, layouts, wrapper, budget)
+}
+
+fn optimize_graph<P: ExecutionPolicyV18>(
+    input: &VerifiedCanonicalKernelIrModuleV18,
+    layouts: StorageLayoutLimitsV1,
+    wrapper: usize,
+    budget: &mut Budget<'_>,
+) -> Result<ExecutedV18Parts<P::Map, P::Execution>, Failure> {
     let ledger = budget.work_ledger_identity_v1();
     let floor = budget.storage();
     // Atomic admission occurs before an upstream graph or cleanup payload exists.
     budget.charge_work(1 + resources::CLEANUP_ATTEMPTS)?;
-    budget.reserve_storage(headers()?)?;
+    budget.reserve_storage(headers::<P::Map, P::Execution>()?)?;
     let caught = catch_unwind(AssertUnwindSafe(|| {
         if input.canonical_bytes().len() > POLICY3_CANONICAL_CAP {
             return Err(Failure::Limit);
@@ -79,7 +104,7 @@ pub(crate) fn optimize_v18_graph(
                 budget,
             )
             .map_err(Failure::Mapping)?;
-        let (profile, map_limits) = policy3_execution_resources_v18(
+        let (profile, map_limits) = P::resources(
             input.canonical_bytes().len(),
             limits.nodes,
             observer_admission,
@@ -115,7 +140,7 @@ pub(crate) fn optimize_v18_graph(
             },
         )
         .map_err(Failure::Mapping)?;
-        let occurrences = Capture::new_v18(
+        let occurrences = Capture::new_for_policy_v18(
             &graph.session.context,
             root,
             input.module(),
@@ -123,21 +148,22 @@ pub(crate) fn optimize_v18_graph(
             limits,
             roster_work,
             observer_admission,
+            P::POLICY,
         )
         .map_err(Failure::Mapping)?;
         let capture = CaptureV12::new_for_policy_admitted(
             map_limits,
             &roster,
-            FixedPolicy::Checked3,
+            P::POLICY,
             Some(observer_admission.definition_arity_bound()),
         )
         .map_err(Failure::Mapping)?;
         drop(roster);
         let mut passes = Vec::new();
         passes
-            .try_reserve_exact(FixedPolicy::Checked3.passes().len())
+            .try_reserve_exact(P::POLICY.passes().len())
             .map_err(|_| ResourceError::Allocation)?;
-        passes.extend_from_slice(FixedPolicy::Checked3.passes());
+        passes.extend_from_slice(P::POLICY.passes());
         let pass_limits = crate::PlironOptimizationLimitsV1::new(256, 32_768, 25_268_224)
             .map_err(|_| ResourceError::Accounting)?;
         let plan = crate::PlironOptimizationPlanV1::new(passes, pass_limits)
@@ -150,7 +176,7 @@ pub(crate) fn optimize_v18_graph(
             &plan,
             &capture,
             Some(&occurrences),
-            FixedPolicy::Checked3,
+            P::POLICY,
             budget,
         )
         .map_err(Failure::Execution)?;
@@ -201,19 +227,18 @@ pub(crate) fn optimize_v18_graph(
                 )
             })
             .map_err(Failure::Mapping)?;
-        let (map, map_storage) = capture
-            .finish_policy3_v18(input, &owner, &roster, budget)
-            .map_err(Failure::Mapping)?;
+        let (map, map_storage) =
+            P::finish_map(&capture, input, &owner, &roster, budget).map_err(Failure::Mapping)?;
         budget.reserve_storage(map_storage)?;
-        let rows = occurrences
-            .finish_policy3_v18(
-                &graph.session.context,
-                &roster,
-                &map,
-                owner.module(),
-                budget,
-            )
-            .map_err(Failure::Mapping)?;
+        let rows = P::finish_rows(
+            &occurrences,
+            &graph.session.context,
+            &roster,
+            &map,
+            owner.module(),
+            budget,
+        )
+        .map_err(Failure::Mapping)?;
         let row_storage = rows.retained_storage().map_err(Failure::Mapping)?;
         drop(roster);
         budget.release_storage(
@@ -221,7 +246,7 @@ pub(crate) fn optimize_v18_graph(
                 .checked_sub(row_storage)
                 .ok_or(ResourceError::Accounting)?,
         )?;
-        let execution = Policy3ExecutionWitnessV18::from_execution(
+        let execution = P::execution(
             input,
             &owner,
             bridge.table,
@@ -275,3 +300,116 @@ pub(crate) fn optimize_v18_graph(
     budget.release_storage(release)?;
     result
 }
+
+// Private policy selection keeps the session, observer, map and execution
+// witness in one nominal family. Callers cannot choose an arbitrary pass list.
+trait ExecutionPolicyV18 {
+    const POLICY: FixedPolicy;
+    type Map;
+    type Execution;
+    fn resources(
+        bytes: usize,
+        nodes: usize,
+        admission: crate::kir_occurrence_capture_v1::ObserverAdmissionV18,
+    ) -> Result<
+        (
+            crate::PlironOptimizationResourcesV12,
+            crate::kir_optimization_map_v12::CaptureLimitsV12,
+        ),
+        crate::PlironOptimizationErrorV12,
+    >;
+    fn finish_map(
+        capture: &CaptureV12,
+        input: &VerifiedCanonicalKernelIrModuleV18,
+        output: &VerifiedCanonicalKernelIrModuleV18,
+        roster: &crate::kir_optimization_map_v12::LiveRosterV12,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self::Map, usize), crate::KirOptimizationMapErrorV12>;
+    fn finish_rows(
+        capture: &Capture,
+        ctx: &pliron::context::Context,
+        roster: &crate::kir_optimization_map_v12::LiveRosterV12,
+        map: &Self::Map,
+        output: &fe2o3_kernel_ir::Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1, crate::KirOptimizationMapErrorV12>;
+    fn execution(
+        input: &VerifiedCanonicalKernelIrModuleV18,
+        output: &VerifiedCanonicalKernelIrModuleV18,
+        table: fe2o3_kernel_ir::CanonicalStorageTableIdentityV18,
+        report: &PlironOptimizationReportV1,
+        map: &Self::Map,
+        profile: ExecutionProfileV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<Self::Execution, ResourceError>;
+}
+
+macro_rules! execution_policy_v18 {
+    ($name:ident, $policy:ident, $map:ty, $execution:ty, $resources:path, $finish:ident) => {
+        struct $name;
+        impl ExecutionPolicyV18 for $name {
+            const POLICY: FixedPolicy = FixedPolicy::$policy;
+            type Map = $map;
+            type Execution = $execution;
+            fn resources(
+                bytes: usize,
+                nodes: usize,
+                admission: crate::kir_occurrence_capture_v1::ObserverAdmissionV18,
+            ) -> Result<
+                (
+                    crate::PlironOptimizationResourcesV12,
+                    crate::kir_optimization_map_v12::CaptureLimitsV12,
+                ),
+                crate::PlironOptimizationErrorV12,
+            > {
+                $resources(bytes, nodes, admission)
+            }
+            fn finish_map(
+                capture: &CaptureV12,
+                input: &VerifiedCanonicalKernelIrModuleV18,
+                output: &VerifiedCanonicalKernelIrModuleV18,
+                roster: &crate::kir_optimization_map_v12::LiveRosterV12,
+                budget: &mut Budget<'_>,
+            ) -> Result<(Self::Map, usize), crate::KirOptimizationMapErrorV12> {
+                capture.$finish(input, output, roster, budget)
+            }
+            fn finish_rows(
+                capture: &Capture,
+                ctx: &pliron::context::Context,
+                roster: &crate::kir_optimization_map_v12::LiveRosterV12,
+                map: &Self::Map,
+                output: &fe2o3_kernel_ir::Module,
+                budget: &mut Budget<'_>,
+            ) -> Result<KirNeutralOccurrenceRowsV1, crate::KirOptimizationMapErrorV12> {
+                capture.$finish(ctx, roster, map, output, budget)
+            }
+            fn execution(
+                input: &VerifiedCanonicalKernelIrModuleV18,
+                output: &VerifiedCanonicalKernelIrModuleV18,
+                table: fe2o3_kernel_ir::CanonicalStorageTableIdentityV18,
+                report: &PlironOptimizationReportV1,
+                map: &Self::Map,
+                profile: ExecutionProfileV1,
+                budget: &mut Budget<'_>,
+            ) -> Result<Self::Execution, ResourceError> {
+                <$execution>::from_execution(input, output, table, report, map, profile, budget)
+            }
+        }
+    };
+}
+execution_policy_v18!(
+    ScalarPolicyV18,
+    Checked3,
+    KirOptimizationMapPolicy3V18,
+    Policy3ExecutionWitnessV18,
+    policy3_execution_resources_v18,
+    finish_policy3_v18
+);
+execution_policy_v18!(
+    IntegerPolicyV18,
+    Integer6,
+    crate::KirOptimizationMapIntegerContinuationV18,
+    crate::IntegerContinuationExecutionWitnessV18,
+    crate::optimization_v12::integer_execution_resources_v18,
+    finish_integer_v18
+);

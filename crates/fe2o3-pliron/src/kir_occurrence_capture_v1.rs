@@ -1688,9 +1688,45 @@ impl Capture {
         output: &Module,
         budget: &mut Budget<'_>,
     ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_admitted_v18(
+            ctx,
+            roster,
+            map.neutral_data_v18(),
+            output,
+            FixedPolicy::Checked3,
+            budget,
+        )
+    }
+
+    pub(crate) fn finish_integer_v18(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::KirOptimizationMapIntegerContinuationV18,
+        output: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_admitted_v18(
+            ctx,
+            roster,
+            map.neutral_data_v18(),
+            output,
+            FixedPolicy::Integer6,
+            budget,
+        )
+    }
+
+    fn finish_admitted_v18<I>(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map_data: &crate::kir_optimization_map_v12::MapData<I>,
+        output: &Module,
+        policy: FixedPolicy,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
         // Fixed allocation initialization and immutable witness scans, before
         // the variable suffix/search/descendant work reaches its direct meter.
-        let map_data = map.neutral_data_v18();
         budget.charge_work(admission_mul_v18(
             8,
             admission_sum_v18(&[
@@ -1699,17 +1735,10 @@ impl Capture {
                 1,
             ])?,
         )?)?;
-        self.finish_data_with_meter(
-            ctx,
-            roster,
-            map.neutral_data_v18(),
-            output,
-            FixedPolicy::Checked3,
-            &mut |_, units| {
-                budget.charge_work(units)?;
-                Ok(())
-            },
-        )
+        self.finish_data_with_meter(ctx, roster, map_data, output, policy, &mut |_, units| {
+            budget.charge_work(units)?;
+            Ok(())
+        })
     }
 
     fn finish_data<I>(

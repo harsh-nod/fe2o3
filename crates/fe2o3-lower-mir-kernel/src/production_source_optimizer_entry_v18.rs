@@ -252,6 +252,52 @@ impl ProductionSourceOwnedViewV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        self.with_checked_optimization_policy_v18::<ScalarSourceOptimizerV18, T, E>(budget, consume)
+    }
+
+    /// Execute the distinct fixed integer-neutral/DCE continuation while the
+    /// original source is live. This is not Policy3 evidence or final admission.
+    /// The same transfer, callback-floor, and sticky-error contract applies as
+    /// `with_checked_optimization_v18`; memory/CFG payloads stay independently checked.
+    pub fn with_checked_integer_optimization_v18<T: 'static, E: 'static>(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+        consume: impl for<'scope, 'work> FnOnce(
+            &ProductionSourceCorrespondenceV18<'scope>,
+            &ProductionOptimizedSourceCorrespondenceV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<(T, usize), E>,
+    ) -> Result<
+        (
+            fe2o3_pliron::CheckedNeutralKernelIrOwnerIntegerContinuationV18,
+            T,
+            fe2o3_pliron::KirNeutralOwnedOriginStorageV1,
+        ),
+        ProductionSourceOptimizationErrorV18<E>,
+    >
+    where
+        E: From<ProductionSourceOwnedViewErrorV18>,
+    {
+        self.with_checked_optimization_policy_v18::<IntegerSourceOptimizerV18, T, E>(
+            budget, consume,
+        )
+    }
+
+    fn with_checked_optimization_policy_v18<P: SourceOptimizerPolicyV18, T: 'static, E: 'static>(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+        consume: impl for<'scope, 'work> FnOnce(
+            &ProductionSourceCorrespondenceV18<'scope>,
+            &ProductionOptimizedSourceCorrespondenceV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<(T, usize), E>,
+    ) -> Result<
+        (P::Output, T, fe2o3_pliron::KirNeutralOwnedOriginStorageV1),
+        ProductionSourceOptimizationErrorV18<E>,
+    >
+    where
+        E: From<ProductionSourceOwnedViewErrorV18>,
+    {
         let floor = budget.storage();
         let slot = std::ptr::from_ref(budget) as usize;
         let ledger = budget.work_ledger_identity_v1();
@@ -261,12 +307,8 @@ impl ProductionSourceOwnedViewV18<'_> {
             let accepted = &accepted;
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 self.query(budget)?;
-                let headers = self.retain_query(
-                    optimized_source_consumer_resources_v18::optimizer_entry_headers::<T, E, _>(
-                        &consume,
-                    )
-                    .map_err(Into::into),
-                )?;
+                let headers =
+                    self.retain_query(P::headers::<T, E, _>(&consume).map_err(Into::into))?;
                 self.retain_query(
                     optimized_source_consumer_resources_v18::reserve_entry(
                         accepted, headers, budget,
@@ -284,27 +326,25 @@ impl ProductionSourceOwnedViewV18<'_> {
                         .map_err(Into::into),
                 )?;
                 let layouts = self.limits(budget)?.storage_layout_limits();
-                let observed = fe2o3_pliron::optimize_neutral_kernel_ir_v18(
-                    &self.owner.inner.pending.graph,
-                    layouts,
-                    budget,
-                )
-                .map_err(|error| {
-                    let refusal = observed_optimizer_refusal_v18(&error);
-                    if matches!(
-                        refusal,
-                        SourceOwnedQueryFailureV18::Resource(ArgumentResourceV1::Accounting)
-                    ) {
-                        self.cleanup.deny_refund();
-                    }
-                    let _ = self.guard.reject::<()>(refusal);
-                    SourceConsumerErrorV18(ProductionSourceOptimizationErrorV18::Observation(error))
-                })?;
+                let observed = P::observe(&self.owner.inner.pending.graph, layouts, budget)
+                    .map_err(|error| {
+                        let refusal = observed_optimizer_refusal_v18(&error);
+                        if matches!(
+                            refusal,
+                            SourceOwnedQueryFailureV18::Resource(ArgumentResourceV1::Accounting)
+                        ) {
+                            self.cleanup.deny_refund();
+                        }
+                        let _ = self.guard.reject::<()>(refusal);
+                        SourceConsumerErrorV18(ProductionSourceOptimizationErrorV18::Observation(
+                            error,
+                        ))
+                    })?;
                 // The observation and adoption must see this same budget object.
                 self.retain_query(
                     optimized_source_consumer_resources_v18::reserve_entry(
                         accepted,
-                        observed.storage().retained_storage(),
+                        P::storage(&observed),
                         budget,
                     )
                     .map_err(Into::into),
@@ -354,7 +394,7 @@ impl ProductionSourceOwnedViewV18<'_> {
             }
         };
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let adopted = observed.try_check_and_finish_with_v18(budget, |checked, budget| {
+            let adopted = P::adopt(observed, budget, |checked, budget| {
                 self.with_ranked_correspondence_v18(checked.input(), budget, |original, budget| {
                     original.with_optimized_correspondence_v18(
                         checked,
@@ -428,3 +468,107 @@ impl ProductionSourceOwnedViewV18<'_> {
         )
     }
 }
+
+trait SourceOptimizerPolicyV18 {
+    type Observed<'a>;
+    type Output;
+    fn observe<'a>(
+        input: &'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
+        layouts: fe2o3_kernel_ir::StorageLayoutLimitsV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self::Observed<'a>, fe2o3_pliron::KirNeutralOptimizationErrorV18>;
+    fn storage(observed: &Self::Observed<'_>) -> usize;
+    fn headers<T, E, F>(consume: &F) -> Result<usize, ArgumentResourceV1>;
+    fn adopt<T: 'static, E: 'static, F>(
+        observed: Self::Observed<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+        consume: F,
+    ) -> Result<
+        (
+            Self::Output,
+            T,
+            fe2o3_pliron::KirNeutralOwnedOriginStorageV1,
+        ),
+        fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1<E>,
+    >
+    where
+        F: for<'view, 'inventory, 'input, 'output, 'rows, 'work> FnOnce(
+            &'view fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV18<
+                'inventory,
+                'input,
+                'output,
+                'rows,
+            >,
+            &mut ArgumentBudgetV1<'work>,
+        )
+            -> Result<(T, usize), E>;
+}
+
+macro_rules! source_optimizer_policy_v18 {
+    ($name:ident, $observed:ident, $output:ident, $observe:ident) => {
+        struct $name;
+        impl SourceOptimizerPolicyV18 for $name {
+            type Observed<'a> = fe2o3_pliron::$observed<'a>;
+            type Output = fe2o3_pliron::$output;
+            fn observe<'a>(
+                input: &'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
+                layouts: fe2o3_kernel_ir::StorageLayoutLimitsV1,
+                budget: &mut ArgumentBudgetV1<'_>,
+            ) -> Result<Self::Observed<'a>, fe2o3_pliron::KirNeutralOptimizationErrorV18> {
+                fe2o3_pliron::$observe(input, layouts, budget)
+            }
+            fn storage(observed: &Self::Observed<'_>) -> usize {
+                observed.storage().retained_storage()
+            }
+            fn headers<T, E, F>(_: &F) -> Result<usize, ArgumentResourceV1> {
+                optimized_source_consumer_resources_v18::optimizer_entry_headers_typed::<
+                    T,
+                    E,
+                    F,
+                    Self::Output,
+                    Self::Observed<'static>,
+                >()
+            }
+            fn adopt<T: 'static, E: 'static, F>(
+                observed: Self::Observed<'_>,
+                budget: &mut ArgumentBudgetV1<'_>,
+                consume: F,
+            ) -> Result<
+                (
+                    Self::Output,
+                    T,
+                    fe2o3_pliron::KirNeutralOwnedOriginStorageV1,
+                ),
+                fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1<E>,
+            >
+            where
+                F: for<'view, 'inventory, 'input, 'output, 'rows, 'work> FnOnce(
+                    &'view fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV18<
+                        'inventory,
+                        'input,
+                        'output,
+                        'rows,
+                    >,
+                    &mut ArgumentBudgetV1<'work>,
+                ) -> Result<
+                    (T, usize),
+                    E,
+                >,
+            {
+                observed.try_check_and_finish_with_v18(budget, consume)
+            }
+        }
+    };
+}
+source_optimizer_policy_v18!(
+    ScalarSourceOptimizerV18,
+    KirNeutralOptimizationOutputV18,
+    CheckedNeutralKernelIrOwnerV18,
+    optimize_neutral_kernel_ir_v18
+);
+source_optimizer_policy_v18!(
+    IntegerSourceOptimizerV18,
+    KirNeutralOptimizationOutputIntegerContinuationV18,
+    CheckedNeutralKernelIrOwnerIntegerContinuationV18,
+    optimize_neutral_kernel_ir_integer_continuation_v18
+);

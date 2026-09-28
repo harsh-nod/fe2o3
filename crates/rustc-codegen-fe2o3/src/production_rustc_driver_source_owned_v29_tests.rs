@@ -11,6 +11,9 @@ const SOURCE_OWNED_CHILD: &str = "production_rustc_driver_v1::checked_output_sou
 #[path = "production_rustc_driver_source_owned_target_llvm_v29_tests.rs"]
 mod target_llvm_tests;
 
+#[path = "production_rustc_driver_source_preparation_v29_tests.rs"]
+mod preparation_tests;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct ScalarResult {
     source: [u8; 32],

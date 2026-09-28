@@ -473,6 +473,16 @@ fn write_execution_tail<const N: usize>(
     map_digest: &[u8; 32],
     execution: ExecutionProfileV1,
 ) -> Result<(), Resource> {
+    write_execution_tail_for_pass_count(writer, report, map_digest, execution, POLICY3_PASSES.len())
+}
+
+fn write_execution_tail_for_pass_count<const N: usize>(
+    writer: &mut RecordWriter<'_, N>,
+    report: &PlironOptimizationReportV1,
+    map_digest: &[u8; 32],
+    execution: ExecutionProfileV1,
+    pass_count: usize,
+) -> Result<(), Resource> {
     let ExecutionProfileV1 {
         resources: profile,
         registered_nodes,
@@ -483,7 +493,7 @@ fn write_execution_tail<const N: usize>(
         profile.work(),
         profile.persistent_storage(),
         profile.temporary_storage(),
-        POLICY3_PASSES.len(),
+        pass_count,
         cse_work,
         POLICY3_CANONICAL_CAP,
         POLICY3_CANONICAL_CAP,
@@ -519,4 +529,7 @@ fn write_execution_tail<const N: usize>(
 
 #[path = "fixed_policy_v18.rs"]
 mod storage_v18;
-pub use storage_v18::{POLICY3_EXECUTION_RECORD_BYTES_V18, Policy3ExecutionWitnessV18};
+pub use storage_v18::{
+    INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V18, IntegerContinuationExecutionWitnessV18,
+    POLICY3_EXECUTION_RECORD_BYTES_V18, Policy3ExecutionWitnessV18,
+};

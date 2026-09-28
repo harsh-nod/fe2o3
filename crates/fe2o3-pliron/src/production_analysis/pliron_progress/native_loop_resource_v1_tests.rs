@@ -39,12 +39,12 @@ fn entry_fields() -> usize {
 }
 
 fn expected() -> ProductionAnalysisResourceUpperBoundV1 {
-    // B=4,E=4,O=8,A=10,D=8: Q=72, scalar sites=932,
+    // B=4,E=4,O=8,A=10,D=8: Q=24, scalar sites=356,
     // scalar cost=808. Eight debug-name dictionaries add 5*8 work and
     // 3*8 temporary cells to the original semantic-only census.
     ProductionAnalysisResourceUpperBoundV1::checked_phase(
         ProductionAnalysisResourcePhaseV1::Progress,
-        27_674 + 5 * 8 + 932 * 808,
+        17_402 + 5 * 8 + 356 * 808,
         8_836,
         2 * 58 + 14 * 4 + 8 * 4 + (58 + 16 + 10) + 3 + (3 + 4 * 10) + entry_fields() + scratch(),
     )
@@ -150,7 +150,7 @@ fn native_progress_scalar_probe_census_is_bounded_for_success_and_refusal() {
             inventory.edges,
             inventory.results + inventory.block_arguments,
         );
-        let queries = e * (2 + b * e);
+        let queries = e * (2 + e);
         let sites = 8 * (b + e) + e + 8 * queries + e * queries;
         native_progress_scalar_observation_v1::reset();
         let _report = run_pliron_progress_check_v1(&context, &function);

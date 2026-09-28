@@ -318,45 +318,31 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                 }
                 crate::collector::ContextRootVisitErrorV29::Consumer(never) => match never {},
             })?;
-        if contexts.is_some() {
-            return Err(Error::Unsupported("closed scalar context provider"));
-        }
-        drop(contexts);
         let original_sha = *semantic_ssa.source_semantic_sha256();
         let original_ssa = semantic_ssa.identity();
         let target = bindings.rustc_target.profile();
-        let abi = crate::compiler_descriptor::source_owned_v29::ScalarAbi::capture(
+        let abi = crate::compiler_descriptor::source_owned_v29::SourceAbi::capture(
             &bindings.typed_descriptor_roots,
             &mut budget,
         )?;
         let roots = abi.roots(&mut budget)?;
-        let mut classes = paid_vec(
-            semantic_ssa.source_semantic().callables().len(),
-            &mut budget,
-        )?;
-        classes.resize(
-            semantic_ssa.source_semantic().callables().len(),
-            Class::Ordinary,
-        );
-        let source = Pending::prepare_source_with_kernel_abi_budget_v18(
+        let source = prepare_original_source_v29(
             semantic_ssa,
             launch,
-            ProductionExecutionSourceInputV29 {
-                semantic_sha256: &original_sha,
-                roots: &[],
-                classes: &classes,
-                events: &[],
-            },
-            ProductionKernelArgumentAbiInputV18 { roots: &roots },
-            fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+            contexts.as_ref(),
+            &roots,
             &mut budget,
         )?;
+        #[cfg(test)]
+        tests::observe_prepared_source_v29(&roots, contexts.is_some());
         let result = source.with_source_consumer_v18(&mut budget, move |source, budget| {
             if source.source_ssa(budget)?.identity() != original_ssa
                 || source.source_semantic(budget)?.semantic_sha256().as_bytes() != &original_sha
             {
                 return Err(Error::Unsupported("source-owned original identity changed"));
             }
+            #[cfg(test)]
+            tests::observe_materialized_source_v29();
             let handoff = source.checked_closed_scalar_output_v18(
                 ProductionKernelArgumentAbiInputV18 { roots: &roots },
                 budget,
@@ -379,7 +365,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                 Err(payload) => resume_unwind(payload),
             }
         });
-        drop((classes, abi, ranked_roots));
+        drop((contexts, abi, ranked_roots));
         let observation = result?;
         Ok(SourceOwnedCompilationContinuationV29 {
             observation,
@@ -388,6 +374,102 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             bindings,
         })
     }
+}
+
+/// Own the genuine SSA and launch through capture, then pass the real prepared
+/// source to its lexical consumer on this same ledger. Full original ABI and
+/// retained execution rows are proposals replayed by the lowerer, not permits.
+fn prepare_original_source_v29(
+    semantic_ssa: fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+    launch: fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+    contexts: Option<&crate::collector::RetainedExecutionSourceV29<'_>>,
+    roots: &[AbiRoot<'_>],
+    budget: &mut Budget<'_>,
+) -> Result<fe2o3_lower_mir_kernel::ProductionPreparedSourceV18, Error> {
+    if let Some(contexts) = contexts {
+        pay_context_preparation_headers_v29(budget)?;
+        // Capture owns all rows before this projection releases its temporary
+        // backing. Original retained compiler bindings remain live outside.
+        return context_handoff_v29::with_projected_execution_source_v29(
+            contexts,
+            budget,
+            move |input, budget| {
+                Ok(Pending::prepare_source_with_kernel_abi_budget_v18(
+                    semantic_ssa,
+                    launch,
+                    input,
+                    ProductionKernelArgumentAbiInputV18 { roots },
+                    fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                    budget,
+                ))
+            },
+        )
+        .map_err(ProductionPipelineError::ContextHandoff)?
+        .map_err(Error::from);
+    }
+    let original_sha = *semantic_ssa.source_semantic_sha256();
+    let mut classes = paid_vec(semantic_ssa.source_semantic().callables().len(), budget)?;
+    classes.resize(
+        semantic_ssa.source_semantic().callables().len(),
+        Class::Ordinary,
+    );
+    Pending::prepare_source_with_kernel_abi_budget_v18(
+        semantic_ssa,
+        launch,
+        ProductionExecutionSourceInputV29 {
+            semantic_sha256: &original_sha,
+            roots: &[],
+            classes: &classes,
+            events: &[],
+        },
+        ProductionKernelArgumentAbiInputV18 { roots },
+        fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+        budget,
+    )
+    .map_err(Error::from)
+}
+
+fn context_preparation_headers_v29() -> Result<usize, Resource> {
+    type Capture<'a> = (
+        fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+        &'a [AbiRoot<'a>],
+    );
+    type Prepared = Result<
+        fe2o3_lower_mir_kernel::ProductionPreparedSourceV18,
+        ProductionSourceOwnedViewErrorV18,
+    >;
+    type Invoke<'a, 'work> = (
+        Capture<'a>,
+        &'a crate::collector::RetainedExecutionSourceV29<'a>,
+        &'a mut Budget<'work>,
+        &'a mut usize,
+    );
+    type Projected = Result<Prepared, fe2o3_lower_mir_kernel::ProductionContextRootErrorV29>;
+    [
+        size_of::<Capture<'_>>(),
+        align_of::<Capture<'_>>(),
+        size_of::<Invoke<'_, '_>>(),
+        align_of::<Invoke<'_, '_>>(),
+        size_of::<AssertUnwindSafe<Invoke<'_, '_>>>(),
+        size_of::<Prepared>(),
+        align_of::<Prepared>(),
+        size_of::<Projected>(),
+        align_of::<Projected>(),
+        size_of::<std::thread::Result<Projected>>(),
+        size_of::<Option<crate::collector::RetainedExecutionSourceV29<'_>>>(),
+    ]
+    .into_iter()
+    .try_fold(0usize, |sum, value| {
+        sum.checked_add(value).ok_or(Resource::Arithmetic)
+    })
+}
+
+fn pay_context_preparation_headers_v29(budget: &mut Budget<'_>) -> Result<(), Error> {
+    let headers = context_preparation_headers_v29()?;
+    budget.charge_work(headers)?;
+    budget.reserve_storage(headers)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -448,6 +530,11 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
 #[cfg(test)]
 #[path = "production_pipeline_source_owned_v29_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::{
+    PreparationObservationV29, start_preparation_observation_v29, take_preparation_observation_v29,
+};
 
 #[path = "production_pipeline_source_owned_target_llvm_v29.rs"]
 mod target_llvm;

@@ -185,8 +185,10 @@ fn preflight_progress_execution_resource_upper_bound_v1(
     // query group, even on Incomplete: at most E external occurrences total.
     // Nested has at most E backedge candidates. For each, X external entry
     // occurrences and I internal occurrences are disjoint, hence X+I <= E.
-    // Entry queries plus B propagation rounds cost X+B*I <= B*E (B >= 1).
-    // Add one latch query per candidate: E + E*(1+B*E) = E*(2+B*E).
+    // Propagation assigns each member once and queues only first discoveries.
+    // Every discovered source is visited once, including all parallel edges
+    // and joins to already visited targets: entry + propagation costs X+I.
+    // Add one latch query per candidate: E + E*(1+E) = E*(2+E).
     // Parallel occurrences count separately; grouping them only saves queries.
     // Empty/early-refused graphs reduce work, including canonical Incomplete
     // followed by nested failure. The helper adds one bounded successor scan
@@ -200,14 +202,7 @@ fn preflight_progress_execution_resource_upper_bound_v1(
     let payload_queries = checked_progress_product_v1(
         census.successors,
         checked_progress_sum_v1(
-            &[
-                2,
-                checked_progress_product_v1(
-                    census.blocks,
-                    census.successors,
-                    "progress parallel-edge query bound",
-                )?,
-            ],
+            &[2, census.successors],
             "progress parallel-edge query bound",
         )?,
         "progress parallel-edge query bound",

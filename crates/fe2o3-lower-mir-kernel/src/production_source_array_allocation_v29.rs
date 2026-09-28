@@ -249,7 +249,18 @@ fn source_array_eligibility_v29(
         )?;
         let mut eligible = emission_vec_v1(plan.cells.rows.len(), budget)?;
         for cell in 0..plan.cells.rows.len() {
-            eligible.push(source_array_cell_facts_v29(plan, cell, budget)?.map(|row| row.0));
+            let facts = source_array_cell_facts_v29(plan, cell, budget)?;
+            plan.charge(1, budget)?;
+            // Layout compatibility alone does not provide per-element pointer
+            // payload/provenance checks. Those arrays keep the existing typed
+            // object route, even when their physical pointer encoding matches.
+            eligible.push(facts.and_then(|(schema, facts)| {
+                matches!(
+                    facts.element.element,
+                    PrivateRetainedElementFactsV1::Scalar(_)
+                )
+                .then_some(schema)
+            }));
         }
         plan.charge(2, budget)?;
         if plan.cells.strategies.len() != plan.loans.len()

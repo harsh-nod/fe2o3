@@ -342,6 +342,8 @@ pub fn optimize_native_neutral_kernel_ir_v1<'input>(
 mod checked_neutral_optimization_v1;
 #[path = "neutral_integer_continuation_v1.rs"]
 mod integer_continuation;
+#[path = "neutral_integer_continuation_v18.rs"]
+mod integer_continuation_v18;
 #[path = "neutral_optimization_policy3_v1.rs"]
 mod policy3;
 #[path = "neutral_optimization_v18.rs"]
@@ -354,6 +356,11 @@ pub use integer_continuation::{
     CheckedNeutralKernelIrOwnerIntegerContinuationV1,
     KirNeutralOptimizationOutputIntegerContinuationV1,
     optimize_native_neutral_kernel_ir_integer_continuation_v1,
+};
+pub use integer_continuation_v18::{
+    CheckedNeutralKernelIrOwnerIntegerContinuationV18,
+    KirNeutralOptimizationOutputIntegerContinuationV18,
+    optimize_neutral_kernel_ir_integer_continuation_v18,
 };
 pub use policy3::{
     CheckedNeutralKernelIrOwnerPolicy3V1, KirNeutralOptimizationOutputPolicy3V1,

@@ -12,7 +12,7 @@ mod progress_scoped_resource_v67_tests {
     }
 
     fn native_normalization(census: ProductionAnalysisInputCensusV1) -> (usize, usize) {
-        let q = census.successors * (2 + census.blocks * census.successors);
+        let q = census.successors * (2 + census.successors);
         let sites = 8 * (census.blocks + census.successors)
             + census.successors
             + 8 * q
@@ -54,10 +54,10 @@ mod progress_scoped_resource_v67_tests {
                     successors: 3,
                     ..ProductionAnalysisInputCensusV1::default()
                 },
-                5_017,
+                3_901,
                 5_586,
                 5_725 + entry_headers(),
-                5_029,
+                3_913,
                 5_722 + entry_headers(),
             ),
         ];
@@ -117,8 +117,8 @@ mod progress_scoped_resource_v67_tests {
         assert!(size_of::<Vec<Value>>() <= 3 * size_of::<usize>());
         assert!(size_of::<Option<Vec<Value>>>() <= 3 * size_of::<usize>());
         for (operands, block_arguments, base_work, base_peak, work, peak) in [
-            (4, 2, 313, 5_706, 5_017, 5_725 + entry_headers()),
-            (0, 0, 243, 5_684, 2_739, 5_687 + entry_headers()),
+            (4, 2, 313, 5_706, 3_901, 5_725 + entry_headers()),
+            (0, 0, 243, 5_684, 2_019, 5_687 + entry_headers()),
         ] {
             let census = ProductionAnalysisInputCensusV1 {
                 blocks: 2,
@@ -131,7 +131,7 @@ mod progress_scoped_resource_v67_tests {
             };
             let (scalar_work, scalar_storage) = native_normalization(census);
             let (work, peak) = (work + scalar_work, peak + scalar_storage);
-            // E*(2+B*E)=24 queries, each 8+24E+11A extra visits.
+            // E*(2+E)=15 queries, each 8+24E+11A extra visits.
             // A=0 still pays controls for more than two nullary successors.
             // One extra payload owner costs three header + four*A cells.
             let bound = preflight_scoped_progress_resource_upper_bound_v1(
@@ -142,7 +142,7 @@ mod progress_scoped_resource_v67_tests {
             assert_eq!(
                 bound.work_upper_bound(),
                 base_work
-                    + 24 * (8 + 24 * 3 + 11 * operands)
+                    + 15 * (8 + 24 * 3 + 11 * operands)
                     + 12 * (48 + (16 + 4 * block_arguments) * operands)
                     + scalar_work
             );

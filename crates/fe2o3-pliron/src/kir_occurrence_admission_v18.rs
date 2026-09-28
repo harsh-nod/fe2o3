@@ -1,5 +1,5 @@
-// V18-only admission for the closed eight-pass observer. Historical policies
-// retain Limits::work and their existing observer growth/storage limits.
+// V18-only conservative eight-pass envelope, also reused by the bounded
+// two-pass integer continuation. Historical policies retain their limits.
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ObserverAdmissionV18 {
@@ -273,8 +273,36 @@ impl Capture {
         roster_work: usize,
         admission: ObserverAdmissionV18,
     ) -> Result<Self> {
+        Self::new_for_policy_v18(
+            ctx,
+            root,
+            source,
+            roster,
+            limits,
+            roster_work,
+            admission,
+            FixedPolicy::Checked3,
+        )
+    }
+
+    pub(crate) fn new_for_policy_v18(
+        ctx: &Context,
+        root: Ptr<Operation>,
+        source: &Module,
+        roster: &LiveRosterV12,
+        limits: Limits,
+        roster_work: usize,
+        admission: ObserverAdmissionV18,
+        policy: FixedPolicy,
+    ) -> Result<Self> {
+        // Integer6 creates at most one false constant per checked binary and
+        // otherwise only replaces values or erases nodes. Two traversals fit
+        // the existing scalar/CFG envelope without increasing any cap.
+        if !matches!(policy, FixedPolicy::Checked3 | FixedPolicy::Integer6) {
+            return Err(E::Passes);
+        }
         Ok(Self(Arc::new(Shared {
-            policy: FixedPolicy::Checked3,
+            policy,
             state: Mutex::new(State::new_admitted(
                 ctx,
                 root,

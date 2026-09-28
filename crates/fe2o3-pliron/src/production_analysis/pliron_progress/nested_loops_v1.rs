@@ -487,45 +487,43 @@ fn propagate_loop_induction_v1(
     induction: pliron::value::Value,
 ) -> Result<HashMap<usize, pliron::value::Value>, ()> {
     let mut inductions = HashMap::from([(header, induction)]);
-    for _ in 0..members.len() {
-        let mut changed = false;
-        for source in members.iter().copied().collect::<Vec<_>>() {
-            let Some(source_induction) = inductions.get(&source).copied() else {
+    // A discovered induction is immutable: joins either agree or refuse.
+    // Visiting its source once therefore checks every occurrence without
+    // rescanning already settled members in repeated fixed-point rounds.
+    // At most one queued index per member, using the same member-vector
+    // capacity already reserved by the progress workspace.
+    let mut pending = Vec::with_capacity(members.len());
+    pending.push(header);
+    while let Some(source) = pending.pop() {
+        let source_induction = inductions[&source];
+        for target in edges[source].iter().copied() {
+            if target == header || !members.contains(&target) {
                 continue;
-            };
-            for target in edges[source].iter().copied() {
-                if target == header || !members.contains(&target) {
-                    continue;
-                }
-                let arguments =
-                    progress_edge_arguments_v1(context, blocks[source], blocks[target])?;
-                let matching = arguments
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, argument)| **argument == source_induction)
-                    .map(|(argument, _)| argument)
-                    .collect::<Vec<_>>();
-                // Natural-loop construction already proves header dominance
-                // for every member. No forwarded alias is needed when the
-                // recurrence reads that exact immutable header SSA value.
-                // The complete parallel payloads were compared above.
-                let target_induction = match matching.as_slice() {
-                    [] => induction,
-                    [argument] => blocks[target].deref(context).get_argument(*argument),
-                    _ => return Err(()),
-                };
-                if let Some(existing) = inductions.get(&target) {
-                    if *existing != target_induction {
-                        return Err(());
-                    }
-                } else {
-                    inductions.insert(target, target_induction);
-                    changed = true;
-                }
             }
-        }
-        if !changed {
-            break;
+            let arguments = progress_edge_arguments_v1(context, blocks[source], blocks[target])?;
+            let matching = arguments
+                .iter()
+                .enumerate()
+                .filter(|(_, argument)| **argument == source_induction)
+                .map(|(argument, _)| argument)
+                .collect::<Vec<_>>();
+            // Natural-loop construction already proves header dominance
+            // for every member. No forwarded alias is needed when the
+            // recurrence reads that exact immutable header SSA value.
+            // The complete parallel payloads were compared above.
+            let target_induction = match matching.as_slice() {
+                [] => induction,
+                [argument] => blocks[target].deref(context).get_argument(*argument),
+                _ => return Err(()),
+            };
+            if let Some(existing) = inductions.get(&target) {
+                if *existing != target_induction {
+                    return Err(());
+                }
+            } else {
+                inductions.insert(target, target_induction);
+                pending.push(target);
+            }
         }
     }
     Ok(inductions)

@@ -3,8 +3,9 @@
 use fe2o3_kernel_ir::{
     BinaryOp, BlockId, CanonicalKirDefinitionCoordinateV1 as Definition,
     CanonicalKirDefinitionDescendantKindV1 as Descendant, CanonicalKirOperationOriginV1 as Origin,
-    CanonicalKirTransitionCandidateV1 as Candidate, ComparePredicate, Constant, FunctionBody,
-    Module, OperationKind, Terminator, Type, ValueId,
+    CanonicalKirTransitionCandidateV1 as Candidate, CheckedBinaryOperator, ComparePredicate,
+    Constant, FunctionBody, Module, Operation, OperationKind, ScalarType, Terminator, Type,
+    ValueId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -363,12 +364,92 @@ impl<'a> FixtureFacts<'a> {
     }
 }
 
+// Ordinary MIR integer arithmetic is represented by a two-result checked
+// operation even when its overflow result is dead. Prove that neither result
+// acquires a scalar fact here; do not quietly treat it as a plain one-result Add.
+fn fixture_checked_dynamic_binary(
+    operation: &Operation,
+    facts: &FixtureFacts<'_>,
+    operator: CheckedBinaryOperator,
+    left: ValueId,
+    right: ValueId,
+) -> Result<(), &'static str> {
+    let ty = facts
+        .types
+        .get(&left)
+        .copied()
+        .ok_or("fixture unknown value")?;
+    if !matches!(
+        ty,
+        Type::Scalar(
+            ScalarType::U8
+                | ScalarType::U16
+                | ScalarType::U32
+                | ScalarType::U64
+                | ScalarType::I8
+                | ScalarType::I16
+                | ScalarType::I32
+                | ScalarType::I64
+        )
+    ) || facts.types.get(&right).copied() != Some(ty)
+        || operation.results.len() != 2
+        || operation.results[0].ty != *ty
+        || operation.results[1].ty != Type::BOOL
+    {
+        return Err("fixture checked integer shape");
+    }
+    let classify = |value| -> Result<Option<(bool, bool)>, &'static str> {
+        let Some((literal, literal_type)) = facts.literal(value)? else {
+            return Ok(None);
+        };
+        if literal_type != ty {
+            return Err("fixture checked integer literal type");
+        }
+        let bits = match (ty, literal) {
+            (Type::Scalar(ScalarType::U8), Constant::U8(value)) => *value as u64,
+            (Type::Scalar(ScalarType::U16), Constant::U16(value)) => *value as u64,
+            (Type::Scalar(ScalarType::U32), Constant::U32(value)) => *value as u64,
+            (Type::Scalar(ScalarType::U64), Constant::U64(value)) => *value,
+            (Type::Scalar(ScalarType::I8), Constant::I8(value)) => *value as u8 as u64,
+            (Type::Scalar(ScalarType::I16), Constant::I16(value)) => *value as u16 as u64,
+            (Type::Scalar(ScalarType::I32), Constant::I32(value)) => *value as u32 as u64,
+            (Type::Scalar(ScalarType::I64), Constant::I64(value)) => *value as u64,
+            _ => return Err("fixture checked integer literal type"),
+        };
+        Ok(Some((bits == 0, bits == 1)))
+    };
+    let a = classify(left)?;
+    let b = classify(right)?;
+    let zero = |value: Option<(bool, bool)>| value.is_some_and(|value| value.0);
+    let one = |value: Option<(bool, bool)>| value.is_some_and(|value| value.1);
+    // At least one operand remains unknown. Refuse every neutral-operand alias,
+    // plus the zero/self cases whose mathematically fixed results would need
+    // an actual scalar-fact extension. Overflow is not assumed to be false.
+    let dependency = a.is_some() && b.is_some()
+        || match operator {
+            CheckedBinaryOperator::Add => zero(a) || zero(b),
+            CheckedBinaryOperator::Subtract => zero(b) || facts.equal(left, right)?,
+            CheckedBinaryOperator::Multiply => zero(a) || zero(b) || one(a) || one(b),
+        };
+    if dependency {
+        return Err("fixture scalar alias or folding dependency");
+    }
+    Ok(())
+}
+
 fn fixture_scalar_grammar(
     body: &FunctionBody,
     facts: &FixtureFacts<'_>,
 ) -> Result<(), &'static str> {
     for operation in body.blocks.iter().flat_map(|block| &block.operations) {
         match &operation.kind {
+            OperationKind::Binary {
+                op: BinaryOp::Checked(operator),
+                lhs,
+                rhs,
+            } => {
+                fixture_checked_dynamic_binary(operation, facts, *operator, *lhs, *rhs)?;
+            }
             OperationKind::Binary {
                 op,
                 lhs: left,
@@ -649,7 +730,12 @@ pub(super) fn assert_policy6_endpoints(
     }
     let mut bc = expected(family, mutation);
     bc.rounds = literal_alias_rounds(owner.bound().module(), third.occurrences().candidate())
-        .expect("B/C fixture must have only reviewed literal/phi dependencies");
+        .unwrap_or_else(|error| {
+            panic!(
+                "B/C fixture dependency refusal: {error}\n{:#?}",
+                owner.bound().module()
+            )
+        });
     let mut oi = expected(family, mutation);
     oi.rounds = literal_alias_rounds(
         fifth.owner().module(),
@@ -659,7 +745,12 @@ pub(super) fn assert_policy6_endpoints(
             .occurrences()
             .candidate(),
     )
-    .expect("O/I fixture must have only reviewed literal/phi dependencies");
+    .unwrap_or_else(|error| {
+        panic!(
+            "O/I fixture dependency refusal: {error}\n{:#?}",
+            fifth.owner().module()
+        )
+    });
     ReplaySchedule { bc, oi }
 }
 
@@ -997,7 +1088,7 @@ mod phi_controls {
 
     #[test]
     fn induction_phi_keeps_distinct_initial_and_increment_values_with_literal_aliases() {
-        let module = module(
+        let mut module = module(
             vec![ty()],
             vec![ValueId(0)],
             vec![
@@ -1063,6 +1154,226 @@ mod phi_controls {
         assert_eq!(
             literal_alias_rounds(&module, candidate(&rows, &outputs)),
             Ok(2)
+        );
+        // The genuine semantic Add producer uses checked(value, overflow).
+        module.functions[0].body.as_mut().unwrap().blocks[3].operations[1] =
+            Operation::checked_binary(
+                parameter(7),
+                ValueDef::new(ValueId(9), Type::BOOL),
+                CheckedBinaryOperator::Add,
+                ValueId(3),
+                ValueId(6),
+            );
+        assert_eq!(literal_alias_rounds(&module, candidate(&[], &[])), Ok(1));
+        assert_eq!(
+            literal_alias_rounds(&module, candidate(&rows, &outputs)),
+            Ok(2)
+        );
+    }
+
+    fn checked_fixture(
+        ty: Type,
+        literal: Constant,
+        operator: CheckedBinaryOperator,
+        swap: bool,
+    ) -> Module {
+        let (left, right) = if swap {
+            (ValueId(1), ValueId(0))
+        } else {
+            (ValueId(0), ValueId(1))
+        };
+        module(
+            vec![ty.clone()],
+            vec![ValueId(0)],
+            vec![block(
+                0,
+                &[],
+                vec![
+                    Operation::effect_free(
+                        ValueDef::new(ValueId(1), ty.clone()),
+                        OperationKind::Constant(literal),
+                    ),
+                    Operation::checked_binary(
+                        ValueDef::new(ValueId(2), ty),
+                        ValueDef::new(ValueId(3), Type::BOOL),
+                        operator,
+                        left,
+                        right,
+                    ),
+                ],
+                Terminator::Return { values: vec![] },
+            )],
+        )
+    }
+
+    #[test]
+    fn checked_dynamic_arithmetic_is_typed_width_general_and_adds_no_scalar_rounds() {
+        for (scalar, literal) in [
+            (ScalarType::U8, Constant::U8(2)),
+            (ScalarType::U16, Constant::U16(2)),
+            (ScalarType::U32, Constant::U32(2)),
+            (ScalarType::U64, Constant::U64(2)),
+            (ScalarType::I8, Constant::I8(-2)),
+            (ScalarType::I16, Constant::I16(-2)),
+            (ScalarType::I32, Constant::I32(-2)),
+            (ScalarType::I64, Constant::I64(-2)),
+        ] {
+            for operator in [
+                CheckedBinaryOperator::Add,
+                CheckedBinaryOperator::Subtract,
+                CheckedBinaryOperator::Multiply,
+            ] {
+                for swap in [false, true] {
+                    let source =
+                        checked_fixture(Type::Scalar(scalar), literal.clone(), operator, swap);
+                    assert_eq!(literal_alias_rounds(&source, candidate(&[], &[])), Ok(1));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn checked_neutral_constant_and_phi_derived_dependencies_are_not_silently_admitted() {
+        for (operator, literal, swaps) in [
+            (CheckedBinaryOperator::Add, 0, &[false, true][..]),
+            (CheckedBinaryOperator::Subtract, 0, &[false][..]),
+            (CheckedBinaryOperator::Multiply, 0, &[false, true][..]),
+            (CheckedBinaryOperator::Multiply, 1, &[false, true][..]),
+        ] {
+            for swap in swaps {
+                let source = checked_fixture(ty(), Constant::U32(literal), operator, *swap);
+                assert_eq!(
+                    literal_alias_rounds(&source, candidate(&[], &[])),
+                    Err("fixture scalar alias or folding dependency")
+                );
+            }
+        }
+        let source = checked_fixture(
+            ty(),
+            Constant::U32(0),
+            CheckedBinaryOperator::Subtract,
+            true,
+        );
+        assert_eq!(
+            literal_alias_rounds(&source, candidate(&[], &[])),
+            Ok(1),
+            "zero minus an unknown is not an identity"
+        );
+        let mut source = checked_fixture(ty(), Constant::U32(1), CheckedBinaryOperator::Add, false);
+        source.functions[0].signature.parameters.clear();
+        source.functions[0]
+            .body
+            .as_mut()
+            .unwrap()
+            .parameters
+            .clear();
+        source.functions[0].body.as_mut().unwrap().blocks[0]
+            .operations
+            .insert(0, constant(0, u32::MAX));
+        assert_eq!(
+            literal_alias_rounds(&source, candidate(&[], &[])),
+            Err("fixture scalar alias or folding dependency"),
+            "checked wrap and overflow require real scalar facts"
+        );
+        let source = module(
+            vec![],
+            vec![],
+            vec![
+                block(0, &[], vec![constant(0, 0)], jump(1, &[0])),
+                block(
+                    1,
+                    &[1],
+                    vec![
+                        constant(2, 1),
+                        Operation::checked_binary(
+                            parameter(3),
+                            ValueDef::new(ValueId(4), Type::BOOL),
+                            CheckedBinaryOperator::Add,
+                            ValueId(1),
+                            ValueId(2),
+                        ),
+                    ],
+                    Terminator::Return { values: vec![] },
+                ),
+            ],
+        );
+        assert_eq!(
+            literal_alias_rounds(&source, candidate(&[], &[])),
+            Err("fixture scalar alias or folding dependency"),
+            "recheck after phi discovery, not only at entrance"
+        );
+    }
+
+    #[test]
+    fn checked_result_shapes_literal_types_and_overflow_candidates_are_independent_obligations() {
+        for fault in 0..5 {
+            let mut source =
+                checked_fixture(ty(), Constant::U32(1), CheckedBinaryOperator::Add, false);
+            let operation = &mut source.functions[0].body.as_mut().unwrap().blocks[0].operations[1];
+            match fault {
+                0 => {
+                    operation.results.pop();
+                }
+                1 => {
+                    operation
+                        .results
+                        .push(ValueDef::new(ValueId(4), Type::BOOL));
+                }
+                2 => operation.results[0].ty = Type::Scalar(ScalarType::I32),
+                3 => operation.results[1].ty = ty(),
+                _ => source.functions[0].signature.parameters[0] = Type::Scalar(ScalarType::I32),
+            }
+            assert_eq!(
+                literal_alias_rounds(&source, candidate(&[], &[])),
+                Err("fixture checked integer shape")
+            );
+        }
+        let source = checked_fixture(ty(), Constant::I32(1), CheckedBinaryOperator::Add, false);
+        assert_eq!(
+            literal_alias_rounds(&source, candidate(&[], &[])),
+            Err("fixture checked integer literal type")
+        );
+        let mut source = checked_fixture(ty(), Constant::U32(1), CheckedBinaryOperator::Add, false);
+        source.functions[0].body.as_mut().unwrap().blocks[0]
+            .operations
+            .push(Operation::effect_free(
+                ValueDef::new(ValueId(4), Type::BOOL),
+                OperationKind::Constant(Constant::Bool(false)),
+            ));
+        let result = |operation, result| Definition::Result {
+            operation: OperationId {
+                block: Block {
+                    function: FunctionId(0),
+                    block: 0,
+                },
+                operation,
+            },
+            result,
+        };
+        let rows = [
+            Row {
+                input: result(1, 1),
+                outputs: Range { start: 0, len: 1 },
+            },
+            Row {
+                input: result(2, 0),
+                outputs: Range { start: 1, len: 1 },
+            },
+        ];
+        let outputs = [
+            Output {
+                output: result(2, 0),
+                kind: Descendant::Substituted,
+            },
+            Output {
+                output: result(2, 0),
+                kind: Descendant::Retained,
+            },
+        ];
+        assert_eq!(
+            literal_alias_rounds(&source, candidate(&rows, &outputs)),
+            Err("fixture nonliteral alias"),
+            "candidate cannot declare unknown overflow false"
         );
     }
 

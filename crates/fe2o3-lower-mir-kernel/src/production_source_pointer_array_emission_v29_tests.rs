@@ -177,20 +177,31 @@ fn observe_original_pointer_array_emission_v29(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let mut helpers = BTreeSet::new();
-    let expected = Type::pointer(
-        Type::Scalar(ScalarType::U64),
-        AddressSpace::Generic,
-        AccessMode::ReadOnly,
-    );
+    let mut generations = BTreeSet::new();
+    let (_, length, _) = SOURCE_ARRAY_CASE_V29.get();
     for slot in &slots.slots {
-        let ScopedAllocationSourceV29::OriginalArray { .. } = slot.origin.source else {
+        let ScopedAllocationIdentityV29::OriginalObject {
+            local: 2,
+            generation,
+        } = slot.origin.identity
+        else {
             continue;
         };
-        let array = slot.scalar_array()?;
-        assert_eq!(array.element.element.into_owned_type(), expected);
-        assert_eq!((array.length, array.bytes, array.element.size), (3, 24, 8));
-        assert!(array.count.is_some());
-        assert!(helpers.insert(slot.instance.index()));
+        let ScopedSlotRepresentationV29::Object {
+            schema,
+            bytes,
+            alignment,
+        } = slot.representation
+        else {
+            panic!("pointer arrays require typed object representation");
+        };
+        assert!(matches!(slot.origin.source,
+            ScopedAllocationSourceV29::OriginalObject { schema: original, .. }
+                if original == schema));
+        assert_eq!((bytes, alignment), (length * 8, 8));
+        assert!(slot.scalar_array().is_err());
+        helpers.insert(slot.instance.index());
+        assert!(generations.insert((slot.instance.index(), generation)));
         let original = instances.instance(slot.instance).unwrap();
         assert_eq!(original.function().index(), 2);
         assert_eq!(
@@ -202,37 +213,52 @@ fn observe_original_pointer_array_emission_v29(
         let actual = &lowered.function.body.as_ref().unwrap().blocks[slot.allocation.block_ordinal]
             .operations[slot.allocation.operation];
         check_scoped_slot_alloca_v29(slot, actual, budget)?;
-        assert!(
-            matches!(&actual.kind, OperationKind::Alloca { element, count: Some(_), .. } if element == &expected)
-        );
-        for changed in [
-            Type::pointer(
-                Type::Scalar(ScalarType::U64),
-                AddressSpace::Global,
-                AccessMode::ReadOnly,
-            ),
-            Type::pointer(
-                Type::Scalar(ScalarType::U64),
-                AddressSpace::Generic,
-                AccessMode::ReadWrite,
-            ),
-            Type::pointer(
-                Type::Scalar(ScalarType::U32),
-                AddressSpace::Generic,
-                AccessMode::ReadOnly,
-            ),
-        ] {
+        assert!(matches!(&actual.kind, OperationKind::Alloca {
+                element: Type::StorageObject(actual), count: None, ..
+            } if *actual == schema));
+        for mutation in 0..5 {
             let mut forged = actual.clone();
-            let OperationKind::Alloca { element, .. } = &mut forged.kind else {
+            let OperationKind::Alloca {
+                element,
+                count,
+                alignment,
+                ..
+            } = &mut forged.kind
+            else {
                 unreachable!();
             };
-            *element = changed.clone();
-            forged.results[0].ty =
-                Type::pointer(changed, AddressSpace::Private, AccessMode::ReadWrite);
+            match mutation {
+                0 => {
+                    let changed = fe2o3_kernel_ir::StorageLayoutIdV1(schema.0 + 1);
+                    *element = Type::StorageObject(changed);
+                    forged.results[0].ty = Type::pointer(
+                        Type::StorageObject(changed),
+                        AddressSpace::Private,
+                        AccessMode::ReadWrite,
+                    );
+                }
+                1 => {
+                    forged.results[0].ty = Type::pointer(
+                        Type::StorageObject(schema),
+                        AddressSpace::Global,
+                        AccessMode::ReadWrite,
+                    )
+                }
+                2 => {
+                    forged.results[0].ty = Type::pointer(
+                        Type::StorageObject(schema),
+                        AddressSpace::Private,
+                        AccessMode::ReadOnly,
+                    )
+                }
+                3 => *count = Some(slot.origin.pointer),
+                4 => *alignment = 4,
+                _ => unreachable!(),
+            }
             assert!(matches!(
                 check_scoped_slot_alloca_v29(slot, &forged, budget),
                 Err(ProductionSemanticKirErrorV1::Unsupported {
-                    detail: "scoped source-slot allocation census is incomplete or mismatched",
+                    detail: "typed allocation identity or representation requires its exact source contract",
                     ..
                 })
             ));
@@ -252,12 +278,49 @@ fn observe_original_pointer_array_emission_v29(
             0
         }
     );
+    assert_eq!(
+        generations.len(),
+        3 * helpers.len(),
+        "entry and both StorageLive generations"
+    );
+    for helper in &helpers {
+        assert!(generations.contains(&(*helper, 0)));
+        let anchors = emitted[*helper]
+            .as_ref()
+            .unwrap()
+            .scoped_memory_anchors
+            .as_ref()
+            .unwrap();
+        assert!(
+            anchors
+                .objects
+                .iter()
+                .any(|row| matches!(row.operation, ScopedObjectOperationV29::ReadValue { .. }))
+        );
+        assert!(
+            anchors
+                .objects
+                .iter()
+                .any(|row| matches!(row.operation, ScopedObjectOperationV29::WriteValue { .. }))
+        );
+    }
     SOURCE_ARRAY_OBSERVED_V29.set(SOURCE_ARRAY_OBSERVED_V29.get() + helpers.len());
     Ok(())
 }
 
 #[test]
 fn actual_argument_pointer_arrays_keep_original_shapes_generations_and_exact_physical_checks() {
+    check_actual_argument_pointer_array_v29(3);
+}
+
+#[test]
+fn actual_argument_pointer_array_object_routing_is_not_specific_to_one_extent() {
+    for length in [1, 5] {
+        check_actual_argument_pointer_array_v29(length);
+    }
+}
+
+fn check_actual_argument_pointer_array_v29(length: u64) {
     struct Restore(
         (u16, u64, bool),
         SourceArrayModeV29,
@@ -273,7 +336,7 @@ fn actual_argument_pointer_arrays_keep_original_shapes_generations_and_exact_phy
         }
     }
     let _restore = Restore(
-        SOURCE_ARRAY_CASE_V29.replace((64, 3, false)),
+        SOURCE_ARRAY_CASE_V29.replace((64, length, false)),
         SOURCE_ARRAY_MODE_V29.replace(SourceArrayModeV29::ThinPointer),
         SCOPED_SLOT_OBSERVER_V29.get(),
         SOURCE_ARRAY_OBSERVED_V29.replace(0),
@@ -302,27 +365,67 @@ fn actual_argument_pointer_arrays_keep_original_shapes_generations_and_exact_phy
                                     budget,
                                 )? && matches!(
                                     allocation.slot.origin.source,
-                                    ScopedAllocationSourceV29::OriginalArray { .. }
+                                    ScopedAllocationSourceV29::OriginalObject { .. }
                                 ) {
+                                    let ScopedAllocationIdentityV29::OriginalObject {
+                                        local: 2,
+                                        ..
+                                    } = allocation.slot.origin.identity
+                                    else {
+                                        continue;
+                                    };
+                                    let ScopedSlotRepresentationV29::Object {
+                                        schema,
+                                        bytes,
+                                        alignment,
+                                    } = allocation.slot.representation
+                                    else {
+                                        panic!("source pointer array must stay object");
+                                    };
+                                    assert_eq!((bytes, alignment), (length * 8, 8));
+                                    let layouts = &inventory.owner().module().storage_layouts;
+                                    let fe2o3_kernel_ir::StorageLayoutKindV1::Array {
+                                        element,
+                                        length: actual,
+                                        stride,
+                                    } = layouts[schema.0 as usize].kind
+                                    else {
+                                        panic!("actual original array schema");
+                                    };
+                                    assert_eq!((actual, stride), (length, 8));
+                                    let fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(pointer) =
+                                        &layouts[element.0 as usize].kind
+                                    else {
+                                        panic!("actual original pointer schema");
+                                    };
                                     assert_eq!(
-                                        allocation
-                                            .slot
-                                            .scalar_array()
-                                            .unwrap()
-                                            .element
-                                            .element
-                                            .into_owned_type(),
-                                        Type::pointer(
-                                            Type::Scalar(ScalarType::U64),
+                                        (
+                                            pointer.encoded_space,
+                                            pointer.value_space,
+                                            pointer.stored_bits,
+                                            pointer.access
+                                        ),
+                                        (
                                             AddressSpace::Generic,
+                                            AddressSpace::Generic,
+                                            64,
                                             AccessMode::ReadOnly
                                         )
                                     );
+                                    assert!(matches!(
+                                        layouts[pointer.pointee.0 as usize].kind,
+                                        fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(
+                                            ScalarType::U64
+                                        )
+                                    ));
                                     count += 1;
                                 }
                             }
                         }
-                        assert_eq!(count, 2);
+                        assert_eq!(
+                            count, 6,
+                            "two helpers retain three distinct source generations"
+                        );
                         reached.set(true);
                         Ok(())
                     })
@@ -333,4 +436,49 @@ fn actual_argument_pointer_arrays_keep_original_shapes_generations_and_exact_phy
     assert!(reached.get());
     assert_eq!(SOURCE_ARRAY_OBSERVED_V29.get(), 3 * 2);
     assert_eq!(budget.storage(), MODULE_FLOOR);
+}
+
+#[test]
+fn pointer_array_layout_compatibility_does_not_grant_scalar_array_payload_admission() {
+    struct RestoreCase((u16, u64, bool));
+    impl Drop for RestoreCase {
+        fn drop(&mut self) {
+            SOURCE_ARRAY_CASE_V29.set(self.0);
+        }
+    }
+    for mode in [SourceArrayModeV29::Scalar, SourceArrayModeV29::ThinPointer] {
+        let _restore = RestoreSourceArrayModeV29(SOURCE_ARRAY_MODE_V29.replace(mode));
+        let _case = RestoreCase(SOURCE_ARRAY_CASE_V29.replace((64, 3, false)));
+        with_original_scalar_array_plan_v29(|plan, budget| {
+            let eligible = source_array_eligibility_v29(plan, budget)?;
+            let mut checked = 0;
+            for (cell, row) in plan.cells.rows.iter().enumerate() {
+                if row.local.index() != 2 {
+                    continue;
+                }
+                let (schema, facts) = source_array_cell_facts_v29(plan, cell, budget)?.unwrap();
+                assert_eq!(facts.length, 3);
+                if mode == SourceArrayModeV29::Scalar {
+                    assert!(matches!(
+                        facts.element.element,
+                        PrivateRetainedElementFactsV1::Scalar(_)
+                    ));
+                    assert_eq!(eligible[cell], Some(schema));
+                } else {
+                    assert!(matches!(
+                        facts.element.element,
+                        PrivateRetainedElementFactsV1::ThinPointer { .. }
+                    ));
+                    assert_eq!(eligible[cell], None);
+                }
+                checked += 1;
+            }
+            assert!(
+                checked >= 4,
+                "both helper activations keep original layout facts"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
 }

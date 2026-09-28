@@ -292,6 +292,28 @@ pub(crate) fn policy3_execution_resources_v18(
     Ok((profile, capture))
 }
 
+pub(crate) fn integer_execution_resources_v18(
+    canonical_bytes: usize,
+    registered_node_bound: usize,
+    admission: crate::kir_occurrence_capture_v1::ObserverAdmissionV18,
+) -> Result<
+    (
+        PlironOptimizationResourcesV12,
+        crate::kir_optimization_map_v12::CaptureLimitsV12,
+    ),
+    PlironOptimizationErrorV12,
+> {
+    // Reuse the V18 growth envelope, never the V12 storage-table-free profile.
+    // Integer identities synthesize at most one false constant per checked
+    // binary; its two results already contribute to the source value census.
+    let (mut profile, capture) =
+        policy3_execution_resources_v18(canonical_bytes, registered_node_bound, admission)?;
+    profile.report = size_of::<PlironOptimizationReportV1>()
+        .checked_add(2 * size_of::<PlironOptimizationPassReportV1>())
+        .ok_or(PlironOptimizationErrorV12::Accounting)?;
+    Ok((profile, capture))
+}
+
 impl KirPlironGraphV12<'_> {
     /// Runs the fixed production policy once on this exact V12 candidate.
     ///

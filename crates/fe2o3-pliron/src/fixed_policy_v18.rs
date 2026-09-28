@@ -80,3 +80,79 @@ impl Policy3ExecutionWitnessV18 {
 #[cfg(test)]
 #[path = "fixed_policy_v18_tests.rs"]
 mod tests;
+
+/// Policy6's two-row frame with the nominal V18 storage-table identity.
+pub const INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V18: usize =
+    crate::fixed_integer_continuation_v1::INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V1 + 40;
+
+/// Move-only actual V18 integer-neutral execution evidence; no authority conversion.
+pub struct IntegerContinuationExecutionWitnessV18 {
+    canonical: [u8; INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V18],
+}
+
+impl IntegerContinuationExecutionWitnessV18 {
+    pub const fn canonical_bytes(&self) -> &[u8; INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V18] {
+        &self.canonical
+    }
+    pub const fn policy_version(&self) -> u16 {
+        6
+    }
+    pub const fn graph_schema(&self) -> u16 {
+        18
+    }
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+
+    pub(crate) fn from_execution(
+        input: &Owner18,
+        output: &Owner18,
+        table: CanonicalStorageTableIdentityV18,
+        report: &PlironOptimizationReportV1,
+        map: &crate::KirOptimizationMapIntegerContinuationV18,
+        execution: ExecutionProfileV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<Self, Resource> {
+        let passes = &crate::fixed_integer_continuation_v1::INTEGER_CONTINUATION_PASSES;
+        budget.charge_work(4 + 2 * passes.len())?;
+        if report.passes().len() != passes.len()
+            || report
+                .passes()
+                .iter()
+                .zip(passes)
+                .any(|(actual, expected)| actual.pass() != *expected)
+            || !map.matches_execution(report)
+            || map.input_identity() != input.identity()
+            || map.output_identity() != output.identity()
+        {
+            return Err(Resource::Accounting);
+        }
+        budget.charge_work(INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V18)?;
+        let mut canonical = [0; INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V18];
+        let mut writer = RecordWriter {
+            bytes: &mut canonical,
+            cursor: 0,
+        };
+        for control in [6, 1, 2, 18] {
+            writer.u16(control);
+        }
+        for owner in [input, output] {
+            writer.raw(owner.identity().digest());
+            writer.u64(owner.identity().canonical_length());
+        }
+        writer.raw(table.digest());
+        writer.u64(table.encoded_length());
+        write_execution_tail_for_pass_count(
+            &mut writer,
+            report,
+            map.digest(),
+            execution,
+            passes.len(),
+        )?;
+        assert_eq!(
+            writer.cursor,
+            INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V18
+        );
+        Ok(Self { canonical })
+    }
+}

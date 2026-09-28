@@ -241,7 +241,7 @@ fn every_new_scalar_sibling_source_event_is_mandatory() {
     ] {
         let mut required = Vec::new();
         let mut definitions = BTreeSet::new();
-        let mut failure_operands = BTreeSet::new();
+        let mut terminal_failure_operands = BTreeSet::new();
         lower_cfg_fixture_with_cursor(
             shape,
             |_| {},
@@ -251,7 +251,7 @@ fn every_new_scalar_sibling_source_event_is_mandatory() {
                     cursor.occurrences.events()[*index].role()
                         == ExecutionEventV29::DestinationDefine
                 }));
-                failure_operands.extend(required.iter().copied().filter(|index| {
+                terminal_failure_operands.extend(required.last().copied().filter(|index| {
                     let event = &cursor.occurrences.events()[*index];
                     event.role() == ExecutionEventV29::BaseUse
                         && matches!(event.operand(), Role::AssertMessage(_))
@@ -300,9 +300,10 @@ fn every_new_scalar_sibling_source_event_is_mandatory() {
                     // before the next event or block-completion check.
                     let expected = if definitions.contains(&omitted) {
                         execution_archive_error_v29()
-                    } else if failure_operands.contains(&omitted) {
-                        // Failure anchors require the exact source operand's
-                        // claimed event before block availability completes.
+                    } else if terminal_failure_operands.contains(&omitted) {
+                        // The failure tail claims all operands before recording
+                        // anchors. A later claim detects earlier omissions; only
+                        // the final omission reaches the scoped anchor check.
                         scoped_memory_error_v29()
                     } else {
                         execution_availability_error_v29()

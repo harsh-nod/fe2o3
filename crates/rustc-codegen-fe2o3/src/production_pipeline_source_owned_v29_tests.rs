@@ -1,5 +1,120 @@
 use super::*;
 
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PreparationObservationV29 {
+    pub(crate) kinds: Vec<String>,
+    pub(crate) contexts: bool,
+    pub(crate) materialized: bool,
+}
+
+thread_local! {
+    static PREPARATION: std::cell::RefCell<Option<PreparationObservationV29>> = const { std::cell::RefCell::new(None) };
+    static OBSERVE_PREPARATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn start_preparation_observation_v29() {
+    OBSERVE_PREPARATION.with(|enabled| assert!(!enabled.replace(true)));
+    PREPARATION.with_borrow_mut(|slot| *slot = None);
+}
+
+pub(crate) fn take_preparation_observation_v29() -> Option<PreparationObservationV29> {
+    OBSERVE_PREPARATION.with(|enabled| enabled.set(false));
+    PREPARATION.with_borrow_mut(Option::take)
+}
+
+pub(super) fn observe_prepared_source_v29(roots: &[AbiRoot<'_>], contexts: bool) {
+    if !OBSERVE_PREPARATION.with(std::cell::Cell::get) {
+        return;
+    }
+    use fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiKindV18 as Kind;
+    let kinds = roots
+        .iter()
+        .flat_map(|root| root.arguments.iter())
+        .map(|argument| match &argument.kind {
+            Kind::Descriptor { source, .. } => format!("{source:?}"),
+            Kind::CompilerLaidOutByValue { .. } => "ByValue".to_owned(),
+        })
+        .collect();
+    PREPARATION.with_borrow_mut(|slot| {
+        *slot = Some(PreparationObservationV29 {
+            kinds,
+            contexts,
+            materialized: false,
+        })
+    });
+}
+
+pub(super) fn observe_materialized_source_v29() {
+    if !OBSERVE_PREPARATION.with(std::cell::Cell::get) {
+        return;
+    }
+    PREPARATION.with_borrow_mut(|slot| {
+        slot.as_mut()
+            .expect("real prepared source precedes materialization")
+            .materialized = true;
+    });
+}
+
+#[test]
+fn source_owned_context_preparation_capture_and_result_headers_are_independent() {
+    type Capture<'a> = (
+        fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+        &'a [AbiRoot<'a>],
+    );
+    type Prepared = Result<
+        fe2o3_lower_mir_kernel::ProductionPreparedSourceV18,
+        ProductionSourceOwnedViewErrorV18,
+    >;
+    type Invoke<'a, 'work> = (
+        Capture<'a>,
+        &'a crate::collector::RetainedExecutionSourceV29<'a>,
+        &'a mut Budget<'work>,
+        &'a mut usize,
+    );
+    type Projected = Result<Prepared, fe2o3_lower_mir_kernel::ProductionContextRootErrorV29>;
+    let expected = size_of::<Capture<'_>>()
+        + align_of::<Capture<'_>>()
+        + size_of::<Invoke<'_, '_>>()
+        + align_of::<Invoke<'_, '_>>()
+        + size_of::<AssertUnwindSafe<Invoke<'_, '_>>>()
+        + size_of::<Prepared>()
+        + align_of::<Prepared>()
+        + size_of::<Projected>()
+        + align_of::<Projected>()
+        + size_of::<std::thread::Result<Projected>>()
+        + size_of::<Option<crate::collector::RetainedExecutionSourceV29<'_>>>();
+    assert_eq!(context_preparation_headers_v29().unwrap(), expected);
+    for limit in [17 + expected - 1, 17 + expected] {
+        let mut work = Work::new(expected);
+        let mut budget = Budget::new(&mut work, limit);
+        budget.reserve_storage(17).unwrap();
+        let charged = pay_context_preparation_headers_v29(&mut budget);
+        assert_eq!(charged.is_ok(), limit == 17 + expected);
+        assert_eq!(budget.work(), expected);
+        assert_eq!(
+            budget.storage(),
+            if limit == 17 + expected {
+                17 + expected
+            } else {
+                17
+            }
+        );
+        if limit < 17 + expected {
+            assert!(
+                matches!(charged, Err(Error::Resource(Resource::Storage(error))) if error.actual() == 17 + expected && error.limit() == limit)
+            );
+        }
+    }
+    let mut work = Work::new(expected - 1);
+    let mut budget = Budget::new(&mut work, 17 + expected);
+    budget.reserve_storage(17).unwrap();
+    assert!(
+        matches!(pay_context_preparation_headers_v29(&mut budget), Err(Error::Resource(Resource::Work(error))) if error.actual() == expected && error.limit() == expected - 1)
+    );
+    assert_eq!((budget.work(), budget.storage()), (0, 17));
+}
+
 impl<R> SourceOwnedCompilationContinuationV29<R> {
     pub(crate) fn assert_retained_bindings_for_test_v29(
         &self,

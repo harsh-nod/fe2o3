@@ -3822,10 +3822,9 @@ fn original_thin_pointer_array_schema_is_exact_and_selected_address_facts_stay_o
                             layouts,
                             instance: cell.instance,
                         };
-                        assert_eq!(
-                            view.array_schema(2, budget)?.is_some(),
-                            mode == SourceArrayModeV29::ThinPointer
-                        );
+                        // Exact pointer layout facts remain available, but
+                        // pointer payloads require typed object admission.
+                        assert!(view.array_schema(2, budget)?.is_none());
                     }
                 }
                 assert_eq!(original_instances.len(), 2);

@@ -466,6 +466,8 @@ fn run_indexed_object_payloads_v29(
     );
     SOURCE_OBJECT_PAYLOAD_INDEX_WORK_V29.set((0, 0));
     SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.set((0, 0));
+    SOURCE_ADDRESS_ACCESS_FIRST_CENSUS_V29.set(None);
+    SOURCE_ADDRESS_ACCESS_ALLOCATIONS_V29.set(0);
     scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29.set((0, 0));
     scoped_raw_admission_v29::PENDING_ALTERNATIVE_CAPACITY_V29.set((0, 0, 0));
     OBJECT_PAYLOAD_INDEX_MUTATED_V29.set(false);
@@ -563,7 +565,8 @@ fn growing_original_object_payload_joins_have_subquadratic_work() {
             run_indexed_object_payloads_v29(count, 0, MODULE_LIMIT, MODULE_LIMIT);
         assert!(
             result.is_ok(),
-            "count={count}, work={work}, peak={peak}, index={index:?}, payloads={payloads:?}: {result:?}"
+            "count={count}, work={work}, peak={peak}, index={index:?}, payloads={payloads:?}, access_allocations={}: {result:?}",
+            SOURCE_ADDRESS_ACCESS_ALLOCATIONS_V29.get()
         );
         assert!(
             completed,
@@ -592,6 +595,145 @@ fn growing_original_object_payload_joins_have_subquadratic_work() {
             "indexed/payload work must grow subquadratically: {work:?}"
         );
     }
+}
+
+thread_local! {
+    static PHYSICAL_ACCESS_CAPACITY_OBSERVATIONS_V29: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn observe_physical_access_capacity_v29(
+    index: &SourceAddressSourceIndexV29<'_>,
+    actual: &[SourceAddressAccessSourceV29],
+    bound: usize,
+    capacity: usize,
+    paid: usize,
+) {
+    let mut expected = Vec::new();
+    let mut total = 0;
+    for sidecar in &index.pending.sidecars.rows {
+        let instance = sidecar.source_call_instance.unwrap();
+        let anchors = sidecar.scoped_memory_anchors.as_ref().unwrap();
+        total += anchors.rows.len();
+        for (anchor, row) in anchors.rows.iter().enumerate() {
+            let selected = match row.kind {
+                ScopedMemoryAnchorKindV29::Object(object) => {
+                    // Independently select by typed source role, then require
+                    // its corresponding actual operation form.
+                    let payload = &anchors.objects[object];
+                    match payload.role {
+                        ScopedObjectRoleV29::ReadValue { .. } => {
+                            assert!(matches!(
+                                payload.operation,
+                                ScopedObjectOperationV29::ReadValue { .. }
+                            ));
+                            true
+                        }
+                        ScopedObjectRoleV29::WriteValue { .. } => {
+                            assert!(matches!(
+                                payload.operation,
+                                ScopedObjectOperationV29::WriteValue { .. }
+                            ));
+                            true
+                        }
+                        _ => false,
+                    }
+                }
+                ScopedMemoryAnchorKindV29::Access { payload, .. } => payload.is_some(),
+                _ => false,
+            };
+            if selected {
+                expected.push((instance.index(), anchor));
+            }
+        }
+    }
+    let mut observed = actual
+        .iter()
+        .map(|row| (row.instance.index(), row.anchor))
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    observed.sort_unstable();
+    // This original-object fixture has no descriptor or issued exclusions.
+    assert_eq!(observed, expected);
+    assert_eq!(bound, expected.len());
+    assert!(bound > 0 && bound < total);
+    let mut allocation = Vec::<SourceAddressAccessSourceV29>::new();
+    allocation.try_reserve_exact(expected.len()).unwrap();
+    assert_eq!(capacity, allocation.capacity());
+    assert!(capacity < total);
+    assert_eq!(
+        paid,
+        capacity * std::mem::size_of::<SourceAddressAccessSourceV29>()
+    );
+    for row in actual {
+        let operation = &index
+            .pending
+            .function
+            .body
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .find(|block| block.id == row.physical.block)
+            .unwrap()
+            .operations[row.physical.operation];
+        assert!(matches!(
+            operation.kind,
+            OperationKind::Load { .. }
+                | OperationKind::Store { .. }
+                | OperationKind::Storage(
+                    ScopedObjectOperationV29::ReadValue { .. }
+                        | ScopedObjectOperationV29::WriteValue { .. }
+                )
+        ));
+    }
+    PHYSICAL_ACCESS_CAPACITY_OBSERVATIONS_V29
+        .set(PHYSICAL_ACCESS_CAPACITY_OBSERVATIONS_V29.get() + 1);
+}
+
+#[test]
+fn physical_access_capacity_tracks_actual_value_rows_and_paid_allocation() {
+    struct Restore(Option<SourceAddressAccessCapacityObserverV29>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SOURCE_ADDRESS_ACCESS_CAPACITY_OBSERVER_V29.set(self.0);
+        }
+    }
+    let _restore = Restore(
+        SOURCE_ADDRESS_ACCESS_CAPACITY_OBSERVER_V29
+            .replace(Some(observe_physical_access_capacity_v29)),
+    );
+    for count in [1, 4, 16] {
+        PHYSICAL_ACCESS_CAPACITY_OBSERVATIONS_V29.set(0);
+        let (result, _, _, _, payloads, completed) =
+            run_indexed_object_payloads_v29(count, 0, MODULE_LIMIT, MODULE_LIMIT);
+        result.unwrap();
+        assert!(completed);
+        assert_eq!(payloads.0, 3);
+        assert_eq!(PHYSICAL_ACCESS_CAPACITY_OBSERVATIONS_V29.get(), 3);
+        assert_eq!(SOURCE_ADDRESS_ACCESS_ALLOCATIONS_V29.get(), 3);
+    }
+}
+
+#[test]
+fn physical_access_candidate_census_refuses_one_short_before_allocation() {
+    let (result, _, _, _, _, completed) =
+        run_indexed_object_payloads_v29(4, 0, MODULE_LIMIT, MODULE_LIMIT);
+    result.unwrap();
+    assert!(completed);
+    let before = SOURCE_ADDRESS_ACCESS_FIRST_CENSUS_V29.get().unwrap();
+    let (result, _, _, _, _, completed) =
+        run_indexed_object_payloads_v29(4, 0, before, MODULE_LIMIT);
+    assert!(!completed);
+    assert_eq!(SOURCE_ADDRESS_ACCESS_FIRST_CENSUS_V29.get(), Some(before));
+    assert_eq!(SOURCE_ADDRESS_ACCESS_ALLOCATIONS_V29.get(), 0);
+    assert!(
+        matches!(&result,
+        Err(ScopedModuleErrorV29::Source(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Work(error))))
+        if error.actual() == before + 1 && error.limit() == before),
+        "{result:?}"
+    );
 }
 
 #[test]

@@ -39,17 +39,18 @@ pub(super) fn entry_custody(
 }
 
 pub(super) fn optimizer_entry_headers<T, E, F>(_: &F) -> Result<usize, ArgumentResourceV1> {
-    type Output<T> = (
-        fe2o3_pliron::CheckedNeutralKernelIrOwnerV18,
+    optimizer_entry_headers_typed::<
         T,
-        fe2o3_pliron::KirNeutralOwnedOriginStorageV1,
-    );
-    type Entry<'a, F> = (
-        fe2o3_pliron::KirNeutralOptimizationOutputV18<'a>,
-        usize,
-        usize,
+        E,
         F,
-    );
+        fe2o3_pliron::CheckedNeutralKernelIrOwnerV18,
+        fe2o3_pliron::KirNeutralOptimizationOutputV18<'static>,
+    >()
+}
+
+pub(super) fn optimizer_entry_headers_typed<T, E, F, C, O>() -> Result<usize, ArgumentResourceV1> {
+    type Output<C, T> = (C, T, fe2o3_pliron::KirNeutralOwnedOriginStorageV1);
+    type Entry<O, F> = (O, usize, usize, F);
     type Capture<'a, 'work, F> = (
         &'a ProductionSourceOwnedViewV18<'a>,
         &'a mut ArgumentBudgetV1<'work>,
@@ -57,40 +58,41 @@ pub(super) fn optimizer_entry_headers<T, E, F>(_: &F) -> Result<usize, ArgumentR
         usize,
         F,
     );
-    type EntryResult<'a, E, F> =
-        Result<Entry<'a, F>, SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>>;
-    type Adoption<'a, 'work, F> = (
+    type EntryResult<O, E, F> =
+        Result<Entry<O, F>, SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>>;
+    type Adoption<'a, 'work, O, F> = (
         &'a ProductionSourceOwnedViewV18<'a>,
         &'a mut ArgumentBudgetV1<'work>,
-        fe2o3_pliron::KirNeutralOptimizationOutputV18<'a>,
+        O,
         F,
     );
-    type Adopted<T, E> = Result<Output<T>, fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1<E>>;
-    type Settled<T, E> =
-        Result<Output<T>, SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>>;
+    type Adopted<C, T, E> =
+        Result<Output<C, T>, fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1<E>>;
+    type Settled<C, T, E> =
+        Result<Output<C, T>, SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>>;
     argument_sum_v1(&[
         argument_product_v1(2, size_of::<Capture<'_, '_, F>>())?,
         argument_product_v1(2, std::mem::align_of::<Capture<'_, '_, F>>())?,
         size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, F>>>(),
-        size_of::<Entry<'_, F>>(),
-        argument_product_v1(2, size_of::<EntryResult<'_, E, F>>())?,
-        size_of::<std::thread::Result<EntryResult<'_, E, F>>>(),
-        size_of::<std::panic::AssertUnwindSafe<Entry<'_, F>>>(),
+        size_of::<Entry<O, F>>(),
+        argument_product_v1(2, size_of::<EntryResult<O, E, F>>())?,
+        size_of::<std::thread::Result<EntryResult<O, E, F>>>(),
+        size_of::<std::panic::AssertUnwindSafe<Entry<O, F>>>(),
         size_of::<std::thread::Result<()>>(),
         size_of::<std::cell::Cell<usize>>(),
         argument_product_v1(3, size_of::<usize>())?,
         size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>(),
         size_of::<SourceOwnedResultV18<()>>(),
-        argument_product_v1(4, size_of::<Adoption<'_, '_, F>>())?,
-        argument_product_v1(4, std::mem::align_of::<Adoption<'_, '_, F>>())?,
-        size_of::<std::panic::AssertUnwindSafe<Adoption<'_, '_, F>>>(),
-        size_of::<Adopted<T, E>>(),
-        size_of::<Settled<T, E>>(),
-        size_of::<std::thread::Result<Settled<T, E>>>(),
-        size_of::<Result<Output<T>, ProductionSourceOptimizationErrorV18<E>>>(),
+        argument_product_v1(4, size_of::<Adoption<'_, '_, O, F>>())?,
+        argument_product_v1(4, std::mem::align_of::<Adoption<'_, '_, O, F>>())?,
+        size_of::<std::panic::AssertUnwindSafe<Adoption<'_, '_, O, F>>>(),
+        size_of::<Adopted<C, T, E>>(),
+        size_of::<Settled<C, T, E>>(),
+        size_of::<std::thread::Result<Settled<C, T, E>>>(),
+        size_of::<Result<Output<C, T>, ProductionSourceOptimizationErrorV18<E>>>(),
         size_of::<
             std::panic::AssertUnwindSafe<
-                Result<Output<T>, ProductionSourceOptimizationErrorV18<E>>,
+                Result<Output<C, T>, ProductionSourceOptimizationErrorV18<E>>,
             >,
         >(),
         size_of::<ProductionSourceOptimizationErrorV18<E>>(),
