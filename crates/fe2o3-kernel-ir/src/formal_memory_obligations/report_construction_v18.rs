@@ -1,4 +1,4 @@
-//! First shared-ledger formal construction phase. This module stays private:
+//! Shared-ledger formal report construction phases. This module stays private:
 //! effects, definitions, private slots and access extraction are not metered by
 //! this phase and must not be represented as paid by its report-row credit.
 
@@ -11,6 +11,7 @@ use crate::{
 use std::{cmp::Ordering, mem::size_of, panic::AssertUnwindSafe};
 
 pub(super) trait ReportMeterV18 {
+    fn bounds_work(&mut self) -> Result<(), GuardedResourceErrorV1>;
     fn charge(&mut self, work: usize) -> Result<(), GuardedResourceErrorV1>;
     fn push<T>(&mut self, rows: &mut Vec<T>, value: T) -> Result<(), GuardedResourceErrorV1>;
     fn sort<T>(
@@ -19,6 +20,50 @@ pub(super) trait ReportMeterV18 {
         compare: impl FnMut(&T, &T) -> Ordering,
     ) -> Result<(), GuardedResourceErrorV1>;
     fn retire<T>(&mut self, rows: Vec<T>) -> Result<(), GuardedResourceErrorV1>;
+}
+
+pub(super) trait BoundsReasonSinkV18 {
+    fn overflow(
+        &mut self,
+        location: FunctionOperationLocation,
+        meter: &mut impl ReportMeterV18,
+    ) -> Result<(), GuardedResourceErrorV1>;
+}
+
+impl BoundsReasonSinkV18 for BTreeSet<FormalMemoryIncompleteReason> {
+    fn overflow(
+        &mut self,
+        location: FunctionOperationLocation,
+        _: &mut impl ReportMeterV18,
+    ) -> Result<(), GuardedResourceErrorV1> {
+        self.insert(FormalMemoryIncompleteReason::AddressArithmeticOverflow { location });
+        Ok(())
+    }
+}
+
+impl BoundsReasonSinkV18 for Vec<FunctionOperationLocation> {
+    fn overflow(
+        &mut self,
+        location: FunctionOperationLocation,
+        meter: &mut impl ReportMeterV18,
+    ) -> Result<(), GuardedResourceErrorV1> {
+        let mut position = self.len();
+        for (index, existing) in self.iter().enumerate() {
+            meter.charge(1)?;
+            match existing.cmp(&location) {
+                Ordering::Less => (),
+                Ordering::Equal => return Ok(()),
+                Ordering::Greater => {
+                    position = index;
+                    break;
+                }
+            }
+        }
+        meter.charge(self.len() - position)?;
+        meter.push(self, location)?;
+        self[position..].rotate_right(1);
+        Ok(())
+    }
 }
 
 struct LiveReportMeterV18<'budget, 'work> {
@@ -32,6 +77,10 @@ fn bytes<T>(capacity: usize) -> Result<usize, GuardedResourceErrorV1> {
 }
 
 impl ReportMeterV18 for LiveReportMeterV18<'_, '_> {
+    fn bounds_work(&mut self) -> Result<(), GuardedResourceErrorV1> {
+        self.charge(guarded_access_v1::BOUNDS_WORK)
+    }
+
     fn charge(&mut self, work: usize) -> Result<(), GuardedResourceErrorV1> {
         self.budget.charge_work(work).map_err(Into::into)
     }
@@ -112,6 +161,8 @@ type ResultV18<T> = Result<T, ReportConstructionErrorV18>;
 /// The original report, including every reason and conflict, is retained.
 pub(super) struct ReportRowsV18<'view, 'owner> {
     original: &'view CanonicalOwnerFormalAnalysisV18<'owner>,
+    bounds: &'view Vec<FormalBoundsRequirement>,
+    overflows: &'view Vec<FunctionOperationLocation>,
     aliases: &'view Vec<RuntimeAliasRequirement>,
     conflicts: &'view Vec<InterInvocationConflictRequirement>,
 }
@@ -155,6 +206,8 @@ fn headers<T, F>() -> ResultV18<usize> {
         })
         .and_then(|n| n.checked_add(size_of::<Vec<RuntimeAliasRequirement>>()))
         .and_then(|n| n.checked_add(size_of::<Vec<InterInvocationConflictRequirement>>()))
+        .and_then(|n| n.checked_add(size_of::<Vec<FormalBoundsRequirement>>()))
+        .and_then(|n| n.checked_add(size_of::<Vec<FunctionOperationLocation>>()))
         .and_then(|n| n.checked_add(size_of::<F>()))
         .and_then(|n| n.checked_add(size_of::<Option<F>>()))
         .ok_or(Resource::Arithmetic.into())
@@ -199,16 +252,21 @@ where
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
         budget.charge_work(4)?;
         budget.reserve_storage(headers::<T, F>()?)?;
-        let (aliases, conflicts) = {
+        let (bounds, overflows, aliases, conflicts) = {
             let accesses = original.analysis().obligations().accesses();
             let mut meter = LiveReportMeterV18 { budget };
+            let mut overflows = Vec::new();
+            let bounds =
+                derive_bounds_requirements_with_meter(accesses, &mut overflows, &mut meter)?;
             let aliases = derive_alias_requirements_with_meter(accesses, &mut meter)?;
             let conflicts = derive_inter_invocation_conflicts_with_meter(accesses, &mut meter)?;
-            (aliases, conflicts)
+            (bounds, overflows, aliases, conflicts)
         };
         state.required = budget.storage();
         let view = ReportRowsV18 {
             original,
+            bounds: &bounds,
+            overflows: &overflows,
             aliases: &aliases,
             conflicts: &conflicts,
         };
@@ -232,6 +290,8 @@ where
         };
         drop(aliases);
         drop(conflicts);
+        drop(bounds);
+        drop(overflows);
         if let Some(error) = state.selected {
             drain(result);
             Err(error)

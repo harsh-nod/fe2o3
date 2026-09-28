@@ -1844,11 +1844,17 @@ fn derive_bounds_requirements(
     reasons: &mut BTreeSet<FormalMemoryIncompleteReason>,
     guarded: &mut Option<GuardedAnalysisV1<'_>>,
 ) -> Result<Vec<FormalBoundsRequirement>, GuardedResourceErrorV1> {
+    derive_bounds_requirements_with_meter(accesses, reasons, guarded)
+}
+
+fn derive_bounds_requirements_with_meter(
+    accesses: &[FormalMemoryAccess],
+    reasons: &mut impl report_construction_v18::BoundsReasonSinkV18,
+    meter: &mut impl report_construction_v18::ReportMeterV18,
+) -> Result<Vec<FormalBoundsRequirement>, GuardedResourceErrorV1> {
     let mut bounds = Vec::new();
     for access in accesses {
-        if let Some(guarded) = guarded.as_mut() {
-            guarded.bounds_work()?;
-        }
+        meter.bounds_work()?;
         let kind = match access.domain {
             FormalAccessDomainV1::SliceBounded(domain) => {
                 FormalBoundsKindV1::SliceElementAtGuardedIndex(domain)
@@ -1865,11 +1871,7 @@ fn derive_bounds_requirements(
                     ByteExpression::Affine { .. } => match access_envelope(access) {
                         Some(range) => range,
                         None => {
-                            reasons.insert(
-                                FormalMemoryIncompleteReason::AddressArithmeticOverflow {
-                                    location: access.location,
-                                },
-                            );
+                            reasons.overflow(access.location, meter)?;
                             continue;
                         }
                     },
@@ -1877,8 +1879,7 @@ fn derive_bounds_requirements(
                 FormalBoundsKindV1::FixedMinimumBytes(range.end_exclusive)
             }
         };
-        guarded_access_v1::report_push(
-            guarded,
+        meter.push(
             &mut bounds,
             FormalBoundsRequirement {
                 location: access.location,

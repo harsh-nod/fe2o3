@@ -74,7 +74,7 @@ use FormalGuardedMemoryResourceErrorV1 as ResourceError;
 pub(super) type GuardedResourceErrorV1 = FormalGuardedMemoryResourceErrorV1;
 const RECIPE_WORK: usize = 128;
 const USE_WORK: usize = 64;
-const BOUNDS_WORK: usize = 16;
+pub(super) const BOUNDS_WORK: usize = 16;
 // Reuse the decoder's conservative numeric ceiling, not its accounting domain.
 const MAX_NEW_BYTES: usize = MAX_FORMAL_MEMORY_DECODER_AUXILIARY_BYTES_V1;
 
@@ -1182,6 +1182,13 @@ pub(super) fn report_work(
 }
 
 impl super::report_construction_v18::ReportMeterV18 for Option<GuardedAnalysisV1<'_>> {
+    fn bounds_work(&mut self) -> Result<(), ResourceError> {
+        if let Some(guarded) = self {
+            guarded.bounds_work()?;
+        }
+        Ok(())
+    }
+
     fn charge(&mut self, work: usize) -> Result<(), ResourceError> {
         report_work(self, work)
     }

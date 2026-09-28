@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
     BasicBlock, CanonicalKernelIrWorkBudgetV1 as Work, Kernel, Signature, StorageLayoutKindV1,
-    StorageLayoutLimitsV1, StorageLayoutV1, Terminator, VerifiedCanonicalKernelIrModuleV18,
+    StorageLayoutLimitsV1, StorageLayoutV1, Terminator, ValueDef,
+    VerifiedCanonicalKernelIrModuleV18,
 };
 use std::cell::Cell;
 
@@ -106,6 +107,17 @@ fn launch() -> ExplicitLaunchExtent {
 
 fn inspect(view: &ReportRowsV18<'_, '_>, _: &mut Budget<'_>) -> ResultV18<()> {
     assert_eq!(
+        view.bounds.as_slice(),
+        view.original.analysis().obligations().bounds_requirements()
+    );
+    assert!(view.overflows.iter().all(|location| {
+        view.original.analysis().incomplete_reasons().contains(
+            &FormalMemoryIncompleteReason::AddressArithmeticOverflow {
+                location: *location,
+            },
+        )
+    }));
+    assert_eq!(
         view.aliases.as_slice(),
         view.original
             .analysis()
@@ -135,6 +147,8 @@ fn independent_headers() -> usize {
         + size_of::<Vec<(FormalAllocationIdentity, AllocationEnvelope)>>()
         + size_of::<Vec<RuntimeAliasRequirement>>()
         + size_of::<Vec<InterInvocationConflictRequirement>>()
+        + size_of::<Vec<FormalBoundsRequirement>>()
+        + size_of::<Vec<FunctionOperationLocation>>()
         + size_of::<Consumer>()
         + size_of::<Option<Consumer>>()
 }
@@ -175,9 +189,10 @@ fn exact_independent_single_store_work_and_capacity_bounds() {
         launch(),
         FormalIndexWidth::Bits64,
         |original| {
-            // Entry 4; alias scan 8+push1+grow2; merge8; conflict32+push1+grow2.
-            let work_limit = 4 + 11 + 8 + 35;
+            // Entry4; bounds16+push1+grow2; alias11; merge8; conflict35.
+            let work_limit = 4 + 19 + 11 + 8 + 35;
             let peak = independent_headers()
+                + 2 * size_of::<FormalBoundsRequirement>()
                 + (2 * size_of::<(FormalAllocationIdentity, AllocationEnvelope)>())
                     .max(2 * size_of::<InterInvocationConflictRequirement>());
             for (work_cap, storage_cap, success) in [
@@ -219,11 +234,14 @@ fn exact_two_allocation_alias_and_conflict_capacity_overlap() {
         launch(),
         FormalIndexWidth::Bits64,
         |original| {
-            let expected_work = 4 + 20 + 8 + 16 + 11 + 100;
+            let expected_work = 4 + 36 + 20 + 8 + 16 + 11 + 100;
             let entries = 2 * size_of::<(FormalAllocationIdentity, AllocationEnvelope)>();
             let aliases = 2 * size_of::<RuntimeAliasRequirement>();
             let conflicts = 2 * size_of::<InterInvocationConflictRequirement>();
-            let peak = independent_headers() + aliases + entries.max(conflicts);
+            let peak = independent_headers()
+                + 2 * size_of::<FormalBoundsRequirement>()
+                + aliases
+                + entries.max(conflicts);
             let mut work = Work::new(expected_work);
             let mut budget = Budget::new(&mut work, 37 + peak);
             budget.reserve_storage(37).unwrap();
@@ -258,7 +276,7 @@ fn repeated_phases_share_work_but_refund_only_destroyed_scratch() {
         launch(),
         FormalIndexWidth::Bits64,
         |original| {
-            for limit in [115, 116] {
+            for limit in [153, 154] {
                 let mut work = Work::new(limit);
                 let mut budget = Budget::new(&mut work, 100_000);
                 budget.reserve_storage(37).unwrap();
@@ -266,20 +284,20 @@ fn repeated_phases_share_work_but_refund_only_destroyed_scratch() {
                 let peak = budget.peak_storage();
                 let completed = COMPLETED.with(Cell::get);
                 let second = with_report_rows_v18(original, &mut budget, inspect as Consumer);
-                assert_eq!(second.is_ok(), limit == 116);
+                assert_eq!(second.is_ok(), limit == 154);
                 assert_eq!(
                     COMPLETED.with(Cell::get),
-                    completed + usize::from(limit == 116)
+                    completed + usize::from(limit == 154)
                 );
                 assert_eq!(budget.storage(), 37);
                 assert_eq!(budget.peak_storage(), peak);
-                if limit == 115 {
-                    assert_eq!(budget.failed_work(), Some(116));
+                if limit == 153 {
+                    assert_eq!(budget.failed_work(), Some(154));
                     let before = budget.work();
                     assert!(matches!(
                         with_report_rows_v18(original, &mut budget, inspect as Consumer),
                         Err(ReportConstructionErrorV18::PriorDenial {
-                            work: Some(116),
+                            work: Some(154),
                             storage: None
                         })
                     ));
@@ -525,8 +543,9 @@ fn repeated_same_allocation_rows_pay_old_and_replacement_conflict_capacity() {
         launch(),
         FormalIndexWidth::Bits64,
         |original| {
-            let expected_work = 4 + 20 + 8 + 16 + 105;
+            let expected_work = 4 + 36 + 20 + 8 + 16 + 105;
             let peak = independent_headers()
+                + 2 * size_of::<FormalBoundsRequirement>()
                 + (2 * size_of::<(FormalAllocationIdentity, AllocationEnvelope)>())
                     .max(6 * size_of::<InterInvocationConflictRequirement>());
             for (work_cap, storage_cap, success) in [
@@ -591,11 +610,7 @@ fn rejected_capture_destructor_cannot_mask_prior_or_construction_denial() {
                 let work_cap = if mode == 1 { 3 } else { 100_000 };
                 let storage_cap = match mode {
                     2 => 37 + frames - 1,
-                    3 => {
-                        37 + frames
-                            + 2 * size_of::<(FormalAllocationIdentity, AllocationEnvelope)>()
-                            - 1
-                    }
+                    3 => 37 + frames + 2 * size_of::<FormalBoundsRequirement>() - 1,
                     _ => 100_000,
                 };
                 let mut work = Work::new(work_cap);
@@ -635,4 +650,158 @@ fn rejected_capture_destructor_cannot_mask_prior_or_construction_denial() {
             }
         },
     );
+}
+
+#[test]
+fn genuine_overflow_reasons_and_conflict_rows_remain_unmodified_and_ordered() {
+    let mut module = fixture(2, false, false);
+    let pointer = module.functions[0].signature.parameters[0].clone();
+    let block = &mut module.functions[0].body.as_mut().unwrap().blocks[0];
+    for operation in &mut block.operations {
+        let OperationKind::Store { pointer, .. } = &mut operation.kind else {
+            unreachable!()
+        };
+        *pointer = ValueId(4);
+    }
+    block.operations.splice(
+        0..0,
+        [
+            Operation::effect_free(
+                ValueDef::new(ValueId(3), Type::INDEX),
+                OperationKind::Constant(Constant::Index(u64::MAX / 4)),
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(4), pointer),
+                OperationKind::GetElementPointer {
+                    base: ValueId(0),
+                    offset: ValueId(3),
+                },
+            ),
+        ],
+    );
+    with_original(&module, launch(), FormalIndexWidth::Bits64, |original| {
+        let expected = [
+            FunctionOperationLocation::new(BlockId(0), 2),
+            FunctionOperationLocation::new(BlockId(0), 3),
+        ];
+        assert_eq!(
+            original.analysis().incomplete_reasons(),
+            expected.map(
+                |location| FormalMemoryIncompleteReason::AddressArithmeticOverflow { location }
+            )
+        );
+        assert_eq!(original.analysis().obligations().accesses().len(), 2);
+        assert_eq!(
+            original
+                .analysis()
+                .obligations()
+                .inter_invocation_conflicts()
+                .len(),
+            3
+        );
+        assert!(
+            original
+                .analysis()
+                .obligations()
+                .bounds_requirements()
+                .is_empty()
+        );
+        let completed = Cell::new(false);
+        let mut work = Work::new(162);
+        let mut budget = Budget::new(&mut work, 100_000);
+        budget.reserve_storage(37).unwrap();
+        with_report_rows_v18(original, &mut budget, |view, _| {
+            assert_eq!(view.overflows.as_slice(), expected);
+            assert!(view.bounds.is_empty());
+            assert_eq!(view.conflicts.len(), 3);
+            assert!(!view.original.analysis().is_complete());
+            completed.set(true);
+            Ok(())
+        })
+        .unwrap();
+        assert!(completed.get());
+        // Entry4; bounds16*2 + ordered reason insertions3+2; alias scan16;
+        // three self/same-allocation candidates plus conflict growth105.
+        assert_eq!(budget.work(), 4 + 37 + 16 + 105);
+        assert_eq!(budget.storage(), 37);
+    });
+}
+
+#[test]
+fn overflow_reason_index_pays_comparisons_dedup_moves_and_replacement() {
+    for (work_cap, storage_cap, success) in [
+        (16, 6 * size_of::<FunctionOperationLocation>(), true),
+        (15, 6 * size_of::<FunctionOperationLocation>(), false),
+        (16, 6 * size_of::<FunctionOperationLocation>() - 1, false),
+    ] {
+        let mut work = Work::new(work_cap);
+        let mut budget = Budget::new(&mut work, storage_cap);
+        let mut rows = Vec::<FunctionOperationLocation>::new();
+        let result = {
+            let mut meter = LiveReportMeterV18 {
+                budget: &mut budget,
+            };
+            [3, 1, 3, 2].into_iter().try_for_each(|ordinal| {
+                rows.overflow(
+                    FunctionOperationLocation::new(BlockId(0), ordinal),
+                    &mut meter,
+                )
+            })
+        };
+        assert_eq!(result.is_ok(), success);
+        if success {
+            assert_eq!(
+                rows,
+                [1, 2, 3].map(|ordinal| FunctionOperationLocation::new(BlockId(0), ordinal))
+            );
+            assert_eq!(budget.work(), 3 + 3 + 2 + 8);
+            assert_eq!(
+                budget.peak_storage(),
+                6 * size_of::<FunctionOperationLocation>()
+            );
+            assert_eq!(budget.storage(), 4 * size_of::<FunctionOperationLocation>());
+        } else if work_cap == 15 {
+            assert!(
+                matches!(result, Err(GuardedResourceErrorV1::Work(error)) if error.actual() == 16 && error.limit() == 15)
+            );
+        } else {
+            assert!(
+                matches!(result, Err(GuardedResourceErrorV1::Storage { actual, limit }) if actual == 6 * size_of::<FunctionOperationLocation>() && limit == storage_cap)
+            );
+        }
+        // This low-level container test owns the backing and its remaining
+        // credit. There is no report consumer or enclosing production scope.
+        drop(rows);
+        budget.release_storage(budget.storage()).unwrap();
+        assert_eq!(budget.storage(), 0);
+    }
+}
+
+fn inspect_retained(view: &ReportRowsV18<'_, '_>, budget: &mut Budget<'_>) -> ResultV18<()> {
+    let retained = view.bounds.capacity() * size_of::<FormalBoundsRequirement>()
+        + view.overflows.capacity() * size_of::<FunctionOperationLocation>()
+        + view.aliases.capacity() * size_of::<RuntimeAliasRequirement>()
+        + view.conflicts.capacity() * size_of::<InterInvocationConflictRequirement>();
+    assert_eq!(budget.storage(), 37 + independent_headers() + retained);
+    inspect(view, budget)
+}
+
+#[test]
+fn retained_report_capacities_stay_paid_after_alias_scratch_is_destroyed() {
+    for count in [0, 1, 2, 3, 8, 44] {
+        with_original(
+            &fixture(count, true, false),
+            launch(),
+            FormalIndexWidth::Bits64,
+            |original| {
+                let mut work = Work::new(1_000_000);
+                let mut budget = Budget::new(&mut work, 1_000_000);
+                budget.reserve_storage(37).unwrap();
+                let completed = COMPLETED.with(Cell::get);
+                with_report_rows_v18(original, &mut budget, inspect_retained as Consumer).unwrap();
+                assert_eq!(COMPLETED.with(Cell::get), completed + 1);
+                assert_eq!(budget.storage(), 37);
+            },
+        );
+    }
 }
