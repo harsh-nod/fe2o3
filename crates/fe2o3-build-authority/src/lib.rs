@@ -14,6 +14,7 @@ mod broker_v4;
 mod cargo_environment_v1;
 mod compiler_approval_policy_v1;
 mod compiler_closure;
+mod compiler_runtime_manifest_v1;
 
 /// Canonical `argv[0]` for the protected authority release executable.
 pub const PROTECTED_AUTHORITY_ARGV0: &[u8] = b"/usr/libexec/fe2o3/cargo-fe2o3";
@@ -57,4 +58,14 @@ pub use compiler_closure::{
     CompilerClosureDigestFieldV2, CompilerClosureErrorV2, CompilerClosureV2,
     derive_compiler_closure_identity_v1, derive_compiler_closure_identity_v2,
     derive_rustc_executable_runtime_identity_v1,
+};
+pub use compiler_runtime_manifest_v1::{
+    COMPILER_RUNTIME_MANIFEST_ENTRY_BYTES_V1, COMPILER_RUNTIME_MANIFEST_HEADER_BYTES_V1,
+    COMPILER_RUNTIME_MANIFEST_IDENTITY_DOMAIN_V1, COMPILER_RUNTIME_MANIFEST_MAGIC_V1,
+    COMPILER_RUNTIME_MANIFEST_MAX_BYTES_V1, COMPILER_RUNTIME_MANIFEST_MAX_ENTRIES_V1,
+    COMPILER_RUNTIME_MANIFEST_MAX_FILE_BYTES_V1, COMPILER_RUNTIME_MANIFEST_MAX_PATH_BYTES_V1,
+    COMPILER_RUNTIME_MANIFEST_MAX_PATH_COMPONENTS_V1, COMPILER_RUNTIME_MANIFEST_MAX_TOTAL_BYTES_V1,
+    COMPILER_RUNTIME_MANIFEST_STORAGE_V1, COMPILER_RUNTIME_MANIFEST_WORK_V1,
+    CompilerRuntimeEntryV1, CompilerRuntimeManifestErrorV1, CompilerRuntimeManifestV1,
+    CompilerRuntimeRoleV1,
 };

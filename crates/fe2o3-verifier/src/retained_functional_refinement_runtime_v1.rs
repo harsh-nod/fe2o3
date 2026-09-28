@@ -17,6 +17,10 @@ use crate::CanonicalGeneratedVerusProofInputV3;
 #[path = "retained_functional_refinement_runtime_v1_linux.rs"]
 mod linux;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "functional_refinement_executor_channel_v1.rs"]
+mod executor_channel;
+
 pub(crate) const FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME: &str =
     "FUNCTIONAL_REFINEMENT_RUNTIME_V1.manifest";
 const FUNCTIONAL_REFINEMENT_MANIFEST_BYTES: &[u8] =

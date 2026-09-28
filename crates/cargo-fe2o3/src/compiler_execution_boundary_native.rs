@@ -340,7 +340,7 @@ fn require_runtime_enforcement(budget: &mut Budget<'_>) -> Result<()> {
 #[derive(Debug)]
 pub(crate) enum Failure {
     RuntimeEnforcementUnavailable,
-    Approval(fe2o3_compiler_closure_capability::CompilerApprovalErrorV1),
+    Approval(fe2o3_compiler_closure_capability::RetainedCompilerRuntimeErrorV1),
     Completion(CompletionError),
     Child(fe2o3_compiler_execution_client::CompilerExecutionChildChannelErrorV1),
     Policy(fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV3),
@@ -375,7 +375,7 @@ macro_rules! causes {
     };
 }
 causes!(CompletionError=>Completion, Resource=>Resource, CapabilityError=>Capability, SupervisorError=>Supervisor,
-    fe2o3_compiler_closure_capability::CompilerApprovalErrorV1=>Approval,
+    fe2o3_compiler_closure_capability::RetainedCompilerRuntimeErrorV1=>Approval,
     fe2o3_compiler_execution_client::CompilerExecutionChildChannelErrorV1=>Child,
     fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV3=>Policy,
     ManifestError=>Manifest, ReadyError=>Ready, HandoffError=>Handoff, SubjectError=>Subject,
