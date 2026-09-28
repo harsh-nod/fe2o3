@@ -142,10 +142,24 @@ not repeat binding, materialization or the Pending handoff. The
 [retry packet](evidence/dev-materialized-retry-2026-09-28/README.md) qualifies CPU
 scripts and allocation counts, not native latency or formal refinement.
 
-Ordinary published observation/recycle and ordered-successor publication still
-move owners outside their indexes. Logical completion also needs checked,
-allocation-free settlement before profiling. Persistent completion work does
-not establish these ordinary-lifetime transitions.
+Ordinary published observation/recycle now shares one indexed transition for
+the logical frontier and pipeline owners. A consuming-operation marker is
+installed before the lower call, and returned batch/completed/recycled state is
+stored before the outer lane loan closes. Only an actually returned completed
+receipt permits recycle retry. Logical settlement checks exact custody, result
+capacity, distinct missing dirty extents and pipeline identity before mutation.
+It settles retains and promotes the next owner before invoking profiling, so
+reporting failure preserves a consistent committed prefix. First-Ready timing
+is stable across retries. The pre-reserved runtime recorder encodes completion
+payloads on a bounded stack buffer without changing their canonical wire form.
+The [completion packet](evidence/dev-materialized-completion-2026-09-28/README.md)
+qualifies selected scripted CPU workflows, not native execution, universal
+allocation-free completion, formal refinement or high-depth performance.
+Pipeline preflight still scans configured slots on each logical commit.
+
+Ordered-successor submission still precedes pipeline-owner installation. It
+needs indexed staged publication and exact Pending error handoff without losing
+the predecessor or introducing logical-epoch holes on confirmed retry withdrawal.
 
 The direct adapter's same-device copies are native SDMA submissions. Direct
 dependency chains are capped at 256 before ledger mutation, cancellation can

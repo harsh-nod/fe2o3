@@ -24,6 +24,23 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Ordinary indexed completion development (2026-09-28 UTC): frontier and pipeline
+owners now remain indexed through consuming poll/recycle, returned receipts and
+physical retirement. Checked logical settlement releases exact custody and
+promotes the next frontier before profiling; reporting failure preserves the
+committed prefix. First-Ready timing survives recycle retries. Completion payload
+encoding uses bounded stack storage, with canonical-wire differential checks and
+zero counted allocation in selected profiled CPU completion controls. The
+[completion packet](evidence/dev-materialized-completion-2026-09-28/README.md)
+records 30 focused passes, 1785 full-runtime passes with three unwaived socket
+inspection failures, 38 protocol passes and passing static checks. It also
+retains preliminary failures and their corrections.
+Its constructed pipeline fixtures do not establish native successor publication
+or GPU execution. Ordered-successor publication and Pending error handoff remain
+the next indexed-ownership work. Native coupling, formal correspondence, Context
+composition, protected Worker and matched performance remain open; A1/A2 and
+accepted lane checkpoints are unchanged.
+
 Ordinary Prepared retry custody development (2026-09-28 UTC): retry now uses
 the same indexed submit-only Binding transition as first publication, without
 repeating preparation, materialization or Pending settlement. Confirmed native
@@ -32,8 +49,9 @@ cannot become Prepared again. Exact descriptor/writeback preflight uses bounded
 stack storage. The [retry packet](evidence/dev-materialized-retry-2026-09-28/README.md)
 records 22 focused passes, 880 serial backend passes, 1777 full-runtime passes
 with three unwaived socket-inspection failures, and passing static checks.
-Ordinary frontier/pipeline completion and ordered-successor publication still
-need continuously indexed transitions. Formal correspondence, native coupling,
+That checkpoint left ordinary frontier/pipeline completion and ordered-successor
+publication indexing open; the newer entry above addresses completion indexing.
+Formal correspondence, native coupling,
 protected Worker and matched performance gates remain open; A1/A2 and accepted
 lane checkpoints are unchanged.
 

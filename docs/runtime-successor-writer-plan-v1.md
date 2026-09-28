@@ -243,18 +243,24 @@ confirmed retries, and retains explicit attempted-publication state on failure.
 It does not repeat the Pending handoff. The bounded descriptor reducer and exact
 writeback guard are CPU-qualified separately from native submission.
 
-Next, ordinary frontier/pipeline completion must retain indexed consuming-poll,
-returned-completed, consuming-recycle and retired states. Store returned native
-receipts before the lane callback closes; only an actually returned completed
-receipt permits recycle retry. Preserve pipeline identity and logical order,
-prevalidate logical settlement, and profile after reaching a consistent state.
-Record publish-to-completion timing at the first Ready observation, not again
-on later recycle attempts. Prepublication dirty-vector capacity already exists;
-completion must count distinct missing extents, not reject valid alias/replay
-epochs merely because spare capacity is zero. Ordered-successor submission also
-still precedes pipeline-owner installation and needs its own indexed publication
-phase plus Pending error-handoff repair. Native coupling, Context composition
-and formal correspondence remain open.
+[Ordinary completion](evidence/dev-materialized-completion-2026-09-28/README.md)
+now keeps frontier/pipeline owners indexed through consuming poll, returned
+completed receipts, consuming recycle and physical retirement. Returned state
+is installed before the lane callback closes; only an actually returned completed
+receipt permits recycle retry. Checked logical settlement preserves pipeline
+identity and stream order, reaches a consistent promoted frontier before
+profiling, and counts distinct missing dirty extents against existing reserved
+capacity. First-Ready timing remains stable across recycle retries. CPU scripts
+cover exact committed prefixes and selected allocation-free profiled polls;
+constructed pipeline owners do not qualify native successor publication.
+
+Next, ordered-successor submission needs a staged indexed pipeline owner before
+the native call, with returned outcomes rooted inside its callback. Preserve the
+predecessor frontier and avoid logical-epoch holes when withdrawing a confirmed
+retry. Returned failure with a retained successor must retire only Pending FIFO
+and explicit dependency metadata, preserving deferred ordering and resource
+custody. Native coupling, Context composition, formal correspondence and matched
+performance remain open.
 
 [Single bind rejection](evidence/dev-single-bind-recovery-2026-09-28/README.md)
 now carries the exact original target/source/submission and empty input box
@@ -267,7 +273,7 @@ injection and allocation-free completion restoration remain separate open gates.
 now keeps Active indexed through lower consuming calls, typed restoration and
 settlement. Pre-bind reservations and original bind boxes avoid replacement
 allocation in the shared completion restore body. Scripted CPU controls qualify
-that adapter; coupled native execution/unwind, three-binding completion,
+that adapter; coupled native execution/unwind, native three-binding completion,
 Context reconciliation, formal correspondence and performance remain open.
 
 ### Unknown Group Disposal

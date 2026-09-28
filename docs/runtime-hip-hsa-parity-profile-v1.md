@@ -115,6 +115,19 @@ CPU fault matrices, corrupt preflight, backing identity and allocation-counted
 retries. It does not qualify native latency, ordinary completion/recycle,
 ordered-successor publication or formal correspondence.
 
+Ordinary frontier/pipeline completion now retains indexed execution state across
+native consuming calls and records returned receipts before the lane callback
+closes. Recycle retry requires an actually returned completed receipt; first-Ready
+timing is not refreshed by later attempts. Logical settlement validates capacity,
+dirty extents and next-owner identity, commits in stream order, and promotes the
+next owner before profiling. The
+[completion evidence](evidence/dev-materialized-completion-2026-09-28/README.md)
+includes CPU fault and promotion controls, canonical completion encoding, and
+selected allocation-counted profiled polls. Its pipeline owners are constructed
+completion fixtures, not native successor publication. Ordered-successor indexed
+publication, native/runtime coupling, formal correspondence and matched HIP/HSA
+measurements remain open. No behavioral or performance parity is newly accepted.
+
 Poll and `wait` never perform deferred compute preparation, but can retry
 publication of an already bound Prepared recipe. Submit may publish immediately
 ready work. The additive in-process `flush_stream`
