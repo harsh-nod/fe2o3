@@ -157,9 +157,22 @@ qualifies selected scripted CPU workflows, not native execution, universal
 allocation-free completion, formal refinement or high-depth performance.
 Pipeline preflight still scans configured slots on each logical commit.
 
-Ordered-successor submission still precedes pipeline-owner installation. It
-needs indexed staged publication and exact Pending error handoff without losing
-the predecessor or introducing logical-epoch holes on confirmed retry withdrawal.
+Ordered-successor submission now stages a distinct indexed Publishing owner
+before the native call. It reserves a physical slot without advancing the
+logical epoch or disturbing the predecessor. The returned outcome is stored
+inside the lane callback; confirmation requires successful outer close. Only
+a confirmed retry withdraws the slot, preserving Pending custody and the next
+logical epoch while burning the physical generation. Failure with an indexed
+successor retires only Pending FIFO and explicit-dependency metadata, never the
+deferred ordering or accepted resource retains. Publishing has no Prepared
+cancellation authority. The
+[ordered-publication packet](evidence/dev-ordered-publication-2026-09-28/README.md)
+qualifies scripted CPU workflows and metadata allocation counts, not native
+receipt execution, latency or formal refinement. Staging/confirmation scans
+configured slots; its preflight is outside the publication timing envelope.
+The next proof must model physical staging separately from confirmed epochs and
+logical settlement separately from optional profiling, and couple exact lower
+receipts to their indexed runtime owners.
 
 The direct adapter's same-device copies are native SDMA submissions. Direct
 dependency chains are capped at 256 before ledger mutation, cancellation can

@@ -254,13 +254,22 @@ capacity. First-Ready timing remains stable across recycle retries. CPU scripts
 cover exact committed prefixes and selected allocation-free profiled polls;
 constructed pipeline owners do not qualify native successor publication.
 
-Next, ordered-successor submission needs a staged indexed pipeline owner before
-the native call, with returned outcomes rooted inside its callback. Preserve the
-predecessor frontier and avoid logical-epoch holes when withdrawing a confirmed
-retry. Returned failure with a retained successor must retire only Pending FIFO
-and explicit dependency metadata, preserving deferred ordering and resource
-custody. Native coupling, Context composition, formal correspondence and matched
-performance remain open.
+[Ordered-successor publication](evidence/dev-ordered-publication-2026-09-28/README.md)
+now stages an indexed pipeline owner before the native call and roots returned
+outcomes inside its callback. The predecessor frontier remains intact. Only a
+confirmed retry after successful outer close withdraws the slot, burning its
+generation without creating logical-epoch holes. Returned failure or unwind
+with a retained successor retires only Pending FIFO and explicit-dependency
+metadata, preserving deferred ordering and resource custody. Public scripted
+flush/retry/fault controls qualify this runtime handoff, not native receipts.
+
+Next, couple the same receipt-storage transition to genuine private KFD CPU
+receipts and refine staged occupancy separately from confirmed logical epochs.
+Refine logical commit separately from optional/fallible observer emission;
+R60's existing model joins these effects and is not correspondence evidence for
+the indexed adapters. Production-body mutations must detect receipt redirection,
+early outer-close settlement and staged-frontier advancement. Native coupling,
+Context composition, protected Worker and matched performance remain open.
 
 [Single bind rejection](evidence/dev-single-bind-recovery-2026-09-28/README.md)
 now carries the exact original target/source/submission and empty input box

@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Ordinary ordered-publication development (2026-09-28 UTC): same-recipe successors
+now retain an indexed Publishing owner before submit while preserving the
+predecessor. Returned outcomes are stored before the outer lane callback closes;
+only a confirmed retry withdraws the staged slot. Withdrawal burns its physical
+generation without consuming a logical epoch. Terminal and unwind handoff settle
+only the Pending FIFO and explicit-dependency metadata, preserving deferred
+ordering and resource custody. The
+[ordered-publication packet](evidence/dev-ordered-publication-2026-09-28/README.md)
+separates public scripted workflows from native execution and correspondence.
+It records nine ordered and 35 materialized focused passes, 1794 full-runtime
+passes with three unwaived socket-inspection failures, and passing static checks.
+The next work is actual native receipt coupling and a shared-source refinement
+for staging/confirmation and logical commit versus optional profiling. R60's
+independent 64-epoch model is not a proof of these production transitions or the
+1024-slot development profile. A1/A2 and accepted checkpoints remain unchanged.
+
 Ordinary indexed completion development (2026-09-28 UTC): frontier and pipeline
 owners now remain indexed through consuming poll/recycle, returned receipts and
 physical retirement. Checked logical settlement releases exact custody and
@@ -36,8 +52,9 @@ records 30 focused passes, 1785 full-runtime passes with three unwaived socket
 inspection failures, 38 protocol passes and passing static checks. It also
 retains preliminary failures and their corrections.
 Its constructed pipeline fixtures do not establish native successor publication
-or GPU execution. Ordered-successor publication and Pending error handoff remain
-the next indexed-ownership work. Native coupling, formal correspondence, Context
+or GPU execution. That checkpoint left ordered-successor publication and Pending
+error handoff open; the newer entry above addresses their runtime indexing.
+Native coupling, formal correspondence, Context
 composition, protected Worker and matched performance remain open; A1/A2 and
 accepted lane checkpoints are unchanged.
 

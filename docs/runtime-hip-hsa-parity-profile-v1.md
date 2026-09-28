@@ -124,9 +124,20 @@ next owner before profiling. The
 [completion evidence](evidence/dev-materialized-completion-2026-09-28/README.md)
 includes CPU fault and promotion controls, canonical completion encoding, and
 selected allocation-counted profiled polls. Its pipeline owners are constructed
-completion fixtures, not native successor publication. Ordered-successor indexed
-publication, native/runtime coupling, formal correspondence and matched HIP/HSA
-measurements remain open. No behavioral or performance parity is newly accepted.
+completion fixtures, not native successor publication.
+
+Ordered-successor publication now stages an indexed owner before consuming native
+submission, preserving the predecessor frontier. Returned outcomes are rooted
+before the outer lane callback closes. A confirmed retry withdraws only the
+physical slot and preserves the next logical epoch; terminal or unwind handoff
+retains resource/deferred-order custody without duplicating Pending ownership.
+The [ordered-publication evidence](evidence/dev-ordered-publication-2026-09-28/README.md)
+covers public admission/flush with scripted outcomes, retry identity and ordered
+completion controls. Its allocation count covers only container metadata, not
+public launch or native publication. Native/runtime receipt coupling, formal
+correspondence and matched HIP/HSA measurements remain open. R60's abstract retry
+and atomic commit/profile transitions do not establish those production
+properties. No behavioral or performance parity is newly accepted.
 
 Poll and `wait` never perform deferred compute preparation, but can retry
 publication of an already bound Prepared recipe. Submit may publish immediately
