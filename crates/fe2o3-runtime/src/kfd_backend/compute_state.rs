@@ -83,6 +83,33 @@ pub(super) struct PersistentPublicationProfileV1 {
     pub(super) bindings: Option<Result<Vec<KfdProfileBindingV1>, ()>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MaterializedPreparationOriginV1 {
+    NewBinding,
+    RecycledAttachment { generation: u64 },
+}
+
+pub(super) struct MaterializedPreparedV1 {
+    pub(super) profile: PersistentPublicationProfileV1,
+    pub(super) origin: MaterializedPreparationOriginV1,
+    #[cfg(test)]
+    pub(super) scripted: Option<(Vec<DataSpecV1>, usize)>,
+}
+
+impl MaterializedPreparedV1 {
+    pub(super) fn new(
+        profile: PersistentPublicationProfileV1,
+        origin: MaterializedPreparationOriginV1,
+    ) -> Self {
+        Self {
+            profile,
+            origin,
+            #[cfg(test)]
+            scripted: None,
+        }
+    }
+}
+
 pub(super) enum PreparedReceiptV1<T> {
     Armed(T),
     // The consuming lower operation now owns the native publication obligation.
@@ -109,9 +136,8 @@ impl<T> PreparedReceiptV1<T> {
 // tests exercise the same allocation-free terminal-recovery invariant.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum ActiveComputeExecutionV1 {
-    MaterializedPrepared {
-        profile: PersistentPublicationProfileV1,
-    },
+    MaterializedPrepared(MaterializedPreparedV1),
+    MaterializedCancelling(Box<super::materialized_cancellation::MaterializedCancellationV1>),
     Materialized(Gfx942DispatchBatchV1<1>),
     MaterializedCompleted(fe2o3_kfd::Gfx942CompletedDispatchBatchV1<1>),
     PersistentPrepared {

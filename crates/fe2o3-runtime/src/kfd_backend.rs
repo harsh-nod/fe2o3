@@ -92,6 +92,7 @@ mod compute_dispatch;
 mod compute_peer_gate;
 mod compute_quiescence_control;
 mod compute_settlement;
+mod materialized_cancellation;
 mod peer_ancestry;
 mod peer_compute_access;
 mod persistent_completion;
@@ -1399,6 +1400,11 @@ pub struct KfdRuntimeBackendV1 {
     #[cfg(test)]
     scripted_prepared_cancel_fault: Option<prepared_cancellation::ScriptedPreparedCancelFaultV1>,
     #[cfg(test)]
+    scripted_materialized_preparation: Option<(MaterializedPreparationOriginV1, usize)>,
+    #[cfg(test)]
+    scripted_materialized_cancel_fault:
+        Option<materialized_cancellation::ScriptedMaterializedCancelFaultV1>,
+    #[cfg(test)]
     scripted_prepared_publication_fault:
         Option<prepared_publication::ScriptedPreparedPublicationFaultV1>,
     #[cfg(test)]
@@ -1895,6 +1901,10 @@ impl KfdRuntimeBackendV1 {
             scripted_three_completion_fault: None,
             #[cfg(test)]
             scripted_prepared_cancel_fault: None,
+            #[cfg(test)]
+            scripted_materialized_preparation: None,
+            #[cfg(test)]
+            scripted_materialized_cancel_fault: None,
             #[cfg(test)]
             scripted_prepared_publication_fault: None,
             #[cfg(test)]
@@ -2801,7 +2811,8 @@ impl KfdRuntimeBackendV1 {
                 ActiveComputeExecutionV1::PersistentCancelling(_)
                 | ActiveComputeExecutionV1::PersistentCompleting(_)
                 | ActiveComputeExecutionV1::ThreeBindingPersistentCompleting(_) => true,
-                ActiveComputeExecutionV1::MaterializedPrepared { .. }
+                ActiveComputeExecutionV1::MaterializedPrepared(_)
+                | ActiveComputeExecutionV1::MaterializedCancelling(_)
                 | ActiveComputeExecutionV1::Materialized(_)
                 | ActiveComputeExecutionV1::MaterializedCompleted(_) => false,
                 #[cfg(test)]
@@ -12885,6 +12896,21 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
         if persistent_prepared {
             return self.cancel_persistent_prepared_v1(submission);
         }
+        if let Some(lane) = self.active_compute_lane_v1(submission) {
+            let prepared = self
+                .active_compute_submission_v1(submission)
+                .is_some_and(|active| {
+                    matches!(
+                        active.execution,
+                        Some(ActiveComputeExecutionV1::MaterializedPrepared(_))
+                    )
+                });
+            if prepared {
+                return self.with_compute_lane_state_v1(lane, |backend| {
+                    backend.cancel_materialized_prepared_v1(submission)
+                });
+            }
+        }
         if self.active_sdma.contains_key(&submission) {
             return self.cancel_sdma_copy_v1(submission);
         }
@@ -13334,6 +13360,7 @@ mod tests {
     mod initial_publication_tests;
     #[path = "initialized_storage_tests.rs"]
     mod initialized_storage_tests;
+    mod materialized_cancellation_tests;
     mod native_xgmi_creation_tests;
     mod native_xgmi_retirement_tests;
     mod prepared_cancellation_tests;

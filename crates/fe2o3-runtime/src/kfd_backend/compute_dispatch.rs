@@ -732,6 +732,10 @@ impl KfdRuntimeBackendV1 {
         lane: usize,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.with_compute_lane_state_v1(lane, |backend| {
+            #[cfg(test)]
+            if let Some(poll) = backend.poll_scripted_materialized_prepared_v1() {
+                return Ok(poll);
+            }
             if backend.persistent_prepared_selected_v1() {
                 return backend.poll_persistent_prepared_v1();
             }
@@ -758,7 +762,7 @@ impl KfdRuntimeBackendV1 {
                 .is_some_and(|execution| {
                     matches!(
                         execution,
-                        ActiveComputeExecutionV1::MaterializedPrepared { .. }
+                        ActiveComputeExecutionV1::MaterializedPrepared(_)
                             | ActiveComputeExecutionV1::Materialized(_)
                     )
                 }) {
@@ -797,7 +801,7 @@ impl KfdRuntimeBackendV1 {
                 );
             };
             match execution {
-                ActiveComputeExecutionV1::MaterializedPrepared { profile } => {
+                ActiveComputeExecutionV1::MaterializedPrepared(prepared) => {
                     let native_lane = ordinary_native_lane
                         .expect("prepared materialized execution validated its native lane");
                     let publication_started = Instant::now();
@@ -815,7 +819,7 @@ impl KfdRuntimeBackendV1 {
                         Ok(Ok(publication)) => publication,
                         Ok(Err(error)) => {
                             active.execution = Some(
-                                ActiveComputeExecutionV1::MaterializedPrepared { profile },
+                                ActiveComputeExecutionV1::MaterializedPrepared(prepared),
                             );
                             backend.active = Some(active);
                             return Err(backend.terminal_error(format!(
@@ -824,7 +828,7 @@ impl KfdRuntimeBackendV1 {
                         }
                         Err(payload) => {
                             active.execution = Some(
-                                ActiveComputeExecutionV1::MaterializedPrepared { profile },
+                                ActiveComputeExecutionV1::MaterializedPrepared(prepared),
                             );
                             backend.active = Some(active);
                             let _ = backend.terminal_error(
@@ -840,7 +844,7 @@ impl KfdRuntimeBackendV1 {
                         ) => {
                             active.performance.publication += publication_started.elapsed();
                             active.execution = Some(
-                                ActiveComputeExecutionV1::MaterializedPrepared { profile },
+                                ActiveComputeExecutionV1::MaterializedPrepared(prepared),
                             );
                             backend.active = Some(active);
                             return Ok(BackendPollV1::Pending);
@@ -849,7 +853,7 @@ impl KfdRuntimeBackendV1 {
                             error,
                         )) => {
                             active.execution = Some(
-                                ActiveComputeExecutionV1::MaterializedPrepared { profile },
+                                ActiveComputeExecutionV1::MaterializedPrepared(prepared),
                             );
                             backend.active = Some(active);
                             return Err(backend.terminal_error(format!(
@@ -858,7 +862,7 @@ impl KfdRuntimeBackendV1 {
                         }
                         Err(Gfx942FixedDispatchSubmissionFailureV1::Terminal(error)) => {
                             active.execution = Some(
-                                ActiveComputeExecutionV1::MaterializedPrepared { profile },
+                                ActiveComputeExecutionV1::MaterializedPrepared(prepared),
                             );
                             backend.active = Some(active);
                             return Err(backend.terminal_error(format!(
@@ -881,7 +885,7 @@ impl KfdRuntimeBackendV1 {
                                 stream,
                                 kernel,
                                 dispatch_shape_sha256,
-                                profile,
+                                prepared.profile,
                             );
                         }));
                     if let Err(payload) = profiling {
@@ -998,6 +1002,11 @@ impl KfdRuntimeBackendV1 {
                     active.execution = Some(ActiveComputeExecutionV1::PersistentCancelling(cancellation));
                     backend.active = Some(active);
                     Err(backend.terminal_error("prepared cancellation cannot resume publication"))
+                }
+                ActiveComputeExecutionV1::MaterializedCancelling(cancellation) => {
+                    active.execution = Some(ActiveComputeExecutionV1::MaterializedCancelling(cancellation));
+                    backend.active = Some(active);
+                    Err(backend.terminal_error("materialized cancellation cannot reenter publication"))
                 }
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedMaterialized => {
@@ -2572,9 +2581,40 @@ impl KfdRuntimeBackendV1 {
             u64::try_from(data.len()).expect("fixed-dispatch data count is bounded below u64");
 
         #[cfg(test)]
-        if self.scripted_sdma.is_some() && writebacks.is_empty() {
+        if self.scripted_sdma.is_some()
+            && (writebacks.is_empty() || self.scripted_materialized_preparation.is_some())
+        {
             performance.data_path = KfdRuntimeLaunchDataPathV1::Materialized;
             performance.user_data_materializations = user_data_count;
+            if let Some((origin, retries)) = self.scripted_materialized_preparation.take() {
+                let mut prepared = MaterializedPreparedV1::new(
+                    PersistentPublicationProfileV1 {
+                        launch: profile_launch,
+                        semantic_contract: profile_semantic_contract,
+                        bindings: profile_bindings,
+                    },
+                    origin,
+                );
+                // Script the publication outcome, not a native receipt or buffer authority.
+                prepared.scripted = Some((data, retries));
+                self.active = Some(ActiveSubmissionV1 {
+                    id,
+                    stream,
+                    ordered_predecessor,
+                    deferred_ordered_predecessor_retain: false,
+                    kernel,
+                    dependency_depth,
+                    allocations,
+                    writebacks,
+                    resident_descriptors,
+                    ordinary_recipe: Some(ordinary_recipe),
+                    dispatch_shape_sha256,
+                    published_at: Instant::now(),
+                    performance,
+                    execution: Some(ActiveComputeExecutionV1::MaterializedPrepared(prepared)),
+                });
+                return Ok(());
+            }
             self.active = Some(ActiveSubmissionV1 {
                 id,
                 stream,
@@ -2625,6 +2665,7 @@ impl KfdRuntimeBackendV1 {
         let native_binding_started = Instant::now();
         let creates_native_queue = self.native_compute_lanes[self.selected_compute_lane].is_none();
         let mut reused_attached = false;
+        let mut preparation_origin = MaterializedPreparationOriginV1::NewBinding;
         let reuse_attached = self.recycled_dispatch.as_ref().is_some_and(|recycled| {
             recycled_dispatch_reuse_is_admitted_v1(
                 recycled,
@@ -2677,14 +2718,14 @@ impl KfdRuntimeBackendV1 {
                                                 format!("KFD recycled-data overwrite: {error}")
                                             })
                                     })
+                                    .map(|()| generation)
                             })
                     })
                     .map_err(|error| format!("KFD compute-lane selection: {error}"))
                     .and_then(core::convert::identity)
             };
-            if let Err(detail) = overwrite {
-                return Err(self.terminal_error(detail));
-            }
+            let generation = overwrite.map_err(|detail| self.terminal_error(detail))?;
+            preparation_origin = MaterializedPreparationOriginV1::RecycledAttachment { generation };
             reused_attached = true;
             performance.data_path = KfdRuntimeLaunchDataPathV1::ResidentReused;
         }
@@ -2936,9 +2977,9 @@ impl KfdRuntimeBackendV1 {
                     dispatch_shape_sha256,
                     published_at: Instant::now(),
                     performance,
-                    execution: Some(ActiveComputeExecutionV1::MaterializedPrepared {
-                        profile: publication_profile,
-                    }),
+                    execution: Some(ActiveComputeExecutionV1::MaterializedPrepared(
+                        MaterializedPreparedV1::new(publication_profile, preparation_origin),
+                    )),
                 });
                 return Ok(());
             }

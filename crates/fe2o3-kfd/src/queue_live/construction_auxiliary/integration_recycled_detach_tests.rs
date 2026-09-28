@@ -468,6 +468,49 @@ fn next_occurrence(name: &str) -> usize {
 }
 
 #[test]
+fn recycled_detach_after_cancelled_retries_returns_prior_generation_on_each_lane() {
+    for ordinal in 0..3 {
+        for bindings in [1, 3] {
+            for retries in [1, 3] {
+                let mut f = DetachFixture::new(ordinal, bindings);
+                let key = f.key;
+                let generation = f.generation;
+                {
+                    let mut context = f.context();
+                    let dispatch = context.dispatch().as_mut().unwrap();
+                    for _ in 0..retries {
+                        let (_, epoch) = dispatch.bind_templates::<1>(key).unwrap();
+                        assert!(dispatch.ensure_returnable().is_err());
+                        dispatch.cancel_binding(epoch).unwrap();
+                        assert_eq!(dispatch.ensure_returnable().unwrap(), generation);
+                    }
+                }
+                let result = f.detach();
+                assert!(!result.transport);
+                let returned = result.result.unwrap().unwrap();
+                assert_eq!(returned.dispatch_generation(), generation);
+                let data = returned.into_data();
+                assert_eq!(data_snapshot(&data), f.expected);
+                assert!(f.context().dispatch().is_none());
+                assert!(f.trace.retained.is_none());
+                assert_eq!((f.trace.loans, f.trace.entered, f.trace.poisons), (1, 1, 0));
+                let mut context = f.context();
+                let ledger = context.ledger();
+                assert_eq!(*ledger.generation, Some(generation));
+                assert_eq!(*ledger.count, data.len());
+                assert_eq!(
+                    *ledger.identities,
+                    data.iter()
+                        .map(Gfx942FixedDispatchDataV1::storage_identity)
+                        .collect::<Vec<_>>()
+                );
+                f.restore();
+            }
+        }
+    }
+}
+
+#[test]
 fn recycled_detach_returns_exact_data_and_commits_ledger_after_successful_retake() {
     for ordinal in 0..3 {
         for bindings in [1, 3] {

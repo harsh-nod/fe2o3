@@ -7,6 +7,100 @@ use crate::queue::live::tests::persistent_compute_cancellation_test_session;
 use fe2o3_resource_accounting::{ResourceCreditAccountV1, ResourceKindV1, ResourceVectorV1};
 
 #[test]
+fn detached_rebind_retry_cancels_through_cancelled_abort() {
+    let mut f = DetachFixture::new(0, 1);
+    let detached = f.detach();
+    assert!(!detached.transport);
+    let detached = detached.result.unwrap().unwrap();
+    let predecessor = detached.dispatch_generation();
+    assert_eq!(predecessor, f.generation);
+    let data = detached.into_data();
+    let expected = data_snapshot(&data);
+    let mut facade = persistent_compute_cancellation_test_session(f.key, None, None);
+    facade.observation.ring_bytes = 4096;
+    facade.detached_dispatch_generation = f.primary.generation.take();
+    facade.detached_data_count = core::mem::take(&mut f.primary.count);
+    facade.detached_data_identities = core::mem::take(&mut f.primary.identities);
+    facade.detached_next_insertion_index = f.primary.next.take();
+    let (programs, [packet, _, _]) = recipe();
+    let root = LiveRebindRootV1::new(
+        programs,
+        [packet],
+        data,
+        facade.detached_dispatch_generation,
+    );
+    let fixture = RefCell::new(&mut f);
+    let retained = RefCell::new(None);
+    let result = facade.settle_fixed_dispatch_rebind_with_v1(
+        root,
+        |session, programs, preparation, predecessor, _, prepared| {
+            let capacity = session.dispatch_capacity.clone();
+            let (operation, retake) =
+                fixture
+                    .borrow_mut()
+                    .scope
+                    .parent
+                    .with_preparation_custody(|memory| {
+                        prepare_public_fixed_dispatch_resources_after_detach_with_capacity_in_place(
+                            memory,
+                            programs,
+                            preparation,
+                            predecessor.unwrap(),
+                            &capacity,
+                            prepared,
+                        )
+                        .map_err(Into::into)
+                    })?;
+            retake?;
+            operation
+        },
+        |_, preparation| {
+            let authorities = preparation.completed()?.device_authorities_inline_v1();
+            fixture
+                .borrow_mut()
+                .memory_mut()
+                .primary_validate_live_dispatch_memory_v1(&authorities)
+                .map_err(Into::into)
+        },
+        |root| *retained.borrow_mut() = Some(root),
+    );
+    assert!(
+        matches!(result.result, Ok(Ok(()))) && !result.transport,
+        "{:?}",
+        result.result
+    );
+    assert!(retained.borrow().is_none());
+    drop(fixture);
+    assert!(facade.detached_dispatch_generation.is_none());
+    let mut owner = facade.dispatch.take().unwrap();
+    assert_eq!(owner.primary_fixture_next_generation_v1(), predecessor + 1);
+    let (_, epoch) = owner.bind_templates::<1>(f.key).unwrap();
+    owner.cancel_binding(epoch).unwrap();
+    assert!(
+        owner.ensure_returnable().is_err(),
+        "detached predecessor is not sticky recycled history"
+    );
+    let buffers = owner.prepare_cancelled_abort_v1(f.key).unwrap();
+    let mut abort = owner.begin_unpublished_abort_v1(buffers);
+    let before = abort.custody_snapshot_for_test();
+    let (release, retake) = f
+        .scope
+        .parent
+        .with_preparation_custody(|memory| abort.release_controls(memory).map_err(Into::into))
+        .unwrap();
+    retake.unwrap();
+    release.unwrap();
+    abort
+        .custody_snapshot_for_test()
+        .assert_preserved_inputs(&before, true);
+    let (continuation, returned, identities) = abort.into_detached();
+    assert!(continuation.matches_queue(f.key));
+    assert_eq!(continuation.next_generation_for_test(), predecessor + 2);
+    assert_eq!(data_snapshot(&returned), expected);
+    assert_eq!(identities, fixed_dispatch_storage_identities(&returned));
+}
+
+#[test]
 fn scaled_attached_preallocation_survives_canceled_history_detach_and_rebind() {
     let probe = ResourceCreditAccountV1::new(
         ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, 4 << 20),
