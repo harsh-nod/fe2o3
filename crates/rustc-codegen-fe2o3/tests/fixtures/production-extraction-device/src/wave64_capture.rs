@@ -17,6 +17,12 @@ macro_rules! capture_kernel {
             }
         }
 
+        #[cfg(feature = "wave64-capture-forged-scan")]
+        #[inline(never)]
+        fn user_unsafe_scan(context: &Gfx942Collectives, value: $ty) -> $ty {
+            unsafe { forged_scan(0, context, value) }
+        }
+
         #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
         pub fn wave64_capture(mut output: DisjointSlice<$ty>, value: $ty) {
             let snapshot = WaveLane::<Wave64>::current();
@@ -26,9 +32,15 @@ macro_rules! capture_kernel {
             let result = user_unsafe_shuffle(value);
             #[cfg(feature = "wave64-capture-inclusive")]
             let result = wave.inclusive_scan_sum(&context, value);
+            #[cfg(feature = "wave64-capture-exclusive")]
+            let result = wave.exclusive_scan_sum(&context, value);
+            #[cfg(feature = "wave64-capture-forged-scan")]
+            let result = user_unsafe_scan(&context, value);
             #[cfg(not(any(
                 feature = "wave64-capture-direct-unsafe",
                 feature = "wave64-capture-inclusive",
+                feature = "wave64-capture-exclusive",
+                feature = "wave64-capture-forged-scan",
             )))]
             let result = wave.reduce_sum(&context, value);
             if let Some(slot) = output.get_mut(thread::index_1d()) {
@@ -54,5 +66,14 @@ pub unsafe fn forged_i32(_: &Gfx942Collectives, value: i32, _: u32) -> i32 {
     value
 }
 pub unsafe fn forged_f32(_: &Gfx942Collectives, value: f32, _: u32) -> f32 {
+    value
+}
+
+#[inline(never)]
+pub unsafe fn forged_scan<T: fe2o3_device::Gfx942CollectiveElement>(
+    _: u32,
+    _: &Gfx942Collectives,
+    value: T,
+) -> T {
     value
 }

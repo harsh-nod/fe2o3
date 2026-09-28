@@ -33,8 +33,12 @@ use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
 use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 
 mod primitive_from_v1;
+mod wave64_scan_provider_v1;
 mod wave64_shuffle_provider_v1;
 pub(crate) use primitive_from_v1::primitive_from_candidate_v1;
+#[cfg(test)]
+pub(crate) use wave64_scan_provider_v1::check_actual_scan_instances_v1;
+pub(crate) use wave64_scan_provider_v1::is_authenticated_gfx942_wave64_scan_instance_v1;
 #[cfg(test)]
 pub(crate) use wave64_shuffle_provider_v1::check_actual_sealed_trait_chain_paths_v1;
 pub(crate) use wave64_shuffle_provider_v1::{
@@ -47,13 +51,13 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x1e, 0x80, 0xb2, 0x55, 0x87, 0x11, 0x2d, 0x19, 0xee, 0x4e, 0xde, 0x55, 0xac, 0x86, 0xa5, 0x0d,
-    0x77, 0xe3, 0xcb, 0xab, 0xb5, 0x50, 0x3a, 0xdd, 0xd7, 0xec, 0x7a, 0xc2, 0x01, 0xf5, 0x15, 0x35,
+    0xe2, 0x67, 0x64, 0xab, 0x3c, 0x1a, 0xa5, 0xef, 0xdb, 0xf1, 0x7d, 0x22, 0xfa, 0x09, 0xa0, 0x1b,
+    0x5d, 0x0c, 0xe6, 0x4c, 0xa3, 0xc9, 0x7e, 0x8a, 0xdc, 0xa1, 0xd1, 0x1e, 0x74, 0xe8, 0xa4, 0x4e,
 ];
 // The pinned Cargo-produced manifest fixture is checked with the complete source tree.
 const REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xeb, 0xcb, 0x99, 0xe9, 0xb9, 0xb1, 0xfb, 0x82, 0x7b, 0xdc, 0x32, 0xf1, 0xd8, 0x45, 0x66, 0x0e,
-    0x69, 0xa0, 0x2b, 0xe2, 0x56, 0xd7, 0x2a, 0xf9, 0xa9, 0xcd, 0x67, 0x01, 0x13, 0xc7, 0xbd, 0xdd,
+    0x87, 0x4b, 0x86, 0x92, 0x05, 0x3e, 0xff, 0xad, 0xdd, 0x66, 0x8f, 0x5d, 0xe8, 0xe8, 0x83, 0xc9,
+    0xc3, 0x70, 0x59, 0xa4, 0x2c, 0x94, 0xce, 0x90, 0xc4, 0x8d, 0xd0, 0x63, 0x18, 0x4e, 0x56, 0xde,
 ];
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1: [[u8; 32]; 2] = [
     REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
@@ -305,6 +309,7 @@ pub(crate) enum TrustedDeviceItem {
     Gfx942Wave64ReduceSum,
     Gfx942Wave64InclusiveScanSum,
     Gfx942Wave64ExclusiveScanSum,
+    Gfx942Wave64InclusiveScanHelper,
     Gfx942WorkgroupReduceSum,
     Gfx942WorkgroupInclusiveScanSum,
     Gfx942WorkgroupExclusiveScanSum,
@@ -997,6 +1002,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::SubgroupTile::<64>::exclusive_scan_sum",
     ),
     (
+        TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper,
+        "fe2o3_device_gfx942_wave64_inclusive_scan_helper_v1",
+        "fe2o3_device::collective::wave64_inclusive_scan",
+    ),
+    (
         TrustedDeviceItem::Gfx942WorkgroupReduceSum,
         "fe2o3_device_gfx942_workgroup_reduce_sum_v1",
         "fe2o3_device::Workgroup::reduce_sum",
@@ -1675,6 +1685,9 @@ fn provider_rule(tcx: TyCtxt<'_>, def_id: DefId, item: TrustedDeviceItem) -> Res
     if let TrustedDeviceItem::Gfx942Wave64Shuffle(scalar) = item {
         wave64_shuffle_provider_v1::validate_definition(tcx, def_id, scalar, &definition)?;
     }
+    if item == TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper {
+        wave64_scan_provider_v1::validate_definition(tcx, def_id, &definition)?;
+    }
     Ok(())
 }
 
@@ -1697,6 +1710,9 @@ fn validate_reviewed_fe2o3_device_provider_definition_v1(
 }
 fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option<&'static str> {
     match item {
+        TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper => {
+            Some("fe2o3_device::collective::wave64_inclusive_scan")
+        }
         TrustedDeviceItem::AmdGpuOrderedXorAddE32 => {
             Some("fe2o3_device::diagnostics::__amdgpu_ordered_xor_add_e32_v1")
         }
@@ -2168,6 +2184,7 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Gfx942Wave64ReduceSum
             | TrustedDeviceItem::Gfx942Wave64InclusiveScanSum
             | TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum
+            | TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper
             | TrustedDeviceItem::Gfx942WorkgroupReduceSum
             | TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum
             | TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum
@@ -3438,6 +3455,7 @@ mod tests {
     include!("trusted_device_items/core_01_tests.rs");
     include!("trusted_device_items/generative_provider_v1_tests.rs");
     include!("trusted_device_items/wave64_shuffle_provider_v1_tests.rs");
+    include!("trusted_device_items/wave64_scan_metadata_v1_tests.rs");
     include!("trusted_device_items/materialization_v1_tests.rs");
 
     include!("trusted_device_items/wrapping_integer_v1_tests.rs");
@@ -3739,7 +3757,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("1e80b25587112d19ee4ede55ac86a50d77e3cbabb5503addd7ec7ac201f51535")
+            digest("e26764ab3c1aa5efdbf17d22fa09a01b5d0ce64ca3c97e8adca1d11e74e8a44e")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
