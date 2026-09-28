@@ -8,6 +8,9 @@ mod abi_tests;
 #[path = "production_source_reference_fixture_closure_v29_tests.rs"]
 mod fixture_closure;
 
+#[path = "production_source_reference_validation_scratch_v29_tests.rs"]
+mod validation_scratch;
+
 // Retained semantic-source component fixtures copied from the frozen A owner
 // fixtures. These tests do not replace the genuine rustc source acceptance gates.
 

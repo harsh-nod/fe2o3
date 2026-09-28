@@ -598,6 +598,61 @@ fn correlated_reference_bindings_retain_the_complete_parent_view_without_a_repre
 }
 
 #[test]
+fn reference_validation_correlated_candidates_are_query_scratch() {
+    run_enum(EnumCase::CorrelatedLoans, |plan, budget| {
+        let node = plan.nodes.iter().enumerate().find_map(|(node, row)| {
+            let SourceReferenceNodeKindV29::EnumView(index) = row.kind else { return None };
+            (row.ty == REFERENCE && plan.enum_views[index].child_count > 1).then_some(node)
+        }).expect("genuine correlated reference view");
+        let origin = SourceReferenceBindingOriginV29::EnumView(node);
+        let types = source_reference_binding_origin_types_v29(plan, origin, REFERENCE, &mut 0, budget)?;
+        let binding = SemanticSourceReferenceBindingV29 {
+            owner: plan as *const SourceReferencePlanV29<'_, '_> as usize,
+            source: plan.source, ssa: plan.ssa, root: plan.root, origin, source_type: REFERENCE,
+            values: types.into_iter().enumerate()
+                .map(|(index, ty)| ValueDef::new(ValueId(500 + index as u32), ty)).collect(),
+        };
+        let floor = budget.storage();
+        for _ in 0..16 {
+            source_reference_validate_binding_v29(plan, &binding, budget)?;
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(binding.origin, origin);
+        }
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn reference_validation_object_schema_stays_owned_by_the_original_arena() {
+    run_enum_with_original_demands(enum_owner(EnumCase::RetainedCorrelatedLoans), |plan, budget| {
+        let loan = plan.cells.strategies.iter().position(|strategy|
+            matches!(strategy, SourceReferenceCellStrategyV29::Object(_)))
+            .expect("genuine object-backed reference");
+        let types = source_reference_payload_types_v29(plan, loan, budget)?;
+        assert_eq!(types.len(), 1);
+        assert!(matches!(types[0], Type::Pointer(_)));
+        let binding = SemanticSourceReferenceBindingV29 {
+            owner: plan as *const SourceReferencePlanV29<'_, '_> as usize,
+            source: plan.source, ssa: plan.ssa, root: plan.root,
+            origin: SourceReferenceBindingOriginV29::SingleLoan(loan),
+            source_type: plan.loans[loan].source_type,
+            values: types.into_iter().map(|ty| ValueDef::new(ValueId(501), ty)).collect(),
+        };
+        budget.charge_work(source_storage_v29::SOURCE_STORAGE_ROOT_GROWTH_WORK_V29)?;
+        let root = plan.storage_root.as_ref().expect("original storage arena");
+        let growth = root.capture_retained_growth().expect("live root custody");
+        let floor = budget.storage();
+        for _ in 0..16 {
+            source_reference_validate_binding_v29(plan, &binding, budget)?;
+            assert_eq!(budget.storage(), floor);
+            assert!(root.retains_custody(plan.instances, &plan.failure, budget));
+            assert!(growth.permits_refund(floor, floor, budget.storage(), 0));
+        }
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
 fn admitted_enum_partial_moves_preserve_siblings_and_exact_reinitialization() {
     for case in [EnumCase::MoveSibling, EnumCase::Reinitialize] {
         run_enum(case, |plan, _| {

@@ -666,6 +666,8 @@ fn source_reference_payload_types_v29(
     }
 }
 
+include!("production_source_reference_validation_scratch_v29.rs");
+
 fn source_reference_validate_binding_v29(
     plan: &SourceReferencePlanV29<'_, '_>,
     binding: &SemanticSourceReferenceBindingV29,
@@ -684,6 +686,14 @@ fn source_reference_validate_binding_v29(
             "source reference binding belongs to another owner",
         ));
     }
+    source_reference_validate_payload_scoped_v29(plan, binding, budget)
+}
+
+fn source_reference_validate_payload_inner_v29(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    binding: &SemanticSourceReferenceBindingV29,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
     let expected = match binding.origin {
         SourceReferenceBindingOriginV29::SingleLoan(loan) => source_reference_payload_types_v29(plan, loan, budget)?,
         SourceReferenceBindingOriginV29::EnumView(_) => source_reference_binding_origin_types_v29(
