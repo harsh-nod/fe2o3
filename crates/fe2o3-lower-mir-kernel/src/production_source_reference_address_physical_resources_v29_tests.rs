@@ -467,6 +467,7 @@ fn run_indexed_object_payloads_v29(
     SOURCE_OBJECT_PAYLOAD_INDEX_WORK_V29.set((0, 0));
     SOURCE_OBJECT_PAYLOAD_PASS_WORK_V29.set((0, 0));
     scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29.set((0, 0));
+    scoped_raw_admission_v29::PENDING_ALTERNATIVE_CAPACITY_V29.set((0, 0, 0));
     OBJECT_PAYLOAD_INDEX_MUTATED_V29.set(false);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
@@ -590,6 +591,23 @@ fn growing_original_object_payload_joins_have_subquadratic_work() {
             first > 0 && second < 3 * first,
             "indexed/payload work must grow subquadratically: {work:?}"
         );
+    }
+}
+
+#[test]
+fn original_object_pending_alternatives_preflight_bounds_actual_retained_rows() {
+    let mut previous = 0;
+    for count in [0, 1, 4, 16] {
+        let (result, _, _, _, payloads, completed) =
+            run_indexed_object_payloads_v29(count, 0, MODULE_LIMIT, MODULE_LIMIT);
+        result.unwrap();
+        assert!(completed);
+        assert_eq!(payloads.0, 3);
+        let (bound, capacity, actual) =
+            scoped_raw_admission_v29::PENDING_ALTERNATIVE_CAPACITY_V29.get();
+        assert!(actual > previous && actual <= bound && bound <= capacity,
+            "count={count} bound={bound} capacity={capacity} actual={actual}");
+        previous = actual;
     }
 }
 

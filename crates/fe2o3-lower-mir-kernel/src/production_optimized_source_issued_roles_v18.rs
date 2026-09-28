@@ -3,12 +3,18 @@
 #[cfg(test)]
 include!("production_optimized_source_issued_role_queries_v18_tests.rs");
 
+include!("production_optimized_source_issued_metadata_v18.rs");
+
 struct IssuedRoleOutputV18 {
     input: [SliceOperation; 4],
     output: [SliceOperation; 4],
     physical: SourceIssuedPhysicalV29,
     root_input: ValueId,
     receiver: ValueId,
+    original_root: SliceDefinition,
+    output_root: SliceDefinition,
+    original_index: SliceDefinition,
+    output_index: SliceDefinition,
 }
 
 fn issued_output_definition_v18(
@@ -66,14 +72,22 @@ fn issued_output_issuer_v18(
 ) -> SourceOwnedResultV18<Option<IssuedRoleOutputV18>> {
     let input = scoped_raw_admission_v29::source_issued_tail_locations_v18(original, root, row, budget)?;
     let mut output = input;
-    for (source, target) in input.iter().zip(&mut output) {
-        let ProductionOptimizedSourceOperationV18::Retained { output, .. } = optimized.operation(*source, budget)?
+    for ordinal in [1, 3] {
+        let source = input[ordinal];
+        let ProductionOptimizedSourceOperationV18::Retained { output: target, .. } = optimized.operation(source, budget)?
             else { return Ok(None); };
         budget.charge_work(1)?;
-        if output.block.function != function.coordinate {
+        if target.block.function != function.coordinate {
             return original.source.missing("issued output tail changed root");
         }
-        *target = output;
+        // Keep control and the actual address producer anchored exactly.
+        output[ordinal] = target;
+    }
+    for (ordinal, kind, consumer) in [(0, IssuedMetadataKindV18::Length, 1),
+        (2, IssuedMetadataKindV18::Data, 3)] {
+        let Some((target, _)) = issued_metadata_output_v18(original, optimized, kind,
+            input[ordinal], input[consumer], output[consumer], budget)? else { return Ok(None); };
+        output[ordinal] = target;
     }
     let inventory = optimized.output_inventory(budget)?;
     let length = optimized_source_operation_row_v18(inventory, output[0], budget)?.operation;
@@ -93,9 +107,11 @@ fn issued_output_issuer_v18(
     check_source_issued_tail_v29(physical, receiver, index, length, compare, data, address, budget)
         .map_err(source_emission_error_v18)?;
     for (ordinal, value) in [length_result.id, present.id, data_result.id, pointer.id].into_iter().enumerate() {
-        issued_output_definition_v18(original, optimized,
-            SliceDefinition::Result { operation: input[ordinal], result: 0 },
-            SliceDefinition::Result { operation: output[ordinal], result: 0 }, budget)?;
+        if ordinal == 1 || ordinal == 3 {
+            issued_output_definition_v18(original, optimized,
+                SliceDefinition::Result { operation: input[ordinal], result: 0 },
+                SliceDefinition::Result { operation: output[ordinal], result: 0 }, budget)?;
+        }
         budget.charge_work(1)?;
         if inventory.definition_for_value(function.coordinate, value, budget)
             .map_err(source_pointer_inventory_error_v18)?.is_none_or(|definition|
@@ -103,8 +119,8 @@ fn issued_output_issuer_v18(
             return original.source.missing("issued output actual result differs");
         }
     }
-    for (operation, operand, value) in [(0, 0, receiver), (1, 0, index),
-        (1, 1, length_result.id), (2, 0, receiver), (3, 0, data_result.id), (3, 1, index)] {
+    for (operation, operand, value) in [(1, 0, index),
+        (1, 1, length_result.id), (3, 0, data_result.id), (3, 1, index)] {
         issued_output_operand_v18(original, optimized, input[operation], output[operation], operand, value, budget)?;
     }
     let body = function.function.body.as_ref()
@@ -129,7 +145,32 @@ fn issued_output_issuer_v18(
         || *actual.value(index, budget).map_err(source_emission_error_v18)?.ty != Type::INDEX {
         return original.source.missing("issued output root or index type differs");
     }
-    Ok(Some(IssuedRoleOutputV18 { input, output, physical, root_input, receiver }))
+    let original_index = original
+        .inventory
+        .definition_for_value(input_function, row.index, budget)
+        .map_err(source_pointer_inventory_error_v18)?
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "issued original index definition",
+        ))?
+        .coordinate;
+    let output_index = inventory
+        .definition_for_value(function.coordinate, index, budget)
+        .map_err(source_pointer_inventory_error_v18)?
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "issued output index definition",
+        ))?
+        .coordinate;
+    Ok(Some(IssuedRoleOutputV18 {
+        input,
+        output,
+        physical,
+        root_input,
+        receiver,
+        original_root: original_parameter.coordinate,
+        output_root: output_parameter.coordinate,
+        original_index,
+        output_index,
+    }))
 }
 
 fn install_optimized_issued_roles_v18(
@@ -234,6 +275,7 @@ fn install_optimized_issued_roles_inner_v18(
         let guard = original.inventory.block_for_id(input.block.function, row.guard_block, budget)
             .map_err(source_pointer_inventory_error_v18)?
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding("issued original success guard block"))?;
+        let input_guard = guard.coordinate;
         let condition = optimized.operand(Usage::TerminatorOperand { block: guard.coordinate, operand: 0 }, budget)?
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding("issued output success condition removed"))?;
         let Usage::TerminatorOperand { block, operand: 0 } = condition.coordinate
@@ -264,6 +306,52 @@ fn install_optimized_issued_roles_inner_v18(
         // An exactly replayed ordered access remains pending for an ordered
         // source-effect proof. It is not an ordinary read/write role.
         if access.access.volatile { continue; }
+        let successor =
+            u32::try_from(row.guard_edge).map_err(|_| ArgumentResourceV1::Arithmetic)?;
+        let input_condition =
+            global_source_guard_definition_v18(original.inventory, input_guard, budget)?;
+        install_global_source_access_v18(
+            original,
+            optimized,
+            roles,
+            row.instance.index(),
+            GlobalSourceAccessOriginV18::Issued {
+                definition: row.issuer,
+            },
+            GlobalSourceLogicalEndpointV18 {
+                access: SliceAccess {
+                    operation: input,
+                    effect: 0,
+                },
+                root: issuer.original_root,
+                index: issuer.original_index,
+                length: issuer.input[0],
+                data: issuer.input[2],
+                address: issuer.input[3],
+                guard_condition: input_condition,
+                guard_edge: fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
+                    source: input_guard,
+                    successor,
+                },
+            },
+            GlobalSourceLogicalEndpointV18 {
+                access: SliceAccess {
+                    operation: coordinate,
+                    effect: 0,
+                },
+                root: issuer.output_root,
+                index: issuer.output_index,
+                length: issuer.output[0],
+                data: issuer.output[2],
+                address: issuer.output[3],
+                guard_condition: condition.definition,
+                guard_edge: fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
+                    source: block,
+                    successor,
+                },
+            },
+            budget,
+        )?;
         install_descriptor_role_v18(original, optimized, roles, input, coordinate, row.instance.index(), None,
             if row.writing { DescriptorSourceRoleV18::Write } else { DescriptorSourceRoleV18::Read }, budget)?;
         users[index].1 = true;
@@ -306,6 +394,8 @@ fn issued_output_headers_v18() -> Result<usize, ArgumentResourceV1> {
         argument_sum_v1(&[size_of::<T>(), argument_product_v1(2, size_of::<SourceOwnedResultV18<T>>())?])
     }
     argument_sum_v1(&[
+        issued_metadata_headers_v18()?,
+        global_source_headers_v18()?,
         scoped_raw_admission_v29::source_issued_replay_headers_v18()?,
         h::<Option<&PendingSourceIssuedRolesV29>>()?, h::<&PendingSourceIssuedRolesV29>()?,
         argument_product_v1(3, h::<&fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>>()?)?,

@@ -1,5 +1,154 @@
 include!("production_execution_slice_holder_v29_tests.rs");
 
+fn cfg_index_test_carrier_v29(local: u32) -> ExecutionCfgCarrierV29 {
+    // Inert table data only. Ordinary cannot pass the carrier authority checks.
+    ExecutionCfgCarrierV29 {
+        source_type: SemanticTypeIdV1::from_index(local),
+        transport_type: SemanticTypeIdV1::from_index(local),
+        binding: SemanticPromotedBindingV1::Ordinary,
+        kernel_types: Vec::new().into_boxed_slice(),
+    }
+}
+
+fn cfg_index_test_headers_v29() -> usize {
+    std::mem::size_of::<ExecutionCfgCarriersV29>()
+        + crate::production_semantic_kir_v1::instance_correspondence_tests::cfg_carrier_index_storage_v29()
+}
+
+#[test]
+fn cfg_carrier_sorted_index_has_independent_headers_and_first_capacity_cuts() {
+    let headers = cfg_index_test_headers_v29();
+    assert_eq!(headers, std::mem::size_of::<ExecutionCfgCarriersV29>()
+        + execution_cfg_carrier_index_headers_v29().unwrap());
+    let capacity = 4 * std::mem::size_of::<(u32, ExecutionCfgCarrierV29)>();
+    for (limit, succeeds) in [(headers - 1, false), (headers, false),
+        (headers + capacity - 1, false), (headers + capacity, true)] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(1000);
+        let mut budget = ArgumentBudgetV1::new(&mut work, limit);
+        let mut table = ExecutionCfgCarriersV29::default();
+        let result = budget.reserve_storage(headers).map_err(ProductionSemanticKirErrorV1::from)
+            .and_then(|()| table.append(7, cfg_index_test_carrier_v29(7), &mut budget));
+        if succeeds {
+            result.unwrap();
+            assert_eq!(table.locals.capacity(), 4);
+            assert_eq!(table.lookup(7, &mut budget).unwrap().unwrap().source_type.index(), 7);
+            assert_eq!(budget.storage(), headers + capacity);
+        } else {
+            let expected = if limit < headers { headers } else { headers + capacity };
+            assert!(matches!(result, Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Storage(error))) if error.actual() == expected && error.limit() == limit));
+            assert!(table.locals.is_empty());
+            assert_eq!(table.locals.capacity(), 0, "first debit precedes allocation");
+            assert_eq!(budget.storage(), if limit < headers { 0 } else { headers });
+        }
+        drop(table);
+        budget.release_storage(budget.storage()).unwrap();
+        assert_eq!(budget.storage(), 0);
+    }
+}
+
+#[test]
+fn cfg_carrier_sorted_index_empty_singleton_growth_and_misses_keep_exact_rows() {
+    let headers = cfg_index_test_headers_v29();
+    let row_bytes = std::mem::size_of::<(u32, ExecutionCfgCarrierV29)>();
+    for count in [0, 1, 4, 16, 128] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+        budget.reserve_storage(headers).unwrap();
+        let mut table = ExecutionCfgCarriersV29::default();
+        for index in 0..count {
+            let local = index * 2 + 1;
+            table.append(local, cfg_index_test_carrier_v29(local), &mut budget).unwrap();
+            assert_eq!(budget.storage(), headers + table.locals.capacity() * row_bytes);
+        }
+        assert_eq!(table.locals.len(), count as usize);
+        let expected_work = (count.checked_ilog2().unwrap_or(0) as usize + 2) * 16;
+        let before_storage = (budget.storage(), budget.peak_storage());
+        for local in (0..=count * 2).chain([u32::MAX]) {
+            let before_work = budget.work();
+            let found = table.lookup(local, &mut budget).unwrap();
+            let expected = local % 2 == 1 && local / 2 < count;
+            assert_eq!(found.is_some(), expected);
+            if let Some(carrier) = found {
+                assert_eq!((carrier.source_type.index(), carrier.transport_type.index()), (local, local));
+            }
+            assert_eq!(budget.work() - before_work, expected_work);
+            assert_eq!((budget.storage(), budget.peak_storage()), before_storage);
+        }
+        drop(table);
+        budget.release_storage(budget.storage()).unwrap();
+    }
+}
+
+#[test]
+fn cfg_carrier_sorted_index_refuses_duplicate_and_descending_insertion() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(1000);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
+    budget.reserve_storage(cfg_index_test_headers_v29()).unwrap();
+    let mut table = ExecutionCfgCarriersV29::default();
+    for local in [2, 5] { table.append(local, cfg_index_test_carrier_v29(local), &mut budget).unwrap(); }
+    let storage = (budget.storage(), budget.peak_storage());
+    for local in [5, 1] {
+        assert!(matches!(table.append(local, cfg_index_test_carrier_v29(99), &mut budget),
+            Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)));
+        assert_eq!(table.locals.iter().map(|(key, _)| *key).collect::<Vec<_>>(), [2, 5]);
+        assert_eq!((budget.storage(), budget.peak_storage()), storage);
+        assert_eq!(table.lookup(5, &mut budget).unwrap().unwrap().source_type.index(), 5);
+    }
+    drop(table);
+    budget.release_storage(budget.storage()).unwrap();
+}
+
+#[test]
+fn cfg_carrier_sorted_index_prepays_lookup_and_replacement_before_mutation() {
+    let headers = cfg_index_test_headers_v29();
+    let row_bytes = std::mem::size_of::<(u32, ExecutionCfgCarrierV29)>();
+    // Eight replacement rows coexist with the four old rows until append.
+    for short in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(1000);
+        let limit = headers + 12 * row_bytes - usize::from(short);
+        let mut budget = ArgumentBudgetV1::new(&mut work, limit);
+        budget.reserve_storage(headers).unwrap();
+        let mut table = ExecutionCfgCarriersV29::default();
+        for local in 0..4 { table.append(local, cfg_index_test_carrier_v29(local), &mut budget).unwrap(); }
+        let result = table.append(4, cfg_index_test_carrier_v29(4), &mut budget);
+        if short {
+            assert!(matches!(result, Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Storage(error))) if error.actual() == headers + 12 * row_bytes && error.limit() == limit));
+            assert_eq!((table.locals.len(), table.locals.capacity()), (4, 4));
+            assert_eq!(budget.storage(), headers + 4 * row_bytes);
+        } else {
+            result.unwrap();
+            assert_eq!((table.locals.len(), table.locals.capacity()), (5, 8));
+            assert_eq!(budget.storage(), headers + 8 * row_bytes);
+            assert_eq!(budget.peak_storage(), limit);
+        }
+        drop(table);
+        budget.release_storage(budget.storage()).unwrap();
+    }
+    for short in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(1000);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
+        budget.reserve_storage(headers).unwrap();
+        let mut table = ExecutionCfgCarriersV29::default();
+        table.append(1, cfg_index_test_carrier_v29(1), &mut budget).unwrap();
+        let expected_work = 2 * 16;
+        budget.charge_work(1000 - budget.work() - expected_work + usize::from(short)).unwrap();
+        let storage = (budget.storage(), budget.peak_storage());
+        let result = table.lookup(1, &mut budget);
+        if short {
+            assert!(matches!(result, Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Work(error))) if error.actual() == 1001 && error.limit() == 1000));
+        } else {
+            assert_eq!(result.unwrap().unwrap().source_type.index(), 1);
+            assert_eq!(budget.work(), 1000);
+        }
+        assert_eq!((budget.storage(), budget.peak_storage()), storage);
+        drop(table);
+        budget.release_storage(budget.storage()).unwrap();
+    }
+}
+
 #[test]
 fn cfg_carrier_scratch_rebuild_preserves_nested_source_shape() {
     let scalar = SemanticTypeIdV1::from_index(0);

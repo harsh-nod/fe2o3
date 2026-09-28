@@ -8,6 +8,7 @@ use crate::{
 };
 use meter::LiveGuardMeter;
 use predicates::PredicateRow;
+use runtime_slice_read_v1::RuntimeSliceReadConditionsV1;
 use std::cell::RefCell;
 
 #[path = "canonical_guarded_reads_queries_v1.rs"]
@@ -93,8 +94,25 @@ pub enum CanonicalGuardedGlobalReadReasonV1 {
 
 struct ReadRow {
     coordinate: Coordinate,
-    domain: Option<FormalRuntimeSliceReadDomainV1>,
+    conditions: Option<RuntimeSliceReadConditionsV1>,
     reason: CanonicalGuardedGlobalReadReasonV1,
+}
+
+fn read_row_frame_bytes() -> Result<usize> {
+    size_of::<ReadRow>()
+        .checked_add(size_of::<(
+            Option<RuntimeSliceReadConditionsV1>,
+            CanonicalGuardedGlobalReadReasonV1,
+        )>())
+        .ok_or(ResourceError::Arithmetic.into())
+}
+
+fn read_origin_query_frame_bytes<O>() -> Result<usize> {
+    size_of::<&CanonicalGuardedGlobalReadFactV1<'_, '_, O>>()
+        .checked_add(size_of::<CanonicalGuardedReadIndexOriginV1>())
+        .and_then(|n| n.checked_add(size_of::<ValueId>()))
+        .and_then(|n| n.checked_add(size_of::<(ValueId, ValueId)>()))
+        .ok_or(ResourceError::Arithmetic.into())
 }
 struct FunctionFacts<'g> {
     function: &'g Function,
@@ -274,6 +292,9 @@ fn with_owner<'g, 'w, O, T>(
     let ledger = budget.work_ledger_identity_v1();
     let slot = std::ptr::from_ref(&*budget) as usize;
     let mut returned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Getter carriers must remain paid through the external callback,
+        // after each function's construction scratch has been refunded.
+        let origin_query_headers = read_origin_query_frame_bytes::<O>()?;
         let headers = size_of::<Facts<'_, O>>()
             .checked_add(size_of::<Accounting>())
             .and_then(|n| {
@@ -282,6 +303,7 @@ fn with_owner<'g, 'w, O, T>(
             .and_then(|n| n.checked_add(size_of::<std::thread::Result<Result<T>>>()))
             .and_then(|n| n.checked_add(size_of::<std::thread::Result<Result<T>>>()))
             .and_then(|n| n.checked_add(size_of::<std::thread::Result<()>>()))
+            .and_then(|n| n.checked_add(origin_query_headers))
             .ok_or(ResourceError::Arithmetic)?;
         budget.reserve_storage(headers)?;
         let facts = build(owner, module, limits, budget)?;
@@ -666,6 +688,7 @@ fn collect_effects<'g, M: GuardMeter>(
     analysis: Option<&mut GuardedAnalysisV1<'g, M>>,
 ) -> Result<()> {
     let analysis = analysis.ok_or(ResourceError::Accounting)?;
+    analysis.ledger.storage(read_row_frame_bytes()?)?;
     for (block_ordinal, block) in body.blocks.iter().enumerate() {
         analysis.ledger.charge(1)?;
         for (ordinal, operation) in block.operations.iter().enumerate() {
@@ -684,13 +707,13 @@ fn collect_effects<'g, M: GuardMeter>(
                 continue;
             }
             let coordinate = operation_coordinate(function, block_ordinal, ordinal)?;
-            let (domain, reason) = match operation.kind {
+            let (conditions, reason) = match operation.kind {
                 OperationKind::Load { pointer, access }
                     if !access.volatile
                         && matches!(access.address_space, AddressSpace::Global | AddressSpace::Generic) =>
                 {
                     (
-                        analysis.runtime_slice_read_domain(
+                        analysis.runtime_slice_read_conditions(
                             FunctionOperationLocation::new(block.id, ordinal),
                             pointer,
                             FormalMemoryAccessKind::Read,
@@ -709,7 +732,7 @@ fn collect_effects<'g, M: GuardMeter>(
                 &mut result.reads,
                 ReadRow {
                     coordinate,
-                    domain,
+                    conditions,
                     reason,
                 },
             )?;
@@ -724,6 +747,7 @@ fn collect_effects_without_reads<M: GuardMeter>(
     body: &crate::FunctionBody,
     meter: &mut M,
 ) -> Result<()> {
+    meter.storage(read_row_frame_bytes()?)?;
     for (block_ordinal, block) in body.blocks.iter().enumerate() {
         meter.charge(1)?;
         for (ordinal, operation) in block.operations.iter().enumerate() {
@@ -733,7 +757,7 @@ fn collect_effects_without_reads<M: GuardMeter>(
                     &mut result.reads,
                     ReadRow {
                         coordinate,
-                        domain: None,
+                        conditions: None,
                         reason: CanonicalGuardedGlobalReadReasonV1::NotOrdinaryGlobalRead,
                     },
                 )?;
@@ -750,3 +774,7 @@ mod tests;
 #[cfg(test)]
 #[path = "canonical_guarded_reads_v18_tests.rs"]
 mod v18_tests;
+
+#[cfg(test)]
+#[path = "canonical_guarded_reads_switch_truth_v1_tests.rs"]
+mod switch_truth_tests;

@@ -966,6 +966,8 @@ mod kernel_argument_abi_v18 {
         }
     }
 
+    include!("production_kernel_shared_entry_abi_v18.rs");
+
     #[cfg(test)]
     pub(super) mod tests {
         include!("production_kernel_argument_abi_v18_tests.rs");

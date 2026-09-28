@@ -10,6 +10,10 @@ fn headers<T>() -> usize {
         + size_of::<CheckedCanonicalGuardedGlobalReadsV18<'_, '_>>()
         + 2 * size_of::<std::thread::Result<Result<T>>>()
         + size_of::<std::thread::Result<()>>()
+        + size_of::<&CanonicalGuardedGlobalReadFactV18<'_, '_>>()
+        + size_of::<CanonicalGuardedReadIndexOriginV1>()
+        + size_of::<ValueId>()
+        + size_of::<(ValueId, ValueId)>()
 }
 
 #[test]

@@ -253,6 +253,14 @@ pub(super) fn owner_with_shape(issuer_count: usize, access_count: usize) -> Prod
     owner_with_shape_and_read(issuer_count, access_count, false)
 }
 
+pub(super) fn owner_with_shape_uncaptured(issuer_count: usize, access_count: usize)
+    -> ProductionSemanticSsaOwnerV1
+{
+    owner_with_issuer_locals_uncaptured(
+        issuer_count, access_count, false, None, true, false, true, true,
+    )
+}
+
 fn owner_with_shape_and_read(issuer_count: usize, access_count: usize, read: bool) -> ProductionSemanticSsaOwnerV1 {
     owner_with_shape_and_effects(issuer_count, access_count, read, None)
 }
@@ -285,6 +293,19 @@ pub(super) fn owner_with_reused_discriminator_issuers(issuer_count: usize, acces
 }
 
 fn owner_with_issuer_locals(issuer_count: usize, access_count: usize, read: bool,
+    ordered: Option<SemanticVolatilityV1>, valid_guard: bool, atomic: bool,
+    distinct_options: bool, distinct_discriminators: bool)
+    -> ProductionSemanticSsaOwnerV1
+{
+    let mut owner = owner_with_issuer_locals_uncaptured(issuer_count, access_count,
+        read, ordered, valid_guard, atomic, distinct_options, distinct_discriminators);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+    owner.try_capture_occurrences_with_budget_v1(&mut budget).unwrap();
+    owner
+}
+
+fn owner_with_issuer_locals_uncaptured(issuer_count: usize, access_count: usize, read: bool,
     ordered: Option<SemanticVolatilityV1>, valid_guard: bool, atomic: bool,
     distinct_options: bool, distinct_discriminators: bool)
     -> ProductionSemanticSsaOwnerV1
@@ -560,18 +581,12 @@ fn owner_with_issuer_locals(issuer_count: usize, access_count: usize, read: bool
     .unwrap()
     .admit_exact_v29(SemanticMirLimitsV1::default())
     .unwrap();
-    let mut owner = ProductionSemanticSsaOwnerV1::try_new(
+    ProductionSemanticSsaOwnerV1::try_new(
         ProductionSemanticMirOwnerV1::try_new(source, ProductionSemanticMirLimitsV1::default())
             .unwrap(),
         ProductionSemanticSsaLimitsV1::default(),
     )
-    .unwrap();
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
-    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
-    owner
-        .try_capture_occurrences_with_budget_v1(&mut budget)
-        .unwrap();
-    owner
+    .unwrap()
 }
 
 thread_local! {

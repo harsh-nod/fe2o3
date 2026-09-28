@@ -1541,3 +1541,4 @@
             } if actual == observed.peak_storage && limit == storage_limit
         ));
     }
+    include!("semantic_ssa_capability_storage_v29_tests.rs");

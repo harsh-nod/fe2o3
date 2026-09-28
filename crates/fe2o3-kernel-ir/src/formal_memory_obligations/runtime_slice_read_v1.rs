@@ -9,7 +9,7 @@ pub(super) struct Origin<'module> {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
-enum ReadIndex {
+pub(super) enum ReadIndex {
     ProvenOrigin(ValueId),
     ExactBlockParameter(ValueId),
 }
@@ -52,10 +52,47 @@ struct ReadGuard {
     allocation: FormalAllocationIdentity,
     guard_index: ValueId,
     length: ValueId,
+    length_origin: ValueId,
     predicate: ValueId,
     edge: Edge,
     interval: (u32, u32),
     covering: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct RuntimeSliceReadConditionsV1 {
+    pub(super) domain: FormalRuntimeSliceReadDomainV1,
+    pub(super) index_origin: ReadIndex,
+    pub(super) length_origin: ValueId,
+}
+
+fn read_conditions_frame_bytes<M: GuardMeter>() -> Result<usize, ResourceError> {
+    4_usize
+        .checked_mul(size_of::<ReadGuard>())
+        .and_then(|n| n.checked_add(size_of::<FormalRuntimeSliceReadDomainV1>()))
+        .and_then(|n| n.checked_add(2 * size_of::<RuntimeSliceReadConditionsV1>()))
+        .and_then(|n| {
+            n.checked_add(2 * size_of::<Result<Option<RuntimeSliceReadConditionsV1>, ResourceError>>())
+        })
+        .and_then(|n| {
+            n.checked_add(size_of::<Result<Option<FormalRuntimeSliceReadDomainV1>, ResourceError>>())
+        })
+        .and_then(|n| n.checked_add(size_of::<Option<RuntimeSliceReadConditionsV1>>()))
+        .and_then(|n| {
+            n.checked_add(size_of::<(
+                &mut GuardedAnalysisV1<'_, M>,
+                FunctionOperationLocation,
+                ValueId,
+                FormalMemoryAccessKind,
+                MemoryAccess,
+                Option<ValueId>,
+            )>())
+        })
+        .ok_or(ResourceError::Arithmetic)
+}
+
+fn reserve_read_conditions_frame<M: GuardMeter>(meter: &mut M) -> Result<(), ResourceError> {
+    meter.storage(read_conditions_frame_bytes::<M>()?)
 }
 
 #[derive(Default)]
@@ -116,10 +153,12 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         function: &'module Function,
     ) -> Result<(), ResourceError> {
         self.collect_read_representations(function)?;
+        // Prepay reused constructor/query carriers once, not on every read.
+        reserve_read_conditions_frame(&mut self.ledger)?;
         self.ledger
             .reserve(&mut self.runtime_reads.guards, self.truths.len())?;
         for ordinal in 0..self.truths.len() {
-            self.ledger.charge(24)?;
+            self.ledger.charge(25)?;
             let truth = self.truths[ordinal];
             // Repeated predicates still have independently checked true edges.
             // This index retains every edge; the single-truth recipe does not.
@@ -164,6 +203,7 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
                 },
                 guard_index: lhs,
                 length: rhs,
+                length_origin: length,
                 predicate: truth.predicate,
                 edge: truth.edge,
                 interval: truth.interval,
@@ -535,6 +575,19 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         access: MemoryAccess,
         predicate: Option<ValueId>,
     ) -> Result<Option<FormalRuntimeSliceReadDomainV1>, ResourceError> {
+        Ok(self
+            .runtime_slice_read_conditions(location, pointer, kind, access, predicate)?
+            .map(|conditions| conditions.domain))
+    }
+
+    pub(super) fn runtime_slice_read_conditions(
+        &mut self,
+        location: FunctionOperationLocation,
+        pointer: ValueId,
+        kind: FormalMemoryAccessKind,
+        access: MemoryAccess,
+        predicate: Option<ValueId>,
+    ) -> Result<Option<RuntimeSliceReadConditionsV1>, ResourceError> {
         self.ledger.charge(24)?;
         if kind != FormalMemoryAccessKind::Read
             || !matches!(access.address_space, AddressSpace::Global | AddressSpace::Generic)
@@ -688,10 +741,19 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
                 target: guard.edge.target,
             },
         };
-        Ok(Some(domain))
+        self.ledger.charge(4)?;
+        Ok(Some(RuntimeSliceReadConditionsV1 {
+            domain,
+            index_origin: guard.index,
+            length_origin: guard.length_origin,
+        }))
     }
 }
 
 #[cfg(test)]
 #[path = "runtime_slice_read_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_slice_read_origin_frames_v1_tests.rs"]
+mod origin_frames;

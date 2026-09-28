@@ -65,6 +65,7 @@ enum QueryFailure {
     Resource(Resource),
     Invalid(usize),
     Mutation,
+    ExactGraph,
 }
 impl QueryFailure {
     fn error(self) -> Failure {
@@ -72,6 +73,7 @@ impl QueryFailure {
             Self::Resource(e) => Failure::Resource(e),
             Self::Invalid(function) => Failure::InvalidQuery { function },
             Self::Mutation => Failure::Mutation,
+            Self::ExactGraph => Failure::ExactGraph,
         }
     }
 }
@@ -97,7 +99,7 @@ impl Guard {
         }
         self.first.get().expect("first error installed").error()
     }
-    fn check(&self, budget: &Budget<'_>) -> Result<(), Failure> {
+    pub(super) fn check(&self, budget: &Budget<'_>) -> Result<(), Failure> {
         if self.slot != std::ptr::from_ref(budget) as usize
             || self.ledger != budget.work_ledger_identity_v1()
             || budget.storage() < self.floor
@@ -120,6 +122,9 @@ impl Guard {
     }
     pub(super) fn mutation(&self) -> Failure {
         self.fail(QueryFailure::Mutation)
+    }
+    pub(super) fn exact_graph(&self) -> Failure {
+        self.fail(QueryFailure::ExactGraph)
     }
     pub(super) fn callback<'w, T>(
         &self,
@@ -193,6 +198,44 @@ pub(super) fn protected<'w, T>(
         return Err(error.into());
     }
     value
+}
+
+// V18 pending children can own a higher floor than the enclosing graph scope.
+// An explicit shared refusal prevents the outer scope from masking its loss.
+pub(super) fn protected_retained_v18<'w, T>(
+    budget: &mut Budget<'w>,
+    denied: &Cell<bool>,
+    run: impl FnOnce(&mut Budget<'w>) -> Result<T, Failure>,
+) -> Result<T, Failure> {
+    budget.charge_work(2)?;
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    let slot = std::ptr::from_ref(&*budget) as usize;
+    let caught = catch_unwind(AssertUnwindSafe(|| run(budget)));
+    let intact = |budget: &Budget<'_>| !denied.get()
+        && ledger == budget.work_ledger_identity_v1()
+        && slot == std::ptr::from_ref(budget) as usize
+        && budget.storage() >= floor;
+    if !intact(budget) {
+        denied.set(true);
+        return match caught {
+            Ok(Err(error)) => Err(error),
+            other => { discard(other); Err(Resource::Accounting.into()) }
+        };
+    }
+    let result = match caught {
+        Ok(result) => result,
+        Err(payload) => { discard(payload); Err(Failure::Panicked) }
+    };
+    if !intact(budget) {
+        denied.set(true);
+        return match result {
+            Err(error) => Err(error),
+            Ok(value) => { discard(value); Err(Resource::Accounting.into()) }
+        };
+    }
+    budget.release_storage(budget.storage() - floor)?;
+    result
 }
 
 fn snapshot(

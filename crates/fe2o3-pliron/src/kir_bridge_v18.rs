@@ -143,6 +143,9 @@ mod ranked_policy;
 mod private_policy;
 pub(crate) use private_policy::NativeCanonicalPrivateAdmissionV18;
 
+#[path = "kir_bridge_global_pending_v18.rs"]
+mod global_pending;
+
 impl<'input> KirPlironGraphV18<'input> {
     /// The returned reservation must be held on the same work ledger while the
     /// session lives. The input's canonical reservation is the caller's custody.

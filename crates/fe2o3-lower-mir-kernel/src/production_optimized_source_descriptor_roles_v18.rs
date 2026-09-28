@@ -17,6 +17,7 @@ struct DescriptorSourceRoleRowV18 {
     site: Option<ProductionSliceAccessSiteV1>,
     role: Option<DescriptorSourceRoleV18>,
     write_recipe_pending: bool,
+    global: Option<GlobalSourceAccessPairV18>,
 }
 
 #[derive(Clone, Copy)]
@@ -25,7 +26,10 @@ struct DescriptorAccessSummaryV18 {
     address: SliceOperation,
     data: SliceOperation,
     length: SliceOperation,
+    logical: GlobalSourceLogicalEndpointV18,
 }
+
+include!("production_optimized_source_global_access_v18.rs");
 
 include!("production_optimized_source_issued_roles_v18.rs");
 
@@ -36,6 +40,16 @@ impl DescriptorAccessSummaryV18 {
             address: facts.address_operation,
             data: facts.data_operation,
             length: facts.length_operation,
+            logical: GlobalSourceLogicalEndpointV18 {
+                access: facts.access,
+                root: facts.input,
+                index: facts.index,
+                data: facts.data_operation,
+                length: facts.length_operation,
+                address: facts.address_operation,
+                guard_condition: facts.guard_condition,
+                guard_edge: facts.guard_edge,
+            },
         }
     }
 }
@@ -179,6 +193,32 @@ pub(super) fn descriptor_role_outer_headers_v18<T, E>(
         size_of::<Result<T, E>>(),
         size_of::<Option<SourceOwnedQueryFailureV18>>(),
         size_of::<SourceOwnedResultV18<()>>(),
+        size_of::<Option<&fe2o3_pliron::ProductionRankedKernelV1>>(),
+        size_of::<(
+            &ProductionSourceCorrespondenceV18<'_>,
+            &ProductionOptimizedSourceCorrespondenceV18<'_>,
+            usize,
+            Option<&fe2o3_pliron::ProductionRankedKernelV1>,
+            &mut ArgumentBudgetV1<'_>,
+        )>(),
+        size_of::<
+            std::panic::AssertUnwindSafe<(
+                &ProductionSourceCorrespondenceV18<'_>,
+                &ProductionOptimizedSourceCorrespondenceV18<'_>,
+                usize,
+                Option<&fe2o3_pliron::ProductionRankedKernelV1>,
+                &mut ArgumentBudgetV1<'_>,
+            )>,
+        >(),
+        size_of::<(
+            &ProductionSourceCorrespondenceV18<'_>,
+            &ProductionOptimizedSourceCorrespondenceV18<'_>,
+            usize,
+        )>(),
+        size_of::<(
+            &CheckedDescriptorSourceRolesV18<'_>,
+            &mut ArgumentBudgetV1<'_>,
+        )>(),
         source_reference_cleanup_headers_v29()?,
     ])
 }
@@ -233,6 +273,7 @@ fn descriptor_role_headers_v18<T, E>() -> Result<usize, ArgumentResourceV1> {
         size_of::<SourceOwnedResultV18<Option<SourcePhysicalPayloadV18<'_>>>>(),
         size_of::<ProductionSourceScalarInputV18<'_>>(),
         size_of::<SourceOwnedResultV18<ProductionSourceScalarInputV18<'_>>>(),
+        global_source_headers_v18()?,
         size_of::<Type>(),
         size_of::<Result<Type, ProductionSemanticKirErrorV1>>(),
         size_of::<Constant>(),
@@ -247,6 +288,29 @@ impl ProductionSourceCorrespondenceV18<'_> {
         optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
         root: usize,
         recipe: &fe2o3_pliron::ProductionRankedKernelV1,
+        budget: &mut ArgumentBudgetV1<'work>,
+        consume: impl for<'scope> FnOnce(
+            &CheckedDescriptorSourceRolesV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<ProductionSourceOwnedViewErrorV18>,
+    {
+        self.with_descriptor_source_roles_namespace_v18(
+            optimized,
+            root,
+            Some(recipe),
+            budget,
+            consume,
+        )
+    }
+
+    fn with_descriptor_source_roles_namespace_v18<'work, T, E>(
+        &self,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        root: usize,
+        recipe: Option<&fe2o3_pliron::ProductionRankedKernelV1>,
         budget: &mut ArgumentBudgetV1<'work>,
         consume: impl for<'scope> FnOnce(
             &CheckedDescriptorSourceRolesV18<'scope>,
@@ -273,12 +337,9 @@ impl ProductionSourceCorrespondenceV18<'_> {
             })?;
         let outer_scope = DescriptorRoleScopeV18::new(budget);
         let outer_caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.with_optimized_scalar_leaves_v18(
-                optimized,
-                root,
-                recipe,
-                budget,
-                |leaves, budget| {
+            let consume_leaves =
+                |leaves: &ProductionOptimizedSourceScalarLeavesV18<'_>,
+                 budget: &mut ArgumentBudgetV1<'work>| {
                     let floor = budget.storage();
                     let (rows, retained) =
                         scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
@@ -320,8 +381,22 @@ impl ProductionSourceCorrespondenceV18<'_> {
                         budget,
                         retained,
                     )
-                },
-            )
+                };
+            match recipe {
+                Some(recipe) => self.with_optimized_scalar_leaves_v18(
+                    optimized,
+                    root,
+                    recipe,
+                    budget,
+                    consume_leaves,
+                ),
+                None => self.with_optimized_source_scalar_leaves_v18(
+                    optimized,
+                    root,
+                    budget,
+                    consume_leaves,
+                ),
+            }
         }));
         let outer_prior = self.source.guard.first.get();
         let outer_postflight = if matches!(&outer_caught, Ok(Ok(_))) {
@@ -419,6 +494,7 @@ fn build_descriptor_source_roles_v18(
             site: None,
             role: None,
             write_recipe_pending: false,
+            global: None,
         });
     }
     install_optimized_issued_roles_v18(original, optimized, root, leaves, &mut rows, budget)?;
@@ -514,6 +590,16 @@ fn build_descriptor_source_roles_v18(
             budget,
             |view, _| Ok(DescriptorAccessSummaryV18::from_facts(view.facts)),
         )?;
+        install_global_source_access_v18(
+            original,
+            optimized,
+            &mut rows,
+            anchor.instance,
+            GlobalSourceAccessOriginV18::Assertion(site),
+            before.logical,
+            after.logical,
+            budget,
+        )?;
         for (input, output, role) in [
             (
                 before.access,
@@ -607,7 +693,10 @@ fn descriptor_source_site_v18(
         return Ok(None);
     };
     if !matches!(
-        place.projections().last().map(|projection| projection.kind()),
+        place
+            .projections()
+            .last()
+            .map(|projection| projection.kind()),
         Some(SemanticProjectionKindV1::Index(_))
     ) {
         return Ok(None);

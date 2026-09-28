@@ -14,7 +14,33 @@ struct ExecutionCfgCarriersV29 {
     source_plan: Option<usize>,
     instance: Option<ProductionCallInstanceIdV1>,
     ledger: Option<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>,
-    locals: BTreeMap<u32, ExecutionCfgCarrierV29>,
+    locals: Vec<(u32, ExecutionCfgCarrierV29)>,
+}
+
+fn execution_cfg_carrier_index_headers_v29() -> Result<usize, ArgumentResourceV1> {
+    fn h<T>() -> Result<usize, ArgumentResourceV1> {
+        argument_sum_v1(&[
+            std::mem::size_of::<T>(),
+            std::mem::size_of::<Result<T, ArgumentResourceV1>>(),
+            std::mem::size_of::<Result<T, ProductionSemanticKirErrorV1>>(),
+        ])
+    }
+    type Row = (u32, ExecutionCfgCarrierV29);
+    type Lookup<'a> = (&'a ExecutionCfgCarriersV29, u32, &'a mut dyn SemanticEmissionBudgetV1);
+    type Append<'a> = (&'a mut ExecutionCfgCarriersV29, u32, ExecutionCfgCarrierV29,
+        &'a mut dyn SemanticEmissionBudgetV1);
+    type Push<'a> = (&'a mut Vec<Row>, Row, &'a mut dyn SemanticEmissionBudgetV1);
+    type Reserve<'a> = (usize, &'a mut dyn SemanticEmissionBudgetV1);
+    argument_sum_v1(&[
+        h::<Lookup<'_>>()?, h::<Append<'_>>()?,
+        h::<Push<'_>>()?, h::<Reserve<'_>>()?,
+        h::<Vec<Row>>()?, h::<&mut Vec<Row>>()?, h::<&Vec<Row>>()?, h::<&[Row]>()?, h::<&Row>()?, h::<Option<&Row>>()?,
+        h::<&ExecutionCfgCarriersV29>()?,
+        h::<Row>()?, h::<ExecutionCfgCarrierV29>()?,
+        h::<&ExecutionCfgCarrierV29>()?, h::<Option<&ExecutionCfgCarrierV29>>()?,
+        h::<Result<usize, usize>>()?, h::<Option<usize>>()?,
+        h::<u32>()?, h::<&u32>()?, h::<usize>()?, h::<bool>()?, h::<()>()?,
+    ])
 }
 
 impl std::fmt::Debug for ExecutionCfgCarriersV29 {
@@ -36,6 +62,33 @@ fn execution_cfg_plain_carrier_node_v29(row: &SourceReferenceNodeV29) -> bool {
 }
 
 impl ExecutionCfgCarriersV29 {
+    // The producer walks original local IDs once in increasing order. Keeping
+    // that order explicit avoids retained per-insertion BTreeMap split credit.
+    fn append(
+        &mut self,
+        local: u32,
+        carrier: ExecutionCfgCarrierV29,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        budget.charge_work(2)?;
+        if self.locals.last().is_some_and(|(previous, _)| *previous >= local) {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        emission_push_v1(&mut self.locals, (local, carrier), budget)
+    }
+
+    fn lookup(
+        &self,
+        local: u32,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<Option<&ExecutionCfgCarrierV29>, ProductionSemanticKirErrorV1> {
+        // The existing conservative logarithmic debit covers the standard
+        // library binary search, including the final equal-key comparison.
+        charge_execution_cfg_lookup_v29(self.locals.len(), budget)?;
+        Ok(self.locals.binary_search_by_key(&local, |(key, _)| *key)
+            .ok().map(|index| &self.locals[index].1))
+    }
+
     fn check_owner(
         &self,
         cursor: &ExecutionAvailabilityV29<'_>,
@@ -61,8 +114,7 @@ impl ExecutionCfgCarriersV29 {
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<Option<&'a ExecutionCfgCarrierV29>, ProductionSemanticKirErrorV1> {
         cursor.check_ledger(budget)?;
-        charge_execution_cfg_lookup_v29(self.locals.len(), budget)?;
-        let Some(carrier) = self.locals.get(&place.local().index()) else { return Ok(None); };
+        let Some(carrier) = self.lookup(place.local().index(), budget)? else { return Ok(None); };
         self.check_owner(cursor, budget)?;
         let references = cursor.references.ok_or_else(execution_cfg_error_v29)?;
         references.check(budget)?;
@@ -87,8 +139,7 @@ impl ExecutionCfgCarriersV29 {
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<Option<&'a ExecutionCfgCarrierV29>, ProductionSemanticKirErrorV1> {
         cursor.check_ledger(budget)?;
-        charge_execution_cfg_lookup_v29(self.locals.len(), budget)?;
-        let Some(carrier) = self.locals.get(&local) else { return Ok(None); };
+        let Some(carrier) = self.lookup(local, budget)? else { return Ok(None); };
         self.check_owner(cursor, budget)?;
         let references = cursor.references.ok_or_else(execution_cfg_error_v29)?;
         references.check(budget)?;

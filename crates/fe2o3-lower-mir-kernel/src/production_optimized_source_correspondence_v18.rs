@@ -155,6 +155,20 @@ impl ProductionSourceCorrespondenceV18<'_> {
 }
 
 impl<'scope> ProductionOptimizedSourceCorrespondenceV18<'scope> {
+    // A pending native join authenticates both subjects before query debits.
+    pub(super) fn pending_global_output_v18(
+        &self,
+        original: &ProductionSourceCorrespondenceV18<'_>,
+        budget: &ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<&Inventory<'scope>> {
+        original.check(budget)?;
+        if !std::ptr::eq(self.original, original) {
+            return original.source.missing("pending global substituted exact correspondence");
+        }
+        self.check(budget)?;
+        Ok(self.checked.output())
+    }
+
     pub(super) fn check_exact_original_v18(
         &self,
         original: &ProductionSourceCorrespondenceV18<'_>,

@@ -293,7 +293,10 @@ struct SemanticCapabilityOriginResolverV1<'a> {
     work: usize,
     storage: usize,
     peak_storage: usize,
+    scoped_storage: Option<CapabilityOriginCreditV29>,
 }
+
+include!("semantic_ssa_capability_storage_v29.rs");
 
 impl<'a> SemanticCapabilityOriginResolverV1<'a> {
     fn new(
@@ -320,6 +323,7 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
             work: 0,
             storage: 0,
             peak_storage: 0,
+            scoped_storage: None,
         };
         for block in function.blocks() {
             resolver.charge_work(1)?;
@@ -875,12 +879,12 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
             budget.charge_work(1)?;
             charge_execution_cfg_lookup_v29(self.memo.len(), budget)?;
             charge_execution_cfg_lookup_v29(self.visiting.len(), budget)?;
-            budget.reserve_storage(argument_sum_v1(&[
+            self.reserve_scoped_storage_v29(argument_sum_v1(&[
                 std::mem::size_of::<SemanticCapabilityOriginNodeV1>(),
                 std::mem::size_of::<Option<SemanticPromotedBindingV1>>(),
                 std::mem::size_of::<Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1>>(),
                 std::mem::size_of_val(&resolve),
-            ])?)?;
+            ])?, budget)?;
         }
         self.charge_work(1)?;
         if let Some(cached) = self.memo.get(&node) {
@@ -890,7 +894,11 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
             return Ok(None);
         }
         if let Some(budget) = budget.as_deref_mut() {
-            reserve_execution_cfg_map_entry_v29::<SemanticCapabilityOriginNodeV1, ()>(self.visiting.len(), budget)?;
+            charge_execution_cfg_lookup_v29(self.visiting.len(), budget)?;
+            self.reserve_scoped_storage_v29(
+                execution_cfg_map_entry_storage_v29::<SemanticCapabilityOriginNodeV1, ()>(self.visiting.len())?,
+                budget,
+            )?;
             // Pay for removal before descending: cleanup must not replace the
             // first recursive refusal with a later shared-ledger refusal.
             charge_execution_cfg_lookup_v29(argument_sum_v1(&[self.visiting.len(), 1])?, budget)?;
@@ -902,7 +910,11 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
         self.release_storage(1)?;
         let result = result?;
         if let Some(budget) = budget.as_deref_mut() {
-            reserve_execution_cfg_map_entry_v29::<SemanticCapabilityOriginNodeV1, Option<SemanticPromotedBindingV1>>(self.memo.len(), budget)?;
+            charge_execution_cfg_lookup_v29(self.memo.len(), budget)?;
+            self.reserve_scoped_storage_v29(
+                execution_cfg_map_entry_storage_v29::<SemanticCapabilityOriginNodeV1, Option<SemanticPromotedBindingV1>>(self.memo.len())?,
+                budget,
+            )?;
         }
         self.charge_storage(1)?;
         self.memo.insert(node, result);

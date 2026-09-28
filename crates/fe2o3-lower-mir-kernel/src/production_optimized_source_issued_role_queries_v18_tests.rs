@@ -70,7 +70,7 @@ pub(super) fn test_issued_installer_header_cut_v18(
             for operation in &output.operations()[function.operations.clone()] {
                 budget.charge_work(1)?;
                 roles.push(DescriptorSourceRoleRowV18 { output: operation.coordinate,
-                    input: None, instance: None, site: None, role: None, write_recipe_pending: false });
+                    input: None, instance: None, site: None, role: None, write_recipe_pending: false, global: None });
             }
             let limit = budget.storage_limit();
             let headers = issued_output_headers_v18()?;

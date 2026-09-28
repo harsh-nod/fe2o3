@@ -78,6 +78,8 @@ struct SliceFacts<'a> {
     index: SliceDefinition,
     memory: MemoryAccess,
     loaded_type: &'a Type,
+    guard_condition: SliceDefinition,
+    guard_edge: fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1,
 }
 
 /// Scoped correspondence between one actual read, its slice extent and entry input.
@@ -967,6 +969,8 @@ impl<'a, O> SliceQuery<'a, '_, O> {
             index,
             memory: *memory,
             loaded_type,
+            guard_condition: definition,
+            guard_edge: success_edge,
         })
     }
 

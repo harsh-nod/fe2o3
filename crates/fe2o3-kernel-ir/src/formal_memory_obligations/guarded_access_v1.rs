@@ -340,6 +340,66 @@ struct TrueRow {
     interval: (u32, u32),
     ambiguous: bool,
 }
+
+fn single_case_switch_truth_frame_bytes() -> Result<usize, ResourceError> {
+    // Only the new one-case path uses this edge-selection helper. The existing
+    // two-case matcher keeps its original work and storage debits.
+    size_of::<(
+        &crate::BasicBlock,
+        Option<&Terminator>,
+        &Vec<crate::SwitchCase>,
+        &[crate::SwitchCase],
+        &crate::SwitchCase,
+        &BlockId,
+        Edge,
+        Option<Edge>,
+        [usize; 2],
+        u64,
+        [bool; 2],
+    )>()
+    .checked_add(size_of::<&mut GuardLedger>())
+    .and_then(|n| n.checked_add(2 * size_of::<Result<(), ResourceError>>()))
+    .and_then(|n| n.checked_add(2 * size_of::<Result<usize, ResourceError>>()))
+    .and_then(|n| n.checked_add(size_of::<Option<usize>>()))
+    .ok_or(ResourceError::Arithmetic)
+}
+
+fn prepay_single_case_switch_truth<M: GuardMeter>(meter: &mut M) -> Result<(), ResourceError> {
+    meter.storage(single_case_switch_truth_frame_bytes()?)?;
+    meter.charge(8)
+}
+
+// This selects an edge only. The caller must authenticate a ZeroExtend of a
+// Bool producer, and the existing unique-incoming/dominance gate still applies.
+fn single_case_switch_true_edge(block: &crate::BasicBlock) -> Option<Edge> {
+    let Some(Terminator::Switch {
+        cases,
+        default_target,
+        ..
+    }) = block.terminator.as_ref()
+    else {
+        return None;
+    };
+    let [case] = cases.as_slice() else {
+        return None;
+    };
+    if case.target == *default_target {
+        return None;
+    }
+    match case.value {
+        1 => Some(Edge {
+            source: block.id,
+            ordinal: 0,
+            target: case.target,
+        }),
+        0 => Some(Edge {
+            source: block.id,
+            ordinal: 1,
+            target: *default_target,
+        }),
+        _ => None,
+    }
+}
 #[derive(Clone, Copy)]
 struct Recipe {
     domain: FormalSliceBoundedDomainV1,
@@ -464,7 +524,12 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
                 )),
                 Some(Terminator::Switch {
                     selector, cases, ..
-                }) if cases.len() == 2 && cases[0].value == 0 && cases[1].value == 1 => {
+                }) if (cases.len() == 2 && cases[0].value == 0 && cases[1].value == 1)
+                    || (cases.len() == 1 && cases[0].value <= 1) =>
+                {
+                    if cases.len() == 1 {
+                        prepay_single_case_switch_truth(&mut result.ledger)?;
+                    }
                     result.ledger.charge(16)?;
                     let selector = result.definition(*selector)?;
                     selector.and_then(|op| match &op.kind {
@@ -488,10 +553,14 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
                         {
                             Some((
                                 *value,
-                                Edge {
-                                    source: block.id,
-                                    ordinal: 1,
-                                    target: cases[1].target,
+                                if cases.len() == 1 {
+                                    single_case_switch_true_edge(block)?
+                                } else {
+                                    Edge {
+                                        source: block.id,
+                                        ordinal: 1,
+                                        target: cases[1].target,
+                                    }
                                 },
                             ))
                         }

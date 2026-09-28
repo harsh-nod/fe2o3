@@ -1099,6 +1099,8 @@ fn assign_source_leaf_symbols_v18(
     Ok(())
 }
 
+include!("production_source_leaf_lookup_work_v18.rs");
+
 impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
     fn observe_custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         self.relation.observe_custody(budget)?;
@@ -1142,6 +1144,7 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                 size_of::<Self>(), size_of::<Vec<u32>>(),
                 size_of::<[Option<(&ProductionSemanticExpressionV2, usize)>;
                     MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 * 2 + 1]>(),
+                source_leaf_lookup_work_headers_v18()?,
             ])?)?;
             let mut count = 0usize;
             visit_source_reserved_symbols_v18(declaration, namespace, budget, &mut |_, budget| {
@@ -1261,8 +1264,7 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                 lookup.push(SourceScalarLeafLookupV18 { key: [1, leaf.value.0 as usize, 0], row });
                 lookup.push(SourceScalarLeafLookupV18 { key: [2, leaf.symbol as usize, 0], row });
             }
-            private_array_heapsort_v1(&mut lookup, |entry| entry.key,
-                &mut SourceCorrespondenceWorkV18(budget), || ArgumentResourceV1::Arithmetic.into())?;
+            source_leaf_lookup_sort_v18(&mut lookup, budget)?;
             for pair in lookup.windows(2) {
                 budget.charge_work(3)?;
                 if pair[0].key == pair[1].key { return relation.source.missing("scalar leaf lookup is ambiguous"); }
@@ -1279,8 +1281,12 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
     {
         self.relation.retain_query((|| {
             self.query(budget)?;
-            let first = private_array_partition_v1(&self.lookup, |entry| entry.key, key, false,
-                &mut SourceCorrespondenceWorkV18(budget))?;
+            let first = if key[0] == 0 {
+                source_leaf_address_partition_v18(&self.lookup, key, budget)?
+            } else {
+                private_array_partition_v1(&self.lookup, |entry| entry.key, key, false,
+                    &mut SourceCorrespondenceWorkV18(budget))?
+            };
             budget.charge_work(2)?;
             let Some(entry) = self.lookup.get(first).filter(|entry| entry.key == key) else { return Ok(None); };
             let row = self.rows.get(entry.row).ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar leaf lookup row differs"))?;

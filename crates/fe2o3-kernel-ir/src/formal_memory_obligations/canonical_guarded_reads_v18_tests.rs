@@ -7,6 +7,9 @@ use crate::{
 #[path = "canonical_guarded_reads_v18_resource_tests.rs"]
 mod resources;
 
+#[path = "canonical_guarded_read_origins_v18_tests.rs"]
+mod read_origins;
+
 const LIMITS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
     rows: 8,
     edges: 16,

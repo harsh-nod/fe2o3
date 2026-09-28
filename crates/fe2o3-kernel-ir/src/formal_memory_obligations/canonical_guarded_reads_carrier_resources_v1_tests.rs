@@ -64,7 +64,7 @@ const SCC_WORK: usize = 20 * 2 + 12 + 1 + 4 + (2 + 3) + (2 + 5) + (2 + 3) + 6 + 
 const ORIGIN_ADAPTER_AFTER_SCC: usize = 2 + 3;
 const ROOT_WORK: usize = 2 + 2 + 4 * 37 + 4 + (3 + 4 + 4 + 1) + 5;
 const EXPANSION_WORK: usize = 4 + 4 + 3 + 4 + 4 + 12 + 4 + 1 + 3 + 8 + 2 + 2;
-const RUNTIME_MATCHER_WORK: usize = (2 + 4 + 4 * 6 + 2 * 3 + 2 * 4 + 2) + (2 + 24 + 4);
+const RUNTIME_MATCHER_WORK: usize = (2 + 4 + 4 * 6 + 2 * 3 + 2 * 4 + 2) + (2 + 25 + 4);
 const CENSUS_WORK: usize = 4 + 2 * 2;
 const SCC_END: usize = CONTROL_WORK + DEFINITION_WORK + ORIGIN_ADAPTER_BEFORE_SCC + SCC_WORK;
 const ROOT_HELPER_END: usize = SCC_END + ORIGIN_ADAPTER_AFTER_SCC + 2 + 2 + 2 * 37 + 4 + 12;
@@ -79,7 +79,7 @@ const FUNCTION_WORK: usize = SCC_END
 fn actual_nonempty_scc_and_carrier_lookup_have_source_derived_local_work_cuts() {
     assert_eq!(
         (SCC_WORK, SCC_END, ROOT_HELPER_END, FUNCTION_WORK),
-        (89, 423, 522, 736)
+        (89, 423, 522, 737)
     );
     let graph = minimal_carrier_graph();
     // Exact interior cuts admit their last event, then reject the next phase.

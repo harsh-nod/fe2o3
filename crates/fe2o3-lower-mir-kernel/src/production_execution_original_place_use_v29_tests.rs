@@ -332,7 +332,7 @@ fn original_carrier_owner_equation_rejects_repeated_caller_and_foreign_headers()
                 let original = ExecutionCfgCarriersV29 {
                     source_owner: Some(std::ptr::from_ref(cursor.function).addr()),
                     source_plan: None, instance: Some(cursor.instance),
-                    ledger: Some(budget.work_ledger_identity_v1()), locals: BTreeMap::new(),
+                    ledger: Some(budget.work_ledger_identity_v1()), locals: Vec::new(),
                 };
                 let floor = budget.storage();
                 let before = budget.work();

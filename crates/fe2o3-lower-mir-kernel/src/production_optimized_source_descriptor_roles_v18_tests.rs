@@ -9,6 +9,10 @@ enum DescriptorRoleSourceV18 {
 }
 
 include!("production_optimized_source_descriptor_read_fixture_v18_tests.rs");
+include!("production_optimized_source_global_access_v18_tests.rs");
+include!("production_optimized_source_global_native_fixtures_v18_tests.rs");
+include!("production_optimized_source_global_read_conditions_v18_tests.rs");
+include!("production_optimized_source_shared_entry_v18_tests.rs");
 include!("production_optimized_source_issued_role_fixture_v18_tests.rs");
 
 #[derive(Clone, Copy, Debug)]
@@ -180,14 +184,17 @@ fn run_descriptor_role_owner_result_with_abi_v18(
     ) -> SourceOwnedResultV18<()>,
 ) -> (ProductionOptimizerTestResultV18, usize, usize) {
     let semantic = owner.source_semantic();
-    let entry = semantic.functions()[0].kernel_entry().unwrap();
-    let launch = ProductionSourceLaunchRosterV1::try_new(
-        semantic,
-        &[ProductionSourceLaunchRootInputV1::new(
+    let launch_roots: Vec<_> = semantic.roots().iter().map(|root| {
+        let entry = semantic.functions()[root.index() as usize].kernel_entry().unwrap();
+        ProductionSourceLaunchRootInputV1::new(
             std::str::from_utf8(entry.export_symbol().as_bytes()).unwrap(),
             *entry.kernel_binding_identity().as_bytes(),
             ProductionSourceLaunchInputV1::new(1, Some([64, 1, 1]), [1, 1, 1]),
-        )],
+        )
+    }).collect();
+    let launch = ProductionSourceLaunchRosterV1::try_new(
+        semantic,
+        &launch_roots,
     )
     .unwrap();
     let sha = *owner.source_semantic_sha256();

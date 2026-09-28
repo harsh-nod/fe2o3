@@ -1,10 +1,26 @@
 use super::*;
 
+/// A normalized index coordinate, meaningful only on its borrowed read fact.
+/// This descriptive value is not a constructor or detached proof token.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanonicalGuardedReadIndexOriginV1 {
+    /// Exact SSA origin through the analyzer's supported representation links.
+    ProvenOrigin(ValueId),
+    /// The exact block parameter is guarded, but has no unique incoming origin.
+    ExactBlockParameter(ValueId),
+}
+
 /// A borrowed local read fact; the runtime allocation remains an obligation.
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::CanonicalGuardedGlobalReadFactV18;
+/// fn detach<'s, 'g>(fact: &CanonicalGuardedGlobalReadFactV18<'s, 'g>)
+///     -> CanonicalGuardedGlobalReadFactV18<'s, 'g> { fact.clone() }
+/// ```
 pub struct CanonicalGuardedGlobalReadFactV1<'scope, 'g, O = VerifiedCanonicalKernelIrModuleV12> {
     owner: &'g O,
     row: &'scope ReadRow,
-    domain: &'scope FormalRuntimeSliceReadDomainV1,
+    conditions: &'scope RuntimeSliceReadConditionsV1,
 }
 impl<O> CanonicalGuardedGlobalReadFactV1<'_, '_, O> {
     /// Exact borrowed owner, not an identity-only substitute.
@@ -17,7 +33,33 @@ impl<O> CanonicalGuardedGlobalReadFactV1<'_, '_, O> {
     }
     /// Descriptive local domain. A copy alone is not a fresh graph fact.
     pub const fn domain(&self) -> &FormalRuntimeSliceReadDomainV1 {
-        self.domain
+        &self.conditions.domain
+    }
+    /// Existing representation analysis equates the actual GEP offset and
+    /// comparison index to this coordinate, not to an equal numeric value.
+    /// The coordinate belongs to this fact's owner and function occurrence.
+    pub const fn normalized_index_origin(&self) -> CanonicalGuardedReadIndexOriginV1 {
+        match self.conditions.index_origin {
+            runtime_slice_read_v1::ReadIndex::ProvenOrigin(value) => {
+                CanonicalGuardedReadIndexOriginV1::ProvenOrigin(value)
+            }
+            runtime_slice_read_v1::ReadIndex::ExactBlockParameter(value) => {
+                CanonicalGuardedReadIndexOriginV1::ExactBlockParameter(value)
+            }
+        }
+    }
+    /// Exact SliceLength result reached from the comparison's right operand.
+    /// Another SliceLength on the same slice is not this occurrence.
+    pub const fn normalized_length_origin(&self) -> ValueId {
+        self.conditions.length_origin
+    }
+    /// Actual comparison operands before representation normalization.
+    /// The actual GEP offset remains available as `domain().index()`.
+    pub const fn comparison_operands(&self) -> (ValueId, ValueId) {
+        (
+            self.conditions.domain.guard_index(),
+            self.conditions.domain.length(),
+        )
     }
     /// The graph proves no live allocation or launch binding.
     pub const fn requires_runtime_allocation_binding(&self) -> bool {
@@ -191,12 +233,12 @@ impl<'scope, 'g, O> CheckedCanonicalGuardedGlobalReadsV1<'scope, 'g, O> {
                     CanonicalGuardedGlobalReadReasonV1::NotOrdinaryGlobalRead,
                 ));
             };
-            Ok(match row.domain.as_ref() {
-                Some(domain) => CanonicalGuardedGlobalReadOutcomeV1::ProvedLocalConditions(
+            Ok(match row.conditions.as_ref() {
+                Some(conditions) => CanonicalGuardedGlobalReadOutcomeV1::ProvedLocalConditions(
                     CanonicalGuardedGlobalReadFactV1 {
                         owner: self.facts.owner,
                         row,
-                        domain,
+                        conditions,
                     },
                 ),
                 None => CanonicalGuardedGlobalReadOutcomeV1::NotProved(row.reason),

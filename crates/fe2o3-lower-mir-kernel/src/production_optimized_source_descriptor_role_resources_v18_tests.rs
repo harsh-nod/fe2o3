@@ -58,6 +58,7 @@ fn header_oracle<T, E>() -> usize {
         + size_of::<Option<SourceOwnedQueryFailureV18>>()
         + owned_rows
         + queries
+        + global_header_oracle_v18()
         + cleanup_header_oracle()
 }
 
@@ -109,6 +110,32 @@ fn descriptor_role_outer_headers_prepay_aligned_callback_before_namespace() {
         + size_of::<Result<Vec<u64>, Error>>()
         + size_of::<Option<SourceOwnedQueryFailureV18>>()
         + size_of::<SourceOwnedResultV18<()>>()
+        + size_of::<Option<&fe2o3_pliron::ProductionRankedKernelV1>>()
+        + size_of::<(
+            &ProductionSourceCorrespondenceV18<'_>,
+            &ProductionOptimizedSourceCorrespondenceV18<'_>,
+            usize,
+            Option<&fe2o3_pliron::ProductionRankedKernelV1>,
+            &mut ArgumentBudgetV1<'_>,
+        )>()
+        + size_of::<
+            std::panic::AssertUnwindSafe<(
+                &ProductionSourceCorrespondenceV18<'_>,
+                &ProductionOptimizedSourceCorrespondenceV18<'_>,
+                usize,
+                Option<&fe2o3_pliron::ProductionRankedKernelV1>,
+                &mut ArgumentBudgetV1<'_>,
+            )>,
+        >()
+        + size_of::<(
+            &ProductionSourceCorrespondenceV18<'_>,
+            &ProductionOptimizedSourceCorrespondenceV18<'_>,
+            usize,
+        )>()
+        + size_of::<(
+            &CheckedDescriptorSourceRolesV18<'_>,
+            &mut ArgumentBudgetV1<'_>,
+        )>()
         + cleanup_header_oracle();
     assert_eq!(
         descriptor_role_outer_headers_v18::<Vec<u64>, Error>(bytes, alignment).unwrap(),
@@ -196,6 +223,7 @@ fn descriptor_role_occurrence_index_has_independent_exact_and_one_short_work() {
                 site: None,
                 role: None,
                 write_recipe_pending: false,
+                global: None,
             })
             .collect();
         for target in [0, count / 2, count] {

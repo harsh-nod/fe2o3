@@ -27,6 +27,7 @@ pub use guarded_access_v1::{
     CanonicalGuardedGlobalReadErrorV1, CanonicalGuardedGlobalReadFactV1,
     CanonicalGuardedGlobalReadLimitsV1, CanonicalGuardedGlobalReadOutcomeV1,
     CanonicalGuardedGlobalReadReasonV1, CanonicalGuardedNoWrapFactV1,
+    CanonicalGuardedReadIndexOriginV1,
     CanonicalGuardedPredicateFactV1, CheckedCanonicalGuardedGlobalReadsV1,
     with_canonical_guarded_global_reads_v1,
     CanonicalGuardedGlobalReadFactV18, CanonicalGuardedGlobalReadOutcomeV18,

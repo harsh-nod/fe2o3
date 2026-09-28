@@ -2239,6 +2239,7 @@ fn check_expanded_source_memory_inner_v29(
 include!("production_source_direct_object_activation_v29.rs");
 include!("production_source_safe_object_activation_v29.rs");
 include!("production_source_object_activation_scratch_v29.rs");
+include!("production_source_pending_alternative_capacity_v29.rs");
 
 fn retain_pending_memory_v29(
     instances: &ExecutionInstancesV29<'_>,
@@ -2338,12 +2339,16 @@ fn retain_pending_memory_v29(
         offsets.push(rows);
         limits.push(next as u32);
     }
+    budget.reserve_storage(pending_alternative_capacity_headers_v29()?)?;
+    let alternative_capacity = pending_alternative_capacity_v29(
+        plan, sources, slots, &limits, &ordinary_activations, ordinary_indices, budget,
+    )?;
     let mut output = PendingSourceMemoryV29 {
         source: ExecutionCallSourceV29::from_instances(instances, budget)?,
         issued,
         accesses: emission_vec_v1(sources.len(), budget)?,
         projects,
-        alternatives: Vec::new(),
+        alternatives: emission_vec_v1(alternative_capacity, budget)?,
         effects: Vec::new(),
         initial: lifetimes.initial,
         lifetimes: lifetimes.lifetimes,
@@ -2355,7 +2360,7 @@ fn retain_pending_memory_v29(
         retained_storage: 0,
     };
     // The copied loop result outlives the closed query scratch. Actual retained
-    // alternatives still pay their own vector capacity through emission_push.
+    // alternatives still pay their complete actual vector capacity above.
     source_reference_emission_prepay_v29::<Option<PendingSourceMemoryAlternativeV29>>(budget)?;
     source_reference_emission_prepay_v29::<PendingSourceMemoryAlternativeV29>(budget)?;
     for source in sources {
@@ -2483,7 +2488,7 @@ fn retain_pending_memory_v29(
                     if original_slot != source.physical.slot {
                         return Err(source_raw_physical_error_v29());
                     }
-                    emission_push_v1(
+                    push_pending_alternative_v29(
                         &mut output.alternatives,
                         PendingSourceMemoryAlternativeV29 {
                             instance: origin.instance,
@@ -2492,12 +2497,13 @@ fn retain_pending_memory_v29(
                             activation,
                             formation: Some(origin.site),
                         },
+                        alternative_capacity,
                         budget,
                     )?;
                 }
             }
         } else if let Some(alternative) = object_alternative {
-            emission_push_v1(&mut output.alternatives, alternative, budget)?;
+            push_pending_alternative_v29(&mut output.alternatives, alternative, alternative_capacity, budget)?;
         } else if ordinary_indices
             && matches!(
                 slots
@@ -2525,7 +2531,7 @@ fn retain_pending_memory_v29(
             }
             for (_, activation) in &ordinary_activations[first..end] {
                 budget.charge_work(2)?;
-                emission_push_v1(
+                push_pending_alternative_v29(
                     &mut output.alternatives,
                     PendingSourceMemoryAlternativeV29 {
                         instance: slot.instance,
@@ -2534,6 +2540,7 @@ fn retain_pending_memory_v29(
                         activation: *activation,
                         formation: None,
                     },
+                    alternative_capacity,
                     budget,
                 )?;
             }
@@ -2621,6 +2628,8 @@ fn retain_pending_memory_v29(
             }
         }
     }
+    #[cfg(test)]
+    PENDING_ALTERNATIVE_CAPACITY_V29.set((alternative_capacity, output.alternatives.capacity(), output.alternatives.len()));
     output.retained_storage = argument_sum_v1(&[
         output.issued.retained_storage()?,
         argument_product_v1(

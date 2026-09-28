@@ -441,10 +441,19 @@ impl SemanticControlFlowSsaPlanV1 {
             max_analysis_work,
             max_analysis_storage,
         )?;
+        let capability_storage = if let Some(cursor) = execution {
+            let budget = emission_work.as_deref_mut().ok_or(ArgumentResourceV1::Accounting)?;
+            Some(CapabilityOriginStorageV29::new(&mut capability_origins, cursor, budget)?)
+        } else {
+            None
+        };
         if let Some(cursor) = execution {
             let budget = emission_work.as_deref_mut().ok_or(ArgumentResourceV1::Accounting)?;
             cursor.check_ledger(budget)?;
-            budget.reserve_storage(std::mem::size_of::<ExecutionCfgCarriersV29>())?;
+            budget.reserve_storage(argument_sum_v1(&[
+                std::mem::size_of::<ExecutionCfgCarriersV29>(),
+                execution_cfg_carrier_index_headers_v29()?,
+            ])?)?;
         }
         let mut cfg_carriers = ExecutionCfgCarriersV29::default();
         if let Some(cursor) = execution {
@@ -471,11 +480,10 @@ impl SemanticControlFlowSsaPlanV1 {
                 )? else { continue; };
                 let kernel_types = binding.transport_types_with_allocation_v29(types, transport_type,
                     &mut CompilerCarrierAllocationV29::paid(budget)?)?;
-                reserve_execution_cfg_map_entry_v29::<u32, ExecutionCfgCarrierV29>(cfg_carriers.locals.len(), budget)?;
-                cfg_carriers.locals.insert(local, ExecutionCfgCarrierV29 {
+                cfg_carriers.append(local, ExecutionCfgCarrierV29 {
                     source_type: function.locals()[local as usize].ty(), transport_type,
                     binding, kernel_types: kernel_types.into_boxed_slice(),
-                });
+                }, budget)?;
             }
         }
         let mut promoted = BTreeMap::new();
@@ -513,8 +521,7 @@ impl SemanticControlFlowSsaPlanV1 {
                     budget,
                 )?;
                 if reference {
-                    charge_execution_cfg_lookup_v29(cfg_carriers.locals.len(), budget)?;
-                    if let Some(carrier) = cfg_carriers.locals.get(&local) {
+                    if let Some(carrier) = cfg_carriers.lookup(local, budget)? {
                         carrier.types(budget)?
                     } else {
                         source_reference_cfg_local_types_v29(execution.unwrap(), local, budget)?
@@ -568,6 +575,12 @@ impl SemanticControlFlowSsaPlanV1 {
                     kernel_types: kernel_types.into_boxed_slice(),
                 },
             );
+        }
+        if let Some(storage) = capability_storage {
+            storage.finish(capability_origins,
+                emission_work.as_deref_mut().ok_or(ArgumentResourceV1::Accounting)?)?;
+        } else {
+            drop(capability_origins);
         }
         let mut live_in = BTreeMap::new();
         for block in 0..function.blocks().len() as u32 {

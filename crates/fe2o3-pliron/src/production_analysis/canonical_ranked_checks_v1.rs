@@ -328,7 +328,8 @@ const fn pending_obligations() -> Obligations {
 
 #[path = "canonical_ranked_checks_resource_v1.rs"]
 mod resources;
-use resources::{AnalysisState, Guard, checked_add, drain_header, protected, reserve_rows};
+use resources::{AnalysisState, Guard, checked_add, drain_header, protected,
+    protected_retained_v18, reserve_rows};
 
 /// Imports one temporary native view, runs the fixed nine-stage policy on every
 /// defined function in canonical order, and checks exact bytes/schema/epoch
@@ -424,7 +425,8 @@ pub use storage::{
     CanonicalRankedSourceRequirementV18, CheckedCanonicalRankedPoliciesV18,
     with_canonical_ranked_policy_checks_v18,
     CanonicalRankedSourceObligationV18, PendingCanonicalRankedPoliciesV18,
-    PendingCanonicalRankedSourceRolesV18, with_pending_canonical_ranked_source_roles_v18,
+    PendingCanonicalRankedSourceRolesV18, PendingCanonicalGlobalAccessesV18,
+    with_pending_canonical_ranked_source_roles_v18,
     PendingCanonicalPrivateMemoryPoliciesV18,
 };
 

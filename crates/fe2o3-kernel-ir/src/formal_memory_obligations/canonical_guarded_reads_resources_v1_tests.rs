@@ -11,6 +11,10 @@ fn headers<T>() -> usize {
         + size_of::<std::thread::Result<Result<T>>>()
         + size_of::<std::thread::Result<Result<T>>>()
         + size_of::<std::thread::Result<()>>()
+        + size_of::<&CanonicalGuardedGlobalReadFactV1<'_, '_>>()
+        + size_of::<CanonicalGuardedReadIndexOriginV1>()
+        + size_of::<ValueId>()
+        + size_of::<(ValueId, ValueId)>()
 }
 
 #[test]
@@ -228,7 +232,21 @@ fn unselected_owned_meter_header_has_an_independent_local_byte_cut() {
     body.blocks[0].terminator = Some(Terminator::Return { values: vec![] });
     let graph = owner(module);
     let header = size_of::<GuardedControlCollectionV1<LiveGuardMeter<'_, '_>>>();
-    for limit in [header - 1, header] {
+    // The unselected meter header is followed by the reused effect-census
+    // row and (conditions, reason) carriers, even when no read rows are built.
+    // The enclosing getter bundle is external credit, not this local cap.
+    let collector = size_of::<ReadRow>()
+        + size_of::<(
+            Option<runtime_slice_read_v1::RuntimeSliceReadConditionsV1>,
+            CanonicalGuardedGlobalReadReasonV1,
+        )>();
+    let exact = header + collector;
+    for (limit, attempted) in [
+        (header - 1, Some(header)),
+        (header, Some(exact)),
+        (exact - 1, Some(exact)),
+        (exact, None),
+    ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000);
         let mut budget = Budget::new(&mut work, 1 << 20);
         budget.reserve_storage(17).unwrap();
@@ -246,18 +264,18 @@ fn unselected_owned_meter_header_has_an_independent_local_byte_cut() {
                 Ok(())
             },
         );
-        if limit == header {
-            result.unwrap();
-            assert_eq!(callbacks, 1);
-        } else {
+        if let Some(actual) = attempted {
             assert_eq!(
                 result,
                 Err(Failure::Resource(ResourceError::Storage {
-                    actual: header,
-                    limit: header - 1,
+                    actual,
+                    limit,
                 }))
             );
             assert_eq!(callbacks, 0);
+        } else {
+            result.unwrap();
+            assert_eq!(callbacks, 1);
         }
         assert_eq!(budget.failed_storage(), None);
         assert_eq!(budget.storage(), 17);

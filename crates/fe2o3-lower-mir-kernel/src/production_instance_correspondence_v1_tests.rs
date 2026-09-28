@@ -7,6 +7,26 @@ use production_call_instances_v1::{
 #[path = "production_instance_coordinates_owner_v1_tests.rs"]
 mod coordinates_owner_tests;
 
+pub(in super) fn cfg_carrier_index_storage_v29() -> usize {
+    use std::mem::size_of;
+    fn h<T>() -> usize {
+        size_of::<T>() + size_of::<Result<T, ArgumentResourceV1>>()
+            + size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+    }
+    type Row = (u32, ExecutionCfgCarrierV29);
+    // Independent lookup/append argument and binary-search carrier equation.
+    h::<(&ExecutionCfgCarriersV29, u32, &mut dyn SemanticEmissionBudgetV1)>()
+        + h::<(&mut ExecutionCfgCarriersV29, u32, ExecutionCfgCarrierV29, &mut dyn SemanticEmissionBudgetV1)>()
+        + h::<(&mut Vec<Row>, Row, &mut dyn SemanticEmissionBudgetV1)>()
+        + h::<(usize, &mut dyn SemanticEmissionBudgetV1)>()
+        + h::<Vec<Row>>() + h::<&mut Vec<Row>>() + h::<&Vec<Row>>() + h::<&[Row]>()
+        + h::<&Row>() + h::<Option<&Row>>() + h::<&ExecutionCfgCarriersV29>()
+        + h::<Row>() + h::<ExecutionCfgCarrierV29>()
+        + h::<&ExecutionCfgCarrierV29>() + h::<Option<&ExecutionCfgCarrierV29>>()
+        + h::<Result<usize, usize>>() + h::<Option<usize>>()
+        + h::<u32>() + h::<&u32>() + h::<usize>() + h::<bool>() + h::<()>()
+}
+
 pub(in super) fn scalar_lowering_scratch_storage_v29(output: &LoweredFunctionResultV1) -> usize {
     assert!(output.scoped_slot_origins.as_ref().is_none_or(Vec::is_empty));
     assert!(output.function.body.as_ref().unwrap().blocks.iter().all(|block| {
@@ -71,8 +91,8 @@ pub(in super) fn scalar_archive_storage_v1(
     let owned = size_of::<ExecutionArchiveV29>().checked_add(map).unwrap();
     assert_eq!(archive.credit.bytes, owned);
     // These fixtures use cursors without source-reference plans, so their
-    // carrier descriptor maps stay empty. Original-place carrier planning
-    // prepays only the table header; it no longer creates a compatibility vector.
+    // carrier descriptor tables stay empty. The table/query headers are paid,
+    // but an empty sorted table has no vector capacity or carrier payload.
     let function = instances
         .owner()
         .source_semantic()
@@ -80,7 +100,7 @@ pub(in super) fn scalar_archive_storage_v1(
         .get(instances.instance(instance).unwrap().function().index() as usize)
         .unwrap();
     assert_eq!(archive.locals.len(), function.locals().len());
-    let carrier_scratch = size_of::<ExecutionCfgCarriersV29>();
+    let carrier_scratch = size_of::<ExecutionCfgCarriersV29>() + cfg_carrier_index_storage_v29();
     // The seed copy and planning scratch stay outside archive.credit; the
     // fixture's enclosing ownership scope remains responsible for their cleanup.
     owned

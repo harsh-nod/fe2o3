@@ -169,6 +169,7 @@ pub struct PendingCanonicalRankedSourceRolesV18<'s, 'g> {
     epoch: u64,
     layouts: StorageLayoutLimitsV1,
     guard: &'s Guard,
+    refund_denied: &'s Cell<bool>,
 }
 
 impl<'g> PendingCanonicalRankedSourceRolesV18<'_, 'g> {
@@ -300,7 +301,8 @@ pub fn with_pending_canonical_ranked_source_roles_v18<'w, T>(
     ) -> Result<T, Failure>,
 ) -> Result<T, Failure> {
     let owner = checked.inventory(budget)?.owner();
-    protected(budget, |budget| {
+    let refund_denied = Cell::new(false);
+    protected_retained_v18(budget, &refund_denied, |budget| {
         let headers = checked_add(
             size_of::<Vec<CanonicalRankedSourceObligationV18>>(),
             checked_add(
@@ -326,6 +328,7 @@ pub fn with_pending_canonical_ranked_source_roles_v18<'w, T>(
                     .ok_or(Resource::Arithmetic)?,
             )?,
         )?)?;
+        budget.reserve_storage(pending_refund_headers_v18()?)?;
         let obligations = source_obligations(owner, budget)?;
         let (mut graph, storage) = crate::KirPlironGraphV18::import(owner, budget)?;
         budget.reserve_storage(storage.retained_storage())?;
@@ -339,6 +342,7 @@ pub fn with_pending_canonical_ranked_source_roles_v18<'w, T>(
             epoch,
             layouts,
             guard: &guard,
+            refund_denied: &refund_denied,
         };
         let result = guard.callback(budget, |budget| callback(&mut view, budget));
         drop(view);
@@ -356,6 +360,14 @@ pub fn with_pending_canonical_ranked_source_roles_v18<'w, T>(
 #[path = "canonical_ranked_pending_v18_tests.rs"]
 mod tests;
 
+fn pending_refund_headers_v18() -> Result<usize, Failure> {
+    checked_add(size_of::<Cell<bool>>(), size_of::<(&Cell<bool>, Ledger, usize, usize)>())
+}
+
 #[path = "canonical_ranked_private_pending_v18.rs"]
 mod private_memory;
 pub use private_memory::PendingCanonicalPrivateMemoryPoliciesV18;
+
+#[path = "canonical_global_pending_v18.rs"]
+mod global_memory;
+pub use global_memory::PendingCanonicalGlobalAccessesV18;
