@@ -175,12 +175,14 @@ fn make_uncaptured_owner(
         false,
         false,
         1,
-        vec![fe2o3_mir_model::SemanticAbiArgumentV1::source(
-            SemanticAbiValueV1::new(
-                WORD,
-                SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+        vec![
+            fe2o3_mir_model::semantic_mir_v1::SemanticAbiArgumentV1::source(
+                SemanticAbiValueV1::new(
+                    WORD,
+                    SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+                ),
             ),
-        )],
+        ],
         SemanticAbiValueV1::new(UNIT, SemanticAbiPassModeV1::Ignore),
     )
     .unwrap();
@@ -614,18 +616,24 @@ fn actual_use_ssa_cumulative_work_and_live_storage_are_exact_and_one_short() {
         let mut work = Work::new(work_limit);
         let mut budget = Budget::new(&mut work, storage_limit);
         budget.reserve_storage(FLOOR).unwrap();
-        let consume = |index: &Index<'_>, facts: &mut dyn ProjectedAssertionFactsV1| {
-            for _ in 0..2 {
-                assert_eq!(
-                    index.resolve(function(&owner), 2, site(0, 1), facts)?,
-                    Origin::Assignment {
-                        local: 2,
-                        site: site(0, 0)
-                    }
-                );
+        fn query_twice<'source, 'facts>(
+            owner: &'source ProductionSemanticSsaOwnerV1,
+        ) -> impl FnOnce(&Index<'source>, &mut (dyn ProjectedAssertionFactsV1 + 'facts)) -> R<()>
+        {
+            move |index, facts| {
+                for _ in 0..2 {
+                    assert_eq!(
+                        index.resolve(function(owner), 2, site(0, 1), facts)?,
+                        Origin::Assignment {
+                            local: 2,
+                            site: site(0, 0)
+                        }
+                    );
+                }
+                Ok(())
             }
-            Ok(())
-        };
+        }
+        let consume = query_twice(&owner);
         fn headers<C>(_: &C) -> usize {
             use std::mem::size_of;
             [
