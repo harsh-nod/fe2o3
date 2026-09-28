@@ -24,6 +24,20 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Exact-three native receipt recovery development (2026-09-28 UTC): registered-
+memory tests now exercise genuine returned published/recycled receipts after
+foreign-session rejection, rightful-session continuation and atomic retirement
+rejection at every ordinal. Runtime outcome handling uses concrete private KFD
+types without public test constructors. The
+[development packet](evidence/dev-three-native-recovery-2026-09-28/README.md)
+records 1,687 passing KFD tests with one telemetry failure, 858 passing serial
+backend tests, and the full runtime suite's three existing telemetry failures.
+A separate probe confirms denied socket-inspection operations; failures remain
+unwaived. End-to-end native/runtime coupling, internal-panic qualification,
+formal correspondence and matched performance remain open. A generated
+retry/Stop provenance mismatch was identified for the next repair; pristine
+abort must not be weakened. Accepted checkpoints and A1/A2 are unchanged.
+
 Three-binding completion custody development (2026-09-28 UTC): Active stays
 indexed through consuming completion, all-three restoration, detached-control
 release and reporting. Commit preflight precedes destructive control release;
