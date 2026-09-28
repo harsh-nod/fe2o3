@@ -88,9 +88,15 @@ fn protected_executor_helper_fixture() {
         deadline,
     )
     .unwrap();
+    super::super::RuntimeAttemptV1::observe_publications();
     channel
         .serve(&runtime)
         .expect("serve the concrete retained backend");
+    assert_eq!(
+        super::super::RuntimeAttemptV1::observed_publications(),
+        3,
+        "two real outputs and FINISHED must retain the attempt gate"
+    );
     runtime
         .revalidate()
         .expect("revalidate helper-local runtime after close");

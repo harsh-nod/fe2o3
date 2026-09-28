@@ -28,9 +28,30 @@ pub(super) struct SeizedChild {
 }
 
 impl SeizedChild {
+    pub(super) fn empty() -> Self {
+        Self {
+            pid: 0,
+            stdout: None,
+            stderr: None,
+        }
+    }
     pub(super) fn id(&self) -> u32 {
         self.pid as u32
     }
+}
+
+pub(super) struct PreparedSpawn {
+    executable: CString,
+    // Keep the byte storage underlying the fork-copied argv/envp pointers.
+    _arguments: Vec<CString>,
+    _environment: Vec<CString>,
+    cwd: Option<CString>,
+    stdin: File,
+    gate_read: OwnedFd,
+    gate_write: OwnedFd,
+    stdout_write: Option<OwnedFd>,
+    stderr_write: Option<OwnedFd>,
+    bindings: Vec<DescriptorBinding>,
 }
 
 fn pipe() -> Result<(OwnedFd, OwnedFd), RetainedFunctionalRefinementRuntimeErrorV1> {
@@ -47,12 +68,33 @@ fn cstring(bytes: &[u8]) -> Result<CString, RetainedFunctionalRefinementRuntimeE
     CString::new(bytes).map_err(|_| process_failure("NUL in seized-child invocation"))
 }
 
+#[cfg(test)]
 pub(super) fn spawn(
+    command: Command,
+    mut bindings: Vec<DescriptorBinding>,
+    cpu_seconds: u64,
+    deadline: Instant,
+) -> Result<AttemptV1, RetainedFunctionalRefinementRuntimeErrorV1> {
+    let mut attempt = AttemptV1::begin()?;
+    for binding in &mut bindings {
+        // Diagnostic bindings must also outlive failed cleanup and caller Drop.
+        let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(binding.source) };
+        let owned = rustix::io::fcntl_dupfd_cloexec(borrowed, 200)
+            .map_err(|e| io_error("retain diagnostic binding", e))?;
+        binding.source = owned.as_raw_fd();
+        attempt.run()?.descriptors.push(owned);
+    }
+    spawn_in(&mut attempt, command, bindings, cpu_seconds, deadline)?;
+    Ok(attempt)
+}
+
+pub(super) fn spawn_in(
+    attempt: &mut AttemptV1,
     command: Command,
     bindings: Vec<DescriptorBinding>,
     cpu_seconds: u64,
     deadline: Instant,
-) -> Result<SeizedChild, RetainedFunctionalRefinementRuntimeErrorV1> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let executable = cstring(command.get_program().as_bytes())?;
     if !Path::new(command.get_program()).is_absolute() {
         return Err(process_failure("seized executable must be absolute"));
@@ -90,8 +132,26 @@ pub(super) fn spawn(
     let (gate_read, gate_write) = pipe()?;
     let (stdout_read, stdout_write) = pipe()?;
     let (stderr_read, stderr_write) = pipe()?;
+    let run = attempt.run()?;
+    if run.root.is_some() {
+        return Err(process_failure("attempt already spawned"));
+    }
+    run.child.stdout = Some(stdout_read.into());
+    run.child.stderr = Some(stderr_read.into());
+    run.prepared = Some(PreparedSpawn {
+        executable,
+        _arguments: arguments,
+        _environment: environment,
+        cwd,
+        stdin,
+        gate_read,
+        gate_write,
+        stdout_write: Some(stdout_write),
+        stderr_write: Some(stderr_write),
+        bindings,
+    });
     let owner_pid = std::process::id() as i32;
-    let child = fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
+    fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
         if Instant::now() >= deadline {
             return Err(controller_error(
                 RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
@@ -101,6 +161,26 @@ pub(super) fn spawn(
         // SAFETY: only the child branch below executes after fork, using prebuilt
         // pointers, raw syscalls and the syscall-only prepare_child; it never
         // allocates, unwinds, locks, returns to Rust callers or runs destructors.
+        let prepared = run.prepared.as_ref().expect("published before fork");
+        let PreparedSpawn {
+            executable,
+            cwd,
+            stdin,
+            gate_read,
+            gate_write,
+            bindings,
+            ..
+        } = prepared;
+        let stdout_fd = prepared
+            .stdout_write
+            .as_ref()
+            .expect("published stdout")
+            .as_raw_fd();
+        let stderr_fd = prepared
+            .stderr_write
+            .as_ref()
+            .expect("published stderr")
+            .as_raw_fd();
         let fork_result: i64;
         // Bypass libc fork's registered atfork callbacks. No unrelated callback
         // may allocate or acquire an inherited lock in this pre-exec child.
@@ -132,8 +212,8 @@ pub(super) fn spawn(
                 }
                 close(gate_read.as_raw_fd());
                 if dup2(stdin.as_raw_fd(), 0) < 0
-                    || dup2(stdout_write.as_raw_fd(), 1) < 0
-                    || dup2(stderr_write.as_raw_fd(), 2) < 0
+                    || dup2(stdout_fd, 1) < 0
+                    || dup2(stderr_fd, 2) < 0
                 {
                     _exit(125);
                 }
@@ -149,28 +229,31 @@ pub(super) fn spawn(
                 _exit(126);
             }
         }
-        Ok(SeizedChild {
-            pid,
-            stdout: Some(stdout_read.into()),
-            stderr: Some(stderr_read.into()),
-        })
+        // No fallible operation or allocation precedes publication of the
+        // parent-known, unreaped child. No competing waiter owns this PID.
+        run.root = Some(pid);
+        run.child.pid = pid;
+        run.tracees
+            .insert(pid, Tracee::pending(TraceeRole::Verifier, pid, true))?;
+        #[cfg(test)]
+        quarantine_tests::after_fork();
+        Ok(())
     })?;
-    drop(gate_read);
-    drop(stdout_write);
-    drop(stderr_write);
-    let mut seized = false;
-    let mut current_stop = None;
-    let mut terminal = None;
+    let prepared = run.prepared.as_mut().expect("published spawn");
+    prepared.stdout_write.take();
+    prepared.stderr_write.take();
+    let pid = run.child.pid;
     let attachment = (|| {
-        ptrace(PTRACE_SEIZE, child.pid, trace_options())?;
-        seized = true;
-        ptrace(PTRACE_INTERRUPT, child.pid, 0)?;
-        let status = wait_for_specific(child.pid, deadline)?;
-        current_stop = TraceeStop::observed(status);
-        if current_stop.is_none() {
-            terminal = Some(status);
-        }
-        if current_stop.is_none()
+        #[cfg(test)]
+        quarantine_tests::before_attach()?;
+        ptrace(PTRACE_SEIZE, pid, trace_options())?;
+        run.seized = true;
+        ptrace(PTRACE_INTERRUPT, pid, 0)?;
+        let status = wait_for_specific(pid, deadline)?;
+        let task = run.tracees.get_mut(&pid).expect("published child");
+        task.current_stop = TraceeStop::observed(status);
+        task.terminal_consumed = !stopped(status);
+        if task.current_stop.is_none()
             || (status as u32) >> 16 != PTRACE_EVENT_STOP
             || stop_signal(status) != SIGTRAP
         {
@@ -180,35 +263,55 @@ pub(super) fn spawn(
         }
         let token = 1_u8;
         // SAFETY: one byte goes to an empty retained gate with a stopped reader.
-        if unsafe { write(gate_write.as_raw_fd(), (&raw const token).cast(), 1) } != 1 {
+        if unsafe {
+            write(
+                prepared.gate_write.as_raw_fd(),
+                (&raw const token).cast(),
+                1,
+            )
+        } != 1
+        {
             return Err(io_process_failure("release seized-child gate"));
         }
-        continue_tracee(child.pid, 0)?;
-        current_stop = None;
+        resume_tracee(&mut run.tracees, pid, 0)?;
         Ok(())
     })();
-    drop(gate_write);
     if let Err(error) = attachment {
-        if seized {
-            let tree = BTreeMap::from([(
-                child.pid,
-                Tracee {
-                    role: TraceeRole::Verifier,
-                    thread_group: child.pid,
-                    leader: true,
-                    exit_boundary: None,
-                    current_stop,
-                    queued_status: terminal,
-                },
-            )]);
-            return Err(reject_and_reap(&tree, error));
+        if run.seized {
+            return Err(reject_and_reap(&mut run.tracees, error));
         }
-        kill_tracee(child.pid).map_err(process_failure)?;
-        let terminal = wait_for_specific(child.pid, Instant::now() + CLEANUP_TIMEOUT)?;
-        if stopped(terminal) {
-            return Err(process_failure("unseized child failed to terminate"));
+        // Before SEIZE the sole child is held on the exact retained gate and
+        // cannot create descendants. Failure leaves it in permanent custody.
+        let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
+        #[cfg(test)]
+        let cleanup_deadline = quarantine_tests::cleanup_deadline(cleanup_deadline);
+        let cleanup = (|| {
+            if !run.tracees[&pid].terminal_consumed {
+                if Instant::now() >= cleanup_deadline {
+                    return Err(controller_error(
+                        RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
+                        "unseized child cleanup deadline elapsed before kill",
+                    ));
+                }
+                kill_tracee(pid).map_err(process_failure)?;
+                let terminal = wait_for_specific(pid, cleanup_deadline)?;
+                if stopped(terminal) {
+                    return Err(process_failure("unseized child failed to terminate"));
+                }
+                run.tracees
+                    .get_mut(&pid)
+                    .expect("published child")
+                    .terminal_consumed = true;
+            }
+            Ok::<_, RetainedFunctionalRefinementRuntimeErrorV1>(())
+        })();
+        if let Err(cleanup) = cleanup {
+            custody::poison();
+            return Err(process_failure(format!(
+                "{error}; gated child cleanup unresolved: {cleanup}"
+            )));
         }
         return Err(error);
     }
-    Ok(child)
+    Ok(())
 }

@@ -16,7 +16,7 @@ pub(super) enum Birth {
     Vfork,
 }
 
-pub(super) fn next_status(tree: &mut BTreeMap<i32, Tracee>, pid: i32) -> Result<Option<i32>> {
+pub(super) fn next_status(tree: &mut Tracees, pid: i32) -> Result<Option<i32>> {
     let task = tree
         .get_mut(&pid)
         .ok_or_else(|| process_failure("wait for unknown proof task"))?;
@@ -26,6 +26,7 @@ pub(super) fn next_status(tree: &mut BTreeMap<i32, Tracee>, pid: i32) -> Result<
     let status = wait_for_specific_nonblocking(pid)?;
     if let Some(status) = status {
         task.current_stop = TraceeStop::observed(status);
+        task.terminal_consumed = !stopped(status);
     }
     Ok(status)
 }
@@ -41,11 +42,12 @@ fn checkpoint(deadline: Instant, progress: &mut impl FnMut() -> Result<()>) -> R
     Ok(())
 }
 
-fn remember(tree: &mut BTreeMap<i32, Tracee>, pid: i32, status: i32) -> Result<()> {
+fn remember(tree: &mut Tracees, pid: i32, status: i32) -> Result<()> {
     let task = tree
         .get_mut(&pid)
         .ok_or_else(|| process_failure("unknown parked task"))?;
     task.current_stop = TraceeStop::observed(status);
+    task.terminal_consumed = !stopped(status);
     if task.queued_status.replace(status).is_some() {
         return Err(process_failure("overwritten parked task event"));
     }
@@ -57,11 +59,11 @@ fn parked(task: &Tracee) -> bool {
 }
 
 fn park_all(
-    tree: &mut BTreeMap<i32, Tracee>,
+    tree: &mut Tracees,
     deadline: Instant,
     progress: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
-    for pid in tree.keys().copied().collect::<Vec<_>>() {
+    for pid in tree.pids() {
         if parked(&tree[&pid]) {
             continue;
         }
@@ -75,7 +77,7 @@ fn park_all(
     }
     while tree.values().any(|task| !parked(task)) {
         checkpoint(deadline, progress)?;
-        for pid in tree.keys().copied().collect::<Vec<_>>() {
+        for pid in tree.pids() {
             if !parked(&tree[&pid])
                 && let Some(status) = wait_for_specific_nonblocking(pid)?
             {
@@ -104,7 +106,7 @@ fn park_all(
 }
 
 pub(super) fn park_for_inspection(
-    tree: &mut BTreeMap<i32, Tracee>,
+    tree: &mut Tracees,
     deadline: Instant,
     progress: &mut impl FnMut() -> Result<()>,
 ) -> Result<Instant> {
@@ -121,7 +123,7 @@ pub(super) fn check_before_release(
     checkpoint(deadline, progress)
 }
 
-fn census(tree: &BTreeMap<i32, Tracee>) -> Result<()> {
+fn census(tree: &Tracees) -> Result<()> {
     let mut groups = BTreeSet::new();
     for (&pid, task) in tree {
         if task.current_stop.is_none() || !groups.insert(task.thread_group) {
@@ -133,6 +135,7 @@ fn census(tree: &BTreeMap<i32, Tracee>) -> Result<()> {
         {
             count += 1;
             if count > MAX_TRACEES {
+                tree.uncertain(pid);
                 return Err(process_failure("parked proof census exceeds task bound"));
             }
             let entry = entry.map_err(|_| io_process_failure("read parked proof task"))?;
@@ -145,6 +148,7 @@ fn census(tree: &BTreeMap<i32, Tracee>) -> Result<()> {
                 .get(&tid)
                 .is_some_and(|t| parked(t) && t.thread_group == task.thread_group)
             {
+                tree.uncertain(tid);
                 return Err(process_failure("unaccounted sharer in parked proof census"));
             }
         }
@@ -152,11 +156,8 @@ fn census(tree: &BTreeMap<i32, Tracee>) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn release_interrupts(
-    tree: &mut BTreeMap<i32, Tracee>,
-    deadline: Instant,
-) -> Result<()> {
-    for pid in tree.keys().copied().collect::<Vec<_>>() {
+pub(super) fn release_interrupts(tree: &mut Tracees, deadline: Instant) -> Result<()> {
+    for pid in tree.pids() {
         if tree[&pid].queued_status.is_some_and(|s| {
             stopped(s) && (s as u32) >> 16 == PTRACE_EVENT_STOP && stop_signal(s) == SIGTRAP
         }) {
@@ -206,7 +207,7 @@ pub(super) fn birth_request(pid: i32, r: &UserRegistersX86_64) -> Result<Option<
     Ok(Some(birth))
 }
 
-fn step(tree: &mut BTreeMap<i32, Tracee>, pid: i32) -> Result<()> {
+fn step(tree: &mut Tracees, pid: i32) -> Result<()> {
     let task = tree
         .get_mut(&pid)
         .ok_or_else(|| process_failure("unknown syscall requester"))?;
@@ -216,7 +217,7 @@ fn step(tree: &mut BTreeMap<i32, Tracee>, pid: i32) -> Result<()> {
 }
 
 fn wait_stopped(
-    tree: &mut BTreeMap<i32, Tracee>,
+    tree: &mut Tracees,
     pid: i32,
     deadline: Instant,
     progress: &mut impl FnMut() -> Result<()>,
@@ -277,7 +278,7 @@ fn completed_result(pid: i32, syscall: u64, status: i32) -> Result<i64> {
 }
 
 fn register_child(
-    tree: &mut BTreeMap<i32, Tracee>,
+    tree: &mut Tracees,
     parent: i32,
     birth: Birth,
     event: u32,
@@ -294,15 +295,8 @@ fn register_child(
         if tree[&pid].queued_status.is_some_and(|s| !stopped(s)) {
             tree.insert(
                 pid,
-                Tracee {
-                    role: TraceeRole::PendingExecutable,
-                    thread_group: pid,
-                    leader: true,
-                    exit_boundary: None,
-                    current_stop: None,
-                    queued_status: None,
-                },
-            );
+                Tracee::pending(TraceeRole::PendingExecutable, pid, true),
+            )?;
         }
         tree.get_mut(&parent)
             .expect("retained parent")
@@ -315,15 +309,8 @@ fn register_child(
     // Register before any fallible inspection, including admission failures.
     tree.insert(
         pid,
-        Tracee {
-            role: TraceeRole::PendingExecutable,
-            thread_group: pid,
-            leader: true,
-            exit_boundary: None,
-            current_stop: None,
-            queued_status: None,
-        },
-    );
+        Tracee::pending(TraceeRole::PendingExecutable, pid, true),
+    )?;
     tree.get_mut(&parent)
         .expect("retained parent")
         .current_stop
@@ -370,7 +357,7 @@ fn register_child(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn complete_request(
-    tree: &mut BTreeMap<i32, Tracee>,
+    tree: &mut Tracees,
     pid: i32,
     allowed: &[AllowedRuntimeExecutableV1],
     validate_maps: bool,
@@ -439,6 +426,7 @@ pub(super) fn complete_request(
     step(tree, pid)?;
     #[cfg(test)]
     if birth.is_some() {
+        super::quarantine_tests::after_birth_resume(pid);
         super::stable_tests::abort_after_birth_resume(pid)?;
     }
     let mut child = None;
@@ -514,7 +502,7 @@ pub(super) fn complete_request(
 
 #[allow(clippy::too_many_arguments)]
 fn run_vfork_to_exec(
-    tree: &mut BTreeMap<i32, Tracee>,
+    tree: &mut Tracees,
     child: i32,
     allowed: &[AllowedRuntimeExecutableV1],
     validate_maps: bool,
@@ -557,7 +545,7 @@ fn run_vfork_to_exec(
 }
 
 fn complete_exit(
-    tree: &mut BTreeMap<i32, Tracee>,
+    tree: &mut Tracees,
     pid: i32,
     group_exit: bool,
     exit_status: i32,

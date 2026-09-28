@@ -164,6 +164,7 @@ impl ExecutorChannelV1 {
         }
         runtime.revalidate().map_err(ChannelErrorV1::Runtime)?;
         loop {
+            let mut attempt = runtime.begin_attempt().map_err(ChannelErrorV1::Runtime)?;
             self.begin()?;
             let request = self.receive(self.deadline, ExpectedFrame::RequestOrFinish)?;
             let deadline = field64(&request.header, 128);
@@ -172,8 +173,11 @@ impl ExecutorChannelV1 {
                     return Err(ChannelErrorV1::Association);
                 }
                 runtime.revalidate().map_err(ChannelErrorV1::Runtime)?;
+                attempt.complete().map_err(ChannelErrorV1::Runtime)?;
                 let mut header = self.header(FINISHED, deadline);
                 seal(&mut header, &[]);
+                #[cfg(test)]
+                attempt.before_publication();
                 write_all(&mut self.stream, &header, deadline)?;
                 return Ok(());
             }
@@ -184,8 +188,16 @@ impl ExecutorChannelV1 {
             }
             let limit = field32(&request.header, 140) as usize;
             let output = runtime
-                .execute_generated_rust_verify(&source, local_deadline(deadline)?, limit)
+                .execute_generated_rust_verify(
+                    &mut attempt,
+                    &source,
+                    local_deadline(deadline)?,
+                    limit,
+                )
                 .map_err(ChannelErrorV1::Runtime)?;
+            attempt.complete().map_err(ChannelErrorV1::Runtime)?;
+            #[cfg(test)]
+            attempt.before_publication();
             self.send_output(request.header, output)?;
             self.terminal = false;
         }

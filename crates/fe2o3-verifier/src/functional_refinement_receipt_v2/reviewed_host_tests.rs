@@ -264,13 +264,16 @@ fn assert_generated_assertion_failure(
         generate_ranked_functional_refinement_proof_v2(kernel, 0, request, subjects()).unwrap();
     assert_eq!(binding, expected_binding(kernel, request));
     runtime.revalidate().unwrap();
+    let mut attempt = runtime.begin_attempt().unwrap();
     let output = runtime
         .execute_generated_rust_verify(
+            &mut attempt,
             &source,
             Instant::now() + Duration::from_secs(u64::from(COMPILER_TIMEOUT_SECONDS)),
             MAX_FUNCTIONAL_REFINEMENT_VERUS_OUTPUT_BYTES_V2,
         )
         .expect("execute the production-generated mismatch within the compiler deadline");
+    attempt.complete().unwrap();
     runtime.revalidate().unwrap();
     assert_eq!((output.exit_code, output.signal), (Some(1), None));
     let stdout = std::str::from_utf8(&output.stdout).unwrap();
@@ -359,6 +362,7 @@ fn generated_effect_binds_coordinates_domains_preconditions_and_value() {
 #[test]
 #[ignore = "requires the installed root-owned pinned functional-refinement runtime"]
 fn protected_ranked_scalar_prepares_bound_receipt() {
+    crate::retained_functional_refinement_runtime_v1::RuntimeAttemptV1::observe_publications();
     let runtime = protected_runtime();
     let kernel = nested_not_wrapping_kernel(7); // !!(255_u8 + 8_u8) == 7_u8, wrapping.
     let binding = expected_binding(&kernel, SCALAR_REQUEST);
@@ -380,6 +384,10 @@ fn protected_ranked_scalar_prepares_bound_receipt() {
         COMPILER_TIMEOUT_SECONDS,
     )
     .expect("prove the generated wrapping scalar formula through the protected runtime");
+    assert_eq!(
+        crate::retained_functional_refinement_runtime_v1::RuntimeAttemptV1::observed_publications(),
+        1
+    );
     assert_eq!(prepared.binding(), binding);
     let unsigned = prepared.into_unsigned();
     let signature = signing.sign(unsigned.signing_bytes()).to_bytes();
@@ -401,6 +409,28 @@ fn protected_ranked_scalar_prepares_bound_receipt() {
     assert_eq!(proof.signer_identity(), signer_identity);
     assert_eq!(importer.imported_count(), 1);
     runtime.revalidate().unwrap();
+}
+
+#[test]
+#[ignore = "requires real protected Verus; checks gate through signed receipt publication"]
+fn protected_whole_attempt_gate_covers_signed_receipt_publication() {
+    use crate::retained_functional_refinement_runtime_v1::RuntimeAttemptV1;
+    let runtime = protected_runtime();
+    let kernel = nested_not_wrapping_kernel(7);
+    RuntimeAttemptV1::observe_publications();
+    let (binding, retained, _) = execute_and_retain_ranked_functional_refinement_locally_v2(
+        &runtime,
+        &kernel,
+        0,
+        SCALAR_REQUEST,
+        subjects(),
+        COMPILER_TIMEOUT_SECONDS,
+    )
+    .expect("a real proved/signed/imported receipt is required before the busy probe");
+    assert_eq!(binding, expected_binding(&kernel, SCALAR_REQUEST));
+    assert_eq!(RuntimeAttemptV1::observed_publications(), 1);
+    let (proof, _) = retained.into_parts();
+    assert!(!proof.execution_identity().is_zero());
 }
 
 #[test]

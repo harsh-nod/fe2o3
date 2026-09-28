@@ -56,6 +56,10 @@ pub enum RetainedFunctionalRefinementRuntimeErrorKindV1 {
     ClosureChanged,
     /// The lease was used by a process other than its admitting process.
     OwnerProcessChanged,
+    /// Another proof attempt holds the nonblocking execution gate.
+    Busy,
+    /// Unresolved custody permanently refuses further execution in this process.
+    Quarantined,
     /// An operating-system operation failed.
     Io,
     /// A supervised proof child exceeded its one global deadline.
@@ -117,7 +121,29 @@ pub(crate) struct RetainedGeneratedVerusRuntimeBackendV1 {
     identity: [u8; 32],
     owner_process: u32,
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    retained: linux::RetainedRuntimeClosureV2,
+    retained: std::sync::Arc<linux::RetainedRuntimeClosureV2>,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use linux::AttemptV1 as RuntimeAttemptV1;
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+pub(crate) struct RuntimeAttemptV1(std::marker::PhantomData<std::rc::Rc<()>>);
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+impl RuntimeAttemptV1 {
+    fn begin() -> Result<Self, RetainedFunctionalRefinementRuntimeErrorV1> {
+        Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::UnsupportedPlatform,
+            "proof attempt custody requires Linux x86-64",
+        ))
+    }
+    pub(crate) fn complete(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+        Self::begin().map(|_| ())
+    }
+    pub(crate) fn check(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+        self.complete()
+    }
 }
 
 pub(crate) fn open_retained_generated_verus_runtime_v1(
@@ -135,7 +161,7 @@ pub(crate) fn open_retained_generated_verus_runtime_v1(
             root: root.to_path_buf(),
             identity,
             owner_process,
-            retained,
+            retained: std::sync::Arc::new(retained),
         })
     }
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
@@ -149,6 +175,13 @@ pub(crate) fn open_retained_generated_verus_runtime_v1(
 }
 
 impl RetainedGeneratedVerusRuntimeBackendV1 {
+    pub(crate) fn begin_attempt(
+        &self,
+    ) -> Result<RuntimeAttemptV1, RetainedFunctionalRefinementRuntimeErrorV1> {
+        // Existing execution/toolchain checks run under this guard. Acquiring
+        // it does not add another full runtime hash pass or grant admission.
+        RuntimeAttemptV1::begin()
+    }
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
@@ -179,6 +212,7 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
 
     pub(crate) fn execute_generated_rust_verify(
         &self,
+        attempt: &mut RuntimeAttemptV1,
         source: &CanonicalGeneratedVerusProofInputV3,
         deadline: Instant,
         output_limit: usize,
@@ -186,10 +220,12 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
         RetainedFunctionalRefinementRuntimeOutputV1,
         RetainedFunctionalRefinementRuntimeErrorV1,
     > {
+        attempt.check()?;
         self.revalidate()?;
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         let result = linux::execute_functional_refinement_generated_rust_verify(
-            &self.retained,
+            attempt,
+            std::sync::Arc::clone(&self.retained),
             source,
             deadline,
             output_limit,
@@ -199,6 +235,7 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
             RetainedFunctionalRefinementRuntimeErrorKindV1::UnsupportedPlatform,
             "sealed generated rust_verify execution requires Linux x86-64",
         ));
+        attempt.complete()?;
         self.revalidate()?;
         result
     }

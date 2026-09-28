@@ -1,6 +1,5 @@
 //! Descendant-aware Linux controller for workload-neutral functional-refinement proofs.
 
-use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::{self, Read};
@@ -296,11 +295,37 @@ struct Tracee {
     thread_group: i32,
     leader: bool,
     exit_boundary: Option<ExitBoundary>,
+    cleanup_exiting: bool,
     // Exact current kernel stop, retained independently of deferred dispatch.
     // Cleanup may need GETEVENTMSG even after queued_status was consumed.
     current_stop: Option<TraceeStop>,
     queued_status: Option<i32>,
+    terminal_consumed: bool,
+    cleanup_interrupt_sent: bool,
+    cleanup_kill_sent: bool,
 }
+
+impl Tracee {
+    fn pending(role: TraceeRole, group: i32, leader: bool) -> Self {
+        Self {
+            role,
+            thread_group: group,
+            leader,
+            exit_boundary: None,
+            cleanup_exiting: false,
+            current_stop: None,
+            queued_status: None,
+            terminal_consumed: false,
+            cleanup_interrupt_sent: false,
+            cleanup_kill_sent: false,
+        }
+    }
+}
+
+#[path = "functional_refinement_process_tree_v1_custody.rs"]
+mod custody;
+pub(crate) use custody::AttemptV1;
+use custody::{Run, Tracees};
 
 #[path = "functional_refinement_process_tree_v1_spawn.rs"]
 mod seized_spawn;
@@ -427,7 +452,8 @@ pub(super) fn allowed_runtime_executable(
 }
 
 pub(super) fn execute(
-    runtime: &RetainedRuntimeClosureV2,
+    attempt: &mut AttemptV1,
+    runtime: std::sync::Arc<RetainedRuntimeClosureV2>,
     source: &CanonicalGeneratedVerusProofInputV3,
     deadline: Instant,
     output_limit: usize,
@@ -540,10 +566,15 @@ pub(super) fn execute(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = seized_spawn::spawn(command, bindings.clone(), cpu_seconds, deadline)?;
-    drop(duplicates);
+    {
+        let run = attempt.run()?;
+        run.backing = Some(runtime);
+        run.sealed = Some(sealed);
+        run.descriptors = duplicates;
+    }
+    seized_spawn::spawn_in(attempt, command, bindings.clone(), cpu_seconds, deadline)?;
     let result = supervise(
-        &mut child,
+        attempt,
         &bindings,
         bindings[0].identity,
         bindings[1].identity,
@@ -553,7 +584,13 @@ pub(super) fn execute(
         deadline,
         output_limit,
     );
-    sealed.revalidate(source)?;
+    attempt
+        .run()?
+        .sealed
+        .as_ref()
+        .expect("published sealed source")
+        .revalidate(source)?;
+    attempt.complete()?;
     result
 }
 
@@ -682,7 +719,7 @@ const fn jump(code: u16, value: u32, jump_true: u8, jump_false: u8) -> SockFilte
 
 #[allow(clippy::too_many_arguments)]
 fn supervise(
-    child: &mut seized_spawn::SeizedChild,
+    attempt: &mut AttemptV1,
     bindings: &[DescriptorBinding],
     verifier_identity: ObjectIdentityV2,
     solver_identity: ObjectIdentityV2,
@@ -693,49 +730,39 @@ fn supervise(
     output_limit: usize,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
-    let verifier =
-        i32::try_from(child.id()).map_err(|_| process_failure("verifier PID overflow"))?;
-    let mut tracees = BTreeMap::from([(
-        verifier,
-        Tracee {
-            role: TraceeRole::Verifier,
-            thread_group: verifier,
-            leader: true,
-            exit_boundary: None,
-            current_stop: None,
-            queued_status: None,
-        },
-    )]);
-    let Some(mut stdout) = child.stdout.take() else {
+    let run = attempt.run()?;
+    run.check_thread()?;
+    let Run {
+        tracees,
+        child,
+        stdout_capture,
+        stderr_capture,
+        ..
+    } = run;
+    let verifier = child.id() as i32;
+    let Some(stdout) = child.stdout.as_mut() else {
         return Err(reject_and_reap(
-            &tracees,
+            tracees,
             process_failure("traced verifier stdout pipe is missing"),
         ));
     };
-    let Some(mut stderr) = child.stderr.take() else {
+    let Some(stderr) = child.stderr.as_mut() else {
         return Err(reject_and_reap(
-            &tracees,
+            tracees,
             process_failure("traced verifier stderr pipe is missing"),
         ));
     };
-    if let Err(error) = make_nonblocking(&stdout) {
-        return Err(reject_and_reap(&tracees, error));
+    if let Err(error) = make_nonblocking(stdout) {
+        return Err(reject_and_reap(tracees, error));
     }
-    if let Err(error) = make_nonblocking(&stderr) {
-        return Err(reject_and_reap(&tracees, error));
+    if let Err(error) = make_nonblocking(stderr) {
+        return Err(reject_and_reap(tracees, error));
     }
-    let mut stdout_capture = Capture {
-        bytes: Vec::new(),
-        eof: false,
-    };
-    let mut stderr_capture = Capture {
-        bytes: Vec::new(),
-        eof: false,
-    };
     let execution = (|| {
         let status = wait_for_specific(verifier, deadline)?;
         let initial = tracees.get_mut(&verifier).expect("retained verifier");
         initial.current_stop = TraceeStop::observed(status);
+        initial.terminal_consumed = !stopped(status);
         if !stopped(status) {
             initial.queued_status = Some(status);
         }
@@ -750,7 +777,7 @@ fn supervise(
         if validate_mappings {
             validate_executable_mappings(verifier, allowed_mappings)?;
         }
-        resume_tracee(&mut tracees, verifier, 0)?;
+        resume_tracee(tracees, verifier, 0)?;
 
         let mut verifier_terminal = None;
         let mut auxiliary_terminal = None;
@@ -761,8 +788,8 @@ fn supervise(
         let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
         let mut idle_interval = ACTIVE_TREE_POLL_INTERVAL;
         while !tracees.is_empty() {
-            drain(&mut stdout, &mut stdout_capture, output_limit)?;
-            drain(&mut stderr, &mut stderr_capture, output_limit)?;
+            drain(stdout, stdout_capture, output_limit)?;
+            drain(stderr, stderr_capture, output_limit)?;
             if Instant::now() >= deadline {
                 return Err(controller_error(
                     RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
@@ -770,9 +797,9 @@ fn supervise(
                 ));
             }
             let mut progressed = false;
-            let processes = tracees.keys().copied().collect::<Vec<_>>();
+            let processes = tracees.pids();
             for process in processes {
-                let Some(status) = stable::next_status(&mut tracees, process)? else {
+                let Some(status) = stable::next_status(tracees, process)? else {
                     continue;
                 };
                 progressed = true;
@@ -780,14 +807,10 @@ fn supervise(
                     let event = (status as u32) >> 16;
                     let signal = stop_signal(status);
                     let inspection_deadline = if event == PTRACE_EVENT_EXEC {
-                        Some(stable::park_for_inspection(
-                            &mut tracees,
-                            deadline,
-                            &mut || {
-                                drain(&mut stdout, &mut stdout_capture, output_limit)?;
-                                drain(&mut stderr, &mut stderr_capture, output_limit)
-                            },
-                        )?)
+                        Some(stable::park_for_inspection(tracees, deadline, &mut || {
+                            drain(stdout, stdout_capture, output_limit)?;
+                            drain(stderr, stderr_capture, output_limit)
+                        })?)
                     } else {
                         None
                     };
@@ -839,19 +862,19 @@ fn supervise(
                             stable::check_before_release(
                                 inspection_deadline.expect("exec inspection deadline"),
                                 &mut || {
-                                    drain(&mut stdout, &mut stdout_capture, output_limit)?;
-                                    drain(&mut stderr, &mut stderr_capture, output_limit)
+                                    drain(stdout, stdout_capture, output_limit)?;
+                                    drain(stderr, stderr_capture, output_limit)
                                 },
                             )?;
-                            resume_tracee(&mut tracees, process, 0)?;
+                            resume_tracee(tracees, process, 0)?;
                         }
                         PTRACE_EVENT_SECCOMP => {
                             let mut progress = || {
-                                drain(&mut stdout, &mut stdout_capture, output_limit)?;
-                                drain(&mut stderr, &mut stderr_capture, output_limit)
+                                drain(stdout, stdout_capture, output_limit)?;
+                                drain(stderr, stderr_capture, output_limit)
                             };
                             stable::complete_request(
-                                &mut tracees,
+                                tracees,
                                 process,
                                 allowed_mappings,
                                 validate_mappings,
@@ -861,9 +884,9 @@ fn supervise(
                                 &mut progress,
                             )?;
                             if tracees[&process].current_stop.is_some() {
-                                resume_tracee(&mut tracees, process, 0)?;
+                                resume_tracee(tracees, process, 0)?;
                             }
-                            stable::release_interrupts(&mut tracees, deadline)?;
+                            stable::release_interrupts(tracees, deadline)?;
                         }
                         PTRACE_EVENT_EXIT => {
                             return Err(process_failure(
@@ -872,12 +895,12 @@ fn supervise(
                         }
                         PTRACE_EVENT_STOP if signal == SIGTRAP => {
                             set_trace_options(process)?;
-                            resume_tracee(&mut tracees, process, 0)?;
+                            resume_tracee(tracees, process, 0)?;
                         }
                         PTRACE_EVENT_STOP | 0 if signal == SIGSTOP => {
                             return Err(process_failure("unexpected proof process group stop"));
                         }
-                        0 => resume_tracee(&mut tracees, process, signal)?,
+                        0 => resume_tracee(tracees, process, signal)?,
                         _ => {
                             return Err(process_failure(
                                 "unknown ptrace event in proof process tree",
@@ -885,7 +908,7 @@ fn supervise(
                         }
                     }
                     if let Some(inspection_deadline) = inspection_deadline {
-                        stable::release_interrupts(&mut tracees, inspection_deadline)?;
+                        stable::release_interrupts(tracees, inspection_deadline)?;
                     }
                 } else {
                     let tracee = tracees.remove(&process).ok_or_else(|| {
@@ -941,21 +964,21 @@ fn supervise(
     })();
     let terminal = match execution {
         Ok(terminal) => terminal,
-        Err(execution_error) => return Err(reject_and_reap(&tracees, execution_error)),
+        Err(execution_error) => return Err(reject_and_reap(tracees, execution_error)),
     };
     drain_to_eof(
-        &mut stdout,
-        &mut stderr,
-        &mut stdout_capture,
-        &mut stderr_capture,
+        stdout,
+        stderr,
+        stdout_capture,
+        stderr_capture,
         output_limit,
         deadline,
     )?;
     Ok(RetainedFunctionalRefinementRuntimeOutputV1 {
         exit_code: terminal.0,
         signal: terminal.1,
-        stdout: stdout_capture.bytes,
-        stderr: stderr_capture.bytes,
+        stdout: std::mem::take(&mut stdout_capture.bytes),
+        stderr: std::mem::take(&mut stderr_capture.bytes),
     })
 }
 
@@ -975,6 +998,12 @@ fn set_trace_options(process: i32) -> Result<(), RetainedFunctionalRefinementRun
 }
 
 fn event_child(process: i32) -> Result<i32, RetainedFunctionalRefinementRuntimeErrorV1> {
+    #[cfg(test)]
+    if quarantine_tests::refuse_birth_query() {
+        return Err(process_failure(
+            "quarantine fixture persistent birth query refusal",
+        ));
+    }
     #[cfg(test)]
     if stable_tests::fail_birth_query_once() {
         return Err(process_failure(
@@ -1021,7 +1050,7 @@ fn continue_tracee(
 }
 
 fn resume_tracee(
-    tracees: &mut BTreeMap<i32, Tracee>,
+    tracees: &mut Tracees,
     process: i32,
     signal: i32,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
@@ -1617,66 +1646,41 @@ fn validate_executable_mapping_rows(
     Ok(())
 }
 
-fn terminate_tree(
-    tracees: &BTreeMap<i32, Tracee>,
-) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
-    #[derive(Debug)]
-    struct CleanupTracee {
-        current_stop: Option<TraceeStop>,
-        exiting: bool,
-        interrupt_sent: bool,
-        kill_sent: bool,
-    }
+fn terminate_tree(tracees: &mut Tracees) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let deadline = Instant::now() + CLEANUP_TIMEOUT;
+    #[cfg(test)]
+    let deadline = quarantine_tests::cleanup_deadline(deadline);
     let mut failures = Vec::new();
-    let mut remaining = tracees
-        .iter()
-        // A queued terminal status was already reaped during quiescence. Its PID
-        // is no longer ours and must never be signalled after possible reuse.
-        .filter(|(_, tracee)| !tracee.queued_status.is_some_and(|s| !stopped(s)))
-        .map(|(&process, tracee)| {
-            (
-                process,
-                CleanupTracee {
-                    current_stop: tracee.current_stop,
-                    exiting: tracee.exit_boundary.is_some()
-                        || tracee.current_stop.is_some_and(TraceeStop::is_exit),
-                    interrupt_sent: false,
-                    kill_sent: false,
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
     let mut discovery_failure = None;
     let mut wait_failure = None;
     let mut quiescent = false;
-    while !remaining.is_empty() && Instant::now() < deadline {
-        let mut reaped = Vec::new();
-        for process in remaining.keys().copied().collect::<Vec<_>>() {
-            if remaining[&process].current_stop.is_some() {
+    while tracees.unresolved() && Instant::now() < deadline {
+        for process in tracees.pids() {
+            let task = &tracees[&process];
+            if task.terminal_consumed || task.current_stop.is_some() {
                 continue;
             }
             let mut status = 0;
-            // SAFETY: waitpid writes one status for the exact ptrace-owned PID.
+            // SAFETY: exact, unreaped PID retained by this originating tracer.
             let result = unsafe { waitpid(process, &mut status, WAIT_NOHANG | WAIT_WALL) };
             match result {
                 0 => {}
-                value if value == process && stopped(status) => {
-                    let task = remaining.get_mut(&process).expect("retained cleanup task");
-                    task.current_stop = TraceeStop::observed(status);
-                    task.exiting |= task.current_stop.is_some_and(TraceeStop::is_exit);
-                    #[cfg(test)]
-                    stable_tests::record_cleanup_stop(process, status);
-                }
                 value if value == process => {
+                    let task = tracees.get_mut(&process).expect("retained cleanup task");
+                    task.current_stop = TraceeStop::observed(status);
+                    task.cleanup_exiting |= task.exit_boundary.is_some()
+                        || task.current_stop.is_some_and(TraceeStop::is_exit);
+                    task.terminal_consumed = !stopped(status);
                     #[cfg(test)]
-                    stable_tests::record_cleanup_terminal(process, status);
-                    reaped.push(process);
+                    if stopped(status) {
+                        stable_tests::record_cleanup_stop(process, status);
+                    } else {
+                        stable_tests::record_cleanup_terminal(process, status);
+                    }
                 }
                 _ if io::Error::last_os_error().raw_os_error() == Some(4) => {}
                 _ => {
-                    // Neither ECHILD nor procfs absence authenticates a terminal
-                    // wait. Keep unresolved custody out of the kill fixed point.
+                    // ECHILD/procfs absence cannot authenticate a terminal wait.
                     wait_failure = Some(format!(
                         "wait PID {process}: {}",
                         io::Error::last_os_error()
@@ -1684,94 +1688,98 @@ fn terminate_tree(
                 }
             }
         }
-        for process in reaped {
-            remaining.remove(&process);
-        }
-        // Both consumed and just-waited birth stops retain GETEVENTMSG custody.
-        // Discover before *any* SIGKILL: killing a parent (or its group sibling)
-        // may invalidate its birth message even before a subsequent CONT.
+        // Discover consumed and just-waited births BEFORE any fatal signal.
         discovery_failure = None;
-        for process in remaining.keys().copied().collect::<Vec<_>>() {
-            if !remaining[&process]
+        for process in tracees.pids() {
+            if !tracees[&process]
                 .current_stop
                 .is_some_and(TraceeStop::unregistered_birth)
             {
                 continue;
             }
-            match event_child(process) {
-                Ok(child) => {
-                    remaining.entry(child).or_insert(CleanupTracee {
-                        current_stop: None,
-                        exiting: false,
-                        interrupt_sent: false,
-                        kill_sent: false,
-                    });
-                    remaining
-                        .get_mut(&process)
-                        .expect("retained birth parent")
-                        .current_stop
-                        .as_mut()
-                        .expect("retained birth stop")
-                        .birth_registered = true;
+            if tracees[&process].terminal_consumed {
+                discovery_failure = Some("terminal parent retained an unresolved birth".to_owned());
+                continue;
+            }
+            let discover = (|| {
+                let child = event_child(process)?;
+                if !tracees.contains_key(&child) || tracees[&child].terminal_consumed {
+                    tracees.insert(
+                        child,
+                        Tracee::pending(TraceeRole::PendingExecutable, child, true),
+                    )?;
+                } else {
+                    // A registered child is marked at its parent atomically; a
+                    // duplicate here cannot establish which lifetime owns PID.
+                    tracees.uncertain(child);
+                    return Err(process_failure("duplicate cleanup birth identity"));
                 }
-                Err(error) => {
-                    discovery_failure = Some(format!(
-                        "discover stopped descendant from PID {process}: {error}"
-                    ));
-                }
+                tracees
+                    .get_mut(&process)
+                    .expect("birth parent")
+                    .current_stop
+                    .as_mut()
+                    .expect("birth stop")
+                    .birth_registered = true;
+                Ok::<_, RetainedFunctionalRefinementRuntimeErrorV1>(())
+            })();
+            if let Err(error) = discover {
+                discovery_failure =
+                    Some(format!("discover descendant from PID {process}: {error}"));
             }
         }
         if !quiescent && wait_failure.is_none() {
-            // A resumed creation may not have reported its birth yet. INTERRUPT
-            // and exact-PID waits close that interval without a fatal signal that
-            // could suppress the birth. Newly discovered children join this same
-            // fixed point. External fatal signals require trusted isolation.
-            for (&process, task) in &mut remaining {
-                if task.current_stop.is_none() && !task.exiting && !task.interrupt_sent {
-                    // SAFETY: only unreaped, ptrace-owned tasks enter this loop.
-                    if unsafe {
-                        linux_ptrace(
-                            PTRACE_INTERRUPT,
-                            process,
-                            std::ptr::null_mut(),
-                            std::ptr::null_mut(),
-                        )
-                    } < 0
-                    {
-                        let error = io::Error::last_os_error();
-                        // Exit can win the poll/interrupt race; only the next
-                        // exact terminal wait, not ESRCH, releases that custody.
-                        if error.raw_os_error() != Some(3) {
-                            failures.push(format!("interrupt cleanup PID {process}: {error}"));
-                        }
-                    }
-                    task.interrupt_sent = true;
+            for process in tracees.pids() {
+                let task = tracees.get_mut(&process).expect("cleanup task");
+                task.cleanup_exiting |= task.exit_boundary.is_some()
+                    || task.current_stop.is_some_and(TraceeStop::is_exit);
+                if task.terminal_consumed
+                    || task.current_stop.is_some()
+                    || task.cleanup_exiting
+                    || task.cleanup_interrupt_sent
+                {
+                    continue;
                 }
+                // Creation events precede an INTERRUPT stop; retain new children
+                // in this same fixed point. External kills require isolation.
+                if unsafe {
+                    linux_ptrace(
+                        PTRACE_INTERRUPT,
+                        process,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                } < 0
+                {
+                    let error = io::Error::last_os_error();
+                    if error.raw_os_error() != Some(3) {
+                        failures.push(format!("interrupt cleanup PID {process}: {error}"));
+                    }
+                }
+                task.cleanup_interrupt_sent = true;
             }
-            // A checked task or group exit cannot return to userspace or fork.
-            // A resumed group leader may still await its parked siblings before
-            // becoming reapable; retain its PID, but do not wait for another stop.
             quiescent = discovery_failure.is_none()
-                && remaining
-                    .values()
-                    .all(|task| task.current_stop.is_some() || task.exiting);
+                && !tracees.has_uncertain()
+                && tracees.values().all(|task| {
+                    task.terminal_consumed || task.current_stop.is_some() || task.cleanup_exiting
+                });
         }
         if Instant::now() >= deadline {
             break;
         }
-        // Retry unresolved discovery under the same bound, with the exact birth
-        // held. No SIGKILL or CONT is allowed before the parked fixed point.
         if quiescent && discovery_failure.is_none() {
-            for (&process, task) in &mut remaining {
-                if !task.kill_sent {
+            for process in tracees.pids() {
+                let task = tracees.get_mut(&process).expect("cleanup task");
+                if !task.terminal_consumed && !task.cleanup_kill_sent {
                     if let Err(error) = kill_tracee(process) {
                         failures.push(error);
                     }
-                    task.kill_sent = true;
+                    task.cleanup_kill_sent = true;
                 }
             }
-            for (&process, task) in &mut remaining {
-                if task.current_stop.is_some() {
+            for process in tracees.pids() {
+                let task = tracees.get_mut(&process).expect("cleanup task");
+                if !task.terminal_consumed && task.current_stop.is_some() {
                     match continue_killed_tracee(process) {
                         Ok(()) => task.current_stop = None,
                         Err(error) => {
@@ -1781,9 +1789,14 @@ fn terminate_tree(
                 }
             }
         }
-        if !remaining.is_empty() {
+        if tracees.unresolved() {
             thread::sleep(POLL_INTERVAL);
         }
+    }
+    // Poison before any allocating error conversion and before caller Drop.
+    // Never retry ptrace or wait from a later caller or another thread.
+    if tracees.unresolved() {
+        custody::poison();
     }
     if let Some(error) = discovery_failure {
         failures.push(error);
@@ -1791,10 +1804,8 @@ fn terminate_tree(
     if let Some(error) = wait_failure {
         failures.push(error);
     }
-    if !remaining.is_empty() {
-        failures.push(format!(
-            "timed out reaping rejected proof process IDs {remaining:?}"
-        ));
+    if tracees.unresolved() {
+        failures.push("cleanup deadline left permanent unresolved task custody".to_owned());
     }
     if failures.is_empty() {
         Ok(())
@@ -1802,7 +1813,6 @@ fn terminate_tree(
         Err(process_failure(failures.join("; ")))
     }
 }
-
 fn kill_tracee(process: i32) -> Result<(), String> {
     #[cfg(test)]
     stable_tests::record_cleanup_kill_request(process);
@@ -1838,7 +1848,7 @@ fn continue_killed_tracee(process: i32) -> Result<(), RetainedFunctionalRefineme
 }
 
 fn reject_and_reap(
-    tracees: &BTreeMap<i32, Tracee>,
+    tracees: &mut Tracees,
     execution_error: RetainedFunctionalRefinementRuntimeErrorV1,
 ) -> RetainedFunctionalRefinementRuntimeErrorV1 {
     match terminate_tree(tracees) {
@@ -1956,6 +1966,10 @@ mod memory_tests;
 #[cfg(test)]
 #[path = "functional_refinement_process_tree_v1_stable_tests.rs"]
 mod stable_tests;
+
+#[cfg(test)]
+#[path = "functional_refinement_process_tree_v1_quarantine_tests.rs"]
+mod quarantine_tests;
 
 #[cfg(test)]
 mod tests {

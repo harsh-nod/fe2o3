@@ -4,6 +4,7 @@
 
 use super::*;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -111,10 +112,7 @@ pub(super) fn abort_after_birth_resume(parent: i32) -> Result<()> {
     }
 }
 
-pub(super) fn abort_after_group_leader_exit_resume(
-    tree: &BTreeMap<i32, Tracee>,
-    leader: i32,
-) -> Result<()> {
+pub(super) fn abort_after_group_leader_exit_resume(tree: &Tracees, leader: i32) -> Result<()> {
     let abort = CLEANUP_PROBE.with(|probe| {
         probe
             .borrow_mut()
@@ -762,19 +760,15 @@ fn seized_expired_deadline_refuses_before_fork() {
 
 #[test]
 fn queued_terminal_status_is_not_signalled_again() {
-    let tree = BTreeMap::from([(
-        std::process::id() as i32,
-        Tracee {
-            role: TraceeRole::Verifier,
-            thread_group: std::process::id() as i32,
-            leader: true,
-            exit_boundary: Some(ExitBoundary::Task(0)),
-            current_stop: None,
-            queued_status: Some(0),
-        },
-    )]);
+    let pid = std::process::id() as i32;
+    let mut tree = Tracees::new().unwrap();
+    let mut task = Tracee::pending(TraceeRole::Verifier, pid, true);
+    task.exit_boundary = Some(ExitBoundary::Task(0));
+    task.queued_status = Some(0);
+    task.terminal_consumed = true;
+    tree.insert(pid, task).unwrap();
     // The fixture's own PID makes a mistaken second SIGKILL immediately observable.
-    terminate_tree(&tree).unwrap();
+    terminate_tree(&mut tree).unwrap();
 }
 
 #[test]
@@ -948,24 +942,15 @@ fn expired_inspection_deadline_refuses_admission_while_child_remains_stopped() {
         .lock()
         .unwrap_or_else(|p| p.into_inner());
     let outer = Instant::now() + Duration::from_secs(5);
-    let child = seized_spawn::spawn(Command::new("/bin/true"), vec![], 5, outer).unwrap();
+    let mut child = seized_spawn::spawn(Command::new("/bin/true"), vec![], 5, outer).unwrap();
     let pid = child.id() as i32;
-    let mut tree = BTreeMap::from([(
-        pid,
-        Tracee {
-            role: TraceeRole::Verifier,
-            thread_group: pid,
-            leader: true,
-            exit_boundary: None,
-            current_stop: None,
-            queued_status: None,
-        },
-    )]);
+    let tree = &mut child.run().unwrap().tracees;
     let observation = (|| -> Result<()> {
         let status = wait_for_specific(pid, outer)?;
         tree.get_mut(&pid).unwrap().current_stop = TraceeStop::observed(status);
         if !stopped(status) {
             tree.get_mut(&pid).unwrap().queued_status = Some(status);
+            tree.get_mut(&pid).unwrap().terminal_consumed = true;
             return Err(process_failure(
                 "inspection fixture exited before its exec stop",
             ));
@@ -973,7 +958,7 @@ fn expired_inspection_deadline_refuses_admission_while_child_remains_stopped() {
         if (status as u32) >> 16 != PTRACE_EVENT_EXEC {
             return Err(process_failure("inspection fixture missed its exec stop"));
         }
-        let deadline = stable::park_for_inspection(&mut tree, outer, &mut || Ok(()))?;
+        let deadline = stable::park_for_inspection(tree, outer, &mut || Ok(()))?;
         thread::sleep(deadline.saturating_duration_since(Instant::now()));
         let error = stable::check_before_release(deadline, &mut || Ok(())).unwrap_err();
         if error.kind() != RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut {
@@ -985,7 +970,7 @@ fn expired_inspection_deadline_refuses_admission_while_child_remains_stopped() {
         read_registers(pid)?;
         Ok(())
     })();
-    let cleanup = terminate_tree(&tree);
+    let cleanup = terminate_tree(tree);
     observation.unwrap();
     cleanup.unwrap();
     tests::assert_process_disappears(pid);
