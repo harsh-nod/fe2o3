@@ -1573,3 +1573,15 @@ This does not establish genuine nonempty enum availability, remaining scalar and
 provenance preparation, argument writers, joint bounds, or production routing.
 Broad accepted exits remain 6/18; no public activation or global compiler pin
 change is implied.
+
+## Retained scalar inventory component — 2026-09-28
+
+The scalar inventory now has an attached owning frame that preserves original
+data, resource debit order and partial allocations across error/unwind.
+All 13 new controls and full 356-model / 3,222-backend regressions passed
+(197 ignored), with backend and extractor builds.
+See [qualification and limits](retained-scalar-inventory-qualification-20260928.md).
+
+This component is not yet wired into the genuine continuation. FIFO, carrier,
+provenance, capability preparation, argument writers and production admission
+remain open. Broad accepted exits remain 6/18; no public activation is implied.
