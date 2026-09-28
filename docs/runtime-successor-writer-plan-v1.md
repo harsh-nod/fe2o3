@@ -303,12 +303,13 @@ early outer-close settlement and staged-frontier advancement. Native coupling,
 Context composition, protected Worker and matched performance remain open.
 
 An opaque [CPU receipt fixture](evidence/dev-cpu-receipt-fixture-2026-09-28/README.md)
-now supplies the genuine lower owners for that next runtime integration. Keep
+supplies the genuine lower owners used by the subsequent
+[runtime composition](evidence/dev-runtime-cpu-receipts-2026-09-28/README.md). Keep
 native and CPU I/O providers mutually exclusive and use fixture-issued lane
 handles. Enter through public Pending admission and the normal indexed binding
 installation, replacing only unavailable native materialization/I/O. Preserve
-all logical custody and settlement checks. The first CPU integration must account
-for clean recycled-cache teardown explicitly; native detachment, prepared
+all logical custody and settlement checks. The first CPU integration now checks
+clean recycled-cache teardown explicitly; native detachment, prepared
 cancellation, dirty writeback/readback and populated-arena ordered retry are not
 provided by the fixture. Terminal cases remain isolated processes with unrepaired
 custody retained, not artificial recovery.

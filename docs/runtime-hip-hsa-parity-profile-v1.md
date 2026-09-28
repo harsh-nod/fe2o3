@@ -172,9 +172,12 @@ establish concurrent-kernel performance or HIP/HSA parity.
 The [CPU receipt fixture](evidence/dev-cpu-receipt-fixture-2026-09-28/README.md)
 adds normal-dependency test access to genuine lower owners and move-only receipts,
 including real CPU signal observation, capacity retry and event-pin refusal.
-It is nondefault and supplies no native execution authority. Runtime Active/
-Pending integration, native signal/currentness evidence and full correspondence
-remain open; this fixture is not additional GPU or parity qualification.
+It is nondefault and supplies no native execution authority. A subsequent
+[runtime composition packet](evidence/dev-runtime-cpu-receipts-2026-09-28/README.md)
+tests actual backend-SPI Active/Pending handoffs, ordered publication and logical
+completion with those opaque receipts. Native materialization, signal/currentness
+evidence, full correspondence and Context/Worker qualification remain open;
+neither CPU packet is additional GPU or parity qualification.
 
 Poll and `wait` never perform deferred compute preparation, but can retry
 publication of an already bound Prepared recipe. Submit may publish immediately

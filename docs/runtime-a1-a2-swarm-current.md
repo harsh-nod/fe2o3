@@ -2,7 +2,7 @@
 
 ## Milestone Snapshot
 
-As of 2026-09-27 UTC, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
+As of 2026-09-28 UTC, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
 remains open. These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -24,6 +24,18 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Actual backend-SPI [runtime CPU receipt composition](evidence/dev-runtime-cpu-receipts-2026-09-28/README.md)
+now connects initial/Prepared publication, ordered successors and completion to
+genuine lower receipts without scripted execution tags or manual Pending
+settlement. Seven groups cover both lanes, real capacity retries, explicit-event
+handoffs, out-of-order physical retirement with logical ordering, exact receipt
+custody across eight terminal publication cases, and checked CPU teardown/refusal.
+The corrected source passes 1813 full-runtime tests with zero failures and 28
+existing ignores, 52 doctests, strict Clippy and default/static checks. The packet
+preserves an earlier owner-thread stack overflow
+and its test-only boxed-storage fix. This is not native binding, GPU execution,
+Context/Worker or formal caller refinement, and does not promote any milestone.
+
 An opaque, nondefault [CPU receipt fixture](evidence/dev-cpu-receipt-fixture-2026-09-28/README.md)
 now makes genuine KFD receipt owners available to normal-dependency composition
 tests without exposing native authority. Seven external groups cover both lanes,
@@ -32,8 +44,9 @@ custody and terminal/unwind behavior. The all-feature KFD library suite passes
 1713 tests, doctests pass 42, and strict Clippy, default KFD/runtime compilation,
 formatting and source continuity pass. No new GPU, solver or performance run is
 claimed; the full runtime suite was not rerun in this packet.
-Actual runtime Active/Pending integration and shared-source caller refinement
-remain next; this does not promote A1/A2 or any accepted checkpoint.
+That lower-fixture checkpoint left actual runtime Active/Pending integration
+next; the composition above supplies bounded CPU evidence. Shared-source caller
+refinement remains open, and neither packet promotes A1/A2 or accepted checkpoints.
 
 Shared pipeline lifecycle/chain development (2026-09-28 UTC): promotion and
 quarantine now share complete executable bodies with Verus. The
