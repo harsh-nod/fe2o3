@@ -1717,3 +1717,15 @@ See [qualification and limits](debugger-supervised-startup-qualification-2026092
 The earlier failed census is preserved. A loaded-file profile still needs
 separate review; no inferior, attach, dispatch or physical register capture ran.
 V4/U4 remain open. Broad accepted exits remain 6/18.
+
+## Retained complete-CFG induction preparation — 2026-09-28
+
+The new model owner retains partial CFG, inventory, reachability, certificates
+and full meter errors through refusal/unwind without changing the old report
+APIs. All 12 new controls, 368 model tests, 3,349 backend tests (197 ignored),
+authority/policy checks and builds passed.
+See [qualification and limits](retained-induction-analysis-qualification-20260928.md).
+
+This is not the canonical compiler-ledger connection or a genuine Rust loop
+proof. Whole-root preparation and production admission remain unfinished;
+broad accepted exits remain 6/18.
