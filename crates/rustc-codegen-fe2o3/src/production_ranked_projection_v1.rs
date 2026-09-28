@@ -40489,3 +40489,6 @@ pub(crate) use canonical_assertion_facts_v1::observe_actual_root_fixed_prefix_co
 
 #[cfg(test)]
 pub(crate) use bf16_nominal_source_preparation_v1::observe_option_first_before_enum_for_test_v1;
+
+#[cfg(test)]
+pub(crate) use bf16_nominal_source_preparation_v1::observe_option_enum_before_scalar_for_test_v1;
